@@ -20,7 +20,7 @@ from .hosted_scheduler import CallAborted, CallOutcome, Scenario, World
 from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime
 from .run.conversation import Transcript, converse
-from .scenario import Scenario as ConversationScenario
+from .scenariogen.model.scenario import Scenario as ConversationScenario
 from .world.runtime import Call, GeneratedWorld
 from .world.stores.postgres import AttachedPostgresStore
 

@@ -17,7 +17,7 @@ from typing import Any, Callable
 from ..backends import SessionSpec
 from ..config import artifact_dir, chosen_model, load_skill
 from ..contract import AgentContract
-from ..scenario_tools import load_scenarios
+from ..scenariogen.store.suite import load_scenarios
 from ..session import Stage
 from .tools import (
     RUN_SERVER,

@@ -21,6 +21,19 @@ from .backends import SessionSpec, resolve
 DEFAULT_MODEL = "claude-sonnet-4-6"
 
 SKILLS_ROOT = Path(__file__).parent / "skills"
+# A stage that owns a package keeps its skills inside it, so the method and the code that runs it
+# are read together. Looked up here rather than at each call site, so a stage names its skill the
+# same way wherever the file happens to live.
+SKILL_ROOTS = (SKILLS_ROOT, Path(__file__).parent / "scenariogen" / "skills")
+
+
+def skill_path(name: str) -> Path:
+    """Where a named skill's SKILL.md is, whichever root holds it."""
+    for root in SKILL_ROOTS:
+        found = root / name / "SKILL.md"
+        if found.exists():
+            return found
+    return SKILLS_ROOT / name / "SKILL.md"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 ARTIFACTS_ROOT = PROJECT_ROOT / "artifacts"
 
@@ -42,6 +55,28 @@ def credentials_hint() -> str:
         "authenticate, load the env file first:\n"
         "           set -a; . ./.env.acceptance; set +a"
     )
+
+
+def _stage_key(stage: str) -> str:
+    """A stage's name as an environment variable fragment: ``scenarios/write`` -> ``SCENARIOS``."""
+    return stage.split("/", 1)[0].replace("-", "_").upper()
+
+
+def stage_backend(stage: str) -> str | None:
+    """The backend this stage should run on, if one was named for it.
+
+    Stages are not alike. Reading an unfamiliar codebase and writing a suite of scenarios reward
+    different models, and a provider's rate limit is counted per model, so pinning the expensive
+    stage to one and the voluminous stage to another is both a quality and a throughput decision.
+    ``ALK_SCENARIOS_HARNESS`` overrides ``ALK_HARNESS`` for the scenarios stage alone; with
+    nothing set the global choice applies as before.
+    """
+    return os.environ.get(f"ALK_{_stage_key(stage)}_HARNESS", "").strip() or None
+
+
+def stage_model(stage: str) -> str | None:
+    """The model this stage should run on, if one was named for it. See ``stage_backend``."""
+    return os.environ.get(f"ALK_{_stage_key(stage)}_MODEL", "").strip() or None
 
 
 def chosen_model(model: str | None = None) -> str:
@@ -77,6 +112,117 @@ def thinking_config() -> dict[str, Any]:
     if setting.isdigit() and int(setting) > 0:
         return {"type": "enabled", "budget_tokens": int(setting), "display": "omitted"}
     return {"type": "disabled"}
+
+
+def compose_skills(*names: str) -> str:
+    """Several skills behind one copy of the harness preamble.
+
+    ``load_skill`` prepends the preamble to whatever it returns, so asking it for two skills
+    sends that preamble twice: measured at 7KB duplicated in a 93KB prompt, resent every turn.
+    This also lets a stage carry only the method for the job in hand. A planner loaded the whole
+    44KB of the writing skill it was not going to use until after it had finished planning.
+    """
+    parts = [skill_path(name).read_text(encoding="utf-8") for name in names]
+    body = "\n\n---\n\n".join(parts)
+    if not HARNESS.exists():
+        return body
+    return (
+        f"{HARNESS.read_text(encoding='utf-8')}\n\n"
+        "---\n\n"
+        "# The stage you are in now\n\n"
+        f"{body}"
+    )
+
+
+def discovered_skills(**about: str) -> str:
+    """Every extra skill that says it applies to this agent, found by looking rather than by name.
+
+    A skill is a markdown file under ``scenariogen/skills/kinds/`` whose first lines declare what
+    it is for::
+
+        ---
+        name: voice
+        applies_to: modality=voice
+        ---
+
+    The harness reads the directory, keeps the files whose ``applies_to`` matches what it was told
+    about this agent, and appends them in name order. ``applies_to: any`` always matches, and a
+    file with no declaration is skipped rather than guessed at.
+
+    Naming each skill in code would mean editing code to add one, and there will be dozens: voice,
+    chat, browser, and whatever a customer turns up with next. Adding a skill is adding a file.
+    """
+    root = Path(__file__).parent / "scenariogen" / "skills" / "kinds"
+    if not root.is_dir():
+        return ""
+    wanted = {key.lower(): str(value).strip().lower() for key, value in about.items() if value}
+    found: list[tuple[str, str]] = []
+    for path in sorted(root.glob("*.md")):
+        text = path.read_text(encoding="utf-8")
+        head = text.split("---")[1] if text.startswith("---") and "---" in text[3:] else ""
+        applies = ""
+        for line in head.splitlines():
+            if line.strip().lower().startswith("applies_to:"):
+                applies = line.split(":", 1)[1].strip().lower()
+        if not applies:
+            continue
+        if applies == "any":
+            found.append((path.stem, text))
+            continue
+        # `key=value`, and every clause has to hold.
+        clauses = [one.strip() for one in applies.split(",") if one.strip()]
+        if all(
+            "=" in clause and wanted.get(clause.split("=", 1)[0].strip()) == clause.split("=", 1)[1].strip()
+            for clause in clauses
+        ):
+            found.append((path.stem, text))
+    if not found:
+        return ""
+    return "\n\n---\n\n" + "\n\n---\n\n".join(text for _name, text in found)
+
+
+def skill_overlay(name: str) -> str:
+    """A skill fragment that exists only for some agents, or not at all.
+
+    The write skill is the spine and holds the craft once; what a *kind* of agent adds on top
+    (its dials, its traps, what a scenario for it must exercise) lives in a short overlay named
+    for the contract's modality. Missing is normal: an agent kind with no overlay gets the spine
+    alone, and adding a kind is adding one file here, not touching code.
+    """
+    path = Path(__file__).parent / "scenariogen" / "skills" / f"{name}.md"
+    if not path.exists():
+        return ""
+    return f"\n\n---\n\n{path.read_text(encoding='utf-8')}"
+
+
+def scenario_thinking() -> bool:
+    """Whether the scenario stage may think, from ALK_SCENARIO_THINKING. Off unless asked.
+
+    The stage used to refuse thinking outright, for a reason that has expired: with it on, the
+    Gemini call stopped returning above a handful of scenarios and the process sat at zero CPU
+    blocked on a read that never completed. That was one provider's failure, and planning a suite
+    is exactly the work thinking is worth paying for, so the choice belongs to whoever starts the
+    run rather than to this file.
+
+    Still off by default, because it has not been measured here since the backend changed.
+    """
+    return os.environ.get("ALK_SCENARIO_THINKING", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+        "adaptive",
+    }
+
+
+def writer_effort() -> str:
+    """How hard a scenario writer may think, from ALK_WRITER_EFFORT. Empty means the model's own.
+
+    Separate from the stage's setting on purpose. The planner decides what a thousand scenarios
+    should be and benefits from thinking; a writer turns one settled line into a scenario and is
+    checked by three gates immediately afterwards, so paying for its private reasoning buys less.
+    """
+    return os.environ.get("ALK_WRITER_EFFORT", "").strip().lower()
 
 
 def provisioning(enabled: bool | None = None) -> bool:
@@ -264,7 +410,7 @@ def load_skill(name: str) -> str:
     The stage's own method follows. Both are files, so how any of this works can be changed
     without touching code.
     """
-    path = SKILLS_ROOT / name / "SKILL.md"
+    path = skill_path(name)
     if not path.exists():
         raise FileNotFoundError(f"no skill at {path}")
     stage = path.read_text(encoding="utf-8")

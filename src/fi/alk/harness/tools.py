@@ -211,6 +211,16 @@ def contract_tools(destination: Path) -> Any:
                     "description": "True if a person talks with it turn by turn. False for an "
                     "agent given one task and left to it.",
                 },
+                "direction": {
+                    "type": "string",
+                    "enum": ["inbound", "outbound"],
+                    "description": "Which way a call goes, for a voice agent. 'inbound' is "
+                    "somebody ringing this agent; 'outbound' is this agent ringing a person. "
+                    "The agent usually says which in its own prompt ('callers dial in', 'you "
+                    "are calling to collect ...') or in the endpoint it declares. It decides "
+                    "who speaks first and what the person on the other end is doing there, so "
+                    "read it rather than assuming inbound.",
+                },
                 "system_prompt_excerpt": {
                     "type": "string",
                     "description": "The agent's own instructions, quoted. Often lives away from "
@@ -238,6 +248,18 @@ def contract_tools(destination: Path) -> Any:
                                 "items": {"type": "string"},
                                 "description": "Exact parameter names, in order.",
                             },
+                            "requires": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Other tools of this agent that must have been "
+                                "called successfully first, or this one refuses. Read the code: "
+                                "a guard raising before any work is done is a precondition, and "
+                                "a check on identity that the agent establishes when the "
+                                "conversation opens is not. Leave empty when the tool can be "
+                                "called first thing, and most can. This decides whether a test "
+                                "of this tool has to replay the agent's whole flow to reach it "
+                                "or can simply call it.",
+                            },
                             "arg_types": {
                                 "type": "object",
                                 "description": "Declared type per argument where the source "
@@ -259,8 +281,14 @@ def contract_tools(destination: Path) -> Any:
                 },
                 "data_schema": {
                     "type": "object",
-                    "description": "The shape of the records the agent works on: which fields "
-                    "each kind of record has.",
+                    "description": "The shape of the records the agent works on. One entry per "
+                    "kind of record, each mapping a field name straight to its type: "
+                    '{\"bookings\": {\"booking_ref\": \"TEXT PRIMARY KEY\", \"status\": '
+                    '\"TEXT NOT NULL\"}}. Fields go directly under the record name, with no '
+                    "wrapper around them, because the world is built from exactly these entries. "
+                    "Include the field the record is identified by; it is the easiest one to "
+                    "leave out and the most expensive to lose, since the agent's own code selects "
+                    "it and will not find it.",
                 },
                 "base_environment": {
                     "type": "object",

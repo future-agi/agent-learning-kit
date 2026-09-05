@@ -13,7 +13,7 @@ import re
 
 import pytest
 from fi.alk.harness.cli import build_parser
-from fi.alk.harness.scenario import Scenario
+from fi.alk.harness.scenariogen.model.scenario import Scenario
 from fi.alk.harness.session import ARTIFACT, DONE, TEXT, TOOL, Event
 from fi.alk.harness.tools import accept_contract, qualified
 from fi.alk.harness.understand import load, opening
@@ -1543,6 +1543,9 @@ def _scenario(**overrides):
         "persona": "brisk",
         "opening": "one big mac please",
         "expect_state": {"cart.count": 1},
+        "hazard": "a record the caller relies on is not what they believe it is",
+        "invariant": "never act on a value the caller has not confirmed",
+        "failure_modes": ["acts on the stale value"],
     }
     payload.update(overrides)
     return payload
@@ -1727,7 +1730,7 @@ def test_github_source_refuses_urls_that_cannot_be_public_https_clones(tmp_path,
 
 
 def test_how_many_scenarios_is_something_you_say():
-    from fi.alk.harness.scenario_tools import TOOL_NAMES
+    from fi.alk.harness.scenariogen.write.tools import TOOL_NAMES
 
     assert "aim_for" in TOOL_NAMES
 
@@ -1914,10 +1917,10 @@ def test_every_stage_publishes_exactly_the_tools_it_claims(tmp_path):
     from fi.alk.harness.run import tools as runs
     from fi.alk.harness.world import tools as world
 
-    from fi.alk.harness import scenario_tools as scenarios
+    from fi.alk.harness.scenariogen.write import tools as scenarios
 
     root, contract = _saved_world(tmp_path)
-    server, _kept = scenarios.scenario_tools(contract, root, root, wanted=1)
+    server, _kept = scenarios.writing_tools(contract, root, root, wanted=1)
     assert _published(server) == sorted(scenarios.TOOL_NAMES)
 
     built, _world = world.world_tools(contract, root)
@@ -2221,7 +2224,7 @@ def test_sqlite_world_seed_encodes_structured_values_as_json():
 
 def test_a_sub_goal_that_settles_nothing_is_rejected():
     """Every scenario referencing it would report a result nobody should believe."""
-    from fi.alk.harness.catalogue import SubGoal, validate_sub_goal
+    from fi.alk.harness.scenariogen.model.catalogue import SubGoal, validate_sub_goal
 
     assert validate_sub_goal(SubGoal(name="x", what="means something")) != []
     settled = SubGoal(
@@ -2239,7 +2242,7 @@ def test_a_sub_goal_that_settles_nothing_is_rejected():
 
 
 def test_a_check_must_actually_define_one():
-    from fi.alk.harness.catalogue import SubGoal, validate_sub_goal
+    from fi.alk.harness.scenariogen.model.catalogue import SubGoal, validate_sub_goal
 
     problems = validate_sub_goal(
         SubGoal(name="x", what="y", check="rows = world.state()['orders']")
@@ -2284,7 +2287,7 @@ def test_a_conversational_simulator_prompt_requires_a_persona_slot():
 
 
 def test_a_persona_is_a_structured_simulator_prompt_slot():
-    from fi.alk.harness.scenario import Persona, Scenario
+    from fi.alk.harness.scenariogen.model.scenario import Persona, Scenario
     from fi.alk.harness.simulator import fill
 
     scenario = Scenario(
@@ -2318,8 +2321,9 @@ def test_a_persona_is_a_structured_simulator_prompt_slot():
 
 
 def test_an_empty_persona_is_rejected():
-    from fi.alk.harness.catalogue import Catalogue, SubGoal
-    from fi.alk.harness.scenario import Persona, Scenario, validate_scenario
+    from fi.alk.harness.scenariogen.model.catalogue import Catalogue, SubGoal
+    from fi.alk.harness.scenariogen.model.scenario import Persona, Scenario
+    from fi.alk.harness.scenariogen.quality.checks import validate_scenario
 
     scenario = Scenario(
         name="empty-persona",
@@ -2338,12 +2342,13 @@ def test_an_empty_persona_is_rejected():
         scenario, catalogue, {}, "{{ persona }}\n{{ instruction }}"
     )
 
-    assert "persona has no details" in problems
+    assert "persona has no name: the caller reaches the call as a placeholder" in problems
 
 
-def test_a_persona_must_contain_the_profile_that_drives_variation():
-    from fi.alk.harness.catalogue import Catalogue, SubGoal
-    from fi.alk.harness.scenario import Persona, Scenario, validate_scenario
+def test_a_thin_persona_is_kept_since_only_the_name_is_load_bearing():
+    from fi.alk.harness.scenariogen.model.catalogue import Catalogue, SubGoal
+    from fi.alk.harness.scenariogen.model.scenario import Persona, Scenario
+    from fi.alk.harness.scenariogen.quality.checks import validate_scenario
 
     scenario = Scenario(
         name="thin-persona",
@@ -2362,12 +2367,15 @@ def test_a_persona_must_contain_the_profile_that_drives_variation():
         scenario, catalogue, {}, "{{ persona }}\n{{ instruction }}"
     )
 
-    assert any("persona is incomplete" in problem for problem in problems)
-    assert all(field in problems[0] for field in ("personality", "languages", "accent"))
+    # A thin profile is no longer refused. Only the name is load-bearing, because the platform
+    # builds the caller from the persona and a nameless one arrives as a placeholder; refusing a
+    # scenario over a missing occupation cost the writer a turn and improved nothing.
+    assert not any("persona is incomplete" in problem for problem in problems)
 
 
 def test_same_call_contract_state_cannot_be_hidden_in_scenario_setup():
-    from fi.alk.harness.scenario import Scenario, contract_sequence_problems
+    from fi.alk.harness.scenariogen.model.scenario import Scenario
+    from fi.alk.harness.scenariogen.quality.checks import contract_sequence_problems
 
     impossible = Scenario(
         name="cancel-an-old-ride",
@@ -2448,7 +2456,7 @@ def test_a_check_can_insist_on_the_arguments_not_just_the_call():
 
 def _built_environment(tmp_path):
     """A saved world plus a catalogue, which is what the environment step leaves behind."""
-    from fi.alk.harness.catalogue import Catalogue, SubGoal, save_catalogue
+    from fi.alk.harness.scenariogen.model.catalogue import Catalogue, SubGoal, save_catalogue
     from fi.alk.harness.world.snapshot import save
 
     world, contract = _cart_world()
@@ -2491,13 +2499,19 @@ def _delta(**overrides):
         "fixture": {"origin": "seed", "item_id": "big_mac"},
         "solution": [{"tool": "add", "arguments": {"item_id": "big_mac"}}],
         "sub_goals": ["item-added", "right-item"],
+        # A scenario that plants nothing is refused, so fixtures carry what a real one carries.
+        "hazard": "the item the caller names is out of stock at this location",
+        "invariant": "never add an item the caller did not agree to",
+        "failure_modes": ["adds a different item without saying so"],
+        # Scenarios stand up the state they turn on, so fixtures do too.
+        "setup_code": "def setup(world):\n    stock = world.state()\n",
     }
     payload.update(overrides)
     return payload
 
 
 def test_a_scenario_is_proved_before_it_is_kept(tmp_path):
-    from fi.alk.harness.scenario_tools import accept_scenario
+    from fi.alk.harness.scenariogen.write.tools import accept_scenario
 
     root, _contract, catalogue = _built_environment(tmp_path)
     kept = []
@@ -2508,9 +2522,32 @@ def test_a_scenario_is_proved_before_it_is_kept(tmp_path):
     assert (root / "scenarios" / "adds-a-big-mac" / "scenario.json").exists()
 
 
+def test_a_scenario_inherits_the_contract_direction(tmp_path):
+    """Direction belongs to the agent, not the writer, which never sets it. An outbound agent
+    whose scenarios say inbound has every call opened by the wrong side."""
+    from fi.alk.harness.scenariogen.write.tools import accept_scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    kept = []
+    said = accept_scenario(
+        _delta(),
+        world_root=root,
+        catalogue=catalogue,
+        kept=kept,
+        direction="outbound",
+    )
+    assert not said.get("is_error"), said
+    assert kept[0].direction == "outbound"
+    assert kept[0].agent_speaks_first is False
+    written = json.loads(
+        (root / "scenarios" / "adds-a-big-mac" / "scenario.json").read_text()
+    )
+    assert written["direction"] == "outbound"
+
+
 def test_a_scenario_whose_solution_cannot_pass_its_own_checks_is_refused(tmp_path):
     """Either the scenario is impossible or the checks are wrong. Both have happened."""
-    from fi.alk.harness.scenario_tools import accept_scenario
+    from fi.alk.harness.scenariogen.write.tools import accept_scenario
 
     root, _contract, catalogue = _built_environment(tmp_path)
     said = accept_scenario(
@@ -2533,15 +2570,15 @@ def test_unbound_runtime_step_says_it_was_assumed_not_executed(caplog):
     """
     import logging
 
-    from fi.alk.harness.prove import play_reference_step
-    from fi.alk.harness.scenario import Step
+    from fi.alk.harness.scenariogen.write.prove import play_reference_step
+    from fi.alk.harness.scenariogen.model.scenario import Step
     from fi.alk.harness.world.runtime import GeneratedWorld
 
     world = GeneratedWorld()
     world.runtime_tools = {"lookup_rider_by_phone"}
     world.endpoint_for = {}
     try:
-        with caplog.at_level(logging.WARNING, logger="fi.alk.harness.prove"):
+        with caplog.at_level(logging.WARNING, logger="fi.alk.harness.scenariogen.write.prove"):
             call = play_reference_step(
                 world, Step(tool="lookup_rider_by_phone", arguments={"phone": "+14155550101"})
             )
@@ -2556,8 +2593,8 @@ def test_unbound_runtime_step_says_it_was_assumed_not_executed(caplog):
 
 def test_source_reference_step_separates_agent_arguments_from_dependency_payload():
     """Proof may drive the real backend, but must only credit what the agent could call."""
-    from fi.alk.harness.prove import play_reference_step
-    from fi.alk.harness.scenario import Step
+    from fi.alk.harness.scenariogen.write.prove import play_reference_step
+    from fi.alk.harness.scenariogen.model.scenario import Step
     from fi.alk.harness.world.runtime import Call, GeneratedWorld
 
     world = GeneratedWorld()
@@ -2607,8 +2644,8 @@ def test_source_reference_step_separates_agent_arguments_from_dependency_payload
 
 
 def test_source_reference_step_records_a_purely_local_agent_tool():
-    from fi.alk.harness.prove import play_reference_step
-    from fi.alk.harness.scenario import Step
+    from fi.alk.harness.scenariogen.write.prove import play_reference_step
+    from fi.alk.harness.scenariogen.model.scenario import Step
     from fi.alk.harness.world.runtime import GeneratedWorld
 
     world = GeneratedWorld()
@@ -2627,8 +2664,8 @@ def test_source_reference_step_records_a_purely_local_agent_tool():
 
 
 def test_source_reference_step_can_use_an_earlier_dependency_result():
-    from fi.alk.harness.prove import play_reference_step
-    from fi.alk.harness.scenario import Step
+    from fi.alk.harness.scenariogen.write.prove import play_reference_step
+    from fi.alk.harness.scenariogen.model.scenario import Step
     from fi.alk.harness.world.runtime import Call, GeneratedWorld
 
     world = GeneratedWorld()
@@ -2679,8 +2716,8 @@ def test_source_reference_step_can_use_an_earlier_dependency_result():
 
 def test_a_scenario_whose_checks_pass_with_nothing_done_is_refused(tmp_path):
     """A check that passes without the agent acting grades nothing while reporting a result."""
-    from fi.alk.harness.catalogue import SubGoal, save_catalogue
-    from fi.alk.harness.scenario_tools import accept_scenario
+    from fi.alk.harness.scenariogen.model.catalogue import SubGoal, save_catalogue
+    from fi.alk.harness.scenariogen.write.tools import accept_scenario
 
     root, _contract, catalogue = _built_environment(tmp_path)
     catalogue.sub_goals.append(
@@ -2692,9 +2729,17 @@ def test_a_scenario_whose_checks_pass_with_nothing_done_is_refused(tmp_path):
     )
     save_catalogue(catalogue, root)
     said = accept_scenario(
-        _delta(sub_goals=["always"]), world_root=root, catalogue=catalogue, kept=[]
+        # The hazard is reworded so the vacuous sub-goal still grades it by name: this test is
+        # about a check that passes with nothing done, not about an ungraded hazard.
+        # Two sub-goals and a two-step solution, so the single-check gate does not fire first:
+        # this test is about a check that passes with nothing done.
+        _delta(sub_goals=["always", "item-added"], hazard="the item is always out of stock here"),
+        world_root=root,
+        catalogue=catalogue,
+        kept=[],
     )
-    assert said["is_error"] and "grade nothing" in said["content"][0]["text"]
+    # Named per sub-goal when there is more than one, so match the claim rather than one phrasing.
+    assert said["is_error"] and "pass without the agent doing anything" in said["content"][0]["text"]
 
 
 def test_a_check_that_cannot_fail_without_calls_prevents_a_misleading_partial_pass(
@@ -2703,10 +2748,10 @@ def test_a_check_that_cannot_fail_without_calls_prevents_a_misleading_partial_pa
     """A check comparing calls against rows holds when there are no calls at all, so it reports
     itself as held for an agent that did nothing. Another strong check must not hide that defect:
     every checkpoint shown to a user needs its own evidence."""
-    from fi.alk.harness.catalogue import SubGoal, save_catalogue
-    from fi.alk.harness.prove import prove
-    from fi.alk.harness.scenario import Scenario
-    from fi.alk.harness.scenario_tools import accept_scenario
+    from fi.alk.harness.scenariogen.model.catalogue import SubGoal, save_catalogue
+    from fi.alk.harness.scenariogen.write.prove import prove
+    from fi.alk.harness.scenariogen.model.scenario import Scenario
+    from fi.alk.harness.scenariogen.write.tools import accept_scenario
 
     root, _contract, catalogue = _built_environment(tmp_path)
     catalogue.sub_goals.append(
@@ -2735,12 +2780,8 @@ def test_a_check_that_cannot_fail_without_calls_prevents_a_misleading_partial_pa
 
 
 def test_predictable_and_reused_otp_fixtures_are_rejected():
-    from fi.alk.harness.scenario import (
-        Persona,
-        Scenario,
-        fixture_problems,
-        suite_diversity_problems,
-    )
+    from fi.alk.harness.scenariogen.model.scenario import Persona, Scenario
+    from fi.alk.harness.scenariogen.quality.checks import fixture_problems, suite_diversity_problems
 
     def made(name: str, code: str) -> Scenario:
         return Scenario(
@@ -2776,7 +2817,8 @@ def test_predictable_and_reused_otp_fixtures_are_rejected():
 
 
 def test_demo_payment_and_booking_values_are_rejected():
-    from fi.alk.harness.scenario import Scenario, fixture_problems
+    from fi.alk.harness.scenariogen.model.scenario import Scenario
+    from fi.alk.harness.scenariogen.quality.checks import fixture_problems
     from fi.alk.harness.world.tools import _base_data_problems
 
     scenario = Scenario(
@@ -2862,7 +2904,8 @@ def test_submitted_fixture_demo_values_are_preserved_but_generated_copies_are_re
 
 
 def test_diversity_gate_catches_one_person_reworded_as_a_suite():
-    from fi.alk.harness.scenario import Persona, Scenario, suite_diversity_problems
+    from fi.alk.harness.scenariogen.model.scenario import Persona, Scenario
+    from fi.alk.harness.scenariogen.quality.checks import suite_diversity_problems
 
     scenarios = [
         Scenario(
@@ -2889,7 +2932,8 @@ def test_diversity_gate_catches_one_person_reworded_as_a_suite():
 
 
 def test_diversity_does_not_treat_generated_noop_setup_files_as_reused_data():
-    from fi.alk.harness.scenario import Scenario, suite_diversity_problems
+    from fi.alk.harness.scenariogen.model.scenario import Scenario
+    from fi.alk.harness.scenariogen.quality.checks import suite_diversity_problems
 
     scenarios = [
         Scenario(
@@ -3658,7 +3702,7 @@ def test_the_adoption_fields_survive_the_write_path(tmp_path):
 
 
 def test_a_scenario_naming_a_sub_goal_nobody_defined_is_refused(tmp_path):
-    from fi.alk.harness.scenario_tools import accept_scenario
+    from fi.alk.harness.scenariogen.write.tools import accept_scenario
 
     root, _contract, catalogue = _built_environment(tmp_path)
     said = accept_scenario(
@@ -3672,7 +3716,7 @@ def test_a_scenario_naming_a_sub_goal_nobody_defined_is_refused(tmp_path):
 
 
 def test_a_scenario_with_no_solution_cannot_be_proved(tmp_path):
-    from fi.alk.harness.scenario_tools import accept_scenario
+    from fi.alk.harness.scenariogen.write.tools import accept_scenario
 
     root, _contract, catalogue = _built_environment(tmp_path)
     said = accept_scenario(
@@ -3683,9 +3727,9 @@ def test_a_scenario_with_no_solution_cannot_be_proved(tmp_path):
 
 def test_a_suite_where_no_sub_goal_is_shared_does_not_roll_up(tmp_path):
     """If a payment step appears in 50 scenarios, the results should say where payment fails."""
-    from fi.alk.harness.catalogue import Catalogue, SubGoal
-    from fi.alk.harness.scenario import Scenario
-    from fi.alk.harness.scenario_tools import not_ready
+    from fi.alk.harness.scenariogen.model.catalogue import Catalogue, SubGoal
+    from fi.alk.harness.scenariogen.model.scenario import Scenario
+    from fi.alk.harness.scenariogen.write.tools import not_ready
 
     catalogue = Catalogue(
         sub_goals=[SubGoal(name=f"g{i}", what="x", judged="y") for i in range(4)]
@@ -3703,7 +3747,8 @@ def test_a_suite_where_no_sub_goal_is_shared_does_not_roll_up(tmp_path):
 
 
 def test_the_simulator_prompt_slots_a_scenario_leaves_unfilled_are_caught(tmp_path):
-    from fi.alk.harness.scenario import Scenario, validate_scenario
+    from fi.alk.harness.scenariogen.model.scenario import Scenario
+    from fi.alk.harness.scenariogen.quality.checks import validate_scenario
 
     root, _contract, catalogue = _built_environment(tmp_path)
     prompt = (
@@ -3801,7 +3846,7 @@ def test_repointing_changes_only_where_the_agents_tools_are_answered():
 
 def test_a_scenario_fills_the_simulator_prompt_before_a_call_is_placed(tmp_path):
     from fi.alk.harness.run.live import prepare
-    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenariogen.model.scenario import Scenario
     from fi.alk.harness.simulator import save_simulator_prompt
 
     root, _contract, _catalogue = _built_environment(tmp_path)
@@ -3823,7 +3868,7 @@ def test_a_scenario_that_leaves_a_slot_empty_never_reaches_a_call(tmp_path):
     """An unfilled slot would be read out to the caller verbatim."""
     import pytest as _pytest
     from fi.alk.harness.run.live import prepare
-    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenariogen.model.scenario import Scenario
     from fi.alk.harness.simulator import save_simulator_prompt
 
     root, _contract, _catalogue = _built_environment(tmp_path)
@@ -3985,7 +4030,8 @@ def test_every_stage_gates_with_the_hook_not_only_the_callback():
 
     from fi.alk.harness.run import grade, stage, targets
 
-    from fi.alk.harness import build, reception, scenarios
+    from fi.alk.harness import build, reception
+    from fi.alk.harness.scenariogen.write import stage as scenarios
 
     for module in (build, reception, scenarios, stage, targets, grade):
         source = inspect.getsource(module)
@@ -4272,28 +4318,41 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
     catches that, because both halves are individually valid."""
     import re
 
-    from fi.alk.harness.config import SKILLS_ROOT
+    from fi.alk.harness.config import skill_path
     from fi.alk.harness.run import tools as run_tools
     from fi.alk.harness.tools import CONTRACT_SERVER  # noqa: F401
     from fi.alk.harness.world import tools as world_tools
 
-    from fi.alk.harness import scenario_tools
+    from fi.alk.harness.scenariogen.write import tools as write_tools
+    from fi.alk.harness.scenariogen.plan import tools as plan_tools
 
+    # The scenarios stage carries both servers, so its skills may name tools from either.
+    suite = set(write_tools.TOOL_NAMES) | set(plan_tools.tool_names())
     surface = {
         "understand-agent": {"submit_contract"},
         "build-environment": set(world_tools.TOOL_NAMES),
-        "write-scenarios": set(scenario_tools.TOOL_NAMES),
+        "overview": suite,
+        "plan": suite,
+        "write": suite,
         "run-scenarios": set(run_tools.TOOL_NAMES),
     }
     # A skill also backticks the names of fields it is telling the model to fill in. Those are
     # not tools, and the list of them is derived rather than hand-kept so it cannot go stale.
-    from fi.alk.harness.catalogue import SubGoal
+    from fi.alk.harness.scenariogen.model.catalogue import SubGoal
     from fi.alk.harness.contract import AgentContract, ToolSpec
-    from fi.alk.harness.scenario import Persona, Scenario
+    from fi.alk.harness.scenariogen.model.scenario import Persona, Scenario
 
     fields = set()
     for model in (AgentContract, ToolSpec, Scenario, Persona, SubGoal):
         fields |= set(model.model_fields)
+    # The blueprint's own fields, which its skill names the same way. Dataclasses, so read them
+    # the same derived way rather than listing them here where they would go stale.
+    import dataclasses
+
+    from fi.alk.harness.scenariogen.plan.canvas import Angle, Canvas, Theme
+
+    for shape in (Canvas, Angle, Theme):
+        fields |= {one.name for one in dataclasses.fields(shape)}
     # Names from the check-writing examples the skills contain.
     from fi.alk.harness.contract import MODALITIES
 
@@ -4301,10 +4360,18 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
         fields
         | set(MODALITIES)
         | {"handle", "check", "args", "db", "world", "calls", "json", "ToolError"}
+        # Named in worked examples rather than called: a sub-agent, and identifiers standing in
+        # for an agent's own tool and for scenario names.
+        | {"scenario_writer", "send_confirmation", "scenario_1", "edge_case_a"}
+        # Argument names a skill tells the model to fill in, not tools.
+        | {"found", "returns", "angles", "themes", "target", "replace"}
+        # Values a skill enumerates for a field, not tools.
+        | {"succeed", "refuse", "ask", "escalate"}
+        | {"impersonation", "injection", "fraud", "emergency", "pressure"}
     )
 
     for stage, tools in surface.items():
-        text = (SKILLS_ROOT / stage / "SKILL.md").read_text(encoding="utf-8")
+        text = skill_path(stage).read_text(encoding="utf-8")
         # `name` or `name(` — the way a skill refers to a tool it wants called.
         mentioned = set(re.findall(r"`([a-z_][a-z0-9_]*)\(?`", text))
         unknown = {
@@ -4319,9 +4386,9 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
 
 def test_scenario_skill_forbids_mutually_exclusive_terminal_outcomes():
     """A transfer/refusal scenario cannot also require work after the conversation ends."""
-    from fi.alk.harness.config import SKILLS_ROOT
+    from fi.alk.harness.config import skill_path
 
-    text = (SKILLS_ROOT / "write-scenarios" / "SKILL.md").read_text(encoding="utf-8")
+    text = skill_path("write").read_text(encoding="utf-8")
     assert "one coherent terminal outcome" in text
     assert "must not also require a transaction to finish after that transfer" in text
     assert "split them into" in text and "separate scenarios" in text
@@ -4704,7 +4771,7 @@ def test_the_ready_gate_refuses_a_scenario_whose_world_was_never_set_up(tmp_path
     """The precondition gate. A scenario about the last five items is only a test of the agent
     if there really are five; otherwise the agent fails for something we got wrong, and it reads
     as the agent's fault."""
-    from fi.alk.harness.prove import prove
+    from fi.alk.harness.scenariogen.write.prove import prove
 
     root, _contract, catalogue = _built_environment(tmp_path)
     scenario = Scenario.model_validate(
@@ -4726,7 +4793,7 @@ def test_the_ready_gate_refuses_a_scenario_whose_world_was_never_set_up(tmp_path
 
 def test_setup_code_makes_the_world_the_scenario_presumes(tmp_path):
     """setup runs, then ready confirms it worked, and only then is anything else asked."""
-    from fi.alk.harness.prove import prove
+    from fi.alk.harness.scenariogen.write.prove import prove
 
     root, _contract, catalogue = _built_environment(tmp_path)
     scenario = Scenario.model_validate(
@@ -4749,7 +4816,7 @@ def test_setup_code_makes_the_world_the_scenario_presumes(tmp_path):
 
 def test_the_setups_own_calls_are_not_credited_to_the_agent(tmp_path):
     """A check that counts calls must not see the ones the scenario made on its own behalf."""
-    from fi.alk.harness.prove import prepared
+    from fi.alk.harness.scenariogen.write.prove import prepared
 
     root, _contract, _catalogue = _built_environment(tmp_path)
     scenario = Scenario.model_validate(
@@ -4769,7 +4836,7 @@ def test_the_setups_own_calls_are_not_credited_to_the_agent(tmp_path):
 
 
 def test_broken_setup_is_ours_and_says_so(tmp_path):
-    from fi.alk.harness.prove import prove
+    from fi.alk.harness.scenariogen.write.prove import prove
 
     root, _contract, catalogue = _built_environment(tmp_path)
     scenario = Scenario.model_validate(
@@ -4784,8 +4851,8 @@ def test_broken_setup_is_ours_and_says_so(tmp_path):
 def test_a_kept_scenario_becomes_a_folder_of_files(tmp_path):
     """The files are the artifact, not a rendering of one. Something you can open and run is
     something you can argue with."""
-    from fi.alk.harness.folder import folder_for, read_folder
-    from fi.alk.harness.scenario_tools import write_scenarios
+    from fi.alk.harness.scenariogen.store.folder import folder_for, read_folder
+    from fi.alk.harness.scenariogen.write.tools import write_scenarios
 
     root, _contract, catalogue = _built_environment(tmp_path)
     scenario = Scenario.model_validate(
@@ -4818,14 +4885,113 @@ def test_a_kept_scenario_becomes_a_folder_of_files(tmp_path):
     assert again.solution == scenario.solution
 
 
+def test_a_check_reaches_the_folder_even_when_the_callers_catalogue_is_stale(tmp_path):
+    """Writers add the discriminating sub-goals as they go, so the copy a save was started with
+    does not have them. Skipping those left twenty five of forty nine scenarios reaching the
+    runner with nothing grading what they were written to catch."""
+    from fi.alk.harness.scenariogen.model.catalogue import (
+        Catalogue,
+        SubGoal,
+        save_catalogue,
+    )
+    from fi.alk.harness.scenariogen.store.folder import folder_for
+    from fi.alk.harness.scenariogen.store.suite import write_scenarios
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    added = SubGoal(
+        name="otp_code_sent",
+        what="an OTP was sent",
+        check="def check(world, calls):\n    del world, calls\n    return None\n",
+    )
+    save_catalogue(catalogue.merged(Catalogue(sub_goals=[added])), root)
+
+    scenario = Scenario.model_validate({**_delta(), "sub_goals": ["item-added", "otp_code_sent"]})
+    # The catalogue this save was handed predates the sub-goal, exactly as a stage's own copy does.
+    write_scenarios([scenario], root, catalogue)
+
+    checks = folder_for(root, scenario.name) / "checks"
+    assert (checks / "otp_code_sent.py").is_file()
+
+
+def test_the_folder_says_which_of_its_sub_goals_are_judged(tmp_path):
+    """Absence of a check file meant both 'judged' and 'we lost it', so the reader had to guess."""
+    import json as _json
+
+    from fi.alk.harness.scenariogen.model.catalogue import Catalogue, SubGoal
+    from fi.alk.harness.scenariogen.store.folder import folder_for, write_folder
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    graded = catalogue.merged(
+        Catalogue(
+            sub_goals=[
+                SubGoal(name="tone_was_kind", what="the refusal was explained", judged="a model has to read it"),
+            ]
+        )
+    )
+    scenario = Scenario.model_validate(
+        {**_delta(), "sub_goals": ["item-added", "tone_was_kind"]}
+    )
+    write_folder(scenario, graded, root)
+
+    body = _json.loads((folder_for(root, scenario.name) / "scenario.json").read_text())
+    assert body["judged_sub_goals"] == ["tone_was_kind"]
+
+
+def test_a_sub_goal_the_catalogue_cannot_resolve_is_not_called_judged(tmp_path):
+    """It is not judged, it is unresolvable, and saying so is what lets the reader refuse it."""
+    import json as _json
+
+    from fi.alk.harness.scenariogen.store.folder import folder_for, write_folder
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    scenario = Scenario.model_validate({**_delta(), "sub_goals": ["item-added", "never_defined"]})
+    write_folder(scenario, catalogue, root)
+
+    body = _json.loads((folder_for(root, scenario.name) / "scenario.json").read_text())
+    assert body["judged_sub_goals"] == []
+
+
+def test_adding_a_sub_goal_keeps_what_another_writer_added(tmp_path):
+    """Saving rewrites the whole file from one writer's copy, so concurrent writers used to drop
+    each other's entries and the folder write then had nothing to resolve the name against."""
+    from fi.alk.harness.scenariogen.model.catalogue import Catalogue, SubGoal, load_catalogue
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    sibling = Catalogue(
+        sub_goals=[
+            SubGoal(
+                name="otp_code_sent",
+                what="an OTP was sent",
+                check="def check(world, calls):\n    del world, calls\n    return None\n",
+            )
+        ]
+    )
+    from fi.alk.harness.scenariogen.model.catalogue import save_catalogue
+
+    save_catalogue(catalogue.merged(sibling), root)
+
+    mine = SubGoal(
+        name="fare_quoted",
+        what="a fare was quoted",
+        check="def check(world, calls):\n    del world, calls\n    return None\n",
+    )
+    # What add_sub_goal does: append to this session's copy, fold the file back in, save.
+    catalogue.sub_goals.append(mine)
+    catalogue.sub_goals = catalogue.merged(load_catalogue(root)).sub_goals
+    save_catalogue(catalogue, root)
+
+    names = load_catalogue(root).names()
+    assert {"otp_code_sent", "fare_quoted"} <= names
+
+
 def test_a_check_file_runs_on_its_own_and_agrees_with_the_harness(tmp_path):
     """The same file, the same answer, whether the harness runs it or a person does. If those
     two could disagree, neither could be trusted."""
     import subprocess
     import sys
 
-    from fi.alk.harness.folder import folder_for, write_folder
-    from fi.alk.harness.prove import prepared
+    from fi.alk.harness.scenariogen.store.folder import folder_for, write_folder
+    from fi.alk.harness.scenariogen.write.prove import prepared
 
     root, _contract, catalogue = _built_environment(tmp_path)
     scenario = Scenario.model_validate(_delta())
@@ -4860,7 +5026,7 @@ def test_every_stage_is_told_what_the_harness_is_for():
     for stage in (
         "understand-agent",
         "build-environment",
-        "write-scenarios",
+        "write",
         "run-scenarios",
     ):
         text = load_skill(stage)
@@ -5009,7 +5175,7 @@ def test_a_timestamped_suite_replaces_a_stale_legacy_runs_file(tmp_path):
 
 def test_voice_scenario_phone_is_bound_from_nested_fixture():
     from fi.alk.harness.run.live import fixture_phone
-    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenariogen.model.scenario import Scenario
 
     scenario = Scenario(
         name="one",
@@ -5867,9 +6033,9 @@ def test_a_refusal_scenario_is_not_vacuous_because_its_evidence_is_what_was_said
     Judged on that alone, the gate rejects exactly the scenarios that test a refusal. An agent that
     did nothing also said nothing, so a judged sub-goal cannot be passed by an empty run.
     """
-    from fi.alk.harness.catalogue import Catalogue, SubGoal
+    from fi.alk.harness.scenariogen.model.catalogue import Catalogue, SubGoal
     from fi.alk.harness.checks import Outcome
-    from fi.alk.harness.prove import Proof
+    from fi.alk.harness.scenariogen.write.prove import Proof
 
     catalogue = Catalogue(
         sub_goals=[
@@ -5909,7 +6075,7 @@ def test_a_setup_or_ready_that_says_nothing_is_not_a_complaint():
     """The convention is that a complaint is a sentence. An empty string reads as "no complaint" to
     whoever wrote it, and taking it as a failure produces a rejection with no reason attached: the
     author is then sent hunting for a problem that is not there."""
-    from fi.alk.harness.folder import _run
+    from fi.alk.harness.scenariogen.store.folder import _run
 
     for returning in ("''", "'   '", "None", "True"):
         outcome = _run(
@@ -6112,9 +6278,9 @@ def test_dropping_a_scenario_removes_it_from_disk(tmp_path):
     """The folders are the truth and they are what gets read back. Writing the survivors without
     taking the others away means a dropped scenario returns on the next load, still failing, and
     dropping it appears to do nothing at all."""
-    from fi.alk.harness.catalogue import Catalogue, SubGoal
-    from fi.alk.harness.scenario import Scenario
-    from fi.alk.harness.scenario_tools import load_scenarios, write_scenarios
+    from fi.alk.harness.scenariogen.model.catalogue import Catalogue, SubGoal
+    from fi.alk.harness.scenariogen.model.scenario import Scenario
+    from fi.alk.harness.scenariogen.write.tools import load_scenarios, write_scenarios
 
     catalogue = Catalogue(
         sub_goals=[
@@ -6289,7 +6455,7 @@ def test_judged_scenario_check_cannot_pass_vacuously_without_actions():
         _voice_attempt_should_retry,
         _voice_infrastructure_failure,
     )
-    from fi.alk.harness.scenario import Step
+    from fi.alk.harness.scenariogen.model.scenario import Step
 
     scenario = type(
         "ExecutableScenario",
@@ -6404,7 +6570,7 @@ def test_the_closing_line_is_kept():
 
     # The person is asked for that line, and told not to leave while the agent is waiting.
     from fi.alk.harness.contract import AgentContract
-    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenariogen.model.scenario import Scenario
 
     asked = customer_prompt(
         Scenario(name="s", instruction="you want a thing", sub_goals=[]),
@@ -6473,12 +6639,12 @@ def test_the_platform_is_used_only_when_it_is_configured():
 
 
 def test_voice_suite_evals_use_the_documented_platform_inputs(monkeypatch):
-    from fi.alk.harness.catalogue import default_suite_evals
+    from fi.alk.harness.scenariogen.model.catalogue import default_suite_evals
     from fi.alk.harness.contract import AgentContract
     from fi.alk.harness.run import platform_evals
     from fi.alk.harness.run.conversation import Exchange, Transcript
     from fi.alk.harness.run.grade import judge_suite_evals
-    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenariogen.model.scenario import Scenario
 
     calls = []
 
@@ -6530,12 +6696,12 @@ def test_voice_suite_evals_use_the_documented_platform_inputs(monkeypatch):
 def test_hosted_voice_marks_unavailable_required_evals_as_grading_failures(
     monkeypatch,
 ):
-    from fi.alk.harness.catalogue import default_suite_evals
+    from fi.alk.harness.scenariogen.model.catalogue import default_suite_evals
     from fi.alk.harness.contract import AgentContract
     from fi.alk.harness.run import platform_evals
     from fi.alk.harness.run.conversation import Transcript
     from fi.alk.harness.run.grade import judge_suite_evals
-    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenariogen.model.scenario import Scenario
 
     monkeypatch.setenv("ALK_HOSTED_EXECUTION", "1")
     monkeypatch.setattr(platform_evals, "configured", lambda: False)
@@ -6552,12 +6718,12 @@ def test_hosted_voice_marks_unavailable_required_evals_as_grading_failures(
 
 
 def test_suite_evals_do_not_run_for_non_voice_agents(monkeypatch):
-    from fi.alk.harness.catalogue import default_suite_evals
+    from fi.alk.harness.scenariogen.model.catalogue import default_suite_evals
     from fi.alk.harness.contract import AgentContract
     from fi.alk.harness.run import platform_evals
     from fi.alk.harness.run.conversation import Transcript
     from fi.alk.harness.run.grade import judge_suite_evals
-    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenariogen.model.scenario import Scenario
 
     monkeypatch.setattr(platform_evals, "configured", lambda: True)
     monkeypatch.setattr(
@@ -6873,7 +7039,7 @@ def test_a_second_run_joins_the_same_test_rather_than_starting_another():
             self.provisioned = 0
             self.started = 0
 
-        def provision(self, name, personas, modality="text"):
+        def provision(self, name, personas, modality="text", description=""):
             self.provisioned += 1
             return {"run_test_id": "rt-1"}
 
@@ -6928,7 +7094,7 @@ def test_reporting_says_when_the_platform_allocated_too_few_calls():
     from fi.alk.harness import platform
 
     class Short:
-        def provision(self, name, personas, modality="text"):
+        def provision(self, name, personas, modality="text", description=""):
             return {"run_test_id": "rt-1"}
 
         def start(self, run_test_id, scenario_ids=None):
@@ -6956,7 +7122,7 @@ def test_new_platform_execution_preserves_submitted_scenario_order():
     class Ordered:
         started_with = None
 
-        def provision(self, name, personas, modality="text"):
+        def provision(self, name, personas, modality="text", description=""):
             return {"run_test_id": "rt-1", "scenario_ids": ["sid-a", "sid-b"]}
 
         def start(self, run_test_id, scenario_ids=None):
@@ -7057,3 +7223,40 @@ def test_platform_call_start_uses_existing_ongoing_status_flow():
     api = Recording()
     platform.mark_ongoing(platform.Reported(), "ce-started", platform=api)
     assert api.calls == ["ce-started"]
+
+
+def test_a_writer_that_cannot_persist_journals_what_it_proved(tmp_path):
+    """The journal has to fire on the path that actually runs.
+
+    Its first home was the legacy fan-out, which the native worker path never calls, so a run
+    delegating to `scenario_writer` held its whole suite in memory and wrote nothing until the
+    final save. A writer sharing the destination has `persist=False`, and that is exactly the
+    case that needs the journal.
+    """
+    from fi.alk.harness.scenariogen.write.tools import accept_scenario
+    from fi.alk.harness.scenariogen.store.suite import JOURNAL, journalled
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    kept = []
+    said = accept_scenario(
+        _delta(), world_root=root, catalogue=catalogue, kept=kept, persist=False
+    )
+
+    assert not said.get("is_error"), said
+    # No folder, because writing the suite here would delete a sibling writer's work.
+    assert not (root / "scenarios" / "adds-a-big-mac" / "scenario.json").exists()
+    # But it is on disk all the same, and readable back.
+    assert (root / JOURNAL).exists()
+    assert [one.name for one in journalled(root)] == ["adds-a-big-mac"]
+
+
+def test_a_writer_that_can_persist_does_not_also_journal(tmp_path):
+    """The folder is the truth once it exists; a journal beside it would be re-imported next run."""
+    from fi.alk.harness.scenariogen.write.tools import accept_scenario
+    from fi.alk.harness.scenariogen.store.suite import JOURNAL
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=[], persist=True)
+
+    assert (root / "scenarios" / "adds-a-big-mac" / "scenario.json").exists()
+    assert not (root / JOURNAL).exists()

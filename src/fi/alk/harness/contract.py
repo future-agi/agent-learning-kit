@@ -97,6 +97,15 @@ class ToolSpec(BaseModel):
     arg_types: dict[str, str] = Field(default_factory=dict)
     arg_values: dict[str, Any] = Field(default_factory=dict)
     description: str = ""
+    # What must already have happened in the conversation before this tool can succeed, named as
+    # the tools that make it true. Empty means it can be called first thing.
+    #
+    # This is the one fact about an agent that no instruction to a scenario writer can replace.
+    # Without it a writer assumes the worst and replays the agent's whole flow to reach every
+    # cell, because doing so always works and deviating risks a refusal it cannot predict. Agents
+    # usually gate far fewer tools than a reader would guess, so the difference between recording
+    # this and leaving it empty is most of a suite's shape.
+    requires: list[str] = Field(default_factory=list)
 
 
 class ToolEntry(BaseModel):
@@ -428,6 +437,16 @@ class AgentContract(BaseModel):
     one_liner: str = ""
     modality: str = "chat"
     conversational: bool = True
+    # Which way a call goes, from this agent's side, and a property of the agent rather than of
+    # any one scenario: an agent that answers a line answers every time, and one that dials out
+    # dials out every time. Read from the agent at understand time, usually from its own prompt
+    # ("callers dial in ...") or from the endpoint it declares. Every scenario inherits it.
+    #
+    # ``inbound`` is somebody ringing the agent and is the default, because it is what every
+    # contract written before this field described. ``outbound`` is the agent ringing a person,
+    # which changes who speaks first and, more importantly, changes the person: they did not
+    # place the call and have no errand of their own.
+    direction: str = "inbound"
     system_prompt_excerpt: str = ""
     hard_constraints: list[str] = Field(default_factory=list)
     tools: list[ToolSpec] = Field(default_factory=list)
@@ -483,6 +502,19 @@ class AgentContract(BaseModel):
         parts = [
             f"AGENT: {self.agent} - {self.one_liner}",
             f"MODALITY: {self.modality}",
+            # Which way the call goes changes what a scenario *is*, so every stage that writes
+            # one has to be told. Without this the writer gives an outbound agent's callers an
+            # errand of their own, and the person opens by asking for the thing the agent rang
+            # them about.
+            (
+                "DIRECTION: outbound - this agent places the call. The person did not ring it, "
+                "has no errand of their own, and does not know who is calling until told. A "
+                "scenario here is the agent's reason for calling and what the person does with "
+                "it, never a person arriving with a request."
+                if self.direction == "outbound"
+                else "DIRECTION: inbound - somebody rings this agent, arriving with something "
+                "they want done."
+            ),
             "REAL TOOLS (use ONLY these, with these exact arg names and types):\n"
             + ("\n".join(lines) or "  (none)"),
         ]

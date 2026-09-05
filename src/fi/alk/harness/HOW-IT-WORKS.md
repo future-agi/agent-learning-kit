@@ -155,7 +155,7 @@ Then `world/snapshot.py` writes `world.sqlite`, `handlers/*.py`, `world.py` and 
 
 ## 4. Scenarios — the conversations worth having
 
-`scenarios.py`, `skills/write-scenarios/SKILL.md`, tools in `scenario_tools.py`
+`scenarios.py`, `skills/scenarios/write/SKILL.md`, tools in `scenario_tools.py`
 
 A scenario is a **change on the base environment**, and it owns a folder (`folder.py`):
 

@@ -18,6 +18,7 @@ renders. Nothing above this line knows a vendor's name.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Callable
@@ -42,6 +43,8 @@ RESULT = "result"
 ARTIFACT = "artifact"
 DONE = "done"
 
+logger = logging.getLogger(__name__)
+
 # Provider streams normally emit a message or tool event every few seconds.  A subprocess can
 # remain alive forever after a dropped upstream stream, though, which previously left a hosted
 # job looking healthy while making no progress.  Bound *inactivity*, not total stage duration:
@@ -52,9 +55,19 @@ STAGE_IDLE_TIMEOUT_SECONDS = float(
 )
 STAGE_IDLE_RETRIES = int(os.getenv("ALK_STAGE_IDLE_RETRIES", "1"))
 
+# A provider's per-minute ceiling is a wait, not a verdict. Left unhandled it ends the run: a
+# five-hundred scenario suite died in its fourteenth turn, still planning, because one call came
+# back 429 and nothing tried again. Backoff is generous because the window being waited out is
+# measured in minutes, and the alternative is losing hours of proved work.
+RATE_LIMIT_RETRIES = int(os.getenv("ALK_RATE_LIMIT_RETRIES", "4"))
+RATE_LIMIT_BACKOFF_SECONDS = float(os.getenv("ALK_RATE_LIMIT_BACKOFF", "45"))
+
 
 class StageIdleTimeout(TimeoutError):
     """The provider stream stayed open without producing any observable event."""
+
+
+from .trace import Trace
 
 
 @dataclass
@@ -129,6 +142,14 @@ _TARGET_KEYS = (
     "table",
     "name",
 )
+
+
+def _rate_limited(turn: Turn) -> bool:
+    """Whether this turn failed only because the provider was at its ceiling."""
+    if turn.outcome != "failed":
+        return False
+    said = f"{turn.error}".lower()
+    return "429" in said or "resource_exhausted" in said or "rate limit" in said
 
 
 def _why_it_failed(done: StageDone) -> str:
@@ -210,6 +231,9 @@ class Stage:
         # same as getting one: a request that quietly does not take shows up only on the
         # invoice, weeks later, as a number nobody can explain.
         self.models_used: set[str] = set()
+        # Recorded as the run goes. Reconstructing where a stage spent its turns from a rendered
+        # log afterwards is possible and horrible, and the answer decides what to fix.
+        self.trace = Trace(name=name)
 
     @property
     def spec(self) -> SessionSpec:
@@ -343,9 +367,41 @@ class Stage:
         self, message: str, *, on_event: Callable[[Event], None] | None = None
     ) -> Turn:
         """Send a message and wait for the whole reply."""
+        # Two independent reasons to try again, so they get their own counters: a dead stream
+        # needs a fresh session, a provider ceiling needs only patience.
+        for waited in range(RATE_LIMIT_RETRIES + 1):
+            turn = await self._said_once(message, on_event=on_event)
+            if not _rate_limited(turn) or waited >= RATE_LIMIT_RETRIES:
+                return turn
+            pause = RATE_LIMIT_BACKOFF_SECONDS * (waited + 1)
+            logger.info(
+                "rate limited, waiting %.0fs before asking again (%s of %s)",
+                pause,
+                waited + 1,
+                RATE_LIMIT_RETRIES,
+            )
+            if on_event:
+                on_event(
+                    Event(
+                        DONE,
+                        text=(
+                            f"rate limited, waiting {pause:.0f}s and asking again "
+                            f"({waited + 1} of {RATE_LIMIT_RETRIES})"
+                        ),
+                        detail={"outcome": "rate_limited", "wait_seconds": pause},
+                    )
+                )
+            await asyncio.sleep(pause)
+        raise AssertionError("unreachable")
+
+    async def _said_once(
+        self, message: str, *, on_event: Callable[[Event], None] | None = None
+    ) -> Turn:
+        """One exchange, retried only for a stream that stopped answering."""
         for attempt in range(STAGE_IDLE_RETRIES + 1):
             try:
                 async for event in self.stream(message):
+                    self.trace.record(event)
                     if on_event:
                         on_event(event)
                 return self.history[-1]

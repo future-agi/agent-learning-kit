@@ -186,6 +186,21 @@ def _sqlite_type(declared: str) -> str:
     return "text"
 
 
+def _default_sql(default: str, sql_type: str) -> str:
+    """A SQLite column default, rewritten for the Postgres column it lands on.
+
+    SQLite has no boolean storage class and keeps `0`/`1`, which Postgres refuses outright
+    against a `boolean` column ("default expression is of type integer").
+    """
+    text = default.strip()
+    if sql_type == "boolean":
+        if text in {"0", "'0'"}:
+            return "FALSE"
+        if text in {"1", "'1'"}:
+            return "TRUE"
+    return text
+
+
 def _sqlite_json_type(values: list[Any], sql_type: str) -> str:
     """Preserve structured SQLite TEXT values when moving a world to Postgres.
 
@@ -260,6 +275,12 @@ def _sqlite_sql(path: Path) -> str:
                 )
                 if int(row[3] or 0) and not int(row[5] or 0):
                     suffix += " NOT NULL"
+                # `PRAGMA table_info` reports the default in row[4]. Dropping it while keeping
+                # NOT NULL leaves a column the authored world fills implicitly and the compiled
+                # one rejects, so every insert relying on it fails against Postgres alone.
+                default = row[4]
+                if default is not None and str(default).strip():
+                    suffix += f" DEFAULT {_default_sql(str(default), sql_type)}"
                 definitions.append(f"{_identifier(name)} {sql_type}{suffix}")
                 columns.append(name)
                 column_types.append(sql_type)

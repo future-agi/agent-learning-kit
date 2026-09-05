@@ -23,7 +23,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from ..probe import ProbeReport, ProbeResult
-from . import Snapshot, Store
+from ..stores import Snapshot, Store
 
 STORE = "store"
 BITES = "bites"

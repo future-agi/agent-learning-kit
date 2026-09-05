@@ -19,7 +19,8 @@ from typing import Any
 
 from . import build as build_stage
 from . import reception as reception_stage
-from . import scenarios as scenario_stage
+from .scenariogen.store.suite import load_scenarios
+from .scenariogen.write import stage as scenario_stage
 from . import understand as understand_stage
 from .config import artifact_dir
 from .contract import AgentContract
@@ -87,7 +88,7 @@ class Conversation:
 
     @property
     def scenarios_written(self) -> bool:
-        return bool(self.out) and bool(scenario_stage.load(self.out))
+        return bool(self.out) and bool(load_scenarios(self.out))
 
     @property
     def anything_run(self) -> bool:
@@ -184,7 +185,7 @@ class Conversation:
         else:
             if not self.world_built:
                 raise RuntimeError("cannot write scenarios before there is a world")
-            written = len(scenario_stage.load(self.out))
+            written = len(load_scenarios(self.out))
             wanted = written or self.wanted
             self.stage, _ = scenario_stage.open_stage(
                 contract, out=self.out, wanted=wanted, ask=self.ask

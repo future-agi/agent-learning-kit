@@ -37,7 +37,7 @@ from fi.alk.harness.process_runtime import EnvironmentRuntime, RuntimeState
 
 # =================================================================================================
 # Scenario-folder fixture writer -- `folder.py`'s documented layout, hand-written (never through
-# `fi.alk.harness.folder`/`fi.alk.harness.scenario`, matching the module under test).
+# `fi.alk.harness.scenariogen.store.folder`/`fi.alk.harness.scenariogen.model.scenario`, matching the module under test).
 # =================================================================================================
 
 
@@ -864,10 +864,73 @@ def test_runtime_error_inside_setup_reaches_setup_crashed_through_the_real_sched
 # =================================================================================================
 
 
+def test_a_missing_check_is_refused_when_the_document_says_it_is_not_judged(tmp_path: Path) -> None:
+    """The reader used to take any missing check file for a judged sub-goal, and the placeholder a
+    judged sub-goal gets reports held, so a check lost on its way to the folder read as a pass."""
+    root = tmp_path / ss.SCENARIOS_DIRNAME
+    _write_scenario(
+        root,
+        "otp_before_charge",
+        raw_body={
+            "name": "otp_before_charge",
+            "scenario_key": "s1",
+            "scenario_id": "id1",
+            "sub_goals": ["otp_code_sent", "tone_was_kind"],
+            "judged_sub_goals": ["tone_was_kind"],
+        },
+        setup_code="def setup(world):\n    return None\n",
+        ready_code="def ready(world):\n    return None\n",
+    )
+
+    with pytest.raises(ss.ScenarioDocumentInvalid) as raised:
+        ss.load_scenarios(tmp_path)
+    assert "otp_code_sent" in str(raised.value)
+
+
+def test_a_judged_sub_goal_the_document_names_still_loads_without_a_file(tmp_path: Path) -> None:
+    root = tmp_path / ss.SCENARIOS_DIRNAME
+    _write_scenario(
+        root,
+        "explains_the_refusal",
+        raw_body={
+            "name": "explains_the_refusal",
+            "scenario_key": "s1",
+            "scenario_id": "id1",
+            "sub_goals": ["tone_was_kind"],
+            "judged_sub_goals": ["tone_was_kind"],
+        },
+        setup_code="def setup(world):\n    return None\n",
+        ready_code="def ready(world):\n    return None\n",
+    )
+
+    scenarios = ss.load_scenarios(tmp_path)
+    assert [goal.judged != "" for goal in scenarios[0].sub_goals] == [True]
+
+
+def test_a_hand_written_folder_making_no_claim_still_reads_a_missing_check_as_judged(
+    tmp_path: Path,
+) -> None:
+    """A suite edited by hand carries no `judged_sub_goals`, so it asserts nothing about which
+    names are judged and the older reading is the only sound one."""
+    root = tmp_path / ss.SCENARIOS_DIRNAME
+    _write_scenario(
+        root,
+        "by_hand",
+        scenario_key="s1",
+        scenario_id="id1",
+        sub_goals=["tone_was_kind"],
+        setup_code="def setup(world):\n    return None\n",
+        ready_code="def ready(world):\n    return None\n",
+    )
+
+    scenarios = ss.load_scenarios(tmp_path)
+    assert [goal.judged != "" for goal in scenarios[0].sub_goals] == [True]
+
+
 def test_real_write_folder_round_trip_matches_the_adapters_reading(tmp_path: Path) -> None:
-    from fi.alk.harness import folder as fmod
-    from fi.alk.harness.catalogue import Catalogue, SubGoal
-    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenariogen.store import folder as fmod
+    from fi.alk.harness.scenariogen.model.catalogue import Catalogue, SubGoal
+    from fi.alk.harness.scenariogen.model.scenario import Scenario
 
     catalogue = Catalogue(
         sub_goals=[
@@ -954,8 +1017,10 @@ def test_load_without_a_hang_is_unaffected_by_the_budget(tmp_path: Path) -> None
         # p13: `build()` now calls `register_with_platform` after load -- this test is about the
         # R1-5 timeout BUDGET specifically, not registration, so registration is stubbed to a
         # passthrough (registration's own behavior is covered separately, below).
-        async def _passthrough(scenarios_client, scenarios, *, run_name):
-            del scenarios_client, run_name
+        async def _passthrough(
+            scenarios_client, scenarios, *, run_name, description="", modality="", direction=""
+        ):
+            del scenarios_client, run_name, description, modality, direction
             return scenarios
 
         with mock.patch.object(ss, "register_with_platform", _passthrough):
@@ -1413,3 +1478,121 @@ def test_mutation_id_assignment_skipped_is_killed() -> None:
         assert restored[0].scenario_id == "platform-a"  # confirms the patch was fully undone
 
     asyncio.run(scenario())
+
+
+def test_provision_payload_carries_the_contract_direction():
+    """An outbound contract must reach the platform, or the agent row says inbound and the
+    simulator is told to wait for a greeting that never comes."""
+    from fi.alk.harness import scenario_source as ss
+
+    class _One:
+        scenario_key = "s1"
+        name = ""
+        situation = ""
+        outcome = ""
+        persona: dict = {}
+
+    outbound = ss._provision_payload("run", [_One()], "prompt", "voice", "outbound")
+    assert outbound["direction"] == "outbound"
+    assert outbound["modality"] == "voice"
+
+    inbound = ss._provision_payload("run", [_One()], "prompt", "voice", "inbound")
+    assert inbound["direction"] == "inbound"
+
+    # Absent stays absent, so an older guest does not start asserting a direction it never read.
+    assert "direction" not in ss._provision_payload("run", [_One()], "prompt", "voice")
+
+
+def test_contract_brief_tells_every_stage_which_way_the_call_goes():
+    """The writer never sees `direction` otherwise, so it gives an outbound agent's callers an
+    errand and the person opens by asking for the thing the agent rang them about."""
+    from fi.alk.harness.contract import AgentContract
+
+    outbound = AgentContract(
+        agent="ride", one_liner="books rides", modality="voice", direction="outbound"
+    ).brief()
+    assert "DIRECTION: outbound" in outbound
+    assert "has no errand of their own" in outbound
+
+    inbound = AgentContract(agent="ride", one_liner="books rides", modality="voice").brief()
+    assert "DIRECTION: inbound" in inbound
+
+
+def test_the_gemini_backend_retries_a_transient_gateway_error():
+    """One 502 from the sandbox egress proxy used to fail the ADK root node and take the whole
+    stage down, losing every scenario already proved. The client must retry instead."""
+    import inspect
+    from fi.alk.harness.backends import vertex_gemini
+
+    source = inspect.getsource(vertex_gemini.VertexGeminiSession.start)
+    assert "retry_options" in source
+    for code in ("429", "502", "503"):
+        assert code in source, f"{code} should be retried, not fatal"
+
+
+def test_the_writer_ceiling_is_enforced_not_merely_asked_for():
+    """A brief is guidance; the safety limit has to hold whatever the model asks for. claim_slice
+    is the only place a slice is handed out, so it is the only place the limit can bind."""
+    import inspect
+    from fi.alk.harness.scenariogen.plan import tools as grid_tools
+    from fi.alk.harness.backends.base import MOST_WORKERS_AT_ONCE
+    from fi.alk.harness.scenariogen.write.delegation import AT_ONCE
+
+    assert MOST_WORKERS_AT_ONCE == 12, "the enforced ceiling"
+    assert AT_ONCE == 10, "what a stage is told to aim at"
+    assert AT_ONCE < MOST_WORKERS_AT_ONCE, "aim below the ceiling so normal work never trips it"
+
+    source = inspect.getsource(grid_tools)
+    assert "MOST_WORKERS_AT_ONCE" in source, "claim_slice must consult the ceiling"
+    assert "Every writer is already holding a slice" in source, "and refuse past it"
+
+    # What the model is told names ten as the most there may be. The enforced ceiling is higher
+    # so a brief overshoot is not a refusal mid-suite, and that number is ours: a brief or a
+    # refusal quoting it would read as the instruction being wrong.
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.scenariogen.write.stage import opening
+
+    said = opening(AgentContract(agent="a", one_liner="b", modality="voice"), 200)
+    assert f"up to {AT_ONCE} at once" in said
+    assert str(MOST_WORKERS_AT_ONCE) not in said
+
+
+def test_vertex_credentials_retry_their_token_fetch():
+    """The sandbox proxy intermittently refuses the CONNECT tunnel to the token endpoint with a
+    502. google-auth has no retry there, and the model client's retry options never see that
+    fetch, so a single refusal killed whole runs. Retrying at connect is the part that matters."""
+    import inspect
+    from fi.alk.harness.backends import vertex_gemini
+
+    helper = inspect.getsource(vertex_gemini._retrying_vertex_credentials)
+    assert "connect=" in helper, "the failure is the tunnel, not a response"
+    assert "502" in helper
+    assert "backoff_factor" in helper
+
+    # The refresh has to keep using the retrying session: a run outlives one token.
+    assert "def refresh" in helper
+
+    start = inspect.getsource(vertex_gemini.VertexGeminiSession.start)
+    assert "_retrying_vertex_credentials" in start, "wired into the client"
+    assert "_api_key()" in start, "and skipped when a key makes the token fetch unnecessary"
+
+
+def test_two_scenarios_graded_by_the_same_check_set_are_refused() -> None:
+    # Six scenarios about six different account conditions each named the one check that a
+    # transfer happened, and two about two different ambiguous addresses shared a four-check set
+    # at thirteen steps apiece. An agent that transferred everybody, or picked either candidate,
+    # passed the lot. Depth hid it: the earlier gate only fired at two steps or fewer.
+    from fi.alk.harness.scenariogen.model.scenario import Scenario
+    from fi.alk.harness.scenariogen.quality.checks import duplicate_grading_problems
+
+    first = Scenario(name="refuse_expired_card", sub_goals=["no_booking_created", "cards_read"])
+    same = Scenario(name="refuse_low_balance", sub_goals=["cards_read", "no_booking_created"])
+    assert duplicate_grading_problems(same, [first]), "same set in any order is the same grade"
+    assert "refuse_expired_card" in duplicate_grading_problems(same, [first])[0], "names the twin"
+
+    apart = Scenario(
+        name="refuse_low_balance", sub_goals=["cards_read", "no_booking_created", "balance_read"]
+    )
+    assert not duplicate_grading_problems(apart, [first]), "one distinguishing check is enough"
+    assert not duplicate_grading_problems(first, [first]), "resubmitting replaces, never duplicates"
+    assert not duplicate_grading_problems(Scenario(name="ungraded"), [first]), "no checks, no twin"

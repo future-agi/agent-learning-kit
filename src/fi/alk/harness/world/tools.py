@@ -24,7 +24,7 @@ from typing import Any
 from ..backends import tool, tool_server
 
 from ..amend import add_rule, drop_rule, fix_tool, set_modality, widen
-from ..catalogue import SubGoal, load_catalogue, save_catalogue, validate_sub_goal
+from ..scenariogen.model.catalogue import SubGoal, load_catalogue, save_catalogue, validate_sub_goal
 from ..checks import run_check, run_world_check
 from ..contract import AgentContract
 from ..simulator import (

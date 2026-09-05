@@ -13,7 +13,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from . import Records, Snapshot, StoreError
+from ..stores import Records, Snapshot, StoreError
 
 # What SQLite hands out that is not itself a record. Only present once a table is declared
 # AUTOINCREMENT, which is why its absence is normal rather than a gap.

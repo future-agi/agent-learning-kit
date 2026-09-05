@@ -1,0 +1,99 @@
+{
+  "modality": "voice",
+  "notes": "Voice adds the channel the call arrives over. Everything else is inherited from universal.json; only the axes named here are overridden.",
+  "axes": [
+    {
+      "name": "channel",
+      "label": "Channel",
+      "of": "the conditions the call arrives under",
+      "baseline": "a quiet room and a clean line",
+      "changes_world": "never",
+      "weight": 0.8,
+      "settings": [
+        {
+          "name": "street",
+          "applies": {
+            "background_noise": "street"
+          },
+          "needs_env": [
+            "ALK_BACKGROUND_NOISE"
+          ],
+          "guidance": "Calling from a pavement. Traffic under the voice, and they raise their own to compete with it."
+        },
+        {
+          "name": "vehicle",
+          "applies": {
+            "background_noise": "vehicle"
+          },
+          "needs_env": [
+            "ALK_BACKGROUND_NOISE"
+          ],
+          "guidance": "Hands-free in a moving car. Road noise, cabin echo, and attention on the road rather than the call."
+        },
+        {
+          "name": "crowd",
+          "applies": {
+            "background_noise": "retail"
+          },
+          "needs_env": [
+            "ALK_BACKGROUND_NOISE"
+          ],
+          "guidance": "A busy public place. Other voices carry, and some of what the agent hears was never said to it."
+        },
+        {
+          "name": "dropping",
+          "applies": {},
+          "unwired": "no packet-loss or jitter injection exists in the voice path, so this setting would change nothing about the call",
+          "guidance": "A failing mobile connection: words disappear mid-sentence and confirmations have to survive it."
+        },
+        {
+          "name": "interrupted",
+          "applies": {},
+          "unwired": "interruption is enabled for every call rather than per scenario, so this setting is not a variation of anything",
+          "guidance": "Talks over the agent rather than waiting for it to finish."
+        }
+      ]
+    },
+    {
+      "name": "who",
+      "label": "Who",
+      "of": "the caller",
+      "baseline": "verified account holder, ordinary literacy, speaking the default language",
+      "changes_world": "never",
+      "weight": 1.0,
+      "settings": [
+        {
+          "name": "senior",
+          "applies": {
+            "persona.age_group": "60+",
+            "persona.communication_style": "Detailed and elaborate"
+          },
+          "guidance": "An older caller, less fluent with the product's vocabulary. They answer in narrative rather than in the field the agent asked for, and they take longer to get to it."
+        },
+        {
+          "name": "second-language",
+          "applies": {
+            "persona.accent": "Indian",
+            "persona.communication_style": "Simple and clear"
+          },
+          "guidance": "Speaks the service's language as a second language. Comprehension is fine, phrasing is not native, and an accent the recogniser handles less well is part of the test."
+        },
+        {
+          "name": "on-someone-behalf",
+          "applies": {
+            "persona.personality": "Professional and formal"
+          },
+          "guidance": "Calling for the account holder, not the account holder. Everything they know is second hand, and some of it is wrong."
+        },
+        {
+          "name": "unverified",
+          "applies": {
+            "persona.personality": "Cautious and skeptical"
+          },
+          "guidance": "Cannot or will not complete verification on this call. What the agent still does for them is the graded behaviour."
+        }
+      ]
+    }
+  ],
+  "counterparty": "caller"
+}

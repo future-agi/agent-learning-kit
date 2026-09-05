@@ -19,6 +19,8 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
+from ...scenariogen import BUNDLED
+
 logger = logging.getLogger(__name__)
 
 # Where the platform's tables are mounted. Colon-separated so voice and chat guides can both be
@@ -111,7 +113,7 @@ def _bundled_vocabulary() -> dict[str, list[str]]:
     definition's set rather than the persona dropdown's two, because nothing on the platform
     enforces the dropdown and a caller is expected to speak more than English and Hindi.
     """
-    path = Path(__file__).parent / "data" / "persona_vocabulary.json"
+    path = BUNDLED / "persona_vocabulary.json"
     try:
         by_class = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):

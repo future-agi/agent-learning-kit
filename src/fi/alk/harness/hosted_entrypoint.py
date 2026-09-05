@@ -67,6 +67,7 @@ from .process_runtime import (
 from .scenario_source import (
     BundleScenarioSource,
     ScenarioDocumentInvalid,
+    bundle_contract,
     bundle_has_scenarios,
 )
 from .world.handle import HostedWorld
@@ -125,10 +126,19 @@ SIMULATOR_SECRETS_PATH = Path("/run/futureagi/simulator-secrets.json")
 # complete set the in-process text/voice simulators may consume.
 _SIMULATOR_SECRET_ALIASES = frozenset(
     {
+        # Noise is off unless a run opts in, so a hosted job that is not told cannot ask.
+        "ALK_BACKGROUND_NOISE",
         "ALK_HARNESS",
         "ALK_HARNESS_MODEL",
         "ALK_HARNESS_THINKING",
+        # The per-stage overrides travel with the run-wide ones. Without them a hosted job
+        # silently ignores the split and puts every stage on the run's backend, which is the
+        # opposite of what naming a stage was for and gives no sign it was dropped.
+        "ALK_SCENARIOS_HARNESS",
+        "ALK_SCENARIOS_MODEL",
         "ALK_VERTEX_LOCATION",
+        # How many writers a stage may run at once. A hosted job could not be told before, so
+        # every run silently used the in-code default however wide the machine actually was.
         "CARTESIA_API_KEY",
         "DEEPGRAM_API_KEY",
         "GEMINI_API_KEY",
@@ -559,16 +569,7 @@ _VOICE_CONNECTORS = {"livekit", "vapi", "retell"}
 
 
 def _bundle_contract_modality(bundle_dir: Path) -> str | None:
-    path = bundle_dir / "contract.json"
-    if not path.is_file():
-        return None
-    try:
-        body = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    if not isinstance(body, dict):
-        return None
-    value = str(body.get("modality") or "").strip().lower()
+    value = str(bundle_contract(bundle_dir).get("modality") or "").strip().lower()
     return value or None
 
 

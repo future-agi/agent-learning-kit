@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import Any, AsyncIterator
 
 from claude_agent_sdk import (
+    AgentDefinition,
     AssistantMessage,
     ClaudeAgentOptions,
     ClaudeSDKClient,
@@ -27,6 +28,7 @@ from claude_agent_sdk import (
 )
 
 from .base import (
+    MOST_WORKERS_AT_ONCE,
     Call,
     ModelReply,
     Say,
@@ -39,6 +41,26 @@ from .base import (
 )
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
+
+# What this SDK calls the tool that runs a worker. The harness calls the capability
+# ``Delegate``; only this line knows the vendor's name for it.
+_DELEGATION_TOOL = "Agent"
+
+
+def _ask_only(ask: Any) -> Any:
+    """Allow everything, but route the one tool that has a person on the other end.
+
+    An ungated stage is trusted with its tools; it is not therefore talking to nobody.
+    """
+
+    async def gate(tool_name: str, payload: dict[str, Any], context: Any) -> Any:
+        from claude_agent_sdk.types import PermissionResultAllow
+
+        if tool_name == "AskUserQuestion":
+            return await ask(tool_name, payload, context)
+        return PermissionResultAllow(updated_input=payload)
+
+    return gate
 
 
 def _sdk_server(server: ToolServer) -> Any:
@@ -164,20 +186,95 @@ class ClaudeBackend:
                 for tool_spec in server.tools
             ),
         ]
+        servers = {
+            server_name: _sdk_server(server)
+            for server_name, server in spec.servers.items()
+        }
+        agents: dict[str, Any] = {}
+        for name, worker in spec.workers.items():
+            worker_servers = worker.servers or spec.servers
+            for server_name, server in worker_servers.items():
+                servers.setdefault(server_name, _sdk_server(server))
+            agents[name] = AgentDefinition(
+                description=worker.description,
+                prompt=worker.instructions,
+                tools=[
+                    *(worker.builtins or spec.builtins),
+                    *(
+                        qualified(server_name, tool_spec.name)
+                        for server_name, server in worker_servers.items()
+                        for tool_spec in server.tools
+                    ),
+                ],
+                mcpServers=list(worker_servers),
+                model=worker.model or "inherit",
+                maxTurns=worker.max_turns,
+                # Blocking, so the call returns the worker's result. Left unset these launch in
+                # the background and the caller is told it will be notified later: a stage that
+                # dealt fifty scenarios across five writers then ended at its next turn, killing
+                # all five, and reported success having saved one. The parent has nothing useful
+                # to do while a slice is written, and it must not finish before the work does.
+                background=False,
+                # Only when asked for: the field has its own default and passing a blank
+                # through would override it with nothing.
+                **({"effort": worker.effort} if worker.effort else {}),
+            )
+        if agents:
+            # The delegation tool is named for the model, and it has to be granted here or the
+            # gate below refuses the very call these workers exist to receive.
+            allowed = [*allowed, _DELEGATION_TOOL]
+        env = dict(provider_env(spec.model))
+        if agents:
+            env.setdefault(
+                "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS", str(MOST_WORKERS_AT_ONCE)
+            )
+            # One level only. A worker that delegates again multiplies the fan-out by a factor
+            # nothing in the stage accounted for, and the depth is free to raise later.
+            env.setdefault("CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH", "1")
+        # A declared worker is reached through the SDK's own sub-agent tool, which asks *which*
+        # kind to run. Nothing otherwise tells the model that ours exists, and left to guess it
+        # dispatches the generic kind: that one launches detached, answers "launched
+        # successfully, you will be notified", and returns nothing, so a stage dealt eight slices,
+        # dispatched eight agents holding none of its tools, declared success and exited having
+        # written nothing. On the other backend a worker is a plain tool in the list, which is why
+        # this only ever bit here. Naming them costs a line and removes the guess.
+        said = spec.system_prompt
+        if spec.workers:
+            said += (
+                "\n\n## Your workers\n\nYou have these sub-agents: "
+                + ", ".join(sorted(spec.workers))
+                + ". Dispatch one by naming it exactly as the kind of sub-agent to run. They "
+                "return what they produced when they finish. Do not dispatch a general-purpose "
+                "sub-agent instead: that kind runs detached, holds none of your tools, and its "
+                "work is lost when you finish your turn."
+            )
         options = ClaudeAgentOptions(
-            system_prompt=spec.system_prompt,
+            system_prompt=said,
             allowed_tools=allowed,
-            mcp_servers={
-                server_name: _sdk_server(server)
-                for server_name, server in spec.servers.items()
-            },
+            mcp_servers=servers,
             setting_sources=[],
             max_turns=spec.max_turns,
             model=spec.model,
-            env=provider_env(spec.model),
+            env=env,
         )
+        if agents:
+            options.agents = agents
         if spec.cwd is not None:
             options.cwd = spec.cwd
+        if not spec.gated:
+            # An ungated stage is given the host's whole tool list on purpose, and an unattended
+            # run cannot answer a prompt, so approval has to be settled here rather than left to
+            # the default. The boundary for such a stage is the sandbox it runs in, not the tool
+            # list: it is reading an agent's own repository to write tests against it, and every
+            # artifact it produces still goes through the three gates before it is kept.
+            options.permission_mode = "bypassPermissions"
+            if spec.permission_override is not None:
+                options.can_use_tool = spec.permission_override
+            elif spec.ask is not None:
+                # Ungated does not mean unattended. In a conversation there is a person on the
+                # other side, and the stage asking them something is the point of keeping it
+                # open. Without this the question is approved silently and never reaches them.
+                options.can_use_tool = _ask_only(spec.ask)
         if spec.gated:
             # Not acceptEdits: that auto-approves Edit and Write before the permission callback
             # is consulted, so a stage could rewrite an artifact by hand and skip the tool whose

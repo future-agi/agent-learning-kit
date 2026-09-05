@@ -12,6 +12,7 @@ invented here would fit only the first.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -76,16 +77,24 @@ class Catalogue(BaseModel):
     def names(self) -> set[str]:
         return {one.name for one in self.sub_goals}
 
+    def merged(self, other: "Catalogue") -> "Catalogue":
+        """This catalogue plus anything only `other` holds, this one winning on a shared name.
+
+        Writers run at the same time and each reads the file once, when its tools are built, so
+        every copy goes stale the moment a sibling adds a sub-goal. Whatever writes has to fold the
+        file back in first, or it saves its own view over everybody else's.
+        """
+        mine = self.names()
+        return Catalogue(
+            sub_goals=[
+                *self.sub_goals,
+                *(one for one in other.sub_goals if one.name not in mine),
+            ],
+            suite_evals=self.suite_evals,
+        )
+
     def suite_eval(self, name: str) -> SuiteEval | None:
         return next((one for one in self.suite_evals if one.name == name), None)
-
-
-def validate_suite_eval(suite_eval: SuiteEval) -> list[str]:
-    if not suite_eval.name.strip():
-        return ["no name"]
-    if not suite_eval.required_inputs:
-        return [f"{suite_eval.name}: no required inputs"]
-    return []
 
 
 def validate_sub_goal(sub_goal: SubGoal) -> list[str]:
@@ -108,6 +117,28 @@ def validate_sub_goal(sub_goal: SubGoal) -> list[str]:
         problems.append(
             f"{sub_goal.name}: a check must define check(world, calls) and return a problem as "
             "a string, or None when the sub-goal held"
+        )
+    # A refusal graded by demanding the forbidden call fails the agent that correctly declined and
+    # passes the one that tried. Nine of thirty one scenarios in one run were graded this way, and
+    # the suite would have told a customer that its better agent was worse. The shape gives it
+    # away: the sub-goal is about something not happening, and the check errors when it did not
+    # happen.
+    about_refusal = re.search(
+        r"\b(refus|declin|reject|must not|never|block|deny|denied|without|unverified|invalid)\b",
+        f"{sub_goal.name} {sub_goal.what}",
+        re.I,
+    )
+    demands_attempt = re.search(
+        r"return\s+f?[\"'][^\"']*\b(was never called|not called|did not attempt|never attempted|"
+        r"was not attempted|no \w+ calls?)\b",
+        sub_goal.check,
+        re.I,
+    )
+    if about_refusal and demands_attempt:
+        problems.append(
+            f"{sub_goal.name}: this grades a refusal by requiring the forbidden call to appear, so "
+            "an agent that correctly declined fails and one that tried passes. Assert the end "
+            "state instead: that the thing which must not happen did not happen"
         )
     return problems
 

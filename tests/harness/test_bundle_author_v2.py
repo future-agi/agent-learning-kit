@@ -526,6 +526,47 @@ def test_bundle_preserves_sqlite_scalar_types_and_boolean_values(
     )
 
 
+def test_bundle_preserves_sqlite_column_defaults(tmp_path: Path) -> None:
+    """A NOT NULL column with a default is filled implicitly by the authored world. Dropping the
+    default while keeping NOT NULL makes every insert that relies on it fail against Postgres."""
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    database = sqlite3.connect(authoring / "world.sqlite")
+    try:
+        database.execute(
+            "CREATE TABLE bookings ("
+            "booking_ref TEXT PRIMARY KEY, "
+            "status TEXT NOT NULL DEFAULT 'pending', "
+            "cash_supported BOOLEAN NOT NULL DEFAULT 0, "
+            "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+        )
+        database.execute("INSERT INTO bookings (booking_ref) VALUES ('UB1')")
+        database.commit()
+    finally:
+        database.close()
+
+    output = tmp_path / "bundle"
+    author_bundle_v2(
+        source=source,
+        job=_job(connector="http"),
+        authoring=authoring,
+        output=output,
+    )
+    seed_sql = (output / "seed" / "world.sql").read_text(encoding="utf-8")
+    assert "DEFAULT CURRENT_TIMESTAMP" in seed_sql
+    assert "DEFAULT 'pending'" in seed_sql
+    # NOT NULL must keep its default, or an insert that omits the column fails where the
+    # authored world accepted it.
+    assert "NOT NULL DEFAULT CURRENT_TIMESTAMP" in seed_sql
+    assert "NOT NULL DEFAULT 'pending'" in seed_sql
+    # SQLite keeps booleans as 0/1; Postgres refuses that against a boolean column outright
+    # ("default expression is of type integer"), which failed a real hosted job at seed.
+    assert "NOT NULL DEFAULT FALSE" in seed_sql
+    assert "DEFAULT 0" not in seed_sql
+
+
 def test_bundle_preserves_sqlite_unique_constraints_for_upserts(tmp_path: Path) -> None:
     source = tmp_path / "source"
     source.mkdir()

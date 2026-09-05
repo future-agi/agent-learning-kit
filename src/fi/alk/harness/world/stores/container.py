@@ -13,12 +13,15 @@ is real or just an aspiration.
 
 from __future__ import annotations
 
+import atexit
 import os
+import signal
 import secrets
 import subprocess
 import time
+from dataclasses import dataclass
 
-from . import Held, StoreError
+from ..stores import Held, StoreError
 
 # How long to wait for a fresh container to start answering. The first run on a machine pulls
 # the image, which dominates; afterwards this is a second or two.
@@ -33,6 +36,69 @@ LABEL = "alk.harness.store"
 # 127.0.0.1 is its own loopback and the engine is not there. Sharing a network instead lets
 # the engine be reached by container name, on the port it actually listens on.
 NETWORK = "ALK_DOCKER_NETWORK"
+
+# Set this to run one engine per store again, which is only worth it to isolate a run completely.
+PER_STORE = "ALK_STORE_PER_WORLD"
+
+# One engine per image for the life of the process, and a database inside it per world.
+#
+# A container per world is what this used to do, and it does not survive being asked for several
+# worlds at once: each engine takes seconds to become ready and megabytes to hold, so a fan-out
+# or a test file stands up four or five at a time, the machine slows, and stores start failing
+# their readiness deadline rather than the run failing for any reason to do with the harness.
+# Sharing one engine makes standing up a world a `CREATE DATABASE`, which is immediate.
+_ENGINES: dict[str, "_Engine"] = {}
+
+
+def _release_on_signal(number: int, _frame: object) -> None:
+    """Release the engines, then die the way we were asked to.
+
+    ``atexit`` is not enough on its own: it does not run when a process is terminated, and a
+    terminated process is the normal way a long run ends here. Every run stopped that way left its
+    engine behind, which is how a machine ends up with one container per abandoned run.
+    """
+    _release_engines()
+    signal.signal(number, signal.SIG_DFL)
+    os.kill(os.getpid(), number)
+
+
+def _catch_signals() -> None:
+    """Ask to be told before we are killed, without stamping on a host that already cares.
+
+    Only from the main thread, and never over a handler somebody else installed: this module is
+    imported into other people's processes and must not quietly change how they shut down.
+    """
+    for number in (signal.SIGTERM, signal.SIGINT):
+        try:
+            if signal.getsignal(number) in (signal.SIG_DFL, None):
+                signal.signal(number, _release_on_signal)
+        except (ValueError, OSError):  # pragma: no cover - not the main thread
+            return
+
+
+def _release_engines() -> None:
+    """Remove the engines this process started, when it ends.
+
+    Nothing else will: a shared engine deliberately outlives the world that paid for it, so
+    without this a machine accumulates one container per run until it is the reason the next run
+    is slow. Registered once, on the first engine, so importing this module costs nothing.
+    """
+    for engine in list(_ENGINES.values()):
+        docker("rm", "--force", "--volumes", engine.container, check=False)
+    _ENGINES.clear()
+
+
+@dataclass
+class _Engine:
+    """A running container several stores are pointed at."""
+
+    container: str
+    user: str
+    password: str
+    database: str
+    host: str
+    port: int | None
+    worlds: int = 0
 
 
 def docker(*args: str, check: bool = True) -> str:
@@ -95,6 +161,7 @@ class ContainerStore(Held):
         self.host = "127.0.0.1"
         self.port: int | None = None
         self._started = False
+        self._shared: _Engine | None = None
         # Every script `apply` has run, in order. Saved beside the rows so a restore into a
         # fresh container can stand the schema up before putting the rows back.
         self.applied: list[str] = []
@@ -102,9 +169,62 @@ class ContainerStore(Held):
     # -- lifecycle -------------------------------------------------------------------
 
     def start(self) -> None:
-        """Stand the container up and block until it answers. Idempotent."""
+        """Point this store at an engine, standing one up if the process has none. Idempotent."""
         if self._started:
             return
+        if os.environ.get(PER_STORE, "").strip():
+            self._start_alone()
+            return
+
+        engine = _ENGINES.get(self.image)
+        if engine is None:
+            # First world in this process pays for the engine; every one after it pays nothing.
+            engine = self._start_engine()
+            if not _ENGINES:
+                atexit.register(_release_engines)
+                _catch_signals()
+            _ENGINES[self.image] = engine
+        self.container = engine.container
+        self.user, self.password = engine.user, engine.password
+        self.host, self.port = engine.host, engine.port
+        self._shared = engine
+        engine.worlds += 1
+        self._started = True
+        self._make_space(engine)
+
+    def _start_engine(self) -> _Engine:
+        """Run the container, wait for it to answer, and describe it for everyone after."""
+        engine = _Engine(
+            container=f"alk-store-{secrets.token_hex(6)}",
+            user=self.user,
+            password=self.password,
+            database=self.database,
+            host="127.0.0.1",
+            port=None,
+        )
+        self.container = engine.container
+        self._run_container()
+        self._started = True
+        if self.network:
+            engine.host, engine.port = engine.container, self.container_port
+        else:
+            engine.port = self._published_port()
+        self.host, self.port = engine.host, engine.port
+        self._await_ready()
+        return engine
+
+    def _start_alone(self) -> None:
+        """One engine for this store only, as it used to be."""
+        self.container = f"alk-store-{secrets.token_hex(6)}"
+        self._run_container()
+        self._started = True
+        if self.network:
+            self.host, self.port = self.container, self.container_port
+        else:
+            self.port = self._published_port()
+        self._await_ready()
+
+    def _run_container(self) -> None:
         environment: list[str] = []
         for name, template in self.boot_env.items():
             environment += [
@@ -127,18 +247,32 @@ class ContainerStore(Held):
             f"127.0.0.1::{self.container_port}",
             self.image,
         )
-        self._started = True
-        if self.network:
-            self.host, self.port = self.container, self.container_port
-        else:
-            self.port = self._published_port()
-        self._await_ready()
+
+    def _make_space(self, engine: _Engine) -> None:
+        """Give this store its own space inside the shared engine.
+
+        The base class has nowhere to put one, so it shares the engine's own. An engine whose
+        stores would tread on each other overrides this.
+        """
+        self.database = engine.database
+
+    def _drop_space(self) -> None:
+        """Remove this store's space. The engine stays up for the next world."""
 
     def stop(self) -> None:
-        """Remove the container. Safe when it never started, so teardown needs no guard."""
+        """Give up this store's space. Safe when it never started, so teardown needs no guard.
+
+        The engine is deliberately left running. It is shared, and the next world in this process
+        wants it; a killed run leaves it labelled, so strays are still findable by label.
+        """
         if not self._started:
             return
-        docker("rm", "--force", "--volumes", self.container, check=False)
+        if self._shared is None:
+            docker("rm", "--force", "--volumes", self.container, check=False)
+        else:
+            self._drop_space()
+            self._shared.worlds -= 1
+            self._shared = None
         self._started = False
         self.port = None
 

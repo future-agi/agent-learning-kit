@@ -18,7 +18,7 @@ from ..backends import SessionSpec
 
 from ..config import chosen_model
 from ..contract import AgentContract
-from ..scenario import Scenario
+from ..scenariogen.model.scenario import Scenario
 from ..session import Stage
 from ..world.runtime import Call
 from .targets import Target

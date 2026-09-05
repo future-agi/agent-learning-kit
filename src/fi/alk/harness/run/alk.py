@@ -25,7 +25,7 @@ from fi.simulate.agent.wrapper import AgentInput, AgentResponse, AgentWrapper
 from fi.simulate.environments.chat import ChatEnvironment
 
 from ..contract import AgentContract
-from ..scenario import Scenario
+from ..scenariogen.model.scenario import Scenario
 from ..world.runtime import GeneratedWorld
 from .targets import LocalAgent
 

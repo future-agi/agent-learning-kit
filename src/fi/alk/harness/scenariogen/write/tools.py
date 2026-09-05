@@ -16,29 +16,37 @@ import os
 from pathlib import Path
 from typing import Any
 
-from .backends import tool, tool_server
+from ...backends import tool, tool_server
 
-from .amend import add_rule, drop_rule, fix_tool, widen
-from .catalogue import (
+from ...amend import add_rule, drop_rule, fix_tool, widen
+from ..model.catalogue import (
     Catalogue,
     SubGoal,
     load_catalogue,
     save_catalogue,
     validate_sub_goal,
 )
-from .contract import AgentContract
-from .folder import SCENARIOS, apply_setup, read_all, write_folder, write_index
-from .prove import play_reference_step, prepared, prove
-from .scenario import (
-    Scenario,
-    Step,
+from ...contract import AgentContract
+from ..store.folder import apply_setup
+from .prove import WORLD_IN_USE, play_reference_step, prepared, prove
+from ..model.scenario import Scenario, Step
+from ..quality.checks import (
     contract_sequence_problems,
+    duplicate_grading_problems,
     suite_diversity_problems,
+    unbacked_condition_problems,
     validate_scenario,
 )
-from .simulator import load_simulator_prompt
-from .tools import brief, schema
-from .world.snapshot import restore
+from ...simulator import load_simulator_prompt
+from ...tools import brief, schema
+from ..store.suite import (
+    forget_journal,
+    journalled,
+    load_scenarios,
+    record_written,
+    write_scenarios,
+)
+from ...world.snapshot import restore
 
 SCENARIO_SERVER = "scenarios"
 
@@ -52,13 +60,12 @@ def _err(text: str) -> dict[str, Any]:
 
 
 def parallel_suites() -> bool:
-    """Whether a suite is written by several writers at once.
+    """Whether a session that saves also offers generate_suite.
 
-    Off by default. Writing one scenario at a time is slower but is the path the base branch runs
-    on, and a suite that is written slowly is worth more than one that is not written at all.
-    Set HARNESS_PARALLEL_SCENARIOS=1 to fan out instead.
+    True now. This was an environment flag that defaulted off, which meant a suite was written one
+    scenario at a time unless somebody remembered to set it, and nothing on screen said why.
     """
-    return os.environ.get("HARNESS_PARALLEL_SCENARIOS", "").strip() == "1"
+    return True
 
 
 def persona_field(name: str) -> dict[str, Any]:
@@ -67,7 +74,7 @@ def persona_field(name: str) -> dict[str, Any]:
     Offered as an enum so the values arrive right the first time. Without the platform's model
     to read, it stays a plain string rather than an enum of nothing.
     """
-    from .persona_guides import offered
+    from ..model.persona import offered
 
     allowed = offered(name)
     return {"type": "string", "enum": allowed} if allowed else {"type": "string"}
@@ -75,7 +82,7 @@ def persona_field(name: str) -> dict[str, Any]:
 
 def persona_vocabulary_note() -> str:
     """A sentence about why the persona fields are constrained, when they are."""
-    from .persona_guides import vocabulary
+    from ..model.persona import vocabulary
 
     if not vocabulary():
         return ""
@@ -86,42 +93,14 @@ def persona_vocabulary_note() -> str:
     )
 
 
-def write_scenarios(
-    scenarios: list[Scenario], destination: Path, catalogue: Catalogue | None = None
-) -> Path:
-    """Write every scenario out as its own folder, and regenerate the index over them."""
-    catalogue = catalogue if catalogue is not None else load_catalogue(destination)
-    for one in scenarios:
-        write_folder(one, catalogue, destination)
-    _forget_dropped(scenarios, destination)
-    return write_index(scenarios, destination)
-
-
-def _forget_dropped(scenarios: list[Scenario], destination: Path) -> None:
-    """Remove the folders of scenarios that are no longer in the suite.
-
-    The folders are the truth, and they are what gets read back. Writing the survivors without
-    taking the others away means a dropped scenario returns on the next load, still failing, and
-    dropping it appears to do nothing at all.
-    """
-    import shutil
-
-    root = Path(destination) / SCENARIOS
-    if not root.exists():
-        return
-    keeping = {one.name for one in scenarios}
-    for folder in root.iterdir():
-        if folder.is_dir() and folder.name not in keeping:
-            shutil.rmtree(folder)
-
-
-def load_scenarios(destination: Path) -> list[Scenario]:
-    """Every scenario on disk, read from its folder.
-
-    The folders are the truth. The index beside them is regenerated from these, so it can
-    describe them but never contradict them.
-    """
-    return read_all(destination)
+# How many throwaway probes a guarded writer may run. A writer has to learn the world before it can
+# ground anything in it, and four was not enough to find the records a real instruction names:
+# across a two hundred scenario suite every delegated writer produced instructions a third the
+# length of the orchestrator's, and not one fixture carried an address. The guard exists to stop a
+# writer mapping the whole suite before saving any of it, so it bites after the first scenario is
+# in rather than before the writer has seen anything.
+PROBES_BEFORE_FIRST = 12
+PROBES_BETWEEN = 4
 
 
 def accept_scenario(
@@ -132,6 +111,7 @@ def accept_scenario(
     kept: list[Scenario],
     simulator_prompt: str = "",
     hard_constraints: list[str] | None = None,
+    direction: str = "inbound",
     persist: bool = True,
 ) -> dict[str, Any]:
     """Validate one scenario, then prove it. A plain function so both halves are testable.
@@ -141,27 +121,51 @@ def accept_scenario(
     the others have proved. Those writers keep their work in ``kept`` and the caller saves once.
     """
     try:
-        scenario = Scenario.model_validate(payload)
+        # Which way the call goes is a property of the agent, not of one scenario, so it comes
+        # from the contract rather than the writer -- which never sets it and would otherwise
+        # leave every scenario inbound and every outbound call opened by the wrong side.
+        scenario = Scenario.model_validate({**payload, "direction": direction})
     except Exception as invalid:
         return _err(f"Not kept. {invalid}"[:600])
 
-    # Read against the world this scenario actually runs in, so a setup that creates the table
-    # a check reads is not reported as referring to something that does not exist.
-    trial, _applied, _ready = prepared(scenario, world_root)
-    try:
-        problems = validate_scenario(
-            scenario, catalogue, trial.state(), simulator_prompt
-        )
-        problems.extend(contract_sequence_problems(scenario, hard_constraints or []))
-    finally:
-        trial.close()
+    # One world, and everything below rewrites it, so siblings wait rather than interleave.
+    # Held across the trial and the proof together: serialising them separately would still let
+    # a sibling restore in the gap and leave this scenario proved against somebody else's world.
+    with WORLD_IN_USE:
+        # Read against the world this scenario actually runs in, so a setup that creates the
+        # table a check reads is not reported as referring to something that does not exist.
+        try:
+            trial, _applied, _ready = prepared(scenario, world_root)
+            try:
+                problems = validate_scenario(
+                    scenario, catalogue, trial.state(), simulator_prompt
+                )
+                problems.extend(contract_sequence_problems(scenario, hard_constraints or []))
+                problems.extend(unbacked_condition_problems(scenario))
+                # Against every sibling this writer cannot see, not only its own list: writers
+                # run in parallel on separate slices, and two of them picking the same check set
+                # is exactly the case worth catching.
+                problems.extend(
+                    duplicate_grading_problems(
+                        scenario,
+                        (*kept, *journalled(world_root), *load_scenarios(world_root)),
+                    )
+                )
+            finally:
+                trial.close()
 
-    if problems:
-        return _err(
-            "Not kept. Fix these and submit again:\n  - " + "\n  - ".join(problems)
-        )
+            if problems:
+                return _err(
+                    "Not kept. Fix these and submit again:\n  - " + "\n  - ".join(problems)
+                )
 
-    proof = prove(scenario, catalogue, world_root)
+            proof = prove(scenario, catalogue, world_root)
+        except Exception as failed:
+            # A store that refuses is this scenario's problem to hear about, not grounds for
+            # killing the writer. Escaping here took a whole sub-agent down mid-run and lost
+            # every scenario it had not yet handed back.
+            return _err(f"Not kept. The world could not be prepared for it: {failed}"[:600])
+
     if not proof.holds:
         said = f"Not kept. {proof.why()}"
         # Code written against the wrong collection shape is the commonest way setup, ready and a
@@ -183,6 +187,12 @@ def accept_scenario(
     # were written. ``save_scenarios`` remains the suite-level diversity/finality gate.
     if persist:
         write_scenarios(kept, world_root, catalogue)
+    else:
+        # The writer that cannot persist folders journals instead, right here at the accept,
+        # because this is the one point every path goes through. The first journal hook sat in a
+        # fan-out that the native worker path never calls, so the run it was built for still held
+        # its whole suite in memory.
+        record_written([scenario], world_root)
     return _ok(
         f"{scenario.name} {'replaced' if replaced else 'kept'}. All three gates pass: the world "
         "is ready for it, the reference solution passes its checks, and those checks fail when "
@@ -240,14 +250,17 @@ def not_ready(kept: list[Scenario], wanted: int, catalogue: Catalogue) -> list[s
     return problems
 
 
-def scenario_tools(
+def writing_tools(
     contract: AgentContract,
     world_root: Path,
     destination: Path,
     *,
     wanted: int,
     can_save: bool = True,
+    delegates: bool = False,
     start_from: list[Scenario] | None = None,
+    share: list[Scenario] | None = None,
+    probing: bool = False,
 ) -> tuple[Any, list[Scenario]]:
     """A server for writing scenarios against one built environment.
 
@@ -256,16 +269,29 @@ def scenario_tools(
     each other's work. A writer that only submits keeps its scenarios in ``kept``, and whoever
     spawned it merges the lists and writes once.
 
-    ``start_from`` seeds that list. A parallel writer starts empty rather than from disk, so it
-    is never counted as already having what a sibling wrote.
+    ``start_from`` seeds that list, copied. A parallel writer starting from disk would count a
+    sibling's work as its own.
+
+    ``share`` is the other case, and it is the one that makes a fan-out land anywhere: the
+    caller passes the very list it will save from, and every server built on it appends into
+    that one list. Without it a writer accepts into a list nobody else can see, the parent saves
+    its own empty one, and a run reports fifty scenarios kept and writes none.
     """
     kept: list[Scenario] = (
-        list(start_from) if start_from is not None else load_scenarios(destination)
+        share
+        if share is not None
+        else list(start_from)
+        if start_from is not None
+        else load_scenarios(destination)
     )
     catalogue = load_catalogue(destination)
     simulator_prompt = load_simulator_prompt(destination)
     target = {"count": wanted}
-    exploration = {"since_submit": 0}
+    # A writer that probes without ever submitting is stalling, and the guard below says so. A
+    # planner has nothing to submit yet: exploring the agent is its whole job at that point, and
+    # the same guard blocks it from doing what it was asked to do. Measured: a planning run spent
+    # twenty-five minutes refused on every probe.
+    exploration = {"since_submit": 0, "guarded": not probing, "submitted": 0}
 
     # ``branch`` is required because coverage is counted on the use case and branch pair, and the
     # merge drops a repeat of that pair. A writer that leaves it out gives every scenario in its
@@ -281,6 +307,13 @@ def scenario_tools(
         schema({"table": str, "limit": int, "matching": str}, []),
     )
     async def inspect_world(args: dict[str, Any]) -> dict[str, Any]:
+        # Reading the world rewrites it: `restore` reloads the snapshot into the store, which
+        # truncates and reinserts every table. Outside the lock that lands in the middle of
+        # somebody else's proof.
+        with WORLD_IN_USE:
+            return await _inspect_world(args)
+
+    async def _inspect_world(args: dict[str, Any]) -> dict[str, Any]:
         world = restore(world_root)
         try:
             state = world.state()
@@ -347,13 +380,20 @@ def scenario_tools(
         schema({"calls": list, "setup_code": str}, ["calls"]),
     )
     async def try_calls(args: dict[str, Any]) -> dict[str, Any]:
-        if exploration["since_submit"] >= 4:
+        allowed = PROBES_BETWEEN if exploration["submitted"] else PROBES_BEFORE_FIRST
+        if exploration["guarded"] and exploration["since_submit"] >= allowed:
             return _err(
-                "Four throwaway probes have run since the last saved scenario. Submit and prove "
-                "one scenario now; if its gate identifies a concrete problem, use the next "
+                f"{allowed} throwaway probes have run since the last saved scenario. Submit and "
+                "prove one scenario now; if its gate identifies a concrete problem, use the next "
                 "probe to correct that problem. Do not map the whole suite before saving work."
             )
         exploration["since_submit"] += 1
+        # Probing rewrites the world too: `restore` reloads the snapshot into the store and this
+        # then applies a setup on top. Held for the same reason a proof is.
+        with WORLD_IN_USE:
+            return await _try_calls(args)
+
+    async def _try_calls(args: dict[str, Any]) -> dict[str, Any]:
         world = restore(world_root)
         try:
             world.reset()
@@ -416,6 +456,9 @@ def scenario_tools(
             one for one in catalogue.sub_goals if one.name != sub_goal.name
         ]
         catalogue.sub_goals.append(sub_goal)
+        # Saving rewrites the whole file, and every writer holds its own copy read when its tools
+        # were built, so writing this one's list alone drops what the others added since.
+        catalogue.sub_goals = catalogue.merged(load_catalogue(destination)).sub_goals
         save_catalogue(catalogue, destination)
         return _ok(
             f"{sub_goal.name} added"
@@ -450,6 +493,34 @@ def scenario_tools(
                     "description": "The condition that makes this scenario different from the "
                     "others in the same use case, in one line: what is true here that is not "
                     "true of its siblings.",
+                },
+                "hazard": {
+                    "type": "string",
+                    "description": "What is planted in the agent's way: a fact that is missing, "
+                    "two that contradict, a request the rules forbid, a record that is not what "
+                    "the caller believes it is. A scenario with nothing planted is refused.",
+                },
+                "withheld": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Facts this person has and will not volunteer, so the agent "
+                    "has to ask for them. Real people answer what was asked and hold the rest.",
+                },
+                "tempting": {
+                    "type": "string",
+                    "description": "The shortcut a plausible agent takes here and policy forbids. "
+                    "Naming the wrong action you expect is most of writing the check that "
+                    "catches it.",
+                },
+                "invariant": {
+                    "type": "string",
+                    "description": "What has to hold for the whole interaction, however it goes.",
+                },
+                "failure_modes": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "The ways this is failed, in plain words. A scenario stating "
+                    "only how it passes cannot say what went wrong when it goes red.",
                 },
                 "tests": {
                     "type": "string",
@@ -598,10 +669,12 @@ def scenario_tools(
             kept=kept,
             simulator_prompt=simulator_prompt,
             hard_constraints=contract.hard_constraints,
+            direction=contract.direction,
             persist=can_save,
         )
         if not result.get("is_error"):
             exploration["since_submit"] = 0
+            exploration["submitted"] += 1
         return result
 
     @tool(
@@ -771,7 +844,7 @@ def scenario_tools(
         ),
     )
     async def generate_suite(args: dict[str, Any]) -> dict[str, Any]:
-        from .scenarios import MOST_AT_ONCE, MOST_IN_ONE_GO, write_in_parallel
+        from .stage import MOST_AT_ONCE, write_in_parallel
 
         asked = int(args.get("count") or 0)
         if asked < 1:
@@ -784,10 +857,10 @@ def scenario_tools(
                 "across. Write them one at a time with submit_scenario, or fix the contract."
             )
 
-        # A large ask is served a batch at a time. Spinning up a writer per scenario would put
-        # hundreds of model sessions on one machine, and the person waiting would see nothing
-        # for an hour. A batch they can read, and an offer of the rest, is the better trade.
-        count = min(asked, MOST_IN_ONE_GO)
+        # Whatever was asked for is what gets written. Writers run at most MOST_AT_ONCE at a
+        # time, which is what protects the machine; capping the count as well meant the number
+        # asked for was not the number returned.
+        count = asked
         at_once = max(1, min(int(args.get("at_once") or 0) or 4, MOST_AT_ONCE))
 
         produced = await write_in_parallel(
@@ -813,13 +886,11 @@ def scenario_tools(
             f"{len(produced)} scenarios across {len(by_case)} use cases, {at_once} writers at a "
             f"time. Each cleared all three gates and the suite is saved.\n{lines}"
         )
-        if asked > count:
+        if len(produced) < asked:
             said += (
-                f"\n\n{asked - count} of the {asked} asked for are still to write. "
-                f"{MOST_IN_ONE_GO} is as many as one pass does, so that the suite can be looked "
-                "at before more is spent on it. Show what came back, then ask whether to carry "
-                "on with the rest, change direction first, or stop here. Call generate_suite "
-                "again for the next batch once they have said."
+                f"\n\n{asked - len(produced)} of the {asked} asked for are still to write. "
+                "Say what stopped them rather than reporting the smaller number as the result: "
+                "call generate_suite again for the rest, or say what the suite has run out of."
             )
         return _ok(said)
 
@@ -835,7 +906,21 @@ def scenario_tools(
         # which is how a suite that asked for fifty and reached twenty-eight saved nothing at all.
         # What is off about the suite is said, not enforced.
         noted = not_ready(kept, target["count"], catalogue)
+        # Whatever the journal holds that this session does not is a killed run's proved work,
+        # already gated on its way in. Folded here rather than dropped, matched by name so this
+        # session's own accepts are not doubled; forgotten after the write because the folders
+        # are the truth from then on and a stale journal would re-import them next run.
+        held = {one.name for one in kept}
+        # The folders already on disk as well as the journal. Saving prunes every folder it is not
+        # given, and the journal is dropped by the save that consumed it, so work proved before an
+        # earlier save lives only on disk: folding just the journal let a second save delete it.
+        for one in (*journalled(destination), *load_scenarios(destination)):
+            if one.name in held:
+                continue
+            held.add(one.name)
+            kept.append(one)
         path = write_scenarios(kept, destination, catalogue)
+        forget_journal(destination)
         diversity = suite_diversity_problems(kept)
         judged = sum(
             1
@@ -874,20 +959,30 @@ def scenario_tools(
             inspect_scenario,
             try_calls,
             add_sub_goal,
-            submit_scenario,
+            *([] if delegates else [submit_scenario]),
             amend_contract,
             add_rule_tool,
             drop_rule_tool,
             fix_tool_tool,
             aim_for,
-            drop_scenario,
         ]
+        # Writing is withheld from a stage that has writers, for the same reason `generate_suite`
+        # is: offered both, the model does the work itself. Measured on a 200 run, the stage made
+        # 59 of the submissions and dispatched four writers, then spent its turns proving instead
+        # of dealing, so the fan-out it was given went mostly unused. A stage that cannot submit
+        # has one way to produce a scenario, which is to hand a slice to a writer.
         # Only the session a person is talking to may fan out. A writer that is itself one slice
-        # of a fan-out calling this would split its own slice again, and so on.
+        # of a fan-out calling this would split its own slice again, and so on. A stage that was
+        # given writer workers fans out through those instead, and offering both leaves the model
+        # choosing between two ways to do the same thing: it picks this one, and the workers are
+        # never exercised.
+        # Dropping is the saving session's alone, for the reason saving is. It rewrites the
+        # index and deletes folders, so a writer calling it would delete a sibling's work, and
+        # with one shared list it would drop from under the stage what it never wrote.
         + (
-            [generate_suite, save_scenarios]
-            if can_save and parallel_suites()
-            else [save_scenarios]
+            [generate_suite, save_scenarios, drop_scenario]
+            if can_save and parallel_suites() and not delegates
+            else [save_scenarios, drop_scenario]
             if can_save
             else []
         ),
@@ -922,8 +1017,23 @@ def tool_names() -> tuple[str, ...]:
 TOOL_NAMES = tool_names()
 
 
+def world_state(world_root: Path) -> dict[str, list[dict[str, Any]]]:
+    """Every row the world holds, for checks that need the data rather than a summary."""
+    with WORLD_IN_USE:
+        world = restore(world_root)
+        try:
+            return world.state()
+        finally:
+            world.close()
+
+
 def world_summary(world_root: Path) -> str:
     """What is in the built environment, for grounding the writer before it asks."""
+    with WORLD_IN_USE:
+        return _world_summary(world_root)
+
+
+def _world_summary(world_root: Path) -> str:
     world = restore(world_root)
     try:
         state = world.state()

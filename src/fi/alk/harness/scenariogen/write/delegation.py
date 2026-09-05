@@ -1,11 +1,12 @@
-"""Stage three: write the scenarios the agent will be tested with.
+"""Handing a suite out to writers, and folding back what they return.
 
-Reads the contract and the world that was built from it, and produces scenarios grounded in both.
-The stage can look at the world and run calls against throwaway copies of it, which is what keeps
-a scenario about a real record rather than a plausible-sounding one.
+The stage next door owns the conversation and the saving. This owns the arithmetic of splitting a
+plan into slices, the brief each writer is given, how many run at once, and the top-up round that
+fills what nobody covered. It is kept apart because the two change for different reasons: the
+stage changes when the conversation does, this changes when the fan-out does.
 
-Like the other stages it stays open. A suite is usually right on the second look, and "make three
-of these harder" is the next thing said rather than a regeneration from nothing.
+Nothing here imports the stage. The dependency runs one way, stage to delegation, so that a
+writer's budget and brief can be read without reading the stage that dispatches them.
 """
 
 from __future__ import annotations
@@ -18,158 +19,226 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from .backends import SessionSpec, ToolServer, tool, tool_server
+from ..plan.axes import axes_for
+from ...backends import SessionSpec, ToolServer, WorkerSpec, resolve, tool, tool_server
+from ...backends.base import MOST_WORKERS_AT_ONCE
 
-from .config import artifact_dir, chosen_model, load_skill
-from .catalogue import load_catalogue
-from .contract import AgentContract
-from .scenario import Scenario
-from .scenario_tools import (
-    parallel_suites,
+from ...config import (
+    artifact_dir,
+    chosen_model,
+    compose_skills,
+    load_skill,
+    discovered_skills,
+    scenario_thinking,
+    stage_backend,
+    stage_model,
+    writer_effort,
+)
+from ..plan.canvas import SLICE_SCENARIOS
+from ..plan.tools import Coverage
+from ...sample import Pick, coverage, plan as plan_picks
+from ..model.catalogue import load_catalogue
+from ...contract import AgentContract
+from ..model.scenario import Scenario
+from .tools import (
     SCENARIO_SERVER,
-    load_scenarios,
-    scenario_tools,
+    parallel_suites,
+    writing_tools,
     world_summary,
+)
+from ..store.suite import (
+    forget_journal,
+    journalled,
+    load_scenarios,
     write_scenarios,
 )
-from .session import Stage
-from .tools import schema
+from ...session import Stage
+from ...tools import schema
+from . import PARENT_SKILL, SKILL
 
 logger = logging.getLogger(__name__)
 
-SKILL = "write-scenarios"
 
-# The review pass runs its own tool server, kept apart from the writers' one so a reviewer can
-# only report gaps and never submit or save a scenario itself.
-REVIEW_SERVER = "suite-review"
-
+# The worker the stage runs to write one slice of the grid. Underscored because one backend
+# rewrites anything else to this form, and the skill has to name the tool the model actually sees.
+WRITER = "scenario_writer"
 
 # Turns a scenario costs in practice: look at the world, rehearse the calls, submit, and often
 # one more to correct what a gate refused.
 TURNS_EACH = 3
+
 # Enough to write a handful without the budget being the thing that stops it.
 TURNS_FLOOR = 120
 
+# One worker's turn budget: enough to inspect, rehearse, prove and submit its slice.
+#
+# Sized from the largest slice it can be handed rather than picked. A slice is clamped to twice
+# the recommended size, each scenario costs about `TURNS_EACH` in practice, and before writing any
+# of them a writer reads the agent under test. At a flat sixty it had 3.8 turns per scenario
+# including that reading, so slices came back part-filled, their buckets reopened, and the next
+# writer paid the same reading cost again to finish somebody else's work.
+WRITER_TURNS = SLICE_SCENARIOS * 2 * (TURNS_EACH + 1) + 24
 
 def turns_for(wanted: int) -> int:
     """A turn budget that grows with the suite being asked for.
 
     A fixed ceiling is what made asking for a large suite pointless: generation stopped partway
-    through, and `save_scenarios` refuses a count that does not match what was asked for, so a run
-    that asked for fifty and reached twenty-eight saved nothing at all. The budget has to follow
-    the request, or the request cannot be honoured.
+    through with the rest of the suite unwritten. (`save_scenarios` used to refuse a short count
+    on top of that, which turned a partial run into a saved-nothing run; it saves whatever was
+    proved now.) The budget has to follow the request, or the request cannot be honoured.
     """
     return max(TURNS_FLOOR, wanted * TURNS_EACH + 40)
 
+def _working_dir(destination: Path) -> str:
+    """Where a session's relative paths resolve from.
 
-def open_stage(
-    contract: AgentContract,
-    *,
-    out: Path | None = None,
-    wanted: int = 10,
-    ask: Callable[..., Any] | None = None,
-    max_turns: int = 0,
-) -> tuple[Stage, Path]:
-    """A live write-the-scenarios stage, and where it will write."""
-    destination = out or artifact_dir(contract.agent)
-    server, kept = scenario_tools(contract, destination, destination, wanted=wanted)
-    spec = SessionSpec(
-        # Same ordering as the slice writer: the agent and its world before the method.
-        system_prompt=(
-            f"## This agent\n\n{contract.brief(with_data=True)}"
-            f"\n\n## Its world\n\n{world_summary(destination)}"
-            f"\n\n{load_skill(SKILL)}"
-            + (
-                f"\n\nWrite {wanted} scenarios."
-                if not kept
-                else f"\n\n{len(kept)} scenarios already exist and are loaded: "
-                + ", ".join(scenario.name for scenario in kept)
-                + ". Submitting one under an existing name replaces it."
-            )
-        ),
-        servers={SCENARIO_SERVER: server},
-        builtins=("AskUserQuestion",),
-        cwd=str(destination.parent if destination.parent.exists() else Path.cwd()),
-        max_turns=max_turns or turns_for(wanted),
-        model=chosen_model(),
-        ask=ask,
-        thinking=True,
+    The run directory, because that is what holds ``environment-bundle`` and therefore the agent's
+    own source. It used to be the parent, so every relative path the skill talks about missed by
+    one level and each writer spent turns hunting for code it had been told to read.
+    """
+    where = Path(destination)
+    return str(where if where.is_dir() else Path.cwd())
+
+def writer_workers(
+    contract: AgentContract, destination: Path, share: list[Scenario] | None = None
+) -> dict[str, WorkerSpec]:
+    """The worker the stage may run to write one slice of the grid.
+
+    One definition, not one per slice: the model writes the brief when it calls, so the same
+    worker covers whichever cells it decides to hand out. It gets the scenario tools so it
+    proves and submits its own work, and it is told the agent and its world up front because a
+    worker never sees the parent's conversation.
+
+    ``save_scenarios`` is withheld. Saving rewrites the index and deletes folders it does not
+    know about, so two workers saving at once would delete each other's scenarios; the parent
+    saves once when the fan-out is done.
+    """
+    # The writers append into the caller's own list, which is what the stage later saves from.
+    # Their own list would be invisible to it.
+    server, _ = writing_tools(
+        contract,
+        destination,
+        destination,
+        wanted=0,
+        can_save=False,
+        start_from=None if share is not None else [],
+        share=share,
     )
-    return Stage(spec, name=SKILL), destination
-
-
-def opening(contract: AgentContract, wanted: int = 10, existing: int = 0) -> str:
-    if existing:
-        return (
-            f"There are already {existing} scenarios for {contract.agent!r}, and they are "
-            "loaded. Use inspect_scenario before changing each one so every unchanged field is "
-            "preserved exactly. Say what you want changed, or add to them. Anything you submit "
-            "under an existing name replaces it."
+    return {
+        WRITER: WorkerSpec(
+            description=(
+                "Writes and proves the scenarios for one slice of the coverage grid. Give it "
+                "the cells to cover, how many scenarios, and what makes them distinct."
+            ),
+            instructions=(
+                f"## This agent\n\n{contract.brief(with_data=True)}"
+                f"\n\n## Its world\n\n{world_summary(destination)}"
+                f"\n\n{compose_skills(PARENT_SKILL, SKILL)}"
+                f"{discovered_skills(modality=contract.modality)}"
+                "\n\n## Your slice\n\nYou are one writer among several working on the same "
+                "suite at the same time. Write only the slice you were given, submit each "
+                "scenario as you prove it, and report which cells you covered and any you "
+                "could not. Do not save the suite; the stage saves once when every writer is "
+                "done.\n\nIf your brief names the callers to use, use those and no others: "
+                "their names, accents and locations were dealt across the whole suite, and "
+                "you cannot see what your siblings were given."
+                "\n\n## What to report back"
+                "\n\nName every scenario you wrote, per bucket. The stage checks those names "
+                "against the folder rather than taking a count on trust, so an unnamed scenario "
+                "does not count towards anything."
+                "\n\nFor each bucket you were given: its id, how many scenarios you wrote for "
+                "it, and one sentence on what you actually covered and what you did not. Say "
+                "plainly if a bucket holds fewer real cases than it was sized for."
+                "\n\nThen, separately, **anything worth testing that your brief did not ask "
+                "for**. You are the first person to look inside this part of the agent with its "
+                "source open, so you will find cases nobody could see from outside: a branch two "
+                "calls deep, a state the data only reaches after something else, a refusal that "
+                "is not written down. List each as a grid cell, a few words on what makes it "
+                "worth testing, and roughly how many scenarios it holds."
+                "\n\nDo not widen the bucket you were given to swallow those, and do not write "
+                "them yourself. Report them: the stage opens a bucket for each and somebody is "
+                "given it properly. Absorbing them quietly hides the discovery and makes the "
+                "count wrong."
+            ),
+            builtins=(),
+            servers={SCENARIO_SERVER: server},
+            max_turns=WRITER_TURNS,
+            effort=writer_effort(),
         )
-    return (
-        f"Write {wanted} scenarios for {contract.agent!r}.\n\n"
-        "Look at the world first with inspect_world so every scenario names real records, and "
-        "read the sub-goals already defined. After that inspection, immediately work out and "
-        "submit one scenario at a time; never hold the whole suite in one long response. Emit a "
-        "tool call after each scenario so progress is visible and proved work survives a stop. "
-        "Work out each scenario's solution with try_calls before you submit it, because a "
-        "scenario is only kept if its solution passes its own "
-        "checks and those checks fail without it. In a source-provisioned world, keep each "
-        "solution step's arguments exactly model-facing. If the raw dependency needs trusted "
-        "fields injected by the worker, put its complete payload in environment_arguments; "
-        "never pretend the model supplied rider ids, resolved routes, fares, or other hidden "
-        "state. Treat every contract phrase like 'from this call' literally: the reference "
-        "solution must create that state earlier in the same conversation. Never pre-seed "
-        "opaque state that the agent has no public tool or session state to retrieve. Cover the "
-        "ordinary case, the request that has "
-        "to be refused, the rule under pressure, and at least one where state has to carry "
-        "across several turns. If a proof says an intended check is vacuous or broken, repair "
-        "that named sub-goal with add_sub_goal and resubmit. Never evade a gate by deleting a "
-        "check for behavior the scenario still claims to test. Then save_scenarios."
-        + (
-            "\n\nFor a suite rather than one scenario, say briefly how you are splitting it "
-            "across the agent's use cases and then write it with generate_suite in the same "
-            "turn: it runs a writer per use case at the same time and saves what they prove."
-            if parallel_suites()
-            else ""
-        )
-    )
-
-
-def load(destination: Path) -> list[Scenario]:
-    """The scenarios written for this agent, if any have been."""
-    return load_scenarios(Path(destination))
-
+    }
 
 # What a suite costs, and what it is allowed to cost.
 #
 # Writers run as separate model sessions, so wall clock is roughly the number of scenarios
 # divided by how many run at once. The two ceilings below exist for different reasons: one
 # protects the machine, the other protects the person waiting. Asking for a thousand scenarios
-# is a reasonable thing to want and an unreasonable thing to do in one go, so a large ask is
-# served a batch at a time with the rest offered back.
-AT_ONCE = 4
-MOST_AT_ONCE = int(os.environ.get("HARNESS_WRITERS_AT_ONCE") or 8)
-MOST_IN_ONE_GO = int(os.environ.get("HARNESS_SUITE_BATCH") or 50)
+# The ceiling on fan-out, defined once in backends.base. It is told to the model rather than used
+# to quietly override it: how many writers to actually run is the model's call, from what the
+# canvas has open.
+MOST_AT_ONCE = MOST_WORKERS_AT_ONCE
+
+# How many scenarios one pass writes is whatever was asked for. A cap here used to serve a large
+# ask a batch at a time, which meant the number the person asked for was not the number they got.
+# What a stage is told to aim at, below the enforced ceiling so normal work never trips it.
+AT_ONCE = 10
+
+# Below this, one session writes the suite itself. Delegation buys parallelism and costs turns:
+# each worker is briefed, runs, and reports, and for a handful of scenarios that overhead is the
+# whole bill. Measured on two N=10 runs of the same suite: 54 turns without workers, 119 with,
+# for output that was identical scenario by scenario.
+FEWEST_WORTH_DELEGATING = 20
 
 # How many times the suite is reviewed and topped up after the first pass. One is enough to
 # catch a slice that came back short or a use case nobody covered; more turns it into a loop
 # that keeps finding smaller things to say.
 TOP_UP_ROUNDS = 1
 
-
 @dataclass(frozen=True)
 class Slice:
-    """One writer's share of a suite: what to write, how much, and why it is worth writing."""
+    """One writer's share of a suite: which cells of the grid, and why they are worth covering.
 
-    use_case: str
+    A slice used to be a use case, which sized every use case identically however much was in
+    it, and left the writers to invent what "different" meant. It is now a set of coordinates,
+    so two writers cannot land on the same test and neither has to guess what the other took.
+
+    ``use_case`` survives because results are grouped on it and a scenario still carries the
+    contract's own wording. The cells decide what gets written; the use case decides where the
+    result is filed.
+    """
+
+    picks: tuple[Pick, ...] = ()
+    use_case: str = ""
     angle: str = ""
-    count: int = 1
     why: str = ""
+    # Only used when a slice is a top-up rather than a share of the plan, where the reviewer
+    # named a gap in words instead of in coordinates.
+    asked: int = 0
+
+    @property
+    def count(self) -> int:
+        return len(self.picks) or self.asked or 1
 
     def named(self) -> str:
+        if self.picks:
+            first = self.picks[0].cell.name
+            return first if len(self.picks) == 1 else f"{first} +{len(self.picks) - 1}"
         return f"{self.use_case}: {self.angle}" if self.angle else self.use_case
 
+def slices_for(picks: list[Pick], at_once: int) -> list[Slice]:
+    """One plan dealt into shares, each small enough for one writer to finish.
+
+    Dealt round-robin rather than in blocks. The plan is ordered by value, so the first cells
+    are the ones a suite is not worth running without; cutting it into contiguous blocks would
+    hand every one of those to a single writer, and lose all of them together if that writer
+    fails. Round-robin spreads the important cells across the slices.
+    """
+    if not picks:
+        return []
+    shares = max(1, min(at_once, len(picks)))
+    dealt: list[list[Pick]] = [[] for _ in range(shares)]
+    for index, pick in enumerate(picks):
+        dealt[index % shares].append(pick)
+    return [Slice(picks=tuple(share)) for share in dealt if share]
 
 def even_slices(wanted: int, use_cases: list[str]) -> list[Slice]:
     """The fallback split, when nobody said how the work should be divided.
@@ -188,7 +257,6 @@ def even_slices(wanted: int, use_cases: list[str]) -> list[Slice]:
         Slice(use_case=case, count=each + (1 if i < extra else 0))
         for i, case in enumerate(use_cases)
     ]
-
 
 def planned(wanted: int, use_cases: list[str], given: list[dict] | None) -> list[Slice]:
     """The split this suite will actually be written to.
@@ -243,7 +311,6 @@ def planned(wanted: int, use_cases: list[str], given: list[dict] | None) -> list
         total = sum(one.count for one in slices)
     return slices
 
-
 def callers_for(index: int, wanted: int) -> str:
     """Which callers this slice should write, so the suite varies across slices as well as within.
 
@@ -258,16 +325,33 @@ def callers_for(index: int, wanted: int) -> str:
     suggestion rather than a rule, because the caller still has to suit the scenario: a stolen
     phone is not a cheerful call whatever this hands out.
     """
-    from .persona_guides import offered
+    from ..model.persona import offered
 
     people = offered("personality")
     accents = offered("accent")
+    places = offered("location")
     if not people:
         return ""
-    picks = [people[(index + step) % len(people)] for step in range(max(1, wanted))]
+    # Dealt hardest first, because the vocabulary happens to lead with the easiest temperament and
+    # a rotation from the front hands every writer an accommodating caller to open with. Measured
+    # on a forty eight scenario suite dealt that way: fifteen friendly and five easy-going against
+    # five impatient, one anxious, one sceptical. The suite is meant to be mostly people who are
+    # hard to serve, since an agent that only meets the patient ones is never really tested.
+    demanding = ("impatient", "anxious", "skeptical", "sceptical", "emotional", "reserved", "talkative")
+    ranked = sorted(
+        people,
+        key=lambda one: 0 if any(word in one.lower() for word in demanding) else 1,
+    )
+    picks = [ranked[(index + step) % len(ranked)] for step in range(max(1, wanted))]
     said = (
-        "\n\nStart from these callers, and move off them only where the scenario calls for "
-        f"somebody else: {', '.join(picks)}."
+        # "Start from these" reads as a suggestion and was treated as one: dealt hardest-first, the
+        # share of accommodating callers went up rather than down. These are the callers, one per
+        # scenario in order, and swapping one needs a reason from the situation rather than a
+        # preference.
+        "\n\nYour callers, one per scenario in the order you write them: "
+        f"{', '.join(picks)}. Use them as given. If a scenario genuinely cannot be run by the "
+        "caller it was dealt, say which one and why when you report back, rather than quietly "
+        "substituting somebody easier to serve."
     )
     if accents:
         # Spread several offered accents across this writer's callers rather than naming just one,
@@ -281,31 +365,80 @@ def callers_for(index: int, wanted: int) -> str:
             " Give your callers varied accents from the offered set, a different one per caller "
             f"where it fits rather than defaulting everyone to the same accent: {', '.join(spread)}. "
             "A suite where every caller sounds the same is a missed test of the agent's speech "
-            "handling, so do not make them all American unless a scenario truly requires it."
+            "handling, so do not default them all to one accent unless a scenario truly requires it."
         )
+    if places:
+        # Dealt for the same reason accents are. Left to instruction it collapsed the same way:
+        # measured across a suite, two locations for forty-one callers, where the platform offered
+        # five. Where a caller is changes what they ask for and which market rules apply, so it is
+        # a test dimension rather than decoration.
+        here = [
+            places[(index + step) % len(places)]
+            for step in range(min(len(places), max(2, wanted)))
+        ]
+        said += (
+            " Place them in different locations from the offered set rather than all in one, "
+            f"choosing what the scenario supports: {', '.join(here)}."
+        )
+    styles = offered("communication_style")
+    if styles:
+        # Dealt for the reason personality and accent are, and it was the one field left out:
+        # undealt across a suite of two hundred it collapsed to a single value on 158 of them,
+        # where the platform offered ten. How someone says a thing decides whether the agent has
+        # to work to understand them, so it is a test dimension and not a label.
+        ways = [
+            styles[(index + step) % len(styles)]
+            for step in range(min(len(styles), max(2, wanted)))
+        ]
+        said += (
+            " Vary how they speak as well as who they are, a different one per caller where the "
+            f"scenario supports it: {', '.join(ways)}."
+        )
+    said += (
+        " A caller who is cooperative, articulate and patient is the one an agent handles best, "
+        "so a suite made only of those reports a pass it has not earned. Across your callers, "
+        "spread in the ones that are harder to serve: somebody impatient who pushes before you "
+        "have finished, somebody anxious who needs reassurance first, somebody sceptical who "
+        "will not accept the first answer, somebody who volunteers three facts at once and "
+        "somebody who answers a near-miss of the question. Let the situation choose which, and "
+        "never soften a caller because it makes the scenario easier to prove."
+    )
     return said
-
 
 def brief_for(
     contract: AgentContract, mine: Slice, siblings: list[Slice], callers: str
 ) -> str:
-    """What one writer is told: its share, what everyone else holds, and the bar.
+    """What one writer is told: its coordinates, what everyone else holds, and the bar.
 
-    Written as a brief rather than a template because a writer that cannot see its siblings
-    will otherwise write what they are writing. Naming their angles is cheaper than discovering
-    the overlap at the merge and throwing the loser away.
+    Coordinates rather than a theme. A writer told "cover cancellations" and a writer told
+    "cover refunds" will both write the ordinary path and one refusal, because that is what
+    anyone writes when asked for a theme. A writer told which cell, with which condition moved
+    off baseline, has nothing left to converge on.
     """
     others = "\n".join(f"  - {one.named()}" for one in siblings if one is not mine)
-    aim = f"    {mine.use_case}"
-    if mine.angle:
-        aim += f"\n    Angle: {mine.angle}"
-    if mine.why:
-        aim += f"\n    Worth testing because: {mine.why}"
+
+    if mine.picks:
+        aim = "\n".join(
+            f"    {index + 1}. {pick.name}\n"
+            f"       cover: {pick.cell.described()}\n"
+            f"       because: {pick.why}"
+            for index, pick in enumerate(mine.picks)
+        )
+        heading = (
+            f"Write {len(mine.picks)} scenario"
+            f"{'s' if len(mine.picks) != 1 else ''} for {contract.agent!r}, one per coordinate "
+            "below. Name each one exactly as its coordinate is named here, so the coverage "
+            "report can find it."
+        )
+    else:
+        aim = f"    {mine.use_case}" + (f"\n    Angle: {mine.angle}" if mine.angle else "")
+        heading = (
+            f"Write {mine.count} scenario{'s' if mine.count != 1 else ''} for "
+            f"{contract.agent!r}, all of them within this one slice:"
+        )
 
     return (
-        f"Write {mine.count} scenario{'s' if mine.count != 1 else ''} for {contract.agent!r}, "
-        "all of them within this one slice:\n\n"
-        f"{aim}\n\n"
+        f"{heading}\n\n{aim}\n\n"
         + (
             "The rest of the suite is being written at the same time by others, covering:\n"
             f"{others}\n\nStay out of theirs. A scenario that strays is either a duplicate of "
@@ -313,11 +446,16 @@ def brief_for(
             if others
             else ""
         )
-        + "Every scenario carries this use case verbatim in `use_case`, and its own one-line "
-        "`branch` saying what makes it different from the others you write here. Branches are "
-        "where the variety lives: the ordinary path, the branch that cannot be completed, the "
-        "rule under pressure, state that has to carry across turns, the same request against a "
-        "differently seeded world.\n\n"
+        + _solution_shape(contract, mine)
+        + "Every scenario carries the use case from the contract that its coordinate belongs "
+        "to, word for word, because results are grouped on that string. Its `branch` says what "
+        "makes it different from its siblings.\n\n"
+        "The condition after the double underscore is the one thing moved off ordinary, and it "
+        "is what the scenario is graded on. Hold everything else ordinary, or a failure cannot "
+        "be attributed to anything.\n\n"
+        "Set `varies` only to withhold: leave it empty when the scenario would still be the "
+        "same test asked by a different sort of person, and name the axes it survives when it "
+        "would not. A scenario about an accent says nothing under a different accent.\n\n"
         "What each one has to be, before you submit it:\n"
         "  - every value real, read out of the world with inspect_world, never invented\n"
         "  - an instruction that is a circumstance the person is living through, not a script "
@@ -335,6 +473,42 @@ def brief_for(
         "Whoever asked for this collects the suite and writes it." + callers
     )
 
+def _solution_shape(contract: AgentContract, mine: Slice) -> str:
+    """What the solution for these cells should be built out of, and what it should not.
+
+    The agent's own rules are the reason a suite goes monotonous. They are written for the agent
+    at large ("book only after an explicit read-back"), and handed to a writer for every cell
+    they read as a demand that each scenario perform the whole flow. Asking for the shortest path
+    while supplying those rules unscoped is a contradiction, and the writer resolves it in favour
+    of the rules, which is the right call on the information it has.
+
+    So the rules are scoped here: the ones bearing on this cell's own tools are quoted, and the
+    rest are left out of the brief rather than argued with.
+    """
+    serving = sorted({name for pick in mine.picks for name in pick.cell.tools})
+    if not serving:
+        return ""
+
+    bearing = [
+        rule
+        for rule in contract.hard_constraints
+        if any(name in rule for name in serving)
+    ]
+    said = (
+        "**Build each solution out of the tools that serve its own cell.** These are yours:\n"
+        f"  {', '.join(serving)}\n\n"
+        "Any other state the scenario needs is `setup_code`, not solution steps. An agent has one "
+        "long flow it is built around, and replaying that flow to arrive at a cell which is not "
+        "about it tests the flow once more and the cell not at all.\n\n"
+    )
+    if bearing:
+        said += (
+            "The agent's rules that bear on these tools, and only these:\n  - "
+            + "\n  - ".join(one.strip() for one in bearing)
+            + "\n\nIts other rules govern parts of the agent your cells do not reach. They are "
+            "not a requirement that your scenario perform the whole flow.\n\n"
+        )
+    return said
 
 async def _write_slice(
     contract: AgentContract,
@@ -347,7 +521,7 @@ async def _write_slice(
     ask: Callable[..., Any] | None,
 ) -> list[Scenario]:
     """One slice, written by its own session. Returns what it proved, unsaved."""
-    server, kept = scenario_tools(
+    server, kept = writing_tools(
         contract,
         destination,
         destination,
@@ -378,6 +552,7 @@ async def _write_slice(
             f"## This agent\n\n{contract.brief(with_data=True)}"
             f"\n\n## Its world\n\n{world_summary(destination)}"
             f"\n\n{load_skill(SKILL)}"
+            f"{discovered_skills(modality=contract.modality)}"
             f"\n\n## Your slice\n\nYou are writing only: {mine.named()}"
         ),
         servers={
@@ -387,11 +562,15 @@ async def _write_slice(
                 tools=[spec for spec in server.tools if spec.name != "save_scenarios"],
             )
         },
-        cwd=str(destination.parent if destination.parent.exists() else Path.cwd()),
+        cwd=_working_dir(destination),
         max_turns=turns_for(mine.count),
         model=chosen_model(),
         ask=ask,
-        thinking=True,
+        # The same switch the parent reads, not an unconditional yes. Only the Claude backend
+        # acts on this, and thinking left on there is the configuration that stalled a run at
+        # zero CPU on a read that never returned, so a run that turned thinking off must get a
+        # writer that has it off too.
+        thinking=scenario_thinking(),
     )
     stage = Stage(sliced, name=f"{SKILL}:{mine.named()[:40]}")
     try:
@@ -407,7 +586,6 @@ async def _write_slice(
         return list(kept)
     logger.info("slice %s finished with %s of %s", mine.named(), len(kept), mine.count)
     return list(kept)
-
 
 def merged(written: list[list[Scenario]]) -> list[Scenario]:
     """One suite out of several writers, with folder-name collisions renamed rather than dropped.
@@ -434,14 +612,12 @@ def merged(written: list[list[Scenario]]) -> list[Scenario]:
             suite.append(one)
     return suite
 
-
 def _suite_summary(suite: list[Scenario]) -> str:
     """The whole suite as a reviewer needs to see it: what each row claims to test."""
     return "\n".join(
         f"  {one.name} | use case: {one.use_case} | branch: {one.branch} | passes when: {one.tests}"
         for one in suite
     )
-
 
 async def gaps_in(
     contract: AgentContract,
@@ -500,7 +676,7 @@ async def gaps_in(
                     Slice(
                         use_case=case,
                         angle=str(one.get("angle") or "").strip(),
-                        count=1,
+                        asked=1,
                         why=str(one.get("why") or "").strip(),
                     )
                 )
@@ -526,7 +702,7 @@ async def gaps_in(
             f"the useful answer.\n\n## This agent\n\n{contract.brief()}"
         ),
         servers={REVIEW_SERVER: server},
-        cwd=str(destination.parent if destination.parent.exists() else Path.cwd()),
+        cwd=_working_dir(destination),
         max_turns=8,
         model=chosen_model(),
         ask=ask,
@@ -543,7 +719,6 @@ async def gaps_in(
     except Exception:  # noqa: BLE001 - a review that fails leaves the suite as written
         return []
     return found
-
 
 async def write_in_parallel(
     contract: AgentContract,
@@ -568,13 +743,29 @@ async def write_in_parallel(
     remove the others' work.
     """
     destination = out or artifact_dir(contract.agent)
-    cases = [case for case in (use_cases or contract.real_use_cases) if case.strip()]
-    if not cases and not slices:
-        # Nothing to partition on. One writer, the ordinary path, rather than no scenarios.
-        return await write(contract, out=destination, wanted=wanted, on_event=on_event, ask=ask)
-
     at_once = max(1, min(at_once or AT_ONCE, MOST_AT_ONCE))
-    allocation = planned(wanted, cases, slices)
+
+    # The grid decides what gets written. A caller-supplied split is still honoured, because
+    # whoever is talking to the person may know something the contract does not say, but the
+    # ordinary path is now coordinates rather than a list of use cases.
+    if slices:
+        cases = [case for case in (use_cases or contract.real_use_cases) if case.strip()]
+        allocation = planned(wanted, cases, slices)
+    else:
+        axes = axes_for(contract.modality)
+        state = Coverage(contract, axes)
+        picks = plan_picks(state.grid, axes, wanted)
+        if not picks:
+            # Nothing to partition on at all. One writer, rather than no scenarios.
+            return await write(contract, out=destination, wanted=wanted, on_event=on_event, ask=ask)
+        allocation = slices_for(picks, at_once)
+        logger.info(
+            "planned %s scenarios over %s of %s cells\n%s",
+            len(picks),
+            len({pick.cell.name for pick in picks}),
+            len(state.grid.cells),
+            coverage(state.grid, axes, picks),
+        )
     logger.info(
         "writing %s scenarios across %s slices, %s at a time: %s",
         wanted,
@@ -609,7 +800,17 @@ async def write_in_parallel(
         *(guarded(one, allocation, index) for index, one in enumerate(allocation)),
         return_exceptions=False,
     )
-    suite = merged([load_scenarios(destination), *written])
+    # A journal left behind means an earlier run was killed before it could save. Its scenarios
+    # were proved against this same world, so they are folded back in rather than rewritten.
+    # Matched by name, because this run journals its own writers too: comparing against `written`
+    # itself would let every scenario in twice, and `merged` renames collisions rather than
+    # dropping them, so the duplicates would survive as -2 folders.
+    already = {one.name for one in load_scenarios(destination)}
+    already |= {one.name for batch in written for one in batch}
+    recovered = [one for one in journalled(destination) if one.name not in already]
+    if recovered:
+        logger.info("recovered %s scenarios from a run that did not save", len(recovered))
+    suite = merged([load_scenarios(destination), recovered, *written])
 
     # Read the whole thing and fill what nobody covered. Bounded, because a reviewer asked
     # twice will always find something smaller to say.
@@ -645,28 +846,10 @@ async def write_in_parallel(
             break
 
     write_scenarios(suite, destination, load_catalogue(destination))
+    # The folders are the truth once they exist, so the journal has done its job and would only
+    # be a stale second copy for the next run to recover from.
+    forget_journal(destination)
     logger.info("suite saved: %s of %s asked for", len(suite), wanted)
     if on_event:
         on_event({"type": "saved", "kept": len(suite), "asked": wanted})
-    return load(destination)
-
-
-async def write(
-    contract: AgentContract,
-    *,
-    out: Path | None = None,
-    wanted: int = 10,
-    follow_ups: list[str] | None = None,
-    on_event: Callable[..., Any] | None = None,
-    ask: Callable[..., Any] | None = None,
-    max_turns: int = 0,
-) -> list[Scenario]:
-    """Run the stage start to finish. Returns whatever scenarios were saved."""
-    stage, destination = open_stage(
-        contract, out=out, wanted=wanted, ask=ask, max_turns=max_turns
-    )
-    async with stage:
-        await stage.say(opening(contract, wanted), on_event=on_event)
-        for follow_up in follow_ups or []:
-            await stage.say(follow_up, on_event=on_event)
     return load(destination)

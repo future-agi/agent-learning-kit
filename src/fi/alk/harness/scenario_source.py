@@ -2,7 +2,7 @@
 on the on-disk layout `folder.py` documents) and turns them into the `Scenario`/`SubGoal` objects
 `hosted_scheduler.py` actually drives.
 
-Deliberately does NOT import `fi.alk.harness.folder` or `fi.alk.harness.scenario` for the model:
+Deliberately does NOT import `fi.alk.harness.scenariogen.store.folder` or `fi.alk.harness.scenariogen.model.scenario` for the model:
 both exist at HEAD, but HEAD's `Scenario` carries no `scenario_key`/`scenario_id` (those are
 pr63-only) and its default `extra="ignore"` would silently discard exactly the two fields the
 scheduler needs off a `scenario.json` written in the newer shape. So this module reads
@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Sequence
 
@@ -182,6 +182,15 @@ class _CompiledScenario:
     sub_goals: tuple[_CompiledSubGoal, ...]
     setup: Callable[[Any], object]
     ready: Callable[[Any], object]
+    # What the caller is and what they are calling about. Carried because the platform builds the
+    # simulator's prompt from these and from nothing else: provisioning a scenario without them
+    # stores an empty persona, and the call runs "Interact about: persona-6" against a caller with
+    # no identity, no task and no reason to be on the phone. Everything the suite is written to
+    # test -- the hazard, the withheld facts, the person -- reaches the call through these fields.
+    name: str = ""
+    situation: str = ""
+    outcome: str = ""
+    persona: dict[str, Any] = field(default_factory=dict)
 
 
 def _read_text(path: Path, *, label: str) -> str:
@@ -216,7 +225,7 @@ def _validate_subgoal_name(name: str, *, folder_name: str) -> None:
 def _load_one(folder: Path) -> _CompiledScenario:
     """One scenario folder -> a `Scenario`-protocol object. Mirrors `folder.py`'s documented
     layout (`scenario.json` + `setup.py` + `ready.py` + `checks/<goal>.py`) but reads
-    `scenario.json` itself as a plain dict rather than through `fi.alk.harness.scenario.Scenario`
+    `scenario.json` itself as a plain dict rather than through `fi.alk.harness.scenariogen.model.scenario.Scenario`
     -- see the module docstring. `folder.py`'s `read_folder` restores only `setup_code`/
     `ready_code` from a folder; it does not read `checks/` at all, so every `checks/<goal>.py` for
     each name in the document's `sub_goals` is read here, by this module, directly.
@@ -258,6 +267,13 @@ def _load_one(folder: Path) -> _CompiledScenario:
     setup = _compile_entry(setup_code, label=f"{folder.name}/{_SETUP_PY}", entry="setup")
     ready = _compile_entry(ready_code, label=f"{folder.name}/{_READY_PY}", entry="ready")
 
+    # Which names the document itself says are judged. `write_folder` records this; a suite
+    # written by hand carries no such claim, and for those absence of a file still means judged.
+    declared_judged = body.get("judged_sub_goals")
+    claims_judged = isinstance(declared_judged, list) and all(
+        isinstance(one, str) for one in declared_judged
+    )
+
     sub_goals: list[_CompiledSubGoal] = []
     for name in sub_goal_names:
         check_path = folder / _CHECKS_DIRNAME / f"{name}.py"
@@ -269,6 +285,15 @@ def _load_one(folder: Path) -> _CompiledScenario:
                                     # vacuous pass -- absence of the file is what means "judged".
             )
             judged = ""
+        elif claims_judged and name not in declared_judged:
+            # The document names its judged sub-goals and this is not one of them, so the check was
+            # written and then lost on its way to the folder. Refused rather than read as judged:
+            # `_judged_placeholder_check` reports held, so grading this scenario on a check that
+            # never arrived would report a pass for behaviour nothing looked at.
+            raise ScenarioDocumentInvalid(
+                f"{folder.name}: sub_goals names {name!r}, which is not judged, but "
+                f"{_CHECKS_DIRNAME}/{name}.py is missing -- nothing would grade it"
+            )
         else:
             # No `checks/<name>.py` -- per `write_folder`'s own `deterministic()` filter, this
             # name is a JUDGED sub-goal.
@@ -276,12 +301,19 @@ def _load_one(folder: Path) -> _CompiledScenario:
             check = _judged_placeholder_check
         sub_goals.append(_CompiledSubGoal(name=name, judged=judged, check=check))
 
+    persona = body.get("persona")
     return _CompiledScenario(
         scenario_key=scenario_key,
         scenario_id=scenario_id,
         sub_goals=tuple(sub_goals),
         setup=setup,
         ready=ready,
+        name=body.get("name") if isinstance(body.get("name"), str) else "",
+        # The instruction is the caller's task in their own terms, which is what the platform's
+        # situation column holds.
+        situation=body.get("instruction") if isinstance(body.get("instruction"), str) else "",
+        outcome=body.get("tests") if isinstance(body.get("tests"), str) else "",
+        persona=persona if isinstance(persona, dict) else {},
     )
 
 
@@ -368,7 +400,15 @@ class BundleScenarioSource:
         # any failure, all of which `hosted_entrypoint.run_job`'s existing call site around
         # `scenario_source.build()` already maps to the typed `validating_scenarios`/`platform_sync`
         # terminal (or the fenced exit) -- nothing new to catch here.
-        return await register_with_platform(scenarios_client, scenarios, run_name=job.run_id)
+        contract = bundle_contract(bundle_dir)
+        return await register_with_platform(
+            scenarios_client,
+            scenarios,
+            run_name=job.run_id,
+            description=str(contract.get("system_prompt_excerpt") or ""),
+            modality=str(contract.get("modality") or ""),
+            direction=str(contract.get("direction") or ""),
+        )
 
 
 def _preallocation_error(code: str, message: str) -> Exception:
@@ -386,7 +426,61 @@ def _preallocation_error(code: str, message: str) -> Exception:
     )
 
 
-def _provision_payload(run_name: str, scenarios: Sequence[_CompiledScenario]) -> dict[str, Any]:
+def bundle_contract(bundle_dir: Path) -> dict[str, Any]:
+    """The bundle's frozen contract, or an empty mapping when there is nothing readable there.
+
+    Lenient on purpose: a hosted job that cannot parse its contract still has scenarios to run,
+    so every caller reads a field and falls back rather than failing the job over a stray byte.
+    """
+    path = Path(bundle_dir) / "contract.json"
+    if not path.is_file():
+        return {}
+    try:
+        body = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return body if isinstance(body, dict) else {}
+
+
+def _provision_persona(scenario: _CompiledScenario) -> dict[str, Any]:
+    """One persona entry: the scenario's key plus who is calling and what about.
+
+    Only `scenario_key` was sent before, and the rest of the serializer's optional fields were
+    left off. The platform builds the simulator's whole prompt from what arrives here, so every
+    hosted call ran a caller with a placeholder name, the situation "Interact about: <key>" and
+    the outcome "Get the request resolved." -- the authored person, task and hazard never left the
+    sandbox. Sending them is what makes a hosted call test the scenario that was written rather
+    than a generic enquiry wearing its name.
+    """
+    entry: dict[str, Any] = {"scenario_key": scenario.scenario_key}
+    if scenario.name:
+        entry["name"] = scenario.name
+    if scenario.situation:
+        entry["situation"] = scenario.situation
+    if scenario.outcome:
+        entry["outcome"] = scenario.outcome
+    if scenario.persona:
+        persona = dict(scenario.persona)
+        # The platform reads a single `language` to choose the caller's voice, and falls back to a
+        # multilingual one when it finds none. A persona carrying `languages` alone is therefore
+        # spoken in the wrong voice for the language it actually speaks, so the first is offered
+        # under the name the platform looks for without disturbing the list.
+        spoken = persona.get("languages")
+        if not persona.get("language") and isinstance(spoken, list) and spoken:
+            first = spoken[0]
+            if isinstance(first, str) and first.strip():
+                persona["language"] = first.strip()
+        entry["persona"] = persona
+    return entry
+
+
+def _provision_payload(
+    run_name: str,
+    scenarios: Sequence[_CompiledScenario],
+    description: str = "",
+    modality: str = "",
+    direction: str = "",
+) -> dict[str, Any]:
     """`HarnessScenarioProvisionSerializer`/`HarnessProvisionPersonaSerializer`
     (futureagi/simulate/serializers/hosted_harness.py:168-190): `operation`/`name`/`personas` (with
     each persona's `scenario_key`) are the only fields this module can actually supply -- `name`/
@@ -396,11 +490,25 @@ def _provision_payload(run_name: str, scenarios: Sequence[_CompiledScenario]) ->
     through pr63's full `Scenario` model). Sending bare `scenario_key` per persona still validates
     against the real endpoint; see CONTRACT NOTES in reports/p13-worker-r2.md.
     """
-    return {
+    payload: dict[str, Any] = {
         "operation": "provision",
         "name": run_name,
-        "personas": [{"scenario_key": scenario.scenario_key} for scenario in scenarios],
+        "personas": [_provision_persona(scenario) for scenario in scenarios],
     }
+    # `description` is what the platform stores on the agent and later serves as
+    # `call.agent_prompt`; omitted, every hosted call reports an empty prompt.
+    if description:
+        payload["description"] = description
+    # Modality decides which schema the finished call renders through, so a voice run left to
+    # default lands as text and its calls do not appear as calls at all. The platform accepts
+    # only text or voice here, while a conversational agent's contract calls itself chat.
+    if modality:
+        payload["modality"] = "voice" if modality == "voice" else "text"
+    # Which way the call goes decides who opens it and how the platform records the agent. An
+    # outbound run left to default is stored as inbound, describing the opposite of what it ran.
+    if direction:
+        payload["direction"] = "outbound" if direction == "outbound" else "inbound"
+    return payload
 
 
 def _begin_payload(run_test_id: str, scenarios: Sequence[_CompiledScenario]) -> dict[str, Any]:
@@ -483,6 +591,9 @@ async def register_with_platform(
     scenarios: Sequence[_CompiledScenario],
     *,
     run_name: str,
+    description: str = "",
+    modality: str = "",
+    direction: str = "",
 ) -> Sequence[_CompiledScenario]:
     """The scenario pre-allocation SEAM, now wired against the platform's real route (a single
     `POST .../scenarios/`, discriminated by a body-level `operation` field -- see
@@ -497,7 +608,8 @@ async def register_with_platform(
     failure) -> only then build and return the new scenario list with `scenario_id` filled in.
     """
     provision_result = await asyncio.to_thread(
-        scenarios_client.provision, _provision_payload(run_name, scenarios)
+        scenarios_client.provision,
+        _provision_payload(run_name, scenarios, description, modality, direction),
     )
     run_test_id = provision_result.get("run_test_id")
     if not isinstance(run_test_id, str) or not run_test_id:

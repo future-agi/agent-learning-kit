@@ -112,11 +112,22 @@ _SIMULATOR_PLATFORM_ALIAS_MAP = {
     "SIMULATOR_OPENAI_API_KEY": OPENAI_API_KEY_ALIAS,
 }
 
-_DEFAULT_CALL_TIMEOUT_SECONDS = 300.0
+# A call that overruns is not failed, it is discarded: the engine returns a caseless report and
+# every checkpoint defaults to Failed, losing a conversation that actually happened. Five minutes
+# was under what real runs already take -- a successful 25-turn booking measured 315.8s -- so the
+# budget, not the agent, decided the outcome. Ten gives a long scenario room; a call that ends
+# normally still costs only what it uses.
+_DEFAULT_CALL_TIMEOUT_SECONDS = 600.0
 
 # sdk_voice.py::build_spec's own phase-overhead constants, reused verbatim so this runner's
 # outer budget composes with the SDK's internal one the same way the local template does.
 _RUN_SECONDS_PAD_SECONDS = 60.0
+
+# What one spoken turn costs, generously: a measured 25-turn booking ran 315.8s, about 12.6s a
+# turn, so thirty leaves room for a slow model without letting a dead call idle for minutes.
+_SECONDS_PER_TURN = 30.0
+# Connecting, greeting and closing, which do not scale with the turn count.
+_CALL_BASE_SECONDS = 90.0
 # Headroom beyond `spec.execution.timeout.run_seconds` -- SimulationRunner.run() already wraps
 # `plugin.run(...)` in its OWN `asyncio.wait_for(..., timeout=spec.execution.timeout.run_seconds)`
 # (runner.py) and catches that TimeoutError into a graceful `SimulationReport(status=TIMED_OUT)`.
@@ -409,7 +420,9 @@ def _build_spec(
     def setting(name: str) -> str:
         return str(simulator_config.get(name.lower()) or environ.get(name) or "")
 
-    simulator = simulator_definition(setting, doc.get("persona"))
+    simulator = simulator_definition(
+        setting, doc.get("persona"), direction=str(doc.get("direction") or "inbound")
+    )
     connector = connector.strip().lower()
     provider_agent: simulate.AgentDefinition | None = None
     if connector == "vapi":
@@ -485,7 +498,11 @@ def _build_spec(
             tts_provider=simulator.tts.provider,
         ),
         simulator=simulator,
-        direction="agent_first",
+        # Who speaks first follows from which way the call goes: a service that was rung answers
+        # and greets, a person who was rung says hello and waits to be told why.
+        direction=(
+            "simulator_first" if str(doc.get("direction")) == "outbound" else "agent_first"
+        ),
         max_seconds=call_timeout_seconds,
         min_turn_messages=min_turn_messages,
         # Hosted targets can legitimately spend tens of seconds in a provider call or a tool
@@ -955,6 +972,18 @@ class CallRunnerImpl:
             if isinstance(raw_timeout, (int, float))
             else _DEFAULT_CALL_TIMEOUT_SECONDS
         )
+        # A scenario states how many turns it needs, so a six-turn call has no business holding a
+        # twelve-minute deadline. Nothing bounds a call by turns -- the only stop is the clock --
+        # so when the far side dies mid-conversation the run sits idle until the deadline and is
+        # then discarded as a timeout, losing the call and the wall-clock. Taking the smaller of
+        # the configured ceiling and what this scenario could plausibly need makes that failure
+        # prompt instead of expensive, and never shortens a call that is still talking.
+        turns = doc.get("max_turns")
+        if isinstance(turns, int) and turns > 0:
+            call_timeout_seconds = min(
+                call_timeout_seconds,
+                turns * _SECONDS_PER_TURN + _CALL_BASE_SECONDS,
+            )
         run_seconds = (
             call_timeout_seconds
             + CONNECT_TIMEOUT_SECONDS
@@ -1177,8 +1206,23 @@ class CallRunnerImpl:
         )
 
         if case is None:
+            # A caseless report is always the engine's `_failure_report` (runtime/runner.py),
+            # which carries the real reason on `report.failure`. Surfacing it is the difference
+            # between a diagnosable receipt and an opaque one.
+            failure = report.failure
+            detail = (
+                f"{failure.stage.value}/{failure.code}: {failure.message}"
+                if failure is not None
+                else f"no failure recorded (status={report.status.value})"
+            )
+            # The engine marks an infrastructure loss (a dropped LiveKit transport, say) as
+            # retryable. Scoring that as a scenario failure fails every checkpoint for a reason
+            # the agent had no part in, so it is retried on another world like any other
+            # world-level fault. The scheduler bounds this at two attempts.
+            if failure is not None and failure.retryable:
+                raise WorldUnavailable(f"voice_call_no_test_case: {detail}")
             raise CallAborted(
-                "voice_call_no_test_case: SimulationReport carried no test case",
+                f"voice_call_no_test_case: {detail}",
                 partial=base,
             )
 

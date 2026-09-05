@@ -28,9 +28,9 @@ from .config import (
     permission_gate,
 )
 from .run.targets import supported as target_kinds
-from .scenarios import load as load_written
-from .scenarios import open_stage as scenario_stage
-from .scenarios import opening as scenario_opening
+from .scenariogen.store.suite import load_scenarios as load_written
+from .scenariogen.write.stage import open_stage as scenario_stage
+from .scenariogen.write.stage import opening as scenario_opening
 from .session import TEXT, Event
 from .sessions import Session, new_id, save as save_session
 from .sources import resolve, supported
@@ -393,6 +393,29 @@ async def _scenarios(args: argparse.Namespace) -> int:
         wanted=wanted,
         ask=permission_gate(_ask_operator) if args.interactive else None,
     )
+    if getattr(args, "plan_only", False):
+        # The plan is worth several iterations of its own, and each full run costs the whole
+        # suite to find out whether the plan was any good. Stopping here makes that loop cheap.
+        from .scenariogen.plan.canvas import load as load_blueprint
+
+        await _converse(
+            stage,
+            f"Plan {wanted} scenarios and record the canvas. Do not write any scenarios, "
+            "and do not brief any writers: stop once the canvas is recorded in full.",
+            interactive=args.interactive,
+            until=lambda: bool(load_blueprint(destination).angles),
+            nudge="No canvas was recorded. Call record_canvas.",
+        )
+        held = load_blueprint(destination)
+        if not held.angles:
+            print("\nNo canvas was recorded.", file=sys.stderr)
+            return 1
+        print(
+            f"\nblueprint: {held.planned} scenarios as {len(held.angles)} buckets across "
+            f"{len(held.covered)} cells -> {destination / 'blueprint.json'}"
+        )
+        return 0
+
     await _converse(
         stage,
         scenario_opening(contract, wanted, existing) + _guidance(args),
@@ -410,6 +433,10 @@ async def _scenarios(args: argparse.Namespace) -> int:
         return 1
     print(f"\nscenarios: {len(written)} in {destination / 'scenarios.json'}")
     print(f"spent:     ${stage.spent_usd:.4f}")
+    # What the turns went on, beside the artifacts they produced. A turn count says a run was
+    # expensive; this says whether it was working or re-reading the same file.
+    stage.trace.write(destination)
+    print(stage.trace.summary())
     return 0
 
 
@@ -550,6 +577,7 @@ async def _simulate(args: argparse.Namespace) -> int:
                 name=platform.display_run_name(args.name),
                 run_test_id=platform.remembered(destination),
                 modality=contract.modality or "text",
+                description=contract.system_prompt_excerpt,
             )
             call_ids = {
                 scenario.name: call_id
@@ -841,7 +869,12 @@ async def _auto(args: argparse.Namespace) -> int:
                 repair_attempt = 0
                 wanted = int(stage_args.count)
                 written_count = len(load_written(destination))
-                while written_count != wanted and repair_attempt < 2:
+                # Short only. Overshooting is not worth a repair: asked to remove six of two
+                # hundred and six, the stage deleted the six deepest scenarios in the run, the
+                # only ones that reached a booking, against an instruction that told it not to.
+                # A suite that is over is reconciled by the bundler afterwards, which costs
+                # nothing and destroys nothing.
+                while written_count < wanted and repair_attempt < 2:
                     repair_attempt += 1
                     missing = wanted - written_count
                     # Count alone is the wrong instruction: asked only for a number, the
@@ -859,11 +892,6 @@ async def _auto(args: argparse.Namespace) -> int:
                                 "when the agent does the wrong thing. Do not pad with "
                                 "variations of a scenario that already exists, and do not "
                                 "add a happy path that an existing scenario already covers."
-                                if missing > 0
-                                else f"Remove exactly {-missing} excess scenario(s), preserve "
-                                "the strongest coverage, and call save_scenarios. Drop the "
-                                "ones that duplicate a branch another scenario already "
-                                "exercises, not the ones that are hardest to pass."
                             )
                         )
                     ]
@@ -878,7 +906,7 @@ async def _auto(args: argparse.Namespace) -> int:
                     if status:
                         break
                     written_count = len(load_written(destination))
-                if not status and written_count != wanted:
+                if not status and written_count < wanted:
                     emit(
                         "harness.stage.failed",
                         label,
@@ -1191,7 +1219,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_false",
         help="run unattended instead of staying open for corrections",
     )
-    scenarios.set_defaults(run=_scenarios, interactive=True)
+    scenarios.add_argument(
+        "--plan-only",
+        dest="plan_only",
+        action="store_true",
+        help="record the blueprint and stop, so the plan can be read before it is written",
+    )
+    scenarios.set_defaults(run=_scenarios, interactive=True, plan_only=False)
 
     live = sub.add_parser(
         "live", help="run the scenarios against the real agent, as a conversation"

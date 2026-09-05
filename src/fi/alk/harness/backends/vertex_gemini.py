@@ -24,6 +24,7 @@ from typing import Any, AsyncIterator
 
 from .base import (
     FILE_TOOLS,
+    HOST_TOOLS,
     Call,
     ModelReply,
     Say,
@@ -35,6 +36,7 @@ from .base import (
     qualified,
 )
 from .files import file_tools
+from .shell import shell_tools
 
 DEFAULT_MODEL = "gemini-3.7-flash"
 
@@ -170,8 +172,84 @@ def _project() -> str:
     )
 
 
+def _retrying_vertex_credentials():
+    """Application-default credentials whose token fetch survives a flaky proxy.
+
+    The sandbox reaches Google through an egress proxy, and that proxy intermittently refuses the
+    CONNECT tunnel to the token endpoint with a 502. google-auth fetches the token over its own
+    requests session, which has no retry, so a single refusal raises and takes the whole stage
+    down. Nothing in the model client covers this: the token fetch happens below it, before any
+    model call is made.
+
+    Retrying at `connect` is the part that matters, because the failure is the tunnel itself
+    rather than a response to a request.
+    """
+    import google.auth
+    import requests
+    from google.auth.transport.requests import Request as AuthRequest
+    from requests.adapters import HTTPAdapter
+    from urllib3.util.retry import Retry
+
+    session = requests.Session()
+    session.mount(
+        "https://",
+        HTTPAdapter(
+            max_retries=Retry(
+                total=5,
+                connect=5,
+                read=5,
+                backoff_factor=1.0,
+                status_forcelist=(408, 429, 500, 502, 503, 504),
+                allowed_methods=None,
+            )
+        ),
+    )
+    credentials, _ = google.auth.default(
+        scopes=["https://www.googleapis.com/auth/cloud-platform"]
+    )
+
+    # Later refreshes have to go the same way, so the wrapper keeps the retrying session rather
+    # than only pre-warming the first token. A run outlives one token.
+    class _Retrying(type(credentials)):  # type: ignore[misc]
+        def refresh(self, request):  # noqa: D102 - matches the credentials contract
+            return super().refresh(AuthRequest(session=session))
+
+    credentials.__class__ = _Retrying
+    credentials.refresh(AuthRequest(session=session))
+    return credentials
+
+
+def _api_key() -> str:
+    """The Gemini API key to use instead of Vertex, or empty when Vertex should be used.
+
+    Absent unless somebody sets one, so this changes nothing for an existing deployment.
+    """
+    for name in ("GEMINI_API_KEY", "GOOGLE_API_KEY"):
+        found = os.environ.get(name, "").strip()
+        if found:
+            return found
+    return ""
+
+
 def _location() -> str:
     return os.environ.get("ALK_VERTEX_LOCATION", "global").strip() or "global"
+
+
+def _identifier(name: str) -> str:
+    """A worker name this SDK will accept as an agent name."""
+    cleaned = "".join(ch if ch.isalnum() else "_" for ch in name).strip("_")
+    return cleaned or "worker"
+
+
+def _call_budget(spec: SessionSpec) -> int:
+    """How many model calls this run may make, workers included.
+
+    This SDK bills every worker's calls to the session that started them: the budget lives on
+    one invocation context and a branched sub-agent shares it. Sizing it for the parent alone
+    is what stops a fan-out partway through and loses the work, so the reserve is added here
+    rather than left for a stage to remember.
+    """
+    return max(spec.max_turns + spec.worker_turns(), 1)
 
 
 def _flattened(result: Any) -> str:
@@ -220,44 +298,117 @@ class VertexGeminiSession:
         self._pending: str | None = None
         self.session_id = f"gemini-{uuid.uuid4().hex[:12]}"
 
-    def _tools(self) -> list[Any]:
+    def _tools_for(
+        self, builtins: tuple[str, ...], servers: dict[str, Any]
+    ) -> list[Any]:
         # ASK_TOOL is deliberately absent: unattended runs never call it, and declaring a tool
         # this backend cannot answer would cost the model a turn finding that out.
         offered: list[Any] = []
-        wanted = {name for name in self._spec.builtins if name in FILE_TOOLS}
+        wanted = {name for name in builtins if name in HOST_TOOLS}
         offered.extend(
             _spec_tool(spec.name, spec)
-            for spec in file_tools(self._spec.cwd)
+            for spec in (*file_tools(self._spec.cwd), *shell_tools(self._spec.cwd))
             if spec.name in wanted
         )
-        for server_name, server in self._spec.servers.items():
+        for server_name, server in servers.items():
             offered.extend(
                 _spec_tool(qualified(server_name, spec.name), spec)
                 for spec in server.tools
             )
         return offered
 
+    def _tools(self) -> list[Any]:
+        return self._tools_for(self._spec.builtins, self._spec.servers)
+
+    def _workers(self) -> list[Any]:
+        """Each declared worker as a sub-agent this SDK exposes to the model as a tool.
+
+        ``single_turn`` is the mode that returns the worker's answer to the caller instead of
+        handing the conversation over, which is what a fan-out needs. The model decides how many
+        to call and when; several named in one turn are dispatched concurrently by the SDK, so
+        the width is the model's choice rather than a number fixed here.
+        """
+        from google.adk.agents import LlmAgent
+        from google.genai import types
+
+        built: list[Any] = []
+        for name, worker in self._spec.workers.items():
+            built.append(
+                LlmAgent(
+                    name=_identifier(name),
+                    model=worker.model or self._model,
+                    description=worker.description,
+                    mode="single_turn",
+                    static_instruction=types.Content(
+                        role="user", parts=[types.Part(text=worker.instructions)]
+                    ),
+                    tools=self._tools_for(
+                        worker.builtins or self._spec.builtins,
+                        worker.servers or self._spec.servers,
+                    ),
+                )
+            )
+        return built
+
     async def start(self) -> None:
         from google.adk.agents import LlmAgent
+        from google.adk.models.google_llm import Gemini
         from google.adk.runners import Runner
         from google.adk.sessions import InMemorySessionService
         from google.genai import types
 
-        # ADK builds its Vertex client from the environment, the same way the Claude backend
-        # passes provider env through its options.
-        os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "TRUE"
-        os.environ["GOOGLE_CLOUD_PROJECT"] = _project()
-        os.environ["GOOGLE_CLOUD_LOCATION"] = _location()
+        # ADK builds its client from the environment, the same way the Claude backend passes
+        # provider env through its options. Vertex is the default and stays the default: it is
+        # only stood down when an API key is present, because the two reach Gemini over different
+        # hosts. Vertex mints a credential at oauth2.googleapis.com first; an API key goes straight
+        # to generativelanguage.googleapis.com. Where the token endpoints are unreachable but the
+        # model endpoint is not, a key is the only way through, and hard-coding Vertex made that
+        # unreachable by configuration.
+        if _api_key():
+            os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "FALSE"
+            os.environ.setdefault("GOOGLE_API_KEY", _api_key())
+        else:
+            os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "TRUE"
+            os.environ["GOOGLE_CLOUD_PROJECT"] = _project()
+            os.environ["GOOGLE_CLOUD_LOCATION"] = _location()
         # static_instruction, not instruction: the skills are full of literal JSON braces,
         # and ADK templates {placeholders} in `instruction` from session state. Static
         # content is sent verbatim and is what ADK context-caches.
+        # A bare model name leaves the client with no retry policy, so one bad response from the
+        # sandbox egress proxy fails the root node and takes the whole stage down with it. A
+        # 502 there is transient and has cost two full runs; retrying the request is the
+        # difference between a blip and losing forty minutes of proved work.
         agent = LlmAgent(
             name=self.session_id.replace("-", "_"),
-            model=self._model,
+            model=Gemini(
+                model=self._model,
+                # Vertex mints a token before any model call, and that fetch is the one the
+                # sandbox proxy has been refusing. Handing the client credentials that retry
+                # their own refresh is the only place that failure can be caught, since the
+                # retry options below cover model calls and never see it.
+                client_kwargs=(
+                    {} if _api_key() else {"credentials": _retrying_vertex_credentials()}
+                ),
+                retry_options=types.HttpRetryOptions(
+                    attempts=5,
+                    # Backs off rather than retrying on a fixed beat: a proxy that just returned
+                    # 502 is usually under load, and evenly spaced retries from every writer at
+                    # once are what turn a blip into an outage. Jitter spreads them apart, since
+                    # the writers all fail at the same moment and would otherwise all return
+                    # together. Every field is set because each defaults to None, which leaves
+                    # the pacing to whatever the client happens to do.
+                    initial_delay=1.0,
+                    exp_base=2.0,
+                    max_delay=30.0,
+                    jitter=1.0,
+                    http_status_codes=[408, 429, 500, 502, 503, 504],
+                ),
+            ),
             static_instruction=types.Content(
                 role="user", parts=[types.Part(text=self._spec.system_prompt)]
             ),
             tools=self._tools(),
+            sub_agents=self._workers(),
         )
         sessions = InMemorySessionService()
         await sessions.create_session(
@@ -297,7 +448,7 @@ class VertexGeminiSession:
                 user_id="stage",
                 session_id=self.session_id,
                 new_message=message,
-                run_config=RunConfig(max_llm_calls=max(self._spec.max_turns, 1)),
+                run_config=RunConfig(max_llm_calls=_call_budget(self._spec)),
             ):
                 usage = getattr(event, "usage_metadata", None)
                 if usage is not None:

@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from ..errors import WorldQueryRejected
-from . import Held, Snapshot, StoreError
+from ..stores import Held, Snapshot, StoreError
 from .container import ContainerStore, docker
 
 SCHEMA = "schema.sql"
@@ -60,6 +60,36 @@ class PostgresStore(ContainerStore):
             return external
         host, port = self.address()
         return f"postgresql://{self.user}:{self.password}@{host}:{port}/{self.database}"
+
+    def _make_space(self, engine) -> None:
+        """A database of this world's own inside the shared engine.
+
+        Postgres stores tread on each other otherwise: every world truncates and reloads every
+        table, so two sharing one database would each wipe the other. A database apiece is the
+        cheap unit of isolation here, and creating one is immediate where a container is not.
+        """
+        import secrets as _secrets
+
+        name = f"w{_secrets.token_hex(6)}"
+        self.database = engine.database
+        with self._connect() as connection:
+            connection.execute(f'CREATE DATABASE "{name}"')
+        self.database = name
+
+    def _drop_space(self) -> None:
+        """Give the database back. Only ever one this store created."""
+        mine, self.database = self.database, self._shared.database if self._shared else self.database
+        if mine == self.database:
+            return
+        try:
+            with self._connect() as connection:
+                connection.execute(
+                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = %s",
+                    (mine,),
+                )
+                connection.execute(f'DROP DATABASE IF EXISTS "{mine}"')
+        except Exception:  # noqa: BLE001 - teardown never fails a run
+            pass
 
     def probe(self) -> None:
         """Really connect. A running container is not yet a database that listens."""
@@ -233,6 +263,12 @@ class PostgresStore(ContainerStore):
             if not tables:
                 return
             listed = ", ".join(f'"{table}"' for table in tables)
+            # One transaction for the emptying and the refilling together. On autocommit the
+            # truncate lands first, so anything that interrupts the inserts - a killed run, a
+            # crash - leaves the world half loaded, and the next restore fails on rows the
+            # truncate should have removed. Wrapped, an interrupted restore rolls back to the
+            # world it started from.
+            connection.execute("BEGIN")
             # One statement, so Postgres resolves the dependency order between them itself.
             connection.execute(f"TRUNCATE TABLE {listed} RESTART IDENTITY CASCADE")
 
@@ -259,6 +295,10 @@ class PostgresStore(ContainerStore):
                                 for row in rows
                             ],
                         )
+                connection.execute("COMMIT")
+            except Exception:
+                connection.execute("ROLLBACK")
+                raise
             finally:
                 connection.execute("SET session_replication_role = DEFAULT")
 
@@ -401,12 +441,12 @@ class AttachedPostgresStore(PostgresStore):
         # Compose owns the schema and reruns the repository's migrations/initialisers whenever
         # the project is recreated. The harness snapshot therefore owns only mutable rows and
         # counters, avoiding a second generated schema that can drift from the submitted code.
-        from . import Held
+        from ..stores import Held
 
         Held.save_to(self, path)
 
     def load_from(self, path: str | Path) -> None:
-        from . import Held
+        from ..stores import Held
 
         Held.load_from(self, path)
 

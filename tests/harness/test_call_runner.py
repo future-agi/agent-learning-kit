@@ -11,6 +11,7 @@ touch a real `SimulationRunner`, `rtc.Room`, or `AgentSession`.
 from __future__ import annotations
 
 import asyncio
+import pytest
 import json
 import sys
 from dataclasses import dataclass, field
@@ -63,9 +64,9 @@ _ALL_SECRETS = {
 _ALL_CONFIG = {cr.LIVEKIT_URL_CONFIG_KEY: "wss://example.livekit.cloud"}
 
 
-# =================================================================================================
+# ==========================================================================================
 # Fixtures -- self-contained (this file touches nothing outside itself + call_runner.py).
-# =================================================================================================
+# ==========================================================================================
 
 
 def _job(
@@ -331,6 +332,7 @@ def _report(
     transcript: str = "hello there",
     messages: list[dict[str, str]] | None = None,
     failure: SimulationFailure | None = None,
+    run_failure: SimulationFailure | None = None,
     started_at: datetime | None = None,
     ended_at: datetime | None = None,
     no_cases: bool = False,
@@ -364,6 +366,7 @@ def _report(
         ended_at=ended_at,
         test_cases=cases,
         artifacts=ArtifactManifest(run_id=run_id),
+        failure=run_failure,
     )
 
 
@@ -393,13 +396,13 @@ def _run_expect_world_unavailable(
     raise AssertionError("expected WorldUnavailable, nothing was raised")
 
 
-# =================================================================================================
+# ==========================================================================================
 # Room naming (deterministic scheme, pinned verbatim by this file). WHY only a prefix at the wire:
 # engines/livekit.py::_resolve_room_name appends its own `-{invocation_id}-{test_case_id[-12:]}`
 # suffix in managed room_mode unless `room_name_verbatim` is set (this runner does not set it), so
 # the pinned string below is the deterministic PREFIX every dialed room carries, not the full
 # on-the-wire room name.
-# =================================================================================================
+# ==========================================================================================
 
 
 def test_room_name_matches_the_pinned_deterministic_scheme() -> None:
@@ -419,9 +422,9 @@ def test_room_name_uses_only_the_first_eight_chars_of_job_id() -> None:
     assert short == "harness-ab-a1-k-s1"
 
 
-# =================================================================================================
+# ==========================================================================================
 # Pre-dial validation.
-# =================================================================================================
+# ==========================================================================================
 
 
 def test_missing_target_provider_secrets_aborts_pre_dial_without_calling_place_call(
@@ -542,9 +545,9 @@ def test_scenario_document_matched_by_scenario_key_field_not_folder_name(
     assert captured["spec"] is not None
 
 
-# =================================================================================================
+# ==========================================================================================
 # Happy path: COMPLETED -> real CallOutcome, artifacts uploaded, dispatch/room wiring correct.
-# =================================================================================================
+# ==========================================================================================
 
 
 def test_completed_call_uploads_transcript_and_returns_populated_outcome(
@@ -732,9 +735,9 @@ def test_scenario_attempt_counter_increments_per_scenario_key_across_retries(
     assert rooms[2].endswith("-k1-s2")
 
 
-# =================================================================================================
+# ==========================================================================================
 # Failure semantics -- the three cases the brief pins.
-# =================================================================================================
+# ==========================================================================================
 
 
 def test_agent_unavailable_status_raises_world_unavailable(tmp_path: Path) -> None:
@@ -862,6 +865,64 @@ def test_no_test_cases_in_report_raises_call_aborted_with_timing_only_partial(
     assert exc.partial is not None
     assert exc.partial.turns == 0
     assert exc.partial.calls == ()
+
+
+def test_caseless_report_surfaces_the_engine_failure_reason(tmp_path: Path) -> None:
+    """A caseless report is the engine's `_failure_report`, which carries the real reason on
+    `report.failure`. The receipt must name it, not just "no test case"."""
+    _job_obj, context = _context(tmp_path=tmp_path)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+
+    async def place_call(spec):
+        return _report(
+            status=RunStatus.FAILED,
+            no_cases=True,
+            run_failure=SimulationFailure(
+                stage=FailureStage.READINESS,
+                code="worker_never_ready",
+                message="no livekit worker registered within 90s",
+            ),
+        )
+
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
+    exc = _run_expect_abort(
+        runner,
+        _FakeScenario("k1"),
+        _runtime(metadata={"livekit_agent_name": "agent-w0"}),
+    )
+    assert "readiness/worker_never_ready" in str(exc)
+    assert "no livekit worker registered within 90s" in str(exc)
+
+
+def test_a_retryable_caseless_report_is_retried_not_scored_as_a_failure(
+    tmp_path: Path,
+) -> None:
+    """A dropped transport is not the agent's doing. Scoring it fails every checkpoint for a
+    reason the agent had no part in, so it retries on another world instead."""
+    _job_obj, context = _context(tmp_path=tmp_path)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+
+    async def place_call(spec):
+        return _report(
+            status=RunStatus.FAILED,
+            no_cases=True,
+            run_failure=SimulationFailure(
+                stage=FailureStage.RUNNING,
+                code="transport_closed",
+                message="room session transport is closed",
+                retryable=True,
+            ),
+        )
+
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
+    with pytest.raises(WorldUnavailable) as caught:
+        asyncio.run(
+            runner.run(
+                _FakeScenario("k1"),
+                _runtime(metadata={"livekit_agent_name": "agent-w0"}),
+            )
+        )
+    assert "transport_closed" in str(caught.value)
 
 
 def test_place_call_exception_raises_call_aborted_with_timing_partial_never_raw(
@@ -1056,9 +1117,9 @@ def test_silent_agent_mapping_is_scoped_to_zero_turns_only(tmp_path: Path) -> No
     assert exc.partial.turns == 2
 
 
-# =================================================================================================
+# ==========================================================================================
 # Evidence collection.
-# =================================================================================================
+# ==========================================================================================
 
 
 def test_http_tool_seam_always_returns_no_calls() -> None:
@@ -1239,9 +1300,9 @@ def test_completed_call_with_tool_trace_seam_collects_evidence(
     assert outcome.calls[0].name == "do_thing"
 
 
-# =================================================================================================
+# ==========================================================================================
 # Credential export (WHY: the LiveKit engine reads these via ambient os.environ, not spec fields).
-# =================================================================================================
+# ==========================================================================================
 
 
 def test_construction_exports_target_provider_secrets_to_environ_once(
@@ -1340,6 +1401,12 @@ def test_platform_simulator_credentials_win_without_replacing_target_livekit(
     )
     assert runner._missing_config is None
 
+
+def test_the_call_budget_fits_a_real_conversation() -> None:
+    """A call that overruns is discarded, not failed: the engine returns a caseless report and
+    every checkpoint defaults to Failed. Successful runs have measured 315.8s, so a 300s budget
+    let the clock decide the outcome rather than the agent."""
+    assert cr._DEFAULT_CALL_TIMEOUT_SECONDS >= 600.0
 
 def test_provider_voice_uses_platform_livekit_without_exposing_customer_livekit(
     tmp_path: Path,

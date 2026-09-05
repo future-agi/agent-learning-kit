@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..contract import AgentContract
-from ..scenario import Scenario
+from ..scenariogen.model.scenario import Scenario
 from ..world.runtime import Call
 from .grade import Judgement, Result
 
@@ -340,7 +340,7 @@ async def _run_one(
     second is graded against.
     """
 
-    from ..folder import apply_setup, check_ready
+    from ..scenariogen.store.folder import apply_setup, check_ready
     from ..world.snapshot import restore
 
     spoken = spoken_to(contract)
@@ -426,8 +426,8 @@ async def _typed_to(
     The same grading as every other run: the world it is handed is already set up, and what it
     leaves behind is what the checks read.
     """
-    from ..catalogue import load_catalogue
-    from . import converse
+    from ..scenariogen.model.catalogue import load_catalogue
+    from ..run import converse
     from .grade import (
         checkpoints,
         grade_sub_goals,
@@ -544,7 +544,7 @@ async def _spoken_to(
     import os
     import time
 
-    from ..catalogue import load_catalogue
+    from ..scenariogen.model.catalogue import load_catalogue
     from .call import place_the_call
     from .conversation import Transcript
     from .evidence import measured, newest_report, spoken_times, tracks_in

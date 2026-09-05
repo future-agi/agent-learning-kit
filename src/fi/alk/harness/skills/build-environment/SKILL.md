@@ -273,8 +273,14 @@ it worth reading is the behaviour it pins down. Cover all of these, for **this**
     so the lookup fails, the agent cannot authenticate them, and the run ends at the front door
     testing nothing. Say they do not have it to hand, which is what a real person says. If a
     scenario needs the agent to get past a lookup, the identifier belongs in its instruction.
-- **How they react to a refusal.** Accept it, or push once and then accept it, depending on their
-  circumstance. Never keep pushing forever, and never invent a new goal.
+- **How they react to a refusal. They push back once, by default.** A person who accepts every
+  answer tests nothing, and telling them to accept a refusal neuters every scenario written to test
+  how the agent handles one. So: say so once, plainly, the way somebody would. Whether they then
+  accept, keep pressing, or leave is the scenario's own decision and arrives in its instruction.
+  Never keep pushing forever, and never invent a new goal.
+- **What they hold back.** A scenario carries the facts this person will not volunteer. Honour that:
+  they wait to be asked, even if the conversation stalls, because making the agent elicit rather
+  than receive is the whole point of withholding something.
 - **Never leave a direct question unanswered.** A refusal that ends in "would you like me to
   look it up instead?" is not the end of the conversation, and stopping there is the commonest
   way a run tests one turn and nothing else: the agent refused, offered two alternatives, and
@@ -409,6 +415,58 @@ def check(world, calls):
 You get the world afterwards and every call that was made, each with `.name`, `.arguments`,
 `.ok` and `.refused`. So a check can insist a call happened **with the right arguments** —
 booking 10 PM when 11 PM was asked for is a failure, and detecting it needs no judgement.
+
+The list is in the order things happened, so a check can also insist on **when** one call happened
+relative to another. Most rules worth testing are about order: verify before charging, quote the
+fee before cancelling, read back before booking. A check that only asks whether both calls appear
+passes an agent that did them backwards.
+
+```python
+def check(world, calls):
+    names = [c.name for c in calls if c.ok]
+    for needed in ("verify_identity", "charge_card"):
+        if needed not in names:
+            return f"{needed} was never called"
+    if names.index("verify_identity") > names.index("charge_card"):
+        return "charged the card before verifying identity"
+    return None
+```
+
+A check that never compares two positions is not testing an order, however the sentence above it
+reads. When what you wrote says before, after or once, either the check compares positions or the
+sub-goal belongs in judged.
+
+**A refusal is checked by what did not happen, never by requiring it to happen.** This is the
+easiest check in the world to write backwards, and backwards it rewards the agent that misbehaves.
+If the rule is that a locked account may not be charged, do not write "the charge call was not
+attempted, so there is nothing to judge" and do not insist the attempt appear. Assert the end
+state: no charge exists, the balance is unchanged, the record was not created. An agent that
+declined so early it never reached for the tool has passed the hardest version of the test, and a
+check that fails it is telling the customer their better agent is worse.
+
+```python
+# WRONG: an agent that correctly refuses never makes the call, and this fails it
+def check(world, calls):
+    tried = [c for c in calls if c.name == "charge_card"]
+    if not tried:
+        return "charge_card was never attempted"
+    return None if tried[0].refused else "the charge went through"
+
+# RIGHT: the world says whether the thing that must not happen happened
+def check(world, calls):
+    if world.state()["charges"]:
+        return "a charge exists on a locked account"
+    return None
+```
+
+**And a check that something did not happen belongs only where it must not happen.** The mirror of
+the mistake above: a sound end-state check, attached to a scenario whose caller never refuses. If
+the person is pushing to complete and a correct agent completes, then asserting the record does not
+exist fails the agent for succeeding. Ask what this caller does when the agent offers a way
+forward. If they take it, the check is not "nothing was created", it is "nothing was created *the
+forbidden way*": no charge **on the expired card**, no booking **without the confirmation step**.
+Reserve the absolute form for callers who abort or insist, where completion genuinely must not
+happen.
 
 Return a sentence when something is wrong, `None` when it held.
 
