@@ -12,6 +12,7 @@ scenario that clears all three is written out as its own folder of runnable file
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -26,10 +27,11 @@ from .catalogue import (
     save_catalogue,
     validate_sub_goal,
 )
-from .contract import AgentContract
-from .folder import SCENARIOS, apply_setup, read_all, write_folder, write_index
+from .contract import CALL_DIRECTIONS, AgentContract
+from .folder import INDEX, SCENARIOS, apply_setup, read_all, write_folder, write_index
 from .prove import play_reference_step, prepared, prove
 from .scenario import (
+    CALLER_AWARENESS,
     Scenario,
     Step,
     contract_sequence_problems,
@@ -39,6 +41,8 @@ from .scenario import (
 from .simulator import load_simulator_prompt
 from .tools import brief, schema
 from .world.snapshot import restore
+
+logger = logging.getLogger(__name__)
 
 SCENARIO_SERVER = "scenarios"
 
@@ -51,14 +55,21 @@ def _err(text: str) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": text}], "is_error": True}
 
 
-def parallel_suites() -> bool:
-    """Whether a suite is written by several writers at once.
+# Below this, fanning out costs more than it saves: measured at ten scenarios, fifty four turns
+# without writers against a hundred and nineteen with, for output that was identical scenario by
+# scenario. Above it, one at a time runs out of turns long before the number is reached.
+FEWEST_WORTH_DELEGATING = 20
 
-    Off by default. Writing one scenario at a time is slower but is the path the base branch runs
-    on, and a suite that is written slowly is worth more than one that is not written at all.
-    Set HARNESS_PARALLEL_SCENARIOS=1 to fan out instead.
+
+def worth_delegating(wanted: int) -> bool:
+    """Whether a request of this size should be written by several writers at once.
+
+    Decided from the number asked for, which is the one fact that settles it, rather than from a
+    setting. An environment variable had to survive four separate allowlists between the platform
+    and the process that reads it, three of which silently dropped it, and it exposed as an
+    operator choice something no operator should have to make.
     """
-    return os.environ.get("HARNESS_PARALLEL_SCENARIOS", "").strip() == "1"
+    return int(wanted or 0) >= FEWEST_WORTH_DELEGATING
 
 
 def persona_field(name: str) -> dict[str, Any]:
@@ -91,6 +102,16 @@ def write_scenarios(
 ) -> Path:
     """Write every scenario out as its own folder, and regenerate the index over them."""
     catalogue = catalogue if catalogue is not None else load_catalogue(destination)
+    if not scenarios and (Path(destination) / SCENARIOS).is_dir():
+        # An empty save would take every folder with it, because dropping a scenario is expressed by
+        # saving the suite without it. Nothing legitimately saves an empty suite over a full one: a
+        # session whose own list is empty is a session that has not written anything yet, and on a run
+        # this emptied 30 folders and then let a second fan-out pass write the suite again from zero.
+        logger.warning(
+            "refusing to save an empty suite over %s existing scenarios",
+            len(load_scenarios(destination)),
+        )
+        return Path(destination) / INDEX
     for one in scenarios:
         write_folder(one, catalogue, destination)
     _forget_dropped(scenarios, destination)
@@ -122,6 +143,48 @@ def load_scenarios(destination: Path) -> list[Scenario]:
     describe them but never contradict them.
     """
     return read_all(destination)
+
+
+JOURNAL = "written.jsonl"
+
+
+def journal_scenario(scenario: Scenario, destination: Path) -> None:
+    """Append one proved scenario to the journal, which is the only record a dead writer leaves.
+
+    A delegated writer cannot write folders: saving the suite deletes every folder it does not know
+    about, so a writer persisting its own would delete its siblings' work. It therefore keeps what it
+    proved in memory, and until now a writer whose session died took its scenarios with it. A whole
+    hundred-scenario run was lost that way. This file is append-only and nothing prunes it, so what
+    was proved survives the session that proved it.
+    """
+    try:
+        path = Path(destination) / JOURNAL
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as journal:
+            journal.write(json.dumps(scenario.model_dump(), ensure_ascii=False) + "\n")
+    except Exception as broke:  # noqa: BLE001 - a scenario is never lost over bookkeeping
+        logger.warning("could not journal %s: %s", scenario.name, broke)
+
+
+def journalled(destination: Path) -> list[Scenario]:
+    """Every scenario the journal holds, newest wins, skipping anything unreadable.
+
+    Appended by writers as they prove, so a retried slice re-journals and the same name appears more
+    than once. Read by the caller that saves, to recover what a writer proved and never returned.
+    """
+    path = Path(destination) / JOURNAL
+    if not path.is_file():
+        return []
+    found: dict[str, Scenario] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            one = Scenario.model_validate(json.loads(line))
+        except Exception:  # noqa: BLE001 - a half-written line is expected while writers run
+            continue
+        found[one.name] = one
+    return list(found.values())
 
 
 def accept_scenario(
@@ -183,10 +246,27 @@ def accept_scenario(
     # were written. ``save_scenarios`` remains the suite-level diversity/finality gate.
     if persist:
         write_scenarios(kept, world_root, catalogue)
+    else:
+        # A writer sharing the destination cannot write folders, so the journal is where its proved
+        # work survives the session that proved it.
+        journal_scenario(scenario, world_root)
+    # Say what the proof did not cover. On a lane where the target's tools have no endpoints, every
+    # solution step is recorded without running, so "all three gates pass" is true and misleading:
+    # the checks were exercised, the solution was not.
+    unproved = (
+        "\nNOT PROVED: "
+        + f"{len(proof.assumed)} of {len(scenario.solution)} solution steps were recorded without "
+        "running, because these tools have no endpoint in this environment: "
+        + ", ".join(proof.assumed)
+        + ". The checks ran, the solution did not, so this scenario is kept as written rather than "
+        "as demonstrated."
+        if proof.assumed
+        else ""
+    )
     return _ok(
         f"{scenario.name} {'replaced' if replaced else 'kept'}. All three gates pass: the world "
         "is ready for it, the reference solution passes its checks, and those checks fail when "
-        f"nothing is done.\n{len(kept)} so far: " + ", ".join(one.name for one in kept)
+        f"nothing is done.{unproved}\n{len(kept)} so far: " + ", ".join(one.name for one in kept)
     )
 
 
@@ -462,12 +542,30 @@ def scenario_tools(
                     "somewhere, a caller leaving a hotel or standing on a street is not in a "
                     "quiet room. Left out, it is decided from the scenario name.",
                 },
+                "call_direction": {
+                    "type": "string",
+                    "enum": list(CALL_DIRECTIONS),
+                    "description": "Who placed the call. Match the contract unless this scenario "
+                    "deliberately tests the other one. Outbound changes what the instruction has "
+                    "to be: a person who did not dial has no objective to pursue.",
+                },
+                "caller_awareness": {
+                    "type": "string",
+                    "enum": list(CALLER_AWARENESS),
+                    "description": "Outbound only, and the thing the scenario is really varying: "
+                    "whether this person was told to expect the call, half remembers arranging "
+                    "something, or has no idea why anyone is ringing. Left out it is unaware, "
+                    "which the agent has to work hardest for.",
+                },
                 "instruction": {
                     "type": "string",
                     "description": "What this person is trying to achieve, written to them. "
                     "State the objective first, in their own terms, so they pursue it rather "
                     "than narrate a situation: 'Get the cancellation fee refunded', not 'You "
-                    "were charged a fee'. Then give them everything they need to hold the "
+                    "were charged a fee'. On an OUTBOUND scenario invert that: they did not "
+                    "call anyone and have no objective, so give them their situation and what "
+                    "they would agree to if asked, never an opening request. Then give them "
+                    "everything they need to hold the "
                     "conversation without inventing anything: the facts they know, the values "
                     "they can be asked for, and what they will only say once asked. Every value "
                     "real and read out of the world.\n"
@@ -591,6 +689,20 @@ def scenario_tools(
         ),
     )
     async def submit_scenario(args: dict[str, Any]) -> dict[str, Any]:
+        # A writer working one slice of a suite stops at the size it was given. Its turn budget is
+        # far larger than its slice, and left to itself it keeps writing: one run proved 559
+        # scenarios against a target of 200, spending three times the quota and three times the wall
+        # clock, and the surplus is trimmed at the end anyway. Replacing a scenario it already has
+        # stays allowed, because fixing a refused one is how a writer finishes its slice.
+        if not can_save and wanted:
+            named = str(args.get("name") or "").strip()
+            already = any(one.name == named for one in kept)
+            if not already and len(kept) >= wanted:
+                return _err(
+                    f"This slice is complete: {len(kept)} of {wanted} written. Do not write another. "
+                    "Say what you covered and what you could not, and stop. Submitting again under "
+                    "an existing name is the only submission left to you, for fixing one of yours."
+                )
         result = accept_scenario(
             args,
             world_root=world_root,
@@ -784,6 +896,29 @@ def scenario_tools(
                 "across. Write them one at a time with submit_scenario, or fix the contract."
             )
 
+        # Never write more than the suite still needs. A pass that comes back short is told how many
+        # are outstanding and to call again, and a model that calls again with the original number
+        # instead of the remainder gets a second full suite: measured at 377 kept against a target of
+        # 200, three times the quota for scenarios that are trimmed away again. The count on disk is
+        # the only honest measure of what is left, so it is read here rather than trusted from the
+        # argument.
+        if wanted:
+            # Counted from the folders, which are what a suite actually is.
+            #
+            # Counting the journal as well looked better, because a save prunes the directory before
+            # rewriting it and a pass asking during that window reads zero and writes a second suite.
+            # It was worse: a retried attempt starts with the folders gone and the journal intact, so
+            # the count said the suite was complete, this refused to write anything, and the attempt
+            # saved 14 of 200 and failed the platform's cardinality check. Overproduction wastes
+            # quota; refusing to produce loses the run, so this counts the conservative thing and the
+            # prune window stays a known cost.
+            asked = min(asked, max(0, wanted - len(load_scenarios(destination))))
+        if not asked:
+            return _ok(
+                f"The suite already holds the {wanted} it was asked for. Nothing more to write: "
+                "review what is there, replace any scenario you are unhappy with by name, and "
+                "call save_scenarios."
+            )
         # A large ask is served a batch at a time. Spinning up a writer per scenario would put
         # hundreds of model sessions on one machine, and the person waiting would see nothing
         # for an hour. A batch they can read, and an offer of the rest, is the better trade.
@@ -814,12 +949,12 @@ def scenario_tools(
             f"time. Each cleared all three gates and the suite is saved.\n{lines}"
         )
         if asked > count:
+            # Never ask here. A hosted run has nobody to answer and no ask tool, so asking ends the
+            # stage with fewer scenarios than were requested and no explanation of why.
             said += (
-                f"\n\n{asked - count} of the {asked} asked for are still to write. "
-                f"{MOST_IN_ONE_GO} is as many as one pass does, so that the suite can be looked "
-                "at before more is spent on it. Show what came back, then ask whether to carry "
-                "on with the rest, change direction first, or stop here. Call generate_suite "
-                "again for the next batch once they have said."
+                f"\n\n{asked - count} of the {asked} asked for are still to write. Call "
+                f"generate_suite again now for the remaining {asked - count}, with slices for the "
+                "use cases still short. Do not stop at this batch and do not ask first."
             )
         return _ok(said)
 
@@ -886,7 +1021,7 @@ def scenario_tools(
         # of a fan-out calling this would split its own slice again, and so on.
         + (
             [generate_suite, save_scenarios]
-            if can_save and parallel_suites()
+            if can_save and worth_delegating(wanted)
             else [save_scenarios]
             if can_save
             else []
@@ -911,15 +1046,16 @@ _ALWAYS = (
 )
 
 
-def tool_names() -> tuple[str, ...]:
-    """The tools a saving session publishes, which depends on how a suite is written."""
-    if parallel_suites():
+def tool_names(wanted: int = 0) -> tuple[str, ...]:
+    """The tools a saving session publishes, which depends on how large a suite it was asked for."""
+    if worth_delegating(wanted):
         return (*_ALWAYS[:-1], "generate_suite", "save_scenarios")
     return _ALWAYS
 
 
-# Kept as a name because callers import it; it reflects the surface for this process.
-TOOL_NAMES = tool_names()
+# The whole surface, for anything that needs to name every tool this module can publish rather than
+# the subset one request gets. Which of them a session actually receives is decided per request.
+TOOL_NAMES = tool_names(FEWEST_WORTH_DELEGATING)
 
 
 def world_summary(world_root: Path) -> str:

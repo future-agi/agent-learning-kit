@@ -118,8 +118,13 @@ class Result:
 
     @property
     def passed(self) -> bool:
+        # A result with no checkpoint at all measured nothing, so it cannot have passed. Reaching
+        # here means every sub-goal this scenario named went missing between writing it and running
+        # it, and a scenario that graded nothing reading as a pass is the most expensive wrong
+        # answer this file can give: it is indistinguishable from an agent that did everything.
         return (
-            not self.state_failures
+            bool(self.checkpoints)
+            and not self.state_failures
             and not self.conduct_failures
             and not self.crashes
             and not self.problems
@@ -468,6 +473,18 @@ def to_judgements(
             )
         )
     return judgements
+
+
+def ungraded_sub_goals(scenario: Scenario, catalogue: Catalogue) -> list[str]:
+    """Sub-goals this scenario names that the catalogue cannot settle either way.
+
+    Writing a scenario refuses a name the catalogue does not hold, so a name missing here means the
+    catalogue this run loaded is not the one the scenario was written against. Both graders below
+    skip such a name, which is correct for them and silent, so it is reported as a problem instead:
+    the scenario ran but was measured against fewer things than it claimed, and that is not a
+    finding about the agent.
+    """
+    return [name for name in scenario.sub_goals if catalogue.named(name) is None]
 
 
 def grade_sub_goals(

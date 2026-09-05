@@ -23,11 +23,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass, replace
+import os
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Sequence
 
 from . import outbound as ob
+from .catalogue import CATALOGUE
 from .job import FailureDomain
 
 if TYPE_CHECKING:
@@ -54,6 +56,13 @@ _READY_PY = "ready.py"
 # actually be killed, so this accepts a leaked thread over an unbounded one, on the reasoning that a
 # terminal event today is strictly better than none ever.
 _LOAD_TIMEOUT_SECONDS = 60.0
+
+# Every scenario a job asked for is called. A job that wrote two hundred is asking for two hundred
+# calls: that is the product, and calling fewer would quietly deliver a fraction of what somebody
+# paid for. There is deliberately no setting here; a smaller run is a smaller `scenario_count`.
+def sampled_for_calling(scenarios: Sequence[Any]) -> list[Any]:
+    """Which scenarios this job calls, which is all of them."""
+    return list(scenarios)
 
 # The TEXT of a judged sub-goal's check is never persisted by `folder.py`'s `write_folder` (only
 # `SubGoal.deterministic()` entries get a `checks/<name>.py` file) -- this fixed marker stands in
@@ -182,6 +191,10 @@ class _CompiledScenario:
     sub_goals: tuple[_CompiledSubGoal, ...]
     setup: Callable[[Any], object]
     ready: Callable[[Any], object]
+    # Who this person is and what they came for, as the platform's own persona record. Read off the
+    # same document and sent at pre-allocation, so a call can be read on the platform without the
+    # scenario file beside it. Presentation only: nothing in the scheduler looks at it.
+    presented: dict[str, Any] = field(default_factory=dict)
 
 
 def _read_text(path: Path, *, label: str) -> str:
@@ -213,7 +226,54 @@ def _validate_subgoal_name(name: str, *, folder_name: str) -> None:
         )
 
 
-def _load_one(folder: Path) -> _CompiledScenario:
+def _presented(body: dict[str, Any], *, scenario_key: str) -> dict[str, Any]:
+    """The persona record the platform stores for a scenario, built by the platform module's own
+    helper rather than a second copy of it here, so both paths describe a person the same way.
+
+    Presentation only, and never load-bearing: anything missing from the document is simply absent
+    from what the platform shows, and a document this cannot read still runs.
+    """
+    from types import SimpleNamespace
+
+    from .platform import persona_of
+
+    try:
+        return persona_of(
+            SimpleNamespace(
+                persona=body.get("persona") or {},
+                name=str(body.get("name") or ""),
+                scenario_key=scenario_key,
+                instruction=str(body.get("instruction") or ""),
+                tests=str(body.get("tests") or ""),
+            )
+        )
+    except Exception:  # noqa: BLE001 - a scenario never fails to run over how it is displayed
+        return {}
+
+
+def _deterministic_names(bundle_dir: Path) -> set[str]:
+    """Sub-goals the catalogue settles in code, so a missing check file is a defect and not a judge.
+
+    Absence of `checks/<name>.py` is what marks a sub-goal judged, which is right when the catalogue
+    says nobody can settle it in code and wrong when the check simply never reached the folder: the
+    run then reports a judged verdict for something that was meant to be measured, and a judge asked
+    about state it cannot see tends to say yes.
+    """
+    path = bundle_dir / CATALOGUE
+    if not path.is_file():
+        return set()
+    try:
+        body = json.loads(path.read_text(encoding="utf-8"))
+        return {
+            str(one.get("name") or "")
+            for one in (body.get("sub_goals") or [])
+            if str(one.get("check") or "").strip()
+        } - {""}
+    except Exception:  # noqa: BLE001 - an unreadable catalogue leaves the old behaviour
+        return set()
+
+
+def _load_one(folder: Path, *, settled_in_code: set[str] | None = None) -> _CompiledScenario:
     """One scenario folder -> a `Scenario`-protocol object. Mirrors `folder.py`'s documented
     layout (`scenario.json` + `setup.py` + `ready.py` + `checks/<goal>.py`) but reads
     `scenario.json` itself as a plain dict rather than through `fi.alk.harness.scenario.Scenario`
@@ -269,6 +329,14 @@ def _load_one(folder: Path) -> _CompiledScenario:
                                     # vacuous pass -- absence of the file is what means "judged".
             )
             judged = ""
+        elif name in (settled_in_code or set()):
+            # The catalogue settles this one in code and the file is not here, so the check was
+            # written and never materialised. Reporting it as judged is the expensive wrong answer:
+            # the scenario runs, the checkpoint reads as assessed, and nothing measured it.
+            raise ScenarioDocumentInvalid(
+                f"{folder.name}: sub-goal {name!r} is settled in code by the catalogue but "
+                f"{_CHECKS_DIRNAME}/{name}.py is missing, so nothing would measure it"
+            )
         else:
             # No `checks/<name>.py` -- per `write_folder`'s own `deterministic()` filter, this
             # name is a JUDGED sub-goal.
@@ -282,6 +350,7 @@ def _load_one(folder: Path) -> _CompiledScenario:
         sub_goals=tuple(sub_goals),
         setup=setup,
         ready=ready,
+        presented=_presented(body, scenario_key=scenario_key),
     )
 
 
@@ -302,11 +371,12 @@ def load_scenarios(bundle_dir: Path) -> list[_CompiledScenario]:
         # document (R1-1) -- this is inside `run_job`'s `try`/`except ScenarioDocumentInvalid`
         # (unlike `bundle_has_scenarios`'s own guard above), so raising here is the safe direction.
         raise ScenarioDocumentInvalid(f"{root}: cannot list scenario folders: {exc}") from exc
+    settled_in_code = _deterministic_names(bundle_dir)
     scenarios: list[_CompiledScenario] = []
     for folder in entries:
         if not folder.is_dir():
             continue
-        scenarios.append(_load_one(folder))
+        scenarios.append(_load_one(folder, settled_in_code=settled_in_code))
     if not scenarios:
         raise ScenarioDocumentInvalid(f"{root} contains no scenario folders")
     return scenarios
@@ -368,7 +438,17 @@ class BundleScenarioSource:
         # any failure, all of which `hosted_entrypoint.run_job`'s existing call site around
         # `scenario_source.build()` already maps to the typed `validating_scenarios`/`platform_sync`
         # terminal (or the fenced exit) -- nothing new to catch here.
-        return await register_with_platform(scenarios_client, scenarios, run_name=job.run_id)
+        # Pre-allocate the WHOLE suite, then run a sample of it.
+        #
+        # The sample used to be taken first, so the platform was handed five personas for a suite of
+        # thirty and refused the job: "expected exactly 30 personas, got 5". Pre-allocation is sealed
+        # against the full set by design (`_begin_payload` sends every key and the platform 409s on a
+        # subset), so the suite is what gets registered and the sample is only what gets called. The
+        # rows that are not called stay unstarted, which is a truthful state rather than a broken job.
+        registered = await register_with_platform(
+            scenarios_client, scenarios, run_name=job.run_id
+        )
+        return sampled_for_calling(registered)
 
 
 def _preallocation_error(code: str, message: str) -> Exception:
@@ -388,18 +468,22 @@ def _preallocation_error(code: str, message: str) -> Exception:
 
 def _provision_payload(run_name: str, scenarios: Sequence[_CompiledScenario]) -> dict[str, Any]:
     """`HarnessScenarioProvisionSerializer`/`HarnessProvisionPersonaSerializer`
-    (futureagi/simulate/serializers/hosted_harness.py:168-190): `operation`/`name`/`personas` (with
-    each persona's `scenario_key`) are the only fields this module can actually supply -- `name`/
-    `role`/`situation`/`outcome`/`persona` are all `required=False` on the real serializer, and
-    `_CompiledScenario` itself carries none of them BY DESIGN (this module's own LAYOUT DECISION,
-    see the module docstring: it reads `scenario.json` for the scheduler-facing fields only, never
-    through pr63's full `Scenario` model). Sending bare `scenario_key` per persona still validates
-    against the real endpoint; see CONTRACT NOTES in reports/p13-worker-r2.md.
+    (futureagi/simulate/serializers/hosted_harness.py): `operation`, `name` and `personas` are
+    required; each persona's `name`, `role`, `situation`, `outcome` and `persona` are optional and
+    are now supplied from the document (`_presented`). They were omitted while this module read
+    `scenario.json` for scheduler-facing fields only, and the cost was a platform that could show a
+    call but not who was on it or what they came for.
     """
     return {
         "operation": "provision",
         "name": run_name,
-        "personas": [{"scenario_key": scenario.scenario_key} for scenario in scenarios],
+        # Everything the serializer accepts, where the document had it: name, role, situation,
+        # outcome and the persona itself. `scenario_key` is set last because it is the one field the
+        # platform matches on and it must be this scenario's, whatever the persona record says.
+        "personas": [
+            {**scenario.presented, "scenario_key": scenario.scenario_key}
+            for scenario in scenarios
+        ],
     }
 
 

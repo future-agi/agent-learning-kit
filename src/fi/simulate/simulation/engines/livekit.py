@@ -107,6 +107,13 @@ _FINAL_TURN_COMMIT_WAIT_SECONDS = 30.0
 # budget (observed 1470s); as a per-step cleanup bound it must stay capped.
 _MAX_CLEANUP_TIMEOUT_SECONDS = 60.0
 _NO_CONVERSATION_TIMEOUT_SECONDS = 120.0
+# How long the side that was meant to speak first is given before the simulated person speaks
+# instead. Both sides are voice agents waiting to be addressed, so when the one that placed the call
+# says nothing the call is silence until a deadline discards it, and nothing was learned about
+# either side. A person hearing nothing says "hello" long before this; the wait is generous because
+# a slow first turn is common and must not be pre-empted. Kept well under the timeout above, which
+# is what abandons a call nobody started.
+_OPEN_INSTEAD_AFTER_SECONDS = 25.0
 # Each web case drives a full voice pipeline (STT/LLM/TTS + LiveKit conns) in one
 # child; too many starve the pod's CPU. This is an OPS CEILING on the
 # config-driven ``max_parallel_cases`` (not a replacement for it) — tune
@@ -399,7 +406,11 @@ class _TestRunnerAgent(Agent):
                 return None
 
         try:
-            volume = float(os.environ.get("HARNESS_BACKGROUND_NOISE_VOLUME", "0.3"))
+            # 2.0, not the 0.3 this used to default to. Measured in an isolated two-participant
+            # room, the office clip peaks at 119 of 32768 at 0.3, which is below the noise floor of
+            # speech near 15000: the ambience played and nobody could hear it. At 2.0 the same clip
+            # measures 752 to 789 on real calls, which is audible under a voice without masking it.
+            volume = float(os.environ.get("HARNESS_BACKGROUND_NOISE_VOLUME", "2.0"))
             if source.startswith(("http://", "https://")):
                 clip_source: Any = await asyncio.to_thread(_download)
                 if not clip_source:
@@ -771,6 +782,20 @@ class LiveKitEngine(BaseEngine):
         conversation_direction: str,
         agent_first_silence_timeout_seconds: float,
     ) -> _CaseOutcome:
+        # Teardown is a run of independent steps that each used to take the full
+        # ``cleanup_timeout``. Ten of them at up to sixty seconds is six hundred seconds of
+        # cleanup against a run budget of five hundred and seventy, so one slow teardown spent
+        # the whole budget and the case was discarded as a timeout with its conversation already
+        # finished. Share one deadline across the run instead, started at the first cleanup that
+        # actually waits, so every path gets the same bound however it got there.
+        _cleanup_started: list[float] = []
+
+        def _cleanup_budget() -> float:
+            if not _cleanup_started:
+                _cleanup_started.append(time.monotonic())
+            spent = time.monotonic() - _cleanup_started[0]
+            return max(1.0, cleanup_timeout - spent)
+
         api_key = os.environ.get(runtime.api_key_env)
         api_secret = os.environ.get(runtime.api_secret_env)
         if not api_key or not api_secret:
@@ -1455,18 +1480,35 @@ class LiveKitEngine(BaseEngine):
             for buffered_reader, buffered_identity in buffered_streams:
                 on_target_transcription(buffered_reader, buffered_identity)
 
+            opener: asyncio.Task[None] | None = None
             if conversation_direction == "simulator_first":
                 customer_agent.open_conversation()
-            stop_reason = await _wait_for_conversation_end(
-                room,
-                session,
-                customer_agent=customer_agent,
-                target_identity=target.identity,
-                timeout=max_seconds,
-                conversation_direction=conversation_direction,
-                agent_first_silence_timeout_seconds=agent_first_silence_timeout_seconds,
-                provider_task=bridge_task,
-            )
+            else:
+                # The agent placed this call and should speak first. If it does not, the person
+                # answers rather than both sides waiting for each other.
+                opener = asyncio.create_task(
+                    _open_if_nobody_speaks_first(
+                        session,
+                        customer_agent,
+                        timeout_seconds=_OPEN_INSTEAD_AFTER_SECONDS,
+                    )
+                )
+            try:
+                stop_reason = await _wait_for_conversation_end(
+                    room,
+                    session,
+                    customer_agent=customer_agent,
+                    target_identity=target.identity,
+                    timeout=max_seconds,
+                    conversation_direction=conversation_direction,
+                    agent_first_silence_timeout_seconds=agent_first_silence_timeout_seconds,
+                    provider_task=bridge_task,
+                )
+            finally:
+                # However the conversation ended, including badly, the watchdog goes with it: a
+                # pending task at loop close is noise in the log of every call.
+                if opener is not None and not opener.done():
+                    opener.cancel()
             logger.info(
                 "livekit_conversation_ended stop_reason=%s run=%s case=%s",
                 stop_reason,
@@ -1516,7 +1558,7 @@ class LiveKitEngine(BaseEngine):
                         api_client.room.delete_room(
                             api.DeleteRoomRequest(room=room_name)
                         ),
-                        timeout=cleanup_timeout,
+                        timeout=_cleanup_budget(),
                     )
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(
@@ -1590,7 +1632,16 @@ class LiveKitEngine(BaseEngine):
             # must never be the reason a case fails.
             if customer_agent is not None:
                 try:
-                    await customer_agent._stop_background_audio()
+                    # Bounded like every other teardown step. Closing the ambience player unpublishes
+                    # its track, and when the room's signal client has already died, that wait never
+                    # returns: the SDK loops on resume and restart while this await sits here, and the
+                    # case never completes, so the whole run is discarded on its deadline with a
+                    # finished conversation inside it. Measured: two calls ended on endCall at 15 and
+                    # 17 messages and both reported 570004ms and no test case.
+                    await asyncio.wait_for(
+                        customer_agent._stop_background_audio(),
+                        timeout=_cleanup_budget(),
+                    )
                 except Exception:
                     logger.warning("background audio not closed cleanly", exc_info=True)
             if target_transcription_handler_registered:
@@ -1600,7 +1651,15 @@ class LiveKitEngine(BaseEngine):
             for pending in pending_transcriptions:
                 pending.cancel()
             if pending_transcriptions:
-                await asyncio.gather(*pending_transcriptions, return_exceptions=True)
+                # Cancelled above, but a task blocked reading a stream whose connection is gone does
+                # not observe the cancellation, so this is bounded too.
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(*pending_transcriptions, return_exceptions=True),
+                        timeout=_cleanup_budget(),
+                    )
+                except Exception as exc:  # noqa: BLE001 - teardown never fails a case
+                    logger.warning("transcription tasks did not stop cleanly: %s", exc)
             session_to_close = session or (
                 getattr(customer_agent, "started_session", None)
                 if customer_agent is not None
@@ -1610,7 +1669,7 @@ class LiveKitEngine(BaseEngine):
                 try:
                     await _close_agent_session(
                         session_to_close,
-                        timeout=cleanup_timeout,
+                        timeout=_cleanup_budget(),
                     )
                 except Exception as exc:
                     _record_cleanup_error(
@@ -1624,7 +1683,7 @@ class LiveKitEngine(BaseEngine):
                 try:
                     await asyncio.wait_for(
                         models.aclose(),
-                        timeout=cleanup_timeout,
+                        timeout=_cleanup_budget(),
                     )
                 except Exception as exc:
                     _record_cleanup_error(
@@ -1638,7 +1697,7 @@ class LiveKitEngine(BaseEngine):
                 try:
                     await asyncio.wait_for(
                         recorder.aclose(),
-                        timeout=cleanup_timeout,
+                        timeout=_cleanup_budget(),
                     )
                 except Exception as exc:
                     _record_cleanup_error(
@@ -1651,10 +1710,10 @@ class LiveKitEngine(BaseEngine):
             if audio_bridge is not None:
                 try:
                     await asyncio.wait_for(
-                        audio_bridge.aclose(), timeout=cleanup_timeout
+                        audio_bridge.aclose(), timeout=_cleanup_budget()
                     )
                     if bridge_task is not None:
-                        await asyncio.wait_for(bridge_task, timeout=cleanup_timeout)
+                        await asyncio.wait_for(bridge_task, timeout=_cleanup_budget())
                 except Exception as exc:
                     _record_cleanup_error(
                         cleanup_errors,
@@ -1665,7 +1724,7 @@ class LiveKitEngine(BaseEngine):
                     )
             if room_connected:
                 try:
-                    await asyncio.wait_for(room.disconnect(), timeout=cleanup_timeout)
+                    await asyncio.wait_for(room.disconnect(), timeout=_cleanup_budget())
                 except Exception as exc:
                     _record_cleanup_error(
                         cleanup_errors,
@@ -1723,7 +1782,7 @@ class LiveKitEngine(BaseEngine):
                 try:
                     await asyncio.wait_for(
                         _delete_sip_dispatch_rule(api_client, sip_dispatch_rule_id),
-                        timeout=cleanup_timeout,
+                        timeout=_cleanup_budget(),
                     )
                 except Exception as exc:
                     if not _is_not_found(exc):
@@ -1740,7 +1799,7 @@ class LiveKitEngine(BaseEngine):
                         api_client.room.delete_room(
                             api.DeleteRoomRequest(room=room_name)
                         ),
-                        timeout=cleanup_timeout,
+                        timeout=_cleanup_budget(),
                     )
                 except Exception as exc:
                     if not _is_not_found(exc):
@@ -2372,6 +2431,35 @@ async def _wait_for_conversation_never_started(
         if any(message["content"] for message in _session_messages(session)):
             await asyncio.Event().wait()
         await asyncio.sleep(0.5)
+
+
+async def _open_if_nobody_speaks_first(
+    session: AgentSession,
+    customer_agent: Any,
+    *,
+    timeout_seconds: float,
+) -> None:
+    """Have the simulated person open the conversation when the other side never does.
+
+    Only for a call the agent was supposed to start. It opens exactly the way a simulator-first call
+    does, through ``open_conversation``, so the person's own initial message is used where the
+    persona has one. Returns as soon as anybody speaks, which is the ordinary case.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_seconds
+    while loop.time() < deadline:
+        if any(message["content"] for message in _session_messages(session)):
+            return
+        await asyncio.sleep(0.2)
+    if any(message["content"] for message in _session_messages(session)):
+        return
+    logger.warning(
+        "no first turn after %ss; the simulated person opens instead", timeout_seconds
+    )
+    try:
+        customer_agent.open_conversation()
+    except Exception:  # noqa: BLE001 - a call that cannot be opened is the case's own failure
+        logger.warning("the simulated person could not open the call", exc_info=True)
 
 
 async def _wait_for_agent_first_silence(

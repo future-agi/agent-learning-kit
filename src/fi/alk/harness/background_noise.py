@@ -32,17 +32,23 @@ _DEFAULT_BUILTIN = "OFFICE_AMBIENCE"
 def enabled() -> bool:
     """Whether any scenario may be heard through background noise on this run.
 
-    Off unless ``ALK_BACKGROUND_NOISE`` opts in, so a run needs no environment at all to be
-    silent. Continuous ambient audio under the caller competes with endpoint detection, and calls
-    carrying it end earlier and on fewer turns, so silence is the setting a run should fall into
-    rather than the one it has to ask for. Opting in still only permits noise: a scenario that
-    asked for none stays silent either way.
+    **On unless ``ALK_BACKGROUND_NOISE`` turns it off.** A real caller is somewhere, and an agent
+    tested only against studio silence has not been tested against its callers, so noise is what a
+    run should fall into rather than something it has to ask for. It was opt-in and every deployment
+    forgot: a switch nobody sets is a feature nobody has.
+
+    The tradeoff is real and is why an opt-out exists. Continuous ambience under the caller competes
+    with endpoint detection, and calls carrying it end a little earlier and on fewer turns. Set
+    ``ALK_BACKGROUND_NOISE=0`` (or ``off``, ``false``, ``no``) for a run that needs a clean line.
+
+    Permission, not compulsion: a scenario whose own ``background_noise`` says none stays silent
+    either way.
     """
-    return os.environ.get("ALK_BACKGROUND_NOISE", "0").strip().lower() in (
-        "1",
-        "on",
-        "true",
-        "yes",
+    return os.environ.get("ALK_BACKGROUND_NOISE", "1").strip().lower() not in (
+        "0",
+        "off",
+        "false",
+        "no",
     )
 
 

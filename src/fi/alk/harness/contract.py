@@ -20,11 +20,14 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 # How a person reaches an agent. This decides how it is later run — voice goes out as a live
 # call, everything else runs locally — so it is defined once and referenced, never retyped.
 MODALITIES = ("voice", "chat", "browser")
+# Voice only, and only two: either the agent placed the call or it answered one.
+CALL_DIRECTIONS = ("inbound", "outbound")
 
 _STRING_FIELDS = (
     "agent",
     "one_liner",
     "modality",
+    "call_direction",
     "system_prompt_excerpt",
     "notes",
 )
@@ -97,6 +100,10 @@ class ToolSpec(BaseModel):
     arg_types: dict[str, str] = Field(default_factory=dict)
     arg_values: dict[str, Any] = Field(default_factory=dict)
     description: str = ""
+    # Tools that must have run before this one stops refusing, and only for state the agent builds
+    # during the conversation. Empty means callable first thing. Marking a tool gated when it is not
+    # costs every future test of it a preamble it never needed.
+    requires: list[str] = Field(default_factory=list)
 
 
 class ToolEntry(BaseModel):
@@ -427,6 +434,10 @@ class AgentContract(BaseModel):
     agent: str = ""
     one_liner: str = ""
     modality: str = "chat"
+    # Voice only: whether this agent places calls or answers them. Chat is always started by the
+    # person, so it stays inbound. It changes how the simulated person is briefed, not who speaks
+    # first: an outbound agent still greets, it just has to say who it is and why it called.
+    call_direction: str = "inbound"
     conversational: bool = True
     system_prompt_excerpt: str = ""
     hard_constraints: list[str] = Field(default_factory=list)
@@ -477,8 +488,13 @@ class AgentContract(BaseModel):
                 if tool.arg_values
                 else ""
             )
+            # Preconditions belong on the tool line or they are not read. A writer that cannot see
+            # what a tool refuses until another has run replays the agent's whole flow to reach it.
+            needs = (
+                f"  [after: {', '.join(tool.requires)}]" if tool.requires else ""
+            )
             lines.append(
-                f"  - {tool.name}({signature}){values} : {tool.description[:140]}"
+                f"  - {tool.name}({signature}){values}{needs} : {tool.description[:140]}"
             )
         parts = [
             f"AGENT: {self.agent} - {self.one_liner}",
@@ -486,6 +502,19 @@ class AgentContract(BaseModel):
             "REAL TOOLS (use ONLY these, with these exact arg names and types):\n"
             + ("\n".join(lines) or "  (none)"),
         ]
+        # Voice only, and stated plainly: a scenario written as though the person dialled in tests
+        # nothing when the agent is the one placing the call.
+        if self.modality == "voice" and self.call_direction:
+            parts.insert(
+                2,
+                f"CALL DIRECTION: {self.call_direction} - "
+                + (
+                    "this agent places the call, so the person did not dial and has no request "
+                    "to open with"
+                    if self.call_direction == "outbound"
+                    else "people dial in to this agent"
+                ),
+            )
         if self.hard_constraints:
             parts.append(
                 "HARD CONSTRAINTS the agent MUST follow (nothing may contradict these):\n  - "
