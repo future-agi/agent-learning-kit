@@ -12,7 +12,7 @@ import pytest
 
 pytest.importorskip("livekit")
 
-from fi.simulate.agent.definition import AgentDefinition
+from fi.simulate.agent.definition import AgentDefinition, TelephonyTransport
 from fi.simulate.recording.room_recorder import (
     RecordedTrack,
     mix_recordings,
@@ -121,7 +121,10 @@ def test_external_multi_case_run_requires_room_template() -> None:
         )
 
 
-def test_verbatim_room_name_rejects_multi_persona_run() -> None:
+def test_verbatim_room_name_requires_serial_cases(monkeypatch) -> None:
+    # A stray env override of the max-case-concurrency default would let this
+    # test pass for the wrong reason (concurrency already 1), so make it explicit.
+    monkeypatch.delenv("ALK_VOICE_MAX_CASE_CONCURRENCY", raising=False)
     runtime = livekit.LiveKitSimulatorRuntime(
         url="wss://livekit.example.com",
         room_name="sim-slot-03",
@@ -131,15 +134,337 @@ def test_verbatim_room_name_rejects_multi_persona_run() -> None:
 
     with pytest.raises(
         ValueError,
-        match="room_name_verbatim requires a single-persona scenario",
+        match="room_name_verbatim_requires_serial_cases",
     ):
         asyncio.run(
             LiveKitEngine().run(
                 agent_definition=_agent(),
                 livekit_runtime=runtime,
                 scenario=_scenario(2),
+                max_concurrency=2,
             )
         )
+
+
+def test_verbatim_sip_inbound_multi_persona_reuses_the_same_room(
+    monkeypatch,
+) -> None:
+    runtime = livekit.LiveKitSimulatorRuntime(
+        url="wss://livekit.example.com",
+        room_name="sim-slot-03",
+        room_mode="managed",
+        room_name_verbatim=True,
+    )
+    agent = _agent(
+        room_mode="managed", transport=TelephonyTransport(kind="sip_inbound")
+    )
+    engine = LiveKitEngine()
+    captured_room_names: list[str] = []
+
+    async def _fake_run_case(*_args, **kwargs):
+        captured_room_names.append(kwargs["room_name"])
+        return livekit._CaseOutcome(status=CaseStatus.COMPLETED)
+
+    monkeypatch.setattr(engine, "_run_single_test_case", _fake_run_case)
+
+    report = asyncio.run(
+        engine.run(
+            agent_definition=agent,
+            livekit_runtime=runtime,
+            scenario=_scenario(3),
+            max_concurrency=2,
+        )
+    )
+
+    assert captured_room_names == ["sim-slot-03"] * 3
+    assert len(report.results) == 3
+
+
+def test_verbatim_multi_persona_sip_inbound_skips_room_template_requirement(
+    monkeypatch,
+) -> None:
+    runtime = livekit.LiveKitSimulatorRuntime(
+        url="wss://livekit.example.com",
+        room_name="sim-slot-03",  # no {test_case_id}/{run_id} template
+        room_mode="managed",
+        room_name_verbatim=True,
+    )
+    agent = _agent(
+        room_mode="managed", transport=TelephonyTransport(kind="sip_inbound")
+    )
+    engine = LiveKitEngine()
+
+    async def _fake_run_case(*_args, **kwargs):
+        return livekit._CaseOutcome(status=CaseStatus.COMPLETED)
+
+    monkeypatch.setattr(engine, "_run_single_test_case", _fake_run_case)
+
+    try:
+        report = asyncio.run(
+            engine.run(
+                agent_definition=agent,
+                livekit_runtime=runtime,
+                scenario=_scenario(3),
+            )
+        )
+    except ValueError as exc:
+        pytest.fail(f"sip_inbound_room_template_required unexpectedly raised: {exc}")
+
+    assert len(report.results) == 3
+
+
+def test_drain_failure_is_a_failure_of_that_case_only(monkeypatch) -> None:
+    runtime = livekit.LiveKitSimulatorRuntime(
+        url="wss://livekit.example.com",
+        room_name="sim-slot-03",
+        room_mode="managed",
+        room_name_verbatim=True,
+    )
+    agent = _agent(
+        room_mode="managed", transport=TelephonyTransport(kind="sip_inbound")
+    )
+    engine = LiveKitEngine()
+    calls = {"count": 0}
+
+    async def _fake_run_case(*_args, **_kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return livekit._failure_outcome(
+                CaseStatus.TIMED_OUT,
+                livekit.FailureStage.PREPARING,
+                "livekit_room_drain_timeout",
+                "The leased simulator room was still occupied when its drain deadline passed",
+                retryable=True,
+            )
+        return livekit._CaseOutcome(status=CaseStatus.COMPLETED)
+
+    monkeypatch.setattr(engine, "_run_single_test_case", _fake_run_case)
+
+    report = asyncio.run(
+        engine.run(
+            agent_definition=agent,
+            livekit_runtime=runtime,
+            scenario=_scenario(3),
+        )
+    )
+
+    assert len(report.results) == 3
+    assert report.results[0].metadata["status"] == CaseStatus.TIMED_OUT.value
+    assert report.results[0].metadata["failure"]["code"] == "livekit_room_drain_timeout"
+    assert report.results[1].metadata["status"] == CaseStatus.COMPLETED.value
+    assert report.results[2].metadata["status"] == CaseStatus.COMPLETED.value
+
+
+class _FakeApiError(Exception):
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+def test_ensure_room_absent_tolerates_not_found_on_initial_delete() -> None:
+    calls: list[tuple] = []
+
+    async def delete_room(request):
+        calls.append(("delete", request.room))
+        raise _FakeApiError("not_found")
+
+    async def list_rooms(request):
+        calls.append(("list", tuple(request.names)))
+        return SimpleNamespace(rooms=[])
+
+    api_client = SimpleNamespace(
+        room=SimpleNamespace(delete_room=delete_room, list_rooms=list_rooms)
+    )
+
+    polls = asyncio.run(livekit._ensure_room_absent(api_client, "sim-slot-01"))
+
+    assert polls == 1
+    assert calls == [("delete", "sim-slot-01"), ("list", ("sim-slot-01",))]
+
+
+def test_ensure_room_absent_redeletes_when_still_listed_once(monkeypatch) -> None:
+    calls: list[tuple] = []
+    list_responses = [
+        SimpleNamespace(rooms=[SimpleNamespace(name="sim-slot-01")]),
+        SimpleNamespace(rooms=[]),
+    ]
+    real_sleep = asyncio.sleep
+
+    async def _fake_sleep(seconds):
+        # Real backoff sleeps would cost CI 1.5s across these two tests for no
+        # assertion value; yield instead so the poll loop still awaits.
+        await real_sleep(0)
+
+    monkeypatch.setattr(livekit.asyncio, "sleep", _fake_sleep)
+
+    async def delete_room(request):
+        calls.append(("delete", request.room))
+
+    async def list_rooms(request):
+        return list_responses.pop(0)
+
+    api_client = SimpleNamespace(
+        room=SimpleNamespace(delete_room=delete_room, list_rooms=list_rooms)
+    )
+
+    polls = asyncio.run(livekit._ensure_room_absent(api_client, "sim-slot-01"))
+
+    assert polls == 2
+    assert calls == [("delete", "sim-slot-01"), ("delete", "sim-slot-01")]
+
+
+def test_ensure_room_absent_redeletes_when_still_listed_twice(monkeypatch) -> None:
+    calls: list[tuple] = []
+    list_responses = [
+        SimpleNamespace(rooms=[SimpleNamespace(name="sim-slot-01")]),
+        SimpleNamespace(rooms=[SimpleNamespace(name="sim-slot-01")]),
+        SimpleNamespace(rooms=[]),
+    ]
+    real_sleep = asyncio.sleep
+
+    async def _fake_sleep(seconds):
+        # Real backoff sleeps would cost CI 1.5s across these two tests for no
+        # assertion value; yield instead so the poll loop still awaits.
+        await real_sleep(0)
+
+    monkeypatch.setattr(livekit.asyncio, "sleep", _fake_sleep)
+
+    async def delete_room(request):
+        calls.append(("delete", request.room))
+
+    async def list_rooms(request):
+        return list_responses.pop(0)
+
+    api_client = SimpleNamespace(
+        room=SimpleNamespace(delete_room=delete_room, list_rooms=list_rooms)
+    )
+
+    polls = asyncio.run(livekit._ensure_room_absent(api_client, "sim-slot-01"))
+
+    assert polls == 3
+    assert len(calls) == 3
+
+
+def test_ensure_room_absent_propagates_non_not_found_delete_error() -> None:
+    async def delete_room(request):
+        raise _FakeApiError("internal")
+
+    async def list_rooms(request):
+        raise AssertionError("list_rooms should not be called")
+
+    api_client = SimpleNamespace(
+        room=SimpleNamespace(delete_room=delete_room, list_rooms=list_rooms)
+    )
+
+    with pytest.raises(_FakeApiError):
+        asyncio.run(livekit._ensure_room_absent(api_client, "sim-slot-01"))
+
+
+def test_ensure_room_absent_times_out_and_backs_off(monkeypatch) -> None:
+    sleep_calls: list[float] = []
+    real_sleep = asyncio.sleep
+
+    async def _fake_sleep(seconds):
+        sleep_calls.append(seconds)
+        # A non-yielding stub would never let wait_for's own timeout fire.
+        await real_sleep(0)
+
+    monkeypatch.setattr(livekit.asyncio, "sleep", _fake_sleep)
+
+    async def delete_room(_request):
+        return None
+
+    async def list_rooms(_request):
+        return SimpleNamespace(rooms=[SimpleNamespace(name="sim-slot-01")])
+
+    api_client = SimpleNamespace(
+        room=SimpleNamespace(delete_room=delete_room, list_rooms=list_rooms)
+    )
+
+    async def _run():
+        await asyncio.wait_for(
+            livekit._ensure_room_absent(api_client, "sim-slot-01"),
+            timeout=0.2,
+        )
+
+    with pytest.raises(asyncio.TimeoutError):
+        asyncio.run(_run())
+
+    assert sleep_calls[:5] == [0.5, 0.5, 0.5, 5.0, 5.0]
+
+
+def test_unexpected_participants_excludes_simulator_and_recorder() -> None:
+    room = SimpleNamespace(
+        remote_participants={
+            "sim": SimpleNamespace(identity="fagi-simulator-abc"),
+            "rec": SimpleNamespace(identity="fagi-recorder-abc"),
+            "other": SimpleNamespace(identity="sip-caller-xyz"),
+        }
+    )
+
+    result = livekit._unexpected_participants(
+        room,
+        simulator_identity="fagi-simulator-abc",
+        recorder_identity="fagi-recorder-abc",
+    )
+
+    assert result == {"sip-caller-xyz"}
+
+
+def test_unexpected_participants_empty_when_only_ours() -> None:
+    room = SimpleNamespace(
+        remote_participants={
+            "sim": SimpleNamespace(identity="fagi-simulator-abc"),
+            "rec": SimpleNamespace(identity="fagi-recorder-abc"),
+        }
+    )
+
+    result = livekit._unexpected_participants(
+        room,
+        simulator_identity="fagi-simulator-abc",
+        recorder_identity="fagi-recorder-abc",
+    )
+
+    assert result == set()
+
+
+@pytest.mark.parametrize(
+    "attribute_value, expected",
+    [
+        ("+14155551234", True),
+        ("14155551234", True),
+        ("4155551234", True),
+        ("5551234", True),
+        ("sip:+14155551234@trunk.example.com", True),
+        ("sip:+14155551234@trunk;transport=udp", True),
+        ("+14155559999", False),
+        ("555", None),
+    ],
+)
+def test_caller_matches_suffix_rule(attribute_value, expected) -> None:
+    attributes = {"sip.phoneNumber": attribute_value}
+    assert livekit._caller_matches(attributes, "+14155551234") is expected
+
+
+def test_caller_matches_missing_attribute_is_unverified() -> None:
+    assert livekit._caller_matches({}, "+14155551234") is None
+
+
+def test_caller_matches_no_expected_number_is_unverified() -> None:
+    assert livekit._caller_matches({"sip.phoneNumber": "+14155551234"}, None) is None
+
+
+def test_caller_matches_national_format_mismatch_is_documented_limitation() -> None:
+    # A national-format caller ID (0-prefixed instead of the country code) is a
+    # known false mismatch, not a false match — loud and retryable.
+    assert (
+        livekit._caller_matches({"sip.phoneNumber": "0612345678"}, "+33612345678")
+        is False
+    )
+
+
+def test_number_digits_strips_sip_uri_user_part_and_params() -> None:
+    assert livekit._number_digits("sip:+1415@host9;x=1") == "1415"
 
 
 def test_missing_credentials_is_typed_failure_not_transcript(monkeypatch) -> None:

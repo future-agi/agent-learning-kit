@@ -72,7 +72,11 @@ from fi.simulate.evidence.providers import (
     RetellEvidenceSource,
     VapiEvidenceSource,
 )
-from fi.simulate.endpoints.vapi import VapiCallOriginator
+from fi.simulate.endpoints.originators import (
+    CallOriginator,
+    build_call_originator,
+    finalize_originator,
+)
 from fi.simulate.simulation.bridge import LiveKitAudioBridge
 from fi.simulate.simulation.livekit_models import LiveKitModels, build_livekit_models
 from fi.simulate.recording.room_recorder import (
@@ -532,39 +536,11 @@ class LiveKitEngine(BaseEngine):
                 num_personas=num_scenarios,
             )
             scenario = Scenario(name="Generated Scenario", dataset=personas)
-        if runtime.room_name_verbatim and len(scenario.dataset) != 1:
-            raise ValueError("room_name_verbatim requires a single-persona scenario")
-        if (
-            runtime.room_mode == "external"
-            and len(scenario.dataset) > 1
-            and not _has_room_template(runtime.room_name)
-        ):
-            raise ValueError(
-                "external_room_template_required: concurrent-safe multi-case runs "
-                "need {run_id}, {test_case_id}, or {index} in room_name"
-            )
         transport = agent_definition.transport or TelephonyTransport()
         profile = _resolve_target_profile(transport.kind)
-        if not profile.uses_external_room and runtime.room_mode != "managed":
-            raise ValueError("managed_transport_requires_managed_room")
-        if (
-            profile.receives_inbound_call
-            and len(scenario.dataset) > 1
-            and not _has_room_template(runtime.room_name)
-        ):
-            raise ValueError(
-                "sip_inbound_room_template_required: multi-case inbound runs "
-                "need {run_id} or {test_case_id} in room_name"
-            )
-        cleanup_timeout = min(cleanup_timeout, _MAX_CLEANUP_TIMEOUT_SECONDS)
-        current_run_id = run_id or new_run_id()
-        if recording_case_directory is not None and len(scenario.dataset) != 1:
-            raise ValueError(
-                "recording_case_directory requires a single-persona scenario"
-            )
-        invocation_id = uuid4().hex[:12]
-        report = TestReport()
-
+        # Computed before the room-name checks below: a serial (concurrency-1)
+        # run is what makes reusing one fixed room across cases safe, so the
+        # verbatim check needs this value, not just the dataset size.
         # Cases run concurrently up to ``max_concurrency`` (bounded by the
         # customer agent's own session capacity). SIP legs stay serial: a run
         # leases a single DID, so overlapping calls would collide. Ask the
@@ -581,6 +557,45 @@ class LiveKitEngine(BaseEngine):
                 ),
             )
         )
+        if (
+            runtime.room_name_verbatim
+            and len(scenario.dataset) != 1
+            and case_concurrency != 1
+        ):
+            raise ValueError(
+                "room_name_verbatim_requires_serial_cases: a fixed room hosts "
+                "one case at a time; run with max_concurrency=1"
+            )
+        if (
+            runtime.room_mode == "external"
+            and len(scenario.dataset) > 1
+            and not _has_room_template(runtime.room_name)
+        ):
+            raise ValueError(
+                "external_room_template_required: concurrent-safe multi-case runs "
+                "need {run_id}, {test_case_id}, or {index} in room_name"
+            )
+        if not profile.uses_external_room and runtime.room_mode != "managed":
+            raise ValueError("managed_transport_requires_managed_room")
+        if (
+            profile.receives_inbound_call
+            and len(scenario.dataset) > 1
+            and not _has_room_template(runtime.room_name)
+            and not runtime.room_name_verbatim
+        ):
+            raise ValueError(
+                "sip_inbound_room_template_required: multi-case inbound runs "
+                "need {run_id} or {test_case_id} in room_name"
+            )
+        cleanup_timeout = min(cleanup_timeout, _MAX_CLEANUP_TIMEOUT_SECONDS)
+        current_run_id = run_id or new_run_id()
+        if recording_case_directory is not None and len(scenario.dataset) != 1:
+            raise ValueError(
+                "recording_case_directory requires a single-persona scenario"
+            )
+        invocation_id = uuid4().hex[:12]
+        report = TestReport()
+
         case_semaphore = asyncio.Semaphore(case_concurrency)
 
         async def _run_case(index: int, persona: Persona) -> TestCaseResult:
@@ -830,9 +845,11 @@ class LiveKitEngine(BaseEngine):
         outcome: _CaseOutcome | None = None
         sip_dispatch_rule_id: str | None = None
         sip_dispatch_rule_created = False
-        vapi_originator: VapiCallOriginator | None = None
+        call_originator: CallOriginator | None = None
         provider_call_id: str | None = None
         provider_termination_source: str | None = None
+        reconciled_call_ids: list[str] = []
+        caller_verification: str | None = None
         audio_bridge: LiveKitAudioBridge | None = None
         bridge_task: asyncio.Task[None] | None = None
         case_started_at = datetime.now(timezone.utc)
@@ -889,40 +906,86 @@ class LiveKitEngine(BaseEngine):
                     api_secret,
                 )
                 if not profile.places_outbound_call:
-                    try:
-                        await asyncio.wait_for(
-                            api_client.room.create_room(
-                                api.CreateRoomRequest(name=room_name)
-                            ),
-                            timeout=connect_timeout,
-                        )
-                    except asyncio.TimeoutError:
-                        outcome = _failure_outcome(
-                            TestCaseStatus.TIMED_OUT,
-                            FailureStage.PREPARING,
-                            "livekit_room_create_timeout",
-                            "LiveKit room creation exceeded its deadline",
-                            retryable=True,
-                        )
-                    except Exception as exc:
-                        logger.warning(
-                            "LiveKit room creation failed",
-                            exc_info=redacted_exc_info(exc),
-                            extra={
-                                "run_id": run_id,
-                                "test_case_id": test_case_id,
-                                "room_name": room_name,
-                            },
-                        )
-                        outcome = _failure_outcome(
-                            TestCaseStatus.FAILED,
-                            FailureStage.PREPARING,
-                            "livekit_room_create_failed",
-                            "Failed to create the LiveKit room",
-                            details=_safe_provider_error_details(
-                                exc, operation="room_create"
-                            ),
-                        )
+                    # The pool's dispatch rule stays live for the whole run, so a
+                    # stray inbound call can re-create this room at any moment
+                    # between cases — drain it before trusting it as ours.
+                    if runtime.room_name_verbatim:
+                        try:
+                            polls = await asyncio.wait_for(
+                                _ensure_room_absent(api_client, room_name),
+                                timeout=connect_timeout,
+                            )
+                            logger.info(
+                                "leased room drained",
+                                extra={
+                                    "run_id": run_id,
+                                    "test_case_id": test_case_id,
+                                    "room_name": room_name,
+                                    "polls": polls,
+                                },
+                            )
+                        except asyncio.TimeoutError:
+                            outcome = _failure_outcome(
+                                TestCaseStatus.TIMED_OUT,
+                                FailureStage.PREPARING,
+                                "livekit_room_drain_timeout",
+                                "The leased simulator room was still occupied when its drain deadline passed",
+                                retryable=True,
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning(
+                                "leased room drain failed",
+                                exc_info=redacted_exc_info(exc),
+                                extra={
+                                    "run_id": run_id,
+                                    "test_case_id": test_case_id,
+                                    "room_name": room_name,
+                                },
+                            )
+                            outcome = _failure_outcome(
+                                TestCaseStatus.FAILED,
+                                FailureStage.PREPARING,
+                                "livekit_room_drain_failed",
+                                "Could not clear the leased simulator room before the call",
+                                details=_safe_provider_error_details(
+                                    exc, operation="room_drain"
+                                ),
+                            )
+                    if outcome is None:
+                        try:
+                            await asyncio.wait_for(
+                                api_client.room.create_room(
+                                    api.CreateRoomRequest(name=room_name)
+                                ),
+                                timeout=connect_timeout,
+                            )
+                        except asyncio.TimeoutError:
+                            outcome = _failure_outcome(
+                                TestCaseStatus.TIMED_OUT,
+                                FailureStage.PREPARING,
+                                "livekit_room_create_timeout",
+                                "LiveKit room creation exceeded its deadline",
+                                retryable=True,
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "LiveKit room creation failed",
+                                exc_info=redacted_exc_info(exc),
+                                extra={
+                                    "run_id": run_id,
+                                    "test_case_id": test_case_id,
+                                    "room_name": room_name,
+                                },
+                            )
+                            outcome = _failure_outcome(
+                                TestCaseStatus.FAILED,
+                                FailureStage.PREPARING,
+                                "livekit_room_create_failed",
+                                "Failed to create the LiveKit room",
+                                details=_safe_provider_error_details(
+                                    exc, operation="room_create"
+                                ),
+                            )
                 if outcome is None and profile.uses_external_room:
                     # Defer the target dispatch until AFTER the early buffer
                     # handler is registered and the session is live (both
@@ -1246,25 +1309,50 @@ class LiveKitEngine(BaseEngine):
                         "sip_dispatch_rule_created": sip_dispatch_rule_created,
                     },
                 )
-            if transport.inbound_call_originator == "vapi":
-                try:
-                    vapi_originator = VapiCallOriginator.from_env()
-                    vapi_call = await asyncio.wait_for(
-                        vapi_originator.start(), timeout=connect_timeout
+            if runtime.room_name_verbatim and profile.receives_inbound_call:
+                unexpected = _unexpected_participants(
+                    room,
+                    simulator_identity=simulator_identity,
+                    recorder_identity=recorder_identity,
+                )
+                if unexpected:
+                    logger.warning(
+                        "leased room occupied before dial",
+                        extra={
+                            "run_id": run_id,
+                            "test_case_id": test_case_id,
+                            "room_name": room_name,
+                            "unexpected_participants": len(unexpected),
+                        },
                     )
-                    provider_call_id = vapi_call.call_id
+                    outcome = _failure_outcome(
+                        TestCaseStatus.FAILED,
+                        FailureStage.PREPARING,
+                        "livekit_room_occupied",
+                        "Another participant was already in the leased simulator room before the call was placed",
+                        retryable=True,
+                    )
+                    return outcome
+            if transport.inbound_call_originator is not None:
+                name = transport.inbound_call_originator
+                try:
+                    call_originator = build_call_originator(transport)
+                    originated_call = await asyncio.wait_for(
+                        call_originator.start(), timeout=connect_timeout
+                    )
+                    provider_call_id = originated_call.call_id
                 except asyncio.TimeoutError:
                     outcome = _failure_outcome(
                         TestCaseStatus.TIMED_OUT,
                         FailureStage.PREPARING,
-                        "vapi_call_start_timeout",
-                        "Vapi call creation exceeded its deadline",
+                        f"{name}_call_start_timeout",
+                        f"{name.capitalize()} call creation exceeded its deadline",
                         retryable=True,
                     )
                     return outcome
                 except Exception as exc:
                     logger.warning(
-                        "Vapi call creation failed",
+                        f"{name.capitalize()} call creation failed",
                         exc_info=redacted_exc_info(exc),
                         extra={
                             "run_id": run_id,
@@ -1274,10 +1362,10 @@ class LiveKitEngine(BaseEngine):
                     outcome = _failure_outcome(
                         TestCaseStatus.FAILED,
                         FailureStage.PREPARING,
-                        "vapi_call_start_failed",
-                        "Failed to start the Vapi call",
+                        f"{name}_call_start_failed",
+                        f"Failed to start the {name.capitalize()} call",
                         details=_safe_provider_error_details(
-                            exc, operation="vapi_call_start"
+                            exc, operation=f"{name}_call_start"
                         ),
                     )
                     return outcome
@@ -1287,6 +1375,42 @@ class LiveKitEngine(BaseEngine):
                 target_identity=effective_target_identity,
                 timeout=effective_readiness_timeout,
             )
+            if (
+                runtime.room_name_verbatim
+                and profile.receives_inbound_call
+                and transport.originator_from_number
+            ):
+                verdict = _caller_matches(
+                    target.attributes, transport.originator_from_number
+                )
+                if verdict is False:
+                    logger.warning(
+                        "leased room wrong caller",
+                        extra={
+                            "run_id": run_id,
+                            "test_case_id": test_case_id,
+                            "expected_digits": len(
+                                _number_digits(transport.originator_from_number)
+                            ),
+                            "observed_digits": len(
+                                _number_digits(
+                                    target.attributes.get(
+                                        _SIP_REMOTE_NUMBER_ATTRIBUTE, ""
+                                    )
+                                )
+                            ),
+                        },
+                    )
+                    caller_verification = "mismatch"
+                    raise _LeasedRoomCallerMismatch()
+                elif verdict is None:
+                    logger.warning(
+                        "leased room caller unverified",
+                        extra={"run_id": run_id, "test_case_id": test_case_id},
+                    )
+                    caller_verification = "unverified"
+                else:
+                    caller_verification = "matched"
             logger.info(
                 "livekit_target_joined identity=%s sid=%s track=%s run=%s case=%s",
                 target.identity,
@@ -1475,6 +1599,17 @@ class LiveKitEngine(BaseEngine):
                 message,
                 retryable=True,
             )
+        except _LeasedRoomCallerMismatch:
+            # Unlike the pre-dial failures above, this path has a billed call and
+            # a joined target; the recordings, provider evidence and metadata
+            # update below all run after the try, so this must not return early.
+            outcome = _failure_outcome(
+                TestCaseStatus.FAILED,
+                FailureStage.READINESS,
+                "livekit_room_wrong_caller",
+                "The participant that answered is not calling from the customer's configured number",
+                retryable=True,
+            )
         except Exception as exc:
             logger.error(
                 "LiveKit test case failed",
@@ -1598,22 +1733,44 @@ class LiveKitEngine(BaseEngine):
                         run_id,
                         test_case_id,
                     )
-            if vapi_originator is not None:
+            if call_originator is not None:
+                # Guarded like every other cleanup step below: a future escape
+                # from the helper (today it never raises) must not skip the
+                # dispatch-rule/room/api-client teardown that follows.
                 try:
-                    if provider_call_id is not None:
-                        await asyncio.wait_for(
-                            vapi_originator.stop(provider_call_id),
-                            timeout=_cleanup_budget(),
-                        )
-                        provider_termination_source = "sdk_originator_cleanup"
-                    await asyncio.wait_for(
-                        vapi_originator.close(), timeout=_cleanup_budget()
+                    finalize_result = await finalize_originator(
+                        call_originator,
+                        provider_call_id=provider_call_id,
+                        originator_name=transport.inbound_call_originator,
+                        case_started_at=case_started_at,
+                        cleanup_timeout=cleanup_timeout,
                     )
+                    for operation, exc in finalize_result.cleanup_errors:
+                        _record_cleanup_error(
+                            cleanup_errors, exc, operation, run_id, test_case_id
+                        )
+                    if finalize_result.termination_source:
+                        provider_termination_source = finalize_result.termination_source
+                    reconciled_call_ids = finalize_result.reconciled_call_ids
+                    if provider_call_id is None and reconciled_call_ids:
+                        # We stopped a billed call we believe is ours, so
+                        # evidence fetches its record instead of reporting
+                        # "not matched" after searching nothing.
+                        provider_call_id = reconciled_call_ids[0]
+                    # Written here too (not only in the metadata.update below)
+                    # because a start-failure path returns from inside the try,
+                    # bypassing that block entirely.
+                    if outcome is not None:
+                        outcome.metadata["reconciled_call_ids"] = reconciled_call_ids
+                        if finalize_result.termination_source:
+                            outcome.metadata["provider_termination_source"] = (
+                                finalize_result.termination_source
+                            )
                 except Exception as exc:
                     _record_cleanup_error(
                         cleanup_errors,
                         exc,
-                        "vapi_call_stop",
+                        f"{transport.inbound_call_originator}_call_finalize",
                         run_id,
                         test_case_id,
                     )
@@ -1664,6 +1821,14 @@ class LiveKitEngine(BaseEngine):
                         run_id,
                         test_case_id,
                     )
+            # Written here too (not only in the metadata.update below) because a
+            # pre-dial return (e.g. the occupancy check) exits from inside the
+            # try, bypassing that block entirely.
+            if outcome is not None and outcome.metadata.get("cleanup_status") is None:
+                outcome.metadata["cleanup_status"] = (
+                    "failed" if cleanup_errors else "completed"
+                )
+                outcome.metadata["cleanup_errors"] = cleanup_errors
         if outcome is None:
             outcome = _failure_outcome(
                 TestCaseStatus.FAILED,
@@ -1729,6 +1894,8 @@ class LiveKitEngine(BaseEngine):
                     provider_target.provider if provider_target is not None else None
                 ),
                 "provider_call_id": provider_call_id,
+                "reconciled_call_ids": reconciled_call_ids,
+                "caller_verification": caller_verification,
                 "vapi_call_id": (
                     provider_call_id
                     if profile.evidence_provider == "vapi"
@@ -1736,7 +1903,10 @@ class LiveKitEngine(BaseEngine):
                     else None
                 ),
                 "retell_call_id": (
-                    provider_call_id if profile.evidence_provider == "retell" else None
+                    provider_call_id
+                    if profile.evidence_provider == "retell"
+                    or transport.inbound_call_originator == "retell"
+                    else None
                 ),
                 "simulator_model_usage": (
                     customer_agent.model_usage
@@ -3089,7 +3259,7 @@ def _safe_provider_error_details(
             code_value = code_value if code_value is not None else code
     else:
         code_value = None
-    status = getattr(exc, "status", None)
+    status = getattr(exc, "status", None) or getattr(exc, "status_code", None)
     details: dict[str, object] = {
         "operation": operation,
         "exception_type": type(exc).__name__,
@@ -3173,6 +3343,83 @@ async def _ensure_sip_inbound_dispatch(
         )
     )
     return resp.sip_dispatch_rule_id, True
+
+
+async def _ensure_room_absent(
+    api_client: api.LiveKitAPI, room_name: str, *, poll_interval: float = 0.5
+) -> int:
+    """Make ``room_name`` absent before the caller (re-)creates it.
+
+    The pool's dispatch rule stays live for the whole run, so an inbound call
+    can re-create this room between our own delete and our next poll — hence
+    the re-delete inside the loop rather than a single delete-then-poll. No
+    internal deadline: the caller bounds this with ``asyncio.wait_for``.
+    """
+
+    try:
+        await api_client.room.delete_room(api.DeleteRoomRequest(room=room_name))
+    except Exception as exc:  # noqa: BLE001
+        if not _is_not_found(exc):
+            raise
+    polls = 0
+    while True:
+        resp = await api_client.room.list_rooms(api.ListRoomsRequest(names=[room_name]))
+        polls += 1
+        if not resp.rooms:
+            return polls
+        try:
+            await api_client.room.delete_room(api.DeleteRoomRequest(room=room_name))
+        except Exception as exc:  # noqa: BLE001
+            if not _is_not_found(exc):
+                raise
+        await asyncio.sleep(poll_interval if polls < 4 else 5.0)
+
+
+def _unexpected_participants(
+    room, *, simulator_identity: str, recorder_identity: str
+) -> set[str]:
+    return {str(p.identity) for p in room.remote_participants.values()} - {
+        simulator_identity,
+        recorder_identity,
+    }
+
+
+# LiveKit: the other party's number on a SIP participant (the caller, for an
+# inbound call). sip.trunkPhoneNumber is OUR number — never use it.
+_SIP_REMOTE_NUMBER_ATTRIBUTE = "sip.phoneNumber"
+
+
+def _number_digits(value) -> str:
+    text = str(value or "")
+    if text.startswith("sip:"):
+        text = text[len("sip:") :]
+        text = text.split("@", 1)[0]
+        text = text.split(";", 1)[0]
+    return re.sub(r"\D", "", text)
+
+
+def _caller_matches(attributes, expected: str | None) -> bool | None:
+    if not expected:
+        return None
+    observed = attributes.get(_SIP_REMOTE_NUMBER_ATTRIBUTE) if attributes else None
+    if not observed:
+        return None
+    expected_digits = _number_digits(expected)
+    observed_digits = _number_digits(observed)
+    if len(expected_digits) < 7 or len(observed_digits) < 7:
+        return None
+    longer, shorter = (
+        (expected_digits, observed_digits)
+        if len(expected_digits) >= len(observed_digits)
+        else (observed_digits, expected_digits)
+    )
+    return longer.endswith(shorter)
+
+
+class _LeasedRoomCallerMismatch(Exception):
+    """Module-private: raised by the leased-room caller check (step 4a), caught
+    by the case's top-level try so the post-try recordings/evidence/metadata
+    block still runs for a call that was billed and answered."""
 
 
 async def _delete_sip_dispatch_rule(api_client: api.LiveKitAPI, rule_id: str) -> None:
