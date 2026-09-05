@@ -479,8 +479,8 @@ fails the insert and the scenario dies in its own setup:
 NotNullViolation: null value in column "issued_at" of relation "otp_codes" violates not-null constraint
 ```
 
-Measured on a real run: four of five calls lost that way, to `issued_at` on a code row and `taken_at` on a
-past trip. If a field is a time, give it a plausible one rather than nothing.
+Measured on a real run: four of five calls lost that way, to the "issued_at" column on a code row and
+"taken_at" on a past trip. If a field is a time, give it a plausible one rather than nothing.
 
 **Write a value of the type the column actually holds.** A true or false field takes `True` or `False`,
 never `1` or `0`. Some stores accept either and some reject the number outright, and the scenario then dies
