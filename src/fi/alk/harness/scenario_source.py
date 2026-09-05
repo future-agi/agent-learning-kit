@@ -57,28 +57,12 @@ _READY_PY = "ready.py"
 # terminal event today is strictly better than none ever.
 _LOAD_TIMEOUT_SECONDS = 60.0
 
-# How many of a suite's scenarios one job calls. **Every one of them, unless a run says otherwise.**
-#
-# A job that wrote two hundred scenarios is asking for two hundred calls: that is the product, and
-# capping it would quietly deliver a fraction of what somebody paid for. `HARNESS_CALLS_AT_MOST`
-# exists for a person burning their own provider credits while proving the path works, and it is
-# unset everywhere else, so it changes nothing for anybody who does not set it.
-CALLS_AT_MOST = int(os.environ.get("HARNESS_CALLS_AT_MOST") or 0)
-
-
+# Every scenario a job asked for is called. A job that wrote two hundred is asking for two hundred
+# calls: that is the product, and calling fewer would quietly deliver a fraction of what somebody
+# paid for. There is deliberately no setting here; a smaller run is a smaller `scenario_count`.
 def sampled_for_calling(scenarios: Sequence[Any]) -> list[Any]:
-    """Which scenarios this job calls: all of them, or a spread sample when a run asked for a cap.
-
-    A sample is spaced evenly rather than taken from the front, because a suite is written slice by
-    slice: its first five scenarios are one writer's work on one part of the agent, where five spread
-    across it are five different parts. Deterministic, so two runs of the same suite call the same
-    ones and can be compared.
-    """
-    kept = list(scenarios)
-    if CALLS_AT_MOST < 1 or len(kept) <= CALLS_AT_MOST:
-        return kept
-    stride = len(kept) / CALLS_AT_MOST
-    return [kept[min(len(kept) - 1, int(index * stride))] for index in range(CALLS_AT_MOST)]
+    """Which scenarios this job calls, which is all of them."""
+    return list(scenarios)
 
 # The TEXT of a judged sub-goal's check is never persisted by `folder.py`'s `write_folder` (only
 # `SubGoal.deterministic()` entries get a `checks/<name>.py` file) -- this fixed marker stands in

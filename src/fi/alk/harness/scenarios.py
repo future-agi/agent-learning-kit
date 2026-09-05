@@ -173,7 +173,7 @@ MOST_AT_ONCE = int(os.environ.get("HARNESS_WRITERS_AT_ONCE") or 4)
 # How many a single generate_suite pass will write. A hosted run is unattended, so a cap here
 # does not pause for a person, it just returns fewer than were asked for and stops. Kept as a
 # backstop against a runaway ask rather than as a batch size.
-MOST_IN_ONE_GO = int(os.environ.get("HARNESS_SUITE_BATCH") or 1000)
+MOST_IN_ONE_GO = 1000
 
 # How many times the suite is reviewed and topped up after the first pass. One is enough to
 # catch a slice that came back short or a use case nobody covered; more turns it into a loop
@@ -191,16 +191,12 @@ TOP_UP_ROUNDS = 1
 #
 # Still bounded, because the reason the bound exists is real: a dropped provider stream leaves a
 # session alive forever. The outer bound is the run's own authoring deadline.
-QUIET_WHILE_DELEGATING_SECONDS = float(
-    os.environ.get("HARNESS_QUIET_WHILE_DELEGATING") or 5400
-)
+QUIET_WHILE_DELEGATING_SECONDS = 5400.0
 # A writer is quiet while one of its own tool calls runs, and its longest is a proof: restore the
 # world, apply setup, play the solution, then play it again against an untouched world. Minutes,
 # not an hour, and keeping this shorter than the planner's bound is what frees a stuck writer's
 # slot for the next slice instead of holding it until the whole stage times out.
-QUIET_WHILE_WRITING_SECONDS = float(
-    os.environ.get("HARNESS_QUIET_WHILE_WRITING") or 1800
-)
+QUIET_WHILE_WRITING_SECONDS = 1800.0
 
 
 # A session refused by the provider is retried rather than abandoned: its work is still worth doing and

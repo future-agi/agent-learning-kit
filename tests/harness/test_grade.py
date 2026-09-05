@@ -231,9 +231,8 @@ def test_the_whole_suite_is_registered_and_only_a_sample_is_run():
     sampled = source.index("sampled_for_calling")
     assert registered < sampled, "the suite must be registered before the sample is taken"
 
-    # And by default every scenario is called: the cap is a testing knob, not product behaviour.
+    # And every scenario is called: registering the suite and calling it are the same set.
     assert len(sampled_for_calling(list(range(30)))) == 30
-    assert len(sampled_for_calling(list(range(200)))) == 200
 
 
 def test_an_empty_save_does_not_take_the_suite_with_it(tmp_path):
@@ -249,17 +248,11 @@ def test_an_empty_save_does_not_take_the_suite_with_it(tmp_path):
     assert [x.name for x in load_scenarios(tmp_path)] == ["keeps_its_place"]
 
 
-def test_every_scenario_is_called_unless_a_run_caps_it(monkeypatch):
-    """The cap was a testing measure for one person's provider credits, never product behaviour.
-
-    The module constant is patched rather than the environment: reloading the module to re-read
-    `os.environ` swaps its identity underneath every other test in the session, which broke four of
-    them.
-    """
+def test_every_scenario_a_job_asked_for_is_called():
+    """The five-call cap was a testing measure for one person's provider credits. It is gone, not
+    defaulted off: a setting that would under-deliver a paid run is not worth having."""
     from fi.alk.harness import scenario_source
 
-    monkeypatch.setattr(scenario_source, "CALLS_AT_MOST", 0)
     assert len(scenario_source.sampled_for_calling(list(range(200)))) == 200
-
-    monkeypatch.setattr(scenario_source, "CALLS_AT_MOST", 5)
-    assert scenario_source.sampled_for_calling(list(range(200))) == [0, 40, 80, 120, 160]
+    assert scenario_source.sampled_for_calling([1, 2, 3]) == [1, 2, 3]
+    assert not hasattr(scenario_source, "CALLS_AT_MOST")
