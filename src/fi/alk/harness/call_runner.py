@@ -1006,9 +1006,17 @@ class CallRunnerImpl:
                 self._environ["HARNESS_CALLER_AWARENESS"] = awareness
             else:
                 self._environ.pop("HARNESS_CALLER_AWARENESS", None)
+            # A mailbox rather than a person answering. Only meaningful outbound, and cleared
+            # otherwise like the two above, so one voicemail scenario cannot silence the next
+            # caller.
+            if str(doc.get("answered_by") or "").strip().lower() == "voicemail":
+                self._environ["HARNESS_ANSWERED_BY"] = "voicemail"
+            else:
+                self._environ.pop("HARNESS_ANSWERED_BY", None)
         else:
             self._environ.pop("HARNESS_CALL_DIRECTION", None)
             self._environ.pop("HARNESS_CALLER_AWARENESS", None)
+            self._environ.pop("HARNESS_ANSWERED_BY", None)
 
         provider_target_key = {"vapi": "assistant_id", "retell": "agent_id"}.get(
             connector

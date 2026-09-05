@@ -31,6 +31,7 @@ from .contract import CALL_DIRECTIONS, AgentContract
 from .folder import INDEX, SCENARIOS, apply_setup, read_all, write_folder, write_index
 from .prove import play_reference_step, prepared, prove
 from .scenario import (
+    ANSWERED_BY,
     CALLER_AWARENESS,
     Scenario,
     Step,
@@ -559,6 +560,17 @@ def scenario_tools(
                     "whether this person was told to expect the call, half remembers arranging "
                     "something, or has no idea why anyone is ringing. Left out it is unaware, "
                     "which the agent has to work hardest for.",
+                },
+                "answered_by": {
+                    "type": "string",
+                    "enum": list(ANSWERED_BY),
+                    "description": "Who picked up, and only for a scenario that states "
+                    "call_direction outbound. Leave it out for the ordinary case where a person "
+                    "answers. 'voicemail' replaces the person with a mailbox that plays its "
+                    "greeting once and then says nothing whatever the agent asks, which tests "
+                    "whether the agent notices it is talking to a machine, leaves a message that "
+                    "stands on its own, and stops. A mailbox can supply nothing, so such a "
+                    "scenario never asks the agent to collect a value or reach agreement.",
                 },
                 "instruction": {
                     "type": "string",

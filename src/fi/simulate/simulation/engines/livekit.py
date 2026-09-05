@@ -110,10 +110,13 @@ _NO_CONVERSATION_TIMEOUT_SECONDS = 120.0
 # How long the side that was meant to speak first is given before the simulated person speaks
 # instead. Both sides are voice agents waiting to be addressed, so when the one that placed the call
 # says nothing the call is silence until a deadline discards it, and nothing was learned about
-# either side. A person hearing nothing says "hello" long before this; the wait is generous because
-# a slow first turn is common and must not be pre-empted. Kept well under the timeout above, which
-# is what abandons a call nobody started.
-_OPEN_INSTEAD_AFTER_SECONDS = 25.0
+# either side. Kept well under the timeout above, which is what abandons a call nobody started.
+#
+# Eight seconds, not twenty five: a person hearing nothing says "hello" long before twenty five, and
+# eight is the smallest bound that cannot pre-empt a slow first turn. The watchdog only sees a turn
+# once it is committed to the session history, and measured agent turn latency on a real run was
+# 4292ms and 3947ms, so anything near five seconds would talk over the agent's greeting.
+_OPEN_INSTEAD_AFTER_SECONDS = 8.0
 # Each web case drives a full voice pipeline (STT/LLM/TTS + LiveKit conns) in one
 # child; too many starve the pod's CPU. This is an OPS CEILING on the
 # config-driven ``max_parallel_cases`` (not a replacement for it) — tune
@@ -1481,7 +1484,10 @@ class LiveKitEngine(BaseEngine):
                 on_target_transcription(buffered_reader, buffered_identity)
 
             opener: asyncio.Task[None] | None = None
-            if conversation_direction == "simulator_first":
+            if conversation_direction == "simulator_first" or _answered_by_voicemail():
+                # A mailbox answers the instant the line opens and then says nothing, so it speaks
+                # first and needs no watchdog: the watchdog exists to break a mutual silence, and a
+                # mailbox is never waiting to be addressed.
                 customer_agent.open_conversation()
             else:
                 # The agent placed this call and should speak first. If it does not, the person
@@ -2432,6 +2438,14 @@ async def _wait_for_conversation_never_started(
         if any(message["content"] for message in _session_messages(session)):
             await asyncio.Event().wait()
         await asyncio.sleep(0.5)
+
+
+def _answered_by_voicemail() -> bool:
+    """Whether what answered this call is a mailbox rather than a person.
+
+    Set per scenario by the call runner, and absent for every other call.
+    """
+    return os.environ.get("HARNESS_ANSWERED_BY", "").strip().lower() == "voicemail"
 
 
 async def _open_if_nobody_speaks_first(

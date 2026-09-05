@@ -128,12 +128,34 @@ _OUTBOUND_AWARENESS = {
 }
 _DEFAULT_OUTBOUND_AWARENESS = "unaware"
 
+# A mailbox is not a person with rules, so this replaces the caller's instructions rather than
+# adding to them: almost every numbered rule above assumes somebody is listening and answering, and
+# a mailbox does neither. What is being tested is entirely on the other side of the call, which is
+# whether the agent notices, leaves a usable message, and stops.
+_VOICEMAIL_INSTRUCTIONS = (
+    "YOU ARE A VOICEMAIL SYSTEM, not a person. This call was placed to a number whose owner did "
+    "not pick up, and you are the mailbox that answered instead.\n"
+    "1. Say your greeting once, at the very start, and nothing else for the rest of the call.\n"
+    "2. After the greeting you are silent. Whatever the caller says, whatever they ask, however "
+    "many times they ask it, you do not reply. You are a recording being played, not a listener.\n"
+    "3. Never answer a question, never confirm or deny anything, never give any detail, never say "
+    "yes or no, and never repeat the greeting.\n"
+    "4. Never end the call. A mailbox records until the caller hangs up or the line is cut.\n"
+    "5. With no greeting of your own, say only what an ordinary mailbox says: that the person is "
+    "not available and to leave a message after the tone.\n"
+)
 
-def simulator_instructions(direction: str = "", awareness: str = "") -> str:
+
+def simulator_instructions(
+    direction: str = "", awareness: str = "", answered_by: str = ""
+) -> str:
     """The caller's rules, framed by whether this call was placed to them or by them.
 
     Chat has no direction: a chat is always started by the person, so it takes the inbound text.
+    A mailbox answering replaces the rules outright, because it is not a person.
     """
+    if str(answered_by).strip().lower() == "voicemail":
+        return _VOICEMAIL_INSTRUCTIONS
     if str(direction).strip().lower() != "outbound":
         return SIMULATOR_INSTRUCTIONS
     chosen = str(awareness).strip().lower() or _DEFAULT_OUTBOUND_AWARENESS
@@ -594,6 +616,7 @@ def simulator_definition(
         instructions=simulator_instructions(
             get("HARNESS_CALL_DIRECTION") or "",
             get("HARNESS_CALLER_AWARENESS") or "",
+            get("HARNESS_ANSWERED_BY") or "",
         ),
         allow_interruptions=True,
     )

@@ -954,8 +954,8 @@ def test_load_without_a_hang_is_unaffected_by_the_budget(tmp_path: Path) -> None
         # p13: `build()` now calls `register_with_platform` after load -- this test is about the
         # R1-5 timeout BUDGET specifically, not registration, so registration is stubbed to a
         # passthrough (registration's own behavior is covered separately, below).
-        async def _passthrough(scenarios_client, scenarios, *, run_name):
-            del scenarios_client, run_name
+        async def _passthrough(scenarios_client, scenarios, *, run_name, **rest):
+            del scenarios_client, run_name, rest
             return scenarios
 
         with mock.patch.object(ss, "register_with_platform", _passthrough):
@@ -1413,3 +1413,50 @@ def test_mutation_id_assignment_skipped_is_killed() -> None:
         assert restored[0].scenario_id == "platform-a"  # confirms the patch was fully undone
 
     asyncio.run(scenario())
+
+
+# -------------------------------------------------------------------------------------------------
+# Harness-chosen platform evals. The guest sends names only; the platform owns the mapping.
+# -------------------------------------------------------------------------------------------------
+
+
+def test_provision_payload_omits_chosen_evals_and_prompt_when_there_are_none() -> None:
+    # Omitted rather than empty, so a platform that predates these fields is unaffected.
+    payload = ss._provision_payload("run-1", (_scenario("book_a_ride"),))
+    assert "chosen_evals" not in payload and "agent_prompt" not in payload
+
+
+def test_provision_payload_carries_the_chosen_names_and_the_agent_prompt() -> None:
+    payload = ss._provision_payload(
+        "run-1",
+        (_scenario("book_a_ride"),),
+        ["customer_agent_loop_detection", "dead_air_detection"],
+        "You are a ride booking agent.",
+    )
+    assert payload["chosen_evals"] == [
+        "customer_agent_loop_detection",
+        "dead_air_detection",
+    ]
+    assert payload["agent_prompt"] == "You are a ride booking agent."
+
+
+def test_chosen_evals_and_prompt_are_read_off_the_bundle_contract(tmp_path) -> None:
+    (tmp_path / "contract.json").write_text(
+        json.dumps(
+            {
+                "agent": "ride",
+                "system_prompt_excerpt": "  You book rides.  ",
+                "chosen_evals": ["customer_agent_conversation_quality", " ", ""],
+            }
+        ),
+        encoding="utf-8",
+    )
+    names, prompt = ss._chosen_evals_and_prompt(tmp_path)
+    assert names == ["customer_agent_conversation_quality"]
+    assert prompt == "You book rides."
+
+
+def test_a_bundle_without_a_readable_contract_costs_the_run_nothing(tmp_path) -> None:
+    assert ss._chosen_evals_and_prompt(tmp_path) == ([], "")
+    (tmp_path / "contract.json").write_text("{not json", encoding="utf-8")
+    assert ss._chosen_evals_and_prompt(tmp_path) == ([], "")
