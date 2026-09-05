@@ -38,6 +38,18 @@ are separate copies. Use only records already in the frozen base, keep setup emp
 settle outcomes from the captured calls. If coverage needs state the base lacks, report that the
 target needs a seed or reset seam rather than writing a scenario that cannot run.
 
+### A record needs every field the store requires
+
+Copy the shape of a record already there, timestamps and all. Omitting a required column, or setting it to
+nothing, fails the insert:
+
+```
+NotNullViolation: null value in column "taken_at" of relation "trips" violates not-null constraint
+```
+
+`inspect_world` on that collection shows what a complete record looks like. A nullable field can be left
+out; a required one cannot, and the only way to tell is to look.
+
 ### Types are the column's, not Python's convenience
 
 A boolean column takes `True` or `False`. Writing `1` fails outright on a store with real booleans:
