@@ -270,3 +270,32 @@ def test_a_proof_says_which_steps_it_could_not_run():
     # is that the caller is told, rather than the fact disappearing into a log line.
     assert proof.holds is True
     assert proof.assumed == ["book_ride", "verify_otp"]
+
+
+def test_a_world_with_state_still_demands_a_check_in_code(tmp_path):
+    """The judged-only path is for a target we cannot see into, not a way around writing a check."""
+    from fi.alk.harness.catalogue import Catalogue, SubGoal
+    from fi.alk.harness.prove import prove
+
+    root, _contract, catalogue = None, None, None
+    from fi.alk.harness.world import GeneratedWorld
+    from fi.alk.harness.world.snapshot import save
+
+    class W(GeneratedWorld):
+        name = "shop"
+        tools = [{"name": "add"}]
+        handlers = {"add": "def handle(args, db):\n    return {'ok': 1}\n"}
+
+    world = W(":memory:")
+    world.connection.executescript("CREATE TABLE cart(item_id TEXT);")
+    world.connection.execute("INSERT INTO cart VALUES ('widget')")
+    world.connection.commit()
+    save(world, tmp_path, notes="test", sequences=[])
+    world.close()
+
+    judged_only = Catalogue(sub_goals=[SubGoal(name="polite", what="tone", judged="read it")])
+    one = Scenario(name="asks_politely", instruction="Ask for it.", sub_goals=["polite"])
+    proof = prove(one, judged_only, tmp_path)
+    assert proof.holds is False
+    assert "settle what happened by reading it" in proof.broken[0]
+    assert proof.judged_only is False

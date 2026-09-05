@@ -60,6 +60,9 @@ class Proof:
     # nowhere, so a scenario whose entire solution was assumed saved as "proved". Carried here so
     # whoever keeps the scenario is told what the proof did not cover.
     assumed: list[str] = field(default_factory=list)
+    # Graded by judgement alone, because the world holds nothing a check could read. True only for
+    # a target we cannot see into, never a way around writing a check for a world that has one.
+    judged_only: bool = False
 
     @property
     def holds(self) -> bool:
@@ -142,6 +145,28 @@ def _checks_for(scenario: Scenario, catalogue: Catalogue) -> list[tuple[str, str
         if sub_goal is not None and sub_goal.deterministic():
             chosen.append((name, sub_goal.check))
     return chosen
+
+
+def _something_to_check(world_root: Path) -> bool:
+    """Whether this world holds anything a check in code could read.
+
+    A world with collections, or a tool with an endpoint bound, can be inspected, so a scenario
+    graded only by a model is a scenario that chose not to look. A world with neither cannot be
+    inspected at all, and insisting on a code check there produces checks that assert on nothing.
+    Unreadable is treated as "there is something", because refusing is the safe direction.
+    """
+    try:
+        world = restore(world_root)
+    except Exception:  # noqa: BLE001 - a world we cannot open is not a world we can excuse
+        return True
+    try:
+        has_rows = any(rows for rows in world.state().values())
+        endpoints = getattr(world, "endpoint_for", {}) or {}
+        return bool(has_rows or any(endpoints.values()))
+    except Exception:  # noqa: BLE001 - same reasoning
+        return True
+    finally:
+        world.close()
 
 
 def prepared(
@@ -282,11 +307,25 @@ def prove(scenario: Scenario, catalogue: Catalogue, world_root: Path) -> Proof:
     """Run all three gates and say whether this scenario is worth keeping."""
     proof = Proof()
     checks = _checks_for(scenario, catalogue)
-    if not checks:
+    if not checks and _something_to_check(world_root):
         proof.broken = [
-            "none of this scenario's sub-goals has a check in code, so nothing here can be "
-            "settled without asking a model"
+            "none of this sub-goal's checks is in code, and this world has state a check could "
+            "read, so settle what happened by reading it rather than by asking a model"
         ]
+        return proof
+    if not checks:
+        # Nothing observable to check: no store, no bound endpoint. That is the connect-only shape,
+        # an agent hosted elsewhere whose tools we cannot see, and there the conversation is the
+        # only evidence there is. Judged sub-goals are the honest grading, so the scenario is
+        # allowed through with the gates that still mean something: setup and ready ran, and
+        # nothing claims to have been settled by code.
+        world, applied, ready = prepared(scenario, world_root)
+        world.close()
+        proof.why_not_ready = "" if applied.ok and ready.ok else (applied.said or ready.said)
+        proof.ready = applied.ok and ready.ok
+        proof.solvable = proof.ready
+        proof.vacuous = False
+        proof.judged_only = True
         return proof
 
     # Gate 1: is the world ready for this scenario at all?
