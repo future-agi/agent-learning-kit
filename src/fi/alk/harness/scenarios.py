@@ -443,8 +443,10 @@ def callers_for(index: int, wanted: int, slice_name: str = "") -> str:
         f"\n\nEvery person you invent must have a given name beginning with one of {letters}, and "
         "every number you invent that the agent will look up, a code or a reference or an account "
         f"number, must begin with {slot % 1000:03d}. Other writers own the other letters and "
-        "prefixes, so this is what keeps two scenarios from sharing a name or a code. No two people "
-        "you invent may share a given name either, however many you write."
+        "prefixes, so this is what keeps two scenarios from sharing a name or a code. Within your own "
+        "slice, no two people may share a given name and no two scenarios may share a code or a "
+        "reference: the prefix keeps you clear of other writers, it does not keep you clear of "
+        "yourself."
     )
     if accents:
         # Spread several offered accents across this writer's callers rather than naming just one,
