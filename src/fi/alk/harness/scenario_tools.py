@@ -12,6 +12,7 @@ scenario that clears all three is written out as its own folder of runnable file
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -27,7 +28,7 @@ from .catalogue import (
     validate_sub_goal,
 )
 from .contract import CALL_DIRECTIONS, AgentContract
-from .folder import SCENARIOS, apply_setup, read_all, write_folder, write_index
+from .folder import INDEX, SCENARIOS, apply_setup, read_all, write_folder, write_index
 from .prove import play_reference_step, prepared, prove
 from .scenario import (
     CALLER_AWARENESS,
@@ -40,6 +41,8 @@ from .scenario import (
 from .simulator import load_simulator_prompt
 from .tools import brief, schema
 from .world.snapshot import restore
+
+logger = logging.getLogger(__name__)
 
 SCENARIO_SERVER = "scenarios"
 
@@ -99,6 +102,16 @@ def write_scenarios(
 ) -> Path:
     """Write every scenario out as its own folder, and regenerate the index over them."""
     catalogue = catalogue if catalogue is not None else load_catalogue(destination)
+    if not scenarios and (Path(destination) / SCENARIOS).is_dir():
+        # An empty save would take every folder with it, because dropping a scenario is expressed by
+        # saving the suite without it. Nothing legitimately saves an empty suite over a full one: a
+        # session whose own list is empty is a session that has not written anything yet, and on a run
+        # this emptied 30 folders and then let a second fan-out pass write the suite again from zero.
+        logger.warning(
+            "refusing to save an empty suite over %s existing scenarios",
+            len(load_scenarios(destination)),
+        )
+        return Path(destination) / INDEX
     for one in scenarios:
         write_folder(one, catalogue, destination)
     _forget_dropped(scenarios, destination)

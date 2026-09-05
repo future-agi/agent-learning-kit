@@ -234,3 +234,16 @@ def test_the_whole_suite_is_registered_and_only_a_sample_is_run():
     # And the sample itself still caps a large suite while leaving a small one whole.
     assert len(sampled_for_calling(list(range(30)))) == 5
     assert len(sampled_for_calling(list(range(12)))) == 12
+
+
+def test_an_empty_save_does_not_take_the_suite_with_it(tmp_path):
+    """Dropping a scenario is expressed by saving without it, so an empty save deletes everything."""
+    from fi.alk.harness.catalogue import Catalogue
+    from fi.alk.harness.scenario_tools import load_scenarios, write_scenarios
+
+    one = Scenario(name="keeps_its_place", instruction="Get it done.", sub_goals=["x"])
+    write_scenarios([one], tmp_path, Catalogue())
+    assert [x.name for x in load_scenarios(tmp_path)] == ["keeps_its_place"]
+
+    write_scenarios([], tmp_path, Catalogue())
+    assert [x.name for x in load_scenarios(tmp_path)] == ["keeps_its_place"]
