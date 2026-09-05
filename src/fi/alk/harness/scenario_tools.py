@@ -250,10 +250,23 @@ def accept_scenario(
         # A writer sharing the destination cannot write folders, so the journal is where its proved
         # work survives the session that proved it.
         journal_scenario(scenario, world_root)
+    # Say what the proof did not cover. On a lane where the target's tools have no endpoints, every
+    # solution step is recorded without running, so "all three gates pass" is true and misleading:
+    # the checks were exercised, the solution was not.
+    unproved = (
+        "\nNOT PROVED: "
+        + f"{len(proof.assumed)} of {len(scenario.solution)} solution steps were recorded without "
+        "running, because these tools have no endpoint in this environment: "
+        + ", ".join(proof.assumed)
+        + ". The checks ran, the solution did not, so this scenario is kept as written rather than "
+        "as demonstrated."
+        if proof.assumed
+        else ""
+    )
     return _ok(
         f"{scenario.name} {'replaced' if replaced else 'kept'}. All three gates pass: the world "
         "is ready for it, the reference solution passes its checks, and those checks fail when "
-        f"nothing is done.\n{len(kept)} so far: " + ", ".join(one.name for one in kept)
+        f"nothing is done.{unproved}\n{len(kept)} so far: " + ", ".join(one.name for one in kept)
     )
 
 

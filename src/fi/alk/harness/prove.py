@@ -55,6 +55,11 @@ class Proof:
     with_nothing: list[Outcome] = field(default_factory=list)
     refused: list[str] = field(default_factory=list)
     broken: list[str] = field(default_factory=list)
+    # Solution steps that were recorded without being executed, because the tool they name has no
+    # endpoint bound in this lane. The condition was already detected and logged and then went
+    # nowhere, so a scenario whose entire solution was assumed saved as "proved". Carried here so
+    # whoever keeps the scenario is told what the proof did not cover.
+    assumed: list[str] = field(default_factory=list)
 
     @property
     def holds(self) -> bool:
@@ -237,10 +242,11 @@ def _resolve_reference_values(value: object, calls: list[Call]) -> object:
 
 def _run(
     scenario: Scenario, world_root: Path, *, with_solution: bool
-) -> tuple[GeneratedWorld, list[Call], list[str]]:
+) -> tuple[GeneratedWorld, list[Call], list[str], list[str]]:
     """A world set up for this scenario, optionally with the solution played through it."""
     world, _applied, _ready = prepared(scenario, world_root)
     refused: list[str] = []
+    assumed: list[str] = []
     if with_solution:
         for step in scenario.solution:
             call = play_reference_step(world, step)
@@ -269,7 +275,7 @@ def _run(
                 scenario.name,
                 len(scenario.solution),
             )
-    return world, list(world.calls), refused
+    return world, list(world.calls), refused, sorted(set(assumed))
 
 
 def prove(scenario: Scenario, catalogue: Catalogue, world_root: Path) -> Proof:
@@ -299,7 +305,10 @@ def prove(scenario: Scenario, catalogue: Catalogue, world_root: Path) -> Proof:
     proof.ready = True
 
     # Gate 2: does the reference solution pass this scenario's own checks?
-    world, calls, refused = _run(scenario, world_root, with_solution=True)
+    world, calls, refused, assumed = _run(scenario, world_root, with_solution=True)
+    # What the proof below could not cover. Detected here since forever and logged into a void; a
+    # scenario whose whole solution was assumed used to save as proved.
+    proof.assumed = assumed
     try:
         proof.with_solution = [
             run_check(source, world, calls, name=name) for name, source in checks
@@ -311,7 +320,7 @@ def prove(scenario: Scenario, catalogue: Catalogue, world_root: Path) -> Proof:
     proof.solvable = all(one.held for one in proof.with_solution) and not proof.broken
 
     # Gate 3: do those same checks fail when nothing is done?
-    untouched, nothing, _ = _run(scenario, world_root, with_solution=False)
+    untouched, nothing, _, _ = _run(scenario, world_root, with_solution=False)
     try:
         proof.with_nothing = [
             run_check(source, untouched, nothing, name=name) for name, source in checks

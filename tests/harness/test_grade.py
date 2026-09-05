@@ -256,3 +256,17 @@ def test_every_scenario_a_job_asked_for_is_called():
     assert len(scenario_source.sampled_for_calling(list(range(200)))) == 200
     assert scenario_source.sampled_for_calling([1, 2, 3]) == [1, 2, 3]
     assert not hasattr(scenario_source, "CALLS_AT_MOST")
+
+
+def test_a_proof_says_which_steps_it_could_not_run():
+    """The condition was detected and logged into a void: a scenario whose whole solution was
+    recorded without executing saved as "all three gates pass"."""
+    from fi.alk.harness.prove import Proof
+
+    proof = Proof(ready=True, solvable=True, vacuous=False)
+    assert proof.assumed == []
+    proof.assumed = ["book_ride", "verify_otp"]
+    # Still holds: on a lane with no endpoints a hard gate would refuse every scenario. What changes
+    # is that the caller is told, rather than the fact disappearing into a log line.
+    assert proof.holds is True
+    assert proof.assumed == ["book_ride", "verify_otp"]
