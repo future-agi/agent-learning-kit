@@ -184,6 +184,28 @@ answers goes in `open_questions`, so the gap is visible rather than hidden.
 
 Do not ask about anything the code answers. Reading one more file is cheaper than a question.
 
+## Choosing the evals
+
+Where your briefing carries a catalogue of platform evals, record the ones this agent should be
+judged by in `chosen_evals`, by exact name. They are judges over the finished conversation, so they
+are worth having only for what the scenarios' own checks cannot settle: how the agent conducted
+itself, whether it looped, whether it handled being interrupted, whether it stayed in the caller's
+language. Do not choose one that repeats what a check already settles from real tool calls, such as
+task completion; the check reads the calls, the judge only reads the transcript, and the check is
+the better witness.
+
+Two rules, and both are refused rather than tolerated:
+
+- **Modality.** Choose only from the section matching the `modality` you record. Dead air,
+  voicemail detection and voicemail handling exist in speech and mean nothing for a chat agent.
+- **Evidence, not the name.** A domain eval, misselling, advice authority, lead qualification,
+  claim intake, intake field accuracy, is worth choosing only where this agent's own tools,
+  constraints and prompt show it doing that work. An insurance-sounding eval on an agent that only
+  books rides scores it against nothing and reads as a real failure.
+
+Choosing none is a legitimate answer, and better than padding the list. Keep it to a handful: every
+eval you name runs on every call of every scenario.
+
 ## Finishing
 
 Call `submit_contract` with the whole contract as one flat object. It is validated when you call

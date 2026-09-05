@@ -36,6 +36,11 @@ ORIGINS_THAT_CREATE = ("generated", "mixed")
 CALLER_AWARENESS = ("expecting", "partial", "unaware")
 LEAST_AWARE = "unaware"
 
+# Who picked up an outbound call. A person is the ordinary case and needs no saying, so empty means
+# a person; "voicemail" means a mailbox answered and there is nobody on the line at all.
+ANSWERED_BY = ("person", "voicemail")
+VOICEMAIL = "voicemail"
+
 
 class Step(BaseModel):
     """One action in a reference solution."""
@@ -247,6 +252,11 @@ class Scenario(BaseModel):
     # "expecting", "partial" or "unaware". Unset means unaware, the case the agent must work
     # hardest for.
     caller_awareness: str = ""
+    # Who answered. Empty or "person" is somebody picking up; "voicemail" is a mailbox answering,
+    # which tests whether the agent notices it is talking to a machine and leaves a usable message
+    # rather than running its interactive script at a recording. Outbound only: a mailbox cannot
+    # answer a call the person placed themselves.
+    answered_by: str = ""
 
     # Slots the caller filled by the run rather than by the scenario. Listed so a template that
     # uses one is not rejected as unfillable at write time.
@@ -359,12 +369,39 @@ def validate_scenario(
             "show this scenario can be passed at all"
         )
     problems.extend(fixture_problems(scenario))
+    problems.extend(answered_by_problems(scenario))
     problems.extend(_world_credential_problems(scenario, world_state))
     problems.extend(self_sufficiency_problems(scenario))
     problems.extend(alignment_problems(scenario, world_state))
     problems.extend(hollow_scenario_problems(scenario))
     problems.extend(naming_problems(scenario))
     return problems
+
+
+def answered_by_problems(scenario: Scenario) -> list[str]:
+    """Whether what answered this call is a thing that could have answered it.
+
+    A mailbox only exists on a call the agent placed, and the direction has to be stated on the
+    scenario rather than left to the run: `call_direction` empty means defer to the contract, so a
+    voicemail scenario that stays quiet about direction is one the run may legally make inbound,
+    and then a mailbox is answering a call the person dialled.
+    """
+    chosen = str(scenario.answered_by or "").strip().lower()
+    if not chosen:
+        return []
+    if chosen not in set(ANSWERED_BY):
+        return [
+            "answered_by must be " + ", ".join(ANSWERED_BY) + f", not {scenario.answered_by!r}"
+        ]
+    if chosen != VOICEMAIL:
+        return []
+    if str(scenario.call_direction or "").strip().lower() != "outbound":
+        return [
+            "answered_by is 'voicemail', which only happens on a call the agent placed, so this "
+            "scenario must state call_direction 'outbound' itself. Left unset, the direction is "
+            "taken from the contract and a mailbox would be answering a call the person dialled"
+        ]
+    return []
 
 
 def _world_credential_problems(
@@ -845,6 +882,28 @@ def suite_diversity_problems(scenarios: list[Scenario]) -> list[str]:
             problems.append(
                 f"no outbound scenario has caller_awareness {LEAST_AWARE!r}, the one that tests whether "
                 "the agent says who it is and why it called before asking for anything"
+            )
+    # A mailbox tests one narrow thing: that the agent notices nobody is listening. It is worth a
+    # few scenarios and never a theme, because a suite of mailboxes learns nothing about the agent
+    # talking to people. A sixth is the ceiling, which no suite written so far comes near.
+    mailboxes = [one for one in scenarios if one.answered_by == VOICEMAIL]
+    if len(mailboxes) > ceil(len(scenarios) / 6):
+        problems.append(
+            f"{len(mailboxes)} of {len(scenarios)} scenarios are answered_by {VOICEMAIL!r}; keep "
+            f"them under a sixth of the suite, so at most {ceil(len(scenarios) / 6)} here"
+        )
+    # And where there are several, they have to be different mailboxes. Distinct greetings is what
+    # can be measured; the shapes worth covering are named in the voice skill.
+    if len(mailboxes) >= 3:
+        greetings = {
+            " ".join((one.persona.initial_message if one.persona else "").lower().split())
+            for one in mailboxes
+        }
+        if len(greetings - {""}) < 2:
+            problems.append(
+                f"all {len(mailboxes)} voicemail scenarios use the same greeting; vary it, since a "
+                "named personal mailbox, a carrier mailbox with no name, a full mailbox and a long "
+                "greeting are four different tests of the agent"
             )
     # A code naturally appears several times inside one scenario (fixture, caller script,
     # reference verify call). Diversity is about reuse *between* callers, not repeated mention

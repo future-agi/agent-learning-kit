@@ -445,10 +445,36 @@ class BundleScenarioSource:
         # against the full set by design (`_begin_payload` sends every key and the platform 409s on a
         # subset), so the suite is what gets registered and the sample is only what gets called. The
         # rows that are not called stay unstarted, which is a truthful state rather than a broken job.
+        chosen_evals, agent_prompt = _chosen_evals_and_prompt(bundle_dir)
         registered = await register_with_platform(
-            scenarios_client, scenarios, run_name=job.run_id
+            scenarios_client,
+            scenarios,
+            run_name=job.run_id,
+            chosen_evals=chosen_evals,
+            agent_prompt=agent_prompt,
         )
         return sampled_for_calling(registered)
+
+
+def _chosen_evals_and_prompt(bundle_dir: Path) -> tuple[list[str], str]:
+    """The eval names the contract chose, and the agent's own prompt text, for pre-allocation.
+
+    Read as plain JSON rather than through ``AgentContract``: neither value changes how a scenario
+    runs, so a contract this cannot parse must cost the run nothing.
+    """
+    try:
+        body = json.loads((bundle_dir / "contract.json").read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 - a run never fails over what it tells the platform about itself
+        return [], ""
+    if not isinstance(body, dict):
+        return [], ""
+    chosen = body.get("chosen_evals")
+    names = (
+        [str(one).strip() for one in chosen if str(one).strip()]
+        if isinstance(chosen, list)
+        else []
+    )
+    return names, str(body.get("system_prompt_excerpt") or "").strip()
 
 
 def _preallocation_error(code: str, message: str) -> Exception:
@@ -466,7 +492,12 @@ def _preallocation_error(code: str, message: str) -> Exception:
     )
 
 
-def _provision_payload(run_name: str, scenarios: Sequence[_CompiledScenario]) -> dict[str, Any]:
+def _provision_payload(
+    run_name: str,
+    scenarios: Sequence[_CompiledScenario],
+    chosen_evals: Sequence[str] = (),
+    agent_prompt: str = "",
+) -> dict[str, Any]:
     """`HarnessScenarioProvisionSerializer`/`HarnessProvisionPersonaSerializer`
     (futureagi/simulate/serializers/hosted_harness.py): `operation`, `name` and `personas` are
     required; each persona's `name`, `role`, `situation`, `outcome` and `persona` are optional and
@@ -474,7 +505,7 @@ def _provision_payload(run_name: str, scenarios: Sequence[_CompiledScenario]) ->
     `scenario.json` for scheduler-facing fields only, and the cost was a platform that could show a
     call but not who was on it or what they came for.
     """
-    return {
+    payload: dict[str, Any] = {
         "operation": "provision",
         "name": run_name,
         # Everything the serializer accepts, where the document had it: name, role, situation,
@@ -485,6 +516,12 @@ def _provision_payload(run_name: str, scenarios: Sequence[_CompiledScenario]) ->
             for scenario in scenarios
         ],
     }
+    # Omitted rather than sent empty, so a platform that does not know these fields is unaffected.
+    if chosen_evals:
+        payload["chosen_evals"] = list(chosen_evals)
+    if agent_prompt:
+        payload["agent_prompt"] = agent_prompt
+    return payload
 
 
 def _begin_payload(run_test_id: str, scenarios: Sequence[_CompiledScenario]) -> dict[str, Any]:
@@ -567,6 +604,8 @@ async def register_with_platform(
     scenarios: Sequence[_CompiledScenario],
     *,
     run_name: str,
+    chosen_evals: Sequence[str] = (),
+    agent_prompt: str = "",
 ) -> Sequence[_CompiledScenario]:
     """The scenario pre-allocation SEAM, now wired against the platform's real route (a single
     `POST .../scenarios/`, discriminated by a body-level `operation` field -- see
@@ -581,7 +620,8 @@ async def register_with_platform(
     failure) -> only then build and return the new scenario list with `scenario_id` filled in.
     """
     provision_result = await asyncio.to_thread(
-        scenarios_client.provision, _provision_payload(run_name, scenarios)
+        scenarios_client.provision,
+        _provision_payload(run_name, scenarios, chosen_evals, agent_prompt),
     )
     run_test_id = provision_result.get("run_test_id")
     if not isinstance(run_test_id, str) or not run_test_id:

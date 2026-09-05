@@ -35,6 +35,7 @@ _LIST_FIELDS = (
     "hard_constraints",
     "real_use_cases",
     "amendments",
+    "chosen_evals",
 )
 _DICT_FIELDS = ("data_schema", "base_environment")
 
@@ -462,6 +463,10 @@ class AgentContract(BaseModel):
     # every later stage.
     notes: str = ""
     open_questions: list[str] = Field(default_factory=list)
+    # Platform evals this agent should be judged by, by name only. The platform owns the catalogue
+    # and works out each eval's inputs itself, so a name is the whole of what is decided here.
+    # Empty is normal: it means judge this agent by its scenarios' own checks alone.
+    chosen_evals: list[str] = Field(default_factory=list)
     # Anything in here was not read from the agent's source. The contract is meant to be what
     # the agent verifiably is, so when the harness widens it the difference is recorded rather
     # than blended in, and whoever reads it later can tell the two apart.
