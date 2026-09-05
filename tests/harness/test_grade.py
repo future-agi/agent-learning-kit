@@ -231,9 +231,9 @@ def test_the_whole_suite_is_registered_and_only_a_sample_is_run():
     sampled = source.index("sampled_for_calling")
     assert registered < sampled, "the suite must be registered before the sample is taken"
 
-    # And the sample itself still caps a large suite while leaving a small one whole.
-    assert len(sampled_for_calling(list(range(30)))) == 5
-    assert len(sampled_for_calling(list(range(12)))) == 12
+    # And by default every scenario is called: the cap is a testing knob, not product behaviour.
+    assert len(sampled_for_calling(list(range(30)))) == 30
+    assert len(sampled_for_calling(list(range(200)))) == 200
 
 
 def test_an_empty_save_does_not_take_the_suite_with_it(tmp_path):
@@ -247,3 +247,22 @@ def test_an_empty_save_does_not_take_the_suite_with_it(tmp_path):
 
     write_scenarios([], tmp_path, Catalogue())
     assert [x.name for x in load_scenarios(tmp_path)] == ["keeps_its_place"]
+
+
+def test_every_scenario_is_called_unless_a_run_caps_it(monkeypatch):
+    """The cap was a testing measure for one person's provider credits, never product behaviour."""
+    import importlib
+
+    from fi.alk.harness import scenario_source
+
+    monkeypatch.delenv("HARNESS_CALLS_AT_MOST", raising=False)
+    importlib.reload(scenario_source)
+    assert len(scenario_source.sampled_for_calling(list(range(200)))) == 200
+
+    monkeypatch.setenv("HARNESS_CALLS_AT_MOST", "5")
+    importlib.reload(scenario_source)
+    picked = scenario_source.sampled_for_calling(list(range(200)))
+    assert picked == [0, 40, 80, 120, 160]
+
+    monkeypatch.delenv("HARNESS_CALLS_AT_MOST", raising=False)
+    importlib.reload(scenario_source)

@@ -57,27 +57,25 @@ _READY_PY = "ready.py"
 # terminal event today is strictly better than none ever.
 _LOAD_TIMEOUT_SECONDS = 60.0
 
-# How many of a suite's scenarios one job actually calls.
+# How many of a suite's scenarios one job calls. **Every one of them, unless a run says otherwise.**
 #
-# Writing a scenario is cheap next to calling it: a call is a real conversation held in real time,
-# so a job that wrote two hundred and then called all of them spends hours before anybody sees a
-# result, and the first five calls already say whether the calls work at all. The suite is the
-# artifact; the calls this job places are a sample of it. A small suite is called in full, because
-# there the calls are the point.
-CALL_EVERY_SUITE_UP_TO = int(os.environ.get("HARNESS_CALL_EVERYTHING_UP_TO") or 20)
-CALLS_AT_MOST = int(os.environ.get("HARNESS_CALLS_AT_MOST") or 5)
+# A job that wrote two hundred scenarios is asking for two hundred calls: that is the product, and
+# capping it would quietly deliver a fraction of what somebody paid for. `HARNESS_CALLS_AT_MOST`
+# exists for a person burning their own provider credits while proving the path works, and it is
+# unset everywhere else, so it changes nothing for anybody who does not set it.
+CALLS_AT_MOST = int(os.environ.get("HARNESS_CALLS_AT_MOST") or 0)
 
 
 def sampled_for_calling(scenarios: Sequence[Any]) -> list[Any]:
-    """The scenarios this job will call, spread across the suite rather than taken from its front.
+    """Which scenarios this job calls: all of them, or a spread sample when a run asked for a cap.
 
-    Evenly spaced rather than the first few, because the suite is written slice by slice: its first
-    five scenarios are one writer's work on one part of the agent, where five spread across it are
-    five different parts. Deterministic, so two runs of the same suite call the same five and can
-    be compared.
+    A sample is spaced evenly rather than taken from the front, because a suite is written slice by
+    slice: its first five scenarios are one writer's work on one part of the agent, where five spread
+    across it are five different parts. Deterministic, so two runs of the same suite call the same
+    ones and can be compared.
     """
     kept = list(scenarios)
-    if len(kept) <= max(CALL_EVERY_SUITE_UP_TO, CALLS_AT_MOST):
+    if CALLS_AT_MOST < 1 or len(kept) <= CALLS_AT_MOST:
         return kept
     stride = len(kept) / CALLS_AT_MOST
     return [kept[min(len(kept) - 1, int(index * stride))] for index in range(CALLS_AT_MOST)]
