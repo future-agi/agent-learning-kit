@@ -7044,17 +7044,18 @@ def test_background_noise_is_decided_the_same_way_twice():
     assert Scenario(name="x", background_noise="street").background_noise == "street"
 
 
-def test_background_noise_needs_opting_in(monkeypatch):
-    """Silence is what a run with no environment set falls into: noise shortens calls, so it is
-    asked for rather than escaped. Anything unrecognised stays silent instead of turning it on."""
+def test_background_noise_is_on_unless_turned_off(monkeypatch):
+    """A caller is somewhere. Noise was opt-in and every deployment forgot, so a run with nothing set
+    now hears it; only an explicit off turns it off, and a typo leaves it on rather than silently
+    reverting to a studio."""
     from fi.alk.harness.background_noise import enabled
 
     monkeypatch.delenv("ALK_BACKGROUND_NOISE", raising=False)
-    assert enabled() is False
-    for off in ("", "0", "off", "false", "no", "ture"):
+    assert enabled() is True
+    for off in ("0", "off", "false", "no", "OFF"):
         monkeypatch.setenv("ALK_BACKGROUND_NOISE", off)
         assert enabled() is False, off
-    for on in ("1", "on", "TRUE", "yes"):
+    for on in ("1", "on", "TRUE", "yes", "ture", ""):
         monkeypatch.setenv("ALK_BACKGROUND_NOISE", on)
         assert enabled() is True, on
 
