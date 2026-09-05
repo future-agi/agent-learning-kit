@@ -199,11 +199,10 @@ def test_a_second_fan_out_pass_only_writes_what_is_missing(tmp_path, monkeypatch
     assert asked_for == [20, 6]
 
     # Once the target is met, it refuses to write more rather than starting another suite. Counted
-    # from the journal here, since a save transiently empties the folders and that is how the cap was
-    # defeated on a real run.
-    monkeypatch.setattr(st, "load_scenarios", lambda _d: [])
+    # from the folders: a journal that outlives its folders means a retried attempt, where refusing to
+    # write is how a run saves 14 of 200 and fails.
     monkeypatch.setattr(
-        st, "journalled", lambda _d: [Scenario(name=f"s{i}", instruction="i", sub_goals=["x"]) for i in range(20)]
+        st, "load_scenarios", lambda _d: [Scenario(name=f"s{i}", instruction="i", sub_goals=["x"]) for i in range(20)]
     )
     said = asyncio.run(suite.handler({"count": 20}))
     assert "already holds the 20" in said["content"][0]["text"]
