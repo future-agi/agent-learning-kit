@@ -38,6 +38,17 @@ are separate copies. Use only records already in the frozen base, keep setup emp
 settle outcomes from the captured calls. If coverage needs state the base lacks, report that the
 target needs a seed or reset seam rather than writing a scenario that cannot run.
 
+### Types are the column's, not Python's convenience
+
+A boolean column takes `True` or `False`. Writing `1` fails outright on a store with real booleans:
+
+```
+DatatypeMismatch: column "phone_verified" is of type boolean but expression is of type smallint
+```
+
+The scenario then dies in `setup_code`, before any conversation, and reports as a setup crash rather than
+anything about the agent. Read-back values may print as `1` and `0`, which is display, not type.
+
 ### A collection is not always a list
 
 `world.state()` gives every collection this world has, and their shapes differ by agent. A collection

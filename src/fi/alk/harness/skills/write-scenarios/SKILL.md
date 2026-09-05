@@ -471,6 +471,12 @@ tool can produce: a record already in a condition the agent could never create i
 keeps is often a mapping, and iterating it yields keys rather than records. Look with `inspect_world`
 before writing against one.
 
+**Write a value of the type the column actually holds.** A true or false field takes `True` or `False`,
+never `1` or `0`. Some stores accept either and some reject the number outright, and the scenario then dies
+in its own setup before the conversation starts: measured on a real run, three of five calls failed with
+`column "phone_verified" is of type boolean but expression is of type smallint`, because the setup wrote
+`1`. Records you read back may display as `1` and `0`; that is how they are shown, not what the column is.
+
 `references/world-api.md` has the exact signatures, the `key=` caveat, how to handle either shape, and
 a worked `ready_code`.
 
