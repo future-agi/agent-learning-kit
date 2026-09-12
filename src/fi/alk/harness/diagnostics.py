@@ -148,6 +148,11 @@ _POLICIES = MappingProxyType(
             owner=RepairOwner.AUTHORING,
             repair_strategy="regenerate_setup_artifact",
         ),
+        "world_import_runtime_error": DiagnosticPolicy(
+            domain=FailureDomain.ENVIRONMENT,
+            owner=RepairOwner.COMPILER,
+            repair_strategy="inspect_world_import_runtime",
+        ),
         "ready_condition_invalid": DiagnosticPolicy(
             domain=FailureDomain.ENVIRONMENT,
             owner=RepairOwner.AUTHORING,

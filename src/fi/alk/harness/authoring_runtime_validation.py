@@ -78,11 +78,7 @@ def _write_runtime_evidence(
         limitations.append(
             "external provider state and tool implementations were not available for local inspection"
         )
-    if world_isolation is CheckStatus.NOT_RUN:
-        limitations.append(
-            "concurrent world isolation was not applicable or runtime parallelism was safely degraded"
-        )
-    else:
+    if not external_provider:
         source_model = store.read_source_model()
         world_ir = store.read_world_ir()
         source_schema_hash = source_model.fingerprint
@@ -90,6 +86,10 @@ def _write_runtime_evidence(
         compiler_version = POSTGRES_COMPILER_VERSION
         schema_and_seed = CheckStatus.PASSED
         source_invariants = CheckStatus.PASSED
+    if world_isolation is CheckStatus.NOT_RUN:
+        limitations.append(
+            "concurrent world isolation was not applicable or runtime parallelism was safely degraded"
+        )
 
     contract = authoring / "contract.json"
     scenarios = authoring / "scenarios"
@@ -377,7 +377,9 @@ async def validate_once(
                     raise RuntimeValidationError(
                         "environment",
                         "Concurrent world isolation conformance failed: "
-                        + str(build_output.get("conformance_reason") or "unknown reason"),
+                        + str(
+                            build_output.get("conformance_reason") or "unknown reason"
+                        ),
                     )
                 world_isolation = (
                     CheckStatus.PASSED if conformance is True else CheckStatus.NOT_RUN
@@ -465,7 +467,7 @@ async def validate_once(
                         manifest=manifest,
                         count=len(scenarios),
                         external_provider=True,
-                            tool_report=tool_report,
+                        tool_report=tool_report,
                         reset_equivalence=CheckStatus.NOT_RUN,
                         world_isolation=CheckStatus.NOT_RUN,
                     )
@@ -489,11 +491,13 @@ async def validate_once(
                 reset_world = await factory.create(
                     runtime, rng=random.Random(job.seed or 0)
                 )
-                if baseline_state_digest is None or _world_state_digest(
-                    reset_world
-                ) != baseline_state_digest:
+                if (
+                    baseline_state_digest is None
+                    or _world_state_digest(reset_world) != baseline_state_digest
+                ):
                     raise RuntimeValidationError(
-                        "environment", "Final reset did not restore the certified baseline"
+                        "environment",
+                        "Final reset did not restore the certified baseline",
                     )
                 _write_runtime_evidence(
                     job=job,

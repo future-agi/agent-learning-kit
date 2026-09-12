@@ -8,6 +8,7 @@ from fi.alk.harness.authoring_runtime_validation import (
     RuntimeValidationError,
     _generic_candidate_hash,
     _write_generic_certificate,
+    _write_runtime_evidence,
     validate_and_repair,
     validate_once,
 )
@@ -286,6 +287,57 @@ def test_generic_candidate_hash_ignores_repository_metadata_and_own_artifacts(
     )
 
     assert _generic_candidate_hash(source, authoring) == before
+
+
+def test_runtime_evidence_reads_generic_models_when_world_isolation_not_run(
+    tmp_path, monkeypatch
+) -> None:
+    from fi.alk.harness import certification
+
+    captured = {}
+
+    class Store:
+        def __init__(self, _root):
+            pass
+
+        def read_source_model(self):
+            return SimpleNamespace(fingerprint="sha256:" + "b" * 64)
+
+        def read_world_ir(self):
+            return SimpleNamespace(fingerprint="sha256:" + "c" * 64)
+
+        def write_runtime_evidence(self, evidence):
+            captured["evidence"] = evidence
+
+        def write_tool_certification(self, report):
+            captured["report"] = report
+
+    monkeypatch.setattr(certification, "GenericHarnessArtifactStore", Store)
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    (authoring / "contract.json").write_text("{}", encoding="utf-8")
+    report = SimpleNamespace(certified_or_runtime_only=1, total=1)
+    manifest = SimpleNamespace(
+        provenance=SimpleNamespace(source_digest="a" * 64),
+        digest="sha256:" + "d" * 64,
+    )
+
+    _write_runtime_evidence(
+        job=SimpleNamespace(),
+        authoring=authoring,
+        manifest=manifest,
+        count=1,
+        external_provider=False,
+        tool_report=report,
+        reset_equivalence=CheckStatus.PASSED,
+        world_isolation=CheckStatus.NOT_RUN,
+    )
+
+    evidence = captured["evidence"]
+    assert evidence.source_schema_hash == "sha256:" + "b" * 64
+    assert evidence.world_ir_hash == "sha256:" + "c" * 64
+    assert evidence.checks.schema_and_seed is CheckStatus.PASSED
+    assert evidence.checks.world_isolation is CheckStatus.NOT_RUN
 
 
 def test_generic_certificate_combines_runtime_evidence_and_repair_history(

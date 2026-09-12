@@ -54,7 +54,9 @@ def test_real_postgres_catalogue_drives_legacy_world_import(tmp_path: Path) -> N
         credentials=EngineCredentials(
             username=str(parameters["user"]), password=str(parameters["password"])
         ),
-        source_digest="sha256:" + "a" * 64,
+        # BundleProvenanceV2 carries the raw hexadecimal digest.  The runtime adapter
+        # qualifies it before constructing the canonical SourceModel.
+        source_digest="a" * 64,
     )
 
     with psycopg.connect(dsn, autocommit=True) as connection:

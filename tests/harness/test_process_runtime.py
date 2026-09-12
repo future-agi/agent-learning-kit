@@ -3245,6 +3245,41 @@ def test_apply_seed_file_preserves_structured_world_diagnostics(
     assert "array_shape_mismatch at users.tags" in str(raised.value)
 
 
+def test_apply_seed_file_types_unadapted_world_import_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    world = tmp_path / "world.sqlite"
+    world.write_bytes(b"sqlite fixture")
+
+    class CatalogueInspectionFailure(RuntimeError):
+        pass
+
+    def reject(*args: Any, **kwargs: Any) -> None:
+        raise CatalogueInspectionFailure("private database details")
+
+    monkeypatch.setattr(pr, "apply_postgres_sqlite_world", reject)
+
+    with pytest.raises(pr.ProcessRuntimeError) as raised:
+        pr.apply_seed_file(
+            pr.ManagedEngine.POSTGRES,
+            world,
+            port=14000,
+            dbname="baseline",
+            credentials=pr.EngineCredentials(username="harness", password="pw"),
+            process_name="postgres",
+            sync_run=lambda *args, **kwargs: pytest.fail("must not execute"),
+            source_digest="sha256:" + "a" * 64,
+        )
+
+    assert raised.value.diagnostics[0].code == "world_import_runtime_error"
+    assert raised.value.diagnostics[0].location is not None
+    assert raised.value.diagnostics[0].location.process == "CatalogueInspectionFailure"
+    assert "private database details" not in str(raised.value)
+    assert "world_import_runtime_error at CatalogueInspectionFailure" in str(
+        raised.value
+    )
+
+
 def test_apply_seed_file_redis_pipes_file_content_over_stdin(tmp_path: Path) -> None:
     seed_file = tmp_path / "cache" / "seed.txt"
     seed_file.parent.mkdir(parents=True)

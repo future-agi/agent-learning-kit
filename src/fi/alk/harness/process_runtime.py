@@ -2593,6 +2593,15 @@ def apply_postgres_sqlite_world(
     from .world_import.sqlite import SQLiteWorldImportError, import_sqlite_world
     from .world_ir import WorldIRValidationError
 
+    # Bundle provenance intentionally stores the hexadecimal source fingerprint without an
+    # algorithm prefix, while the canonical SourceModel requires an algorithm-qualified digest.
+    # Normalize at this adapter boundary; otherwise every hosted generic world fails SourceModel
+    # validation before its rows are even inspected.
+    canonical_source_digest = (
+        source_digest
+        if source_digest.startswith("sha256:")
+        else f"sha256:{source_digest}"
+    )
     uri = f"file:{file.resolve()}?mode=ro"
     with psycopg.connect(
         host="localhost",
@@ -2601,7 +2610,7 @@ def apply_postgres_sqlite_world(
         password=credentials.password,
         dbname=dbname,
     ) as postgres:
-        source = inspect_postgres(postgres, source_digest=source_digest)
+        source = inspect_postgres(postgres, source_digest=canonical_source_digest)
         unsupported = tuple(
             HarnessDiagnostic.create(
                 stage=HarnessStage.VALIDATING_ENVIRONMENT,
@@ -2756,6 +2765,27 @@ def apply_seed_file(
             except Exception as exc:
                 code = str(getattr(exc, "code", "generic_world_import_failed"))
                 diagnostics = tuple(getattr(exc, "diagnostics", ()))
+                if not diagnostics:
+                    # A failure outside the source-model/import/compiler adapters (for
+                    # example catalogue connection/inspection) used to collapse to an
+                    # unactionable generic message.  Preserve only its structural class;
+                    # never persist the exception text, which can contain DSNs or values.
+                    diagnostics = (
+                        HarnessDiagnostic.create(
+                            stage=HarnessStage.VALIDATING_ENVIRONMENT,
+                            component="world_import_runtime",
+                            code="world_import_runtime_error",
+                            message=(
+                                "semantic world import failed outside a typed adapter: "
+                                f"{type(exc).__name__}"
+                            ),
+                            location=DiagnosticLocation(process=type(exc).__name__),
+                            evidence_refs=(
+                                "artifact://world-ir",
+                                "artifact://source-model",
+                            ),
+                        ),
+                    )
                 structural = []
                 for diagnostic in diagnostics:
                     location = diagnostic.location
@@ -2774,9 +2804,7 @@ def apply_seed_file(
                         diagnostic.code + (f" at {'.'.join(parts)}" if parts else "")
                     )
                 summary = (
-                    ": " + ", ".join(sorted(set(structural)))
-                    if structural
-                    else ""
+                    ": " + ", ".join(sorted(set(structural))) if structural else ""
                 )
                 raise ProcessRuntimeError(
                     "seed",
