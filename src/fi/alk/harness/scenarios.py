@@ -37,7 +37,6 @@ from .scenario_tools import (
 )
 from .session import Stage
 from .tools import schema
-from .usage import check_scenario_generation
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +75,6 @@ def open_stage(
     max_turns: int = 0,
 ) -> tuple[Stage, Path]:
     """A live write-the-scenarios stage, and where it will write."""
-    check_scenario_generation()
     destination = out or artifact_dir(contract.agent)
     server, kept = scenario_tools(contract, destination, destination, wanted=wanted)
     spec = SessionSpec(

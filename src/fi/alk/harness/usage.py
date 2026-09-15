@@ -20,9 +20,7 @@ from .outbound import HostedCapabilities, Transport, TransportError
 
 USAGE_SCHEMA_VERSION = "futureagi.harness-usage.v1"
 SIMULATOR_FUNDING_ALIAS = "ALK_SIMULATOR_FUNDING"
-UsageAction = Literal[
-    "scenario_generation", "text_call", "voice_call", "managed_evaluation"
-]
+UsageAction = Literal["text_call", "voice_call", "managed_evaluation"]
 Funding = Literal["platform", "customer"]
 
 
@@ -345,22 +343,3 @@ def configure_reporter(reporter: UsageReporter | None) -> None:
 
 def active_reporter() -> UsageReporter | None:
     return _active_reporter
-
-
-def check_scenario_generation() -> None:
-    reporter = active_reporter()
-    if reporter is not None:
-        reporter.check("scenario_generation", amount=1)
-
-
-def record_generated_scenario(scenario_key: str, *, action_key: str) -> None:
-    reporter = active_reporter()
-    if reporter is None:
-        return
-    reporter.record(
-        action="scenario_generation",
-        scenario_key=scenario_key,
-        amount=1,
-        funding="platform",
-        record_key=f"generated:{action_key}",
-    )
