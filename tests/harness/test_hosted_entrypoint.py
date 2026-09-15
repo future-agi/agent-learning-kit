@@ -79,7 +79,7 @@ def _judged_sub_goals_decided_without_a_model(monkeypatch):
     """
     from fi.alk.harness import hosted_scheduler
 
-    async def _held(goal, world, calls):
+    async def _held(goal, world, calls, **_kwargs):
         return True, f"{goal.name}: stubbed for an entrypoint test"
 
     monkeypatch.setattr(hosted_scheduler, "_judge", _held)
@@ -369,6 +369,11 @@ class FakeTransport:
             existed = digest in self.artifacts
             self.artifacts[digest] = bytes(payload)
             return ob.TransportResponse(200 if existed else 201, {}, {})
+        if "/usage/" in url and method == "POST" and json_body is not None:
+            if json_body.get("operation") == "check":
+                return ob.TransportResponse(200, {"allowed": True}, {})
+            if json_body.get("operation") == "report":
+                return ob.TransportResponse(200, {"accepted": True}, {})
         if "/scenarios/" in url and method == "POST" and json_body is not None:
             # p13: Azain's real router mints exactly ONE url per attempt (a DRF detail `@action`,
             # no `url_path`) -- provision vs begin is a body-level `operation` field, never a URL
@@ -3972,7 +3977,9 @@ def test_a_provider_with_no_speed_setting_is_left_alone(monkeypatch):
     assert "speed" not in captured
 
 
-def test_the_delivery_a_persona_was_rendered_with_is_recoverable_from_the_log(monkeypatch, caplog):
+def test_the_delivery_a_persona_was_rendered_with_is_recoverable_from_the_log(
+    monkeypatch, caplog
+):
     """The only record of what the simulator actually sounded like.
 
     call_metadata reports conversation_speed 1.0 and a constant voice name on every call whatever
@@ -4046,9 +4053,13 @@ def test_two_personalities_do_not_share_one_emotional_register():
     from fi.alk.harness.simulator_voice import persona_emotion
 
     assert persona_emotion({"personality": "Warm and chatty"}) == ["positivity:high"]
-    assert persona_emotion({"personality": "Professional and formal"}) == ["positivity:low"]
+    assert persona_emotion({"personality": "Professional and formal"}) == [
+        "positivity:low"
+    ]
     assert persona_emotion({"personality": "Impatient and abrupt"}) == ["anger:low"]
-    assert persona_emotion({"personality": "Curious and sceptical"}) == ["curiosity:high"]
+    assert persona_emotion({"personality": "Curious and sceptical"}) == [
+        "curiosity:high"
+    ]
 
 
 def test_the_persona_s_emotion_reaches_the_speech_provider(monkeypatch):
@@ -4059,14 +4070,20 @@ def test_the_persona_s_emotion_reaches_the_speech_provider(monkeypatch):
 
     captured = {}
     monkeypatch.setattr(
-        livekit_models, "_import_plugin",
+        livekit_models,
+        "_import_plugin",
         lambda name: SimpleNamespace(TTS=lambda **kw: captured.update(kw) or "tts"),
     )
     monkeypatch.setenv("CARTESIA_API_KEY", "not-a-real-key")
 
     livekit_models._cartesia_tts(
-        TTSConfig(provider="cartesia", model="sonic-3", voice="abc",
-                  speed=1.05, emotion=["anger:low"]),
+        TTSConfig(
+            provider="cartesia",
+            model="sonic-3",
+            voice="abc",
+            speed=1.05,
+            emotion=["anger:low"],
+        ),
         http_session=None,
     )
 
@@ -4083,7 +4100,8 @@ def test_a_persona_with_no_recognised_emotion_sends_no_emotion_key(monkeypatch):
 
     captured = {}
     monkeypatch.setattr(
-        livekit_models, "_import_plugin",
+        livekit_models,
+        "_import_plugin",
         lambda name: SimpleNamespace(TTS=lambda **kw: captured.update(kw) or "tts"),
     )
     monkeypatch.setenv("CARTESIA_API_KEY", "not-a-real-key")

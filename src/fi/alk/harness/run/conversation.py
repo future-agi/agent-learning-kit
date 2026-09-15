@@ -54,6 +54,8 @@ class Transcript:
     calls: list[Call] = field(default_factory=list)
     ended: str = ""
     spent_usd: float = 0.0
+    simulator_input_tokens: int = 0
+    simulator_output_tokens: int = 0
 
     def spoken(self) -> str:
         return "\n".join(f"{turn.speaker}: {turn.text}" for turn in self.exchanges)
@@ -261,4 +263,8 @@ async def converse(
 
     transcript.calls = list(target.world.calls) if hasattr(target, "world") else []
     transcript.spent_usd = target.spent_usd + customer.spent_usd
+    (
+        transcript.simulator_input_tokens,
+        transcript.simulator_output_tokens,
+    ) = customer.simulator_tokens
     return transcript

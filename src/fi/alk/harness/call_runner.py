@@ -57,6 +57,7 @@ from .hosted_scheduler import Scenario as HostedScenario
 from .job import ExecutionMode, HarnessJob, ProviderExecutionMode
 from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime
+from .usage import UsageDenied, UsageReporter, UsageUnavailable, simulator_funding
 from .scenario import DEFAULT_VOICEMAIL_STYLE, voicemail_enabled
 from .voicemail_audio import clip_for
 from .simulator_voice import (
@@ -229,6 +230,7 @@ class CallRunnerContext:
     attempt_number: int
     source_directory: Path | None = None
     simulator_provider_secret_values: Mapping[str, str] = field(default_factory=dict)
+    usage_reporter: UsageReporter | None = None
 
 
 # --- pre-dial validation -----------------------------------------------------------------------
@@ -1012,6 +1014,19 @@ class CallRunnerImpl:
             # code is reserved by the contract for a world-level capability mismatch, not a
             # job-level voice config gap).
             raise CallAborted(self._missing_config.message())
+        if self._context.usage_reporter is not None:
+            try:
+                await asyncio.to_thread(
+                    self._context.usage_reporter.check, "voice_call"
+                )
+            except UsageDenied as exc:
+                raise CallAborted(
+                    f"voice_usage_check_denied: {exc}", code="usage_exhausted"
+                ) from exc
+            except UsageUnavailable as exc:
+                raise CallAborted(
+                    f"voice_usage_check_failed: {exc}", code="usage_check_failed"
+                ) from exc
 
         connector = _resolve_connector(
             self._context.job, self._context.target_provider_secret_values
@@ -1371,6 +1386,20 @@ class CallRunnerImpl:
             )
             raise WorldUnavailable(f"target agent never joined the room: {reason}")
 
+        async def record_voice_usage(*, infra_failed: bool) -> None:
+            if self._context.usage_reporter is None:
+                return
+            await asyncio.to_thread(
+                self._context.usage_reporter.record,
+                action="voice_call",
+                scenario_key=scenario_key,
+                amount=base.duration_ms / 60_000,
+                funding=simulator_funding(self._environ),
+                occurred_at=case_started_at,
+                record_key=report.run_id,
+                infra_failed=infra_failed,
+            )
+
         # A genuinely silent agent-first call (agent joined, zero conversational turns) reaches
         # the real engine (engines/livekit.py::_conversation_outcome) as FAILED with code
         # "no_conversation" or "conversation_silence_timeout" and zero messages -- never as a
@@ -1402,20 +1431,24 @@ class CallRunnerImpl:
             attributed = _attributed_stall(case)
             if attributed is not None:
                 code, reason = attributed
+                await record_voice_usage(infra_failed=code != "target_agent_stalled")
                 raise CallAborted(reason, partial=base, code=code)
             if (
                 case.failure is not None
                 and case.failure.code == "target_agent_tool_failed"
             ):
+                await record_voice_usage(infra_failed=False)
                 raise CallAborted(
                     case.failure.message,
                     partial=base,
                     code="target_agent_tool_failed",
                 )
+            await record_voice_usage(infra_failed=True)
             raise CallAborted(
                 f"voice_call_not_completed: {case.status.value}: {reason}", partial=base
             )
 
+        await record_voice_usage(infra_failed=False)
         # Never fabricate calls for a call that produced no conversation -- the scheduler's own
         # coverage guarantee turns an empty `calls` tuple into evidence_missing/simulator
         # regardless of turns (hosted_scheduler.py's own unconditioned-on-turns rule).

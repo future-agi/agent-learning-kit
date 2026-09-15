@@ -15,6 +15,7 @@ a judge that failed to run is not evidence against the agent.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from typing import Any, Sequence
@@ -22,6 +23,12 @@ from typing import Any, Sequence
 from .backends import SessionSpec, tool, tool_server
 from .config import chosen_model
 from .session import Stage
+from .usage import (
+    UsageDenied,
+    UsageUnavailable,
+    active_reporter,
+    simulator_funding,
+)
 from .tools import schema
 
 JUDGE_MODEL_ALIAS = "ALK_JUDGE_MODEL"
@@ -65,7 +72,14 @@ def _dump(value: object) -> str:
 
 
 async def judge(
-    goal: Any, world: Any, calls: Sequence[Any], *, messages: Sequence[Any] = ()
+    goal: Any,
+    world: Any,
+    calls: Sequence[Any],
+    *,
+    messages: Sequence[Any] = (),
+    scenario_key: str = "",
+    scenario_attempt: int = 1,
+    evaluation_key: str = "",
 ) -> tuple[bool | None, str]:
     """Decide one judged sub-goal: (passed, explanation). Never raises."""
     verdict: dict[str, tuple[bool | None, str]] = {}
@@ -120,16 +134,28 @@ async def judge(
     @tool(
         "decide",
         "Commit to the verdict, once, after looking.",
-        schema({"passed": bool, "explanation": str, "undecided": bool}, ["explanation"]),
+        schema(
+            {"passed": bool, "explanation": str, "undecided": bool}, ["explanation"]
+        ),
     )
     async def decide(args: dict[str, Any]) -> dict[str, Any]:
         explanation = str(args.get("explanation") or "").strip()
         if not explanation:
-            return _say("a verdict needs an explanation naming what you saw", error=True)
+            return _say(
+                "a verdict needs an explanation naming what you saw", error=True
+            )
         held = None if bool(args.get("undecided")) else bool(args.get("passed"))
         verdict["it"] = (held, explanation)
         return _say("recorded")
 
+    model = judge_model()
+    funding = simulator_funding()
+    reporter = active_reporter()
+    if reporter is not None and funding == "platform":
+        try:
+            await asyncio.to_thread(reporter.check, "managed_evaluation", model=model)
+        except (UsageDenied, UsageUnavailable) as exc:
+            return None, f"the judge was not authorized to run: {exc}"
     spec = SessionSpec(
         system_prompt=_INSTRUCTIONS,
         servers={
@@ -139,7 +165,7 @@ async def judge(
             )
         },
         max_turns=12,
-        model=judge_model(),
+        model=model,
     )
     prompt = (
         f"Claim {getattr(goal, 'name', '')!r}.\n"
@@ -150,9 +176,25 @@ async def judge(
     )
     try:
         async with Stage(spec, name="judge-sub-goals") as stage:
-            await stage.say(prompt)
+            turn = await stage.say(prompt)
     except Exception as exc:  # noqa: BLE001 - a judge that could not run is not a failed agent
         return None, f"the judge could not run: {type(exc).__name__}: {exc}"
+    turn_error = str(getattr(turn, "error", "") or "")
+    if turn_error:
+        return None, f"the judge could not run: {turn_error}"
+    if reporter is not None:
+        await asyncio.to_thread(
+            reporter.record,
+            action="managed_evaluation",
+            scenario_key=scenario_key or str(getattr(goal, "name", "") or "evaluation"),
+            amount=1,
+            funding=funding,
+            model=model,
+            record_key=(
+                f"{scenario_attempt}:"
+                f"{evaluation_key or getattr(goal, 'name', '') or 'evaluation'}"
+            ),
+        )
     return verdict.get("it", (None, "the judge finished without a verdict"))
 
 
@@ -163,7 +205,9 @@ def _transcript(messages: Sequence[Any]) -> str:
         for m in messages
         if isinstance(m, dict)
     )
-    return body if len(body) <= _TRANSCRIPT_LIMIT else "...\n" + body[-_TRANSCRIPT_LIMIT:]
+    return (
+        body if len(body) <= _TRANSCRIPT_LIMIT else "...\n" + body[-_TRANSCRIPT_LIMIT:]
+    )
 
 
 def _call(call: Any) -> dict[str, Any]:

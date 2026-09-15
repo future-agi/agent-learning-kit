@@ -37,6 +37,7 @@ from .scenario_tools import (
 )
 from .session import Stage
 from .tools import schema
+from .usage import check_scenario_generation
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +76,7 @@ def open_stage(
     max_turns: int = 0,
 ) -> tuple[Stage, Path]:
     """A live write-the-scenarios stage, and where it will write."""
+    check_scenario_generation()
     destination = out or artifact_dir(contract.agent)
     server, kept = scenario_tools(contract, destination, destination, wanted=wanted)
     spec = SessionSpec(
@@ -218,7 +220,13 @@ def _rate_limited(said: str) -> bool:
     lowered = said.lower()
     return any(
         mark in lowered
-        for mark in ("429", "resource_exhausted", "resourceexhausted", "rate limit", "quota")
+        for mark in (
+            "429",
+            "resource_exhausted",
+            "resourceexhausted",
+            "rate limit",
+            "quota",
+        )
     )
 
 
@@ -283,7 +291,11 @@ async def survive_refusal(
         waited += pause
         logger.warning(
             "%s was refused for rate or quota; waiting %ss (%ss of %ss spent): %s",
-            what, pause, round(waited), RATE_LIMIT_TOTAL_WAIT_SECONDS, refusal[:200],
+            what,
+            pause,
+            round(waited),
+            RATE_LIMIT_TOTAL_WAIT_SECONDS,
+            refusal[:200],
         )
         if on_event:
             on_event({"type": "waiting_on_provider", "what": what, "seconds": pause})
@@ -437,7 +449,8 @@ def callers_for(index: int, wanted: int, slice_name: str = "") -> str:
     # suite rule wants.
     block = max(len(_LETTER_BLOCK), min(8, (max(1, wanted) + 2) // 3))
     letters = "".join(
-        _NAME_LETTERS[(slot * block + step) % len(_NAME_LETTERS)] for step in range(block)
+        _NAME_LETTERS[(slot * block + step) % len(_NAME_LETTERS)]
+        for step in range(block)
     )
     said += (
         f"\n\nEvery person you invent must have a given name beginning with one of {letters}, and "
@@ -581,6 +594,7 @@ async def _write_slice(
         thinking=True,
         idle_timeout_seconds=QUIET_WHILE_WRITING_SECONDS,
     )
+
     # Each writer drives its own model session, so several of them together are a request rate. When
     # the provider refuses one, the slice is not wrong and its brief is still worth writing, so wait
     # for the quota to recover and run it again. `kept` belongs to this slice's own tool server, so a
@@ -605,7 +619,9 @@ async def _write_slice(
     except Exception as broke:  # noqa: BLE001 - one slice failing must not lose the others
         logger.warning("slice %s failed after %s: %s", mine.named(), len(kept), broke)
         if on_event:
-            on_event({"type": "slice_failed", "slice": mine.named(), "why": str(broke)[:300]})
+            on_event(
+                {"type": "slice_failed", "slice": mine.named(), "why": str(broke)[:300]}
+            )
         return list(kept)
     logger.info("slice %s finished with %s of %s", mine.named(), len(kept), mine.count)
     return list(kept)
@@ -630,7 +646,9 @@ def merged(written: list[list[Scenario]]) -> list[Scenario]:
                 stem, suffix = one.name, 2
                 while f"{stem}-{suffix}" in taken:
                     suffix += 1
-                one = one.model_copy(update={"name": f"{stem}-{suffix}", "scenario_key": ""})
+                one = one.model_copy(
+                    update={"name": f"{stem}-{suffix}", "scenario_key": ""}
+                )
                 logger.info("renamed a duplicate folder name to %s", one.name)
             taken.add(one.name)
             suite.append(one)
@@ -652,6 +670,7 @@ async def gaps_in(
     destination: Path,
     wanted: int,
     ask: Callable[..., Any] | None = None,
+    on_event: Callable[..., Any] | None = None,
 ) -> list[Slice]:
     """What the finished suite is missing, as slices that would fill it.
 
@@ -708,7 +727,10 @@ async def gaps_in(
                 )
         return {
             "content": [
-                {"type": "text", "text": f"{len(found)} gap(s) recorded. Nothing else to do."}
+                {
+                    "type": "text",
+                    "text": f"{len(found)} gap(s) recorded. Nothing else to do.",
+                }
             ]
         }
 
@@ -790,7 +812,9 @@ async def write_in_parallel(
     cases = [case for case in (use_cases or contract.real_use_cases) if case.strip()]
     if not cases and not slices:
         # Nothing to partition on. One writer, the ordinary path, rather than no scenarios.
-        return await write(contract, out=destination, wanted=wanted, on_event=on_event, ask=ask)
+        return await write(
+            contract, out=destination, wanted=wanted, on_event=on_event, ask=ask
+        )
 
     at_once = max(1, min(at_once or AT_ONCE, MOST_AT_ONCE))
     allocation = planned(wanted, cases, slices)
@@ -832,7 +856,9 @@ async def write_in_parallel(
     # What a writer proved but never handed back, because its session died after proving it. Matched
     # by name so a scenario already in hand is not added twice under a numbered name.
     recovered = [
-        one for one in journalled(destination) if one.name not in {x.name for x in proved}
+        one
+        for one in journalled(destination)
+        if one.name not in {x.name for x in proved}
     ]
     if recovered:
         logger.warning(
@@ -850,7 +876,7 @@ async def write_in_parallel(
         if len(suite) >= wanted:
             break
         missing = await gaps_in(
-            contract, suite, destination=destination, wanted=wanted, ask=ask
+            contract, suite, destination=destination, wanted=wanted, ask=ask, on_event=on_event
         )
         missing = missing[: max(0, wanted - len(suite))]
         if not missing:

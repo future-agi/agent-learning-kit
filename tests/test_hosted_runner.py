@@ -203,9 +203,7 @@ def _canonical_case(index: int):
     from fi.simulate.simulation.models import Persona as _Persona
     from fi.simulate.simulation.models import TestCaseResult
 
-    persona = _Persona(
-        persona={"name": f"Caller {index}"}, situation="s", outcome="o"
-    )
+    persona = _Persona(persona={"name": f"Caller {index}"}, situation="s", outcome="o")
     return SimulationTestCaseResult(
         test_case_id=f"tc-{index}",
         status=TestCaseStatus.COMPLETED,
@@ -297,9 +295,7 @@ def test_sink_streams_each_case_and_finalizes_submitted(tmp_path, monkeypatch):
     assert on_disk["status"] == "submitted"
 
 
-def test_finalize_reports_failed_when_every_case_fails_to_submit(
-    tmp_path, monkeypatch
-):
+def test_finalize_reports_failed_when_every_case_fails_to_submit(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
     sink = FutureAGIResultSink(
@@ -520,6 +516,56 @@ def test_livekit_run_stamps_provider_marker_for_role_resolution():
     # eval transcript labels don't fall back to the VAPI-inbound (swapped) map.
     pcd = payload.get("provider_call_data") or {}
     assert pcd.get("livekit")
+
+
+def test_livekit_simulator_usage_is_normalized_separately_from_target_usage():
+    from fi.simulate.results.futureagi import _build_result_payload
+    from fi.simulate.runtime import TestCaseStatus
+    from fi.simulate.runtime.report import SimulationTestCaseResult
+    from fi.simulate.simulation.models import Persona, TestCaseResult
+
+    persona = Persona(persona={"name": "C"}, situation="s", outcome="o")
+    result = TestCaseResult(
+        persona=persona,
+        transcript="hi",
+        messages=[],
+        metadata={
+            "engine": "livekit",
+            "simulator_funding": "customer",
+            "simulator_model_usage": [
+                {
+                    "type": "llm_usage",
+                    "provider": "google",
+                    "model": "gemini",
+                    "input_tokens": 41,
+                    "input_cached_tokens": 17,
+                    "output_tokens": 9,
+                },
+                {
+                    "type": "stt_usage",
+                    "provider": "deepgram",
+                    "model": "nova",
+                    "input_tokens": 500,
+                    "output_tokens": 200,
+                },
+            ],
+        },
+    )
+    case = SimulationTestCaseResult(
+        test_case_id="tc",
+        status=TestCaseStatus.COMPLETED,
+        persona=persona,
+        result=result,
+    )
+
+    payload = _build_result_payload(case)
+
+    assert payload["call_metadata"]["simulator_usage"] == {
+        "input_tokens": 41,
+        "output_tokens": 9,
+        "cached_input_tokens": 17,
+        "funding": "customer",
+    }
 
 
 def _import(ref: str):

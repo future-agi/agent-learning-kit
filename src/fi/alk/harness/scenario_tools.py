@@ -11,6 +11,7 @@ scenario that clears all three is written out as its own folder of runnable file
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -42,6 +43,7 @@ from .scenario import (
 )
 from .simulator import load_simulator_prompt
 from .tools import brief, schema
+from .usage import check_scenario_generation, record_generated_scenario
 from .world.snapshot import read_manifest, restore
 
 logger = logging.getLogger(__name__)
@@ -237,6 +239,7 @@ def accept_scenario(
         scenario = Scenario.model_validate(payload)
     except Exception as invalid:
         return _err(f"Not kept. {invalid}"[:600])
+    replaced = any(one.name == scenario.name for one in kept)
 
     # Read against the world this scenario actually runs in, so a setup that creates the table
     # a check reads is not reported as referring to something that does not exist.
@@ -277,7 +280,8 @@ def accept_scenario(
                 world.close()
         return _err(said)
 
-    replaced = any(one.name == scenario.name for one in kept)
+    if not replaced:
+        check_scenario_generation()
     kept[:] = [one for one in kept if one.name != scenario.name]
     kept.append(scenario)
     # A proved scenario is already valuable work. Persist it immediately so a stopped model,
@@ -289,6 +293,13 @@ def accept_scenario(
         # A writer sharing the destination cannot write folders, so the journal is where its proved
         # work survives the session that proved it.
         journal_scenario(scenario, world_root)
+    if not replaced:
+        record_generated_scenario(
+            scenario.scenario_key or scenario.name,
+            action_key=hashlib.sha256(
+                scenario.model_dump_json().encode("utf-8")
+            ).hexdigest(),
+        )
     # Say what the proof did not cover. On a lane where the target's tools have no endpoints, every
     # solution step is recorded without running, so "all three gates pass" is true and misleading:
     # the checks were exercised, the solution was not.

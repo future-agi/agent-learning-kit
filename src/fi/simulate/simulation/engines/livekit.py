@@ -2124,6 +2124,12 @@ class LiveKitEngine(BaseEngine):
                     and hasattr(customer_agent, "model_usage")
                     else []
                 ),
+                "simulator_funding": (
+                    "platform"
+                    if os.environ.get("ALK_SIMULATOR_FUNDING", "").strip().lower()
+                    == "platform"
+                    else "customer"
+                ),
             }
         )
         logger.info(

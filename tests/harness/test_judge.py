@@ -64,7 +64,8 @@ def _drive(monkeypatch, decision: dict, *, world=None, raises: bool = False):
 def test_a_judged_sub_goal_can_fail(monkeypatch):
     """The whole point: before this, every judged sub-goal passed before anything looked."""
     (held, why), _ = _drive(
-        monkeypatch, {"passed": False, "explanation": "contacts row 1 still has opted_out false"}
+        monkeypatch,
+        {"passed": False, "explanation": "contacts row 1 still has opted_out false"},
     )
     assert held is False
     assert "opted_out" in why
@@ -72,7 +73,8 @@ def test_a_judged_sub_goal_can_fail(monkeypatch):
 
 def test_a_judged_sub_goal_can_pass_with_its_explanation(monkeypatch):
     (held, why), _ = _drive(
-        monkeypatch, {"passed": True, "explanation": "contacts row 1 shows opted_out true"}
+        monkeypatch,
+        {"passed": True, "explanation": "contacts row 1 shows opted_out true"},
     )
     assert held is True
     assert why == "contacts row 1 shows opted_out true"
@@ -115,7 +117,9 @@ def test_a_verdict_with_no_explanation_is_refused(monkeypatch):
 
 
 def test_a_judge_that_raises_never_fails_the_agent(monkeypatch):
-    (held, why), _ = _drive(monkeypatch, {"passed": True, "explanation": "x"}, raises=True)
+    (held, why), _ = _drive(
+        monkeypatch, {"passed": True, "explanation": "x"}, raises=True
+    )
     assert held is None
     assert "could not run" in why
 
@@ -160,3 +164,42 @@ def test_the_judge_is_given_what_was_said_not_only_what_was_done():
     assert "user: one large fries" in rendered
     assert "your order is one large fries" in rendered
     assert len(rendered) <= judge_module._TRANSCRIPT_LIMIT + 8
+
+
+def test_completed_native_judge_reports_one_managed_evaluation(monkeypatch):
+    from fi.alk.harness.usage import configure_reporter
+
+    class Reporter:
+        def __init__(self):
+            self.checked = []
+            self.recorded = []
+
+        def check(self, action, **kwargs):
+            self.checked.append((action, kwargs))
+
+        def record(self, **kwargs):
+            self.recorded.append(kwargs)
+
+    reporter = Reporter()
+    monkeypatch.setenv("ALK_SIMULATOR_FUNDING", "platform")
+    monkeypatch.setenv(judge_module.JUDGE_MODEL_ALIAS, "gemini-2.5-pro")
+    configure_reporter(reporter)
+    try:
+        _drive(
+            monkeypatch,
+            {"passed": True, "explanation": "row seen"},
+        )
+    finally:
+        configure_reporter(None)
+
+    assert reporter.checked == [("managed_evaluation", {"model": "gemini-2.5-pro"})]
+    assert reporter.recorded == [
+        {
+            "action": "managed_evaluation",
+            "scenario_key": "removal_honoured",
+            "amount": 1,
+            "funding": "platform",
+            "model": "gemini-2.5-pro",
+            "record_key": "1:removal_honoured",
+        }
+    ]
