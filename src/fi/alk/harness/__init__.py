@@ -14,6 +14,13 @@ rather than a new code path.
 """
 
 from .chat import Conversation, open_conversation
+from .action_certification import (
+    ActionCertificationReport,
+    ActionProbeMode,
+    ActionProbePolicy,
+    ActionProbeStatus,
+    certify_actions,
+)
 from .bundle import EnvironmentBundle, load_bundle, seal_bundle
 from .environment_plan import EnvironmentPlan, load_environment_plan
 from .config import (
@@ -34,7 +41,14 @@ from .diagnostics import DiagnosticLocation, HarnessDiagnostic, RepairOwner
 from .job import ExecutionMode, HarnessJob, HarnessStage
 from .scenario import Scenario, validate_scenario
 from .session import Stage, Turn
-from .source_model import LogicalType, SourceModel
+from .source_model import (
+    LogicalType,
+    SourceAction,
+    SourceInterface,
+    SourceModel,
+    SourceProcess,
+)
+from .source_discovery import compose_source_models, discover_code_source_model
 from .sources import (
     AgentSource,
     GitHubSource,
@@ -51,6 +65,10 @@ from .world_ir import ValueState, WorldIR, WorldValue, validate_world_ir
 __all__ = [
     "AgentContract",
     "AgentSource",
+    "ActionCertificationReport",
+    "ActionProbeMode",
+    "ActionProbePolicy",
+    "ActionProbeStatus",
     "Conversation",
     "DEFAULT_MODEL",
     "DiagnosticLocation",
@@ -70,6 +88,9 @@ __all__ = [
     "Scenario",
     "SpecSource",
     "SourceModel",
+    "SourceAction",
+    "SourceInterface",
+    "SourceProcess",
     "Stage",
     "ToolSpec",
     "Turn",
@@ -77,6 +98,9 @@ __all__ = [
     "WorldIR",
     "WorldValue",
     "artifact_dir",
+    "compose_source_models",
+    "certify_actions",
+    "discover_code_source_model",
     "load_skill",
     "load_bundle",
     "load_environment_plan",

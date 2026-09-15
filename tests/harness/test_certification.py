@@ -96,7 +96,9 @@ def test_certificate_is_canonical_and_tamper_evident() -> None:
         HarnessCertification.model_validate(body)
 
 
-def test_execution_gate_accepts_only_matching_complete_certificate(tmp_path: Path) -> None:
+def test_execution_gate_accepts_only_matching_complete_certificate(
+    tmp_path: Path,
+) -> None:
     path = tmp_path / "runtime-validation.json"
     path.write_text(_certificate().model_dump_json(), encoding="utf-8")
 
@@ -149,6 +151,105 @@ def test_execution_gate_rejects_missing_and_incomplete_certificates(
         )
 
 
+@pytest.mark.parametrize(
+    "check",
+    (
+        "static",
+        "schema_and_seed",
+        "processes",
+        "source_invariants",
+        "reset_equivalence",
+        "world_isolation",
+    ),
+)
+def test_execution_gate_rejects_required_check_that_was_not_run(
+    tmp_path: Path, check: str
+) -> None:
+    certificate = _certificate()
+    incomplete = HarnessCertification.create(
+        status=CertificationStatus.CERTIFIED,
+        source=certificate.source,
+        authoring=certificate.authoring,
+        compiler=certificate.compiler,
+        runtime=certificate.runtime,
+        checks=certificate.checks.model_copy(update={check: CheckStatus.NOT_RUN}),
+        repairs=certificate.repairs,
+        limitations=certificate.limitations,
+    )
+    path = tmp_path / "runtime-validation.json"
+    path.write_text(incomplete.model_dump_json(), encoding="utf-8")
+
+    with pytest.raises(CertificationGateError, match=check):
+        verify_runtime_certification(
+            path,
+            bundle_digest=_digest("f"),
+            source_digest=_digest("a"),
+        )
+
+
+def test_execution_gate_accepts_explicit_non_applicable_state_checks(
+    tmp_path: Path,
+) -> None:
+    certificate = _certificate()
+    external = HarnessCertification.create(
+        status=CertificationStatus.CERTIFIED,
+        source=certificate.source,
+        authoring=certificate.authoring,
+        compiler=certificate.compiler,
+        runtime=certificate.runtime,
+        checks=certificate.checks.model_copy(
+            update={
+                "schema_and_seed": CheckStatus.NOT_APPLICABLE,
+                "source_invariants": CheckStatus.NOT_APPLICABLE,
+                "reset_equivalence": CheckStatus.NOT_APPLICABLE,
+                "world_isolation": CheckStatus.NOT_APPLICABLE,
+            }
+        ),
+        repairs=certificate.repairs,
+        limitations=("provider state is external to the harness",),
+    )
+
+    path = tmp_path / "runtime-validation.json"
+    path.write_text(external.model_dump_json(), encoding="utf-8")
+
+    assert (
+        verify_runtime_certification(
+            path,
+            bundle_digest=_digest("f"),
+            source_digest=_digest("a"),
+        ).fingerprint
+        == external.fingerprint
+    )
+
+
+def test_execution_gate_rejects_non_applicable_checks_without_limitation(
+    tmp_path: Path,
+) -> None:
+    certificate = _certificate()
+    incomplete = HarnessCertification.create(
+        status=CertificationStatus.CERTIFIED,
+        source=certificate.source,
+        authoring=certificate.authoring,
+        compiler=certificate.compiler,
+        runtime=certificate.runtime,
+        checks=certificate.checks.model_copy(
+            update={"schema_and_seed": CheckStatus.NOT_APPLICABLE}
+        ),
+        repairs=certificate.repairs,
+    )
+    path = tmp_path / "runtime-validation.json"
+    path.write_text(incomplete.model_dump_json(), encoding="utf-8")
+
+    with pytest.raises(
+        CertificationGateError, match="not_applicable_without_limitation"
+    ):
+        verify_runtime_certification(
+            path,
+            bundle_digest=_digest("f"),
+            source_digest=_digest("a"),
+        )
+
+
 def test_certified_status_cannot_hide_diagnostics() -> None:
     body = _certificate().model_dump(mode="python")
     body["diagnostics"] = [
@@ -177,6 +278,7 @@ def test_artifact_store_round_trips_and_uses_private_atomic_files(
     source = SourceModel.create(source_digest=_digest("a"), engine="postgres")
     world = WorldIR.create(source_model_fingerprint=source.fingerprint, tables=())
     store = GenericHarnessArtifactStore(tmp_path / "generic")
+    source_schema, world_schema = store.write_contract_schemas()
 
     source_path = store.write_source_model(source)
     world_path = store.write_world_ir(world)
@@ -185,6 +287,10 @@ def test_artifact_store_round_trips_and_uses_private_atomic_files(
     certificate_path = store.write_certification(_certificate())
 
     assert store.read_source_model() == source
+    assert json.loads(source_schema.read_text())["$defs"]["SourceTable"]
+    assert json.loads(world_schema.read_text())["$defs"]["WorldValue"]
+    assert stat.S_IMODE(source_schema.stat().st_mode) == 0o600
+    assert stat.S_IMODE(world_schema.stat().st_mode) == 0o600
     assert store.read_world_ir() == world
     assert store.read_repair_history() == _history()
     assert store.read_runtime_evidence() == _runtime_evidence()

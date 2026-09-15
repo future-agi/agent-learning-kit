@@ -20,6 +20,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import yaml
 
@@ -116,6 +117,99 @@ _COMPOSE_NAMES = (
     "docker-compose.yaml",
 )
 _IGNORED_ARTIFACT_PARTS = {".git", ".venv", "__pycache__", "node_modules"}
+_CERTIFIED_BUNDLE_DIRECTORY = "certified-bundle"
+
+
+def _reuse_certified_bundle(
+    *, source: Path, job: HarnessJob, authoring: Path, output: Path
+) -> EnvironmentBundleV2 | None:
+    """Publish the exact generic bundle that passed runtime validation.
+
+    The authoring and execution sandboxes are separate.  Recompiling between them creates a
+    time-of-check/time-of-use gap and can produce a different digest even when the submitted
+    source fingerprint is unchanged.  A frozen bundle is accepted only when its certificate,
+    source, contract, scenarios and canonical world still match the current job inputs.
+    """
+
+    artifact_root = authoring / "generic-harness"
+    frozen = artifact_root / _CERTIFIED_BUNDLE_DIRECTORY
+    certificate_path = authoring / "runtime-validation.json"
+    if not frozen.is_dir() or not certificate_path.is_file():
+        return None
+
+    from .authoring_runtime_validation import _artifact_digest
+    from .certification import (
+        CheckStatus,
+        GenericHarnessArtifactStore,
+        verify_runtime_certification,
+    )
+
+    manifest = load_bundle_v2(frozen)
+    source_digest = source_fingerprint(source)
+    certificate = verify_runtime_certification(
+        certificate_path,
+        bundle_digest=manifest.digest,
+        source_digest=source_digest,
+    )
+    store = GenericHarnessArtifactStore(artifact_root)
+    scenarios = authoring / "scenarios"
+    if not scenarios.is_dir():
+        scenarios = authoring / "scenario"
+    expected = {
+        "contract": _artifact_digest(authoring / "contract.json"),
+        "scenarios": _artifact_digest(scenarios),
+    }
+    actual = {
+        "contract": certificate.authoring.contract_hash,
+        "scenarios": certificate.authoring.scenario_set_hash,
+    }
+    # Hosted/black-box agents deliberately have no harness-owned source schema or world to
+    # compare. Runtime validation records those checks as not applicable and explains why in the
+    # certificate. Keep the tamper checks for every artifact that does exist, without comparing
+    # model-authored placeholder state to an intentionally synthetic external-state fingerprint.
+    if certificate.checks.source_invariants is not CheckStatus.NOT_APPLICABLE:
+        expected["world"] = store.read_world_ir().fingerprint
+        actual["world"] = certificate.authoring.world_ir_hash
+    if certificate.checks.schema_and_seed is not CheckStatus.NOT_APPLICABLE:
+        expected["source_schema"] = store.read_source_model().fingerprint
+        actual["source_schema"] = certificate.source.schema_hash
+    mismatched = sorted(name for name in expected if expected[name] != actual[name])
+    if mismatched:
+        raise BundleAuthorError(
+            "certified_bundle_inputs_changed: " + ", ".join(mismatched)
+        )
+    scenario_total = sum(
+        1 for path in (frozen / "scenarios").iterdir() if path.is_dir()
+    )
+    if scenario_total != job.scenario_count:
+        raise BundleAuthorError(
+            "certified_bundle_scenario_count_mismatch: "
+            f"expected {job.scenario_count}, found {scenario_total}"
+        )
+    preflight_bundle(
+        frozen,
+        manifest,
+        parallelism=job.runtime.parallelism,
+        secret_refs={
+            alias: reference.purpose
+            for alias, reference in job.agent.secret_refs.items()
+        },
+    )
+
+    temporary = Path(tempfile.mkdtemp(prefix=f".{output.name}.", dir=output.parent))
+    shutil.rmtree(temporary)
+    shutil.copytree(frozen, temporary)
+    if output.exists():
+        backup = output.with_name(output.name + ".previous")
+        if backup.exists():
+            shutil.rmtree(backup)
+        output.rename(backup)
+        temporary.rename(output)
+        shutil.rmtree(backup)
+    else:
+        temporary.rename(output)
+    shutil.copy2(certificate_path, output.parent / "runtime-validation.json")
+    return load_bundle_v2(output)
 
 
 def _sql_literal(value: Any) -> str:
@@ -693,11 +787,13 @@ def _generic_postgres_seed_artifacts(
     source: Path,
     contract: dict[str, Any],
     prefix: str,
+    allow_harness_owned_schema: bool = False,
 ) -> tuple[list[str], list[str], list[str]]:
     """Package source schema and semantic rows separately for runtime catalogue inspection."""
 
     source_schemas = _source_schema_paths(source, contract=contract)
-    world = authoring / "world.sqlite"
+    canonical_world = authoring / "generic-harness" / "world-ir.json"
+    legacy_world = authoring / "world.sqlite"
     data_store = contract.get("data_store")
     data_store = data_store if isinstance(data_store, dict) else {}
     store_kind = str(data_store.get("kind") or "").strip().lower()
@@ -714,13 +810,21 @@ def _generic_postgres_seed_artifacts(
             "local_state",
         )
     )
-    if not source_schemas and not embedded_store:
+    declared_tools = contract.get("tools")
+    explicitly_tool_free = isinstance(declared_tools, list) and not declared_tools
+    if (
+        not source_schemas
+        and not embedded_store
+        and not explicitly_tool_free
+        and not allow_harness_owned_schema
+    ):
         raise BundleAuthorError(
             "generic_pipeline_source_schema_required: no source-owned PostgreSQL schema found"
         )
-    if not world.is_file():
+    if not canonical_world.is_file() and not legacy_world.is_file():
         raise BundleAuthorError(
-            "generic_pipeline_world_ir_required: compatibility mode requires world.sqlite"
+            "generic_pipeline_world_ir_required: expected generic-harness/world-ir.json "
+            "or compatibility world.sqlite"
         )
     seed = staging / "seed"
     schema_path = seed / "source-schema.sql"
@@ -730,21 +834,40 @@ def _generic_postgres_seed_artifacts(
         )
     else:
         # A data-free/in-process source has no repository-owned database schema to adopt.
-        # Its authored world is harness-owned scenario state, so compile only that world's
-        # deterministic schema here; process_runtime imports the rows from world.sqlite.
+        # During the compatibility window SQLite may carry that harness-owned schema. Canonical
+        # World IR deliberately contains logical values only and cannot invent native DDL.
+        if not legacy_world.is_file():
+            raise BundleAuthorError(
+                "generic_pipeline_source_schema_required: canonical World IR requires "
+                "source-owned schema metadata"
+            )
         schema_sql = _sqlite_sql(
-            world,
+            legacy_world,
             contract_declarations=_contract_column_declarations(contract),
             include_rows=False,
         )
     schema_path.write_text(prefix + schema_sql, encoding="utf-8")
-    world_path = seed / "world.sqlite"
-    shutil.copy2(world, world_path)
+    if canonical_world.is_file():
+        world_path = seed / "world-ir.json"
+        shutil.copy2(canonical_world, world_path)
+        adopted_world = "generic-harness/world-ir.json"
+    else:
+        world_path = seed / "world.sqlite"
+        shutil.copy2(legacy_world, world_path)
+        adopted_world = "world.sqlite"
+    adopted_contracts: list[str] = []
+    contracts = staging / "contracts"
+    for name in ("source-model.schema.json", "world-ir.schema.json"):
+        schema = authoring / "generic-harness" / name
+        if schema.is_file():
+            contracts.mkdir(exist_ok=True)
+            shutil.copy2(schema, contracts / name)
+            adopted_contracts.append(f"generic-harness/{name}")
     adopted = [
         f"source/{path.relative_to(source.resolve()).as_posix()}"
         for path in source_schemas
-    ] + ["world.sqlite"]
-    return ["seed/source-schema.sql"], ["seed/world.sqlite"], adopted
+    ] + [adopted_world, *adopted_contracts]
+    return ["seed/source-schema.sql"], [f"seed/{world_path.name}"], adopted
 
 
 def _compose_path(source: Path) -> Path | None:
@@ -973,6 +1096,18 @@ def _dockerfile_run(root: Path) -> list[str] | None:
 _LIVEKIT_WORKER_SUBCOMMANDS = frozenset({"start", "dev", "connect", "console"})
 
 
+def _livekit_cli_fixed_health_port(command: list[str]) -> int | None:
+    """Describe LiveKit's production CLI port so the runtime can avoid contention.
+
+    ``start`` binds its health server to 8081 and does not expose a ``--port``
+    CLI option. Declaring that fixed port makes the existing port planner
+    safely degrade a multi-world sandbox to one world. ``dev`` already asks the
+    OS for an ephemeral port and needs no declaration.
+    """
+
+    return 8081 if "start" in command else None
+
+
 def _hands_off_to_livekit_cli(root: Path, entry: str) -> bool:
     """Whether the entry delegates to LiveKit's CLI. An agent that runs its own worker must not."""
     path = root / entry
@@ -1055,6 +1190,59 @@ def _tool_proxy_process() -> SourceProcess:
         user=ProcessUser.SVC_TOOLS,
         depends_on=["tools-api", "world-db"],
     )
+
+
+def _rewrite_managed_dependency_environment(
+    environment: dict[str, str],
+    *,
+    managed_services: set[str],
+    capabilities: dict[str, CapabilityV2],
+) -> dict[str, str]:
+    """Translate Compose service URLs to runtime-owned capability addresses.
+
+    Source containers normally address dependencies through Compose DNS names. Hosted Bundle V2
+    processes share a sandbox host instead, with ports allocated per world. The translation is
+    derived only from declared service/capability metadata; it does not know an agent, framework,
+    environment-variable name, or repository layout.
+    """
+
+    by_service = {
+        service: [
+            (slug, capability)
+            for slug, capability in capabilities.items()
+            if capability.service == ("world-db" if service == "postgres" else service)
+            and capability.configuration_name
+        ]
+        for service in managed_services
+    }
+    rewritten: dict[str, str] = {}
+    for name, value in environment.items():
+        parsed = urlsplit(value)
+        service = parsed.hostname or ""
+        candidates = by_service.get(service, [])
+        if parsed.scheme and candidates:
+            if len(candidates) != 1:
+                raise BundleAuthorError(
+                    f"managed_dependency_capability_ambiguous: {service}: "
+                    + ", ".join(slug for slug, _ in candidates)
+                )
+            _, capability = candidates[0]
+            replacement = f"{{{{{capability.configuration_name}}}}}"
+            if capability.protocol is CapabilityProtocol.REDIS:
+                # Redis DB selectors and query options are source semantics and remain valid on
+                # the harness-owned endpoint. PostgreSQL database names do not: the runtime must
+                # select its isolated wN database, already encoded in the capability address.
+                if parsed.path and parsed.path != "/":
+                    replacement += parsed.path
+                if parsed.query:
+                    replacement += "?" + parsed.query
+            rewritten[name] = replacement
+            continue
+        if value in managed_services:
+            rewritten[name] = f"{{{{HOST_{value}}}}}"
+            continue
+        rewritten[name] = value
+    return rewritten
 
 
 def resolve_environment_plan(
@@ -1200,14 +1388,17 @@ def resolve_environment_plan(
                 if isinstance(service.get("depends_on"), dict)
                 else list(service.get("depends_on") or [])
             )
+            environment = _rewrite_managed_dependency_environment(
+                environment,
+                managed_services=managed_names,
+                capabilities=capabilities,
+            )
+            depends = ["world-db" if item == "postgres" else item for item in depends]
             if service_name == "tools-api" and "postgres" in managed_names:
                 # The target DB is intentionally a distinct per-world logical DB on the same
                 # harness-owned Postgres engine. This preserves reset/isolation without another
                 # daemon per call.
-                environment["DATABASE_URL"] = "{{WORLD_DATABASE_URL}}"
-                depends = [
-                    "world-db" if item == "postgres" else item for item in depends
-                ]
+                environment.setdefault("DATABASE_URL", "{{WORLD_DATABASE_URL}}")
             if service_name == control_name and "tools-api" in source_services:
                 environment["TOOLS_API_URL"] = "{{TOOLS_API_URL}}"
             if is_livekit and service_name == control_name:
@@ -1225,7 +1416,12 @@ def resolve_environment_plan(
                 if (service_root / "agent" / "agent.py").is_file()
                 else "agent.py"
             )
-            port = 8080 if service_name in {"api", "tools-api"} else None
+            port = (
+                8080
+                if service_name in {"api", "tools-api"}
+                or (service_name == control_name and not is_livekit)
+                else None
+            )
             process = _plan_python(
                 root,
                 name=service_name,
@@ -1239,6 +1435,38 @@ def resolve_environment_plan(
                 livekit_download=is_livekit and service_name == control_name,
                 run_override=_dockerfile_run(service_root),
             )
+            # Compose commonly publishes a fixed host port for developer convenience while the
+            # application itself already accepts its listen port through an environment value.
+            # Keeping that published port as ``fixed_port`` unnecessarily collapses a generic
+            # runtime to one world and prevents the isolation canary from being exercised.  When
+            # the repository has an explicit, unambiguous port seam, bind each world to the
+            # provisioner's allocated port instead.  This is framework- and modality-neutral:
+            # services that truly hard-code their port retain the safe single-world fallback.
+            if port:
+                configurable_port_names = (
+                    "PORT",
+                    "HTTP_PORT",
+                    "SERVER_PORT",
+                    "UVICORN_PORT",
+                )
+                configured_port = next(
+                    (
+                        name
+                        for name in configurable_port_names
+                        if process.environment.get(name) == str(port)
+                    ),
+                    None,
+                )
+                if configured_port is not None:
+                    process = process.model_copy(
+                        update={
+                            "environment": {
+                                **process.environment,
+                                configured_port: f"{{{{PORT_{service_name}}}}}",
+                            },
+                            "fixed_port": None,
+                        }
+                    )
             if is_livekit and service_name == control_name:
                 # The LiveKit worker opens its HTTP health port before it has registered with
                 # the dispatch service.  Treating the port as readiness creates a race where a
@@ -1247,9 +1475,12 @@ def resolve_environment_plan(
                 # log is the first observable signal that it can actually accept the call.
                 process = process.model_copy(
                     update={
+                        "fixed_port": _livekit_cli_fixed_health_port(
+                            process.run_command
+                        ),
                         "started_check": StartedCheck(
                             log_marker="registered worker", timeout_seconds=180
-                        )
+                        ),
                     }
                 )
             processes.append(process)
@@ -1388,6 +1619,8 @@ def resolve_environment_plan(
                 set(process.run_command) & _LIVEKIT_WORKER_SUBCOMMANDS
             ):
                 update["run_command"] = [*process.run_command, "start"]
+            final_run_command = update.get("run_command", process.run_command)
+            update["fixed_port"] = _livekit_cli_fixed_health_port(final_run_command)
             process = process.model_copy(update=update)
         processes.append(process)
         if port:
@@ -1565,6 +1798,16 @@ def author_bundle_v2(
     source_root = Path(source).resolve()
     authoring_root = Path(authoring).resolve()
     output_root = Path(output).resolve()
+    output_root.parent.mkdir(parents=True, exist_ok=True)
+    if job.metadata.get("generic_harness_v1") is True:
+        certified = _reuse_certified_bundle(
+            source=source_root,
+            job=job,
+            authoring=authoring_root,
+            output=output_root,
+        )
+        if certified is not None:
+            return certified
     contract_modality: str | None = None
     contract_interface_kind: str | None = None
     contract_body: dict[str, Any] = {}
@@ -1680,6 +1923,12 @@ def author_bundle_v2(
                 source=source_root,
                 contract=contract_body,
                 prefix=prefix,
+                allow_harness_owned_schema=job.agent.mode
+                in {
+                    ProviderExecutionMode.CONNECT_ONLY,
+                    ProviderExecutionMode.ENVIRONMENT_BACKED,
+                    ProviderExecutionMode.PROVIDER_IMPORT,
+                },
             )
         else:
             seed_path = seed_dir / "world.sql"
@@ -1803,7 +2052,7 @@ def author_bundle_v2(
                 + adopted_chat_files,
                 generated_files=["manifest.json"]
                 + (
-                    ["seed/source-schema.sql", "seed/world.sqlite"]
+                    [*migrations, *seed_files]
                     if generic_pipeline
                     else ["seed/world.sql"]
                 ),

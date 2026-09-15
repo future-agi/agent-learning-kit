@@ -139,6 +139,16 @@ def test_absent_null_and_present_serialize_distinctly() -> None:
     assert len({value.model_dump_json() for value in values}) == 3
 
 
+def test_present_json_null_is_distinct_from_database_null() -> None:
+    present_json_null = WorldValue.present(LogicalType.JSON, None)
+    database_null = WorldValue.null(LogicalType.JSON)
+
+    assert present_json_null.state is ValueState.PRESENT
+    assert present_json_null.value is None
+    assert database_null.state is ValueState.NULL
+    assert present_json_null != database_null
+
+
 def test_valid_world_matches_source_model() -> None:
     source = _source()
     world = _valid_world(source)
@@ -278,3 +288,95 @@ def test_validation_rejects_foreign_key_when_target_table_is_omitted() -> None:
         validate_world_ir(world, source)
 
     assert [issue.code for issue in caught.value.issues] == ["foreign_key_missing"]
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        [[1, 2], [3, 4]],
+        [[[1], [2]], [[3], [4]]],
+        [[], []],
+        [],
+    ),
+)
+def test_multidimensional_arrays_preserve_rectangular_scalar_shape(value) -> None:
+    source = SourceModel.create(
+        source_digest=SOURCE_DIGEST,
+        engine="postgres",
+        tables=(
+            SourceTable(
+                name="matrices",
+                columns=(
+                    _column("id", LogicalType.INTEGER),
+                    _column(
+                        "value",
+                        LogicalType.ARRAY,
+                        element_type=LogicalType.INTEGER,
+                    ),
+                ),
+                primary_key=("id",),
+            ),
+        ),
+    )
+    world = WorldIR.create(
+        source_model_fingerprint=source.fingerprint,
+        tables=(
+            WorldTable(
+                source_name="matrices",
+                rows=(
+                    WorldRow(
+                        identity="matrix-1",
+                        values={
+                            "id": WorldValue.present(LogicalType.INTEGER, 1),
+                            "value": WorldValue.present(LogicalType.ARRAY, value),
+                        },
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    validate_world_ir(world, source)
+
+
+@pytest.mark.parametrize("value", ([[1], [2, 3]], [[1], ["wrong"]], [1, [2]]))
+def test_multidimensional_arrays_reject_ragged_or_mixed_shape(value) -> None:
+    source = SourceModel.create(
+        source_digest=SOURCE_DIGEST,
+        engine="postgres",
+        tables=(
+            SourceTable(
+                name="matrices",
+                columns=(
+                    _column("id", LogicalType.INTEGER),
+                    _column(
+                        "value",
+                        LogicalType.ARRAY,
+                        element_type=LogicalType.INTEGER,
+                    ),
+                ),
+                primary_key=("id",),
+            ),
+        ),
+    )
+    world = WorldIR.create(
+        source_model_fingerprint=source.fingerprint,
+        tables=(
+            WorldTable(
+                source_name="matrices",
+                rows=(
+                    WorldRow(
+                        identity="matrix-1",
+                        values={
+                            "id": WorldValue.present(LogicalType.INTEGER, 1),
+                            "value": WorldValue.present(LogicalType.ARRAY, value),
+                        },
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    with pytest.raises(WorldIRValidationError) as caught:
+        validate_world_ir(world, source)
+    assert [issue.code for issue in caught.value.issues] == ["array_shape_mismatch"]

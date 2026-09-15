@@ -3129,6 +3129,44 @@ def test_apply_seed_file_imports_sqlite_world_without_psql(
     ]
 
 
+def test_apply_seed_file_compiles_canonical_world_ir_without_psql(
+    tmp_path: Path, monkeypatch
+) -> None:
+    world = tmp_path / "seed" / "world-ir.json"
+    world.parent.mkdir()
+    world.write_text("{}", encoding="utf-8")
+    credentials = pr.EngineCredentials(username="harness", password="pw")
+    calls: list[dict[str, Any]] = []
+
+    def apply_world(file: Path, **kwargs: Any) -> None:
+        calls.append({"file": file, **kwargs})
+
+    monkeypatch.setattr(pr, "apply_postgres_world_ir", apply_world)
+
+    pr.apply_seed_file(
+        pr.ManagedEngine.POSTGRES,
+        world,
+        port=14000,
+        dbname="baseline",
+        credentials=credentials,
+        process_name="postgres",
+        sync_run=lambda *_args, **_kwargs: pytest.fail(
+            "canonical World IR must not be passed to psql"
+        ),
+        source_digest="sha256:" + "a" * 64,
+    )
+
+    assert calls == [
+        {
+            "file": world,
+            "port": 14000,
+            "dbname": "baseline",
+            "credentials": credentials,
+            "source_digest": "sha256:" + "a" * 64,
+        }
+    ]
+
+
 def test_typed_postgres_seed_persists_the_accepted_source_and_world(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -4998,6 +5036,67 @@ def test_environment_backed_provider_is_created_exposed_and_destroyed(
 
     asyncio.run(provider.close(work_directory=tmp_path))
     assert lifecycle_calls == ["provision", "destroy"]
+
+
+def test_provider_provision_failure_surfaces_redacted_provider_output(
+    tmp_path: Path,
+) -> None:
+    def lifecycle_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        if argv[-1] != "provision":
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        secret = kwargs["env"]["VAPI_API_KEY"]
+        return subprocess.CompletedProcess(
+            argv,
+            1,
+            stdout="",
+            stderr=f"provider rejected assistant definition using {secret}",
+        )
+
+    manifest = _manifest(
+        lambda body: {
+            **body,
+            "metadata": {
+                "provider_lifecycle": {
+                    "type": "vapi",
+                    "scope": "world",
+                    "process": "agent",
+                    "public_capability": "tools",
+                    "provision": {"command": ["python", "provider.py", "provision"]},
+                    "destroy": {"command": ["python", "provider.py", "destroy"]},
+                    "required_secrets": ["VAPI_API_KEY"],
+                }
+            },
+        }
+    )
+    source, bundle_dir = _provision_dirs(tmp_path)
+    (source / "provider.py").write_text("# lifecycle", encoding="utf-8")
+    secrets_path = tmp_path / "secrets.json"
+    secrets_path.write_text(
+        json.dumps({"VAPI_API_KEY": "test-secret-value"}), encoding="utf-8"
+    )
+    provider = _sql_spy_provider(
+        secrets_path=secrets_path,
+        secret_purpose_map={"VAPI_API_KEY": "target_provider"},
+        sync_run=lifecycle_run,
+        public_url_resolver=lambda port, _ttl: f"https://signed.example/{port}",
+    )
+
+    with pytest.raises(pr.ProcessRuntimeError) as exc_info:
+        asyncio.run(
+            provider.provision(
+                manifest,
+                source=source,
+                bundle_dir=bundle_dir,
+                work_directory=tmp_path,
+                instances=1,
+                require_declared_user=False,
+            )
+        )
+
+    message = str(exc_info.value)
+    assert "provider rejected assistant definition" in message
+    assert "[REDACTED]" in message
+    assert "test-secret-value" not in message
 
 
 def test_provider_import_is_cloned_after_readiness_and_destroyed_from_receipt(

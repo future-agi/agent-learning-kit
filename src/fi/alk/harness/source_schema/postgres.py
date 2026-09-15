@@ -129,7 +129,10 @@ _STRING_TYPES = {
 }
 _INTEGER_TYPES = {"int2", "int4", "int8", "oid"}
 _NUMBER_TYPES = {"decimal", "float4", "float8", "money", "numeric"}
-_TIMESTAMP_TYPES = {"time", "timetz", "timestamp", "timestamptz"}
+# World IR deliberately models an absolute timestamp, not a time-of-day.  PostgreSQL's
+# ``time``/``timetz`` types therefore remain explicit unsupported constructs until a portable
+# time-only logical type exists.  Likewise, BINARY is byte-oriented and must not claim bit strings.
+_TIMESTAMP_TYPES = {"timestamp", "timestamptz"}
 
 
 def _execute_rows(
@@ -161,7 +164,7 @@ def _logical_scalar(udt_name: str) -> LogicalType | None:
         return LogicalType.DATE
     if normalized in {"json", "jsonb"}:
         return LogicalType.JSON
-    if normalized in {"bytea", "bit", "varbit"}:
+    if normalized == "bytea":
         return LogicalType.BINARY
     return None
 

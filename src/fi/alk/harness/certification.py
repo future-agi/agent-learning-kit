@@ -17,8 +17,11 @@ from .repair_controller import RepairHistory
 from .source_model import SourceModel
 from .world_ir import WorldIR
 from .tool_certification import ToolCertificationReport
+from .action_certification import ActionCertificationReport
+from .repair_patch import WorldIRRepairPatch
+from .scenario_repair import ScenarioRepairReceipt
 
-HARNESS_CERTIFICATION_SCHEMA_VERSION = "futureagi.harness-certification.v1"
+HARNESS_CERTIFICATION_SCHEMA_VERSION = "futureagi.harness-certification.v2"
 
 
 class CertificationStatus(str, Enum):
@@ -30,6 +33,7 @@ class CheckStatus(str, Enum):
     PASSED = "passed"
     FAILED = "failed"
     NOT_RUN = "not_run"
+    NOT_APPLICABLE = "not_applicable"
 
 
 class CertificationSource(BaseModel):
@@ -72,6 +76,7 @@ class CertificationChecks(BaseModel):
     source_invariants: CheckStatus = CheckStatus.NOT_RUN
     scenario_setup_ready: str = "0/0"
     tool_contract: str = "0/0"
+    action_behavior: str = "0/0"
     reset_equivalence: CheckStatus = CheckStatus.NOT_RUN
     world_isolation: CheckStatus = CheckStatus.NOT_RUN
 
@@ -206,14 +211,36 @@ def verify_runtime_certification(
             "certification_mismatch",
             "certification source digest does not match the execution source",
         )
+    # Every Level 1-3 prerequisite is fail-closed.  A validator may record PASSED for a
+    # capability that is vacuously satisfied (for example schema_and_seed on a data-free
+    # agent), but it may not dispatch while the check is merely NOT_RUN.
     required = {
         "static": certificate.checks.static,
         "processes": certificate.checks.processes,
     }
-    failed = sorted(name for name, value in required.items() if value is not CheckStatus.PASSED)
+    required_or_not_applicable = {
+        "schema_and_seed": certificate.checks.schema_and_seed,
+        "source_invariants": certificate.checks.source_invariants,
+        "reset_equivalence": certificate.checks.reset_equivalence,
+        "world_isolation": certificate.checks.world_isolation,
+    }
+    failed = sorted(
+        name for name, value in required.items() if value is not CheckStatus.PASSED
+    )
+    failed.extend(
+        name
+        for name, value in required_or_not_applicable.items()
+        if value not in {CheckStatus.PASSED, CheckStatus.NOT_APPLICABLE}
+    )
+    if (
+        CheckStatus.NOT_APPLICABLE in required_or_not_applicable.values()
+        and not certificate.limitations
+    ):
+        failed.append("not_applicable_without_limitation")
     for name, ratio in (
         ("scenario_setup_ready", certificate.checks.scenario_setup_ready),
         ("tool_contract", certificate.checks.tool_contract),
+        ("action_behavior", certificate.checks.action_behavior),
     ):
         try:
             accepted, total = (int(value) for value in ratio.split("/", 1))
@@ -260,22 +287,37 @@ class GenericHarnessArtifactStore:
     """Atomic readers/writers for resumable generic-harness state."""
 
     SOURCE_MODEL = "source-model.json"
+    SOURCE_MODEL_SCHEMA = "source-model.schema.json"
     WORLD_IR = "world-ir.json"
+    WORLD_IR_SCHEMA = "world-ir.schema.json"
     REPAIR_HISTORY = "repair-history.json"
     RUNTIME_EVIDENCE = "runtime-evidence.json"
     CERTIFICATION = "certification.json"
     TOOL_CERTIFICATION = "tool-certification.json"
+    ACTION_CERTIFICATION = "action-certification.json"
 
     def __init__(self, root: Path) -> None:
         self.root = root
 
     def _write(self, name: str, value: BaseModel) -> Path:
+        return self._write_json(name, value.model_dump(mode="json"))
+
+    def _write_json(self, name: str, value: object) -> Path:
+        """Atomically persist a non-secret canonical JSON artifact."""
+
         self.root.mkdir(parents=True, exist_ok=True)
         descriptor, temporary_name = tempfile.mkstemp(prefix=f".{name}.", dir=self.root)
         temporary = Path(temporary_name)
         try:
             with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-                handle.write(value.model_dump_json(indent=2))
+                json.dump(
+                    value,
+                    handle,
+                    sort_keys=True,
+                    indent=2,
+                    ensure_ascii=False,
+                    allow_nan=False,
+                )
                 handle.write("\n")
                 handle.flush()
                 os.fsync(handle.fileno())
@@ -294,8 +336,34 @@ class GenericHarnessArtifactStore:
     def write_source_model(self, value: SourceModel) -> Path:
         return self._write(self.SOURCE_MODEL, value)
 
+    def write_contract_schemas(self) -> tuple[Path, Path]:
+        """Publish the versioned semantic contracts beside authored artifacts."""
+
+        return (
+            self._write_json(self.SOURCE_MODEL_SCHEMA, SourceModel.model_json_schema()),
+            self._write_json(self.WORLD_IR_SCHEMA, WorldIR.model_json_schema()),
+        )
+
     def read_source_model(self) -> SourceModel:
         return self._read(self.SOURCE_MODEL, SourceModel)
+
+    def write_action_certification(self, value: ActionCertificationReport) -> Path:
+        return self._write(self.ACTION_CERTIFICATION, value)
+
+    def read_action_certification(self) -> ActionCertificationReport:
+        return self._read(self.ACTION_CERTIFICATION, ActionCertificationReport)
+
+    def write_repair_patch(self, value: WorldIRRepairPatch, *, sequence: int) -> Path:
+        if sequence < 1:
+            raise ValueError("repair_patch_sequence_invalid")
+        return self._write(f"repair-patch-{sequence:04d}.json", value)
+
+    def write_scenario_repair(
+        self, value: ScenarioRepairReceipt, *, sequence: int
+    ) -> Path:
+        if sequence < 1:
+            raise ValueError("scenario_repair_sequence_invalid")
+        return self._write(f"scenario-repair-{sequence:04d}.json", value)
 
     def write_world_ir(self, value: WorldIR) -> Path:
         return self._write(self.WORLD_IR, value)

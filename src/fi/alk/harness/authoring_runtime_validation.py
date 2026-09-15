@@ -12,6 +12,8 @@ import hashlib
 import json
 import os
 import random
+import re
+import shutil
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -44,6 +46,21 @@ def _runtime_snapshot(job) -> str | None:
     return os.environ.get("ALK_DAYTONA_SNAPSHOT") or None
 
 
+def _world_isolation_status(build_output: dict):
+    """Classify the isolation proof at the runtime's enforced parallelism."""
+
+    from .certification import CheckStatus
+
+    if build_output.get("conformance") is True:
+        return CheckStatus.PASSED
+    if (
+        build_output.get("degrade_reason") == "fixed_port"
+        and build_output.get("effective_parallelism") == 1
+    ):
+        return CheckStatus.NOT_APPLICABLE
+    return CheckStatus.NOT_RUN
+
+
 def _write_runtime_evidence(
     *,
     job,
@@ -52,6 +69,7 @@ def _write_runtime_evidence(
     count: int,
     external_provider: bool,
     tool_report,
+    action_report,
     reset_equivalence,
     world_isolation,
 ) -> None:
@@ -63,7 +81,6 @@ def _write_runtime_evidence(
         GenericHarnessArtifactStore,
         RuntimeValidationEvidence,
     )
-    from .compile.postgres import POSTGRES_COMPILER_VERSION
 
     store = GenericHarnessArtifactStore(authoring / "generic-harness")
     limitations = [
@@ -73,8 +90,8 @@ def _write_runtime_evidence(
         source_schema_hash = manifest.provenance.source_digest
         world_ir_hash = _artifact_digest(Path("__external_provider_world__"))
         compiler_version = "external-provider-black-box"
-        schema_and_seed = CheckStatus.NOT_RUN
-        source_invariants = CheckStatus.NOT_RUN
+        schema_and_seed = CheckStatus.NOT_APPLICABLE
+        source_invariants = CheckStatus.NOT_APPLICABLE
         limitations.append(
             "external provider state and tool implementations were not available for local inspection"
         )
@@ -83,12 +100,29 @@ def _write_runtime_evidence(
         world_ir = store.read_world_ir()
         source_schema_hash = source_model.fingerprint
         world_ir_hash = world_ir.fingerprint
-        compiler_version = POSTGRES_COMPILER_VERSION
+        from .generic_pipeline import default_compiler_registry
+
+        compiler_version = (
+            default_compiler_registry().resolve(source_model.engine).version
+        )
         schema_and_seed = CheckStatus.PASSED
         source_invariants = CheckStatus.PASSED
     if world_isolation is CheckStatus.NOT_RUN:
         limitations.append(
             "concurrent world isolation was not applicable or runtime parallelism was safely degraded"
+        )
+    elif world_isolation is CheckStatus.NOT_APPLICABLE and not external_provider:
+        limitations.append(
+            "concurrent world isolation is not applicable because a fixed-port runtime is "
+            "enforced at single-world parallelism; reset equivalence remains certified"
+        )
+    if action_report.executable != action_report.total:
+        limitations.append(
+            f"{action_report.total - action_report.executable} actions require runtime or an external sandbox probe"
+        )
+    if action_report.certified != action_report.executable:
+        limitations.append(
+            f"{action_report.executable - action_report.certified} safe action probes failed at the runtime boundary"
         )
 
     contract = authoring / "contract.json"
@@ -112,6 +146,7 @@ def _write_runtime_evidence(
             tool_contract=(
                 f"{tool_report.certified_or_runtime_only}/{tool_report.total}"
             ),
+            action_behavior=f"{action_report.certified}/{action_report.executable}",
             reset_equivalence=reset_equivalence,
             world_isolation=world_isolation,
         ),
@@ -119,6 +154,7 @@ def _write_runtime_evidence(
     )
     store.write_runtime_evidence(evidence)
     store.write_tool_certification(tool_report)
+    store.write_action_certification(action_report)
 
 
 def _world_state_digest(world) -> str:
@@ -146,6 +182,14 @@ def _world_state_digest(world) -> str:
         default=str,
     ).encode("utf-8")
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def _freeze_certified_bundle(bundle: Path, authoring: Path) -> None:
+    """Persist the exact bundle bytes exercised by runtime validation."""
+
+    certified_bundle = authoring / "generic-harness" / "certified-bundle"
+    shutil.rmtree(certified_bundle, ignore_errors=True)
+    shutil.copytree(bundle, certified_bundle)
 
 
 def _write_generic_certificate(job, authoring: Path, repairs) -> None:
@@ -200,10 +244,12 @@ def _generic_candidate_hash(source: Path, authoring: Path) -> str:
     digest.update(source_fingerprint(source).encode("ascii"))
     for path in sorted(item for item in authoring.rglob("*") if item.is_file()):
         relative = path.relative_to(authoring).as_posix()
-        if (
-            relative.startswith("generic-harness/")
-            or relative == "runtime-validation.json"
-        ):
+        if relative == "runtime-validation.json":
+            continue
+        if relative.startswith("generic-harness/") and relative not in {
+            "generic-harness/source-model.json",
+            "generic-harness/world-ir.json",
+        }:
             continue
         digest.update(f"authoring/{relative}\n".encode("utf-8"))
         digest.update(path.read_bytes())
@@ -214,7 +260,40 @@ def _fallback_diagnostic(error):
     from .diagnostics import HarnessDiagnostic
     from .job import HarnessStage
 
-    if error.phase == "scenarios":
+    detail = str(error)
+    normalized = detail.casefold()
+    provider_lifecycle_failure = "provider_lifecycle/" in normalized
+    if (
+        provider_lifecycle_failure
+        and "http error 408" not in normalized
+        and "http error 429" not in normalized
+        and re.search(r"http error 4\d\d\b", normalized)
+    ):
+        # A lifecycle command is submitted source. A definitive external 4xx means
+        # that source/config/credential was rejected; changing generated world data
+        # cannot make it valid. Keep 408 and 429 in the transient bucket below.
+        code = "external_service_request_rejected"
+        stage = HarnessStage.CONNECTING_AGENT
+    elif provider_lifecycle_failure and (
+        re.search(r"http error 5\d\d\b", normalized)
+        or "http error 408" in normalized
+        or "http error 429" in normalized
+        or any(
+            marker in normalized
+            for marker in (
+                "clientconnectordnserror",
+                "name resolution",
+                "temporary failure in name resolution",
+                "connection reset",
+                "connection refused",
+                "timed out",
+                "timeout",
+            )
+        )
+    ):
+        code = "external_service_unavailable"
+        stage = HarnessStage.CONNECTING_AGENT
+    elif error.phase == "scenarios":
         code = "ready_condition_invalid"
         stage = HarnessStage.VALIDATING_SCENARIOS
     elif error.phase == "infrastructure":
@@ -231,11 +310,72 @@ def _fallback_diagnostic(error):
     )
 
 
+def _repair_guidance(diagnostics) -> str:
+    """Render the complete secret-safe evidence needed for one constrained repair."""
+
+    rendered = []
+    for item in sorted(
+        diagnostics, key=lambda diagnostic: (diagnostic.code, diagnostic.component)
+    ):
+        location = (
+            item.location.model_dump(mode="json", exclude_none=True)
+            if item.location is not None
+            else None
+        )
+        parts = [f"{item.code}@{item.component}"]
+        if item.repair_strategy:
+            parts.append(f"strategy={item.repair_strategy}")
+        if location:
+            parts.append(
+                "location="
+                + json.dumps(location, sort_keys=True, separators=(",", ":"))
+            )
+        # HarnessDiagnostic.create already redacts this value. Keep the model input
+        # bounded as a second line of defence against oversized provider traces.
+        parts.append(f"evidence={item.redacted_message[:4000]}")
+        rendered.append(" | ".join(parts))
+    return "\n".join(rendered)[:12000]
+
+
 class RuntimeValidationError(RuntimeError):
     def __init__(self, phase: str, detail: str, *, diagnostics=()):
         self.phase = phase
         self.diagnostics = tuple(diagnostics)
         super().__init__(detail)
+
+
+class _GeneratedWorldActionAdapter:
+    """Expose the generated world through the generic action-probe boundary."""
+
+    def __init__(self, world) -> None:
+        self.world = world
+        self.baseline = world.checkpoint()
+
+    def invoke(self, action, arguments):
+        from .action_certification import ActionInvocation
+        from .world.handle import WorldUnavailable
+
+        try:
+            call = self.world.call(action.name, arguments)
+        except WorldUnavailable as exc:
+            # A source-owned callable that is reachable only through the running agent is not
+            # an executable action at this validation boundary.  Reporting NOT_RUN keeps the
+            # evidence honest; treating the absent direct adapter as a broken customer action
+            # made every repository-hosted tool fail before scenarios could exercise it.
+            return ActionInvocation(not_run=True, error=str(exc))
+        return ActionInvocation(
+            result=call.result,
+            refused=bool(call.refused),
+            error=(call.error or "action execution failed")
+            if not call.ok and not call.refused
+            else None,
+        )
+
+    def checkpoint(self) -> str:
+        return _world_state_digest(self.world)
+
+    def reset(self) -> None:
+        self.world.revert(self.baseline)
 
 
 async def validate_once(
@@ -274,6 +414,10 @@ async def validate_once(
         from .certification import CheckStatus, GenericHarnessArtifactStore
 
         artifact_root = authoring / "generic-harness"
+        # A prior certified bundle is an output of validation, never an input to a fresh
+        # validation attempt.  Remove it before compiling so repairs cannot accidentally
+        # validate yesterday's environment.
+        shutil.rmtree(artifact_root / "certified-bundle", ignore_errors=True)
         (artifact_root / GenericHarnessArtifactStore.RUNTIME_EVIDENCE).unlink(
             missing_ok=True
         )
@@ -336,8 +480,11 @@ async def validate_once(
                 instances=validation_parallelism,
             )
             tool_report = None
+            action_report = None
             world_isolation = None
             if generic:
+                from .action_certification import certify_actions
+
                 contract = AgentContract.model_validate_json(
                     (authoring / "contract.json").read_text(encoding="utf-8")
                 )
@@ -369,6 +516,10 @@ async def validate_once(
                         + ", ".join(sorted(rejected_tools)),
                         diagnostics=diagnostics,
                     )
+                source_model = GenericHarnessArtifactStore(
+                    authoring / "generic-harness"
+                ).read_source_model()
+                action_report = certify_actions(source_model.actions, adapter=None)
                 build_output = json.loads(
                     (work / "artifacts" / "build.json").read_text(encoding="utf-8")
                 )
@@ -381,9 +532,12 @@ async def validate_once(
                             build_output.get("conformance_reason") or "unknown reason"
                         ),
                     )
-                world_isolation = (
-                    CheckStatus.PASSED if conformance is True else CheckStatus.NOT_RUN
-                )
+                # A source process that genuinely hard-codes its listen port cannot coexist with
+                # a second copy in the same network namespace. The process provider enforces that
+                # physical constraint by returning exactly one world. There is no concurrent
+                # boundary to certify at that supported parallelism; clean lifecycle reuse is
+                # still proved independently by reset_equivalence.
+                world_isolation = _world_isolation_status(build_output)
             factory = ProcessWorldFactory(work)
             runtime = runtimes[0]
             phase = "scenarios"
@@ -468,9 +622,11 @@ async def validate_once(
                         count=len(scenarios),
                         external_provider=True,
                         tool_report=tool_report,
-                        reset_equivalence=CheckStatus.NOT_RUN,
-                        world_isolation=CheckStatus.NOT_RUN,
+                        action_report=action_report,
+                        reset_equivalence=CheckStatus.NOT_APPLICABLE,
+                        world_isolation=CheckStatus.NOT_APPLICABLE,
                     )
+                    _freeze_certified_bundle(bundle, authoring)
                 return len(scenarios)
             phase = "environment"
             await provider.reset(runtime, work_directory=work)
@@ -483,6 +639,49 @@ async def validate_once(
             await provider.reset(runtime, work_directory=work)
             baseline = await factory.create(runtime, rng=random.Random(job.seed or 0))
             await check_invariants(baseline.read_only(), invariants)
+            if generic:
+                from .action_certification import certify_actions
+
+                source_model = GenericHarnessArtifactStore(
+                    authoring / "generic-harness"
+                ).read_source_model()
+                action_report = certify_actions(
+                    source_model.actions,
+                    adapter=_GeneratedWorldActionAdapter(baseline),
+                )
+                GenericHarnessArtifactStore(
+                    authoring / "generic-harness"
+                ).write_action_certification(action_report)
+                from .action_certification import ActionProbeStatus
+                from .diagnostics import DiagnosticLocation, HarnessDiagnostic
+                from .job import HarnessStage
+
+                failed_actions = [
+                    item
+                    for item in action_report.actions
+                    if item.status is ActionProbeStatus.FAILED
+                ]
+                if failed_actions:
+                    raise RuntimeValidationError(
+                        "environment",
+                        "Action behavior certification failed: "
+                        + ", ".join(item.action for item in failed_actions),
+                        diagnostics=tuple(
+                            HarnessDiagnostic.create(
+                                stage=HarnessStage.VALIDATING_ENVIRONMENT,
+                                component="action_behavior",
+                                code="action_probe_failed",
+                                message=f"{item.action}: {item.reason}",
+                                location=DiagnosticLocation(tool=item.action),
+                            )
+                            for item in failed_actions
+                        ),
+                    )
+                # Probes may mutate the disposable world. Restore before scenario checks.
+                await provider.reset(runtime, work_directory=work)
+                baseline = await factory.create(
+                    runtime, rng=random.Random(job.seed or 0)
+                )
             phase = "scenarios"
             if invariants:
                 await check_setups(invariants)
@@ -506,9 +705,16 @@ async def validate_once(
                     count=len(scenarios),
                     external_provider=False,
                     tool_report=tool_report,
+                    action_report=action_report,
                     reset_equivalence=CheckStatus.PASSED,
                     world_isolation=world_isolation,
                 )
+                # Freeze the exact bytes that passed the real runtime checks.  Recompiling from
+                # the authoring archive in the execution sandbox can otherwise drift on inputs
+                # that are deliberately outside the source fingerprint (generated build/cache
+                # artifacts are one example).  The consumer re-verifies the certificate and all
+                # authoring fingerprints before accepting this directory.
+                _freeze_certified_bundle(bundle, authoring)
             return len(scenarios)
         except RuntimeValidationError as exc:
             raise RuntimeValidationError(
@@ -545,12 +751,35 @@ async def validate_and_repair(
     sleeper=asyncio.sleep,
 ) -> None:
     """Two repairs per phase; environment repairs cannot exhaust setup's budget."""
+    generic = bool(
+        job is not None
+        and isinstance(getattr(job, "metadata", None), dict)
+        and job.metadata.get("generic_harness_v1") is True
+    )
     if repair is None:
 
         async def repair(phase, guidance):
             from .cli import _build, _scenarios
 
             if phase == "environment":
+                artifact_root = authoring / "generic-harness"
+                if generic and all(
+                    (artifact_root / name).is_file()
+                    for name in ("source-model.json", "world-ir.json")
+                ):
+                    from .certification import GenericHarnessArtifactStore
+                    from .repair_authoring import request_world_ir_patch
+
+                    store = GenericHarnessArtifactStore(artifact_root)
+                    # Diagnostics are already included in guidance, but the constrained author
+                    # consumes their typed form. The closure is called only by the generic loop,
+                    # which replaces this placeholder through `_active_repair_diagnostics`.
+                    return await request_world_ir_patch(
+                        source,
+                        store.read_source_model(),
+                        store.read_world_ir(),
+                        _active_repair_diagnostics,
+                    )
                 return await _build(
                     argparse.Namespace(
                         name=source.name,
@@ -575,11 +804,7 @@ async def validate_and_repair(
                 )
             )
 
-    generic = bool(
-        job is not None
-        and isinstance(getattr(job, "metadata", None), dict)
-        and job.metadata.get("generic_harness_v1") is True
-    )
+    _active_repair_diagnostics = ()
     if generic:
         from .certification import GenericHarnessArtifactStore
         from .repair_controller import (
@@ -598,6 +823,14 @@ async def validate_and_repair(
                 count = await validate(job, source, authoring)
             except RuntimeValidationError as exc:
                 diagnostics = exc.diagnostics or (_fallback_diagnostic(exc),)
+                # The repair history deliberately fingerprints diagnostics without persisting
+                # their potentially high-cardinality text. Keep the redacted evidence visible in
+                # the guest log as well, otherwise a bounded repair can appear to hang while the
+                # actionable cause is available only inside the model session.
+                print(
+                    f"runtime validation: {exc.phase}: {exc}",
+                    flush=True,
+                )
                 phase = (
                     RepairPhase.SCENARIOS
                     if exc.phase == "scenarios"
@@ -640,12 +873,61 @@ async def validate_and_repair(
                 guidance = (
                     "Apply one constrained repair using submitted source evidence only. "
                     "Do not modify source, disable constraints, weaken checks, drop scenarios, "
-                    "or invent services/tools. Resolve this complete diagnostic set: "
-                    + ", ".join(
-                        sorted(f"{item.code}@{item.component}" for item in diagnostics)
-                    )
+                    "or invent services/tools. Resolve this complete, redacted diagnostic set:\n"
+                    + _repair_guidance(diagnostics)
                 )
-                status = await repair(repair_phase, guidance)
+                _active_repair_diagnostics = diagnostics
+                scenarios_before = None
+                if repair_phase == "scenarios":
+                    from .scenario_tools import load_scenarios
+
+                    scenarios_before = load_scenarios(authoring)
+                repair_result = await repair(repair_phase, guidance)
+                if repair_phase == "environment":
+                    from .repair_patch import (
+                        WorldIRRepairPatch,
+                        apply_world_ir_repair_patch,
+                    )
+
+                    if isinstance(repair_result, WorldIRRepairPatch):
+                        source_model = artifacts.read_source_model()
+                        world_ir = artifacts.read_world_ir()
+                        artifacts.write_repair_patch(
+                            repair_result, sequence=decision.sequence
+                        )
+                        repaired_world = apply_world_ir_repair_patch(
+                            world_ir,
+                            source_model,
+                            repair_result,
+                            allowed_reason_codes={item.code for item in diagnostics},
+                        )
+                        artifacts.write_world_ir(repaired_world)
+                        status = 0
+                    else:
+                        status = repair_result
+                else:
+                    status = repair_result
+                    if not status:
+                        from .scenario_repair import certify_scenario_repair
+                        from .scenario_tools import load_scenarios, write_scenarios
+
+                        assert scenarios_before is not None
+                        scenarios_after = load_scenarios(authoring)
+                        try:
+                            receipt = certify_scenario_repair(
+                                scenarios_before,
+                                scenarios_after,
+                                expected_count=job.scenario_count,
+                                diagnostic_codes={item.code for item in diagnostics},
+                            )
+                        except Exception:
+                            # Restore the last certified candidate; a rejected patch never becomes
+                            # the input to another repair attempt.
+                            write_scenarios(scenarios_before, authoring)
+                            raise
+                        artifacts.write_scenario_repair(
+                            receipt, sequence=decision.sequence
+                        )
                 after_hash = _generic_candidate_hash(source, authoring)
                 repair_controller.record_result(
                     decision.sequence,

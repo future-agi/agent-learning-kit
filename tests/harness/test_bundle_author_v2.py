@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sqlite3
 from pathlib import Path
 
@@ -13,10 +14,25 @@ from fi.alk.harness.bundle_author_v2 import (
     author_bundle_v2,
     resolve_environment_plan,
 )
+from fi.alk.harness.authoring_runtime_validation import _artifact_digest
 from fi.alk.harness.bundle_v2 import load_bundle_v2
+from fi.alk.harness.certification import (
+    CertificationAuthoring,
+    CertificationChecks,
+    CertificationCompiler,
+    CertificationRuntime,
+    CertificationSource,
+    CertificationStatus,
+    CheckStatus,
+    HarnessCertification,
+)
 from fi.alk.harness.job import HarnessJob, ProviderExecutionMode
 from fi.alk.harness.process_preflight import preflight_bundle
+from fi.alk.harness.provision import source_fingerprint
+from fi.alk.harness.repair_controller import RepairHistory
+from fi.alk.harness.source_model import SourceModel
 from fi.alk.harness.world.runtime import GeneratedWorld
+from fi.alk.harness.world_ir import WorldIR
 
 
 def _job(
@@ -158,6 +174,56 @@ def test_connect_only_provider_source_needs_no_agent_process(tmp_path: Path) -> 
         parallelism=1,
         secret_refs={"RETELL_API_KEY": "target_provider"},
     )
+
+
+def test_generic_connect_only_provider_uses_authored_world_schema(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "provider-target"
+    source.mkdir()
+    authoring = _authoring(tmp_path)
+    _write_voice_contract(authoring)
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("CREATE TABLE accounts (id TEXT PRIMARY KEY, status TEXT)")
+        database.execute("INSERT INTO accounts VALUES ('acct-1', 'active')")
+    body = {
+        "job_id": "provider-generic-job",
+        "run_id": "provider-generic-run",
+        "execution": "hosted",
+        "source": {"kind": "provider", "visibility": "public"},
+        "agent": {
+            "connector": "retell",
+            "mode": "connect_only",
+            "config": {"agent_id": "agent_existing"},
+            "secret_refs": {
+                "RETELL_API_KEY": {
+                    "manager": "platform-vault",
+                    "key": "retell-key",
+                    "purpose": "target_provider",
+                }
+            },
+        },
+        "scenario_count": 1,
+        "metadata": {"generic_harness_v1": True},
+        "runtime": {
+            "isolation": "dedicated_vm",
+            "cpu_units": 2,
+            "memory_mb": 4096,
+            "parallelism": 1,
+        },
+    }
+
+    bundle = author_bundle_v2(
+        source=source,
+        job=HarnessJob.model_validate(body),
+        authoring=authoring,
+        output=tmp_path / "bundle",
+    )
+
+    assert bundle.metadata["generic_harness"] == "v1"
+    schema = (tmp_path / "bundle" / "seed" / "source-schema.sql").read_text()
+    assert 'CREATE TABLE IF NOT EXISTS "accounts"' in schema
+    assert "acct-1" not in schema
 
 
 def test_connect_only_repository_source_still_compiles_uploaded_code(
@@ -302,7 +368,8 @@ def test_livekit_cli_agent_without_a_dockerfile_is_started_with_a_subcommand(
     )
 
     agent = next(process for process in bundle.processes if process.name == "agent")
-    assert agent.run_command[-1] == "start"
+    assert agent.run_command[-1:] == ["start"]
+    assert agent.fixed_port == 8081
 
 
 def test_a_dockerfile_command_that_already_starts_a_worker_is_left_alone(
@@ -336,7 +403,8 @@ def test_a_dockerfile_command_that_already_starts_a_worker_is_left_alone(
 
     agent = next(process for process in bundle.processes if process.name == "agent")
     assert agent.run_command.count("start") == 1
-    assert agent.run_command[-1] == "start"
+    assert agent.run_command[-1:] == ["start"]
+    assert agent.fixed_port == 8081
 
 
 def test_an_agent_that_starts_its_own_worker_gets_no_subcommand(tmp_path: Path) -> None:
@@ -446,7 +514,8 @@ def test_src_layout_keeps_nearest_project_manifest(tmp_path, project_dir, manife
     agent = next(p for p in plan.processes if p.name == "agent")
     assert agent.working_directory == project_dir
     assert "src/agent.py" in agent.run_command
-    assert agent.run_command[-1] == "start"
+    assert agent.run_command[-1:] == ["start"]
+    assert agent.fixed_port == 8081
     if manifest.endswith("toml"):
         assert agent.build_commands[0] == [
             "uv",
@@ -726,6 +795,87 @@ def test_six_supported_shapes_produce_preflight_clean_bundle(
     assert second.digest == first.digest
 
 
+def test_compose_multi_store_dependencies_are_rewired_from_declared_topology(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "multi-store"
+    source.mkdir()
+    (source / "agent.py").write_text("print('agent')\n", encoding="utf-8")
+    (source / "requirements.txt").write_text("\n", encoding="utf-8")
+    (source / "compose.yml").write_text(
+        """services:
+  postgres:
+    image: postgres:16
+  cache:
+    image: redis:7-alpine
+  agent:
+    build: .
+    environment:
+      DATABASE_URL: postgresql://source:source@postgres:5432/app
+      CACHE_URL: redis://cache:6379/2?decode_responses=true
+      CACHE_HOST: cache
+      PUBLIC_LABEL: unchanged
+    depends_on:
+      postgres: {condition: service_healthy}
+      cache: {condition: service_healthy}
+""",
+        encoding="utf-8",
+    )
+
+    plan = resolve_environment_plan(source, _job(connector="http"))
+    agent = next(process for process in plan.processes if process.name == "agent")
+
+    assert agent.depends_on == ["world-db", "cache"]
+    assert agent.environment == {
+        "DATABASE_URL": "{{WORLD_DATABASE_URL}}",
+        "CACHE_URL": "{{CACHE_URL}}/2?decode_responses=true",
+        "CACHE_HOST": "{{HOST_cache}}",
+        "PUBLIC_LABEL": "unchanged",
+        "HARNESS_MODE": "1",
+    }
+    assert plan.capabilities["cache_redis"].service == "cache"
+    assert plan.capabilities["cache_redis"].configuration_name == "CACHE_URL"
+    assert plan.capabilities["target_http"].service == "agent"
+
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source,
+        job=_job(connector="http"),
+        authoring=_authoring(tmp_path),
+        output=output,
+    )
+    preflight_bundle(output, manifest, parallelism=2, secret_refs={})
+
+
+def test_fixed_multi_store_fixture_compiles_to_a_preflight_clean_bundle(
+    tmp_path: Path,
+) -> None:
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "examples"
+        / "harness"
+        / "generic_multi_store_chat"
+    )
+    output = tmp_path / "bundle"
+
+    manifest = author_bundle_v2(
+        source=source,
+        job=_job(connector="auto"),
+        authoring=_authoring(tmp_path),
+        output=output,
+    )
+
+    agent = next(process for process in manifest.processes if process.name == "agent")
+    assert agent.depends_on == ["world-db", "cache"]
+    assert agent.environment["DATABASE_URL"] == "{{WORLD_DATABASE_URL}}"
+    assert agent.environment["CACHE_URL"] == "{{CACHE_URL}}/2"
+    assert agent.environment["PORT"] == "{{PORT_agent}}"
+    assert agent.fixed_port is None
+    assert manifest.capabilities["target_http"].service == "agent"
+    assert manifest.capabilities["cache_redis"].service == "cache"
+    preflight_bundle(output, manifest, parallelism=2, secret_refs={})
+
+
 def test_bundle_never_persists_resolved_secret(tmp_path: Path) -> None:
     source = tmp_path / "source"
     source.mkdir()
@@ -794,11 +944,14 @@ provider:
         }
     )
     output = tmp_path / "vapi-bundle"
+    authoring = _authoring(tmp_path)
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("CREATE TABLE preferences (id TEXT PRIMARY KEY, value TEXT)")
 
     bundle = author_bundle_v2(
         source=source,
         job=job,
-        authoring=_authoring(tmp_path),
+        authoring=authoring,
         output=output,
     )
 
@@ -1112,6 +1265,187 @@ def test_generic_pipeline_packages_source_schema_and_world_separately(
     preflight_bundle(output, manifest, parallelism=1, secret_refs={})
 
 
+def test_generic_pipeline_prefers_canonical_world_ir(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    (source / "db").mkdir(parents=True)
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    (source / "db" / "schema.sql").write_text(
+        "CREATE TABLE users (id TEXT PRIMARY KEY);\n", encoding="utf-8"
+    )
+    authoring = _authoring(tmp_path)
+    artifact_root = authoring / "generic-harness"
+    artifact_root.mkdir()
+    world = WorldIR.create(
+        source_model_fingerprint="sha256:" + "a" * 64,
+        tables=(),
+    )
+    (artifact_root / "world-ir.json").write_text(
+        world.model_dump_json(indent=2) + "\n", encoding="utf-8"
+    )
+    (artifact_root / "source-model.schema.json").write_text(
+        '{"title":"SourceModel"}\n', encoding="utf-8"
+    )
+    (artifact_root / "world-ir.schema.json").write_text(
+        '{"title":"WorldIR"}\n', encoding="utf-8"
+    )
+    # A stale compatibility artifact must not override the canonical semantic artifact.
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("CREATE TABLE stale (id TEXT)")
+
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source,
+        job=_job(connector="http", metadata={"generic_harness_v1": True}),
+        authoring=authoring,
+        output=output,
+    )
+
+    store = manifest.seed.stores[0]
+    assert store.seed_files == ["seed/world-ir.json"]
+    assert (output / "seed" / "world-ir.json").read_text() == (
+        artifact_root / "world-ir.json"
+    ).read_text()
+    assert not (output / "seed" / "world.sqlite").exists()
+    assert "generic-harness/world-ir.json" in manifest.provenance.adopted_files
+    assert (
+        "generic-harness/source-model.schema.json" in manifest.provenance.adopted_files
+    )
+    assert "generic-harness/world-ir.schema.json" in manifest.provenance.adopted_files
+    assert (output / "contracts" / "source-model.schema.json").is_file()
+    assert (output / "contracts" / "world-ir.schema.json").is_file()
+    preflight_bundle(output, manifest, parallelism=1, secret_refs={})
+
+
+def test_generic_pipeline_reuses_the_exact_runtime_certified_bundle(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    (source / "db").mkdir(parents=True)
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    (source / "db" / "schema.sql").write_text(
+        "CREATE TABLE users (id TEXT PRIMARY KEY);\n", encoding="utf-8"
+    )
+    authoring = _authoring(tmp_path)
+    (authoring / "contract.json").write_text(
+        json.dumps({"modality": "chat", "tools": []}), encoding="utf-8"
+    )
+    artifact_root = authoring / "generic-harness"
+    artifact_root.mkdir()
+    source_model = SourceModel.create(
+        source_digest="sha256:" + source_fingerprint(source), engine="postgresql"
+    )
+    world = WorldIR.create(source_model_fingerprint=source_model.fingerprint, tables=())
+    (artifact_root / "source-model.json").write_text(
+        source_model.model_dump_json(indent=2) + "\n", encoding="utf-8"
+    )
+    (artifact_root / "world-ir.json").write_text(
+        world.model_dump_json(indent=2) + "\n", encoding="utf-8"
+    )
+    job = _job(connector="http", metadata={"generic_harness_v1": True})
+    validated = tmp_path / "validated"
+    manifest = author_bundle_v2(
+        source=source, job=job, authoring=authoring, output=validated
+    )
+    shutil.copytree(validated, artifact_root / "certified-bundle")
+    certificate = HarnessCertification.create(
+        status=CertificationStatus.CERTIFIED,
+        source=CertificationSource(
+            digest=source_fingerprint(source), schema_hash=source_model.fingerprint
+        ),
+        authoring=CertificationAuthoring(
+            contract_hash=_artifact_digest(authoring / "contract.json"),
+            world_ir_hash=world.fingerprint,
+            scenario_set_hash=_artifact_digest(authoring / "scenarios"),
+        ),
+        compiler=CertificationCompiler(
+            version="test-compiler", bundle_digest=manifest.digest
+        ),
+        runtime=CertificationRuntime(snapshot="test", validation_attempts=1),
+        checks=CertificationChecks(
+            static=CheckStatus.PASSED,
+            schema_and_seed=CheckStatus.PASSED,
+            processes=CheckStatus.PASSED,
+            source_invariants=CheckStatus.PASSED,
+            scenario_setup_ready="1/1",
+            tool_contract="0/0",
+            action_behavior="0/0",
+            reset_equivalence=CheckStatus.PASSED,
+            world_isolation=CheckStatus.PASSED,
+        ),
+        repairs=RepairHistory(
+            decisions=(),
+            results=(),
+            compiler_candidates_used=0,
+            environment_patches_used=0,
+            scenario_patches_used=0,
+        ),
+    )
+    (authoring / "runtime-validation.json").write_text(
+        certificate.model_dump_json(indent=2) + "\n", encoding="utf-8"
+    )
+
+    # Build/cache directories do not alter source identity.  They also must not cause a second
+    # compilation to replace the exact environment bytes that passed runtime validation.
+    (source / "build").mkdir()
+    (source / "build" / "generated.py").write_text(
+        "def agent_callback(message):\n    return message\n", encoding="utf-8"
+    )
+    execution = tmp_path / "execution"
+    reused = author_bundle_v2(
+        source=source, job=job, authoring=authoring, output=execution
+    )
+
+    assert reused.digest == manifest.digest
+    assert (tmp_path / "runtime-validation.json").is_file()
+    assert load_bundle_v2(execution).digest == manifest.digest
+
+    # A black-box hosted agent has no harness-owned schema/world. Those fingerprints are
+    # intentionally synthetic and must not be compared to model-authored placeholder artifacts
+    # when the certificate marks the corresponding checks not applicable.
+    external_certificate = HarnessCertification.create(
+        status=CertificationStatus.CERTIFIED,
+        source=CertificationSource(
+            digest=source_fingerprint(source), schema_hash="sha256:" + "a" * 64
+        ),
+        authoring=CertificationAuthoring(
+            contract_hash=_artifact_digest(authoring / "contract.json"),
+            world_ir_hash="sha256:" + "b" * 64,
+            scenario_set_hash=_artifact_digest(authoring / "scenarios"),
+        ),
+        compiler=CertificationCompiler(
+            version="external-provider-black-box", bundle_digest=manifest.digest
+        ),
+        runtime=CertificationRuntime(snapshot="test", validation_attempts=1),
+        checks=CertificationChecks(
+            static=CheckStatus.PASSED,
+            schema_and_seed=CheckStatus.NOT_APPLICABLE,
+            processes=CheckStatus.PASSED,
+            source_invariants=CheckStatus.NOT_APPLICABLE,
+            scenario_setup_ready="1/1",
+            tool_contract="0/0",
+            action_behavior="0/0",
+            reset_equivalence=CheckStatus.NOT_APPLICABLE,
+            world_isolation=CheckStatus.NOT_APPLICABLE,
+        ),
+        repairs=RepairHistory(
+            decisions=(),
+            results=(),
+            compiler_candidates_used=0,
+            environment_patches_used=0,
+            scenario_patches_used=0,
+        ),
+        limitations=("provider state is external",),
+    )
+    (authoring / "runtime-validation.json").write_text(
+        external_certificate.model_dump_json(indent=2) + "\n", encoding="utf-8"
+    )
+    external_execution = tmp_path / "external-execution"
+    external_reused = author_bundle_v2(
+        source=source, job=job, authoring=authoring, output=external_execution
+    )
+    assert external_reused.digest == manifest.digest
+
+
 def test_generic_pipeline_requires_source_schema_and_world(tmp_path: Path) -> None:
     source = tmp_path / "source"
     source.mkdir()
@@ -1168,6 +1502,30 @@ def test_generic_pipeline_compiles_harness_schema_for_in_process_store(
     assert "acct-1" not in schema
     with sqlite3.connect(output / "seed" / "world.sqlite") as copied:
         assert copied.execute("SELECT status FROM accounts").fetchone() == ("active",)
+
+
+def test_generic_pipeline_accepts_explicitly_tool_free_agent(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    (authoring / "contract.json").write_text(
+        json.dumps({"modality": "voice", "tools": []}),
+        encoding="utf-8",
+    )
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("CREATE TABLE session_state (id TEXT PRIMARY KEY)")
+
+    manifest = author_bundle_v2(
+        source=source,
+        job=_job(connector="livekit", metadata={"generic_harness_v1": True}),
+        authoring=authoring,
+        output=tmp_path / "bundle",
+    )
+
+    assert manifest.metadata["generic_harness"] == "v1"
+    schema = (tmp_path / "bundle" / "seed" / "source-schema.sql").read_text()
+    assert 'CREATE TABLE IF NOT EXISTS "session_state"' in schema
 
 
 def test_generic_pipeline_still_requires_schema_for_declared_postgres(

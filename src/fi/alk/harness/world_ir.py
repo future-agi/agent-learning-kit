@@ -52,7 +52,9 @@ class WorldValue(BaseModel):
         elif self.state is ValueState.NULL:
             if self.value is not None:
                 raise ValueError("world_value_null_has_payload")
-        elif self.logical_type is None or self.value is None:
+        elif self.logical_type is None:
+            raise ValueError("world_value_present_type_missing")
+        elif self.value is None and self.logical_type is not LogicalType.JSON:
             raise ValueError("world_value_present_payload_missing")
         return self
 
@@ -199,6 +201,33 @@ def _value_matches(logical_type: LogicalType, value: JsonValue) -> bool:
     return False
 
 
+def _array_shape_matches(element_type: LogicalType, value: list[JsonValue]) -> bool:
+    """Validate rectangular arrays of any depth against their scalar leaf type.
+
+    PostgreSQL array dimensionality is a value property rather than a distinct catalogue type.
+    Keeping the leaf type in the source model and validating the complete value therefore
+    preserves multidimensional arrays without adding backend-specific syntax to World IR.
+    """
+
+    def shape(items: list[JsonValue]) -> tuple[int, ...] | None:
+        child_shapes: list[tuple[int, ...]] = []
+        for item in items:
+            if isinstance(item, list):
+                child = shape(item)
+                if child is None:
+                    return None
+                child_shapes.append(child)
+            elif _value_matches(element_type, item):
+                child_shapes.append(())
+            else:
+                return None
+        if child_shapes and any(item != child_shapes[0] for item in child_shapes[1:]):
+            return None
+        return (len(items), *(child_shapes[0] if child_shapes else ()))
+
+    return shape(value) is not None
+
+
 def _issue(
     code: str,
     table: str,
@@ -280,7 +309,6 @@ def _validate_value(
                 column=column.name,
             )
         ]
-    assert authored.value is not None
     if not _value_matches(column.logical_type, authored.value):
         issues.append(
             _issue(
@@ -307,9 +335,7 @@ def _validate_value(
         )
     if column.logical_type is LogicalType.ARRAY and column.element_type is not None:
         assert isinstance(authored.value, list)
-        if any(
-            not _value_matches(column.element_type, item) for item in authored.value
-        ):
+        if not _array_shape_matches(column.element_type, authored.value):
             issues.append(
                 _issue(
                     "array_shape_mismatch",

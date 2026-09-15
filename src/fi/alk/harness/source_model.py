@@ -14,7 +14,7 @@ from pathlib import PurePosixPath
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-SOURCE_MODEL_SCHEMA_VERSION = "futureagi.source-model.v1"
+SOURCE_MODEL_SCHEMA_VERSION = "futureagi.source-model.v2"
 _DIGEST_PATTERN = re.compile(r"sha256:[0-9a-f]{64}")
 
 
@@ -83,6 +83,11 @@ class SourceColumn(BaseModel):
             raise ValueError("source_enum_values_not_allowed")
         if self.logical_type is LogicalType.ARRAY and self.element_type is None:
             raise ValueError("source_array_element_type_missing")
+        if (
+            self.logical_type is LogicalType.ARRAY
+            and self.element_type is LogicalType.ARRAY
+        ):
+            raise ValueError("source_array_element_type_must_be_scalar")
         if self.logical_type is not LogicalType.ARRAY and self.element_type is not None:
             raise ValueError("source_array_element_type_not_allowed")
         return self
@@ -151,6 +156,124 @@ class UnsupportedSourceConstruct(BaseModel):
     location: str | None = None
 
 
+class SourceProcess(BaseModel):
+    """One runnable source-owned component, independent of language or agent framework."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str = Field(min_length=1)
+    kind: str = Field(min_length=1)
+    working_directory: str = "."
+    entrypoint: str | None = None
+    command: tuple[str, ...] = ()
+    dependencies: tuple[str, ...] = ()
+    configuration_names: tuple[str, ...] = ()
+    ports: tuple[int, ...] = ()
+    evidence: tuple[SourceEvidence, ...] = ()
+
+    @model_validator(mode="after")
+    def _canonical(self) -> "SourceProcess":
+        if self.kind != self.kind.strip().lower():
+            raise ValueError("source_process_kind_not_canonical")
+        if self.entrypoint is None and not self.command:
+            raise ValueError("source_process_launch_missing")
+        for value, code in (
+            (self.working_directory, "source_process_workdir_invalid"),
+        ):
+            path = PurePosixPath(value)
+            if ".." in path.parts:
+                raise ValueError(code)
+        if self.entrypoint is not None:
+            path = PurePosixPath(self.entrypoint)
+            if path.is_absolute() or ".." in path.parts:
+                raise ValueError("source_process_entrypoint_invalid")
+        if any(not item.strip() for item in self.command):
+            raise ValueError("source_process_command_invalid")
+        if self.dependencies != tuple(sorted(set(self.dependencies))):
+            raise ValueError("source_process_dependencies_not_canonical")
+        if self.configuration_names != tuple(sorted(set(self.configuration_names))):
+            raise ValueError("source_process_configuration_names_not_canonical")
+        if self.ports != tuple(sorted(set(self.ports))) or any(
+            port < 1 or port > 65535 for port in self.ports
+        ):
+            raise ValueError("source_process_ports_not_canonical")
+        if self.evidence != tuple(sorted(self.evidence, key=lambda item: item.path)):
+            raise ValueError("source_process_evidence_not_canonical")
+        return self
+
+
+class SourceInterface(BaseModel):
+    """A callable/transport/UI boundary offered by submitted code.
+
+    ``kind`` and ``protocol`` are intentionally extensible strings: HTTP, Python callables,
+    queues, browser sessions, desktop sessions and future transports share this model.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str = Field(min_length=1)
+    kind: str = Field(min_length=1)
+    protocol: str = Field(min_length=1)
+    process: str | None = None
+    endpoint: str | None = None
+    port: int | None = Field(default=None, ge=1, le=65535)
+    input_schema: dict[str, object] | None = None
+    output_schema: dict[str, object] | None = None
+    configuration_names: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def _canonical(self) -> "SourceInterface":
+        if self.kind != self.kind.strip().lower():
+            raise ValueError("source_interface_kind_not_canonical")
+        if self.protocol != self.protocol.strip().lower():
+            raise ValueError("source_interface_protocol_not_canonical")
+        if self.configuration_names != tuple(sorted(set(self.configuration_names))):
+            raise ValueError("source_interface_configuration_names_not_canonical")
+        if self.endpoint is not None:
+            path = PurePosixPath(self.endpoint)
+            if ".." in path.parts:
+                raise ValueError("source_interface_endpoint_invalid")
+        try:
+            if self.input_schema is not None:
+                json.dumps(self.input_schema, allow_nan=False, sort_keys=True)
+            if self.output_schema is not None:
+                json.dumps(self.output_schema, allow_nan=False, sort_keys=True)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("source_interface_schema_not_json") from exc
+        return self
+
+
+class SourceAction(BaseModel):
+    """A source-owned action/tool and the evidence needed to reach it."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str = Field(min_length=1)
+    input_schema: dict[str, object] = Field(default_factory=dict)
+    output_schema: dict[str, object] | None = None
+    implementation_kind: str = Field(min_length=1)
+    implementation_ref: str = Field(min_length=1)
+    interface: str | None = None
+    effect: str = "unknown"
+    evidence: tuple[SourceEvidence, ...] = ()
+
+    @model_validator(mode="after")
+    def _canonical(self) -> "SourceAction":
+        if self.implementation_kind != self.implementation_kind.strip().lower():
+            raise ValueError("source_action_implementation_kind_not_canonical")
+        if self.effect not in {"read_only", "mutating", "external", "unknown"}:
+            raise ValueError("source_action_effect_invalid")
+        if self.evidence != tuple(sorted(self.evidence, key=lambda item: item.path)):
+            raise ValueError("source_action_evidence_not_canonical")
+        try:
+            json.dumps(self.input_schema, allow_nan=False, sort_keys=True)
+            if self.output_schema is not None:
+                json.dumps(self.output_schema, allow_nan=False, sort_keys=True)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("source_action_schema_not_json") from exc
+        return self
+
+
 class SourceModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -159,6 +282,9 @@ class SourceModel(BaseModel):
     engine: str = Field(min_length=1)
     engine_version: str | None = None
     tables: tuple[SourceTable, ...] = ()
+    processes: tuple[SourceProcess, ...] = ()
+    interfaces: tuple[SourceInterface, ...] = ()
+    actions: tuple[SourceAction, ...] = ()
     configuration_names: tuple[str, ...] = ()
     migrations: tuple[SourceEvidence, ...] = ()
     seeds: tuple[SourceEvidence, ...] = ()
@@ -174,6 +300,9 @@ class SourceModel(BaseModel):
         engine: str,
         engine_version: str | None = None,
         tables: tuple[SourceTable, ...] = (),
+        processes: tuple[SourceProcess, ...] = (),
+        interfaces: tuple[SourceInterface, ...] = (),
+        actions: tuple[SourceAction, ...] = (),
         configuration_names: tuple[str, ...] = (),
         migrations: tuple[SourceEvidence, ...] = (),
         seeds: tuple[SourceEvidence, ...] = (),
@@ -186,6 +315,9 @@ class SourceModel(BaseModel):
             "engine": engine.strip().lower(),
             "engine_version": engine_version,
             "tables": tuple(sorted(tables, key=lambda item: item.name)),
+            "processes": tuple(sorted(processes, key=lambda item: item.name)),
+            "interfaces": tuple(sorted(interfaces, key=lambda item: item.name)),
+            "actions": tuple(sorted(actions, key=lambda item: item.name)),
             "configuration_names": tuple(sorted(set(configuration_names))),
             "migrations": tuple(sorted(migrations, key=lambda item: item.path)),
             "seeds": tuple(sorted(seeds, key=lambda item: item.path)),
@@ -208,6 +340,51 @@ class SourceModel(BaseModel):
             raise ValueError("source_model_source_digest_invalid")
         if self.tables != tuple(sorted(self.tables, key=lambda item: item.name)):
             raise ValueError("source_model_tables_not_canonical")
+        for collection, code in (
+            (self.processes, "source_model_processes_not_canonical"),
+            (self.interfaces, "source_model_interfaces_not_canonical"),
+            (self.actions, "source_model_actions_not_canonical"),
+        ):
+            if collection != tuple(sorted(collection, key=lambda item: item.name)):
+                raise ValueError(code)
+            names = [item.name for item in collection]
+            if len(names) != len(set(names)):
+                raise ValueError(code.replace("not_canonical", "name_duplicate"))
+        process_names = {process.name for process in self.processes}
+        for process in self.processes:
+            unknown = sorted(set(process.dependencies) - process_names)
+            if unknown:
+                raise ValueError(
+                    "source_process_dependency_unknown: " + ", ".join(unknown)
+                )
+        visiting: set[str] = set()
+        visited: set[str] = set()
+        dependencies = {
+            process.name: set(process.dependencies) for process in self.processes
+        }
+
+        def visit(name: str) -> None:
+            if name in visiting:
+                raise ValueError(f"source_process_dependency_cycle: {name}")
+            if name in visited:
+                return
+            visiting.add(name)
+            for dependency in sorted(dependencies[name]):
+                visit(dependency)
+            visiting.remove(name)
+            visited.add(name)
+
+        for name in sorted(process_names):
+            visit(name)
+        for interface in self.interfaces:
+            if interface.process is not None and interface.process not in process_names:
+                raise ValueError(
+                    f"source_interface_process_unknown: {interface.process}"
+                )
+        interface_names = {interface.name for interface in self.interfaces}
+        for action in self.actions:
+            if action.interface is not None and action.interface not in interface_names:
+                raise ValueError(f"source_action_interface_unknown: {action.interface}")
         if self.configuration_names != tuple(sorted(set(self.configuration_names))):
             raise ValueError("source_model_configuration_names_not_canonical")
         for collection, code in (
@@ -259,9 +436,12 @@ __all__ = [
     "SOURCE_MODEL_SCHEMA_VERSION",
     "ForeignKey",
     "LogicalType",
+    "SourceAction",
     "SourceColumn",
     "SourceEvidence",
+    "SourceInterface",
     "SourceModel",
+    "SourceProcess",
     "SourceTable",
     "UnsupportedSourceConstruct",
 ]

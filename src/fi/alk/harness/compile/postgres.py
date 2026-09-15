@@ -98,12 +98,12 @@ def _table_order(source: SourceModel, world: WorldIR) -> tuple[str, ...]:
 
 
 def _parameter(column: SourceColumn, value: Any) -> Any:
-    if value is None:
-        return None
     if column.logical_type is LogicalType.JSON:
         return json.dumps(
             value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
         )
+    if value is None:
+        return None
     if column.logical_type is LogicalType.BINARY:
         assert isinstance(value, str)
         return base64.b64decode(value, validate=True)
@@ -115,8 +115,16 @@ def compile_postgres(
     world: WorldIR,
     *,
     schema: str = "public",
+    reconcile_existing: bool = False,
 ) -> PostgresCompileResult:
-    """Compile validated semantic rows into deterministic parameterized inserts."""
+    """Compile validated semantic rows into deterministic parameterized inserts.
+
+    ``reconcile_existing`` is used when applying a complete authored world on top of a
+    source-owned schema/seed.  Compose database images commonly install representative rows
+    from ``docker-entrypoint-initdb.d`` before ALK applies the generated world.  Replaying a
+    world must therefore update an already-present primary-key row instead of failing with a
+    duplicate-key error.  The default remains strict insert semantics for ordinary callers.
+    """
 
     if source.engine != "postgres":
         raise PostgresCompileError(
@@ -157,7 +165,11 @@ def compile_postgres(
                         )
                     continue
                 columns.append(column.name)
-                params.append(_parameter(column, authored.value))
+                params.append(
+                    None
+                    if authored.state is ValueState.NULL
+                    else _parameter(column, authored.value)
+                )
             qualified = f"{_identifier(schema)}.{_identifier(table_name)}"
             if columns:
                 names = ", ".join(_identifier(column) for column in columns)
@@ -165,6 +177,36 @@ def compile_postgres(
                 statement = f"INSERT INTO {qualified} ({names}) VALUES ({placeholders})"
             else:
                 statement = f"INSERT INTO {qualified} DEFAULT VALUES"
+            if (
+                reconcile_existing
+                and source_table.primary_key
+                and set(source_table.primary_key).issubset(columns)
+            ):
+                conflict_columns = ", ".join(
+                    _identifier(column) for column in source_table.primary_key
+                )
+                mutable_columns = [
+                    column
+                    for column in columns
+                    if column not in source_table.primary_key
+                ]
+                if mutable_columns:
+                    assignments = ", ".join(
+                        f"{_identifier(column)} = EXCLUDED.{_identifier(column)}"
+                        for column in mutable_columns
+                    )
+                    statement += (
+                        f" ON CONFLICT ({conflict_columns}) DO UPDATE SET {assignments}"
+                    )
+                else:
+                    statement += f" ON CONFLICT ({conflict_columns}) DO NOTHING"
+                decisions.append(
+                    CompileDecision(
+                        code="existing_primary_key_reconciled",
+                        table=table_name,
+                        row_identity=row.identity,
+                    )
+                )
             operations.append(
                 PostgresInsert(
                     table=table_name,

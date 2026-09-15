@@ -2611,6 +2611,14 @@ def apply_postgres_sqlite_world(
         dbname=dbname,
     ) as postgres:
         source = inspect_postgres(postgres, source_digest=canonical_source_digest)
+        if artifact_root is not None:
+            from .certification import GenericHarnessArtifactStore
+            from .source_discovery import compose_source_models
+
+            artifacts = GenericHarnessArtifactStore(artifact_root)
+            discovered_path = artifact_root / artifacts.SOURCE_MODEL
+            if discovered_path.is_file() and not discovered_path.is_symlink():
+                source = compose_source_models(artifacts.read_source_model(), source)
         unsupported = tuple(
             HarnessDiagnostic.create(
                 stage=HarnessStage.VALIDATING_ENVIRONMENT,
@@ -2628,8 +2636,11 @@ def apply_postgres_sqlite_world(
             raise GenericWorldSeedError(unsupported)
         try:
             with sqlite3.connect(uri, uri=True) as sqlite:
-                imported = import_sqlite_world(sqlite, source)
-            compiled = compile_postgres(source, imported.world)
+                imported = import_sqlite_world(sqlite, source, validate=False)
+            if artifact_root is not None:
+                artifacts.write_source_model(source)
+                artifacts.write_world_ir(imported.world)
+            compiled = compile_postgres(source, imported.world, reconcile_existing=True)
         except SQLiteWorldImportError as error:
             normalized_code = {
                 "array_value_invalid": "array_shape_mismatch",
@@ -2697,6 +2708,125 @@ def apply_postgres_sqlite_world(
             artifacts.write_world_ir(imported.world)
 
 
+def apply_postgres_world_ir(
+    file: Path,
+    *,
+    port: int,
+    dbname: str,
+    credentials: EngineCredentials,
+    source_digest: str,
+    artifact_root: Path | None = None,
+) -> None:
+    """Validate and apply canonical World IR against the live source-owned PostgreSQL schema."""
+
+    try:
+        import psycopg
+    except (
+        ImportError
+    ) as exc:  # pragma: no cover - snapshot dependency is tested at build time.
+        raise RuntimeError("generic_pipeline_dependency_missing: psycopg") from exc
+
+    from .certification import GenericHarnessArtifactStore
+    from .compile.postgres import PostgresCompileError, apply_postgres, compile_postgres
+    from .diagnostic_adapters.postgres import diagnose_postgres_error
+    from .diagnostic_adapters.world_ir import diagnose_world_ir_error
+    from .source_schema.postgres import inspect_postgres
+    from .world_ir import WorldIR, WorldIRValidationError
+
+    canonical_source_digest = (
+        source_digest
+        if source_digest.startswith("sha256:")
+        else f"sha256:{source_digest}"
+    )
+    try:
+        world = WorldIR.model_validate_json(file.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise GenericWorldSeedError(
+            (
+                HarnessDiagnostic.create(
+                    stage=HarnessStage.VALIDATING_ENVIRONMENT,
+                    component="world_ir",
+                    code="world_ir_invalid",
+                    message="canonical World IR artifact is invalid",
+                    evidence_refs=("artifact://world-ir",),
+                ),
+            )
+        ) from error
+
+    with psycopg.connect(
+        host="localhost",
+        port=port,
+        user=credentials.username,
+        password=credentials.password,
+        dbname=dbname,
+    ) as postgres:
+        source = inspect_postgres(postgres, source_digest=canonical_source_digest)
+        if artifact_root is not None:
+            artifacts = GenericHarnessArtifactStore(artifact_root)
+            discovered_path = artifact_root / artifacts.SOURCE_MODEL
+            if discovered_path.is_file() and not discovered_path.is_symlink():
+                from .source_discovery import compose_source_models
+
+                source = compose_source_models(artifacts.read_source_model(), source)
+        unsupported = tuple(
+            HarnessDiagnostic.create(
+                stage=HarnessStage.VALIDATING_ENVIRONMENT,
+                component=item.component,
+                code="unsupported_source_construct",
+                message=f"unsupported source construct: {item.code}",
+                location=DiagnosticLocation(source_path=item.location)
+                if item.location
+                else None,
+                evidence_refs=("artifact://source-model",),
+            )
+            for item in source.unsupported
+        )
+        if unsupported:
+            raise GenericWorldSeedError(unsupported)
+        try:
+            if artifact_root is not None:
+                artifacts.write_source_model(source)
+                artifacts.write_world_ir(world)
+            compiled = compile_postgres(source, world, reconcile_existing=True)
+        except WorldIRValidationError as error:
+            raise GenericWorldSeedError(diagnose_world_ir_error(error)) from error
+        except PostgresCompileError as error:
+            raise GenericWorldSeedError(
+                (
+                    HarnessDiagnostic.create(
+                        stage=HarnessStage.VALIDATING_ENVIRONMENT,
+                        component="postgres_compiler",
+                        code=error.code,
+                        message=error.message,
+                        evidence_refs=(
+                            "artifact://world-ir",
+                            "artifact://source-model",
+                        ),
+                    ),
+                )
+            ) from error
+        try:
+            apply_postgres(postgres, compiled)
+        except Exception as error:
+            raise GenericWorldSeedError(
+                (
+                    diagnose_postgres_error(
+                        error,
+                        stage=HarnessStage.VALIDATING_ENVIRONMENT,
+                        component="postgres_seed",
+                        evidence_refs=(
+                            "artifact://world-ir",
+                            "artifact://source-model",
+                        ),
+                    ),
+                )
+            ) from error
+        if artifact_root is not None:
+            artifacts = GenericHarnessArtifactStore(artifact_root)
+            artifacts.write_source_model(source)
+            artifacts.write_world_ir(world)
+
+
 class GenericWorldSeedError(ValueError):
     """Structured semantic seed rejection; never contains authored values."""
 
@@ -2744,6 +2874,35 @@ def apply_seed_file(
                 "postgres requires generated credentials to seed",
                 process=process_name,
             )
+        if file.name == "world-ir.json":
+            if source_digest is None:
+                raise ProcessRuntimeError(
+                    "seed",
+                    "internal_source_digest_missing",
+                    "generic PostgreSQL World IR requires source provenance",
+                    process=process_name,
+                )
+            try:
+                world_kwargs = {
+                    "port": port,
+                    "dbname": dbname,
+                    "credentials": credentials,
+                    "source_digest": source_digest,
+                }
+                if generic_artifact_root is not None:
+                    world_kwargs["artifact_root"] = generic_artifact_root
+                apply_postgres_world_ir(file, **world_kwargs)
+            except Exception as exc:
+                diagnostics = tuple(getattr(exc, "diagnostics", ()))
+                raise ProcessRuntimeError(
+                    "seed",
+                    "seed_failed",
+                    "canonical World IR could not be compiled or applied",
+                    process=process_name,
+                    domain=FailureDomain.ENVIRONMENT,
+                    diagnostics=diagnostics,
+                ) from exc
+            return
         if file.suffix.lower() == ".sqlite":
             if source_digest is None:
                 raise ProcessRuntimeError(
@@ -5147,14 +5306,23 @@ class ProcessRuntimeProvider:
             output_relative_path=spec.output,
         )
         try:
+            provision_log_path = lifecycle_directory / "provision.log"
             returncode = run_lifecycle_invocation(
                 invocation,
-                log_path=lifecycle_directory / "provision.log",
+                log_path=provision_log_path,
                 run=self._sync_run,
             )
             if returncode != 0:
+                diagnostic = ""
+                try:
+                    diagnostic = provision_log_path.read_text(encoding="utf-8")[
+                        -4000:
+                    ].strip()
+                except OSError:
+                    pass
                 raise ProviderLifecycleError(
                     f"provider_provision_failed: command exited {returncode}"
+                    + (f"; provider output: {diagnostic}" if diagnostic else "")
                 )
             receipt = validate_provision_receipt(
                 invocation.output_path,

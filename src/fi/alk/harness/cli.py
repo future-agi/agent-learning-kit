@@ -182,6 +182,25 @@ async def _understand(args: argparse.Namespace) -> int:
     if contract is None:
         print("\nNo contract was submitted.", file=sys.stderr)
         return 1
+    generic = bool(
+        job is not None
+        and isinstance(getattr(job, "metadata", None), dict)
+        and job.metadata.get("generic_harness_v1") is True
+    )
+    if generic:
+        from .certification import GenericHarnessArtifactStore
+        from .provision import source_fingerprint
+        from .source_discovery import discover_code_source_model
+
+        digest = source_fingerprint(Path(args.path).resolve())
+        if not digest.startswith("sha256:"):
+            digest = f"sha256:{digest}"
+        source_model = discover_code_source_model(
+            Path(args.path), contract, source_digest=digest
+        )
+        GenericHarnessArtifactStore(destination / "generic-harness").write_source_model(
+            source_model
+        )
     print(
         f"\ncontract: {len(contract.tools)} tools, "
         f"{len(contract.hard_constraints)} rules, "

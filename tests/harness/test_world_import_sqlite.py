@@ -124,3 +124,24 @@ def test_import_rejects_malformed_array_before_postgres() -> None:
 
     assert raised.value.code == "array_value_invalid"
     assert "not-an-array" not in str(raised.value)
+
+
+def test_import_normalizes_legacy_naive_timestamp_to_utc() -> None:
+    source = _source(
+        _column("id", LogicalType.STRING),
+        _column("issued_at", LogicalType.TIMESTAMP),
+    )
+    connection = sqlite3.connect(":memory:")
+    connection.execute("CREATE TABLE users (id TEXT, issued_at TEXT)")
+    connection.execute(
+        "INSERT INTO users VALUES (?, ?)",
+        ("rider-1", "2026-09-12T12:30:00"),
+    )
+
+    result = import_sqlite_world(connection, source)
+
+    row = result.world.tables[0].rows[0]
+    assert row.values["issued_at"].value == "2026-09-12T12:30:00+00:00"
+    assert [decision.code for decision in result.decisions] == [
+        "legacy_naive_timestamp_normalized_to_utc"
+    ]

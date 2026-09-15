@@ -67,9 +67,52 @@ The implementation is not starting from zero. These pieces already exist:
 - Bundle provenance includes the source digest and, when available, repository and commit.
 - Credential purposes separate source checkout, target-provider, and simulator-provider material.
 
-The principal limitation is that process/runtime metadata is strongly typed while generated
-world data is still transported mainly through SQLite and backend-specific SQL. This loses
-semantic information and makes low-level database failures arrive at the repair loop as text.
+At plan inception, the principal limitation was that process/runtime metadata was strongly typed
+while generated world data was transported mainly through SQLite and backend-specific SQL. The
+implementation status below records how that boundary has now been replaced for supported engines.
+
+### 3.1 Implementation status (2026-09-15)
+
+| Milestone | Status | Evidence |
+|---|---|---|
+| 0. Baseline | Complete | Existing agent/environment failures are fixed regression fixtures; hosted certification defaults to fresh authoring. |
+| 1. Source model + diagnostics | Complete | Canonical, fingerprinted source model; PostgreSQL/SQLite discovery; closed, redacted diagnostic policies. |
+| 2. World IR + compilers | Complete for supported engines | `none`, PostgreSQL, and SQLite compilers preserve absent/null/present intent; schemas are published in Bundle V2 under `contracts/`. |
+| 3. Policy repair | Complete | Bounded controller, typed World IR patches, scenario patches, no-op/repeated-fingerprint termination, and durable receipts. |
+| 4. Action certification | Complete | Framework-neutral action probe adapter, safe modes, schema-valid inputs, refusal semantics, and reset verification. |
+| 5. Gate + evidence | Complete | Versioned certificate, required-check dispatch gate, typed platform projection, provenance, limitations, and repair history. |
+| 6. Generated/release gate | Complete | Generated logical-type/adversarial tests, runtime tests, and the fixed multi-agent Daytona campaign pass the harness-owned release gate. |
+
+Latest release-candidate evidence:
+
+- complete harness suite: `1308 passed, 5 skipped`;
+- LiveKit runtime engine suite: `128 passed`;
+- property-based compiler suite: `300` generated PostgreSQL/SQLite examples, including JSON-null
+  versus database-null preservation;
+- real PostgreSQL compiler/runtime suite: `14 passed`;
+- platform gateway and DTO suite: `86 passed`;
+- fixed PostgreSQL + Redis + HTTP chat fixture: build, health, persistent tool-state, rewiring,
+  and preflight passed;
+- hosted snapshot `alk-generic-self-repair-20260915-r9` is active with source revision
+  `20260915-generic-self-repair-r24`;
+- five-call execution completed without harness-owned escapes for unpackaged and packaged chat,
+  the PostgreSQL/Redis/HTTP multi-store fixture, LiveKit starter/front-desk/drive-through, Uber,
+  Ava, Alderway, Retell connect-only and native chat, Vapi connect-only, and Vapi code-created
+  lanes;
+- agent behavior failures stayed agent/evaluation outcomes, including correctly attributed target
+  stalls, rather than being rewritten as infrastructure failures;
+- external/source blockers stopped before calls: a Retell key that does not own the imported
+  agent, Retell lifecycle creation rejected with HTTP 403, an intentionally invalid Vapi tool URL,
+  and a hotel fixture whose submitted action behavior failed certification;
+- a definitive external lifecycle 4xx is now source-owned and non-repairable, while
+  408/429/5xx/DNS failures are infrastructure-owned with bounded retries. This was verified on r9:
+  all five scenarios were authored before the current Retell account rejected provisioning, and
+  no model repair was spent trying to alter generated world data.
+
+The generic core contains no provider, framework, modality, repository, or agent-name branches.
+Supporting a new state engine or execution surface requires a compiler/discovery/probe/execution
+adapter at the boundary; it does not require changes to source understanding, repair policy, or
+certification semantics.
 
 ## 4. Design principles
 
@@ -115,6 +158,25 @@ Environment incompatibility must be discovered during certification, not during 
 
 Invalid tool arguments, refusal, incorrect tool choice, or failure to complete a task are agent
 behavior. The harness must record these accurately rather than repairing them away.
+
+### 4.8 Keep understanding independent of integrations
+
+The canonical source model, World IR, diagnostics, repair controller, certification, and policy
+engine must never branch on an agent name, repository, framework, provider, or modality. They model
+only portable facts: processes, interfaces, actions, state, configuration names, capabilities,
+evidence, and validation outcomes.
+
+An integration may translate a provider definition or runtime protocol into those facts. A new
+surface implements only the boundary it needs:
+
+- source discovery contributes canonical processes, interfaces, actions, and state metadata;
+- a backend compiler translates typed state into a supported store;
+- an action-probe adapter invokes safe actions and resets disposable state;
+- an execution adapter connects the simulator to the declared runtime interface.
+
+For example, a graph-based Python agent can expose a callable or HTTP interface, while a future
+computer-use agent can expose a browser/desktop interface and navigation actions. Neither case may
+change source understanding, World IR validation, repair policy, or certification semantics.
 
 ## 5. Target architecture
 
@@ -872,26 +934,22 @@ The self-repair project is complete when all of the following hold:
 9. An uncertified bundle cannot be dispatched.
 10. The platform exposes enough persisted evidence to diagnose failures without ephemeral-shell
     access.
-11. Known Uber, Alderway, Retell, chat, and multi-store fixtures certify from fresh source.
+11. Runnable Uber, Alderway, Retell, chat, and multi-store fixtures certify from fresh source;
+    invalid credentials, provider permissions, and deliberately broken submitted fixtures stop
+    before calls with source/external ownership.
 12. Generated-schema tests cover all supported logical/native type combinations.
 13. No environment or infrastructure failure is reported as an agent-quality failure.
 14. Missing source tool implementations are rejected and never invented.
 15. Production-path certification has zero harness/environment escapes for the release campaign.
 
-## 18. Immediate next actions
+## 18. Release conclusion and extension work
 
-1. Land this design as the implementation contract.
-2. Add regression fixtures for every failure already observed, including boolean/smallint,
-   PostgreSQL array literals, source defaults suppressed by nulls, and relationship/insertion
-   ordering.
-3. Implement `SourceModel`, `WorldValue`, and `HarnessDiagnostic` without changing runtime behavior.
-4. Route PostgreSQL seed generation through the typed compiler behind a feature flag.
-5. Run dual compilation in CI: retain the current output for execution, compare it with the new
-   compiler, and report divergences.
-6. Promote the new compiler only after the fixed-agent and generated-schema matrices pass.
-7. Add the certification gate and then remove the legacy SQLite-authority path for new hosted
-   authoring.
+Implementation items 1-7 and the release campaign are complete for the declared `none`,
+PostgreSQL, and SQLite state surfaces. Snapshot
+`alk-generic-self-repair-20260915-r9` is the verified campaign image. Provider-account failures and
+invalid submitted implementations remain external evidence; they are not candidates for generated
+environment repair.
 
-This sequence preserves the working Bundle V2 runtime while replacing the fragile authoring-to-
-seed boundary incrementally. It targets the recurring root cause instead of accumulating
-repository-specific patches.
+New engines and execution surfaces remain adapter work. They must implement discovery,
+compilation/provisioning, probing, and execution at the boundary without adding provider,
+framework, modality, repository, or agent-name conditions to the generic core.

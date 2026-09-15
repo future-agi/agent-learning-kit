@@ -168,6 +168,16 @@ _POLICIES = MappingProxyType(
             domain=FailureDomain.AGENT,
             owner=RepairOwner.SOURCE,
         ),
+        "external_service_request_rejected": DiagnosticPolicy(
+            domain=FailureDomain.AGENT,
+            owner=RepairOwner.SOURCE,
+        ),
+        "external_service_unavailable": DiagnosticPolicy(
+            domain=FailureDomain.INFRASTRUCTURE,
+            owner=RepairOwner.INFRASTRUCTURE,
+            retryable=True,
+            repair_strategy="retry_external_service_request",
+        ),
         "egress_blocked": DiagnosticPolicy(
             domain=FailureDomain.INFRASTRUCTURE,
             owner=RepairOwner.INFRASTRUCTURE,
@@ -182,6 +192,10 @@ _POLICIES = MappingProxyType(
             domain=FailureDomain.ENVIRONMENT,
             owner=RepairOwner.SOURCE,
             repair_strategy="reconcile_discovered_contract",
+        ),
+        "action_probe_failed": DiagnosticPolicy(
+            domain=FailureDomain.ENVIRONMENT,
+            owner=RepairOwner.SOURCE,
         ),
         "agent_tool_argument_invalid": DiagnosticPolicy(
             domain=FailureDomain.AGENT,

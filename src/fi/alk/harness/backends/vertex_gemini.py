@@ -50,6 +50,10 @@ _TERMINAL_SAVE_TOOLS = frozenset(
         # was declared.  Letting ADK take another turn after that success can burn the entire
         # call budget and turn a completed review into a spurious validation failure.
         "mcp__source_data__finish_review",
+        # A validated repair patch is itself the complete output of the repair stage.  Stop
+        # immediately after accepting it instead of spending the remaining agent budget on
+        # another model turn that can only restate or replace an already-valid patch.
+        "mcp__repair__submit_world_ir_patch",
     }
 )
 
@@ -348,7 +352,9 @@ class VertexGeminiSession:
                 if usage is not None:
                     tokens_in += usage.prompt_token_count or 0
                     tokens_out += usage.candidates_token_count or 0
-                    tokens_cached += getattr(usage, "cached_content_token_count", 0) or 0
+                    tokens_cached += (
+                        getattr(usage, "cached_content_token_count", 0) or 0
+                    )
                 parts: list[Any] = []
                 returned: list[ToolReturned] = []
                 for part in (event.content.parts if event.content else []) or []:
@@ -440,7 +446,9 @@ def priced(model: str, tokens_in: int, tokens_out: int) -> float | None:
         return None
     if len(prices) > 2 and date.today().isoformat() > str(prices[2]):
         logger.warning(
-            "no current price for %s: the table's figures expired on %s", model, prices[2]
+            "no current price for %s: the table's figures expired on %s",
+            model,
+            prices[2],
         )
         return None
     return (tokens_in * prices[0] + tokens_out * prices[1]) / 1_000_000

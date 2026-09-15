@@ -12,6 +12,7 @@ import hashlib
 import json
 import math
 import sqlite3
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
@@ -153,11 +154,32 @@ def _convert(column: SourceColumn, value: Any) -> Any:
                 raise ValueError("number_value_invalid")
             return value
         raise ValueError("number_value_invalid")
+    if logical is LogicalType.TIMESTAMP:
+        if not isinstance(value, str):
+            raise ValueError("timestamp_value_invalid")
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("timestamp_value_invalid") from exc
+        # SQLite has no native timestamp-with-time-zone representation. Legacy
+        # authoring databases commonly contain ISO wall-clock values even when
+        # the source model was discovered from PostgreSQL. The World IR requires
+        # an offset for deterministic replay, so use UTC at this compatibility
+        # boundary instead of rejecting otherwise valid authored rows.
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.isoformat()
+    if logical is LogicalType.DATE:
+        if not isinstance(value, str):
+            raise ValueError("date_value_invalid")
+        try:
+            datetime.fromisoformat(value).date()
+        except ValueError as exc:
+            raise ValueError("date_value_invalid") from exc
+        return value
     if logical in {
         LogicalType.STRING,
         LogicalType.UUID,
-        LogicalType.TIMESTAMP,
-        LogicalType.DATE,
         LogicalType.ENUM,
     }:
         if not isinstance(value, str):
@@ -190,6 +212,7 @@ def import_sqlite_world(
     source: SourceModel,
     *,
     null_policy: SQLiteNullPolicy = SQLiteNullPolicy.LEGACY_ABSENT,
+    validate: bool = True,
 ) -> SQLiteWorldImportResult:
     """Import rows against authoritative source facts and validate the resulting World IR."""
 
@@ -271,6 +294,19 @@ def import_sqlite_world(
                             column=column.name,
                         )
                     )
+                if (
+                    column.logical_type is LogicalType.TIMESTAMP
+                    and isinstance(raw_value, str)
+                    and converted != raw_value
+                ):
+                    decisions.append(
+                        SQLiteImportDecision(
+                            code="legacy_naive_timestamp_normalized_to_utc",
+                            table=table_name,
+                            row_identity=identity,
+                            column=column.name,
+                        )
+                    )
             rows.append(WorldRow(identity=identity, values=values))
         world_tables.append(
             WorldTable(
@@ -283,7 +319,8 @@ def import_sqlite_world(
         source_model_fingerprint=source.fingerprint,
         tables=tuple(world_tables),
     )
-    validate_world_ir(world, source)
+    if validate:
+        validate_world_ir(world, source)
     return SQLiteWorldImportResult(world=world, decisions=tuple(decisions))
 
 

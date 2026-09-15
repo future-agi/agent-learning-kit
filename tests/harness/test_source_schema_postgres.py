@@ -198,6 +198,49 @@ def test_postgres_inspection_is_stable() -> None:
     assert first == second
 
 
+@pytest.mark.parametrize("udt_name", ("time", "timetz", "bit", "varbit"))
+def test_postgres_discovery_does_not_claim_unsupported_native_semantics(
+    udt_name: str,
+) -> None:
+    class UnsupportedCatalogue(CatalogueConnection):
+        def execute(self, statement: str, params: tuple[Any, ...]) -> Cursor:
+            if "attr.attnum AS ordinal_position" in statement:
+                return Cursor(
+                    [
+                        {
+                            "table_name": "events",
+                            "column_name": "value",
+                            "ordinal_position": 1,
+                            "native_type": udt_name,
+                            "nullable": False,
+                            "has_default": False,
+                            "default_expression": None,
+                            "generated": False,
+                            "type_kind": "b",
+                            "udt_name": udt_name,
+                            "element_udt_name": None,
+                        }
+                    ]
+                )
+            if "pg_catalog.pg_enum" in statement:
+                return Cursor([])
+            if "pg_catalog.pg_index index" in statement:
+                return Cursor([])
+            if "pg_catalog.pg_constraint con" in statement:
+                return Cursor([])
+            raise AssertionError("unexpected catalogue query")
+
+    model = inspect_postgres(
+        UnsupportedCatalogue(),
+        source_digest=SOURCE_DIGEST,
+    )
+
+    assert [item.code for item in model.unsupported] == [
+        "postgres_native_type_unsupported"
+    ]
+    assert model.unsupported[0].location == "events.value"
+
+
 def test_postgres_inspection_against_real_catalogues() -> None:
     dsn = os.environ.get("ALK_TEST_POSTGRES_DSN")
     if not dsn:

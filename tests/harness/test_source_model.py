@@ -7,12 +7,30 @@ from pydantic import ValidationError
 
 from fi.alk.harness.source_model import (
     LogicalType,
+    SourceAction,
+    SourceColumn,
     SourceEvidence,
+    SourceInterface,
     SourceModel,
+    SourceProcess,
 )
 from fi.alk.harness.source_schema.sqlite import inspect_sqlite
 
 SOURCE_DIGEST = "sha256:" + ("a" * 64)
+
+
+def test_array_source_column_requires_a_scalar_leaf_type() -> None:
+    with pytest.raises(
+        ValidationError, match="source_array_element_type_must_be_scalar"
+    ):
+        SourceColumn(
+            name="nested",
+            logical_type=LogicalType.ARRAY,
+            native_type="INTEGER[]",
+            nullable=False,
+            has_default=False,
+            element_type=LogicalType.ARRAY,
+        )
 
 
 def _database() -> sqlite3.Connection:
@@ -100,6 +118,97 @@ def test_source_model_fingerprint_covers_source_identity() -> None:
     second = inspect_sqlite(_database(), source_digest="sha256:" + ("b" * 64))
 
     assert first.fingerprint != second.fingerprint
+
+
+def test_source_model_represents_framework_neutral_runtime_and_actions() -> None:
+    evidence = SourceEvidence(
+        path="src/agent.py", digest=SOURCE_DIGEST, kind="entrypoint"
+    )
+    model = SourceModel.create(
+        source_digest=SOURCE_DIGEST,
+        engine="none",
+        processes=(
+            SourceProcess(
+                name="agent",
+                kind="worker",
+                entrypoint="src/agent.py",
+                configuration_names=("MODEL_API_KEY",),
+                evidence=(evidence,),
+            ),
+        ),
+        interfaces=(
+            SourceInterface(
+                name="primary",
+                kind="callable",
+                protocol="python",
+                process="agent",
+            ),
+        ),
+        actions=(
+            SourceAction(
+                name="navigate",
+                input_schema={"type": "object"},
+                output_schema={"type": "object"},
+                implementation_kind="callable",
+                implementation_ref="src.agent:navigate",
+                effect="mutating",
+                evidence=(evidence,),
+            ),
+        ),
+    )
+
+    assert model.processes[0].kind == "worker"
+    assert model.interfaces[0].kind == "callable"
+    assert model.actions[0].name == "navigate"
+    assert "voice" not in model.model_dump_json()
+
+
+def test_source_model_rejects_unknown_process_dependencies() -> None:
+    with pytest.raises(ValidationError, match="source_process_dependency_unknown"):
+        SourceModel.create(
+            source_digest=SOURCE_DIGEST,
+            engine="none",
+            processes=(
+                SourceProcess(
+                    name="agent",
+                    kind="process",
+                    entrypoint="agent.py",
+                    dependencies=("missing-service",),
+                ),
+            ),
+        )
+
+
+def test_source_model_rejects_process_dependency_cycles() -> None:
+    with pytest.raises(ValidationError, match="source_process_dependency_cycle"):
+        SourceModel.create(
+            source_digest=SOURCE_DIGEST,
+            engine="none",
+            processes=(
+                SourceProcess(
+                    name="agent",
+                    kind="process",
+                    entrypoint="agent.py",
+                    dependencies=("browser",),
+                ),
+                SourceProcess(
+                    name="browser",
+                    kind="service",
+                    entrypoint="browser.py",
+                    dependencies=("agent",),
+                ),
+            ),
+        )
+
+
+def test_source_action_rejects_non_json_schemas() -> None:
+    with pytest.raises(ValidationError, match="source_action_schema_not_json"):
+        SourceAction(
+            name="navigate",
+            input_schema={"type": {"not-json"}},
+            implementation_kind="callable",
+            implementation_ref="src.agent:navigate",
+        )
 
 
 def test_source_model_rejects_tampered_fingerprint() -> None:

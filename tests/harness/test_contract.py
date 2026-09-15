@@ -9,8 +9,6 @@ def test_an_import_entrypoint_without_module_and_callable_is_rejected_at_contrac
     with `contract_tool_entry_incomplete`. Catching it here tells the model while it can still fix
     the entry.
     """
-    from fi.alk.harness.contract import AgentContract, validate_contract
-
     contract = AgentContract.model_validate(
         {
             "agent": "hotel",
@@ -20,21 +18,28 @@ def test_an_import_entrypoint_without_module_and_callable_is_rejected_at_contrac
         }
     )
     problems = validate_contract(contract)
-    assert any("lookup_policy" in p and "needs-module-and-callable" in p for p in problems), problems
+    assert any(
+        "lookup_policy" in p and "needs-module-and-callable" in p for p in problems
+    ), problems
 
 
 def test_a_complete_entrypoint_and_an_unreachable_one_both_pass():
-    from fi.alk.harness.contract import AgentContract, validate_contract
-
     contract = AgentContract.model_validate(
         {
             "agent": "hotel",
             "real_use_cases": ["book a room"],
             "tools": [{"name": "a", "args": []}, {"name": "b", "args": []}],
             "tool_entrypoints": [
-                {"tool": "a", "mode": "construct", "module": "pkg.mod", "callable": "Klass.method"},
+                {
+                    "tool": "a",
+                    "mode": "construct",
+                    "module": "pkg.mod",
+                    "callable": "Klass.method",
+                },
                 {"tool": "b", "mode": "unreachable"},
             ],
         }
     )
-    assert not [p for p in validate_contract(contract) if "needs-module-and-callable" in p]
+    assert not [
+        p for p in validate_contract(contract) if "needs-module-and-callable" in p
+    ]
