@@ -6,11 +6,6 @@ from pathlib import Path
 from fi.alk.harness import hosted_authoring_entrypoint as entrypoint
 
 
-class _UsageReporter:
-    def report(self) -> bool:
-        return True
-
-
 def test_platform_simulator_values_ignore_customer_target_credentials() -> None:
     values = entrypoint._platform_simulator_values(
         {
@@ -64,9 +59,6 @@ def test_exhausted_runtime_repair_returns_nonretryable_exit(tmp_path, monkeypatc
     from fi.alk.harness.authoring_runtime_validation import RuntimeValidationError
 
     monkeypatch.setattr(entrypoint, "_load_values", lambda path: {})
-    monkeypatch.setattr(
-        entrypoint, "_configure_usage_reporter", lambda: _UsageReporter()
-    )
     monkeypatch.setattr(entrypoint, "_ADC_PATH", tmp_path / "adc.json")
 
     def failed(argv, *, validate_runtime):
@@ -94,9 +86,6 @@ def test_hosted_entrypoint_passes_one_shot_provider_secret_to_authoring(
     monkeypatch.setattr(entrypoint, "_SECRETS_PATH", secrets)
     monkeypatch.setattr(entrypoint, "_TARGET_SECRETS_PATH", target_secrets)
     monkeypatch.setattr(entrypoint, "_ADC_PATH", tmp_path / "adc.json")
-    monkeypatch.setattr(
-        entrypoint, "_configure_usage_reporter", lambda: _UsageReporter()
-    )
     observed = {}
 
     def authoring_main(argv, *, validate_runtime):
@@ -109,7 +98,12 @@ def test_hosted_entrypoint_passes_one_shot_provider_secret_to_authoring(
 
     monkeypatch.setattr(entrypoint, "authoring_main", authoring_main)
 
-    assert entrypoint.main(["job.json", "--source", "source", "--output", "out"]) == 0
+    assert (
+        entrypoint.main(
+            ["job.json", "--source", "source", "--output", "out"]
+        )
+        == 0
+    )
     assert observed == {
         "argv": [
             "job.json",

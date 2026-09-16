@@ -70,7 +70,7 @@ from .scenario_source import (
     ScenarioDocumentInvalid,
     bundle_has_scenarios,
 )
-from .usage import UsageJournal, UsageReporter, configure_reporter
+from .usage import UsageJournal, UsageReporter
 from .world.handle import HostedWorld
 from .world.stores.postgres import AttachedPostgresStore
 
@@ -1817,7 +1817,6 @@ async def run_job(
         transport,
         UsageJournal(work_directory / "usage.json", attempt_id=capabilities.attempt_id),
     )
-    configure_reporter(usage_reporter)
 
     adapter = OutboundAdapter(
         capabilities,
@@ -2352,7 +2351,6 @@ async def run_job(
                     logger.exception(
                         "call runner close failed in the run_job finally backstop"
                     )
-        configure_reporter(None)
         restore_sigterm()
 
 

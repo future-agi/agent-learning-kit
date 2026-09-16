@@ -587,44 +587,6 @@ def _safe_body(response: httpx.Response) -> Any:
         return response.text[:500]
 
 
-def _simulator_usage(metadata: dict[str, Any]) -> dict[str, Any] | None:
-    observations = metadata.get("simulator_model_usage")
-    if not isinstance(observations, list):
-        return None
-    llm = [
-        item
-        for item in observations
-        if isinstance(item, dict) and item.get("type") == "llm_usage"
-    ]
-    if not llm:
-        return None
-    usage: dict[str, Any] = {
-        "input_tokens": sum(
-            value
-            for item in llm
-            if isinstance((value := item.get("input_tokens")), int) and value >= 0
-        ),
-        "output_tokens": sum(
-            value
-            for item in llm
-            if isinstance((value := item.get("output_tokens")), int) and value >= 0
-        ),
-        "cached_input_tokens": sum(
-            value
-            for item in llm
-            if isinstance((value := item.get("input_cached_tokens")), int) and value >= 0
-        ),
-        "funding": (
-            "platform"
-            if metadata.get("simulator_funding") == "platform"
-            else "customer"
-        ),
-    }
-    if isinstance(metadata.get("infra_failed"), bool):
-        usage["infra_failed"] = metadata["infra_failed"]
-    return usage
-
-
 def _build_result_payload(case) -> dict[str, Any]:
     """Map a SimulationTestCaseResult into the ALK ingestion PATCH body.
 
@@ -731,9 +693,6 @@ def _build_result_payload(case) -> dict[str, Any]:
                 "run_id",
             }
         }
-        simulator_usage = _simulator_usage(result.metadata)
-        if simulator_usage is not None:
-            call_metadata["simulator_usage"] = simulator_usage
         if call_metadata:
             payload["call_metadata"] = _json_safe(call_metadata)
 

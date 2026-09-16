@@ -237,7 +237,6 @@ def accept_scenario(
         scenario = Scenario.model_validate(payload)
     except Exception as invalid:
         return _err(f"Not kept. {invalid}"[:600])
-    replaced = any(one.name == scenario.name for one in kept)
 
     # Read against the world this scenario actually runs in, so a setup that creates the table
     # a check reads is not reported as referring to something that does not exist.
@@ -278,6 +277,7 @@ def accept_scenario(
                 world.close()
         return _err(said)
 
+    replaced = any(one.name == scenario.name for one in kept)
     kept[:] = [one for one in kept if one.name != scenario.name]
     kept.append(scenario)
     # A proved scenario is already valuable work. Persist it immediately so a stopped model,

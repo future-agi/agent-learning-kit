@@ -14,15 +14,12 @@ import sys
 from pathlib import Path
 
 from . import observability
-from . import outbound as ob
 from .authoring_entrypoint import main as authoring_main
-from .usage import UsageJournal, UsageReporter, configure_reporter
 
 _SECRETS_PATH = Path("/run/futureagi/secrets.json")
 _ADC_PATH = Path("/work/.authoring-credentials/google.json")
 _TARGET_SECRETS_PATH = Path("/run/futureagi/authoring-target-secrets.json")
 _SIMULATOR_SECRETS_PATH = Path("/run/futureagi/simulator-secrets.json")
-_USAGE_PATH = Path("/work/usage.json")
 _PASSTHROUGH = {
     # Not a credential: authoring writes the scenarios, so the switch has to reach it.
     "ALK_VOICEMAIL_SCENARIOS",
@@ -135,23 +132,12 @@ def _authoring_job_context(forwarded: list[str]) -> tuple[str, str, dict]:
     return "", "", {}
 
 
-def _configure_usage_reporter() -> UsageReporter:
-    capabilities = ob.load_capabilities(unlink=False)
-    reporter = UsageReporter(
-        capabilities,
-        ob.RequestsTransport(),
-        UsageJournal(_USAGE_PATH, attempt_id=capabilities.attempt_id),
-    )
-    configure_reporter(reporter)
-    return reporter
-
 
 def main(argv: list[str] | None = None) -> int:
     all_values = _load_values(_SECRETS_PATH)
     values = _platform_simulator_values(all_values)
     _configure_generation_environment(values)
     _configure_observability_environment(all_values)
-    usage_reporter = _configure_usage_reporter()
     target_values = {
         name: all_values[name]
         for name in ("RETELL_API_KEY", "VAPI_API_KEY")
@@ -182,8 +168,6 @@ def main(argv: list[str] | None = None) -> int:
             # EX_CONFIG: deterministic generated-environment failure, not retryable infra.
             return 78
     finally:
-        usage_reporter.report()
-        configure_reporter(None)
         observability.end()
         try:
             _ADC_PATH.unlink(missing_ok=True)

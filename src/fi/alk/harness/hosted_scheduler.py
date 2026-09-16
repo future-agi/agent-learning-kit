@@ -377,12 +377,12 @@ _CODE_DOMAIN: dict[str, FailureDomain] = {
     "world_unavailable": FailureDomain.ENVIRONMENT,
     "state_too_large": FailureDomain.SIMULATOR,
     "call_failed": FailureDomain.INFRASTRUCTURE,
-    "usage_exhausted": FailureDomain.PLATFORM_SYNC,
-    "usage_check_failed": FailureDomain.PLATFORM_SYNC,
     "target_agent_stalled": FailureDomain.AGENT,
     "target_agent_tool_failed": FailureDomain.AGENT,
     "simulator_stalled": FailureDomain.SIMULATOR,
     "driver_crashed": FailureDomain.SIMULATOR,
+    "usage_exhausted": FailureDomain.PLATFORM_SYNC,
+    "usage_check_failed": FailureDomain.PLATFORM_SYNC,
     "world_pool_exhausted": FailureDomain.INFRASTRUCTURE,
 }
 _RETRYABLE_CODES = frozenset(
@@ -1435,7 +1435,6 @@ def _record_scenario(span: Any, receipt: Any, context: Any) -> None:
         attempt=getattr(context, "attempt", None),
     )
 
-
 class HostedScheduler:
     """Drains a job's scenario list across a `WorldPool`, one asyncio task per scenario — lease()
     blocking when the pool is saturated is what caps concurrency at W, so nothing here re-derives
@@ -2078,22 +2077,16 @@ class HostedScheduler:
         if judged_pending:
             # Judged sub-goals only read, so they are independent of each other and of the coded
             # checks: one round trip for all of them rather than one each.
-            async def _settle(slot: int, goal: Any) -> Any:
+            async def _settle(goal: Any) -> Any:
                 # Awaited, not called inline: calling an injected judge whose signature does not
                 # match raises while the coroutines are still being built, which is outside
                 # `gather`'s net and errors the scenario. Inside a coroutine it is just a fault.
                 return await self._judge(
-                    goal,
-                    check_handle,
-                    calls,
-                    messages=call_outcome.messages,
-                    scenario_key=scenario.scenario_key,
-                    scenario_attempt=attempt,
-                    evaluation_key=str(slot),
+                    goal, check_handle, calls, messages=call_outcome.messages
                 )
 
             verdicts = await asyncio.gather(
-                *(_settle(slot, goal) for slot, goal in judged_pending),
+                *(_settle(goal) for _, goal in judged_pending),
                 return_exceptions=True,
             )
             for (slot, goal), outcome in zip(judged_pending, verdicts):
