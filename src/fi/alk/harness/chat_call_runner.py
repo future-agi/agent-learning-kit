@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -21,6 +22,7 @@ from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime
 from .run.conversation import TargetConversationEnded, Transcript, converse
 from .scenario import Scenario as ConversationScenario
+from .usage import UsageDenied, UsageUnavailable, simulator_funding
 from .world.runtime import Call, GeneratedWorld
 from .world.stores.postgres import AttachedPostgresStore
 
@@ -393,6 +395,7 @@ class HostedChatCallRunner:
             self._contract = AgentContract.model_validate_json(
                 contract_path.read_text(encoding="utf-8")
             )
+        self._scenario_attempt_counts: dict[str, int] = {}
 
     async def run(
         self,
@@ -445,6 +448,22 @@ class HostedChatCallRunner:
                 "scenario": scenario.scenario_key,
             },
         )
+        scenario_attempt = (
+            self._scenario_attempt_counts.get(scenario.scenario_key, 0) + 1
+        )
+        self._scenario_attempt_counts[scenario.scenario_key] = scenario_attempt
+        funding = simulator_funding()
+        if self._context.usage_reporter is not None and funding == "platform":
+            try:
+                await asyncio.to_thread(self._context.usage_reporter.check, "text_call")
+            except UsageDenied as exc:
+                raise CallAborted(
+                    f"text_usage_check_denied: {exc}", code="usage_exhausted"
+                ) from exc
+            except UsageUnavailable as exc:
+                raise CallAborted(
+                    f"text_usage_check_failed: {exc}", code="usage_check_failed"
+                ) from exc
         started = datetime.now(timezone.utc)
         try:
             transcript = await _drive_conversation(
@@ -467,6 +486,19 @@ class HostedChatCallRunner:
             ) from exc
 
         ended = datetime.now(timezone.utc)
+        simulator_tokens = (
+            transcript.simulator_input_tokens + transcript.simulator_output_tokens
+        )
+        if self._context.usage_reporter is not None and simulator_tokens > 0:
+            await asyncio.to_thread(
+                self._context.usage_reporter.record,
+                action="text_call",
+                scenario_key=scenario.scenario_key,
+                amount=simulator_tokens,
+                funding=funding,
+                occurred_at=started,
+                record_key=str(scenario_attempt),
+            )
         transcript_id = await self._adapter.upload_artifact(
             transcript.artifact(),
             kind=ArtifactKind.TRANSCRIPT,
