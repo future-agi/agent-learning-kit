@@ -2348,9 +2348,7 @@ async def run_job(
                     if hasattr(result, "__await__"):
                         await result
                 except Exception:  # noqa: BLE001 - cleanup must never mask the real exit path
-                    logger.exception(
-                        "call runner close failed in the run_job finally backstop"
-                    )
+                    logger.exception("call runner close failed in the run_job finally backstop")
         restore_sigterm()
 
 

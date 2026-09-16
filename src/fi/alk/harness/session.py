@@ -220,11 +220,7 @@ class Stage:
         return self._spec
 
     def grant(
-        self,
-        server_name: str,
-        server: ToolServer,
-        tool_names: list[str],
-        ask: Any = None,
+        self, server_name: str, server: ToolServer, tool_names: list[str], ask: Any = None
     ) -> None:
         """Give this stage one more tool server, before it opens.
 
