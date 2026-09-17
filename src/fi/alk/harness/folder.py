@@ -22,6 +22,8 @@ something you can argue with.
 from __future__ import annotations
 
 import json
+import re
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -251,3 +253,63 @@ def read_all(destination: Path) -> list[Scenario]:
         if scenario is not None:
             found.append(scenario)
     return found
+
+
+def _expects_a_value(body: str) -> bool:
+    """Whether a check compares an argument against something concrete, rather than just naming it.
+
+    Everything a check must mention to reach an argument at all is stripped first: the tool it
+    selects on, the key it reads, the empty-string default, and the sentence it returns when it
+    fails, which is the check's own prose and not a claim about the agent. Whatever literal survives is the
+    value the agent is actually being held to, wherever it sits in the expression, which is what a
+    pattern anchored on ``arguments`` missed when a suite wrote ``'san francisco' in ...``.
+    """
+    left = re.sub(r"return\s+'[^']*'", "return", body)
+    left = re.sub(r'return\s+"[^"]*"', "return", left)
+    left = re.sub(r"c\.name\s*==\s*'[^']*'", "", left)
+    left = re.sub(r"\.get\(\s*'[^']*'", ".get(", left)
+    left = re.sub(r"'[^']*'\s+in\s+c\.arguments(?![\.\[])", "", left)
+    left = left.replace("''", "").replace('""', "")
+    return bool(re.search(r"'[^']+'", left))
+
+
+def check_problems(folder: Path) -> list[str]:
+    """Checks that were written but do not check anything, read back from what was just saved.
+
+    The rule is already in the writing skill and was followed anyway: a real hundred-scenario suite
+    shipped `lookup_weather_executed` and `weather_lookup_succeeded` on seventy of them, both
+    asserting a successful call carrying a location, neither asserting what the caller was told.
+    Prose did not stop it, so this reads the files.
+
+    A check earns its place by looking at the world the run left, or by comparing an argument to a
+    value it should have. One that does neither only proves the tool was reached: every agent that
+    reaches it passes, and an agent that behaves correctly by another route fails. Two such checks
+    naming the same tool are one check written twice.
+
+    Advisory, never blocking. The suite saves either way; this only says what is thin.
+    """
+    problems: list[str] = []
+    thin = 0
+    for scenario_dir in sorted(one for one in (folder / SCENARIOS).glob("*") if one.is_dir()):
+        by_tool: dict[str, list[str]] = defaultdict(list)
+        for check in sorted(scenario_dir.glob("checks/*.py")):
+            body = check.read_text(encoding="utf-8").split("if __name__")[0]
+            inside = body.replace("def check(world, calls):", "")
+            if "world" in inside or _expects_a_value(inside):
+                continue
+            thin += 1
+            for tool in set(re.findall(r"c\.name\s*==\s*'([^']+)'", inside)):
+                by_tool[tool].append(check.stem)
+        for tool, names in sorted(by_tool.items()):
+            if len(names) > 1:
+                problems.append(
+                    f"{scenario_dir.name}: {', '.join(sorted(names))} all only assert that "
+                    f"{tool} was called, so they are one check written more than once"
+                )
+    if thin:
+        problems.append(
+            f"{thin} checks assert only that a tool was called. Assert the arguments it was given "
+            "or the state the world was left in, or the check passes for any agent that reaches "
+            "the tool at all."
+        )
+    return problems

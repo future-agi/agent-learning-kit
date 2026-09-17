@@ -27,7 +27,15 @@ from .catalogue import (
     validate_sub_goal,
 )
 from .contract import CALL_DIRECTIONS, AgentContract
-from .folder import INDEX, SCENARIOS, apply_setup, read_all, write_folder, write_index
+from .folder import (
+    INDEX,
+    SCENARIOS,
+    apply_setup,
+    check_problems,
+    read_all,
+    write_folder,
+    write_index,
+)
 from .prove import play_reference_step, prepared, prove
 from .scenario import (
     ANSWERED_BY,
@@ -36,6 +44,7 @@ from .scenario import (
     Scenario,
     Step,
     contract_sequence_problems,
+    coverage_report,
     keyword_problems,
     suite_diversity_problems,
     validate_scenario,
@@ -406,6 +415,31 @@ def not_ready(kept: list[Scenario], wanted: int, catalogue: Catalogue) -> list[s
             "suite. Reuse the catalogue where the same thing is being checked."
         )
     return problems
+
+
+def _coverage_gaps(coverage: dict[str, Any]) -> str:
+    """The part of the coverage report worth saying out loud: what the plan promised and missed.
+
+    Silent unless a design was declared, because without one there is nothing to have missed.
+    """
+    lines = []
+    for axis, body in coverage.get("axes", {}).items():
+        unused = body.get("unused") or []
+        if unused:
+            lines.append(
+                f"{axis}: {body['planned'] - len(unused)} of {body['planned']} levels written, "
+                f"never used {', '.join(unused)}"
+            )
+    thin = [
+        f"{pair} {body['covered']}/{body['possible']}"
+        for pair, body in coverage.get("pairs", {}).items()
+        if body.get("possible") and body["share"] < 0.5
+    ]
+    if thin:
+        lines.append("under half the pairs: " + "; ".join(thin))
+    if not lines:
+        return ""
+    return "Against the plan you declared:\n  - " + "\n  - ".join(lines) + "\n"
 
 
 def scenario_tools(
@@ -788,6 +822,14 @@ def scenario_tools(
                     "existing names wherever one fits, so results add up across the suite.",
                 },
                 "max_turns": {"type": "integer"},
+                "coverage": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                    "description": "Where this scenario sits on the axes the plan varied, one "
+                    "value per axis, for example {\"task\": \"book_ride\", \"overlay\": "
+                    "\"interruption\"}. Copy it from your brief. It is what lets the suite "
+                    "report how much of the space was tested; it never reaches the caller.",
+                },
             },
             scenario_required,
         ),
@@ -972,7 +1014,47 @@ def scenario_tools(
         "save_scenarios",
         "Write the kept scenarios out. Every one has already been proved by submit_scenario, so "
         "this always saves; anything else worth knowing comes back alongside.",
-        schema({}, []),
+        schema(
+            {
+                "design": {
+                    "type": "object",
+                    "description": (
+                        "What you planned to cover, so the coverage report can tell a gap from a "
+                        "cell that was never legal. Omit it and the report can only count the "
+                        "levels that happen to appear, which reads as full coverage however much "
+                        "was missed. Axis names are your own."
+                    ),
+                    "properties": {
+                        "axes": {
+                            "type": "object",
+                            "description": (
+                                "Every level you intended per axis, including ones no scenario "
+                                "reached. Example: "
+                                '{"task": ["book", "cancel"], "counterparty": ["first_time"]}'
+                            ),
+                            "additionalProperties": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                        },
+                        "masked": {
+                            "type": "array",
+                            "description": (
+                                "Pairs that are deliberately not testable, so they leave the "
+                                "denominator instead of counting as a gap. Each entry is two "
+                                'strings shaped "axis=level". Example: '
+                                '[["task=book", "counterparty=minor"]]'
+                            ),
+                            "items": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                        },
+                    },
+                }
+            },
+            [],
+        ),
     )
     async def save_scenarios(_args: dict[str, Any]) -> dict[str, Any]:
         # Always written. Each of these already cleared all three gates on its way in, so this is
@@ -981,7 +1063,17 @@ def scenario_tools(
         # What is off about the suite is said, not enforced.
         noted = not_ready(kept, target["count"], catalogue)
         path = write_scenarios(kept, destination, catalogue)
+        # Read back after writing, because it is the check files on disk that get run, not the
+        # intention behind them. Advisory: a thin check is still a check and still saves.
+        noted = noted + check_problems(destination)
         diversity = suite_diversity_problems(kept) + keyword_problems(kept)
+        # How much of the space this suite covered, written beside it so the number and the
+        # scenarios it describes can never drift apart.
+        design = _args.get("design") if isinstance(_args.get("design"), dict) else None
+        coverage = coverage_report(kept, design)
+        (destination / "coverage.json").write_text(
+            json.dumps(coverage, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
         judged = sum(
             1
             for one in kept
@@ -992,7 +1084,14 @@ def scenario_tools(
             f"Saved {len(kept)} scenarios. Each has its own folder under "
             f"{destination / 'scenarios'} holding scenario.json, setup.py, ready.py and one "
             f"runnable file per check; {path.name} indexes them.\n"
-            "Every one cleared all three gates: the world is ready for it, the reference "
+            f"Coverage: {coverage['placed']} of {coverage['scenarios']} placed on the axes, "
+            + ", ".join(
+                f"{axis} {body['levels']} levels (spread {body['spread']})"
+                for axis, body in coverage["axes"].items()
+            )
+            + ". Written to coverage.json.\n"
+            + _coverage_gaps(coverage)
+            + "Every one cleared all three gates: the world is ready for it, the reference "
             "solution passes its checks, and those checks fail when nothing is done.\n"
             f"{judged} sub-goal references are judged rather than settled by code."
         )

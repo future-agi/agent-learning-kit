@@ -1894,3 +1894,117 @@ def test_keyword_problems_catches_what_a_hundred_scenario_suite_did(tmp_path: Pa
     assert keyword_problems(
         suite(lambda i: [vocabulary[i % 6], vocabulary[(i + 2) % 6]])
     ) == []
+
+
+def test_coverage_report_answers_how_much_of_the_space_was_tested(tmp_path: Path) -> None:
+    """Breadth and evenness are different questions, and a suite can pass one and fail the other."""
+    from fi.alk.harness.scenario import Scenario, coverage_report
+
+    def suite(coords) -> list[Scenario]:
+        return [
+            Scenario(name=f"s{i}", use_case="book a ride", coverage=c)
+            for i, c in enumerate(coords)
+        ]
+
+    even = coverage_report(
+        suite([{"task": t, "overlay": o} for t in ("book", "cancel") for o in ("none", "interrupt")])
+    )
+    assert even["scenarios"] == 4
+    assert even["placed"] == 4
+    assert even["axes"]["task"]["levels"] == 2
+    # Two levels used equally is perfectly even.
+    assert even["axes"]["task"]["spread"] == 1.0
+    # Both axes fully crossed, so every pair was seen.
+    assert even["pairs"]["overlay x task"]["covered"] == 4
+    assert even["pairs"]["overlay x task"]["share"] == 1.0
+
+    # Broad but lopsided: the same two levels, one of them swamping the other. Breadth is unchanged
+    # and only the spread reveals it, which is why both numbers are reported.
+    lopsided = coverage_report(
+        suite([{"task": "book"}] * 9 + [{"task": "cancel"}])
+    )
+    assert lopsided["axes"]["task"]["levels"] == 2
+    assert lopsided["axes"]["task"]["spread"] < 0.5
+
+    # A scenario written before the coordinate existed is counted, not dropped, and never invents a
+    # placement it does not have.
+    mixed = coverage_report(suite([{"task": "book"}, {}, {}]))
+    assert mixed["scenarios"] == 3 and mixed["placed"] == 1
+    # The use case is an axis whether or not the plan named one.
+    assert mixed["axes"]["use_case"]["levels"] == 1
+
+    # An empty suite answers rather than raising.
+    assert coverage_report([])["scenarios"] == 0
+
+
+def test_coverage_report_tells_a_gap_from_a_cell_that_was_never_legal(tmp_path: Path) -> None:
+    """Without the plan a narrow suite reports full coverage, which is the number QA would act on.
+
+    Measured on the four scenarios below: covering two tasks and two counterparties reads as 4 of 4
+    pairs, 100%. The plan dealt three of each and masked one combination, so the truth is 4 of 8.
+    """
+    from fi.alk.harness.scenario import Persona, Scenario, coverage_report
+
+    suite = [
+        Scenario(
+            name=f"s{i}",
+            persona=Persona(name=f"P{i}"),
+            coverage={"task": task, "counterparty": who},
+        )
+        for i, (task, who) in enumerate(
+            [("book", "first_time"), ("book", "regular"), ("cancel", "first_time"), ("cancel", "regular")]
+        )
+    ]
+
+    blind = coverage_report(suite)
+    assert blind["pairs"]["counterparty x task"]["share"] == 1.0
+
+    told = coverage_report(
+        suite,
+        {
+            "axes": {
+                "task": ["book", "cancel", "reschedule"],
+                "counterparty": ["first_time", "regular", "minor"],
+            },
+            "masked": [["task=book", "counterparty=minor"]],
+        },
+    )
+    pair = told["pairs"]["counterparty x task"]
+    assert (pair["covered"], pair["possible"], pair["masked"]) == (4, 8, 1)
+    assert told["axes"]["task"]["unused"] == ["reschedule"]
+    assert told["axes"]["counterparty"]["unused"] == ["minor"]
+
+
+def test_check_problems_names_the_check_that_only_proves_the_tool_was_reached(tmp_path: Path) -> None:
+    """Both halves of what a real hundred-scenario suite shipped on seventy of its scenarios.
+
+    `lookup_weather_executed` and `weather_lookup_succeeded` each assert a successful call carrying
+    a location, so either passes for any agent that reaches the tool at all and neither says what
+    the caller was told. A check naming the value it expects is left alone.
+    """
+    from fi.alk.harness.folder import check_problems
+
+    def write(scenario: str, name: str, body: str) -> None:
+        folder = tmp_path / "scenarios" / scenario / "checks"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / f"{name}.py").write_text(
+            "def check(world, calls):\n"
+            "    lookups = [c for c in calls if c.name == 'lookup_weather' and c.ok]\n"
+            f"{body}\n    return None\n",
+            encoding="utf-8",
+        )
+
+    write("thin", "lookup_weather_executed",
+          "    if not any('location' in c.arguments for c in lookups):\n"
+          "        return 'The agent called lookup_weather without a location argument.'")
+    write("thin", "weather_lookup_succeeded",
+          "    if not any(len(c.arguments.get('location', '').strip()) > 0 for c in lookups):\n"
+          "        return 'lookup_weather was not called with a non-empty location.'")
+    write("real", "san_francisco_weather_looked_up",
+          "    if not any('san francisco' in c.arguments.get('location', '').lower() for c in lookups):\n"
+          "        return 'The agent did not look up weather with location San Francisco.'")
+
+    said = " ".join(check_problems(tmp_path))
+    assert "thin: lookup_weather_executed, weather_lookup_succeeded" in said
+    assert "2 checks assert only that a tool was called" in said
+    assert "san_francisco" not in said

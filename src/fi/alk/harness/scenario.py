@@ -17,8 +17,9 @@ import hashlib
 import json
 import os
 import re
-from collections import Counter
-from math import ceil
+from collections import Counter, defaultdict
+from itertools import combinations
+from math import ceil, log
 from typing import Any, ClassVar
 
 from pydantic import BaseModel, Field, model_validator
@@ -244,6 +245,17 @@ class Scenario(BaseModel):
     # What a correct agent would do. Run by the gates, never by the agent under test.
     solution: list[Step] = Field(default_factory=list)
 
+    # Where this scenario sits on the axes the plan varied, one value per named dimension, for
+    # example {"task": "book_ride", "counterparty": "first_time", "overlay": "interruption"}.
+    #
+    # The plan already computes this to brief a writer and then throws it away, which is why
+    # nothing can answer "how much of the space did we test". Carrying it costs nothing and makes
+    # the coverage report arithmetic rather than guesswork.
+    #
+    # Deliberately an open dict rather than named fields: the axes differ per modality, a scenario
+    # written before this existed simply has none, and nothing downstream may require it. It never
+    # reaches the simulated caller.
+    coverage: dict[str, str] = Field(default_factory=dict)
     # Which entries of the shared catalogue must hold. Named, not restated, so results roll up
     # across the suite: the same sub-goal failing in seven of twelve scenarios is one sentence.
     sub_goals: list[str] = Field(default_factory=list)
@@ -906,6 +918,132 @@ def fixture_problems(scenario: Scenario) -> list[str]:
 def rare_event_ceiling(suite_size: int) -> int:
     """The most scenarios of this suite size that may carry a rare call condition, rounded up."""
     return max(1, ceil(suite_size * RARE_CONDITION_SHARE))
+
+
+def _against_plan(
+    axis: str, counts: "Counter[str]", planned: dict[str, list[str]]
+) -> dict[str, Any]:
+    """The levels the plan promised for this axis and the ones no scenario ever used.
+
+    Only a declared axis gets these keys, so a report on an undeclared suite keeps the shape it
+    always had and nothing downstream has to learn two formats.
+    """
+    levels = planned.get(axis)
+    if not levels:
+        return {}
+    unused = [one for one in levels if one not in counts]
+    return {
+        "planned": len(levels),
+        "unused": unused,
+        "share": round((len(levels) - len(unused)) / len(levels), 3) if levels else 0.0,
+    }
+
+
+def coverage_report(
+    scenarios: list[Scenario], design: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """What share of the space this suite actually exercised, per axis and per pair.
+
+    Answers the question the suite exists to answer and currently cannot: how much did we test. It
+    reads only what is already on each scenario, so it never asks a writer for anything extra and a
+    scenario authored before the coordinate existed is counted as unplaced rather than dropped.
+
+    Two numbers per axis, and they mean different things. ``levels`` is how many distinct values the
+    suite used, which is breadth. ``spread`` is how evenly it used them, one when every level is
+    equally represented and near zero when one level swamps the rest. A suite can be broad and still
+    lopsided, and only the pair tells you that.
+
+    ``design`` is optional and is what the plan intended, against what the suite did. Without it the
+    report can only count what it sees, so a level nobody ever wrote is invisible and an absent pair
+    cannot be told apart from one that was never legal. Shape::
+
+        {"axes": {"task": ["book", "cancel"], "counterparty": ["first_time", "minor"]},
+         "masked": [["task=book", "counterparty=minor"]]}
+
+    ``masked`` names pairs that are deliberately not testable, so they leave the denominator rather
+    than counting as a gap. Anything the plan does not declare is simply not checked against.
+    """
+    total = len(scenarios)
+    if not total:
+        return {"scenarios": 0, "axes": {}, "pairs": {}, "placed": 0}
+
+    # What the plan said it would cover. Axis names are the plan's own, never a fixed list, which is
+    # what lets a browser or computer-use agent declare axes this module has never heard of.
+    declared = design or {}
+    planned: dict[str, list[str]] = {
+        str(axis): [str(level).strip() for level in levels if str(level).strip()]
+        for axis, levels in (declared.get("axes") or {}).items()
+    }
+    masked = {
+        (str(pair[0]).strip(), str(pair[1]).strip())
+        for pair in (declared.get("masked") or [])
+        if isinstance(pair, (list, tuple)) and len(pair) == 2
+    }
+    masked |= {(b, a) for a, b in masked}
+
+    placed = [one for one in scenarios if one.coverage]
+    axes: dict[str, Counter] = defaultdict(Counter)
+    for one in placed:
+        for axis, level in one.coverage.items():
+            if str(level).strip():
+                axes[axis][str(level).strip()] += 1
+
+    # The use case is an axis whether or not the plan named it, because it is how a suite is read.
+    for one in scenarios:
+        if one.use_case.strip():
+            axes["use_case"][one.use_case.strip()] += 1
+
+    def spread(counts: Counter) -> float:
+        """1.0 when every level is used equally, approaching 0 when one level dominates."""
+        seen = sum(counts.values())
+        if seen <= 0 or len(counts) <= 1:
+            return 0.0
+        share = [n / seen for n in counts.values()]
+        entropy = -sum(p * log(p) for p in share if p > 0)
+        return round(entropy / log(len(counts)), 3)
+
+    report: dict[str, Any] = {
+        "scenarios": total,
+        "placed": len(placed),
+        "axes": {
+            axis: {
+                "levels": len(counts),
+                "spread": spread(counts),
+                "counts": dict(counts.most_common()),
+                **_against_plan(axis, counts, planned),
+            }
+            for axis, counts in sorted(axes.items())
+        },
+        "pairs": {},
+    }
+
+    # Pairwise is where the gaps actually hide: a suite can cover every level of two axes and never
+    # put a hard counterparty together with a hard task.
+    named = sorted(axis for axis in axes if axis != "use_case")
+    for first, second in combinations(named, 2):
+        seen = Counter()
+        for one in placed:
+            a, b = one.coverage.get(first, ""), one.coverage.get(second, "")
+            if str(a).strip() and str(b).strip():
+                seen[(str(a).strip(), str(b).strip())] += 1
+        if not seen:
+            continue
+        first_levels = planned.get(first) or sorted(axes[first])
+        second_levels = planned.get(second) or sorted(axes[second])
+        blocked = sum(
+            1
+            for a in first_levels
+            for b in second_levels
+            if (f"{first}={a}", f"{second}={b}") in masked
+        )
+        possible = max(len(first_levels) * len(second_levels) - blocked, 0)
+        report["pairs"][f"{first} x {second}"] = {
+            "covered": len(seen),
+            "possible": possible,
+            "masked": blocked,
+            "share": round(len(seen) / possible, 3) if possible else 0.0,
+        }
+    return report
 
 
 def keyword_problems(scenarios: list[Scenario]) -> list[str]:
