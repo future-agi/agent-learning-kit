@@ -154,8 +154,6 @@ class Persona(BaseModel):
             behavior.append(f"- Personality: {self.personality}")
         if self.communication_style:
             behavior.append(f"- Communication Style: {self.communication_style}")
-        if self.keywords:
-            behavior.append("- Key Traits: " + ", ".join(self.keywords))
         if behavior:
             parts.append("# YOUR PERSONALITY & COMMUNICATION\n\n" + "\n".join(behavior))
 
@@ -908,6 +906,58 @@ def fixture_problems(scenario: Scenario) -> list[str]:
 def rare_event_ceiling(suite_size: int) -> int:
     """The most scenarios of this suite size that may carry a rare call condition, rounded up."""
     return max(1, ceil(suite_size * RARE_CONDITION_SHARE))
+
+
+def keyword_problems(scenarios: list[Scenario]) -> list[str]:
+    """Whether the suite's keywords can actually be used to find anything.
+
+    Keywords are the one field a writer chooses for the whole suite while being unable to see what
+    the other writers chose, so left unchecked they fragment: a real suite of 100 carried 143
+    distinct keywords, 108 of them used exactly once, with four separate words for ending a call.
+    The plan skill decides the vocabulary; this refuses a suite that ignored it.
+    """
+    problems: list[str] = []
+    total = len(scenarios)
+    if total < 8:
+        return problems
+    used = [
+        [word.strip().lower() for word in (one.persona.keywords if one.persona else []) if word.strip()]
+        for one in scenarios
+    ]
+    counts = Counter(word for words in used for word in set(words))
+    if not counts:
+        return problems
+
+    most = max(16, total // 50)
+    if len(counts) > most:
+        worst = ", ".join(word for word, _ in counts.most_common()[: -6 : -1])
+        problems.append(
+            f"{len(counts)} distinct keywords across {total} scenarios; at most {most}. "
+            f"A filter nobody can scan is not a filter. Rarely used: {worst}"
+        )
+
+    broad = [word for word, seen in counts.items() if seen > max(3, round(total * 0.4))]
+    if broad:
+        problems.append(
+            "these keywords are on more than 40% of the suite and so filter almost nothing: "
+            + ", ".join(sorted(broad))
+        )
+
+    rare = [word for word, seen in counts.items() if seen < 3]
+    if len(rare) > max(2, total // 10):
+        problems.append(
+            f"{len(rare)} keywords appear on fewer than 3 scenarios; a chip returning one row is a "
+            "note, not a filter"
+        )
+
+    crowded = [
+        one.name for one, words in zip(scenarios, used) if len(set(words)) > 5
+    ]
+    if crowded:
+        problems.append(
+            "more than 5 keywords on: " + ", ".join(sorted(crowded)[:5])
+        )
+    return problems
 
 
 def suite_diversity_problems(scenarios: list[Scenario]) -> list[str]:

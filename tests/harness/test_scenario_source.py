@@ -1811,3 +1811,86 @@ def test_restoring_claims_never_makes_a_coded_sub_goal_judged(tmp_path: Path) ->
     goal = restored.sub_goals[0]
     assert goal.judged == "", "a coded sub-goal must stay coded whatever the catalogue claims"
     assert goal.what == "the row is written", "the description is still restored"
+
+
+def test_the_index_carries_each_scenario_in_full(tmp_path: Path) -> None:
+    """The index is the only view of a suite anything outside the sandbox gets.
+
+    The platform reads ``scenarios.json`` straight into the stage output the Scenarios tab renders,
+    so a summary here is a summary on screen: the caller, the branch, the seeded data and the
+    known-good solution reached nobody, and a scenario carrying all of them showed as blanks.
+    """
+    from fi.alk.harness.folder import write_index
+    from fi.alk.harness.scenario import Persona, Scenario, Step
+
+    scenario = Scenario(
+        name="quote_for_a_young_adult",
+        use_case="quote a plan",
+        branch="applicant is 26",
+        tests="quotes the youth plan",
+        instruction="ask for a quote",
+        sub_goals=["plan_quoted"],
+        persona=Persona(name="Ada", age_group="25-32"),
+        fixture={"age": 26, "email": "ada@example.com"},
+        solution=[Step(tool="find_applicant"), Step(tool="quote_plan")],
+        max_turns=12,
+    )
+    write_index([scenario], tmp_path)
+
+    row = json.loads((tmp_path / "scenarios.json").read_text(encoding="utf-8"))[0]
+    assert row["persona"]["name"] == "Ada"
+    assert row["branch"] == "applicant is 26"
+    assert row["fixture"]["age"] == 26
+    assert [step["tool"] for step in row["solution"]] == ["find_applicant", "quote_plan"]
+    assert row["max_turns"] == 12
+    # Still an index over the folders, so what it is an index of stays on every row.
+    assert row["folder"] == "scenarios/quote_for_a_young_adult"
+    assert row["steps"] == 2
+    # The code lives in its own files and must not be duplicated here.
+    assert "setup_code" not in row
+    assert "ready_code" not in row
+
+
+def test_keyword_problems_catches_what_a_hundred_scenario_suite_did(tmp_path: Path) -> None:
+    """The three ways a keyword row stops being usable, measured on a real suite of 100.
+
+    143 distinct keywords, 108 of them on exactly one scenario, and `weather` on 91 of 100. Each is
+    a separate failure and each has to be named, because the fix for one is not the fix for another.
+    """
+    from fi.alk.harness.scenario import Persona, Scenario, keyword_problems
+
+    def suite(keywords_for) -> list[Scenario]:
+        return [
+            Scenario(
+                name=f"s{i}",
+                persona=Persona(name=f"P{i}", keywords=keywords_for(i)),
+            )
+            for i in range(20)
+        ]
+
+    # A term on every scenario filters nothing.
+    said = " ".join(keyword_problems(suite(lambda i: ["weather", f"x{i}"])))
+    assert "more than 40%" in said and "weather" in said
+
+    # A vocabulary of one term per scenario is not a vocabulary.
+    said = " ".join(keyword_problems(suite(lambda i: [f"only{i}", f"also{i}", f"third{i}"])))
+    assert "fewer than 3 scenarios" in said
+
+    # A scenario carrying every keyword it can think of.
+    said = " ".join(keyword_problems(suite(lambda i: [f"k{n}" for n in range(8)] if i == 0 else ["k0", "k1", "k2"])))
+    assert "more than 5 keywords" in said
+
+    # A suite that follows the plan has nothing to report. Note what the rules imply together: at
+    # two keywords each and a 40% ceiling, the vocabulary cannot be smaller than about six, which is
+    # why the skill asks for eight to sixteen.
+    vocabulary = [
+        "call_termination",
+        "disambiguation",
+        "weather_lookup",
+        "interruption",
+        "multi_intent",
+        "code_switching",
+    ]
+    assert keyword_problems(
+        suite(lambda i: [vocabulary[i % 6], vocabulary[(i + 2) % 6]])
+    ) == []

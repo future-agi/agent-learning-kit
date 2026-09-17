@@ -36,6 +36,7 @@ from .scenario import (
     Scenario,
     Step,
     contract_sequence_problems,
+    keyword_problems,
     suite_diversity_problems,
     validate_scenario,
     voicemail_enabled,
@@ -980,7 +981,7 @@ def scenario_tools(
         # What is off about the suite is said, not enforced.
         noted = not_ready(kept, target["count"], catalogue)
         path = write_scenarios(kept, destination, catalogue)
-        diversity = suite_diversity_problems(kept)
+        diversity = suite_diversity_problems(kept) + keyword_problems(kept)
         judged = sum(
             1
             for one in kept
@@ -1003,10 +1004,9 @@ def scenario_tools(
         if diversity:
             return _err(
                 said
-                + "\n\nSaved as a checkpoint, but the suite is not ready to run because its "
-                "fixtures/personas are repetitive:\n  - "
+                + "\n\nSaved as a checkpoint, but the suite is not ready to run:\n  - "
                 + "\n  - ".join(diversity)
-                + "\nReplace the repeated scenarios, then save again."
+                + "\nFix these, then save again."
             )
         return _ok(said)
 

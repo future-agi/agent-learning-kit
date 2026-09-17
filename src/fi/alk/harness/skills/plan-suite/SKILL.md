@@ -106,7 +106,52 @@ the scenario needs a sub-goal for each.
 The ordinary path is worth one cell, and only one. Everything else is a way things go wrong. A plan
 whose cells all expect success has tested the demonstration rather than the agent.
 
-## 5. Decide whether to hand it out
+## 5. Name the keywords before you hand anything out
+
+Keywords are how somebody finds a scenario in a suite of a thousand. They are not a description of
+the caller and they never reach the call, so a term that reads like a trait is the wrong kind of
+word. Decide the whole suite's keyword vocabulary here, before the first brief goes out, and deal it
+in the briefs the way you deal accents and name initials. A writer cannot see its siblings, so twelve
+writers left to choose their own words produce twelve vocabularies for the same ideas: measured on a
+real suite, 143 distinct keywords across 100 scenarios, 108 of them used exactly once, and `hang up`,
+`end call`, `bye` and `goodbye` all meaning the same thing.
+
+**The vocabulary is the coordinate, written down.** You have already placed every scenario on the
+axes. A keyword is that placement in a word somebody would search for, which is why it costs nothing
+to derive and why it cannot drift:
+
+| facet | comes from | examples |
+|---|---|---|
+| what the agent must do | T, operation and object | `disambiguation`, `unit_conversion`, `multi_intent`, `call_termination`, `handoff`, `tool_failure_recovery` |
+| what it touches | T's object, from the contract's tools | `weather_lookup`, `order_status`, `transfer_endpoint` |
+| what is being done to it | O, the overlay | `interruption`, `topic_switch`, `prompt_injection`, `silence`, `refusal_bait` |
+| the conditions | X, per modality | `noisy_line`, `code_switching`, `outbound_call` |
+
+W and D are **not** keywords. The caller and their state are already columns of their own, and a
+keyword that restates a column filters nothing.
+
+**Rules that make a keyword worth clicking.**
+
+- **Never restate something already shown.** Not the use case, not the situation, not a sub-goal,
+  not any persona field. On the measured suite this one rule removed 193 of 445 uses: `weather` was
+  the use case, and the four city names were parameter values dealt by the plan.
+- **Nothing on more than about a third of the suite.** `weather` sat on 91 of 100, so clicking it
+  removed nine rows. A term that is true of nearly everything carries no information.
+- **Nothing on fewer than three scenarios.** A chip that returns one row is an annotation, and 108
+  of the 143 measured were exactly that.
+- **One term per idea.** Pick `call_termination`, not four words for it. Where a distinction is real,
+  make it two terms and only if both will be used enough: `call_termination_by_caller` and
+  `_by_agent`.
+- **Between eight and sixteen terms for the whole suite**, however large the suite. A thousand
+  scenarios do not need a thousand words, and a filter row nobody can scan is not a filter.
+- **Three to five per scenario.**
+
+**Write the vocabulary into every brief, in full.** A writer chooses from it and does not invent. If
+a writer genuinely needs a word the vocabulary lacks, that is a gap in your plan rather than a gap in
+the list: it means a coordinate you dealt has no name, and the next suite's vocabulary should carry
+one.
+
+## 6. Decide whether to hand it out
 
 You can write the suite yourself, or run writers to write parts of it in parallel. Judge it; nothing
 decides this for you.
@@ -124,7 +169,7 @@ rule: a suite of fifteen rich cells may be worth splitting and one of thirty sha
 **At most twelve writers run at the same time.** Ask for more and the extra are refused until a slot
 frees, which wastes the turn that asked.
 
-## 6. Hand each writer its part
+## 7. Hand each writer its part
 
 The worker is called `scenario_writer`. Brief one per slice, or per group of related cells. A brief carries: which cells to cover, the
 angle each should take, how many scenarios it is worth, and what makes them different from what the
@@ -145,7 +190,7 @@ that fails costs its own slice rather than a third of the suite. Two signs the s
 slice holds one scenario, which means you listed scenarios instead of grouping them; or every slice
 holds the same number, which means you padded to reach a target.
 
-## 7. Collect, review, save
+## 8. Collect, review, save
 
 A writer submits its scenarios and reports what it wrote. Its scenarios are already in your suite;
 the report tells you what it could not cover.

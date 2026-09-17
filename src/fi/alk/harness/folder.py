@@ -135,16 +135,25 @@ def folder_for(destination: Path, name: str) -> Path:
     return Path(destination) / SCENARIOS / name
 
 
+def document_for(scenario: Scenario) -> dict:
+    """One scenario as JSON: everything about it except the code, which lives in its own files.
+
+    The single answer to "what is this scenario", so the folder and the index cannot disagree about
+    it. Keeping a second copy of the code here would let the two drift and leave nobody able to say
+    which one ran.
+    """
+    body = scenario.model_dump()
+    body.pop("setup_code", None)
+    body.pop("ready_code", None)
+    return body
+
+
 def write_folder(scenario: Scenario, catalogue: Catalogue, destination: Path) -> Path:
     """Write one scenario out as its own folder of files."""
     root = folder_for(destination, scenario.name)
     (root / "checks").mkdir(parents=True, exist_ok=True)
 
-    body = scenario.model_dump()
-    # The code lives in its own files; keeping a second copy in the JSON would let the two drift
-    # and leave nobody able to say which one ran.
-    body.pop("setup_code", None)
-    body.pop("ready_code", None)
+    body = document_for(scenario)
     (root / "scenario.json").write_text(
         json.dumps(body, indent=2, ensure_ascii=False), encoding="utf-8"
     )
@@ -192,10 +201,16 @@ def read_folder(destination: Path, name: str) -> Scenario | None:
 
 
 def write_index(scenarios: list[Scenario], destination: Path) -> Path:
-    """The whole suite at a glance, over the folders.
+    """The whole suite, over the folders.
 
     Regenerated from the folders rather than maintained alongside them, so it can never disagree
     with what is actually on disk.
+
+    It carries each scenario in full rather than a summary of it. This file is the only view of the
+    suite anything outside the sandbox gets: the platform reads it straight into the stage output
+    the Scenarios tab renders. A summary here meant the caller, the branch, the seeded data and the
+    known-good solution never reached the tab at all, and a scenario that had all of them showed as
+    a row of blanks.
     """
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
@@ -204,11 +219,7 @@ def write_index(scenarios: list[Scenario], destination: Path) -> Path:
         json.dumps(
             [
                 {
-                    "name": one.name,
-                    "use_case": one.use_case,
-                    "tests": one.tests,
-                    "instruction": one.instruction,
-                    "sub_goals": one.sub_goals,
+                    **document_for(one),
                     "steps": len(one.solution),
                     "folder": f"{SCENARIOS}/{one.name}",
                 }
