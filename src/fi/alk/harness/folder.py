@@ -167,6 +167,14 @@ def write_folder(scenario: Scenario, catalogue: Catalogue, destination: Path) ->
         (root / "checks" / f"{name}.py").write_text(
             sub_goal.check.rstrip() + "\n" + _RUNNABLE, encoding="utf-8"
         )
+
+    # A rewrite can drop a sub-goal, and a check left behind from the previous shape reads like a
+    # check this scenario still makes. Keyed on sub_goals rather than on what this pass wrote: a
+    # catalogue that cannot supply a body is a reason to leave the file alone, not to delete it.
+    wanted = {f"{name}.py" for name in scenario.sub_goals}
+    for stale in (root / "checks").glob("*.py"):
+        if stale.name not in wanted:
+            stale.unlink()
     return root
 
 

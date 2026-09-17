@@ -28,6 +28,21 @@ scenario as one the person initiated, and ignore anything written for calls an a
 - **Ambiguity a speaker would have resolved by tone.** "great, that's just what I needed" from
   somebody who has been complaining for four turns.
 
+## The channel, and which parts of it are real
+
+The same five questions, answered for typing. **Only vary what is applied.**
+
+| Question | In a chat | Can you vary it? |
+|---|---|---|
+| How clean is the input? | typos, autocorrect, slang, a pasted blob | **yes**, it is all just text the person sends |
+| What is the channel? | web, SMS, a work chat tool | no, the run decides |
+| How reliable is it? | the person going quiet and coming back | **yes**, as part of the situation, not as a setting |
+| What competes with the signal? | a pasted block carrying instructions of its own | **yes**, and it is where injection lives |
+| How is state exposed? | everything said is still on screen and re-readable | fixed, and it is what a caller cannot do |
+
+Four of the five are yours here, against two on a call, because text carries its own conditions
+rather than needing the platform to produce them.
+
 ## What this modality lets you vary
 
 Register: how somebody types is who they are. Someone terse sends four words and no punctuation.

@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import Any, AsyncIterator
 
 from claude_agent_sdk import (
+    AgentDefinition,
     AssistantMessage,
     ClaudeAgentOptions,
     ClaudeSDKClient,
@@ -27,6 +28,8 @@ from claude_agent_sdk import (
 )
 
 from .base import (
+    DELEGATE_TOOL,
+    MOST_WORKERS_AT_ONCE,
     Call,
     ModelReply,
     Say,
@@ -35,10 +38,15 @@ from .base import (
     StageDone,
     ToolReturned,
     ToolServer,
-    qualified,
+    WorkerSpec,
 )
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
+
+# What this SDK calls the tool that runs a worker. It reports itself under both names depending
+# on the version, and the gate matches on the reported name, so both are granted or delegation
+# is denied by the very gate the workers exist to pass.
+DELEGATION_TOOLS = ("Agent", "Task")
 
 
 def _sdk_server(server: ToolServer) -> Any:
@@ -55,6 +63,28 @@ def _sdk_server(server: ToolServer) -> Any:
             )
             for spec in server.tools
         ],
+    )
+
+
+def _definition(worker: WorkerSpec, parent: SessionSpec) -> AgentDefinition:
+    """A ``WorkerSpec`` as this SDK's own sub-agent definition.
+
+    ``model="inherit"`` rather than a name: a worker doing the parent's kind of work on a
+    different model is a difference nobody asked for and nothing on screen would explain.
+    """
+    tools = [name for name in worker.granted(parent) if name != DELEGATE_TOOL]
+    if DELEGATE_TOOL in (worker.builtins or parent.builtins):
+        tools.extend(DELEGATION_TOOLS)
+    return AgentDefinition(
+        description=worker.description,
+        prompt=worker.instructions,
+        tools=tools,
+        mcpServers=list(worker.servers or parent.servers),
+        model=worker.model or "inherit",
+        maxTurns=worker.max_turns,
+        # Blocking, so the delegating turn receives the worker's report rather than a handle to
+        # a run that outlives the stage that started it.
+        background=False,
     )
 
 
@@ -174,25 +204,33 @@ class ClaudeBackend:
             thinking_config,
         )
 
-        allowed = [
-            *spec.builtins,
-            *(
-                qualified(server_name, tool_spec.name)
-                for server_name, server in spec.servers.items()
-                for tool_spec in server.tools
-            ),
-        ]
+        # Everything the session or any of its workers may call. A worker's calls are made
+        # inside this session, so building the gate from the parent's tools alone would deny a
+        # worker the very tools it was given.
+        allowed = [name for name in spec.granted_anywhere() if name != DELEGATE_TOOL]
+        servers = {**spec.servers}
+        for worker in spec.workers.values():
+            servers.update(worker.servers)
+        environment = dict(provider_env(spec.model))
+        if spec.workers:
+            allowed.extend(DELEGATION_TOOLS)
+            environment["CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"] = str(MOST_WORKERS_AT_ONCE)
         options = ClaudeAgentOptions(
             system_prompt=spec.system_prompt,
             allowed_tools=allowed,
             mcp_servers={
                 server_name: _sdk_server(server)
-                for server_name, server in spec.servers.items()
+                for server_name, server in servers.items()
             },
+            agents={
+                name: _definition(worker, spec)
+                for name, worker in spec.workers.items()
+            }
+            or None,
             setting_sources=[],
             max_turns=spec.max_turns,
             model=spec.model,
-            env=provider_env(spec.model),
+            env=environment,
         )
         if spec.cwd is not None:
             options.cwd = spec.cwd

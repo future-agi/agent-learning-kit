@@ -143,70 +143,60 @@ def test_a_declared_check_that_never_reached_the_folder_is_not_read_as_judged(tm
     assert loaded[0].presented["situation"] == "Get the fee taken off."
 
 
-def test_a_slice_writer_stops_at_the_size_it_was_given(tmp_path):
-    """Its turn budget is far larger than its slice, and left alone it keeps writing."""
+def test_a_writer_stops_at_the_size_it_was_given(tmp_path):
+    """Its turn budget is far larger than its share, and left alone it keeps writing."""
     import asyncio
 
     from fi.alk.harness.contract import AgentContract
     from fi.alk.harness.scenario_tools import scenario_tools
 
     contract = AgentContract(agent="cart", real_use_cases=["add an item"])
-    server, kept = scenario_tools(contract, tmp_path, tmp_path, wanted=1, can_save=False)
+    (tmp_path / "manifest.json").write_text("{}")
+    server, kept = scenario_tools(
+        contract, tmp_path, tmp_path, wanted=1, can_save=False, start_from=[]
+    )
     submit = next(spec for spec in server.tools if spec.name == "submit_scenario")
     kept.append(Scenario(name="already_here", instruction="one", sub_goals=["x"]))
 
     said = asyncio.run(submit.handler({"name": "a_second_one", "instruction": "two"}))
     assert said.get("is_error")
-    assert "This slice is complete" in said["content"][0]["text"]
+    assert "This is complete" in said["content"][0]["text"]
 
     # Replacing one of its own is still allowed, which is how a refused scenario gets fixed. It gets
     # past the cap and into validation, which here has no world to validate against.
     import pytest
 
-    with pytest.raises(FileNotFoundError):
+    from fi.alk.harness.world.stores import StoreError
+
+    with pytest.raises(StoreError):
         asyncio.run(submit.handler({"name": "already_here", "instruction": "one, fixed"}))
 
 
-def test_a_second_fan_out_pass_only_writes_what_is_missing(tmp_path, monkeypatch):
-    """Called again with the original number, it wrote a second full suite: 377 against a target of 200."""
+def test_the_cap_holds_for_the_session_that_saves_too(tmp_path):
+    """Delegating used to be a tool that capped itself; the stage that called it did not.
+
+    Asked again with the original number instead of the remainder, it wrote a second full suite:
+    377 kept against a target of 200. The cap is now one refusal in submit_scenario, so the stage
+    and every worker it runs hit the same wall at the same count.
+    """
     import asyncio
 
-    from fi.alk.harness import scenario_tools as st
     from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.scenario_tools import scenario_tools
 
     contract = AgentContract(agent="cart", real_use_cases=["add an item", "remove an item"])
-    # Above FEWEST_WORTH_DELEGATING, or the fan-out tool is not published at all.
-    server, _kept = st.scenario_tools(contract, tmp_path, tmp_path, wanted=20)
-    suite = next(spec for spec in server.tools if spec.name == "generate_suite")
-
-    asked_for: list[int] = []
-
-    async def _fake_parallel(contract, *, out, wanted, use_cases, slices, at_once):
-        asked_for.append(wanted)
-        return []
-
-    monkeypatch.setattr("fi.alk.harness.scenarios.write_in_parallel", _fake_parallel)
-    # Nothing on disk yet: the full ask goes through.
-    asyncio.run(suite.handler({"count": 20}))
-    assert asked_for == [20]
-
-    # Fourteen already written, and the model asks for twenty again: six are outstanding.
-    monkeypatch.setattr(
-        st, "load_scenarios", lambda _d: [Scenario(name=f"s{i}", instruction="i", sub_goals=["x"]) for i in range(14)]
-    )
-    monkeypatch.setattr(st, "journalled", lambda _d: [])
-    asyncio.run(suite.handler({"count": 20}))
-    assert asked_for == [20, 6]
-
-    # Once the target is met, it refuses to write more rather than starting another suite. Counted
-    # from the folders: a journal that outlives its folders means a retried attempt, where refusing to
-    # write is how a run saves 14 of 200 and fails.
-    monkeypatch.setattr(
-        st, "load_scenarios", lambda _d: [Scenario(name=f"s{i}", instruction="i", sub_goals=["x"]) for i in range(20)]
-    )
-    said = asyncio.run(suite.handler({"count": 20}))
-    assert "already holds the 20" in said["content"][0]["text"]
-    assert asked_for == [20, 6]
+    (tmp_path / "manifest.json").write_text("{}")
+    for can_save in (True, False):
+        server, kept = scenario_tools(
+            contract, tmp_path, tmp_path, wanted=2, can_save=can_save, start_from=[]
+        )
+        kept[:] = [
+            Scenario(name=f"s{i}", instruction="i", sub_goals=["x"]) for i in range(2)
+        ]
+        submit = next(spec for spec in server.tools if spec.name == "submit_scenario")
+        said = asyncio.run(submit.handler({"name": "one_more", "instruction": "three"}))
+        assert said.get("is_error"), can_save
+        assert "2 of 2 written" in said["content"][0]["text"]
 
 
 def test_a_placeholder_code_is_refused_however_it_is_arranged():

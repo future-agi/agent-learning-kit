@@ -916,6 +916,11 @@ def suite_diversity_problems(scenarios: list[Scenario]) -> list[str]:
         return []
     problems: list[str] = []
     personas = [one.persona for one in scenarios if one.persona]
+    # A persona is a lever, not a requirement. An agent that talks to nobody has no callers to be
+    # distinct from each other, and judging it on caller names reported two failures for a suite
+    # that was correct. Nothing below applies when there are none.
+    if not personas:
+        return problems
     names = [one.name.strip().lower() for one in personas if one and one.name.strip()]
     unique_names = len(set(names))
     required_names = min(len(scenarios), max(3, ceil(len(scenarios) * 0.9)))

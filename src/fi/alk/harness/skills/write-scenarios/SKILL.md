@@ -24,10 +24,10 @@ of the world follows it. Do not restate those; read them.
 These instructions are loaded by more than one kind of session. Work out which you are from what you
 were asked, then follow only that part.
 
-**You were asked for a number of scenarios.** You are planning a suite. Decide what it covers, then
-hand it to `generate_suite`, which runs one writer per part of your plan. Separate planning
-instructions follow this file when a suite is what was asked for. You do not write the scenarios
-yourself.
+**You were asked for a number of scenarios.** You own the suite. Plan what it covers first, using the
+planning instructions that follow this file, then either write it yourself or run writers to write
+parts of it in parallel. That choice is yours and the planning instructions give you what decides it.
+Whatever you choose, you are the one who saves at the end.
 
 **You were given one brief.** You are a writer. Somebody has already read the agent, decided which
 pairings of thing-acted-on and thing-wanted are worth testing, and how many scenarios each earns.
@@ -86,6 +86,22 @@ supposedly chose. Put them in `environment_arguments` on the same step, which th
 service and the agent never sees.
 
 ## How grading works
+
+**Name every sub-goal the scenario actually settles, not just the one it is about.** A scenario
+that asks for a refusal usually also settles what the world must still hold afterwards, and one
+that completes a task usually settles both the call and the state it left. Two a scenario is the
+working number; one is right only when one is all that is true.
+
+The two failures look opposite and are both real. One suite defined thirty-nine sub-goals and used
+twenty-six of them exactly once: a bespoke check wherever a shared one would have done, so nothing
+adds up across the suite. Another reused perfectly but kept the catalogue to ten and named 1.5 a
+scenario, so half the scenarios asserted one thing and let the rest of what they saw go unchecked.
+
+The catalogue is too small when a scenario settles something and there is no name for it. **Its size
+follows the plan, not your convenience: every cell the suite covers has an outcome, and an outcome
+nothing can be checked against is a cell nobody is testing.** A suite over six use cases that
+manages on ten sub-goals has stopped asking what each run proved. Add the name when it is missing,
+reuse it everywhere it fits afterwards, and the count takes care of itself.
 
 A **sub-goal** is one named thing the agent can be checked on, defined once for the agent and shared
 by every scenario that names it. That sharing is what makes results add up: the same sub-goal failing

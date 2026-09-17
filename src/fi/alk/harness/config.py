@@ -255,7 +255,13 @@ HARNESS = SKILLS_ROOT / "harness.md"
 def discovered_skills(**about: str) -> str:
     """Every extra skill that says it applies to this agent, found by looking rather than by name.
 
-    A skill is a markdown file under ``skills/kinds/`` whose first lines declare what it is for::
+    Two directories are read. ``skills/kinds/`` is what kind of agent this is: voice, chat,
+    browser, and whatever a customer turns up with next. ``skills/modules/`` is everything that
+    cuts across kinds: the people an agent talks to apply to voice and chat alike and to no
+    agent that talks to nobody. Both use the same declaration, so where a file lives says what
+    sort of thing it is and nothing else.
+
+    A skill is a markdown file under either whose first lines declare what it is for::
 
         ---
         name: voice
@@ -268,16 +274,19 @@ def discovered_skills(**about: str) -> str:
 
     Naming each kind in code would mean editing code to add one, and there will be many: voice, chat,
     browser, and whatever a customer turns up with next. **Adding support for a kind of agent is
-    adding a file here.**
+    adding a file to ``kinds/``, and adding something that cuts across them is adding one to
+    ``modules/``.** Deleting either file removes what it taught, which is how the people block
+    stops existing for an agent that talks to nobody.
     """
-    root = SKILLS_ROOT / "kinds"
-    if not root.is_dir():
-        return ""
+    roots = [SKILLS_ROOT / "kinds", SKILLS_ROOT / "modules"]
     wanted = {
         key.lower(): str(value).strip().lower() for key, value in about.items() if value
     }
     found: list[tuple[str, str]] = []
-    for path in sorted(root.glob("*.md")):
+    for path in sorted(
+        (one for root in roots if root.is_dir() for one in root.glob("*.md")),
+        key=lambda one: one.stem,
+    ):
         text = path.read_text(encoding="utf-8")
         head = text.split("---")[1] if text.startswith("---") and "---" in text[3:] else ""
         applies = ""

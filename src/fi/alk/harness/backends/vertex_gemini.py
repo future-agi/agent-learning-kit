@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import uuid
 from datetime import date
 from typing import Any, AsyncIterator
@@ -265,22 +266,61 @@ class VertexGeminiSession:
         self._pending: str | None = None
         self.session_id = f"gemini-{uuid.uuid4().hex[:12]}"
 
-    def _tools(self) -> list[Any]:
+    def _tools(
+        self,
+        builtins: tuple[str, ...] | None = None,
+        servers: dict[str, Any] | None = None,
+    ) -> list[Any]:
         # ASK_TOOL is deliberately absent: unattended runs never call it, and declaring a tool
         # this backend cannot answer would cost the model a turn finding that out.
+        # DELEGATE_TOOL is absent for the same reason it is not a tool here at all: ADK exposes
+        # a sub-agent as a tool itself, so asking for one by name would declare it twice.
+        builtins = self._spec.builtins if builtins is None else builtins
+        servers = self._spec.servers if servers is None else servers
         offered: list[Any] = []
-        wanted = {name for name in self._spec.builtins if name in FILE_TOOLS}
+        wanted = {name for name in builtins if name in FILE_TOOLS}
         offered.extend(
             _spec_tool(spec.name, spec)
             for spec in file_tools(self._spec.cwd)
             if spec.name in wanted
         )
-        for server_name, server in self._spec.servers.items():
+        for server_name, server in servers.items():
             offered.extend(
                 _spec_tool(qualified(server_name, spec.name), spec)
                 for spec in server.tools
             )
         return offered
+
+    def _workers(self) -> list[Any]:
+        """Every declared worker as a sub-agent this loop may run.
+
+        ``mode="single_turn"`` is ADK's own answer to the same need the other backend meets with
+        a sub-agent definition: the parent exposes the sub-agent as a tool and runs it inline,
+        so the delegating turn receives the worker's report rather than handing the conversation
+        over. A worker with no tools of its own inherits the parent's, which is what a worker
+        doing part of the parent's job should have.
+        """
+        from google.adk.agents import LlmAgent
+        from google.genai import types
+
+        built: list[Any] = []
+        for name, worker in self._spec.workers.items():
+            built.append(
+                LlmAgent(
+                    name=re.sub(r"[^0-9A-Za-z_]", "_", name),
+                    description=worker.description,
+                    model=worker.model or self._model,
+                    mode="single_turn",
+                    static_instruction=types.Content(
+                        role="user", parts=[types.Part(text=worker.instructions)]
+                    ),
+                    tools=self._tools(
+                        worker.builtins or self._spec.builtins,
+                        worker.servers or self._spec.servers,
+                    ),
+                )
+            )
+        return built
 
     async def start(self) -> None:
         from google.adk.agents import LlmAgent
@@ -303,6 +343,7 @@ class VertexGeminiSession:
                 role="user", parts=[types.Part(text=self._spec.system_prompt)]
             ),
             tools=self._tools(),
+            sub_agents=self._workers(),
         )
         sessions = InMemorySessionService()
         await sessions.create_session(
