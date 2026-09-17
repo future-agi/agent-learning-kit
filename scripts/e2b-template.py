@@ -32,6 +32,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import time
 from dataclasses import dataclass
@@ -543,12 +544,14 @@ def certify_template(
             )
             checks.append(f"engine-{engine}")
 
-        disk_output = _sandbox_command(
+        disk_path = "/tmp/futureagi-certification-disk-kib"
+        _sandbox_command(
             sandbox,
-            "df -Pk --output=size /work | tail -1",
+            f"df -Pk /work | awk 'NR == 2 {{print $2}}' > {disk_path}",
             label="disk-capacity",
         )
-        disk_kib = int(disk_output.strip())
+        disk_output = sandbox.files.read(disk_path, user="svc-control")
+        disk_kib = int(str(disk_output).strip())
         disk_gb = disk_kib // (1024 * 1024)
         if disk_kib < required_disk_gb * 1024 * 1024:
             raise RuntimeError(
@@ -574,6 +577,32 @@ def certify_template(
         disk_gb=disk_gb,
         checks=tuple(checks),
     )
+
+
+def certify_template_with_retries(
+    *,
+    attempts: int,
+    **kwargs: Any,
+) -> CertificationResult:
+    from e2b import TimeoutException
+
+    if attempts < 1:
+        raise SystemExit("--certification-attempts must be at least 1")
+    for attempt in range(1, attempts + 1):
+        try:
+            return certify_template(**kwargs)
+        except TimeoutException:
+            if attempt == attempts:
+                raise
+            delay = attempt * 5
+            print(
+                f"E2B certification transport timed out on attempt {attempt}/{attempts}; "
+                f"retrying with a fresh sandbox in {delay}s",
+                file=sys.stderr,
+                flush=True,
+            )
+            time.sleep(delay)
+    raise AssertionError("unreachable")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -607,6 +636,7 @@ def _parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULT_CERTIFICATION_TTL_SECONDS,
     )
+    parser.add_argument("--certification-attempts", type=int, default=3)
     parser.add_argument("--no-cache", action="store_true")
     parser.add_argument("--allow-dirty", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
@@ -702,7 +732,8 @@ def main() -> int:
         template_name = build.name
         template_build_id = build.build_id
         template_alias = build.alias
-    certification = certify_template(
+    certification = certify_template_with_retries(
+        attempts=args.certification_attempts,
         reference=template_reference,
         catalog=catalog,
         catalog_path=catalog_path,
