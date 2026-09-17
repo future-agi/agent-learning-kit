@@ -46,9 +46,16 @@ RUN python3.12 -m venv /opt/alk-venv \
     && ln -s /opt/node22/bin/node /usr/local/bin/node22 \
     && ln -s /usr/lib/postgresql/16/bin/postgres /usr/local/bin/postgres \
     && ln -s /usr/lib/postgresql/16/bin/initdb /usr/local/bin/initdb \
+    && ln -s /opt/erlang/bin/erl /usr/local/bin/erl \
+    && ln -s /opt/erlang/bin/epmd /usr/local/bin/epmd \
+    && ln -s /opt/erlang/bin/escript /usr/local/bin/escript \
+    && printf '#!/bin/sh\nexec /opt/rabbitmq/sbin/rabbitmq-diagnostics "$@"\n' > /usr/local/bin/rabbitmq-diagnostics \
+    && printf '#!/bin/sh\nexec /opt/rabbitmq/sbin/rabbitmq-plugins "$@"\n' > /usr/local/bin/rabbitmq-plugins \
     && printf '#!/bin/sh\nexec /opt/rabbitmq/sbin/rabbitmq-server "$@"\n' > /usr/local/bin/rabbitmq-server \
     && printf '#!/bin/sh\nexec /opt/rabbitmq/sbin/rabbitmqctl "$@"\n' > /usr/local/bin/rabbitmqctl \
-    && chmod 0755 /usr/local/bin/npm20 /usr/local/bin/npm22 /usr/local/bin/rabbitmq-server /usr/local/bin/rabbitmqctl
+    && chmod 0755 /usr/local/bin/npm20 /usr/local/bin/npm22 \
+      /usr/local/bin/rabbitmq-diagnostics /usr/local/bin/rabbitmq-plugins \
+      /usr/local/bin/rabbitmq-server /usr/local/bin/rabbitmqctl
 
 # Catalog entries are executable promises. Fail the snapshot build if either alternate Python
 # cannot create and execute a writable project-local venv.
@@ -59,6 +66,12 @@ RUN python3.11 -m venv /tmp/python311-smoke \
     && python3.14 -m venv /tmp/python314-smoke \
     && /tmp/python314-smoke/bin/python -c 'import encodings, sys; assert sys.version_info[:2] == (3, 14)' \
     && rm -rf /tmp/python311-smoke /tmp/python313-smoke /tmp/python314-smoke
+
+# E2B command sessions use a provider-owned default PATH rather than the image ENV. Keep every
+# RabbitMQ launcher self-contained through /usr/local/bin and fail the image build if Erlang
+# resolution regresses.
+RUN rabbitmqctl version | grep -Eq '^3\.13\.' \
+    && rabbitmq-plugins list -m | grep -qx rabbitmq_management
 
 RUN groupadd --gid 2000 svc-control \
     && useradd --uid 2000 --gid 2000 --create-home --shell /bin/bash svc-control \
