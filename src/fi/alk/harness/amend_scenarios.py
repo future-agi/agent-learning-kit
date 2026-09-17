@@ -26,6 +26,7 @@ The gates are the safety net for a rewrite, never the detector for the need.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -40,14 +41,18 @@ SCHEMA = "futureagi.scenario-changes.v1"
 OPERATIONS = ("set_persona", "set_field", "drop")
 
 # Fields a `set_field` may touch. Everything else is derived, proved, or identity, and letting an
-# edit write those would be letting it bypass the gates rather than satisfy them.
-EDITABLE_FIELDS = ("instruction", "tests", "use_case", "branch", "max_turns", "background_noise")
+# edit write those would be letting it bypass the gates rather than satisfy them. `use_case` is not
+# here: it is read off the contract and one use case covers many scenarios, so editing it on one
+# only misfiles that scenario. A wrong use case means a wrong contract, which is a rebuild.
+EDITABLE_FIELDS = ("instruction", "tests", "branch", "max_turns", "background_noise")
 
-# Of those, the ones that say how a scenario is filed or how long it may run. None of them can
-# change what the world holds or what a correct agent does, so they are applied without asking.
-# `instruction` and `tests` are deliberately absent: the first is what the person asks for and the
-# second is the claim the checks are supposed to make good, so either can move the proof.
-DESCRIPTIVE_FIELDS = ("use_case", "branch", "max_turns", "background_noise")
+# Of those, the ones that describe a scenario rather than decide anything about it. `tests` belongs
+# here despite reading like the claim: it is reported with the result and deliberately withheld from
+# the simulated caller, and the checks are what actually grade. Editing it renames the claim without
+# changing what is verified, so changing what is verified means changing sub-goals instead.
+# `instruction` stays out, because it is what the person asks for and can leave the solution unable
+# to solve it.
+DESCRIPTIVE_FIELDS = ("tests", "branch", "max_turns", "background_noise")
 
 
 @dataclass
@@ -126,6 +131,27 @@ def parse_changes(document: dict[str, Any]) -> list[Change]:
 NEVER_CONSEQUENTIAL = ("accent", "communication_style", "personality", "initial_message", "name")
 
 
+def seeded_among(scenario: Any, persona_fields: list[str]) -> list[str]:
+    """Which of these fields this scenario already wrote into the world.
+
+    The contract says what an agent reasons about. It cannot say what a scenario seeded, and a
+    value in the world is just as binding: a caller who gives a different name than the record the
+    agent looks them up by is a caller the agent cannot find. The fixture is the record of what was
+    seeded, so it settles this without guessing.
+    """
+    fixture = getattr(scenario, "fixture", None) or {}
+    persona = getattr(scenario, "persona", None)
+    seeded = {str(value).strip().lower() for value in fixture.values() if value not in (None, "")}
+    if not seeded or persona is None:
+        return []
+    found: list[str] = []
+    for name in persona_fields:
+        value = getattr(persona, name, None)
+        if isinstance(value, str) and value.strip() and value.strip().lower() in seeded:
+            found.append(name)
+    return found
+
+
 def bearing_on(contract: Any, persona_fields: list[str]) -> list[str]:
     """Which of these edited fields the agent's contract could plausibly act on.
 
@@ -152,7 +178,10 @@ def bearing_on(contract: Any, persona_fields: list[str]) -> list[str]:
         if name in NEVER_CONSEQUENTIAL:
             continue
         for word in _words_for(name):
-            if word in haystack:
+            # On word boundaries, because plain substring matching makes "age" a hit inside
+            # "agent", "manage" and "package". Every contract says "agent" somewhere, so that
+            # alone flagged an age edit as consequential on every agent there is.
+            if re.search(rf"(?<!\w){re.escape(word)}(?!\w)", haystack):
                 bearing.append(name)
                 break
     return bearing
@@ -241,7 +270,9 @@ def amend(
         edited = applied_to(scenario, change)
         if change.op == "set_persona":
             fields = sorted(change.persona)
-            might = bearing_on(contract, fields)
+            # Two independent reasons a persona edit matters: the agent reasons about the field, or
+            # this scenario already wrote that value into the world.
+            might = sorted(set(bearing_on(contract, fields)) | set(seeded_among(scenario, fields)))
         else:
             fields = [change.field_name]
             might = [] if change.field_name in DESCRIPTIVE_FIELDS else fields

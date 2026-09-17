@@ -4980,6 +4980,44 @@ def test_a_rewrite_leaves_no_check_behind_for_a_sub_goal_it_dropped(tmp_path):
     assert not (checks / "item-added.py").exists()
 
 
+def test_a_word_a_contract_only_contains_inside_another_word_does_not_count(tmp_path):
+    """"age" sits inside "agent", and every contract says agent. Matching on substrings alone made
+    an age edit consequential everywhere, which costs a rewrite and a re-proof for nothing."""
+    from fi.alk.harness.amend_scenarios import bearing_on
+    from fi.alk.harness.contract import AgentContract
+
+    innocent = AgentContract(
+        one_liner="A kiosk ordering agent that can manage a package.",
+        real_use_cases=["add an item to the cart"],
+    )
+    assert bearing_on(innocent, ["age_group"]) == []
+
+    genuine = AgentContract(
+        one_liner="A life insurance agent.",
+        hard_constraints=["Applicants over 60 complete the senior questionnaire."],
+    )
+    assert bearing_on(genuine, ["age_group"]) == ["age_group"]
+
+
+def test_a_persona_value_the_scenario_seeded_is_consequential(tmp_path):
+    """The contract says what an agent reasons about. It cannot say what a scenario wrote into the
+    world, and a caller giving a different name than the seeded record is one the agent cannot
+    find. The fixture records what was seeded, so it is what settles this."""
+    from fi.alk.harness.amend_scenarios import seeded_among
+
+    scenario = Scenario.model_validate(
+        {
+            **_delta(),
+            "fixture": {"name": "Ada", "email": "ada@example.com"},
+            "persona": {"name": "Ada", "occupation": "Student", "accent": "Neutral"},
+        }
+    )
+    assert seeded_among(scenario, ["name", "occupation", "accent"]) == ["name"]
+
+    unseeded = scenario.model_copy(update={"fixture": {}})
+    assert seeded_among(unseeded, ["name", "occupation", "accent"]) == []
+
+
 def test_a_rewrite_keeps_checks_a_catalogue_cannot_rebuild(tmp_path):
     """A rewrite that cannot look up a sub-goal's body must leave the check on disk. Amending a
     scenario reaches this with an empty catalogue, and deleting there would strip the very files
