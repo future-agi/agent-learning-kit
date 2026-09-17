@@ -752,6 +752,19 @@ def _ensure_within(path: Path, root: Path, *, process_name: str, stage: str) -> 
     return path
 
 
+_IGNORED_GENERATED_SOURCE_DIRECTORIES = frozenset(
+    {
+        ".git",
+        ".venv",
+        "venv",
+        "node_modules",
+        "__pycache__",
+        ".pytest_cache",
+        ".ruff_cache",
+    }
+)
+
+
 def _reject_escaping_symlinks(
     tree_root: Path, allowed_root: Path, *, process_name: str
 ) -> None:
@@ -765,19 +778,26 @@ def _reject_escaping_symlinks(
     deliberately, so a relative target or a multi-hop symlink chain is followed all the way to
     where it actually lands, not just its first hop.
     """
-    for entry in tree_root.rglob("*"):
-        if not entry.is_symlink():
-            continue
-        target = entry.resolve()
-        if not target.is_relative_to(allowed_root):
-            raise ProcessRuntimeError(
-                "build",
-                "source_tree_unavailable",
-                f"{entry.relative_to(tree_root)} is a symlink to {target}, which escapes "
-                "/work/source",
-                process=process_name,
-                domain=FailureDomain.ENVIRONMENT,
-            )
+    for current, directories, files in os.walk(tree_root, followlinks=False):
+        directories[:] = [
+            name
+            for name in directories
+            if name not in _IGNORED_GENERATED_SOURCE_DIRECTORIES
+        ]
+        for name in (*directories, *files):
+            entry = Path(current) / name
+            if not entry.is_symlink():
+                continue
+            target = entry.resolve()
+            if not target.is_relative_to(allowed_root):
+                raise ProcessRuntimeError(
+                    "build",
+                    "source_tree_unavailable",
+                    f"{entry.relative_to(tree_root)} is a symlink to {target}, which escapes "
+                    "/work/source",
+                    process=process_name,
+                    domain=FailureDomain.ENVIRONMENT,
+                )
 
 
 def _copytree_preserving_symlinks(src: Path, dst: Path) -> None:
@@ -787,7 +807,12 @@ def _copytree_preserving_symlinks(src: Path, dst: Path) -> None:
     # svc-control in the first place. A link that escaped `/work/source` was already rejected by
     # `_reject_escaping_symlinks` before this ever runs; one that stays inside the tree is copied
     # as-is and simply works (or dangles harmlessly) under the chowned, unprivileged build tree.
-    shutil.copytree(src, dst, symlinks=True)
+    shutil.copytree(
+        src,
+        dst,
+        symlinks=True,
+        ignore=shutil.ignore_patterns(*_IGNORED_GENERATED_SOURCE_DIRECTORIES),
+    )
 
 
 _DEFAULT_BUILD_STEP_TIMEOUT_SECONDS = 600.0
@@ -913,6 +938,10 @@ def build_process_tree(
     spawn_gid = resolved_user.pw_gid if resolved_user is not None else None
 
     env = _base_process_env(build_dir, process.build_environment)
+    if resolved_user is not None:
+        # The controller commonly runs as root, but build steps run as the declared svc user.
+        # Keeping root's HOME makes uv/pip/npm probe unreadable root-owned caches.
+        env["HOME"] = getattr(resolved_user, "pw_dir", f"/tmp/{process.user.value}")
     for step in process.build_commands:
         result = None
         for network_attempt in range(max(0, build_step_network_retries) + 1):
@@ -1299,7 +1328,10 @@ def postgres_bootstrap_argv(
         # schema-driven value adaptation because b"boolean" is not "boolean". Fix the cluster
         # representation at its source so every fresh world has the same text semantics.
         "--encoding=UTF8",
-        "--locale=C.UTF-8",
+        # POSIX ``C`` is guaranteed to exist on both minimal Linux images and macOS. Encoding is
+        # pinned independently above, so using C here still creates an UTF-8 cluster without
+        # relying on the host-specific spelling (``C.UTF-8`` on Debian, often absent on macOS).
+        "--locale=C",
     ]
 
 
@@ -1717,6 +1749,8 @@ def spawn_source_process(
             **authoritative_endpoints,
         },
     )
+    if resolved_user is not None:
+        env["HOME"] = getattr(resolved_user, "pw_dir", f"/tmp/{process.user.value}")
     command = list(process.run_command)
     if trace_bootstrap is not None:
         # Python imports ``sitecustomize`` at interpreter startup. Put the ALK-owned hook first

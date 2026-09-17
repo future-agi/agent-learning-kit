@@ -18,7 +18,10 @@ from .authoring_entrypoint import main as authoring_main
 _SECRETS_PATH = Path("/run/futureagi/secrets.json")
 _ADC_PATH = Path("/work/.authoring-credentials/google.json")
 _TARGET_SECRETS_PATH = Path("/run/futureagi/authoring-target-secrets.json")
+_SIMULATOR_SECRETS_PATH = Path("/run/futureagi/simulator-secrets.json")
 _PASSTHROUGH = {
+    "AGENTCC_API_KEY",
+    "AGENTCC_BASE_URL",
     # Not a credential: authoring writes the scenarios, so the switch has to reach it.
     "ALK_VOICEMAIL_SCENARIOS",
     "ANTHROPIC_API_KEY",
@@ -93,6 +96,20 @@ def _configure_generation_environment(values: dict[str, str]) -> None:
 def main(argv: list[str] | None = None) -> int:
     all_values = _load_values(_SECRETS_PATH)
     values = _platform_simulator_values(all_values)
+    # The launch-time fallback authoring command runs before hosted_entrypoint consumes this
+    # control-plane channel. Read only the two authoring gateway values and leave the file for
+    # hosted_entrypoint to consume and delete. Never copy customer target credentials here.
+    try:
+        gateway_values = _load_values(_SIMULATOR_SECRETS_PATH)
+    except (OSError, ValueError):
+        gateway_values = {}
+    values.update(
+        {
+            name: gateway_values[name]
+            for name in ("AGENTCC_API_KEY", "AGENTCC_BASE_URL")
+            if gateway_values.get(name)
+        }
+    )
     _configure_generation_environment(values)
     target_values = {
         name: all_values[name]

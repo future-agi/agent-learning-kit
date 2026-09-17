@@ -1,4 +1,55 @@
-from fi.alk.harness.contract import AgentContract, validate_contract
+import pytest
+from pydantic import ValidationError
+
+from fi.alk.harness.contract import AgentContract, RuntimeInterface, validate_contract
+
+
+def test_generic_http_contract_rejects_unbound_or_forward_template_variables():
+    with pytest.raises(
+        ValidationError, match="runtime_http_setup_unknown_placeholders"
+    ):
+        RuntimeInterface.model_validate(
+            {
+                "kind": "http",
+                "port": 8080,
+                "path": "/run",
+                "protocol": "json_template",
+                "setup_requests": [
+                    {
+                        "path": "/users/{{user_id}}/sessions",
+                        "capture": {"session_id": "id"},
+                    }
+                ],
+                "request_template": {"session_id": "{{session_id}}"},
+            }
+        )
+    with pytest.raises(
+        ValidationError, match="runtime_http_request_unknown_placeholders"
+    ):
+        RuntimeInterface.model_validate(
+            {
+                "kind": "http",
+                "port": 8080,
+                "path": "/run",
+                "protocol": "json_template",
+                "request_template": {"session_id": "{{session_id}}"},
+            }
+        )
+    assert RuntimeInterface.model_validate(
+        {
+            "kind": "http",
+            "port": 8080,
+            "path": "/run",
+            "protocol": "json_template",
+            "setup_requests": [
+                {
+                    "path": "/users/{{thread_id}}/sessions",
+                    "capture": {"session_id": "id"},
+                }
+            ],
+            "request_template": {"session_id": "{{session_id}}"},
+        }
+    ).setup_requests[0].capture == {"session_id": "id"}
 
 
 def test_an_import_entrypoint_without_module_and_callable_is_rejected_at_contract_time():

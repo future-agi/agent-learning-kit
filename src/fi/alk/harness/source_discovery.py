@@ -30,10 +30,12 @@ def _json_type(declared: str) -> dict[str, object]:
     normalized = declared.strip().lower()
     if "bool" in normalized:
         return {"type": "boolean"}
-    if "int" in normalized:
-        return {"type": "integer"}
+    # Preserve the widest accepted numeric shape for unions such as
+    # ``int | float`` instead of narrowing according to token order.
     if any(token in normalized for token in ("float", "number", "decimal")):
         return {"type": "number"}
+    if "int" in normalized:
+        return {"type": "integer"}
     if any(token in normalized for token in ("list", "array", "tuple", "set")):
         return {"type": "array"}
     if any(token in normalized for token in ("dict", "mapping", "object", "json")):
@@ -49,7 +51,11 @@ def _action_schema(tool: Any) -> dict[str, object]:
         if isinstance(values, (list, tuple)) and values:
             usable = [value for value in values if value not in (None, "null", "")]
             if usable:
-                property_schema = {**property_schema, "enum": usable}
+                # An observed set of allowed values is more precise than an
+                # inferred textual type. Contracts can mislabel a string-valued
+                # Literal as int; keeping both yields an impossible schema and
+                # makes an unrelated action probe abort the whole run.
+                property_schema = {"enum": usable}
         properties[name] = property_schema
     return {
         "type": "object",

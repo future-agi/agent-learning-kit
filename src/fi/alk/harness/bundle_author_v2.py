@@ -16,8 +16,9 @@ import logging
 import re
 import shutil
 import sqlite3
+import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -400,6 +401,23 @@ def _contract_column_declarations(
 
 def _contract_sql_type(declaration: str) -> str | None:
     normalized = declaration.strip().upper()
+    tokens = set(re.findall(r"[A-Z][A-Z0-9_]*", normalized))
+    language_type = "|" in normalized or normalized.startswith(
+        ("UNION[", "OPTIONAL[", "LIST[", "DICT[", "MAPPING[", "TUPLE[", "SET[")
+    )
+    if language_type:
+        if tokens & {"FLOAT", "NUMBER", "DECIMAL", "DOUBLE"}:
+            return "double precision"
+        if tokens & {"INT", "INTEGER"}:
+            return "bigint"
+        if tokens & {"BOOL", "BOOLEAN"}:
+            return "boolean"
+        if tokens & {"DICT", "MAPPING", "OBJECT", "JSON", "ANY"}:
+            return "jsonb"
+        if tokens & {"LIST", "ARRAY", "TUPLE", "SET"}:
+            return "jsonb"
+        if tokens & {"STR", "STRING"}:
+            return "text"
     patterns = (
         (r"^BOOLEAN\b", "boolean"),
         (r"^(?:BIGINT|INTEGER|INT|SMALLINT)\b", "bigint"),
@@ -417,6 +435,23 @@ def _contract_sql_type(declaration: str) -> str | None:
     for pattern, sql_type in patterns:
         if re.match(pattern, normalized):
             return sql_type
+
+    # Application contracts often use language-level unions instead of SQL
+    # declarations. Interpret the whole declaration as a type set, with the wider
+    # compatible representation winning independently of token order.
+    if tokens & {"FLOAT", "NUMBER", "DECIMAL", "DOUBLE"}:
+        return "double precision"
+    if tokens & {"INT", "INTEGER"}:
+        return "bigint"
+    if tokens & {"BOOL", "BOOLEAN"}:
+        return "boolean"
+    if tokens & {"DICT", "MAPPING", "OBJECT", "JSON", "ANY"}:
+        return "jsonb"
+    if tokens & {"LIST", "ARRAY", "TUPLE", "SET"}:
+        # Without a proven homogeneous leaf type, JSONB preserves the value shape.
+        return "jsonb"
+    if tokens & {"STR", "STRING"}:
+        return "text"
     return None
 
 
@@ -801,6 +836,7 @@ def _generic_postgres_seed_artifacts(
     embedded_store = any(
         marker in normalized_store_kind
         for marker in (
+            "none",
             "in_process",
             "in_memory",
             "memory",
@@ -1160,10 +1196,86 @@ def _callback_entrypoint(root: Path) -> str:
     return candidate
 
 
+def _langgraph_entrypoint(root: Path) -> str | None:
+    """Read a source-declared LangGraph graph without guessing an agent script."""
+
+    path = root / "langgraph.json"
+    if not path.is_file():
+        return None
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise BundleAuthorError(f"langgraph_config_invalid: {exc}") from exc
+    graphs = document.get("graphs") if isinstance(document, dict) else None
+    if not isinstance(graphs, dict) or len(graphs) != 1:
+        raise BundleAuthorError("langgraph_graph_ambiguous: expected exactly one declared graph")
+    declaration = next(iter(graphs.values()))
+    if not isinstance(declaration, str) or ":" not in declaration:
+        raise BundleAuthorError("langgraph_graph_invalid: expected path:attribute")
+    file_name, attribute = declaration.rsplit(":", 1)
+    graph_path = (root / file_name).resolve()
+    if not graph_path.is_relative_to(root) or not graph_path.is_file() or not graph_path.suffix == ".py":
+        raise BundleAuthorError("langgraph_graph_invalid: graph source must be a Python file in the repository")
+    if not attribute.isidentifier():
+        raise BundleAuthorError("langgraph_graph_invalid: graph attribute is invalid")
+    return f"{graph_path.relative_to(root).as_posix()}:{attribute}"
+
+
 def _callback_adapter_source() -> str:
     return (
         Path(__file__).with_name("callback_http_adapter.py").read_text(encoding="utf-8")
     )
+
+
+def _langgraph_adapter_source() -> str:
+    return Path(__file__).with_name("langgraph_http_adapter.py").read_text(
+        encoding="utf-8"
+    )
+
+
+def _subprocess_adapter_source() -> str:
+    """Return the generic command-to-HTTP bridge embedded in a Bundle V2 process."""
+
+    return (
+        Path(__file__)
+        .with_name("subprocess_http_adapter.py")
+        .read_text(encoding="utf-8")
+    )
+
+
+def _runtime_component(root: Path, configured_workdir: str) -> Path:
+    """Resolve a source-declared workdir to its nearest installable project root."""
+
+    configured = configured_workdir.strip()
+    component = (
+        (root / configured).resolve() if configured not in {"", ".", "/"} else root
+    )
+    if not component.is_relative_to(root) or not component.is_dir():
+        raise BundleAuthorError(f"runtime_workdir_invalid: {configured_workdir or '.'}")
+    for candidate in (component, *component.parents):
+        if not candidate.is_relative_to(root):
+            break
+        if any(
+            (candidate / name).is_file()
+            for name in ("pyproject.toml", "requirements.txt", "setup.py")
+        ):
+            return candidate
+    return component
+
+
+def _submitted_command(process: SourceProcess, command: list[str]) -> list[str]:
+    """Run a contract argv inside the dependency environment selected for the source."""
+
+    if not command:
+        return list(process.run_command)
+    normalized = [str(item) for item in command]
+    if normalized[0] in {"python", "python3", "python3.11", "python3.12", "python3.13"}:
+        if process.run_command[:3] == ["uv", "run", "--no-sync"]:
+            return [*process.run_command[:4], *normalized[1:]]
+        return [process.run_command[0], *normalized[1:]]
+    if process.run_command[:3] == ["uv", "run", "--no-sync"] and normalized[0] != "uv":
+        return ["uv", "run", "--no-sync", *normalized]
+    return normalized
 
 
 def _managed_world_db() -> ManagedProcess:
@@ -1180,7 +1292,9 @@ def _tool_proxy_process() -> SourceProcess:
         name="tool-proxy",
         working_directory="generated/tool-proxy",
         source_origin="bundle",
-        run_command=["/opt/alk-venv/bin/python", "proxy.py"],
+        # The ALK interpreter carries the proxy's dependencies in both local and
+        # hosted runtimes; its path is not necessarily /opt/alk-venv.
+        run_command=[sys.executable, "proxy.py"],
         environment={
             "PORT": "{{PORT_tool-proxy}}",
             "UPSTREAM_URL": "{{TOOLS_UPSTREAM_URL}}",
@@ -1251,6 +1365,7 @@ def resolve_environment_plan(
     *,
     contract_modality: str | None = None,
     contract_interface_kind: str | None = None,
+    contract_runtime: dict[str, Any] | None = None,
 ) -> EnvironmentPlanV2:
     """Resolve packaging once.  Authoring and provisioning consume this same immutable plan."""
     root = Path(source).resolve()
@@ -1291,6 +1406,18 @@ def resolve_environment_plan(
     }
     readiness = [ReadinessProbeV2(capability="world_db", timeout_seconds=180)]
     declared_runtime_environment = _declared_runtime_environment(root)
+    contract_runtime = contract_runtime if isinstance(contract_runtime, dict) else {}
+    runtime_command = [str(item) for item in (contract_runtime.get("command") or [])]
+    runtime_workdir = str(contract_runtime.get("workdir") or "")
+    interface = contract_runtime.get("interface")
+    interface = interface if isinstance(interface, dict) else {}
+    # A generated contract may correctly identify the HTTP seam but omit its start command.
+    # The repository's exec-form Dockerfile CMD is an explicit source-owned declaration; use it
+    # before falling back to a guessed agent.py entrypoint. This works for any HTTP framework.
+    if not runtime_command and interface.get("kind") == "http" and not compose:
+        runtime_command = _dockerfile_run(root) or []
+    interface_port = interface.get("port")
+    interface_health_path = str(interface.get("health_path") or "/health")
 
     # A connect-only provider target is hosted by Vapi/Retell and is addressed by the
     # provider ID in the job.  When no repository was submitted there is deliberately no
@@ -1538,12 +1665,53 @@ def resolve_environment_plan(
         discovered_callback = (
             None if is_livekit else _discover_callback_entrypoint(root)
         )
-        is_callback = not is_livekit and (
+        graph_entrypoint = (
+            _langgraph_entrypoint(root)
+            if not is_livekit and contract_modality == "chat" and not runtime_command
+            else None
+        )
+        is_graph = graph_entrypoint is not None and not discovered_callback
+        is_callback = not is_livekit and not is_graph and (
             contract_is_callback or discovered_callback is not None
         )
+        is_command_adapter = bool(
+            not is_livekit
+            and not is_callback
+            and contract_modality == "chat"
+            and runtime_command
+            and (contract_interface_kind or "") in {"", "command"}
+        )
+        is_http_runtime = bool(
+            not is_livekit
+            and not is_callback
+            and contract_modality == "chat"
+            and runtime_command
+            and contract_interface_kind == "http"
+        )
+        is_declared_runtime = is_command_adapter or is_http_runtime
         entry = "agent.py"
-        if not is_callback and not (root / entry).is_file():
-            candidates = sorted(root.glob("**/agent.py"))
+        if is_declared_runtime or is_graph:
+            component = _runtime_component(root, runtime_workdir)
+            entry = next(
+                (
+                    item
+                    for item in runtime_command
+                    if item.endswith(".py") and (component / item).is_file()
+                ),
+                "agent.py",
+            )
+        elif not is_callback and not (root / entry).is_file():
+            # A submitted checkout may contain a developer's virtualenv or dependency tree.
+            # Those files are not agent entrypoints and must not make source discovery
+            # ambiguous.  Apply the same generated-artifact exclusions used by staging.
+            candidates = sorted(
+                path
+                for path in root.glob("**/agent.py")
+                if not any(
+                    part in _IGNORED_ARTIFACT_PARTS
+                    for part in path.relative_to(root).parts[:-1]
+                )
+            )
             if len(candidates) != 1:
                 raise BundleAuthorError(
                     "component_ambiguous: expected exactly one agent.py"
@@ -1565,7 +1733,7 @@ def resolve_environment_plan(
         else:
             component = root
         control_name = "agent"
-        port = None if is_livekit else 8080
+        port = None if is_livekit else int(interface_port or 8080)
         environment = (
             {
                 **declared_runtime_environment,
@@ -1580,6 +1748,13 @@ def resolve_environment_plan(
         callback_entrypoint = (
             discovered_callback or _callback_entrypoint(root) if is_callback else None
         )
+        if is_graph:
+            environment.update(
+                {
+                    "PORT": "{{PORT_agent}}",
+                    "ALK_LANGGRAPH_ENTRYPOINT": graph_entrypoint,
+                }
+            )
         if callback_entrypoint:
             environment.update(
                 {
@@ -1597,13 +1772,41 @@ def resolve_environment_plan(
             port=port,
             environment=environment,
             livekit_download=is_livekit,
-            run_override=(None if is_callback else _dockerfile_run(component)),
+            run_override=(
+                None
+                if is_callback or is_command_adapter or is_graph
+                else runtime_command or _dockerfile_run(component)
+            ),
         )
+        if is_graph:
+            python_command = process.run_command[:-1]
+            process = process.model_copy(
+                update={
+                    "run_command": python_command
+                    + ["-c", _langgraph_adapter_source()],
+                    "started_check": StartedCheck(port=True, timeout_seconds=180),
+                }
+            )
         if is_callback:
             python_command = process.run_command[:-1]
             process = process.model_copy(
                 update={
                     "run_command": python_command + ["-c", _callback_adapter_source()],
+                    "started_check": StartedCheck(port=True, timeout_seconds=180),
+                }
+            )
+        if is_command_adapter:
+            command = _submitted_command(process, runtime_command)
+            python_command = process.run_command[:-1]
+            process = process.model_copy(
+                update={
+                    "run_command": python_command
+                    + ["-c", _subprocess_adapter_source()],
+                    "environment": {
+                        **process.environment,
+                        "PORT": "{{PORT_agent}}",
+                        "ALK_SUBPROCESS_COMMAND": json.dumps(command),
+                    },
                     "started_check": StartedCheck(port=True, timeout_seconds=180),
                 }
             )
@@ -1632,7 +1835,13 @@ def resolve_environment_plan(
             )
             readiness.append(
                 ReadinessProbeV2(
-                    capability="target_http", path="/health", timeout_seconds=180
+                    capability="target_http",
+                    path=(
+                        "/health"
+                        if is_command_adapter or is_callback
+                        else interface_health_path
+                    ),
+                    timeout_seconds=180,
                 )
             )
         packaging = (
@@ -1745,7 +1954,12 @@ def _compile_source_tool_handlers(contract: dict[str, Any], staging: Path) -> li
                 f"contract_tool_entry_incomplete: {entry.tool}: "
                 f"{entry.mode} requires module and callable"
             )
-        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", entry.tool):
+        # Provider/framework tool names are display names, not Python identifiers (CrewAI,
+        # for example, permits spaces). The handler is loaded by exact filename, not imported
+        # as a module. Reject path/control characters while preserving that exact display name.
+        if not re.fullmatch(
+            r"[A-Za-z0-9_][A-Za-z0-9_. -]{0,127}", entry.tool
+        ) or entry.tool in {".", ".."}:
             raise BundleAuthorError(f"contract_tool_name_unsafe: {entry.tool!r}")
         handlers.mkdir(parents=True, exist_ok=True)
         destination = handlers / f"{entry.tool}.py"
@@ -1811,6 +2025,8 @@ def author_bundle_v2(
     contract_modality: str | None = None
     contract_interface_kind: str | None = None
     contract_body: dict[str, Any] = {}
+    runtime: dict[str, Any] = {}
+    command_adapter_contract = False
     contract_path = authoring_root / "contract.json"
     if contract_path.is_file():
         try:
@@ -1823,6 +2039,7 @@ def author_bundle_v2(
             raise BundleAuthorError("contract_invalid: contract.json must be an object")
         contract_modality = str(contract_body.get("modality") or "").strip().lower()
         runtime = contract_body.get("runtime")
+        runtime = runtime if isinstance(runtime, dict) else {}
         interface = runtime.get("interface") if isinstance(runtime, dict) else None
         if isinstance(interface, dict):
             contract_interface_kind = str(interface.get("kind") or "").strip().lower()
@@ -1844,12 +2061,109 @@ def author_bundle_v2(
             }
             contract_body = {**contract_body, "runtime": runtime}
             contract_interface_kind = "callable"
+        elif (
+            contract_modality == "chat"
+            and not isinstance(interface, dict)
+            and not runtime.get("command")
+            and _langgraph_entrypoint(source_root) is not None
+        ):
+            runtime = dict(runtime)
+            runtime["interface"] = {
+                "kind": "callable",
+                "protocol": "fi.alk",
+                "path": "",
+                "health_path": "",
+                "include_tools": False,
+            }
+            contract_body = {**contract_body, "runtime": runtime}
+            contract_interface_kind = "callable"
+        elif (
+            contract_modality == "chat"
+            and not isinstance(interface, dict)
+            and runtime.get("command")
+        ):
+            # A runnable one-shot command is a real source-owned execution boundary even when it
+            # is not a server. Compile the generic stdin/environment subprocess bridge below and
+            # expose that bridge to the chat runner as the standard callable protocol.
+            runtime = dict(runtime)
+            runtime["interface"] = {
+                "kind": "command",
+                "protocol": "fi.alk",
+                "path": "",
+                "health_path": "",
+                "include_tools": False,
+            }
+            contract_body = {**contract_body, "runtime": runtime}
+            contract_interface_kind = "command"
+            command_adapter_contract = True
+        if (
+            contract_modality == "chat"
+            and contract_interface_kind == "callable"
+            and runtime.get("command")
+            and _discover_callback_entrypoint(source_root) is None
+        ):
+            # Authoring models sometimes infer ``callable`` from an in-process agent object even
+            # though the repository exports no harness callback.  The executable command is the
+            # stronger, source-verifiable boundary in that case.  Compile it through the generic
+            # command bridge instead of starting a one-shot script and waiting for an HTTP port it
+            # can never open.  This rule is framework-neutral and does not modify submitted code.
+            runtime = dict(runtime)
+            runtime["interface"] = {
+                "kind": "command",
+                "protocol": "fi.alk",
+                "path": "",
+                "health_path": "",
+                "include_tools": False,
+            }
+            contract_body = {**contract_body, "runtime": runtime}
+            contract_interface_kind = "command"
+            command_adapter_contract = True
     plan = resolve_environment_plan(
         source_root,
         job,
         contract_modality=contract_modality,
         contract_interface_kind=contract_interface_kind,
+        contract_runtime=(runtime if isinstance(runtime, dict) else None),
     )
+    # In-process framework tools do not cross the HTTP tool proxy. Trace only source-declared
+    # callable boundaries inside the target Python process; the trace is observational and
+    # never replays the tool. The same mechanism works for any Python framework with an
+    # importable callable recorded during source understanding.
+    trace_bindings = [
+        {"name": entry.tool, "module": entry.module, "callable": entry.callable}
+        for raw in contract_body.get("tool_entrypoints", [])
+        if isinstance(raw, dict)
+        for entry in [ToolEntry.model_validate(raw)]
+        if entry.mode in {"import", "construct"} and entry.module and entry.callable
+    ]
+    if contract_modality == "chat" and trace_bindings:
+        plan = replace(
+            plan,
+            processes=tuple(
+                process.model_copy(
+                    update={
+                        "environment": {
+                            **process.environment,
+                            "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
+                            "ALK_TOOL_TRACE_BINDINGS": json.dumps(trace_bindings),
+                        }
+                    }
+                )
+                if isinstance(process, SourceProcess) and process.name == plan.control_service
+                else process
+                for process in plan.processes
+            ),
+        )
+    if command_adapter_contract:
+        sealed_runtime = dict(contract_body["runtime"])
+        sealed_runtime["interface"] = {
+            "kind": "callable",
+            "protocol": "fi.alk",
+            "path": "",
+            "health_path": "",
+            "include_tools": False,
+        }
+        contract_body = {**contract_body, "runtime": sealed_runtime}
     provided_environment = {
         str(name).upper()
         for name in (job.metadata.get("environment_value_names", []) or [])
@@ -1868,6 +2182,9 @@ def author_bundle_v2(
             for process in plan.processes
             if isinstance(process, SourceProcess)
         },
+        # Match preflight: a template documents possible integrations, not every
+        # credential needed by the selected generic-runtime path.
+        template_secrets_required=job.metadata.get("generic_harness_v1") is not True,
     )
     if not credential_manifest.ready:
         missing = sorted(
@@ -1923,12 +2240,15 @@ def author_bundle_v2(
                 source=source_root,
                 contract=contract_body,
                 prefix=prefix,
-                allow_harness_owned_schema=job.agent.mode
-                in {
-                    ProviderExecutionMode.CONNECT_ONLY,
-                    ProviderExecutionMode.ENVIRONMENT_BACKED,
-                    ProviderExecutionMode.PROVIDER_IMPORT,
-                },
+                allow_harness_owned_schema=(
+                    command_adapter_contract
+                    or job.agent.mode
+                    in {
+                        ProviderExecutionMode.CONNECT_ONLY,
+                        ProviderExecutionMode.ENVIRONMENT_BACKED,
+                        ProviderExecutionMode.PROVIDER_IMPORT,
+                    }
+                ),
             )
         else:
             seed_path = seed_dir / "world.sql"

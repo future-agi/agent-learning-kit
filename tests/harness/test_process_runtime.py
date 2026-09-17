@@ -1173,6 +1173,24 @@ def test_build_process_tree_preserves_a_within_tree_symlink_as_a_symlink(
     assert (build_dir / "link.txt").read_text() == "hello"
 
 
+def test_build_process_tree_ignores_a_local_virtual_environment(
+    tmp_path: Path,
+) -> None:
+    """A developer's generated venv is not submitted source and may contain host-only links."""
+    svc_dir = tmp_path / "source" / "svc"
+    (svc_dir / ".venv" / "bin").mkdir(parents=True)
+    (svc_dir / "agent.py").write_text("print('ready')\n", encoding="utf-8")
+    (svc_dir / ".venv" / "bin" / "python").symlink_to("/host/python")
+
+    process = _source_process(working_directory="svc", build_commands=[])
+    build_dir = pr.build_process_tree(
+        process, source_root=tmp_path / "source", build_root=tmp_path / "build"
+    )
+
+    assert (build_dir / "agent.py").is_file()
+    assert not (build_dir / ".venv").exists()
+
+
 def test_build_process_tree_rejects_a_symlinked_working_directory_path_component(
     tmp_path: Path,
 ) -> None:
@@ -1841,7 +1859,7 @@ def test_spawn_managed_process_bootstraps_postgres_once_via_sync_run(
     assert len(bootstrap_calls) == 1
     assert bootstrap_calls[0][0] == "initdb"
     assert "--encoding=UTF8" in bootstrap_calls[0]
-    assert "--locale=C.UTF-8" in bootstrap_calls[0]
+    assert "--locale=C" in bootstrap_calls[0]
     assert run_calls[0][0] == "postgres"
     # No pwfile left behind after bootstrap.
     assert not any(p.name.endswith(".pwfile") for p in data_dir.parent.glob(".*"))

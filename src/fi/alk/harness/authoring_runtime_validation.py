@@ -192,6 +192,26 @@ def _freeze_certified_bundle(bundle: Path, authoring: Path) -> None:
     shutil.copytree(bundle, certified_bundle)
 
 
+def _make_local_seed_files_readable(bundle: Path) -> None:
+    """Allow an unprivileged data service to read public, generated seed inputs.
+
+    The bundle is created in a private controller workspace.  PostgreSQL is deliberately
+    launched as svc-data, so its ``psql -f`` needs search permission on the seed directory
+    and read permission on the generated files.  Do not relax modes elsewhere in the bundle:
+    credential handoffs and submitted source are outside this seed-only boundary.
+    """
+
+    seed = bundle / "seed"
+    if not seed.is_dir():
+        return
+    bundle.chmod(bundle.stat().st_mode | 0o055)
+    seed.chmod(seed.stat().st_mode | 0o055)
+    for path in seed.rglob("*"):
+        if path.is_symlink():
+            continue
+        path.chmod(path.stat().st_mode | (0o055 if path.is_dir() else 0o044))
+
+
 def _write_generic_certificate(job, authoring: Path, repairs) -> None:
     from .certification import (
         CertificationAuthoring,
@@ -299,6 +319,9 @@ def _fallback_diagnostic(error):
     elif error.phase == "infrastructure":
         code = "process_dependency_timeout"
         stage = HarnessStage.BUILDING_ENVIRONMENT
+    elif error.phase == "runtime" or _looks_like_runtime_plan_failure(normalized):
+        code = "generated_runtime_plan_invalid"
+        stage = HarnessStage.BUILDING_ENVIRONMENT
     else:
         code = "generated_setup_invalid"
         stage = HarnessStage.VALIDATING_ENVIRONMENT
@@ -307,6 +330,36 @@ def _fallback_diagnostic(error):
         component="runtime_validation",
         code=code,
         message=str(error),
+    )
+
+
+def _looks_like_runtime_plan_failure(detail: str) -> bool:
+    """Recognize failures in the generated execution plan, not agent behavior/data.
+
+    The concrete exception types are deliberately allowed to vary across Docker, Compose,
+    process and HTTP runtimes.  These stable boundary messages are produced before a scenario
+    can exercise the agent and are therefore safe to route to repository/runtime inspection.
+    """
+
+    return any(
+        marker in detail
+        for marker in (
+            "generated_runtime_",
+            "no runnable shipped entrypoint",
+            "dependency manifest",
+            "failed to build",
+            "docker build",
+            "process exited",
+            "process failed",
+            "readiness probe",
+            "health check",
+            "healthcheck",
+            "entrypoint",
+            "module not found",
+            "modulenotfounderror",
+            "cannot find module",
+            "command not found",
+        )
     )
 
 
@@ -335,6 +388,19 @@ def _repair_guidance(diagnostics) -> str:
         parts.append(f"evidence={item.redacted_message[:4000]}")
         rendered.append(" | ".join(parts))
     return "\n".join(rendered)[:12000]
+
+
+def _needs_runtime_plan_repair(diagnostics) -> bool:
+    """Route execution construction failures away from world-data authoring."""
+
+    runtime_codes = {
+        "generated_runtime_plan_invalid",
+        "process_dependency_timeout",
+        "tool_endpoint_unreachable",
+    }
+    return bool(diagnostics) and all(
+        diagnostic.code in runtime_codes for diagnostic in diagnostics
+    )
 
 
 class RuntimeValidationError(RuntimeError):
@@ -384,6 +450,7 @@ async def validate_once(
     authoring: Path,
     *,
     secrets_path=Path("/run/futureagi/secrets.json"),
+    local_runtime: bool = False,
 ) -> int:
     from . import outbound
     from .bundle_author_v2 import author_bundle_v2
@@ -396,7 +463,7 @@ async def validate_once(
     from .hosted_scheduler import _classify_ready, _run_phase
     from .job import ProviderExecutionMode, SourceKind
     from .process_preflight import preflight_bundle
-    from .process_runtime import ProcessRuntimeProvider
+    from .process_runtime import ProcessRuntimeProvider, default_user_resolver
     from .scenario_source import load_scenarios
     from .source_data_invariants import author_invariants, check_invariants
     from .tool_certification import ToolAvailability, certify_tool_inventory
@@ -428,34 +495,66 @@ async def validate_once(
 
     # The real execution consumes its credential file. Validation gets a private copy,
     # with the same purpose map, so it cannot destroy the execution handoff.
+    temporary_parent = authoring.parent
+    if local_runtime:
+        # The local sandbox itself runs in Docker while ProcessRuntimeProvider may ask the
+        # host Docker daemon to build/start submitted Compose services.  A path in the sandbox's
+        # private artifact volume is not visible to that daemon.  The upload root is deliberately
+        # bind-mounted at the same absolute path on both sides, so use it for disposable runtime
+        # candidates when present.  A plain local CLI has no such variable and keeps the historic
+        # authoring-adjacent temporary directory.
+        shared_root = os.environ.get("ALK_SANDBOX_UPLOAD_ROOT", "").strip()
+        if shared_root:
+            temporary_parent = Path(shared_root).expanduser().resolve()
+            temporary_parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(
-        prefix="runtime-validation-", dir=authoring.parent
+        prefix="runtime-validation-", dir=temporary_parent
     ) as root:
         work = Path(root)
+        if local_runtime:
+            # Child processes drop to svc-* identities. They need search permission on the
+            # disposable workspace parent in order to reach their individually chowned trees;
+            # secrets below retain mode 0600 and are injected by the controller.
+            work.chmod(0o755)
         secrets = work / "secrets.json"
         secrets.write_bytes(secrets_path.read_bytes())
         secrets.chmod(0o600)
         secret_values = tuple(
             str(value) for value in json.loads(secrets.read_text()).values()
         )
-        capabilities = outbound.load_capabilities(unlink=False)
+        capabilities = (
+            None if local_runtime else outbound.load_capabilities(unlink=False)
+        )
         transport = outbound.RequestsTransport()
         provider = ProcessRuntimeProvider(
             secrets_path=secrets,
             secret_purpose_map=job_secret_purposes(job),
-            user_resolver=lambda _name: None,
-            require_declared_user=False,
-            public_url_resolver=lambda port, ttl: _resolve_hosted_public_url(
-                capabilities, transport, port=port, expires_in_seconds=ttl
+            # A local parity run shares the host/container process namespace and must resolve
+            # the same unprivileged identities installed in the sandbox image. Forcing every
+            # user to unresolved silently falls back to root, which PostgreSQL correctly rejects.
+            user_resolver=(
+                default_user_resolver if local_runtime else lambda _name: None
             ),
-            provider_attempt_id=capabilities.attempt_id,
-            provider_expires_at=capabilities.expires_at,
+            require_declared_user=False,
+            public_url_resolver=(
+                None
+                if capabilities is None
+                else lambda port, ttl: _resolve_hosted_public_url(
+                    capabilities, transport, port=port, expires_in_seconds=ttl
+                )
+            ),
+            provider_attempt_id=(
+                capabilities.attempt_id if capabilities is not None else None
+            ),
+            provider_expires_at=(
+                capabilities.expires_at if capabilities is not None else None
+            ),
             generic_artifact_root=(authoring / "generic-harness") if generic else None,
         )
         executor = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="runtime-validation"
         )
-        phase = "environment"
+        phase = "runtime"
         try:
             bundle = work / "bundle"
             manifest = await asyncio.to_thread(
@@ -465,6 +564,8 @@ async def validate_once(
                 authoring=authoring,
                 output=bundle,
             )
+            if local_runtime:
+                _make_local_seed_files_readable(bundle)
             validation_parallelism = 1 if external_provider or not generic else 2
             preflight_bundle(
                 bundle,
@@ -479,6 +580,9 @@ async def validate_once(
                 work_directory=work,
                 instances=validation_parallelism,
             )
+            # From here onward the generated build/start plan has succeeded. Failures belong to
+            # the generated world, tool boundary, or scenarios rather than runtime discovery.
+            phase = "environment"
             tool_report = None
             action_report = None
             world_isolation = None
@@ -763,6 +867,16 @@ async def validate_and_repair(
 
             if phase == "environment":
                 artifact_root = authoring / "generic-harness"
+                if generic and _needs_runtime_plan_repair(_active_repair_diagnostics):
+                    from .contract import AgentContract
+                    from .runtime_repair import request_runtime_plan_patch
+
+                    contract = AgentContract.model_validate_json(
+                        (authoring / "contract.json").read_text(encoding="utf-8")
+                    )
+                    return await request_runtime_plan_patch(
+                        source, contract, _active_repair_diagnostics
+                    )
                 if generic and all(
                     (artifact_root / name).is_file()
                     for name in ("source-model.json", "world-ir.json")
@@ -817,7 +931,21 @@ async def validate_and_repair(
 
         repair_controller = controller or RepairController()
         artifacts = GenericHarnessArtifactStore(authoring / "generic-harness")
-        for _attempt in range(12):
+        budgets = repair_controller.budgets
+        candidate_repairs = (
+            budgets.compiler_candidates
+            + budgets.environment_patches
+            + budgets.scenario_patches
+        )
+        # Every materially changed candidate may first consume its transient retry allowance.
+        # Derive the guard from the controller's real budgets so increasing autonomous repair
+        # depth cannot make this outer loop terminate before the final candidate is validated.
+        decision_bound = (
+            1
+            + candidate_repairs
+            + (candidate_repairs + 1) * budgets.infrastructure_retries_per_candidate
+        )
+        for _attempt in range(decision_bound):
             candidate_hash = _generic_candidate_hash(source, authoring)
             try:
                 count = await validate(job, source, authoring)
@@ -888,6 +1016,10 @@ async def validate_and_repair(
                         WorldIRRepairPatch,
                         apply_world_ir_repair_patch,
                     )
+                    from .runtime_repair import (
+                        RuntimePlanPatch,
+                        apply_runtime_plan_patch,
+                    )
 
                     if isinstance(repair_result, WorldIRRepairPatch):
                         source_model = artifacts.read_source_model()
@@ -902,6 +1034,25 @@ async def validate_and_repair(
                             allowed_reason_codes={item.code for item in diagnostics},
                         )
                         artifacts.write_world_ir(repaired_world)
+                        status = 0
+                    elif isinstance(repair_result, RuntimePlanPatch):
+                        apply_runtime_plan_patch(
+                            source,
+                            authoring / "contract.json",
+                            repair_result,
+                            allowed_diagnostic_codes={
+                                item.code for item in diagnostics
+                            },
+                        )
+                        patch_path = (
+                            authoring
+                            / "generic-harness"
+                            / f"runtime-plan-repair-{decision.sequence}.json"
+                        )
+                        patch_path.write_text(
+                            repair_result.model_dump_json(indent=2) + "\n",
+                            encoding="utf-8",
+                        )
                         status = 0
                     else:
                         status = repair_result

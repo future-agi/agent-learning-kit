@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 import shutil
 import sqlite3
+import sys
 from pathlib import Path
 
 import pytest
 
 from fi.alk.harness.bundle_author_v2 import (
     BundleAuthorError,
+    _compile_source_tool_handlers,
     _contract_column_declarations,
     _sqlite_sql,
     author_bundle_v2,
@@ -33,6 +35,42 @@ from fi.alk.harness.repair_controller import RepairHistory
 from fi.alk.harness.source_model import SourceModel
 from fi.alk.harness.world.runtime import GeneratedWorld
 from fi.alk.harness.world_ir import WorldIR
+
+
+def test_source_tool_handler_preserves_safe_display_name(tmp_path: Path) -> None:
+    written = _compile_source_tool_handlers(
+        {
+            "tool_entrypoints": [
+                {
+                    "tool": "Character Counter Tool",
+                    "mode": "import",
+                    "module": "example.tools",
+                    "callable": "count",
+                }
+            ]
+        },
+        tmp_path,
+    )
+
+    assert written == ["handlers/Character Counter Tool.py"]
+    assert (tmp_path / written[0]).is_file()
+
+
+def test_source_tool_handler_rejects_path_separator(tmp_path: Path) -> None:
+    with pytest.raises(BundleAuthorError, match="contract_tool_name_unsafe"):
+        _compile_source_tool_handlers(
+            {
+                "tool_entrypoints": [
+                    {
+                        "tool": "../escape",
+                        "mode": "import",
+                        "module": "example.tools",
+                        "callable": "count",
+                    }
+                ]
+            },
+            tmp_path,
+        )
 
 
 def _job(
@@ -113,6 +151,34 @@ def _write_callable_contract(authoring: Path) -> None:
                         "include_tools": True,
                     },
                 },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _write_chat_contract(
+    authoring: Path,
+    *,
+    command: list[str],
+    workdir: str = ".",
+    interface: dict[str, object] | None = None,
+    data_store: str = "none",
+) -> None:
+    runtime: dict[str, object] = {
+        "language": "python",
+        "command": command,
+        "workdir": workdir,
+    }
+    if interface is not None:
+        runtime["interface"] = interface
+    (authoring / "contract.json").write_text(
+        json.dumps(
+            {
+                "modality": "chat",
+                "runtime": runtime,
+                "data_store": {"kind": data_store},
+                "tools": [],
             }
         ),
         encoding="utf-8",
@@ -747,6 +813,9 @@ def test_six_supported_shapes_produce_preflight_clean_bundle(
     job = _job(connector=connector, with_secrets=connector == "livekit")
     plan = resolve_environment_plan(source, job)
     assert plan.packaging == packaging
+    if case == "uber-compose":
+        proxy = next(process for process in plan.processes if process.name == "tool-proxy")
+        assert proxy.run_command == [sys.executable, "proxy.py"]
     output = tmp_path / "bundle"
     first = author_bundle_v2(
         source=source, job=job, authoring=_authoring(tmp_path), output=output
@@ -1171,6 +1240,35 @@ def test_bundle_uses_contract_boolean_type_when_sqlite_erases_it(
     assert '"attempts_left" bigint NOT NULL DEFAULT 3' in seed_sql
     assert '"verified" boolean NOT NULL DEFAULT FALSE' in seed_sql
     assert "'2026-09-04T12:00:00Z', 3, FALSE);" in seed_sql
+
+
+def test_bundle_uses_widest_numeric_type_from_language_union(tmp_path: Path) -> None:
+    authoring = _authoring(tmp_path)
+    (authoring / "contract.json").write_text(
+        json.dumps(
+            {
+                "modality": "chat",
+                "data_schema": {"feedback": {"score": "int | float"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    database = sqlite3.connect(authoring / "world.sqlite")
+    try:
+        database.execute("CREATE TABLE feedback (score INTEGER)")
+        database.execute("INSERT INTO feedback VALUES (?)", (5.0,))
+        database.commit()
+    finally:
+        database.close()
+
+    compiled_world = _sqlite_sql(
+        authoring / "world.sqlite",
+        contract_declarations=_contract_column_declarations(
+            json.loads((authoring / "contract.json").read_text(encoding="utf-8"))
+        ),
+    )
+
+    assert '"score" double precision' in compiled_world
 
 
 def test_adopted_source_schema_applies_defaults_for_authored_nulls(
@@ -1829,3 +1927,271 @@ def test_bundle_rejects_missing_declared_source_schema(tmp_path: Path) -> None:
             authoring=authoring,
             output=tmp_path / "bundle",
         )
+
+
+def test_chat_command_runtime_compiles_generic_subprocess_bridge(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "requirements.txt").write_text("\n", encoding="utf-8")
+    (source / "main.py").write_text("print('real target output')\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(authoring, command=["python", "main.py"])
+    contract = json.loads((authoring / "contract.json").read_text(encoding="utf-8"))
+    contract.pop("data_store")
+    contract.pop("tools")
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("CREATE TABLE fixture (id TEXT PRIMARY KEY)")
+
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source,
+        job=_job(
+            connector="auto",
+            metadata={"generic_harness_v1": True},
+        ),
+        authoring=authoring,
+        output=output,
+    )
+
+    agent = next(process for process in manifest.processes if process.name == "agent")
+    assert agent.working_directory == "."
+    assert agent.environment["ALK_SUBPROCESS_COMMAND"] == json.dumps(
+        [".venv/bin/python", "main.py"]
+    )
+    assert "ThreadingHTTPServer" in agent.run_command[-1]
+    assert manifest.capabilities["target_http"].service == "agent"
+    sealed_contract = json.loads((output / "contract.json").read_text(encoding="utf-8"))
+    assert sealed_contract["runtime"]["interface"] == {
+        "kind": "callable",
+        "protocol": "fi.alk",
+        "path": "",
+        "health_path": "",
+        "include_tools": False,
+    }
+    preflight_bundle(output, manifest, parallelism=1, secret_refs={})
+
+
+def test_chat_callable_without_exported_callback_falls_back_to_command_bridge(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "requirements.txt").write_text("\n", encoding="utf-8")
+    (source / "main.py").write_text(
+        "async def main():\n    print('target')\n",
+        encoding="utf-8",
+    )
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring,
+        command=["python", "main.py"],
+        interface={
+            "kind": "callable",
+            "protocol": "fi.alk",
+            "path": "",
+            "health_path": "",
+            "include_tools": True,
+        },
+    )
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("CREATE TABLE fixture (id TEXT PRIMARY KEY)")
+
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source,
+        job=_job(connector="auto", metadata={"generic_harness_v1": True}),
+        authoring=authoring,
+        output=output,
+    )
+
+    agent = next(process for process in manifest.processes if process.name == "agent")
+    assert agent.environment["ALK_SUBPROCESS_COMMAND"] == json.dumps(
+        [".venv/bin/python", "main.py"]
+    )
+    assert "ThreadingHTTPServer" in agent.run_command[-1]
+    sealed_contract = json.loads((output / "contract.json").read_text(encoding="utf-8"))
+    assert sealed_contract["runtime"]["interface"] == {
+        "kind": "callable",
+        "protocol": "fi.alk",
+        "path": "",
+        "health_path": "",
+        "include_tools": False,
+    }
+
+
+def test_declared_langgraph_graph_compiles_without_agent_script(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    graph_source = source / "src" / "example" / "graph.py"
+    graph_source.parent.mkdir(parents=True)
+    graph_source.write_text("graph = object()\n", encoding="utf-8")
+    (source / "pyproject.toml").write_text(
+        '[project]\nname = "example"\nversion = "0.1"\n', encoding="utf-8"
+    )
+    (source / "langgraph.json").write_text(
+        json.dumps({"graphs": {"Example": "./src/example/graph.py:graph"}}),
+        encoding="utf-8",
+    )
+    (source / ".env.example").write_text("UNUSED_PROVIDER_API_KEY=your-key\n")
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(authoring, command=[])
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("CREATE TABLE fixture (id TEXT PRIMARY KEY)")
+
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source,
+        job=_job(connector="auto", metadata={"generic_harness_v1": True}),
+        authoring=authoring,
+        output=output,
+    )
+
+    agent = next(process for process in manifest.processes if process.name == "agent")
+    assert agent.environment["ALK_LANGGRAPH_ENTRYPOINT"] == "src/example/graph.py:graph"
+    assert "ThreadingHTTPServer" in agent.run_command[-1]
+    sealed_contract = json.loads((output / "contract.json").read_text())
+    assert sealed_contract["runtime"]["interface"]["kind"] == "callable"
+
+
+def test_langgraph_graph_outside_source_is_rejected(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "langgraph.json").write_text(
+        json.dumps({"graphs": {"Unsafe": "../outside.py:graph"}}), encoding="utf-8"
+    )
+    with pytest.raises(BundleAuthorError, match="langgraph_graph_invalid"):
+        resolve_environment_plan(
+            source,
+            _job(connector="auto"),
+            contract_modality="chat",
+            contract_runtime={},
+        )
+
+
+def test_nested_script_runtime_uses_project_environment_without_agent_py(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    (source / "src" / "package").mkdir(parents=True)
+    (source / "pyproject.toml").write_text(
+        "[project]\nname='target'\nversion='1'\n"
+        "[project.scripts]\nkickoff='package.main:main'\n",
+        encoding="utf-8",
+    )
+    (source / "src" / "package" / "main.py").write_text(
+        "def main():\n    print('target')\n",
+        encoding="utf-8",
+    )
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(authoring, command=["kickoff"], workdir="src")
+
+    plan = resolve_environment_plan(
+        source,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="command",
+        contract_runtime={"command": ["kickoff"], "workdir": "src"},
+    )
+
+    agent = next(process for process in plan.processes if process.name == "agent")
+    assert agent.working_directory == "."
+    assert agent.environment["ALK_SUBPROCESS_COMMAND"] == json.dumps(
+        ["uv", "run", "--no-sync", "kickoff"]
+    )
+    assert "ThreadingHTTPServer" in agent.run_command[-1]
+
+
+def test_agent_entrypoint_discovery_ignores_generated_virtualenv(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    (source / "app").mkdir(parents=True)
+    (source / "app" / "agent.py").write_text("print('target')\n")
+    dependency = source / ".venv" / "lib" / "site-packages" / "other"
+    dependency.mkdir(parents=True)
+    (dependency / "agent.py").write_text("print('dependency')\n")
+
+    plan = resolve_environment_plan(
+        source,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime={"command": [], "workdir": ""},
+    )
+
+    agent = next(process for process in plan.processes if process.name == "agent")
+    assert agent.working_directory == "app"
+    assert "agent.py" in agent.run_command
+
+
+def test_http_runtime_uses_dockerfile_cmd_when_contract_omits_command(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    (source / "app").mkdir(parents=True)
+    (source / "app" / "agent.py").write_text("print('not the server')\n")
+    (source / "app" / "server.py").write_text("app = object()\n")
+    (source / "Dockerfile").write_text(
+        'FROM python:3.12\nCMD ["uv", "run", "uvicorn", "app.server:app", '
+        '"--host", "0.0.0.0", "--port", "8080"]\n'
+    )
+
+    plan = resolve_environment_plan(
+        source,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime={"command": [], "interface": {"kind": "http", "port": 8080}},
+    )
+
+    agent = next(process for process in plan.processes if process.name == "agent")
+    assert agent.working_directory == "."
+    assert agent.run_command[:4] == ["uv", "run", "uvicorn", "app.server:app"]
+
+
+def test_declared_http_runtime_uses_contract_command_port_and_health(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    (source / "app").mkdir(parents=True)
+    (source / "pyproject.toml").write_text(
+        "[project]\nname='target'\nversion='1'\n", encoding="utf-8"
+    )
+    (source / "app" / "server.py").write_text("app = object()\n", encoding="utf-8")
+    runtime = {
+        "command": [
+            "uv",
+            "run",
+            "uvicorn",
+            "app.server:app",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "9090",
+        ],
+        "workdir": ".",
+        "interface": {
+            "kind": "http",
+            "protocol": "custom",
+            "path": "/invoke",
+            "health_path": "/docs",
+            "port": 9090,
+        },
+    }
+
+    plan = resolve_environment_plan(
+        source,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime=runtime,
+    )
+
+    agent = next(process for process in plan.processes if process.name == "agent")
+    assert agent.working_directory == "."
+    assert agent.run_command == runtime["command"]
+    assert agent.fixed_port == 9090
+    readiness = next(
+        item for item in plan.readiness if item.capability == "target_http"
+    )
+    assert readiness.path == "/docs"

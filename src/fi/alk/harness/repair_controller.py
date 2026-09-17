@@ -28,7 +28,7 @@ class RepairBudgets(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     compiler_candidates: int = Field(default=3, ge=0, le=10)
-    environment_patches: int = Field(default=2, ge=0, le=10)
+    environment_patches: int = Field(default=4, ge=0, le=10)
     scenario_patches: int = Field(default=2, ge=0, le=10)
     infrastructure_retries_per_candidate: int = Field(default=2, ge=0, le=5)
     infrastructure_initial_backoff_seconds: float = Field(default=1.0, ge=0, le=60)
@@ -229,6 +229,30 @@ class RepairController:
                 )
             used = self._infrastructure_retries.get(observation.candidate_hash, 0)
             if used >= self.budgets.infrastructure_retries_per_candidate:
+                runtime_repairable = all(
+                    diagnostic.code
+                    in {"process_dependency_timeout", "tool_endpoint_unreachable"}
+                    for diagnostic in infrastructure
+                )
+                if (
+                    runtime_repairable
+                    and observation.phase is RepairPhase.ENVIRONMENT
+                    and self._environment_patches < self.budgets.environment_patches
+                ):
+                    fingerprints = tuple(
+                        sorted({item.fingerprint for item in infrastructure})
+                    )
+                    signature = (observation.candidate_hash, fingerprints)
+                    if signature not in self._repair_signatures:
+                        self._repair_signatures.add(signature)
+                        self._environment_patches += 1
+                        return self._decision(
+                            observation,
+                            RepairAction.PATCH_ENVIRONMENT,
+                            "transient retries exhausted; inspect and revise the generated "
+                            "runtime plan",
+                            infrastructure,
+                        )
                 return self._decision(
                     observation,
                     RepairAction.REJECT,

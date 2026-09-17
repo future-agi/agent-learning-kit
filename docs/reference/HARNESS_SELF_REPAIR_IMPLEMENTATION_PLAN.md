@@ -20,13 +20,16 @@ compatibility failures for each new agent.
 
 The production guarantee should be:
 
-> For a declared supported runtime and backend, ALK either produces a fresh, validated,
-> reproducible environment or stops before calls with a typed, redacted, actionable
-> incompatibility. It never silently weakens the environment, invents missing agent tools, or
-> reports harness failures as agent-quality failures.
+> ALK first uses deterministic adapters for known repository structures. When the structure is
+> unfamiliar or that plan fails, it inspects repository evidence, revises only the generated
+> runtime/environment plan, rebuilds in a clean room, and retries. It never modifies submitted
+> source, silently weakens the environment, invents missing agent tools, or reports harness
+> failures as agent-quality failures.
 
-This work is not intended to make arbitrary unknown infrastructure automatically supported. It
-is intended to make variation inside supported surfaces deterministic and self-correcting.
+The generic fallback is not a promise to manufacture unavailable credentials, external services,
+or missing agent implementations. Those remain typed external/source blockers. It is a promise
+that an unfamiliar framework or entrypoint is not rejected merely because it lacks a handwritten
+adapter: runtime construction is investigated through the same evidence-driven loop.
 
 ## 2. Required production behavior
 
@@ -82,6 +85,7 @@ implementation status below records how that boundary has now been replaced for 
 | 4. Action certification | Complete | Framework-neutral action probe adapter, safe modes, schema-valid inputs, refusal semantics, and reset verification. |
 | 5. Gate + evidence | Complete | Versioned certificate, required-check dispatch gate, typed platform projection, provenance, limitations, and repair history. |
 | 6. Generated/release gate | Complete | Generated logical-type/adversarial tests, runtime tests, and the fixed multi-agent Daytona campaign pass the harness-owned release gate. |
+| 7. Generic runtime-plan repair | Complete in core; hosted campaign pending | Pre-provision failures have a distinct runtime phase; deterministic construction remains first; unfamiliar build/start plans invoke read-only repository inspection and a typed runtime-only patch, followed by a clean rebuild. Transient process/wiring failures escalate to the same path after retries. |
 
 Latest release-candidate evidence:
 
@@ -127,7 +131,8 @@ Representation problems are compiler problems. Booleans, arrays, JSON, defaults,
 enums, keys, and insertion order must be handled by deterministic code.
 
 The authoring model is used only when a semantic choice is missing, such as which valid records
-are needed to make a scenario meaningful.
+are needed to make a scenario meaningful, or when repository evidence must disambiguate an
+unfamiliar component, command, interface, or readiness seam.
 
 ### 4.3 Preserve intent explicitly
 
@@ -144,6 +149,10 @@ It must not infer this distinction after round-tripping through SQLite.
 Self-repair may change the typed world data, generated process adapter, generated setup/ready code,
 or scenario definitions. It must not modify submitted source, disable constraints, weaken checks,
 remove scenarios, or fabricate missing tool implementations.
+
+Runtime-plan repair replaces only the generated contract's runtime metadata. Every submitted
+workdir, command, container file, interface, and evidence path is validated against the immutable
+checkout before it can become the next candidate.
 
 ### 4.5 Clean-room validation after every repair
 

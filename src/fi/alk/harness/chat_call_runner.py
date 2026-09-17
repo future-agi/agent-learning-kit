@@ -14,7 +14,12 @@ from urllib.parse import urljoin
 from fi.simulate.agent.wrapper import AgentInput
 from fi.simulate.agent.wrappers.http import HTTPAgentWrapper
 
-from .call_runner import ArtifactUploader, CallRunnerContext
+from .call_runner import (
+    ArtifactUploader,
+    CallRunnerContext,
+    _clear_file_tool_calls,
+    _collect_file_tool_calls,
+)
 from .contract import AgentContract
 from .hosted_scheduler import CallAborted, CallOutcome, Scenario, World
 from .outbound import ArtifactKind, format_rfc3339_millis
@@ -439,6 +444,11 @@ class HostedChatCallRunner:
             ),
             protocol=adapter_protocol,
             include_tools=interface.include_tools,
+            request_template=interface.request_template,
+            response_path=interface.response_path,
+            setup_requests=[
+                item.model_dump(mode="python") for item in interface.setup_requests
+            ],
             timeout=_chat_target_timeout_seconds(),
             metadata={
                 "target": "hosted_repository_runtime",
@@ -446,6 +456,7 @@ class HostedChatCallRunner:
             },
         )
         started = datetime.now(timezone.utc)
+        _clear_file_tool_calls(runtime)
         try:
             transcript = await _drive_conversation(
                 _HostedChatTarget(
@@ -463,8 +474,16 @@ class HostedChatCallRunner:
             raise
         except Exception as exc:  # noqa: BLE001 - convert target transport failures to call faults
             raise CallAborted(
-                f"chat_target_failed: {type(exc).__name__}: {exc}"
+                f"chat_target_failed: {type(exc).__name__}: {exc}",
+                code="target_agent_failed",
             ) from exc
+
+        # The submitted agent may execute tools entirely inside its Python process instead
+        # of returning tool requests over HTTP. These observed calls belong to the same attempt;
+        # do not replay the tool through the generated world or fabricate evidence from text.
+        traced_calls = _collect_file_tool_calls(runtime)
+        if traced_calls and not transcript.calls:
+            transcript.calls.extend(traced_calls)
 
         ended = datetime.now(timezone.utc)
         transcript_id = await self._adapter.upload_artifact(

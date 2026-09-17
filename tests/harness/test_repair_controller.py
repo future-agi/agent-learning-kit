@@ -68,13 +68,14 @@ def test_infrastructure_retry_budget_is_per_candidate() -> None:
         controller.decide(
             _observation("candidate-a", "process_dependency_timeout")
         ).action
-        for _ in range(3)
+        for _ in range(4)
     ]
     other = controller.decide(_observation("candidate-b", "process_dependency_timeout"))
 
     assert actions == [
         RepairAction.RETRY_INFRASTRUCTURE,
         RepairAction.RETRY_INFRASTRUCTURE,
+        RepairAction.PATCH_ENVIRONMENT,
         RepairAction.REJECT,
     ]
     assert other.action is RepairAction.RETRY_INFRASTRUCTURE
@@ -83,6 +84,16 @@ def test_infrastructure_retry_budget_is_per_candidate() -> None:
         4.0,
         None,
     ]
+
+
+def test_external_service_outage_does_not_trigger_runtime_reauthoring() -> None:
+    controller = RepairController(RepairBudgets(infrastructure_retries_per_candidate=0))
+
+    decision = controller.decide(
+        _observation("candidate-a", "external_service_unavailable")
+    )
+
+    assert decision.action is RepairAction.REJECT
 
 
 def test_repeated_compiler_failure_without_new_candidate_is_rejected() -> None:

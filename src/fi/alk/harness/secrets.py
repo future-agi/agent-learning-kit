@@ -104,6 +104,8 @@ def worker_environment(
         "ALK_HARNESS",
         "ALK_HARNESS_MODEL",
         "ALK_HARNESS_THINKING",
+        "AGENTCC_API_KEY",
+        "AGENTCC_BASE_URL",
         "ALK_JUDGE_MODEL",
         "ALK_USER_MODEL",
         # Backend-specific configuration. A hosted run pinned to a region falls back to
@@ -131,6 +133,8 @@ def worker_environment(
         "ALK_HARNESS",
         "ALK_HARNESS_MODEL",
         "ALK_HARNESS_THINKING",
+        "AGENTCC_API_KEY",
+        "AGENTCC_BASE_URL",
         "ALK_VERTEX_LOCATION",
         "CARTESIA_API_KEY",
         "ANTHROPIC_MODEL",

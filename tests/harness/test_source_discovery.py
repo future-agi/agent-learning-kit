@@ -12,6 +12,8 @@ from fi.alk.harness.contract import (
     ToolSpec,
 )
 from fi.alk.harness.source_discovery import (
+    _action_schema,
+    _json_type,
     compose_source_models,
     discover_code_source_model,
 )
@@ -23,6 +25,24 @@ from fi.alk.harness.source_model import (
 )
 
 DIGEST = "sha256:" + "a" * 64
+
+
+def test_language_numeric_union_discovers_number_independent_of_order() -> None:
+    assert _json_type("int | float") == {"type": "number"}
+    assert _json_type("float | int") == {"type": "number"}
+
+
+def test_allowed_values_override_conflicting_inferred_type() -> None:
+    tool = ToolSpec(
+        name="book_business_center",
+        args=("service",),
+        arg_types={"service": "integer"},
+        arg_values={"service": ["meeting_room", "secretarial"]},
+    )
+
+    assert _action_schema(tool)["properties"]["service"] == {
+        "enum": ["meeting_room", "secretarial"]
+    }
 
 
 def test_discovers_framework_neutral_process_interface_and_actions(

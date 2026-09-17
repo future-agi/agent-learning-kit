@@ -11,6 +11,7 @@ name rather than implemented here.
 
 from __future__ import annotations
 
+import os
 from typing import Any, AsyncIterator
 
 from claude_agent_sdk import (
@@ -41,7 +42,33 @@ from .base import (
 DEFAULT_MODEL = "claude-sonnet-4-6"
 
 
-def _sdk_server(server: ToolServer) -> Any:
+def _gateway_compatible_schema(value: Any) -> Any:
+    """Translate JSON-Schema nullable unions to the scalar form Gemini accepts.
+
+    Claude accepts ``type: [string, null]``. Vertex function declarations use a scalar enum for
+    ``type`` and reject that otherwise-valid JSON Schema before the model can run. Optional
+    properties remain optional because their names are absent from ``required``; only explicit
+    null loses validation support on this provider path.
+    """
+    if isinstance(value, list):
+        return [_gateway_compatible_schema(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    result = {
+        key: _gateway_compatible_schema(item) for key, item in value.items()
+    }
+    kind = result.get("type")
+    if isinstance(kind, list):
+        concrete = [item for item in kind if item != "null"]
+        if len(concrete) == 1:
+            result["type"] = concrete[0]
+    enum = result.get("enum")
+    if isinstance(enum, list) and None in enum:
+        result["enum"] = [item for item in enum if item is not None]
+    return result
+
+
+def _sdk_server(server: ToolServer, *, gateway_compatible: bool = False) -> Any:
     """A ToolServer as the in-process MCP server the SDK routes calls to."""
     return create_sdk_mcp_server(
         name=server.name,
@@ -50,7 +77,11 @@ def _sdk_server(server: ToolServer) -> Any:
             SdkMcpTool(
                 name=spec.name,
                 description=spec.description,
-                input_schema=spec.input_schema,
+                input_schema=(
+                    _gateway_compatible_schema(spec.input_schema)
+                    if gateway_compatible
+                    else spec.input_schema
+                ),
                 handler=spec.handler,
             )
             for spec in server.tools
@@ -70,8 +101,11 @@ def _flattened(content: Any) -> str:
 class ClaudeSession:
     """One Claude Code session, translated to the neutral reply vocabulary."""
 
-    def __init__(self, options: ClaudeAgentOptions) -> None:
+    def __init__(
+        self, options: ClaudeAgentOptions, *, reported_model: str | None = None
+    ) -> None:
         self._options = options
+        self._reported_model = reported_model
         self._client: ClaudeSDKClient | None = None
 
     async def start(self) -> None:
@@ -108,7 +142,14 @@ class ClaudeSession:
                     parts.append(
                         Call(id=block.id, name=block.name, arguments=block.input)
                     )
-            return [ModelReply(parts=parts, model=getattr(received, "model", "") or "")]
+            return [
+                ModelReply(
+                    parts=parts,
+                    model=self._reported_model
+                    or getattr(received, "model", "")
+                    or "",
+                )
+            ]
         if isinstance(received, ResultMessage):
             # subtype alone is not the outcome. A call that failed upstream still arrives with
             # subtype "success", so the error facts ride along and Stage decides what failed.
@@ -119,7 +160,11 @@ class ClaudeSession:
                     cost_usd=received.total_cost_usd,
                     **_tokens(getattr(received, "model_usage", None)),
                     session_id=received.session_id,
-                    models=set(getattr(received, "model_usage", None) or {}),
+                    models=(
+                        {self._reported_model}
+                        if self._reported_model
+                        else set(getattr(received, "model_usage", None) or {})
+                    ),
                     is_error=bool(getattr(received, "is_error", False)),
                     api_error_status=getattr(received, "api_error_status", None),
                     errors=list(getattr(received, "errors", None) or []),
@@ -163,7 +208,12 @@ class ClaudeBackend:
     default_model = DEFAULT_MODEL
 
     def can_drive(self, model: str) -> bool:
-        return "claude" in (model or "").lower()
+        # Agent CC's native Anthropic endpoint accepts the Claude Agent SDK wire format and
+        # translates it for the provider named by the model. Without the gateway, this backend
+        # still only advertises models supported by Claude Code directly.
+        return "claude" in (model or "").lower() or bool(
+            os.environ.get("AGENTCC_API_KEY", "").strip()
+        )
 
     def create(self, spec: SessionSpec) -> ClaudeSession:
         from ..config import (
@@ -182,17 +232,30 @@ class ClaudeBackend:
                 for tool_spec in server.tools
             ),
         ]
+        wire_model = spec.model
+        gateway_compatible = bool(
+            os.environ.get("AGENTCC_API_KEY", "").strip()
+            and "claude" not in wire_model.lower()
+        )
+        if gateway_compatible:
+            # Claude Code validates model names locally before making an HTTP request. AgentCC
+            # resolves this Claude-shaped alias to the requested non-Anthropic provider model.
+            wire_model = os.environ.get(
+                "AGENTCC_CLAUDE_MODEL_ALIAS", "claude-sonnet-4-6"
+            ).strip()
         options = ClaudeAgentOptions(
             system_prompt=spec.system_prompt,
             allowed_tools=allowed,
             mcp_servers={
-                server_name: _sdk_server(server)
+                server_name: _sdk_server(
+                    server, gateway_compatible=gateway_compatible
+                )
                 for server_name, server in spec.servers.items()
             },
             setting_sources=[],
             max_turns=spec.max_turns,
-            model=spec.model,
-            env=provider_env(spec.model),
+            model=wire_model,
+            env=provider_env(wire_model),
         )
         if spec.cwd is not None:
             options.cwd = spec.cwd
@@ -208,4 +271,6 @@ class ClaudeBackend:
             )
         if spec.thinking:
             options.thinking = thinking_config()
-        return ClaudeSession(options)
+        return ClaudeSession(
+            options, reported_model=spec.model if gateway_compatible else None
+        )

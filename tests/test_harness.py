@@ -1283,6 +1283,54 @@ def test_repository_chat_target_executes_returned_tools_in_the_scenario_world():
         world.close()
 
 
+def test_target_factory_passes_only_context_supported_by_registered_target():
+    from fi.alk.harness.contract import Runtime
+    from fi.alk.harness.run.targets import RepositoryChatTarget, create_target
+
+    world, contract = _cart_world()
+    contract.runtime = Runtime(
+        language="python",
+        interface={
+            "kind": "http",
+            "protocol": "openai_chat",
+            "port": 8080,
+            "path": "/v1/chat/completions",
+        },
+    )
+    try:
+        target = create_target(
+            "repository",
+            contract,
+            world,
+            world_root=".",
+            scenario_name="order-fries",
+            model="provider/model-not-used-by-submitted-runtime",
+        )
+        assert isinstance(target, RepositoryChatTarget)
+        assert target.scenario_name == "order-fries"
+    finally:
+        world.close()
+
+
+def test_agentcc_role_models_report_requested_provider_model(monkeypatch):
+    from fi.alk.harness.run.models import for_roles
+
+    monkeypatch.setenv("ALK_HARNESS", "claude")
+    monkeypatch.setenv("AGENTCC_API_KEY", "test-only-key")
+    monkeypatch.setenv("ALK_HARNESS_MODEL", "vertex_ai/gemini-3.7-flash")
+    monkeypatch.delenv("ALK_AGENT_MODEL", raising=False)
+    monkeypatch.delenv("ALK_USER_MODEL", raising=False)
+    monkeypatch.delenv("ALK_JUDGE_MODEL", raising=False)
+
+    assert for_roles() == {
+        "agent": "vertex_ai/gemini-3.7-flash",
+        "user": "vertex_ai/gemini-3.7-flash",
+        "judge": "vertex_ai/gemini-3.7-flash",
+    }
+    monkeypatch.setenv("ALK_USER_MODEL", "provider/explicit-user")
+    assert for_roles()["user"] == "provider/explicit-user"
+
+
 def test_github_source_reads_like_a_repository(tmp_path):
     source = GitHubSource(name="a", root=tmp_path, url="https://github.com/acme/agent")
     assert source.builtin_tools() == ("Read", "Glob", "Grep")
@@ -1496,12 +1544,69 @@ def test_a_world_reverts_to_a_checkpoint():
 
 
 def test_provider_env_pins_the_model_and_never_invents_a_project(monkeypatch):
+    monkeypatch.delenv("AGENTCC_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_VERTEX_PROJECT_ID", raising=False)
     monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
     env = provider_env("claude-sonnet-4-6")
     assert env["CLAUDE_CODE_USE_VERTEX"] == "1"
     assert env["ANTHROPIC_MODEL"] == "claude-sonnet-4-6"
     assert "ANTHROPIC_VERTEX_PROJECT_ID" not in env
+
+
+def test_provider_env_routes_claude_sdk_through_agentcc(monkeypatch):
+    monkeypatch.setenv("AGENTCC_API_KEY", "sk-agentcc-test")
+    monkeypatch.setenv("AGENTCC_BASE_URL", "https://gateway.example.test/")
+
+    env = provider_env("vertexai/gemini-3.7-flash")
+
+    assert env["ANTHROPIC_AUTH_TOKEN"] == "sk-agentcc-test"
+    assert env["ANTHROPIC_BASE_URL"] == "https://gateway.example.test"
+    assert env["CLAUDE_CODE_USE_VERTEX"] == "0"
+    assert env["ANTHROPIC_MODEL"] == "vertexai/gemini-3.7-flash"
+    assert env["ANTHROPIC_SMALL_FAST_MODEL"] == "vertexai/gemini-3.7-flash"
+    assert "GOOGLE_APPLICATION_CREDENTIALS" not in env
+
+
+def test_claude_backend_accepts_gateway_models_only_with_agentcc(monkeypatch):
+    from fi.alk.harness.backends import SessionSpec
+    from fi.alk.harness.backends.claude import ClaudeBackend
+
+    monkeypatch.delenv("AGENTCC_API_KEY", raising=False)
+    assert not ClaudeBackend().can_drive("vertexai/gemini-3.7-flash")
+
+    monkeypatch.setenv("AGENTCC_API_KEY", "sk-agentcc-test")
+    assert ClaudeBackend().can_drive("vertexai/gemini-3.7-flash")
+    options = ClaudeBackend().create(
+        SessionSpec(system_prompt="x", model="vertex_ai/gemini-3.7-flash")
+    )._options
+    assert options.model == "claude-sonnet-4-6"
+    assert options.env["ANTHROPIC_MODEL"] == "claude-sonnet-4-6"
+
+
+def test_claude_gateway_schema_uses_scalar_types_for_gemini():
+    from fi.alk.harness.backends.claude import _gateway_compatible_schema
+
+    source = {
+        "type": "object",
+        "properties": {
+            "name": {"type": ["string", "null"]},
+            "items": {
+                "type": ["array", "null"],
+                "items": {"type": ["integer", "null"], "enum": [1, None]},
+            },
+        },
+        "required": [],
+    }
+
+    converted = _gateway_compatible_schema(source)
+
+    assert converted["properties"]["name"]["type"] == "string"
+    assert converted["properties"]["items"]["type"] == "array"
+    assert converted["properties"]["items"]["items"] == {
+        "type": "integer",
+        "enum": [1],
+    }
+    assert source["properties"]["name"]["type"] == ["string", "null"]
 
 
 def test_qualified_tool_name_matches_the_mcp_convention():

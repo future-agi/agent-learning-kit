@@ -6,6 +6,7 @@ import pytest
 
 from fi.alk.harness.authoring_runtime_validation import (
     _fallback_diagnostic,
+    _make_local_seed_files_readable,
     RuntimeValidationError,
     _generic_candidate_hash,
     _world_isolation_status,
@@ -35,6 +36,8 @@ from fi.alk.harness.repair_patch import (
     RepairPatchOperation,
     WorldIRRepairPatch,
 )
+from fi.alk.harness.runtime_repair import RuntimePlanPatch, _contract_hash
+from fi.alk.harness.contract import AgentContract, Runtime
 from fi.alk.harness.source_model import (
     LogicalType,
     SourceColumn,
@@ -48,6 +51,27 @@ from fi.alk.harness.world_ir import (
     WorldValue,
     validate_world_ir,
 )
+
+
+def test_local_seed_handoff_opens_only_generated_seed_files(tmp_path):
+    bundle = tmp_path / "bundle"
+    seed = bundle / "seed"
+    seed.mkdir(parents=True)
+    sql = seed / "source-schema.sql"
+    sql.write_text("select 1;\n")
+    secret = bundle / "private.txt"
+    secret.write_text("private")
+    bundle.chmod(0o700)
+    seed.chmod(0o700)
+    sql.chmod(0o600)
+    secret.chmod(0o600)
+
+    _make_local_seed_files_readable(bundle)
+
+    assert bundle.stat().st_mode & 0o055 == 0o055
+    assert seed.stat().st_mode & 0o055 == 0o055
+    assert sql.stat().st_mode & 0o044 == 0o044
+    assert secret.stat().st_mode & 0o077 == 0
 
 
 def test_validation_repairs_then_revalidates_and_records_scope(tmp_path):
@@ -783,6 +807,107 @@ def test_connect_only_provider_validation_does_not_invent_source_data_review(
     assert calls == ["provision", "reset", "close"]
 
 
+def test_local_runtime_validation_does_not_require_hosted_capabilities(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness import (
+        bundle_author_v2,
+        hosted_entrypoint,
+        outbound,
+        process_preflight,
+        process_runtime,
+        scenario_source,
+        source_data_invariants,
+    )
+
+    secrets = tmp_path / "secrets.json"
+    secrets.write_text("{}", encoding="utf-8")
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+
+    monkeypatch.setattr(
+        outbound,
+        "load_capabilities",
+        lambda **_kwargs: pytest.fail("local validation must not load hosted capabilities"),
+    )
+
+    class Provider:
+        def __init__(self, **kwargs):
+            assert kwargs["public_url_resolver"] is None
+            assert kwargs["provider_attempt_id"] is None
+            assert kwargs["provider_expires_at"] is None
+
+        async def provision(self, *_args, **_kwargs):
+            return [SimpleNamespace(endpoints={})]
+
+        async def reset(self, *_args, **_kwargs):
+            return None
+
+        async def close(self, **_kwargs):
+            return None
+
+    class World:
+        def read_only(self):
+            return self
+
+    class Factory:
+        def __init__(self, _work):
+            pass
+
+        async def create(self, *_args, **_kwargs):
+            return World()
+
+    monkeypatch.setattr(process_runtime, "ProcessRuntimeProvider", Provider)
+    monkeypatch.setattr(hosted_entrypoint, "ProcessWorldFactory", Factory)
+    monkeypatch.setattr(
+        bundle_author_v2, "author_bundle_v2", lambda **_kwargs: object()
+    )
+    monkeypatch.setattr(process_preflight, "preflight_bundle", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        scenario_source,
+        "load_scenarios",
+        lambda _bundle: [
+            SimpleNamespace(
+                scenario_key="one",
+                setup=lambda _world: None,
+                ready=lambda _world: True,
+            )
+        ],
+    )
+    async def author_invariants(*_args, **_kwargs):
+        return []
+
+    async def check_invariants(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        source_data_invariants, "author_invariants", author_invariants
+    )
+    monkeypatch.setattr(
+        source_data_invariants, "check_invariants", check_invariants
+    )
+    job = SimpleNamespace(
+        source=SimpleNamespace(kind=None),
+        agent=SimpleNamespace(secret_refs={}),
+        metadata={},
+        scenario_count=1,
+        seed=0,
+    )
+
+    assert (
+        asyncio.run(
+            validate_once(
+                job,
+                tmp_path,
+                authoring,
+                secrets_path=secrets,
+                local_runtime=True,
+            )
+        )
+        == 1
+    )
+
+
 def test_connect_only_provider_repair_preserves_external_runtime_mode(
     tmp_path, monkeypatch
 ):
@@ -861,3 +986,136 @@ def test_provider_lifecycle_transient_failure_is_retryable_infrastructure(detail
     assert diagnostic.owner.value == "infrastructure"
     assert diagnostic.retryable is True
     assert diagnostic.stage is HarnessStage.CONNECTING_AGENT
+
+
+@pytest.mark.parametrize(
+    "detail",
+    (
+        "GeneratedRuntimeError: generated_runtime_component_ambiguous",
+        "ProcessRuntimeError: no runnable shipped entrypoint was identified",
+        "docker build failed while installing dependencies",
+        "agent process exited before readiness probe passed",
+    ),
+)
+def test_runtime_construction_failure_routes_to_runtime_plan_repair(detail):
+    diagnostic = _fallback_diagnostic(RuntimeValidationError("environment", detail))
+
+    assert diagnostic.code == "generated_runtime_plan_invalid"
+    assert diagnostic.owner.value == "authoring"
+    assert diagnostic.repair_strategy == "inspect_repository_and_revise_runtime_plan"
+
+
+def test_unknown_pre_provision_failure_routes_to_generic_runtime_inspection():
+    diagnostic = _fallback_diagnostic(
+        RuntimeValidationError("runtime", "an unfamiliar framework launcher failed")
+    )
+
+    assert diagnostic.code == "generated_runtime_plan_invalid"
+    assert diagnostic.owner.value == "authoring"
+
+
+def test_generic_validation_applies_runtime_plan_patch_and_revalidates(tmp_path):
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    (source / "pyproject.toml").write_text("[project]\nname='agent'\nversion='1'\n")
+    (source / "server.py").write_text("print('server')\n")
+    contract = AgentContract(agent="example", runtime=Runtime(language="python"))
+    (authoring / "contract.json").write_text(
+        contract.model_dump_json(indent=2) + "\n", encoding="utf-8"
+    )
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.BUILDING_ENVIRONMENT,
+        component="runtime_validation",
+        code="generated_runtime_plan_invalid",
+        message="no runnable shipped entrypoint was identified",
+    )
+    calls = []
+
+    async def validate(*_args):
+        calls.append("validate")
+        current = AgentContract.model_validate_json(
+            (authoring / "contract.json").read_text(encoding="utf-8")
+        )
+        if not current.runtime or not current.runtime.command:
+            raise RuntimeValidationError(
+                "environment", "entrypoint missing", diagnostics=(diagnostic,)
+            )
+        return 1
+
+    async def repair(phase, _guidance):
+        assert phase == "environment"
+        calls.append("repair")
+        return RuntimePlanPatch(
+            base_contract_hash=_contract_hash(contract),
+            runtime=Runtime(language="python", command=["python", "server.py"]),
+            evidence_paths=("pyproject.toml", "server.py"),
+            diagnostic_codes=("generated_runtime_plan_invalid",),
+            summary="Use the repository's server entrypoint.",
+        )
+
+    job = SimpleNamespace(metadata={"generic_harness_v1": True})
+    asyncio.run(
+        validate_and_repair(job, source, authoring, validate=validate, repair=repair)
+    )
+
+    repaired = AgentContract.model_validate_json(
+        (authoring / "contract.json").read_text(encoding="utf-8")
+    )
+    assert repaired.runtime.command == ["python", "server.py"]
+    assert calls == ["validate", "repair", "validate"]
+    assert (authoring / "generic-harness" / "runtime-plan-repair-1.json").is_file()
+
+
+def test_default_generic_repair_dispatches_unknown_runtime_to_repository_inspection(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness import runtime_repair
+
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    (source / "pyproject.toml").write_text("[project]\nname='agent'\nversion='1'\n")
+    (source / "worker.py").write_text("print('worker')\n")
+    contract = AgentContract(agent="unknown-framework", runtime=Runtime())
+    (authoring / "contract.json").write_text(
+        contract.model_dump_json(indent=2) + "\n", encoding="utf-8"
+    )
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.BUILDING_ENVIRONMENT,
+        component="runtime_validation",
+        code="generated_runtime_plan_invalid",
+        message="unfamiliar launcher",
+    )
+    inspected = []
+
+    async def inspect(source_root, current_contract, diagnostics):
+        inspected.append((source_root, current_contract.agent, diagnostics[0].code))
+        return RuntimePlanPatch(
+            base_contract_hash=_contract_hash(current_contract),
+            runtime=Runtime(language="python", command=["python", "worker.py"]),
+            evidence_paths=("pyproject.toml", "worker.py"),
+            diagnostic_codes=("generated_runtime_plan_invalid",),
+            summary="Use the discovered worker entrypoint.",
+        )
+
+    monkeypatch.setattr(runtime_repair, "request_runtime_plan_patch", inspect)
+
+    async def validate(*_args):
+        current = AgentContract.model_validate_json(
+            (authoring / "contract.json").read_text(encoding="utf-8")
+        )
+        if not current.runtime or not current.runtime.command:
+            raise RuntimeValidationError(
+                "runtime", "unfamiliar launcher", diagnostics=(diagnostic,)
+            )
+        return 1
+
+    job = SimpleNamespace(metadata={"generic_harness_v1": True})
+    asyncio.run(validate_and_repair(job, source, authoring, validate=validate))
+
+    assert inspected == [
+        (source, "unknown-framework", "generated_runtime_plan_invalid")
+    ]
