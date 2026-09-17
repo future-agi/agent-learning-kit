@@ -477,6 +477,15 @@ Read your own instruction back, list every condition it assumes, and make sure `
 establishes each one and `ready_code` proves it. If the instruction hands the person a value to say
 back, `setup_code` is what puts that exact value where the agent will look for it.
 
+**This is the rule most often broken, and it is checked now.** On a real 200-scenario suite, **all 17
+scenarios naming a six-digit OTP invented one**: the instruction said "your verification code is
+265512", the world held 638204 for that caller's phone, `setup.py` said "runs on the base world
+unchanged" and `ready.py` returned None. Seventeen scenarios the caller could not possibly complete.
+Either seed the value in `setup_code`, or read the real one out of the world and put that in the
+instruction. Do not write a plausible-looking number: a code, a reference, a card, an account, an
+order id and a phone are all records the agent looks up, and a value that is merely realistic is a
+value the lookup rejects.
+
 ### setup_code
 
 Python defining `setup(world)`.

@@ -2008,3 +2008,29 @@ def test_check_problems_names_the_check_that_only_proves_the_tool_was_reached(tm
     assert "thin: lookup_weather_executed, weather_lookup_succeeded" in said
     assert "2 checks assert only that a tool was called" in said
     assert "san_francisco" not in said
+
+
+def test_fixture_credentials_are_only_flagged_when_they_name_a_record() -> None:
+    """What the caller is handed, separated from what the call is meant to create.
+
+    A real ride suite handed callers a six-digit OTP that appeared nowhere in `otp_codes`, on 17 of
+    17 scenarios. A pickup time and a passenger count look just as literal and must not be flagged,
+    because the run creates those rather than looking them up.
+    """
+    from fi.alk.harness.scenario_tools import _handed_to_the_caller
+
+    ungrounded = {
+        "origin": "seed",
+        "identity": {"rider_id": "rdr_dana", "phone": "+14155550101"},
+        "credentials": {"otp_code": "265512"},
+    }
+    assert sorted(_handed_to_the_caller(ungrounded)) == [
+        ("otp_code", "265512"),
+        ("phone", "+14155550101"),
+    ]
+
+    assert _handed_to_the_caller({"origin": "seed", "location": "New York"}) == []
+    assert _handed_to_the_caller({"pickup_time": "18:30", "passengers": 3}) == []
+    assert _handed_to_the_caller({"payment": {"card_number": "4242424242424242"}}) == [
+        ("card_number", "4242424242424242")
+    ]

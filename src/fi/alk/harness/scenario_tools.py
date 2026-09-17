@@ -12,6 +12,7 @@ scenario that clears all three is written out as its own folder of runnable file
 from __future__ import annotations
 
 import json
+import re
 import logging
 from pathlib import Path
 from typing import Any
@@ -1065,7 +1066,7 @@ def scenario_tools(
         path = write_scenarios(kept, destination, catalogue)
         # Read back after writing, because it is the check files on disk that get run, not the
         # intention behind them. Advisory: a thin check is still a check and still saves.
-        noted = noted + check_problems(destination)
+        noted = noted + check_problems(destination) + grounding_problems(kept, world_root)
         diversity = suite_diversity_problems(kept) + keyword_problems(kept)
         # How much of the space this suite covered, written beside it so the number and the
         # scenarios it describes can never drift apart.
@@ -1185,3 +1186,60 @@ def world_summary(world_root: Path) -> str:
         return prefix + "\n".join(lines)
     finally:
         world.close()
+
+
+_CLAIMS_A_RECORD = re.compile(
+    r"(^|_)(otp|code|pin|token|phone|email|reference|ref|account|card|number|id)s?$",
+    re.IGNORECASE,
+)
+
+
+def _handed_to_the_caller(fixture: Any, key: str = "") -> list[tuple[str, str]]:
+    """Values the fixture gives the caller that name a record the world is supposed to already hold.
+
+    Only keys that clearly denote a credential or an identifier, and only values carrying a digit.
+    A pickup time or a passenger count is something the run creates, not something it looks up, and
+    flagging those would make this cry wolf the way an over-broad rule always does.
+    """
+    if isinstance(fixture, dict):
+        return [one for k, v in fixture.items() for one in _handed_to_the_caller(v, str(k))]
+    if isinstance(fixture, list):
+        return [one for v in fixture for one in _handed_to_the_caller(v, key)]
+    text = str(fixture).strip()
+    if not _CLAIMS_A_RECORD.search(key) or len(text) < 4 or not any(c.isdigit() for c in text):
+        return []
+    return [(key, text)]
+
+
+def grounding_problems(scenarios: list[Scenario], world_root: Path) -> list[str]:
+    """Scenarios that hand the caller a credential the world does not hold once setup has run.
+
+    Measured on a real 200-scenario ride suite: **17 of 17 scenarios naming a six-digit OTP used a
+    code that appears nowhere in `otp_codes`**, with a no-op `setup.py` and a `ready.py` that
+    returned None. `verify-otp-success-dana` told the caller 265512 while the world held 638204 for
+    that phone, so the caller could not possibly succeed.
+
+    The three admission gates all passed, because they ask whether a check *can* fail, not whether it
+    can fail for the reason the scenario is about. This asks the separate question: does the person
+    on the call have what the call needs.
+
+    Advisory. It reads the world after `setup`, so a scenario that seeds its own code is correct and
+    is left alone.
+    """
+    problems: list[str] = []
+    for scenario in scenarios:
+        claimed = _handed_to_the_caller(scenario.fixture)
+        if not claimed:
+            continue
+        try:
+            trial, _applied, _ready = prepared(scenario, world_root)
+            blob = json.dumps(trial.state(), default=str)
+        except Exception:
+            continue
+        missing = [f"{key}={value}" for key, value in claimed if value not in blob]
+        if missing:
+            problems.append(
+                f"{scenario.name}: the caller is handed {', '.join(missing)}, which the world does "
+                "not hold after setup runs, so the caller cannot succeed"
+            )
+    return problems
