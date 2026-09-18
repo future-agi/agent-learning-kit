@@ -2654,7 +2654,9 @@ def apply_seed_file(
             domain=FailureDomain.ENVIRONMENT,
         )
     if result.returncode != 0:
-        stderr = (result.stderr or "").strip()[:2000]
+        # The tail, not the head: psql prints its NOTICEs before the ERROR that stopped it, so
+        # keeping the first lines reports "table does not exist, skipping" and hides the cause.
+        stderr = (result.stderr or "").strip()[-2000:]
         raise ProcessRuntimeError(
             "seed",
             "seed_failed",
