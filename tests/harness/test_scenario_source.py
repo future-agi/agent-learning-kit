@@ -2295,3 +2295,44 @@ def test_a_resumed_suite_that_is_handed_out_is_briefed_not_written() -> None:
     assert "do not write scenarios yourself" in big and "scenario_writer" in big
     assert "inspect_scenario" not in big
     assert "inspect_scenario" in small
+
+
+def test_a_writer_is_told_which_named_tools_are_not_its_job() -> None:
+    """The writing method names eight tools a writer lacks; unsaid, it tries them and burns turns."""
+    import re
+    from unittest import mock
+    from pathlib import Path as _P
+
+    from fi.alk.harness import scenarios as stage
+    from fi.alk.harness.backends import ToolServer, ToolSpec
+    from fi.alk.harness.config import SKILLS_ROOT
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.scenario_tools import TOOL_NAMES
+
+    async def handler(args):
+        return {"content": "ok"}
+
+    server = ToolServer(
+        name="scenarios",
+        version="1",
+        tools=[
+            ToolSpec(name=n, description=n, input_schema={}, handler=handler)
+            for n in TOOL_NAMES
+        ],
+    )
+    with mock.patch.object(stage, "world_summary", lambda _: "w"), mock.patch.object(
+        stage, "load_skill", lambda *a, **k: "s"
+    ), mock.patch.object(stage, "discovered_skills", lambda **k: ""):
+        said = stage.writer_worker(
+            AgentContract(agent="a"), _P("/tmp"), server, budget=400
+        )[stage.WRITER].instructions
+
+    method = re.sub(
+        r"```.*?```",
+        "",
+        (SKILLS_ROOT / "write-scenarios" / "SKILL.md").read_text(encoding="utf-8"),
+        flags=re.S,
+    )
+    named = set(re.findall(r"`([a-z_][a-z0-9_]*)\(?`", method)) & set(TOOL_NAMES)
+    for missing in named - set(stage.WRITER_TOOLS):
+        assert f"`{missing}`" in said, f"the writer is never told it lacks {missing}"

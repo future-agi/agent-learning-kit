@@ -36,6 +36,7 @@ from .contract import AgentContract
 from .scenario import Scenario, voicemail_enabled
 from .scenario_tools import (
     SCENARIO_SERVER,
+    TOOL_NAMES,
     load_scenarios,
     scenario_tools,
     world_summary,
@@ -130,6 +131,18 @@ def writer_worker(
                     modality=contract.modality,
                     voicemail="on" if voicemail_enabled() else "off",
                     conversational="yes" if contract.conversational else "no",
+                )
+                + (
+                    "\n\n## Not yours to do\n\nThe method above names tools this session does "
+                    "not have: "
+                    + ", ".join(
+                        f"`{name}`"
+                        for name in TOOL_NAMES
+                        if name not in WRITER_TOOLS
+                    )
+                    + ". Planning the suite, saving it, reading it back and changing the contract "
+                    "belong to whoever briefed you. Where the method tells you to reach for one, "
+                    "say so in your report instead and it will be done for you."
                 )
                 + "\n\n## Your part of the suite\n\nYou are one writer among several working "
                 "on the same suite at the same time, and you cannot see what the others were "
