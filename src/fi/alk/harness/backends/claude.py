@@ -29,6 +29,7 @@ from claude_agent_sdk import (
 )
 
 from .base import (
+    ASK_TOOL,
     Call,
     ModelReply,
     Say,
@@ -236,7 +237,7 @@ class ClaudeBackend:
         )
 
         allowed = [
-            *spec.builtins,
+            *(name for name in spec.builtins if name != ASK_TOOL),
             *(
                 qualified(server_name, tool_spec.name)
                 for server_name, server in spec.servers.items()

@@ -4274,6 +4274,7 @@ def test_hosted_claude_session_uses_durable_resume_and_restricted_tools(tmp_path
 
     assert options.tools == ["Read", "AskUserQuestion"]
     assert options.strict_mcp_config is True
+    assert "AskUserQuestion" not in options.allowed_tools
     assert options.setting_sources == []
     assert options.include_partial_messages is True
     assert options.resume == "provider-session-id"
