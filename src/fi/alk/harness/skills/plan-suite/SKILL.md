@@ -4,6 +4,23 @@ A scenario is one complete session with the agent under test: a person with a si
 they know, the data the world holds for them, and a settled outcome. This is how to decide what a
 suite covers before any of it is written.
 
+**The goal is a benchmark: a complex set of scenarios that genuinely tests this agent.** Not a
+collection of things it can do. Complex here has a precise meaning, and it is not that any single
+scenario is convoluted. **The complexity is in the axes.** A scenario sits at a point in a space:
+what is being acted on, what is being done to it, who is asking, what state they are in, and what
+they are doing to make it hard. Move along any one axis and you have a different **kind** of test,
+one that can fail for a different reason.
+
+That is where a suite's value comes from. Fifty scenarios that are all "book a ride" with different
+addresses are one test written fifty times, whatever the coverage report says. Fifty that spread
+across the axes are fifty different questions about the agent: can it cancel as well as book, refuse
+as well as comply, hold a rule for a caller claiming authority, keep state across an interruption,
+handle a first-time caller and a suspended account and a child. Your plan is what decides which of
+those questions get asked, and a question nobody asks is a failure nobody finds.
+
+So when you size the suite, spend it on distance across the axes rather than on more points near the
+same one.
+
 You own the suite end to end, and **your job is to plan it and hand it out, not to write it**. You
 find the cells, decide which are worth testing, deal them to writers with everything each one needs,
 and save once at the end. Writing scenarios yourself is the exception, not the default.
@@ -68,6 +85,34 @@ method is not "check a code", it is a person getting all the way through what th
 authentication as the part that goes wrong. Write it the way you would write an end-to-end test of a
 large system: one complete journey, the interesting failure somewhere inside it, everything around it
 real.
+
+## 2b. Write down what changes the answer
+
+The cell says what is being done, and the overlay says what makes it hard. Neither says why two
+scenarios in the same cell are different tests rather than the same test twice. That comes from the
+**states of this agent's world whose value changes what the agent should do.** Derive them from the
+world you were given, not from a fixed list, because they are different for every agent:
+
+```
+payment_state    valid card / card expired / two cards / wallet covers it /
+                 wallet does not / link sent / link paid / cash-only market
+account_status   active / suspended / on payment hold / banned
+otp_state        not sent / sent unverified / verified / attempts used up
+```
+
+Two rules keep that list honest, and both matter:
+
+- **the value must exist** in the seeded world, or be something a scenario's setup can create
+- **the value must change the right answer.** There may be nine riders, but nine names is **one**
+  case, because the agent should treat them identically. A difference the agent should ignore is
+  not an axis
+
+This is the list that makes a suite complex in the way that counts. Five scenarios on one cell that
+differ only by address are one test written five times, and the coverage report cannot tell. Five
+that differ by `payment_state` and `otp_state` are five different questions. **When you hand a slice
+out, name the states its scenarios must differ along**, because the plan never names the individual
+scenarios and this is the only thing standing between "write five" and five chances to write the
+same one.
 
 ## 3. Size each cell
 
@@ -316,7 +361,18 @@ many scenarios it is worth, and what makes them different from what the other wr
 A writer sees the cell you deal it and nothing else: not your grid, not the overlay table above, not
 what you meant by `fraud_policy_abuse`. Deal it the meaning in a line, in your own words, with the
 sub-goal that has to fail if the agent mishandles it. A cell without that is a label, and a writer
-handed a label writes the ordinary task with a different name on it. **A writer cannot see the others' briefs**, so anything that has to stay spread across the
+handed a label writes the ordinary task with a different name on it.
+
+**And name the states each slice must differ along**, from section 2b. A brief line looks like:
+
+```
+update a payment method | saved card asked for with no OTP this call | x5 | expects: refuse
+   the 5 must differ by: payment_state, otp_state
+   overlay none. The sub-goal that must fail if it slips: otp_verified_before_card
+```
+
+Do not hand one writer every scenario in a single cell. A writer given a whole cell has to invent
+all of that cell's variety by itself, which is the situation planning exists to prevent. **A writer cannot see the others' briefs**, so anything that has to stay spread across the
 suite has to be dealt out in the briefs, one share each.
 
 The people are the thing to deal. Give each writer its own share of the levels above: two or three
