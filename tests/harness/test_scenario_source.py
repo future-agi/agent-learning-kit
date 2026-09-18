@@ -2138,8 +2138,8 @@ def test_uncovered_cells_stops_at_the_limit() -> None:
     assert len(uncovered_cells([], design, limit=5)) == 5
 
 
-def test_a_writer_can_neither_save_nor_read_the_suite_it_is_writing_into(monkeypatch) -> None:
-    """Saving would delete the other writers' work; progress would have it re-plan its own brief."""
+def test_a_writer_is_offered_only_the_tools_it_writes_with(monkeypatch) -> None:
+    """A writer got `inspect_scenario` and called it 358 times reading other writers' work."""
     from pathlib import Path as _Path
 
     from fi.alk.harness import scenarios as stage
@@ -2153,12 +2153,14 @@ def test_a_writer_can_neither_save_nor_read_the_suite_it_is_writing_into(monkeyp
     async def handler(args):
         return {"content": "ok"}
 
+    from fi.alk.harness.scenario_tools import TOOL_NAMES
+
     server = ToolServer(
         name="scenarios",
         version="1",
         tools=[
             ToolSpec(name=name, description=name, input_schema={}, handler=handler)
-            for name in ("submit_scenario", "suite_progress", "save_scenarios")
+            for name in TOOL_NAMES
         ],
     )
     worker = stage.writer_worker(
@@ -2166,7 +2168,16 @@ def test_a_writer_can_neither_save_nor_read_the_suite_it_is_writing_into(monkeyp
     )[stage.WRITER]
 
     offered = {spec.name for spec in worker.servers[stage.SCENARIO_SERVER].tools}
-    assert offered == {"submit_scenario"}
+    assert offered == set(stage.WRITER_TOOLS)
+    # The expensive ones a writer has no business calling, named so a new tool is a decision.
+    assert not offered & {
+        "inspect_scenario",
+        "suite_progress",
+        "save_scenarios",
+        "aim_for",
+        "drop_scenario",
+        "amend_contract",
+    }
 
 
 def test_the_submit_reply_says_what_the_names_are_for() -> None:

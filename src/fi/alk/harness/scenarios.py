@@ -62,6 +62,11 @@ TURNS_FLOOR = 120
 # once, writes its slice, and reports. Given the stage's budget instead it can spend the suite's
 # turns on its own part, and nothing is left for the rest.
 WRITER_TURNS = int(os.environ.get("ALK_HARNESS_WRITER_TURNS", "110") or 110)
+# Everything a writer needs to write its slice, and nothing else. Read the world, rehearse the
+# calls, name what is checked, submit. Planning the suite, reading it back, saving it and changing
+# the contract all belong to the loop that briefed it; offered here they get used, and a tool a
+# writer has no business calling is turns and context spent on nothing.
+WRITER_TOOLS = ("inspect_world", "try_calls", "add_sub_goal", "submit_scenario")
 
 
 def turns_for(wanted: int) -> int:
@@ -97,7 +102,8 @@ def writer_worker(
     briefing loop's own instrument: a writer that reads it starts deciding what the suite needs
     instead of writing what it was given.
 
-    ``budget`` is the stage's, and a writer is capped well below it. Every call a writer makes
+    It is given ``WRITER_TOOLS`` and nothing else. ``budget`` is the stage's, and a writer is
+    capped well below it. Every call a writer makes
     is spent from the same budget as the loop that briefed it, so an uncapped writer can spend
     the suite's turns on one slice. A writer that runs out says so and the loop hands the rest
     of its brief to the next round.
@@ -130,11 +136,7 @@ def writer_worker(
                 SCENARIO_SERVER: ToolServer(
                     name=server.name,
                     version=server.version,
-                    tools=[
-                        spec
-                        for spec in server.tools
-                        if spec.name not in ("save_scenarios", "suite_progress")
-                    ],
+                    tools=[spec for spec in server.tools if spec.name in WRITER_TOOLS],
                 )
             },
             max_turns=min(WRITER_TURNS, budget),
