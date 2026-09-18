@@ -1464,6 +1464,12 @@ def grounding_problems(scenarios: list[Scenario], world_root: Path) -> list[str]
     problems: list[str] = []
     for scenario in scenarios:
         claimed = _handed_to_the_caller(scenario.fixture)
+        # A record the correct agent creates during the call is not one the world owes the
+        # caller beforehand: a guest booking hands over a phone precisely because no rider holds
+        # it yet. Narrow on purpose. A wider rule that also skipped refusals hid real ungrounded
+        # credentials in scenarios that refuse one request and complete another.
+        if any(str(step.tool or "").startswith("create_") for step in scenario.solution):
+            continue
         if not claimed:
             continue
         try:

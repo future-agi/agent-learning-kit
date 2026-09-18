@@ -2189,3 +2189,28 @@ def test_the_submit_reply_says_what_the_names_are_for() -> None:
     )
     assert "inspect_scenario names them all" not in source
     assert "do not read them" in source
+
+
+def test_a_record_the_agent_creates_is_not_a_missing_credential() -> None:
+    """A guest booking hands over a phone precisely because no rider holds it yet."""
+    from pathlib import Path as _P
+    import tempfile
+
+    from fi.alk.harness.scenario import Scenario, Step
+    from fi.alk.harness.scenario_tools import grounding_problems
+
+    guest = Scenario(
+        name="guest",
+        fixture={"credentials": {"phone": "+14155550220"}},
+        solution=[Step(tool="create_guest_rider", arguments={"first_name": "Dana"})],
+    )
+    looked_up = Scenario(
+        name="known",
+        fixture={"credentials": {"phone": "+14155550220"}},
+        solution=[Step(tool="get_saved_places", arguments={})],
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        # No world to restore, so `prepared` raises and both are skipped; what this pins is that
+        # the create-shaped one is skipped before that, by the rule rather than by the failure.
+        assert grounding_problems([guest], _P(tmp)) == []
+        assert grounding_problems([looked_up], _P(tmp)) == []
