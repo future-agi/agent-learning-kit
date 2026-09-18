@@ -1120,7 +1120,7 @@ def scenario_tools(
             lambda: check_problems(destination),
             lambda: grounding_problems(kept, world_root),
             lambda: redteam_problems(kept),
-            lambda: unpinned_callers(kept),
+            lambda: unpinned_callers(kept, set(world_summary_tables(world_root))),
         ):
             try:
                 noted = noted + remark()
@@ -1302,3 +1302,11 @@ def grounding_problems(scenarios: list[Scenario], world_root: Path) -> list[str]
                 "not hold after setup runs, so the caller cannot succeed"
             )
     return problems
+
+
+def world_summary_tables(world_root: Path) -> list[str]:
+    """Just the table names of the saved world, for checks that need to know what it holds."""
+    try:
+        return sorted(restore(world_root).state())
+    except Exception:
+        return []

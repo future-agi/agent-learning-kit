@@ -1302,7 +1302,9 @@ def _pinned_identity(fixture: Any, key: str = "") -> list[str]:
     return [f"{key}={text}"] if _NAMES_A_CALLER.search(key) and text else []
 
 
-def unpinned_callers(scenarios: list[Scenario]) -> list[str]:
+def unpinned_callers(
+    scenarios: list[Scenario], world_tables: set[str] | None = None
+) -> list[str]:
     """Scenarios that leave who is calling to the run, in a suite where everything else pins it.
 
     A voice run always arrives from some number. If the scenario does not say which, the runtime
@@ -1314,17 +1316,31 @@ def unpinned_callers(scenarios: list[Scenario]) -> list[str]:
     him Dana's wallet balance. **The agent was right every step of the way.** The scenario asserted
     an absence it never established.
 
-    Calibrated against the suite itself, because only the suite knows whether its agent has callers
-    at all: if no scenario pins an identity, the agent has no such concept and nothing is reported.
-    On a weather agent that is all 100 scenarios and silence is correct; on the ride suite it was
-    exactly the ten `guest_ride_*` scenarios and nothing else.
+    Calibrated against the suite, with the world as a second opinion. If no scenario pins an identity
+    the agent usually has no such concept and nothing is reported: on a weather agent that is all 100
+    scenarios and silence is correct.
+
+    **But a suite calibrated only against itself goes quiet exactly when it fails uniformly.** A
+    cheaper model writing the ride suite pinned an identity in **zero of 50** scenarios, and this
+    returned no problems at all, while the same suite written by the stronger model pinned one in
+    **50 of 50**. So when the world holds a table of people and the suite names none of them, that is
+    reported as the whole suite rather than passed over in silence.
 
     A guest caller is a legitimate scenario. The fix is to pin a number belonging to nobody, not to
     stop writing guests. Advisory.
     """
     pinned = [one for one in scenarios if _pinned_identity(one.fixture)]
-    if not pinned or len(pinned) == len(scenarios):
+    if len(pinned) == len(scenarios):
         return []
+    if not pinned:
+        people = {"users", "riders", "customers", "callers", "accounts", "people", "members"}
+        if not (world_tables or set()) & people:
+            return []
+        return [
+            f"not one of {len(scenarios)} scenarios says who is calling, yet the world has a table "
+            "of people. Every claim any instruction makes about the caller is unverifiable, and the "
+            "run picks whoever happens to own the number it dials."
+        ]
     loose = [one for one in scenarios if not _pinned_identity(one.fixture)]
     problems = [
         f"{one.name}: nothing in the fixture says who is calling, so the run picks the number. "
