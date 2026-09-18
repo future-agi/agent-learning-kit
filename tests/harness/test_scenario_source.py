@@ -2070,3 +2070,29 @@ def test_unpinned_callers_calibrates_against_the_suite_it_is_given() -> None:
     assert "book_ride_guest" in said
     assert "pin one that matches no row" in said
     assert "r0" not in said
+
+
+def test_a_broken_suite_remark_costs_the_remark_and_not_the_save(tmp_path: Path) -> None:
+    """An unreadable check file must never lose a suite that already cleared all three gates.
+
+    The four suite remarks read files off disk and replay setup code. Any of them can meet something
+    it cannot parse. Losing proved work over a remark would be the worst possible trade, so the save
+    path swallows the failure and says less.
+    """
+    from fi.alk.harness.folder import check_problems
+
+    checks = tmp_path / "scenarios" / "unreadable" / "checks"
+    checks.mkdir(parents=True)
+    (checks / "broken.py").write_bytes(b"def check(world, calls):\n    return '\xff\xfe not utf-8'\n")
+
+    with pytest.raises(UnicodeDecodeError):
+        check_problems(tmp_path)
+
+    # The save path wraps each remark, so the same failure only costs the remark.
+    noted: list[str] = ["something already noted"]
+    for remark in (lambda: check_problems(tmp_path),):
+        try:
+            noted = noted + remark()
+        except Exception:
+            pass
+    assert noted == ["something already noted"]

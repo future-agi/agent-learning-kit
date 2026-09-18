@@ -1068,8 +1068,20 @@ def scenario_tools(
         path = write_scenarios(kept, destination, catalogue)
         # Read back after writing, because it is the check files on disk that get run, not the
         # intention behind them. Advisory: a thin check is still a check and still saves.
-        noted = noted + check_problems(destination) + grounding_problems(kept, world_root)
-        noted = noted + redteam_problems(kept) + unpinned_callers(kept)
+        #
+        # Every one of these is a remark about the suite, never a condition on keeping it, so none of
+        # them may cost a writer work that already cleared all three gates. One unreadable check file
+        # or one setup that will not replay is a reason to say less, not a reason to lose the save.
+        for remark in (
+            lambda: check_problems(destination),
+            lambda: grounding_problems(kept, world_root),
+            lambda: redteam_problems(kept),
+            lambda: unpinned_callers(kept),
+        ):
+            try:
+                noted = noted + remark()
+            except Exception as unreadable:  # noqa: BLE001 - advisory only, never fatal
+                logger.warning("suite remark skipped: %s", unreadable)
         diversity = suite_diversity_problems(kept) + keyword_problems(kept)
         # How much of the space this suite covered, written beside it so the number and the
         # scenarios it describes can never drift apart.
