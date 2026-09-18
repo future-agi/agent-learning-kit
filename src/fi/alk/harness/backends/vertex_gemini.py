@@ -229,9 +229,9 @@ def _successful_terminal_save(name: str, response: Any) -> bool:
     )
 
 
-# Tools whose result the model can take again. A stage re-reads the world and its own scenarios
-# constantly, and ADK re-sends every one of those results on every later call, so the oldest read
-# in a 190-turn stage is paid for 190 times.
+# Tools whose result the model can fetch again. ADK re-sends the whole conversation on every call,
+# so anything left in it is paid for once per remaining turn; only these may be dropped, because
+# only these can be recovered by spending one.
 _REREADABLE = frozenset(
     {
         "inspect_world",
@@ -260,13 +260,14 @@ def _bare(name: str) -> str:
 
 
 def _forget_old_reads(contents: list[Any]) -> None:
-    """Collapse superseded reads, keeping the last few of each tool whole.
+    """Collapse superseded reads, keeping the newest few of each tool whole.
 
-    Only results the model can fetch again are dropped, and the replacement names the call that
-    brings one back, so a turn recovers anything this costs. Collapsing waits until the retained
-    reads pass a threshold rather than running every call, which leaves the prefix the model
-    caches stable in between.
+    The replacement names the call that brings one back, so a turn recovers anything this costs.
+    ADK shallow-copies a Part into the request, so the whole ``function_response`` is replaced
+    rather than its ``response`` edited: editing in place would rewrite the stored session event.
     """
+    from google.genai import types
+
     arguments: dict[str, str] = {}
     reads: list[tuple[Any, str, str]] = []
     held = 0
@@ -296,19 +297,22 @@ def _forget_old_reads(contents: list[Any]) -> None:
         if recent[name] <= _READS_KEPT_WHOLE:
             continue
         said = arguments.get(call_id, "")
-        part.function_response.response = {
-            "content": [
-                {
-                    "type": "text",
-                    "text": f"{_FORGOTTEN}call {name}({said}) again if you still need it.",
-                }
-            ]
-        }
+        part.function_response = types.FunctionResponse(
+            id=call_id or None,
+            name=part.function_response.name,
+            response={
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"{_FORGOTTEN}call {name}({said}) again if you still need it.",
+                    }
+                ]
+            },
+        )
 
 
 def _pruned_history(callback_context: Any, llm_request: Any) -> None:
     _forget_old_reads(llm_request.contents or [])
-    return None
 
 
 def _spec_tool(name: str, spec: ToolSpec) -> Any:

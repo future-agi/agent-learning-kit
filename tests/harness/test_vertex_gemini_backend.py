@@ -93,3 +93,19 @@ def test_forgetting_twice_changes_nothing_more() -> None:
     once = [_said(one) for one in contents]
     _forget_old_reads(contents)
     assert [_said(one) for one in contents] == once
+
+
+def test_forgetting_leaves_the_session_event_alone() -> None:
+    """ADK shallow-copies a Part into the request, so an in-place edit would rewrite history."""
+    from google.genai import types
+
+    session = [
+        _read(f"c{n}", "mcp__scenarios__inspect_world", "x" * 10_000) for n in range(10)
+    ]
+    request = [
+        types.Content(role=one.role, parts=[part.model_copy() for part in one.parts])
+        for one in session
+    ]
+    _forget_old_reads(request)
+    assert _said(request[0]).startswith("[dropped")
+    assert all(_said(one) == "x" * 10_000 for one in session)
