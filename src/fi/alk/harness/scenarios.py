@@ -173,7 +173,7 @@ REVIEWER = "suite_reviewer"
 # What a reviewer may touch. Reading the suite and the world is the whole job; a reviewer that
 # could submit would answer its own objection instead of reporting it, and one that could save
 # would rewrite the index underneath the writers still running.
-REVIEWER_TOOLS = ("inspect_world", "inspect_scenario")
+REVIEWER_TOOLS = ("inspect_world", "inspect_scenario", "suite_progress")
 
 
 def reviewer_worker(
@@ -205,6 +205,10 @@ def reviewer_worker(
                 "is already well covered, and do not report a gap you cannot name a scenario "
                 "for. A suite of the right size that covers what matters is finished, and "
                 "saying so is the useful answer.\n\n"
+                "Start with suite_progress(names=true): it names every scenario written and the cell each "
+                "sits in, which is the only way to learn a name, and inspect_scenario needs one. "
+                "Read the scenarios whose names or cells look like the gap you suspect; you do "
+                "not need to read them all.\n\n"
                 "Report each gap as the use case, the scenario that is missing in one line, and "
                 "why it matters. Report nothing when there is nothing to report."
                 f"\n\n## This agent\n\n{contract.brief()}"

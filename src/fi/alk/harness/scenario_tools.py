@@ -1161,8 +1161,10 @@ def scenario_tools(
         "suite_progress",
         "How far the suite has got and which cells of your grid are still empty. Call it after a "
         "batch of writers reports back, to decide what the next batch covers. It never returns "
-        "scenario bodies, so it costs the same whether ten are written or a thousand.",
-        schema({}, []),
+        "scenario bodies, so it costs the same whether ten are written or a thousand. Pass "
+        "`names` only when you need to name a scenario, as `inspect_scenario` does: the list is "
+        "the one expensive part of this reply.",
+        schema({"names": bool}, []),
     )
     async def suite_progress(args: dict[str, Any]) -> dict[str, Any]:
         design = {"axes": target.get("axes") or {}}
@@ -1187,6 +1189,22 @@ def scenario_tools(
             lines.append(
                 "overlays asserting nothing beyond the plain task, brief a round to name what "
                 "each must produce or prevent: " + ", ".join(unasserted[:12])
+            )
+        # Names, with where each sits. Whoever reads the suite has to be able to name a scenario
+        # before it can read one: `inspect_scenario` takes a name and there is no other way to
+        # learn them, so without this a reviewer discovers the suite only by guessing wrong.
+        if kept and bool(args.get("names")):
+            placed = [
+                f"{one.name} [{', '.join(f'{k}={v}' for k, v in sorted(one.coverage.items()))}]"
+                if one.coverage
+                else one.name
+                for one in kept
+            ]
+            shown = placed if len(placed) <= 120 else placed[-120:]
+            lines.append(
+                f"written so far ({len(placed)}): "
+                + "; ".join(shown)
+                + ("" if len(shown) == len(placed) else f"; and {len(placed) - len(shown)} before them")
             )
         by_worker = Counter(one.use_case.strip() for one in kept if one.use_case.strip())
         if by_worker:

@@ -2336,3 +2336,30 @@ def test_a_writer_is_told_which_named_tools_are_not_its_job() -> None:
     named = set(re.findall(r"`([a-z_][a-z0-9_]*)\(?`", method)) & set(TOOL_NAMES)
     for missing in named - set(stage.WRITER_TOOLS):
         assert f"`{missing}`" in said, f"the writer is never told it lacks {missing}"
+
+
+def test_a_reviewer_can_learn_the_names_it_needs_and_the_loop_is_not_charged_for_them() -> None:
+    """inspect_scenario takes a name, and nothing else hands one out: the reviewer was blind."""
+    import asyncio
+    import json
+    from pathlib import Path as _P
+
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.scenario_tools import scenario_tools
+    from fi.alk.harness.scenarios import REVIEWER_TOOLS
+
+    assert "suite_progress" in REVIEWER_TOOLS
+
+    root = _P(__file__).parent.parent / "fixtures"
+    if not (root / "contract.json").exists():
+        return  # the shape is pinned above; the sizing check needs a real suite
+    contract = AgentContract.model_validate(json.loads((root / "contract.json").read_text()))
+    server, _ = scenario_tools(contract, root, root, wanted=5)
+    tool = next(t for t in server.tools if t.name == "suite_progress")
+
+    async def said(args):
+        out = await tool.handler(args)
+        return "".join(p.get("text", "") for p in out["content"])
+
+    plain, named = asyncio.run(said({})), asyncio.run(said({"names": True}))
+    assert len(named) >= len(plain)
