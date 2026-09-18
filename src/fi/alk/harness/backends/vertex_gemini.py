@@ -229,6 +229,88 @@ def _successful_terminal_save(name: str, response: Any) -> bool:
     )
 
 
+# Tools whose result the model can take again. A stage re-reads the world and its own scenarios
+# constantly, and ADK re-sends every one of those results on every later call, so the oldest read
+# in a 190-turn stage is paid for 190 times.
+_REREADABLE = frozenset(
+    {
+        "inspect_world",
+        "inspect_scenario",
+        "inspect_environment",
+        "query_world",
+        "check_world",
+        "read_scenario",
+        "read_scenarios",
+        "read_source",
+        "read_transcript",
+        "try_calls",
+        "Read",
+        "Grep",
+        "Glob",
+    }
+)
+
+_READS_KEPT_WHOLE = 2
+_READ_CHARS_BEFORE_FORGETTING = 60_000
+_FORGOTTEN = "[dropped to keep this session small] "
+
+
+def _bare(name: str) -> str:
+    return name.rsplit("__", 1)[-1]
+
+
+def _forget_old_reads(contents: list[Any]) -> None:
+    """Collapse superseded reads, keeping the last few of each tool whole.
+
+    Only results the model can fetch again are dropped, and the replacement names the call that
+    brings one back, so a turn recovers anything this costs. Collapsing waits until the retained
+    reads pass a threshold rather than running every call, which leaves the prefix the model
+    caches stable in between.
+    """
+    arguments: dict[str, str] = {}
+    reads: list[tuple[Any, str, str]] = []
+    held = 0
+    for content in contents:
+        for part in getattr(content, "parts", None) or []:
+            call = getattr(part, "function_call", None)
+            if call is not None:
+                arguments[getattr(call, "id", "") or ""] = json.dumps(
+                    dict(getattr(call, "args", None) or {}), default=str
+                )[:160]
+            answer = getattr(part, "function_response", None)
+            if answer is None:
+                continue
+            name = _bare(getattr(answer, "name", "") or "")
+            if name not in _REREADABLE:
+                continue
+            text = _flattened(getattr(answer, "response", None))
+            if text.startswith(_FORGOTTEN):
+                continue
+            held += len(text)
+            reads.append((part, name, getattr(answer, "id", "") or ""))
+    if held <= _READ_CHARS_BEFORE_FORGETTING:
+        return
+    recent: dict[str, int] = {}
+    for part, name, call_id in reversed(reads):
+        recent[name] = recent.get(name, 0) + 1
+        if recent[name] <= _READS_KEPT_WHOLE:
+            continue
+        said = arguments.get(call_id, "")
+        part.function_response.response = {
+            "content": [
+                {
+                    "type": "text",
+                    "text": f"{_FORGOTTEN}call {name}({said}) again if you still need it.",
+                }
+            ]
+        }
+
+
+def _pruned_history(callback_context: Any, llm_request: Any) -> None:
+    _forget_old_reads(llm_request.contents or [])
+    return None
+
+
 def _spec_tool(name: str, spec: ToolSpec) -> Any:
     """A ToolSpec as an ADK tool, through ADK's own extension point.
 
@@ -318,6 +400,7 @@ class VertexGeminiSession:
                         worker.builtins or self._spec.builtins,
                         worker.servers or self._spec.servers,
                     ),
+                    before_model_callback=_pruned_history,
                 )
             )
         return built
@@ -344,6 +427,7 @@ class VertexGeminiSession:
             ),
             tools=self._tools(),
             sub_agents=self._workers(),
+            before_model_callback=_pruned_history,
         )
         sessions = InMemorySessionService()
         await sessions.create_session(

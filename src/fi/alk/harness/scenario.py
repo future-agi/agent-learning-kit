@@ -1118,9 +1118,8 @@ def keyword_problems(scenarios: list[Scenario]) -> list[str]:
     """Whether the suite's keywords can actually be used to find anything.
 
     Keywords are the one field a writer chooses for the whole suite while being unable to see what
-    the other writers chose, so left unchecked they fragment: a real suite of 100 carried 143
-    distinct keywords, 108 of them used exactly once, with four separate words for ending a call.
-    The plan skill decides the vocabulary; this refuses a suite that ignored it.
+    the other writers chose, so left unchecked they fragment. The plan skill decides the
+    vocabulary; this refuses a suite that ignored it.
     """
     problems: list[str] = []
     total = len(scenarios)

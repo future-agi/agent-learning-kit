@@ -49,6 +49,12 @@ PLAN_SKILL = "plan-suite"
 # Turns a scenario costs in practice: look at the world, rehearse the calls, submit, and often
 # one more to correct what a gate refused.
 TURNS_EACH = 3
+# A briefed writer reads the world again in its own context, and its turns come out of the same
+# budget as the loop that briefed it, so a handed-out suite spends more turns than one written
+# in a single session.
+TURNS_EACH_HANDED_OUT = 9
+# The suite size above which the skill has the loop hand the writing out rather than do it.
+HANDS_OUT_ABOVE = 20
 # Enough to write a handful without the budget being the thing that stops it.
 TURNS_FLOOR = 120
 
@@ -61,7 +67,8 @@ def turns_for(wanted: int) -> int:
     that asked for fifty and reached twenty-eight saved nothing at all. The budget has to follow
     the request, or the request cannot be honoured.
     """
-    return max(TURNS_FLOOR, wanted * TURNS_EACH + 40)
+    each = TURNS_EACH_HANDED_OUT if wanted > HANDS_OUT_ABOVE else TURNS_EACH
+    return max(TURNS_FLOOR, wanted * each + 40)
 
 
 # Named with underscores because one backend sanitises a worker name into an identifier and the
@@ -223,7 +230,8 @@ def open_stage(
                 f"Writing one scenario takes several: exploring the world, probing calls, submitting, "
                 f"and fixing what the gates refuse. Work out whether {wanted} of them fit in {budget} "
                 f"before you start writing, because running out mid-suite loses the turns you spent. "
-                f"A writer you brief spends its own turns, not yours."
+                f"A writer you brief reads the world in its own context, which is cheaper than "
+                f"carrying it in yours, but its turns come out of this same budget."
             )
             + (
                 f"\n\nWrite {wanted} scenarios."

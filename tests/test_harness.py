@@ -2341,8 +2341,9 @@ def test_a_persona_is_a_structured_simulator_prompt_slot():
     assert "Personality: anxious" in filled
     assert "Language(s): English, Hindi" in filled
     assert "Accent: South Asian English" in filled
-    assert "Key Traits: in a noisy curbside area, will ask for clarification" in filled
     assert "Pickup Context: busy airport curb" in filled
+    # Keywords index the suite; they are not traits for the caller to act out.
+    assert "in a noisy curbside area" not in filled
 
 
 def test_an_empty_persona_is_rejected():
@@ -4445,6 +4446,13 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
 
     for stage, tools in surface.items():
         text = (SKILLS_ROOT / stage / "SKILL.md").read_text(encoding="utf-8")
+        # Worked examples name sub-goals, tables and columns the same way instructions name a
+        # tool, and a skill is not telling the model to call those. Fenced blocks and quoted
+        # examples come out before the scan; what is left is the method itself.
+        text = re.sub(r"```.*?```", "", text, flags=re.S)
+        text = "\n".join(
+            line for line in text.splitlines() if not line.lstrip().startswith(">")
+        )
         # `name` or `name(` — the way a skill refers to a tool it wants called.
         mentioned = set(re.findall(r"`([a-z_][a-z0-9_]*)\(?`", text))
         unknown = {
