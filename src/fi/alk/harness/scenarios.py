@@ -86,9 +86,11 @@ def writer_worker(
     agent and its world up front because a worker never sees the parent's conversation.
 
     It gets the stage's own tool server, so a scenario it proves lands in the same list the
-    stage later saves from. ``save_scenarios`` is the one tool withheld: saving rewrites the
-    index and deletes folders it does not know about, so two workers saving at once would each
-    remove the other's work. The stage saves once, when the fan-out is done.
+    stage later saves from. Two tools are withheld. ``save_scenarios`` rewrites the index and
+    deletes folders it does not know about, so two workers saving at once would each remove the
+    other's work; the stage saves once, when the fan-out is done. ``suite_progress`` is the
+    briefing loop's own instrument: a writer that reads it starts deciding what the suite needs
+    instead of writing what it was given.
 
     ``budget`` is the stage's own, not a share of it. A worker never needs the whole suite's
     turns, but a ceiling set too low truncates its part silently and ``save_scenarios`` then
@@ -123,7 +125,9 @@ def writer_worker(
                     name=server.name,
                     version=server.version,
                     tools=[
-                        spec for spec in server.tools if spec.name != "save_scenarios"
+                        spec
+                        for spec in server.tools
+                        if spec.name not in ("save_scenarios", "suite_progress")
                     ],
                 )
             },

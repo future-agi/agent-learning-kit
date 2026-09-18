@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import re
 import logging
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +52,7 @@ from .scenario import (
     unpinned_callers,
     suite_diversity_problems,
     tidy_keywords,
+    uncovered_cells,
     vocabulary_from,
     validate_scenario,
     voicemail_enabled,
@@ -1158,6 +1160,32 @@ def scenario_tools(
         return _ok(said)
 
     @tool(
+        "suite_progress",
+        "How far the suite has got and which cells of your grid are still empty. Call it after a "
+        "batch of writers reports back, to decide what the next batch covers. It never returns "
+        "scenario bodies, so it costs the same whether ten are written or a thousand.",
+        schema({}, []),
+    )
+    async def suite_progress(args: dict[str, Any]) -> dict[str, Any]:
+        design = {"axes": target.get("axes") or {}}
+        lines = [f"{len(kept)} of {target['count']} written."]
+        report = coverage_report(kept, design)
+        for axis, body in report.get("axes", {}).items():
+            unused = body.get("unused") or []
+            if unused:
+                lines.append(f"{axis}: nothing yet on {', '.join(unused)}")
+        empty = uncovered_cells(kept, design)
+        if empty:
+            lines.append("cells still empty: " + "; ".join(empty))
+        by_worker = Counter(one.use_case.strip() for one in kept if one.use_case.strip())
+        if by_worker:
+            lines.append(
+                "use cases written: "
+                + ", ".join(f"{name} ({n})" for name, n in by_worker.most_common(12))
+            )
+        return _ok("\n".join(lines))
+
+    @tool(
         "drop_scenario",
         "Remove a scenario by name, or all of them with name '*'.",
         schema({"name": str}, ["name"]),
@@ -1336,6 +1364,7 @@ def scenario_tools(
             drop_rule_tool,
             fix_tool_tool,
             aim_for,
+            suite_progress,
             drop_scenario,
         ]
         # Saving rewrites the index and deletes any folder it does not know about, so only the
@@ -1357,6 +1386,7 @@ _ALWAYS = (
     "drop_rule",
     "fix_tool",
     "aim_for",
+    "suite_progress",
     "drop_scenario",
     "save_scenarios",
 )

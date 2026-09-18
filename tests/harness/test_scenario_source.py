@@ -2096,3 +2096,74 @@ def test_a_broken_suite_remark_costs_the_remark_and_not_the_save(tmp_path: Path)
         except Exception:
             pass
     assert noted == ["something already noted"]
+
+
+def test_uncovered_cells_names_what_the_plan_allows_and_nothing_reached() -> None:
+    """A loop briefs a writer on cells, so the gap has to be named rather than counted."""
+    from fi.alk.harness.scenario import Scenario, uncovered_cells
+
+    design = {"axes": {"task": ["book", "cancel"], "who": ["new", "vip"]}}
+    written = [Scenario(name="a", coverage={"task": "book", "who": "new"})]
+
+    assert uncovered_cells(written, design) == [
+        "task=book x who=vip",
+        "task=cancel x who=new",
+        "task=cancel x who=vip",
+    ]
+    assert len(uncovered_cells([], design)) == 4
+    assert uncovered_cells(written, {"axes": {"task": ["book"]}}) == []
+
+
+def test_a_masked_pair_is_not_an_empty_cell() -> None:
+    from fi.alk.harness.scenario import Scenario, uncovered_cells
+
+    design = {
+        "axes": {"task": ["book", "cancel"], "who": ["new", "vip"]},
+        "masked": [["task=cancel", "who=vip"]],
+    }
+    written = [Scenario(name="a", coverage={"task": "book", "who": "new"})]
+
+    assert uncovered_cells(written, design) == [
+        "task=book x who=vip",
+        "task=cancel x who=new",
+    ]
+
+
+def test_uncovered_cells_stops_at_the_limit() -> None:
+    from fi.alk.harness.scenario import uncovered_cells
+
+    design = {"axes": {"a": [str(n) for n in range(10)], "b": [str(n) for n in range(10)]}}
+
+    assert len(uncovered_cells([], design)) == 24
+    assert len(uncovered_cells([], design, limit=5)) == 5
+
+
+def test_a_writer_can_neither_save_nor_read_the_suite_it_is_writing_into(monkeypatch) -> None:
+    """Saving would delete the other writers' work; progress would have it re-plan its own brief."""
+    from pathlib import Path as _Path
+
+    from fi.alk.harness import scenarios as stage
+    from fi.alk.harness.backends import ToolServer, ToolSpec
+    from fi.alk.harness.contract import AgentContract
+
+    monkeypatch.setattr(stage, "world_summary", lambda _: "a world")
+    monkeypatch.setattr(stage, "load_skill", lambda *a, **k: "a skill")
+    monkeypatch.setattr(stage, "discovered_skills", lambda **k: "")
+
+    async def handler(args):
+        return {"content": "ok"}
+
+    server = ToolServer(
+        name="scenarios",
+        version="1",
+        tools=[
+            ToolSpec(name=name, description=name, input_schema={}, handler=handler)
+            for name in ("submit_scenario", "suite_progress", "save_scenarios")
+        ],
+    )
+    worker = stage.writer_worker(
+        AgentContract(agent="a"), _Path("/tmp"), server, budget=40
+    )[stage.WRITER]
+
+    offered = {spec.name for spec in worker.servers[stage.SCENARIO_SERVER].tools}
+    assert offered == {"submit_scenario"}

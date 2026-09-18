@@ -248,31 +248,47 @@ a writer genuinely needs a word the vocabulary lacks, that is a gap in your plan
 the list: it means a coordinate you dealt has no name, and the next suite's vocabulary should carry
 one.
 
-## 7. Hand it out
+## 7. Hand it out, one round at a time
 
 **Above about twenty scenarios, delegate. Do not write the suite yourself.** Your turn budget is
-roughly three per scenario and a scenario takes far more than that to explore, write and prove, so a
-suite you write alone runs out of budget long before it runs out of cells. That is not a risk, it is
-what happens: a fifty-scenario suite written by the main loop reached seventeen before the budget
-ended.
+spent by writers as well as by you, and a scenario takes far more turns to explore, write and prove
+than the budget allows per scenario, so a suite you write alone runs out of budget long before it
+runs out of cells. That is not a risk, it is what happens: a fifty-scenario suite written by the
+main loop reached seventeen before the budget ended.
 
 Below about ten scenarios, write it yourself. Briefing a writer, having it read the world and having
-it report back costs real turns, and on a ten-scenario suite that overhead is the whole bill: fifty
-four turns writing it alone against a hundred and nineteen delegated, for output identical scenario
-by scenario. Between ten and twenty, judge it on how rich the cells are.
+it report back costs real turns, and on a ten-scenario suite that overhead is the whole bill.
+Between ten and twenty, judge it on how rich the cells are.
 
 When you delegate, delegate the writing entirely. Splitting a suite and then writing half of it
 yourself gives you the overhead of both.
 
-**At most twelve writers run at the same time.** Ask for more and the extra are refused until a slot
-frees, which wastes the turn that asked.
+**Work in rounds, not in one fan-out.** A round is:
+
+1. Pick the cells that are still empty and group them into slices of four to eight scenarios.
+2. Brief one writer per slice, up to twelve in the same turn. More than twelve are refused until a
+   slot frees, which wastes the turn that asked.
+3. Each writer submits its scenarios itself and comes back with a report saying what it wrote and
+   what it could not.
+4. Call `suite_progress`. It names what is still empty without returning a single scenario body, so
+   it costs the same on a suite of a thousand as on a suite of ten.
+5. Decide the next round from that: refill the cells that came back short, cover the ones nobody has
+   reached, and stop when the count is met.
+
+Rounds are what make a large suite finish. A writer that misreads its brief is caught in the next
+round rather than at the end; the suite stays inside a budget you can watch; and the same loop that
+writes fifty in one or two rounds writes a thousand in fourteen without changing shape. Track rounds
+rather than scenarios: the suite size only decides how many rounds there are.
+
+Do not brief the next round before the current one reports. You would be guessing at what is still
+empty, and two writers would cover the same cell.
 
 ## 8. Hand each writer its part
 
-The worker is called `scenario_writer`. Brief one per slice, or per group of related cells. A brief carries: which cells to cover, the
-angle each should take, how many scenarios it is worth, and what makes them different from what the
-other writers were given. **A writer cannot see the others' briefs**, so anything that has to stay
-spread across the suite has to be dealt out in the briefs, one share each.
+The worker is called `scenario_writer`. A brief carries: which cells to cover, the angle each should
+take, how many scenarios it is worth, and what makes them different from what the other writers were
+given. **A writer cannot see the others' briefs**, so anything that has to stay spread across the
+suite has to be dealt out in the briefs, one share each.
 
 The people are the thing to deal. Give each writer its own share of the levels above: two or three
 per sub-dimension, and no level to two writers where you can help it. A writer told only "vary the
@@ -288,15 +304,12 @@ that fails costs its own slice rather than a third of the suite. Two signs the s
 slice holds one scenario, which means you listed scenarios instead of grouping them; or every slice
 holds the same number, which means you padded to reach a target.
 
-## 9. Collect, review, save
+## 9. Close it out
 
-A writer submits its scenarios and reports what it wrote. Its scenarios are already in your suite;
-the report tells you what it could not cover.
-
-When the writers are done, run `suite_reviewer` on the whole suite. Nobody else looks at it whole: each
-writer saw only its own brief, so a cell that came back one short, or a branch every writer assumed
-somebody else had, survives unnoticed. Brief more writers for whatever it names, then review again if
-you filled much.
+When `suite_progress` says the count is met, run `suite_reviewer` on the whole suite. Nobody else
+looks at it whole: each writer saw only its own brief, so a cell that came back one short, or a
+branch every writer assumed somebody else had, survives unnoticed. Brief another round for whatever
+it names, then review again if you filled much.
 
 **You save, once, at the end.** Writers cannot: saving rewrites the index and deletes any folder it
 does not know about, so two of them saving would each delete the other's work.

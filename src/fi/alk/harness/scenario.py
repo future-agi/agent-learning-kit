@@ -1042,6 +1042,47 @@ def coverage_report(
     return report
 
 
+def uncovered_cells(
+    scenarios: list[Scenario], design: dict[str, Any] | None, limit: int = 24
+) -> list[str]:
+    """Pairs the plan allows that nothing has reached yet, as ``axis=level x axis=level``.
+
+    The coverage report counts what is missing; a loop handing work out has to name it, because a
+    writer is briefed on cells rather than on a share.
+    """
+    declared = design or {}
+    planned: dict[str, list[str]] = {
+        str(axis): [str(level).strip() for level in levels if str(level).strip()]
+        for axis, levels in (declared.get("axes") or {}).items()
+    }
+    if len(planned) < 2:
+        return []
+    masked = {
+        (str(pair[0]).strip(), str(pair[1]).strip())
+        for pair in (declared.get("masked") or [])
+        if isinstance(pair, (list, tuple)) and len(pair) == 2
+    }
+    masked |= {(b, a) for a, b in masked}
+    seen = {
+        (first, str(one.coverage.get(first, "")).strip(), second, str(one.coverage.get(second, "")).strip())
+        for one in scenarios
+        if one.coverage
+        for first, second in combinations(sorted(planned), 2)
+    }
+    empty: list[str] = []
+    for first, second in combinations(sorted(planned), 2):
+        for a in planned[first]:
+            for b in planned[second]:
+                if (f"{first}={a}", f"{second}={b}") in masked:
+                    continue
+                if (first, a, second, b) in seen:
+                    continue
+                empty.append(f"{first}={a} x {second}={b}")
+                if len(empty) >= limit:
+                    return empty
+    return empty
+
+
 def vocabulary_from(design: dict | None) -> set[str] | None:
     """The keyword vocabulary a plan declared, folded for comparison. ``None`` when it declared none.
 
