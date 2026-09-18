@@ -497,6 +497,15 @@ instruction. Do not write a plausible-looking number: a code, a reference, a car
 order id and a phone are all records the agent looks up, and a value that is merely realistic is a
 value the lookup rejects.
 
+**An absence is a fact about the world, and it needs establishing like any other.** If the
+instruction says the caller has no account, no saved card, no prior trip, then the scenario has to
+pin the value it is talking about, or the run picks one and the claim is quietly false. Measured:
+`book_ride_guest_payment_link` told its caller "you do not have an existing account on file for this
+phone number", pinned no phone, and ran on a number the world gives to a seeded rider named Dana. The
+agent greeted the caller as Dana and read out her wallet balance. **The agent was correct at every
+step.** The scenario claimed an absence and then supplied someone else's presence. Pin a phone that
+matches no row, and say in `ready_code` that it matches none.
+
 ### setup_code
 
 Python defining `setup(world)`.

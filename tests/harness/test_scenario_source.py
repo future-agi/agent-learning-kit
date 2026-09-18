@@ -2040,3 +2040,33 @@ def test_fixture_credentials_are_only_flagged_when_they_name_a_record() -> None:
     assert _handed_to_the_caller({"payment": {"card_number": "4242424242424242"}}) == [
         ("card_number", "4242424242424242")
     ]
+
+
+def test_unpinned_callers_calibrates_against_the_suite_it_is_given() -> None:
+    """Silent when the agent has no callers, specific when it does.
+
+    `book_ride_guest_payment_link` told its caller "you do not have an existing account on file for
+    this phone number", pinned no phone, and ran on a number the world gives to a rider called Dana.
+    The agent greeted the caller as Dana. A weather agent has no callers at all, and reporting all
+    100 of its scenarios would be noise, so the suite's own habit decides.
+    """
+    from fi.alk.harness.scenario import Persona, Scenario, unpinned_callers
+
+    def one(name: str, fixture: dict) -> Scenario:
+        return Scenario(name=name, persona=Persona(name=name), fixture=fixture)
+
+    # No scenario names a caller: the agent has no such concept, say nothing.
+    weatherish = [one(f"w{i}", {"location": "London"}) for i in range(4)]
+    assert unpinned_callers(weatherish) == []
+
+    # Every scenario names one: nothing is anomalous.
+    alike = [one(f"r{i}", {"phone": f"+1415555010{i}"}) for i in range(4)]
+    assert unpinned_callers(alike) == []
+
+    # One guest among riders is exactly what to report.
+    mixed = [one(f"r{i}", {"phone": f"+1415555010{i}"}) for i in range(3)]
+    mixed.append(one("book_ride_guest", {"caller_name": "Carlos"}))
+    said = " ".join(unpinned_callers(mixed))
+    assert "book_ride_guest" in said
+    assert "pin one that matches no row" in said
+    assert "r0" not in said

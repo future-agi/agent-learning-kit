@@ -1284,3 +1284,57 @@ def redteam_problems(scenarios: list[Scenario]) -> list[str]:
             "nothing. Add the missing names with add_sub_goal and deal them in the briefs."
         )
     return problems
+
+
+_NAMES_A_CALLER = re.compile(
+    r"(^|_)(phone|msisdn|caller_id|rider_id|account|customer_id|user_id|email)s?$",
+    re.IGNORECASE,
+)
+
+
+def _pinned_identity(fixture: Any, key: str = "") -> list[str]:
+    """Anything in the fixture that says who is calling."""
+    if isinstance(fixture, dict):
+        return [one for k, v in fixture.items() for one in _pinned_identity(v, str(k))]
+    if isinstance(fixture, list):
+        return [one for v in fixture for one in _pinned_identity(v, key)]
+    text = str(fixture).strip()
+    return [f"{key}={text}"] if _NAMES_A_CALLER.search(key) and text else []
+
+
+def unpinned_callers(scenarios: list[Scenario]) -> list[str]:
+    """Scenarios that leave who is calling to the run, in a suite where everything else pins it.
+
+    A voice run always arrives from some number. If the scenario does not say which, the runtime
+    picks, and every claim the instruction makes about the caller is then unverifiable.
+
+    Measured, and this is the whole reason the rule exists: `book_ride_guest_payment_link` told its
+    caller "you do not have an existing account on file for this phone number", pinned no phone, and
+    ran on `+14155550101`, which the world gives to Dana. The agent greeted Carlos as "Dana" and read
+    him Dana's wallet balance. **The agent was right every step of the way.** The scenario asserted
+    an absence it never established.
+
+    Calibrated against the suite itself, because only the suite knows whether its agent has callers
+    at all: if no scenario pins an identity, the agent has no such concept and nothing is reported.
+    On a weather agent that is all 100 scenarios and silence is correct; on the ride suite it was
+    exactly the ten `guest_ride_*` scenarios and nothing else.
+
+    A guest caller is a legitimate scenario. The fix is to pin a number belonging to nobody, not to
+    stop writing guests. Advisory.
+    """
+    pinned = [one for one in scenarios if _pinned_identity(one.fixture)]
+    if not pinned or len(pinned) == len(scenarios):
+        return []
+    loose = [one for one in scenarios if not _pinned_identity(one.fixture)]
+    problems = [
+        f"{one.name}: nothing in the fixture says who is calling, so the run picks the number. "
+        "If the caller is meant to be unknown, pin one that matches no row in the world; otherwise "
+        "the agent may recognise whoever happens to own it."
+        for one in loose
+    ]
+    if len(problems) > 1:
+        problems.append(
+            f"{len(loose)} of {len(scenarios)} scenarios leave the caller unpinned while "
+            f"{len(pinned)} pin one."
+        )
+    return problems
