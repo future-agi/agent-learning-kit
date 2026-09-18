@@ -222,6 +222,9 @@ class Call:
     id: str
     name: str
     arguments: dict[str, Any] = field(default_factory=dict)
+    # Which agent made the call. Empty when the backend does not distinguish one. Without it a
+    # stage that delegates cannot tell its own spending from its workers'.
+    by: str = ""
 
 
 @dataclass

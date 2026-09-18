@@ -558,6 +558,7 @@ class VertexGeminiSession:
                                 or f"call-{uuid.uuid4().hex[:8]}",
                                 name=part.function_call.name or "",
                                 arguments=dict(part.function_call.args or {}),
+                                by=getattr(event, "author", "") or "",
                             )
                         )
                     if getattr(part, "function_response", None):

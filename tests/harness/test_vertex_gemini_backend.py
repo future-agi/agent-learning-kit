@@ -123,3 +123,11 @@ def test_compaction_is_configured_and_can_be_switched_off(monkeypatch) -> None:
 
     monkeypatch.setattr(vertex_gemini, "COMPACT_ABOVE_TOKENS", 0)
     assert vertex_gemini._compaction() is None
+
+
+def test_a_tool_call_carries_the_agent_that_made_it() -> None:
+    """A delegating stage cannot tell its own spending from its workers' without this."""
+    from fi.alk.harness.backends import Call
+
+    assert Call(id="c1", name="x").by == ""
+    assert Call(id="c1", name="x", by="scenario_writer").by == "scenario_writer"

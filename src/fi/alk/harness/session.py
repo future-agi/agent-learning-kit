@@ -297,8 +297,10 @@ class Stage:
                     events.append(Event(TEXT, text=part.text))
                 elif isinstance(part, Call):
                     turn.tools_used.append(part.name)
-                    self.tool_calls[part.name] += 1
-                    self._awaiting[part.id] = part.name
+                    # Keyed by who called it: a delegating stage has to be able to tell its own
+                    # spending from its workers', and the name alone cannot.
+                    self.tool_calls[f"{part.by or 'loop'}:{part.name}"] += 1
+                    self._awaiting[part.id] = f"{part.by or 'loop'}:{part.name}"
                     events.append(
                         Event(
                             TOOL,

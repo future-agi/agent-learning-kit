@@ -171,7 +171,7 @@ with `add_sub_goal`.
 | Tool | What it does |
 |---|---|
 | `inspect_world` | Lists the world's collections and their sizes; with a collection, returns records from it. `matching` is plain text, not SQL. |
-| `inspect_scenario` | Reads one already-kept scenario in full. Use before replacing one, rather than reconstructing it from memory. |
+| `inspect_scenario` | Reads one already-kept scenario **in full**, which is expensive. Use it before replacing a scenario of your own, rather than reconstructing it from memory. Do not read scenarios you did not write: the reply to `submit_scenario` already names everything in the suite, and that is what you need in order not to collide with it. |
 | `try_calls` | Runs calls against a **throwaway copy** of the world and shows the state they leave. This is how you work out a solution and what its checks should assert. Nothing you do here is visible to anybody else. |
 | `add_sub_goal` | Adds a named thing this agent can be checked on, with its check in code. |
 | `submit_scenario` | Keeps one scenario, after validation and the three gates. |

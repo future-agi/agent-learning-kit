@@ -275,7 +275,10 @@ yourself gives you the overhead of both.
 3. Each writer submits its scenarios itself and comes back with a report saying what it wrote and
    what it could not.
 4. Call `suite_progress`. It names what is still empty without returning a single scenario body, so
-   it costs the same on a suite of a thousand as on a suite of ten.
+   it costs the same on a suite of a thousand as on a suite of ten. **This is how you check a
+   round, once per round.** Do not read the scenarios back to see what a writer did: a writer's
+   report says what it wrote, `suite_progress` says what that left empty, and a scenario body is
+   several thousand tokens that you then carry for the rest of the stage.
 5. Decide the next round from that: refill the cells that came back short, cover the ones nobody has
    reached, and stop when the count is met.
 
