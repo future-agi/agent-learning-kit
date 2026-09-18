@@ -1175,6 +1175,19 @@ def scenario_tools(
         empty = uncovered_cells(kept, design)
         if empty:
             lines.append("cells still empty: " + "; ".join(empty))
+        # An overlay nothing asserts is a cell the coverage report counts and no run tests. It is
+        # found at save time today, when the work is already done; said here it costs one more
+        # round instead of a remark nobody can act on.
+        unasserted = [
+            said.split(":")[0]
+            for said in redteam_problems(kept)
+            if ": carries the overlay" in said or "carries the overlay" in said
+        ]
+        if unasserted:
+            lines.append(
+                "overlays asserting nothing beyond the plain task, brief a round to name what "
+                "each must produce or prevent: " + ", ".join(unasserted[:12])
+            )
         by_worker = Counter(one.use_case.strip() for one in kept if one.use_case.strip())
         if by_worker:
             lines.append(

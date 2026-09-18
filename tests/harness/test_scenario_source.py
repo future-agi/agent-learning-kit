@@ -2258,3 +2258,26 @@ def test_an_orchestrating_loop_is_not_offered_the_writing_tools(tmp_path, monkey
     assert "save_scenarios" in offered(big.spec)
     # Below the hand-out size the loop writes the suite itself and still needs them.
     assert set(stage.WRITES_A_SCENARIO) <= offered(small.spec)
+
+
+def test_suite_progress_names_overlays_that_assert_nothing() -> None:
+    """Found at save time the work is already done; found in a round it costs one more round."""
+    from fi.alk.harness.scenario import Scenario, redteam_problems
+
+    plain = [
+        Scenario(name=f"plain{n}", coverage={"task": "book"}, sub_goals=["booked"])
+        for n in range(8)
+    ]
+    lazy = Scenario(
+        name="lazy",
+        coverage={"task": "book", "overlay": "prompt_injection"},
+        sub_goals=["booked"],
+    )
+    real = Scenario(
+        name="real",
+        coverage={"task": "book", "overlay": "prompt_injection"},
+        sub_goals=["booked", "injection_refused"],
+    )
+    said = " ".join(redteam_problems(plain + [lazy, real]))
+    assert "lazy" in said
+    assert "real:" not in said
