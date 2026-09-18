@@ -216,6 +216,15 @@ def open_stage(
                 conversational="yes" if contract.conversational else "no",
             )
             + f"\n\nAt most {MOST_WORKERS_AT_ONCE} writers may run at the same time."
+            # The loop cannot ration what it cannot see. Without this it has no reason to believe
+            # writing the suite alone will not fit, and it runs out mid-suite instead of delegating.
+            + (
+                f"\n\nYou have {budget} turns for this whole stage, and every tool call spends one. "
+                f"Writing one scenario takes several: exploring the world, probing calls, submitting, "
+                f"and fixing what the gates refuse. Work out whether {wanted} of them fit in {budget} "
+                f"before you start writing, because running out mid-suite loses the turns you spent. "
+                f"A writer you brief spends its own turns, not yours."
+            )
             + (
                 f"\n\nWrite {wanted} scenarios."
                 if not kept

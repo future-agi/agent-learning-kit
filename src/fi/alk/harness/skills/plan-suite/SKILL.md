@@ -4,11 +4,19 @@ A scenario is one complete session with the agent under test: a person with a si
 they know, the data the world holds for them, and a settled outcome. This is how to decide what a
 suite covers before any of it is written.
 
-You own the suite end to end. You may write it yourself, or run writers in their own sessions to
-write parts of it in parallel, and you decide which. Either way the plan comes first.
+You own the suite end to end, and **your job is to plan it and hand it out, not to write it**. You
+find the cells, decide which are worth testing, deal them to writers with everything each one needs,
+and save once at the end. Writing scenarios yourself is the exception, not the default.
+
+There is a hard reason for that, and it is not style. Everything you do accumulates in your own
+context and is re-sent on every later turn, so your cost grows with the square of how long you work.
+A writer starts fresh, writes its slice, and ends. Ten writers cost ten short sessions; you writing
+the same ten slices costs one session that gets more expensive with every scenario. Measured on a
+hosted fifty-scenario suite written entirely by the main loop: the turn budget ran out at seventeen,
+a repair pass had to finish the rest, and the run cost twenty two dollars.
 
 Work in this order: find the cells, pick the ones worth testing, size them, decide who the people
-are, decide whether to hand the work out, then collect and save once at the end.
+are, hand the work out, then collect and save once at the end.
 
 ## 1. Find the cells
 
@@ -240,20 +248,21 @@ a writer genuinely needs a word the vocabulary lacks, that is a gap in your plan
 the list: it means a coordinate you dealt has no name, and the next suite's vocabulary should carry
 one.
 
-## 7. Decide whether to hand it out
+## 7. Hand it out
 
-You can write the suite yourself, or run writers to write parts of it in parallel. Judge it; nothing
-decides this for you.
+**Above about twenty scenarios, delegate. Do not write the suite yourself.** Your turn budget is
+roughly three per scenario and a scenario takes far more than that to explore, write and prove, so a
+suite you write alone runs out of budget long before it runs out of cells. That is not a risk, it is
+what happens: a fifty-scenario suite written by the main loop reached seventeen before the budget
+ended.
 
-Delegating buys parallelism and costs turns. Every writer has to be briefed, has to read the world
-for itself, and has to report back. Measured on two runs of the same ten-scenario suite: fifty four
-turns writing it alone against a hundred and nineteen delegated, for output that was identical
-scenario by scenario. At that size the overhead is the whole bill.
+Below about ten scenarios, write it yourself. Briefing a writer, having it read the world and having
+it report back costs real turns, and on a ten-scenario suite that overhead is the whole bill: fifty
+four turns writing it alone against a hundred and nineteen delegated, for output identical scenario
+by scenario. Between ten and twenty, judge it on how rich the cells are.
 
-It pays when the suite is large enough that one session runs out of turns before it runs out of
-cells, which starts somewhere around twenty scenarios and is certain by fifty. Wall clock then
-follows the slowest writer rather than the sum of all of them. Those numbers are evidence, not a
-rule: a suite of fifteen rich cells may be worth splitting and one of thirty shallow ones may not.
+When you delegate, delegate the writing entirely. Splitting a suite and then writing half of it
+yourself gives you the overhead of both.
 
 **At most twelve writers run at the same time.** Ask for more and the extra are refused until a slot
 frees, which wastes the turn that asked.
