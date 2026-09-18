@@ -12,6 +12,7 @@ scenario that clears all three is written out as its own folder of runnable file
 from __future__ import annotations
 
 import json
+import re
 import logging
 from pathlib import Path
 from typing import Any
@@ -27,7 +28,15 @@ from .catalogue import (
     validate_sub_goal,
 )
 from .contract import CALL_DIRECTIONS, AgentContract
-from .folder import INDEX, SCENARIOS, apply_setup, read_all, write_folder, write_index
+from .folder import (
+    INDEX,
+    SCENARIOS,
+    apply_setup,
+    check_problems,
+    read_all,
+    write_folder,
+    write_index,
+)
 from .prove import play_reference_step, prepared, prove
 from .scenario import (
     ANSWERED_BY,
@@ -36,6 +45,10 @@ from .scenario import (
     Scenario,
     Step,
     contract_sequence_problems,
+    coverage_report,
+    keyword_problems,
+    redteam_problems,
+    unpinned_callers,
     suite_diversity_problems,
     validate_scenario,
     voicemail_enabled,
@@ -82,23 +95,6 @@ def _ok(text: str) -> dict[str, Any]:
 
 def _err(text: str) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": text}], "is_error": True}
-
-
-# Below this, fanning out costs more than it saves: measured at ten scenarios, fifty four turns
-# without writers against a hundred and nineteen with, for output that was identical scenario by
-# scenario. Above it, one at a time runs out of turns long before the number is reached.
-FEWEST_WORTH_DELEGATING = 20
-
-
-def worth_delegating(wanted: int) -> bool:
-    """Whether a request of this size should be written by several writers at once.
-
-    Decided from the number asked for, which is the one fact that settles it, rather than from a
-    setting. An environment variable had to survive four separate allowlists between the platform
-    and the process that reads it, three of which silently dropped it, and it exposed as an
-    operator choice something no operator should have to make.
-    """
-    return int(wanted or 0) >= FEWEST_WORTH_DELEGATING
 
 
 def persona_field(name: str) -> dict[str, Any]:
@@ -216,6 +212,49 @@ def journalled(destination: Path) -> list[Scenario]:
     return list(found.values())
 
 
+# How much of a suite one value of a persona field may account for. Counting distinct values does
+# not catch a suite that is 28 United States and one each of two others: it has three locations and
+# has still tested one.
+#
+# A third, because a ceiling is read as a target. At half, a suite that had been 28 of 30 on one
+# location came back at exactly 15 of 30 and stopped there; the suite this replaces sits at 7 or 8.
+# The bound has to be nearer the even share than the extreme for the spread to come out even.
+MOST_OF_A_SUITE = 0.34
+# Below this a suite is too small for a share to mean anything.
+FEWEST_FOR_A_SHARE = 8
+
+
+def crowded_field(kept: list[Scenario], candidate: Any, wanted: int) -> str:
+    """Which persona field this scenario would push past its share of the suite, if any.
+
+    The plan deals these out across the writers, and a writer that ignores its share produces a
+    suite where everybody is the same person in different clothes. Measured: one suite put 28 of
+    30 callers in the United States and 22 of 30 on one accent, while passing a distinct-values
+    check because three values existed. Refused here rather than reported at the end, because here
+    it costs one turn and there it costs the suite.
+    """
+    if wanted < FEWEST_FOR_A_SHARE or candidate is None:
+        return ""
+    ceiling = max(2, int(wanted * MOST_OF_A_SUITE))
+    for field in ("location", "accent", "language"):
+        value = str(getattr(candidate, field, "") or "").strip().lower()
+        if not value:
+            continue
+        held = sum(
+            1
+            for one in kept
+            if one.persona
+            and str(getattr(one.persona, field, "") or "").strip().lower() == value
+        )
+        if held >= ceiling:
+            return (
+                f"{held} of the {len(kept)} scenarios written so far already use "
+                f"{field}={value!r}, and a suite of {wanted} may not put more than {ceiling} on "
+                f"one. Give this person a different {field}; the rest of the scenario can stay."
+            )
+    return ""
+
+
 def accept_scenario(
     payload: dict[str, Any],
     *,
@@ -226,12 +265,20 @@ def accept_scenario(
     hard_constraints: list[str] | None = None,
     allow_empty_solution: bool = False,
     persist: bool = True,
+    rename_on_collision: bool = False,
 ) -> dict[str, Any]:
     """Validate one scenario, then prove it. A plain function so both halves are testable.
 
     ``persist`` is off for a writer that shares the destination with siblings: writing the suite
     removes every folder not in the writer's own list, so persisting here would delete whatever
     the others have proved. Those writers keep their work in ``kept`` and the caller saves once.
+
+    ``rename_on_collision`` decides what a name already in ``kept`` means. For the session that
+    owns the suite it means a deliberate replacement, which is how a refused scenario gets fixed.
+    For a writer it cannot mean that: writers share one list and cannot see each other, so two of
+    them reaching for the same obvious name is a coincidence, and replacing silently destroys
+    proved work. Measured once: thirty-four scenarios cleared all three gates and twenty-one
+    survived to be saved.
     """
     try:
         scenario = Scenario.model_validate(payload)
@@ -278,7 +325,15 @@ def accept_scenario(
         return _err(said)
 
     replaced = any(one.name == scenario.name for one in kept)
-    kept[:] = [one for one in kept if one.name != scenario.name]
+    if replaced and rename_on_collision:
+        taken = {one.name for one in kept}
+        stem, suffix = scenario.name, 2
+        while f"{stem}-{suffix}" in taken:
+            suffix += 1
+        scenario = scenario.model_copy(update={"name": f"{stem}-{suffix}", "scenario_key": ""})
+        replaced = False
+    else:
+        kept[:] = [one for one in kept if one.name != scenario.name]
     kept.append(scenario)
     # A proved scenario is already valuable work. Persist it immediately so a stopped model,
     # browser refresh, process restart, or later scenario failure cannot make the UI say none
@@ -309,9 +364,18 @@ def accept_scenario(
         else "All three gates pass: the world is ready for it, the reference solution passes "
         "its checks, and those checks fail when nothing is done."
     )
+    # The whole list used to be echoed on every submit. On a hundred-scenario suite that is
+    # 207,000 characters of re-listing, quadratic in the count and re-read on every later turn.
+    # The tail is what a writer uses to keep its bearings; `inspect_scenario` has the rest.
+    recent = ", ".join(one.name for one in kept[-5:])
+    more = (
+        f" (and {len(kept) - 5} before them; inspect_scenario names them all if you have lost track)"
+        if len(kept) > 5
+        else ""
+    )
     return _ok(
         f"{scenario.name} {'replaced' if replaced else 'kept'}. {proof_summary}"
-        f"{unproved}\n{len(kept)} so far: " + ", ".join(one.name for one in kept)
+        f"{unproved}\n{len(kept)} so far, most recent: {recent}{more}"
     )
 
 
@@ -365,6 +429,65 @@ def not_ready(kept: list[Scenario], wanted: int, catalogue: Catalogue) -> list[s
     return problems
 
 
+def _rows_of(table: Any) -> list[Any]:
+    """A table as a list of rows, whichever way the store happens to key them."""
+    return list(table.values()) if isinstance(table, dict) else list(table or [])
+
+
+def _what_moved(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
+    """The rows the calls actually changed, and nothing else.
+
+    What a writer needs after running a reference solution is what its calls did, which is a small
+    set of rows. Re-printing every small table on every probe instead cost a real 100-scenario ride
+    suite most of its bill: the world has twelve tables, several under six rows, so each probe echoed
+    about 5KB of unchanged rows into a conversation that is re-read on every later turn. Measured at
+    206k tokens of context per turn against 28k for a one-table world.
+
+    Saying **nothing changed** is information the old dump could not express: a solution whose calls
+    leave the world untouched cannot be checked against world state, and the writer needs to know
+    that before it writes checks that can only ever pass.
+    """
+    lines: list[str] = []
+    for name in sorted(after):
+        was = {json.dumps(row, sort_keys=True, default=str) for row in _rows_of(before.get(name))}
+        now = [row for row in _rows_of(after.get(name))
+               if json.dumps(row, sort_keys=True, default=str) not in was]
+        if now:
+            lines.append(f"{name}: {len(now)} changed — " + brief(now, limit=900))
+    gone = [name for name in sorted(before)
+            if len(_rows_of(before.get(name))) > len(_rows_of(after.get(name)))]
+    for name in gone:
+        lines.append(
+            f"{name}: {len(_rows_of(before[name])) - len(_rows_of(after.get(name)))} row(s) removed"
+        )
+    return lines or ["nothing in the world changed, so no check can read these calls from state"]
+
+
+def _coverage_gaps(coverage: dict[str, Any]) -> str:
+    """The part of the coverage report worth saying out loud: what the plan promised and missed.
+
+    Silent unless a design was declared, because without one there is nothing to have missed.
+    """
+    lines = []
+    for axis, body in coverage.get("axes", {}).items():
+        unused = body.get("unused") or []
+        if unused:
+            lines.append(
+                f"{axis}: {body['planned'] - len(unused)} of {body['planned']} levels written, "
+                f"never used {', '.join(unused)}"
+            )
+    thin = [
+        f"{pair} {body['covered']}/{body['possible']}"
+        for pair, body in coverage.get("pairs", {}).items()
+        if body.get("possible") and body["share"] < 0.5
+    ]
+    if thin:
+        lines.append("under half the pairs: " + "; ".join(thin))
+    if not lines:
+        return ""
+    return "Against the plan you declared:\n  - " + "\n  - ".join(lines) + "\n"
+
+
 def scenario_tools(
     contract: AgentContract,
     world_root: Path,
@@ -373,6 +496,7 @@ def scenario_tools(
     wanted: int,
     can_save: bool = True,
     start_from: list[Scenario] | None = None,
+    rename_on_collision: bool | None = None,
 ) -> tuple[Any, list[Scenario]]:
     """A server for writing scenarios against one built environment.
 
@@ -383,7 +507,14 @@ def scenario_tools(
 
     ``start_from`` seeds that list. A parallel writer starts empty rather than from disk, so it
     is never counted as already having what a sibling wrote.
+
+    ``rename_on_collision`` defaults to whether this session is one of several writers, because a
+    name two blind writers both reached for is a coincidence. A session editing one named scenario
+    is the exception: it means to replace, so it passes False and keeps the name.
     """
+    rename_on_collision = (
+        (not can_save) if rename_on_collision is None else rename_on_collision
+    )
     kept: list[Scenario] = (
         list(start_from) if start_from is not None else load_scenarios(destination)
     )
@@ -491,6 +622,9 @@ def scenario_tools(
             if not applied.ok:
                 return _err(f"the setup did not run: {applied.said}")
             world.calls = []
+            # The world as the scenario's own setup left it, so what is reported below is what the
+            # calls did and not what the fixture already contained.
+            before = world.state()
             lines: list[str] = []
             for step in args.get("calls") or []:
                 if not isinstance(step, dict):
@@ -511,9 +645,7 @@ def scenario_tools(
                 "state afterwards: "
                 + ", ".join(f"{n}.count={len(r)}" for n, r in sorted(state.items()))
             )
-            for name, rows in sorted(state.items()):
-                if rows and len(rows) <= 6:
-                    lines.append(f"{name}: " + brief(rows, limit=1200))
+            lines.extend(_what_moved(before, state))
             return _ok("\n".join(lines) or "no calls were made")
         finally:
             world.close()
@@ -737,6 +869,14 @@ def scenario_tools(
                     "existing names wherever one fits, so results add up across the suite.",
                 },
                 "max_turns": {"type": "integer"},
+                "coverage": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                    "description": "Where this scenario sits on the axes the plan varied, one "
+                    "value per axis, for example {\"task\": \"book_ride\", \"overlay\": "
+                    "\"interruption\"}. Copy it from your brief. It is what lets the suite "
+                    "report how much of the space was tested; it never reaches the caller.",
+                },
             },
             scenario_required,
         ),
@@ -748,17 +888,26 @@ def scenario_tools(
                 "be replayed against a local world and would be assumed rather than proved. "
                 "Use solution: [] and judged sub-goals; the live call supplies the evidence."
             )
-        # A writer working one slice of a suite stops at the size it was given. Its turn budget is
-        # far larger than its slice, and left to itself it keeps writing: one run proved 559
-        # scenarios against a target of 200, spending three times the quota and three times the wall
-        # clock, and the surplus is trimmed at the end anyway. Replacing a scenario it already has
-        # stays allowed, because fixing a refused one is how a writer finishes its slice.
-        if not can_save and wanted:
+        # The suite stops at the size it was asked for. A turn budget is far larger than any one
+        # writer's share, and left to itself a session keeps writing: one run proved 559 scenarios
+        # against a target of 200, spending three times the quota and three times the wall clock,
+        # and the surplus is trimmed at the end anyway. This is the refusal that makes the number
+        # asked for the number produced, so it applies to the stage and to every worker alike.
+        # Replacing a scenario that already exists stays allowed, because fixing a refused one is
+        # how a writer finishes its part.
+        # Before the gates, because a spread refusal is cheap to correct and proving is not.
+        if wanted and target.get("people") != "alike":
+            crowded = crowded_field(
+                kept, Scenario.model_validate(args).persona, wanted
+            ) if args.get("persona") else ""
+            if crowded:
+                return _err(crowded)
+        if wanted:
             named = str(args.get("name") or "").strip()
             already = any(one.name == named for one in kept)
             if not already and len(kept) >= wanted:
                 return _err(
-                    f"This slice is complete: {len(kept)} of {wanted} written. Do not write another. "
+                    f"This is complete: {len(kept)} of {wanted} written. Do not write another. "
                     "Say what you covered and what you could not, and stop. Submitting again under "
                     "an existing name is the only submission left to you, for fixing one of yours."
                 )
@@ -771,6 +920,7 @@ def scenario_tools(
             hard_constraints=contract.hard_constraints,
             allow_empty_solution=tool_free_target,
             persist=can_save,
+            rename_on_collision=rename_on_collision,
         )
         if not result.get("is_error"):
             exploration["since_submit"] = 0
@@ -864,15 +1014,30 @@ def scenario_tools(
         "always needs this, because reopening one starts with the target set to what is already "
         "there.\n\n"
         "What it is not for is saving a suite nobody asked for. Writing extra and then raising "
-        "the target to match is how a request for four becomes thirteen that nobody reviews.",
-        schema({"count": int}, ["count"]),
+        "the target to match is how a request for four becomes thirteen that nobody reviews.\n\n"
+        "`people` says whether this suite is meant to cover different kinds of person. Leave it "
+        "alone unless the person asked otherwise: `varied` is the default and no single accent, "
+        "language or location may then dominate the suite. Set `alike` when they asked for one "
+        "kind of caller on purpose, and that bound comes off. Their request decides this, never "
+        "your own convenience: a writer that found the bound inconvenient and turned it off has "
+        "made a suite about one person.",
+        schema({"count": int, "people": {"type": "string", "enum": ["varied", "alike"]}}, ["count"]),
     )
     async def aim_for(args: dict[str, Any]) -> dict[str, Any]:
         count = int(args.get("count") or 0)
         if count < 1:
             return _err("that is not a number of scenarios worth writing")
         target["count"] = count
-        return _ok(f"aiming for {count}. {len(kept)} written so far")
+        said = f"aiming for {count}. {len(kept)} written so far"
+        people = str(args.get("people") or "").strip().lower()
+        if people in ("varied", "alike"):
+            target["people"] = people
+            said += (
+                ". Callers may now be alike; the spread bound is off"
+                if people == "alike"
+                else ". No accent, language or location may dominate the suite"
+            )
+        return _ok(said)
 
     @tool(
         "drop_scenario",
@@ -893,136 +1058,50 @@ def scenario_tools(
         return _ok(f"{name} dropped. {len(kept)} left")
 
     @tool(
-        "generate_suite",
-        "Write a whole suite at once by splitting it across the agent's use cases, one writer "
-        "per slice, several running at the same time, then reviewing what came back and "
-        "filling what it missed. Use this whenever somebody asks for a number of scenarios "
-        "rather than one in particular: writing twenty or fifty one at a time runs out of "
-        "turns long before it finishes.\n\n"
-        "Pass `slices` when you know how the suite should be divided, which you do once you "
-        "have looked at the world: give each use case a share in proportion to how much can "
-        "genuinely go wrong in it, and name the angle each slice should take. Without it the "
-        "work is divided evenly, which pads the thin use cases and under-covers the rich ones. "
-        "Everything produced clears the same three gates, and the suite is saved.",
-        schema(
-            {
-                "count": int,
-                "at_once": int,
-                "slices": {
-                    "type": ["array", "null"],
-                    "description": "How to divide the suite. One entry per writer.",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "use_case": {
-                                "type": "string",
-                                "description": "One of the agent's use cases, worded as the "
-                                "contract words it.",
-                            },
-                            "angle": {
-                                "type": "string",
-                                "description": "What this slice should look for: the ordinary "
-                                "path, the branch that cannot be completed, the rule under "
-                                "pressure, state that has to carry.",
-                            },
-                            "count": {
-                                "type": "integer",
-                                "description": "How many scenarios this slice is worth, in "
-                                "proportion to how much can genuinely go wrong in it.",
-                            },
-                            "why": {
-                                "type": "string",
-                                "description": "Why it earns that share.",
-                            },
-                        },
-                        "required": ["use_case", "count"],
-                    },
-                },
-            },
-            ["count"],
-        ),
-    )
-    async def generate_suite(args: dict[str, Any]) -> dict[str, Any]:
-        from .scenarios import MOST_AT_ONCE, MOST_IN_ONE_GO, write_in_parallel
-
-        asked = int(args.get("count") or 0)
-        if asked < 1:
-            return _err("say how many scenarios the suite should have")
-        cases = [one for one in contract.real_use_cases if one.strip()]
-        given = args.get("slices") or None
-        if not cases and not given:
-            return _err(
-                "this contract names no use cases, so there is nothing to split the work "
-                "across. Write them one at a time with submit_scenario, or fix the contract."
-            )
-
-        # Never write more than the suite still needs. A pass that comes back short is told how many
-        # are outstanding and to call again, and a model that calls again with the original number
-        # instead of the remainder gets a second full suite: measured at 377 kept against a target of
-        # 200, three times the quota for scenarios that are trimmed away again. The count on disk is
-        # the only honest measure of what is left, so it is read here rather than trusted from the
-        # argument.
-        if wanted:
-            # Counted from the folders, which are what a suite actually is.
-            #
-            # Counting the journal as well looked better, because a save prunes the directory before
-            # rewriting it and a pass asking during that window reads zero and writes a second suite.
-            # It was worse: a retried attempt starts with the folders gone and the journal intact, so
-            # the count said the suite was complete, this refused to write anything, and the attempt
-            # saved 14 of 200 and failed the platform's cardinality check. Overproduction wastes
-            # quota; refusing to produce loses the run, so this counts the conservative thing and the
-            # prune window stays a known cost.
-            asked = min(asked, max(0, wanted - len(load_scenarios(destination))))
-        if not asked:
-            return _ok(
-                f"The suite already holds the {wanted} it was asked for. Nothing more to write: "
-                "review what is there, replace any scenario you are unhappy with by name, and "
-                "call save_scenarios."
-            )
-        # A large ask is served a batch at a time. Spinning up a writer per scenario would put
-        # hundreds of model sessions on one machine, and the person waiting would see nothing
-        # for an hour. A batch they can read, and an offer of the rest, is the better trade.
-        count = min(asked, MOST_IN_ONE_GO)
-        at_once = max(1, min(int(args.get("at_once") or 0) or 4, MOST_AT_ONCE))
-
-        produced = await write_in_parallel(
-            contract,
-            out=destination,
-            wanted=count,
-            use_cases=cases,
-            slices=given,
-            at_once=at_once,
-        )
-        # The suite is already on disk. The open session's own list has to be brought level with
-        # it, or a later save_scenarios here would write out the stale list and delete every
-        # folder the fan-out just produced.
-        kept[:] = produced
-        target["count"] = len(produced)
-
-        by_case: dict[str, int] = {}
-        for one in produced:
-            name = one.use_case or "unassigned"
-            by_case[name] = by_case.get(name, 0) + 1
-        lines = "\n".join(f"  {n} x {case[:70]}" for case, n in sorted(by_case.items()))
-        said = (
-            f"{len(produced)} scenarios across {len(by_case)} use cases, {at_once} writers at a "
-            f"time. Each cleared all three gates and the suite is saved.\n{lines}"
-        )
-        if asked > count:
-            # Never ask here. A hosted run has nobody to answer and no ask tool, so asking ends the
-            # stage with fewer scenarios than were requested and no explanation of why.
-            said += (
-                f"\n\n{asked - count} of the {asked} asked for are still to write. Call "
-                f"generate_suite again now for the remaining {asked - count}, with slices for the "
-                "use cases still short. Do not stop at this batch and do not ask first."
-            )
-        return _ok(said)
-
-    @tool(
         "save_scenarios",
         "Write the kept scenarios out. Every one has already been proved by submit_scenario, so "
         "this always saves; anything else worth knowing comes back alongside.",
-        schema({}, []),
+        schema(
+            {
+                "design": {
+                    "type": "object",
+                    "description": (
+                        "What you planned to cover, so the coverage report can tell a gap from a "
+                        "cell that was never legal. Omit it and the report can only count the "
+                        "levels that happen to appear, which reads as full coverage however much "
+                        "was missed. Axis names are your own."
+                    ),
+                    "properties": {
+                        "axes": {
+                            "type": "object",
+                            "description": (
+                                "Every level you intended per axis, including ones no scenario "
+                                "reached. Example: "
+                                '{"task": ["book", "cancel"], "counterparty": ["first_time"]}'
+                            ),
+                            "additionalProperties": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                        },
+                        "masked": {
+                            "type": "array",
+                            "description": (
+                                "Pairs that are deliberately not testable, so they leave the "
+                                "denominator instead of counting as a gap. Each entry is two "
+                                'strings shaped "axis=level". Example: '
+                                '[["task=book", "counterparty=minor"]]'
+                            ),
+                            "items": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                        },
+                    },
+                }
+            },
+            [],
+        ),
     )
     async def save_scenarios(_args: dict[str, Any]) -> dict[str, Any]:
         # Always written. Each of these already cleared all three gates on its way in, so this is
@@ -1031,7 +1110,30 @@ def scenario_tools(
         # What is off about the suite is said, not enforced.
         noted = not_ready(kept, target["count"], catalogue)
         path = write_scenarios(kept, destination, catalogue)
-        diversity = suite_diversity_problems(kept)
+        # Read back after writing, because it is the check files on disk that get run, not the
+        # intention behind them. Advisory: a thin check is still a check and still saves.
+        #
+        # Every one of these is a remark about the suite, never a condition on keeping it, so none of
+        # them may cost a writer work that already cleared all three gates. One unreadable check file
+        # or one setup that will not replay is a reason to say less, not a reason to lose the save.
+        for remark in (
+            lambda: check_problems(destination),
+            lambda: grounding_problems(kept, world_root),
+            lambda: redteam_problems(kept),
+            lambda: unpinned_callers(kept, set(world_summary_tables(world_root))),
+        ):
+            try:
+                noted = noted + remark()
+            except Exception as unreadable:  # noqa: BLE001 - advisory only, never fatal
+                logger.warning("suite remark skipped: %s", unreadable)
+        diversity = suite_diversity_problems(kept) + keyword_problems(kept)
+        # How much of the space this suite covered, written beside it so the number and the
+        # scenarios it describes can never drift apart.
+        design = _args.get("design") if isinstance(_args.get("design"), dict) else None
+        coverage = coverage_report(kept, design)
+        (destination / "coverage.json").write_text(
+            json.dumps(coverage, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
         judged = sum(
             1
             for one in kept
@@ -1042,7 +1144,14 @@ def scenario_tools(
             f"Saved {len(kept)} scenarios. Each has its own folder under "
             f"{destination / 'scenarios'} holding scenario.json, setup.py, ready.py and one "
             f"runnable file per check; {path.name} indexes them.\n"
-            "Every one cleared all three gates: the world is ready for it, the reference "
+            f"Coverage: {coverage['placed']} of {coverage['scenarios']} placed on the axes, "
+            + ", ".join(
+                f"{axis} {body['levels']} levels (spread {body['spread']})"
+                for axis, body in coverage["axes"].items()
+            )
+            + ". Written to coverage.json.\n"
+            + _coverage_gaps(coverage)
+            + "Every one cleared all three gates: the world is ready for it, the reference "
             "solution passes its checks, and those checks fail when nothing is done.\n"
             f"{judged} sub-goal references are judged rather than settled by code."
         )
@@ -1054,10 +1163,9 @@ def scenario_tools(
         if diversity:
             return _err(
                 said
-                + "\n\nSaved as a checkpoint, but the suite is not ready to run because its "
-                "fixtures/personas are repetitive:\n  - "
+                + "\n\nSaved as a checkpoint, but the suite is not ready to run:\n  - "
                 + "\n  - ".join(diversity)
-                + "\nReplace the repeated scenarios, then save again."
+                + "\nFix these, then save again."
             )
         return _ok(said)
 
@@ -1077,15 +1185,10 @@ def scenario_tools(
             aim_for,
             drop_scenario,
         ]
-        # Only the session a person is talking to may fan out. A writer that is itself one slice
-        # of a fan-out calling this would split its own slice again, and so on.
-        + (
-            [generate_suite, save_scenarios]
-            if can_save and worth_delegating(wanted)
-            else [save_scenarios]
-            if can_save
-            else []
-        ),
+        # Saving rewrites the index and deletes any folder it does not know about, so only the
+        # session that owns the suite gets it. A worker is handed this same server with this one
+        # tool filtered out.
+        + ([save_scenarios] if can_save else []),
     )
     return server, kept
 
@@ -1106,16 +1209,17 @@ _ALWAYS = (
 )
 
 
-def tool_names(wanted: int = 0) -> tuple[str, ...]:
-    """The tools a saving session publishes, which depends on how large a suite it was asked for."""
-    if worth_delegating(wanted):
-        return (*_ALWAYS[:-1], "generate_suite", "save_scenarios")
+def tool_names() -> tuple[str, ...]:
+    """The tools a saving session publishes.
+
+    One list for every request now that fanning out is delegation rather than a tool: a worker
+    gets this same surface minus ``save_scenarios``, because the stage is what saves.
+    """
     return _ALWAYS
 
 
-# The whole surface, for anything that needs to name every tool this module can publish rather than
-# the subset one request gets. Which of them a session actually receives is decided per request.
-TOOL_NAMES = tool_names(FEWEST_WORTH_DELEGATING)
+# The whole surface, for anything that needs to name every tool this module can publish.
+TOOL_NAMES = tool_names()
 
 
 def world_summary(world_root: Path) -> str:
@@ -1141,3 +1245,68 @@ def world_summary(world_root: Path) -> str:
         return prefix + "\n".join(lines)
     finally:
         world.close()
+
+
+_CLAIMS_A_RECORD = re.compile(
+    r"(^|_)(otp|code|pin|token|phone|email|reference|ref|account|card|number|id)s?$",
+    re.IGNORECASE,
+)
+
+
+def _handed_to_the_caller(fixture: Any, key: str = "") -> list[tuple[str, str]]:
+    """Values the fixture gives the caller that name a record the world is supposed to already hold.
+
+    Only keys that clearly denote a credential or an identifier, and only values carrying a digit.
+    A pickup time or a passenger count is something the run creates, not something it looks up, and
+    flagging those would make this cry wolf the way an over-broad rule always does.
+    """
+    if isinstance(fixture, dict):
+        return [one for k, v in fixture.items() for one in _handed_to_the_caller(v, str(k))]
+    if isinstance(fixture, list):
+        return [one for v in fixture for one in _handed_to_the_caller(v, key)]
+    text = str(fixture).strip()
+    if not _CLAIMS_A_RECORD.search(key) or len(text) < 4 or not any(c.isdigit() for c in text):
+        return []
+    return [(key, text)]
+
+
+def grounding_problems(scenarios: list[Scenario], world_root: Path) -> list[str]:
+    """Scenarios that hand the caller a credential the world does not hold once setup has run.
+
+    Measured on a real 200-scenario ride suite: **17 of 17 scenarios naming a six-digit OTP used a
+    code that appears nowhere in `otp_codes`**, with a no-op `setup.py` and a `ready.py` that
+    returned None. `verify-otp-success-dana` told the caller 265512 while the world held 638204 for
+    that phone, so the caller could not possibly succeed.
+
+    The three admission gates all passed, because they ask whether a check *can* fail, not whether it
+    can fail for the reason the scenario is about. This asks the separate question: does the person
+    on the call have what the call needs.
+
+    Advisory. It reads the world after `setup`, so a scenario that seeds its own code is correct and
+    is left alone.
+    """
+    problems: list[str] = []
+    for scenario in scenarios:
+        claimed = _handed_to_the_caller(scenario.fixture)
+        if not claimed:
+            continue
+        try:
+            trial, _applied, _ready = prepared(scenario, world_root)
+            blob = json.dumps(trial.state(), default=str)
+        except Exception:
+            continue
+        missing = [f"{key}={value}" for key, value in claimed if value not in blob]
+        if missing:
+            problems.append(
+                f"{scenario.name}: the caller is handed {', '.join(missing)}, which the world does "
+                "not hold after setup runs, so the caller cannot succeed"
+            )
+    return problems
+
+
+def world_summary_tables(world_root: Path) -> list[str]:
+    """Just the table names of the saved world, for checks that need to know what it holds."""
+    try:
+        return sorted(restore(world_root).state())
+    except Exception:
+        return []

@@ -1811,3 +1811,288 @@ def test_restoring_claims_never_makes_a_coded_sub_goal_judged(tmp_path: Path) ->
     goal = restored.sub_goals[0]
     assert goal.judged == "", "a coded sub-goal must stay coded whatever the catalogue claims"
     assert goal.what == "the row is written", "the description is still restored"
+
+
+def test_the_index_carries_each_scenario_in_full(tmp_path: Path) -> None:
+    """The index is the only view of a suite anything outside the sandbox gets.
+
+    The platform reads ``scenarios.json`` straight into the stage output the Scenarios tab renders,
+    so a summary here is a summary on screen: the caller, the branch, the seeded data and the
+    known-good solution reached nobody, and a scenario carrying all of them showed as blanks.
+    """
+    from fi.alk.harness.folder import write_index
+    from fi.alk.harness.scenario import Persona, Scenario, Step
+
+    scenario = Scenario(
+        name="quote_for_a_young_adult",
+        use_case="quote a plan",
+        branch="applicant is 26",
+        tests="quotes the youth plan",
+        instruction="ask for a quote",
+        sub_goals=["plan_quoted"],
+        persona=Persona(name="Ada", age_group="25-32"),
+        fixture={"age": 26, "email": "ada@example.com"},
+        solution=[Step(tool="find_applicant"), Step(tool="quote_plan")],
+        max_turns=12,
+    )
+    write_index([scenario], tmp_path)
+
+    row = json.loads((tmp_path / "scenarios.json").read_text(encoding="utf-8"))[0]
+    assert row["persona"]["name"] == "Ada"
+    assert row["branch"] == "applicant is 26"
+    assert row["fixture"]["age"] == 26
+    assert [step["tool"] for step in row["solution"]] == ["find_applicant", "quote_plan"]
+    assert row["max_turns"] == 12
+    # Still an index over the folders, so what it is an index of stays on every row.
+    assert row["folder"] == "scenarios/quote_for_a_young_adult"
+    assert row["steps"] == 2
+    # The code lives in its own files and must not be duplicated here.
+    assert "setup_code" not in row
+    assert "ready_code" not in row
+
+
+def test_keyword_problems_catches_what_a_hundred_scenario_suite_did(tmp_path: Path) -> None:
+    """The three ways a keyword row stops being usable, measured on a real suite of 100.
+
+    143 distinct keywords, 108 of them on exactly one scenario, and `weather` on 91 of 100. Each is
+    a separate failure and each has to be named, because the fix for one is not the fix for another.
+    """
+    from fi.alk.harness.scenario import Persona, Scenario, keyword_problems
+
+    def suite(keywords_for) -> list[Scenario]:
+        return [
+            Scenario(
+                name=f"s{i}",
+                persona=Persona(name=f"P{i}", keywords=keywords_for(i)),
+            )
+            for i in range(20)
+        ]
+
+    # A term on every scenario filters nothing.
+    said = " ".join(keyword_problems(suite(lambda i: ["weather", f"x{i}"])))
+    assert "more than 40%" in said and "weather" in said
+
+    # A vocabulary of one term per scenario is not a vocabulary.
+    said = " ".join(keyword_problems(suite(lambda i: [f"only{i}", f"also{i}", f"third{i}"])))
+    assert "fewer than 3 scenarios" in said
+
+    # A scenario carrying every keyword it can think of.
+    said = " ".join(keyword_problems(suite(lambda i: [f"k{n}" for n in range(8)] if i == 0 else ["k0", "k1", "k2"])))
+    assert "more than 5 keywords" in said
+
+    # A suite that follows the plan has nothing to report. Note what the rules imply together: at
+    # two keywords each and a 40% ceiling, the vocabulary cannot be smaller than about six, which is
+    # why the skill asks for eight to sixteen.
+    vocabulary = [
+        "call_termination",
+        "disambiguation",
+        "weather_lookup",
+        "interruption",
+        "multi_intent",
+        "code_switching",
+    ]
+    assert keyword_problems(
+        suite(lambda i: [vocabulary[i % 6], vocabulary[(i + 2) % 6]])
+    ) == []
+
+
+def test_coverage_report_answers_how_much_of_the_space_was_tested(tmp_path: Path) -> None:
+    """Breadth and evenness are different questions, and a suite can pass one and fail the other."""
+    from fi.alk.harness.scenario import Scenario, coverage_report
+
+    def suite(coords) -> list[Scenario]:
+        return [
+            Scenario(name=f"s{i}", use_case="book a ride", coverage=c)
+            for i, c in enumerate(coords)
+        ]
+
+    even = coverage_report(
+        suite([{"task": t, "overlay": o} for t in ("book", "cancel") for o in ("none", "interrupt")])
+    )
+    assert even["scenarios"] == 4
+    assert even["placed"] == 4
+    assert even["axes"]["task"]["levels"] == 2
+    # Two levels used equally is perfectly even.
+    assert even["axes"]["task"]["spread"] == 1.0
+    # Both axes fully crossed, so every pair was seen.
+    assert even["pairs"]["overlay x task"]["covered"] == 4
+    assert even["pairs"]["overlay x task"]["share"] == 1.0
+
+    # Broad but lopsided: the same two levels, one of them swamping the other. Breadth is unchanged
+    # and only the spread reveals it, which is why both numbers are reported.
+    lopsided = coverage_report(
+        suite([{"task": "book"}] * 9 + [{"task": "cancel"}])
+    )
+    assert lopsided["axes"]["task"]["levels"] == 2
+    assert lopsided["axes"]["task"]["spread"] < 0.5
+
+    # A scenario written before the coordinate existed is counted, not dropped, and never invents a
+    # placement it does not have.
+    mixed = coverage_report(suite([{"task": "book"}, {}, {}]))
+    assert mixed["scenarios"] == 3 and mixed["placed"] == 1
+    # The use case is an axis whether or not the plan named one.
+    assert mixed["axes"]["use_case"]["levels"] == 1
+
+    # An empty suite answers rather than raising.
+    assert coverage_report([])["scenarios"] == 0
+
+
+def test_coverage_report_tells_a_gap_from_a_cell_that_was_never_legal(tmp_path: Path) -> None:
+    """Without the plan a narrow suite reports full coverage, which is the number QA would act on.
+
+    Measured on the four scenarios below: covering two tasks and two counterparties reads as 4 of 4
+    pairs, 100%. The plan dealt three of each and masked one combination, so the truth is 4 of 8.
+    """
+    from fi.alk.harness.scenario import Persona, Scenario, coverage_report
+
+    suite = [
+        Scenario(
+            name=f"s{i}",
+            persona=Persona(name=f"P{i}"),
+            coverage={"task": task, "counterparty": who},
+        )
+        for i, (task, who) in enumerate(
+            [("book", "first_time"), ("book", "regular"), ("cancel", "first_time"), ("cancel", "regular")]
+        )
+    ]
+
+    blind = coverage_report(suite)
+    assert blind["pairs"]["counterparty x task"]["share"] == 1.0
+
+    told = coverage_report(
+        suite,
+        {
+            "axes": {
+                "task": ["book", "cancel", "reschedule"],
+                "counterparty": ["first_time", "regular", "minor"],
+            },
+            "masked": [["task=book", "counterparty=minor"]],
+        },
+    )
+    pair = told["pairs"]["counterparty x task"]
+    assert (pair["covered"], pair["possible"], pair["masked"]) == (4, 8, 1)
+    assert told["axes"]["task"]["unused"] == ["reschedule"]
+    assert told["axes"]["counterparty"]["unused"] == ["minor"]
+
+
+def test_check_problems_names_the_check_that_only_proves_the_tool_was_reached(tmp_path: Path) -> None:
+    """The two shapes that cannot fail, and the shape that must not be flagged.
+
+    A real hundred-scenario suite shipped `lookup_weather_executed` and `weather_lookup_succeeded`
+    together on seventy scenarios, both reading one lookup_weather call. A second suite, written with
+    double quotes, asserts `caller_explicitly_confirmed is not True`; an earlier version of this
+    check understood only single quotes and called 19 of its 19 checks thin, which is worse than
+    saying nothing.
+    """
+    from fi.alk.harness.folder import check_problems
+
+    def write(scenario: str, name: str, body: str) -> None:
+        folder = tmp_path / "scenarios" / scenario / "checks"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / f"{name}.py").write_text(
+            f"def check(world, calls):\n{body}\n    return None\n", encoding="utf-8"
+        )
+
+    write("twice", "lookup_weather_executed",
+          "    lookups = [c for c in calls if c.name == 'lookup_weather' and c.ok]\n"
+          "    if not any('location' in c.arguments for c in lookups):\n"
+          "        return 'no location'")
+    write("twice", "weather_lookup_succeeded",
+          "    lookups = [c for c in calls if c.name == 'lookup_weather' and c.ok]\n"
+          "    if not any(len(c.arguments.get('location', '')) > 0 for c in lookups):\n"
+          "        return 'empty location'")
+    write("plumbing", "call_ended_on_request",
+          "    if not [c for c in calls if c.name == 'end_call']:\n"
+          "        return 'not ended'")
+    write("double_quoted", "subgoal_book_ride_confirmed",
+          '    book = next((c for c in calls if c.name == "book_ride" and c.ok), None)\n'
+          '    if book.arguments.get("caller_explicitly_confirmed") is not True:\n'
+          '        return "must be explicitly confirmed"')
+
+    said = " ".join(check_problems(tmp_path))
+    assert "twice: lookup_weather_executed, weather_lookup_succeeded" in said
+    assert "1 checks assert only that a tool was called" in said
+    # The double-quoted check reads its arguments, so it is neither plumbing nor a duplicate.
+    assert "double_quoted" not in said
+
+
+def test_fixture_credentials_are_only_flagged_when_they_name_a_record() -> None:
+    """What the caller is handed, separated from what the call is meant to create.
+
+    A real ride suite handed callers a six-digit OTP that appeared nowhere in `otp_codes`, on 17 of
+    17 scenarios. A pickup time and a passenger count look just as literal and must not be flagged,
+    because the run creates those rather than looking them up.
+    """
+    from fi.alk.harness.scenario_tools import _handed_to_the_caller
+
+    ungrounded = {
+        "origin": "seed",
+        "identity": {"rider_id": "rdr_dana", "phone": "+14155550101"},
+        "credentials": {"otp_code": "265512"},
+    }
+    assert sorted(_handed_to_the_caller(ungrounded)) == [
+        ("otp_code", "265512"),
+        ("phone", "+14155550101"),
+    ]
+
+    assert _handed_to_the_caller({"origin": "seed", "location": "New York"}) == []
+    assert _handed_to_the_caller({"pickup_time": "18:30", "passengers": 3}) == []
+    assert _handed_to_the_caller({"payment": {"card_number": "4242424242424242"}}) == [
+        ("card_number", "4242424242424242")
+    ]
+
+
+def test_unpinned_callers_calibrates_against_the_suite_it_is_given() -> None:
+    """Silent when the agent has no callers, specific when it does.
+
+    `book_ride_guest_payment_link` told its caller "you do not have an existing account on file for
+    this phone number", pinned no phone, and ran on a number the world gives to a rider called Dana.
+    The agent greeted the caller as Dana. A weather agent has no callers at all, and reporting all
+    100 of its scenarios would be noise, so the suite's own habit decides.
+    """
+    from fi.alk.harness.scenario import Persona, Scenario, unpinned_callers
+
+    def one(name: str, fixture: dict) -> Scenario:
+        return Scenario(name=name, persona=Persona(name=name), fixture=fixture)
+
+    # No scenario names a caller: the agent has no such concept, say nothing.
+    weatherish = [one(f"w{i}", {"location": "London"}) for i in range(4)]
+    assert unpinned_callers(weatherish) == []
+
+    # Every scenario names one: nothing is anomalous.
+    alike = [one(f"r{i}", {"phone": f"+1415555010{i}"}) for i in range(4)]
+    assert unpinned_callers(alike) == []
+
+    # One guest among riders is exactly what to report.
+    mixed = [one(f"r{i}", {"phone": f"+1415555010{i}"}) for i in range(3)]
+    mixed.append(one("book_ride_guest", {"caller_name": "Carlos"}))
+    said = " ".join(unpinned_callers(mixed))
+    assert "book_ride_guest" in said
+    assert "pin one that matches no row" in said
+    assert "r0" not in said
+
+
+def test_a_broken_suite_remark_costs_the_remark_and_not_the_save(tmp_path: Path) -> None:
+    """An unreadable check file must never lose a suite that already cleared all three gates.
+
+    The four suite remarks read files off disk and replay setup code. Any of them can meet something
+    it cannot parse. Losing proved work over a remark would be the worst possible trade, so the save
+    path swallows the failure and says less.
+    """
+    from fi.alk.harness.folder import check_problems
+
+    checks = tmp_path / "scenarios" / "unreadable" / "checks"
+    checks.mkdir(parents=True)
+    (checks / "broken.py").write_bytes(b"def check(world, calls):\n    return '\xff\xfe not utf-8'\n")
+
+    with pytest.raises(UnicodeDecodeError):
+        check_problems(tmp_path)
+
+    # The save path wraps each remark, so the same failure only costs the remark.
+    noted: list[str] = ["something already noted"]
+    for remark in (lambda: check_problems(tmp_path),):
+        try:
+            noted = noted + remark()
+        except Exception:
+            pass
+    assert noted == ["something already noted"]

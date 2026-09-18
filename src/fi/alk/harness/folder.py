@@ -22,6 +22,8 @@ something you can argue with.
 from __future__ import annotations
 
 import json
+import re
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -135,16 +137,25 @@ def folder_for(destination: Path, name: str) -> Path:
     return Path(destination) / SCENARIOS / name
 
 
+def document_for(scenario: Scenario) -> dict:
+    """One scenario as JSON: everything about it except the code, which lives in its own files.
+
+    The single answer to "what is this scenario", so the folder and the index cannot disagree about
+    it. Keeping a second copy of the code here would let the two drift and leave nobody able to say
+    which one ran.
+    """
+    body = scenario.model_dump()
+    body.pop("setup_code", None)
+    body.pop("ready_code", None)
+    return body
+
+
 def write_folder(scenario: Scenario, catalogue: Catalogue, destination: Path) -> Path:
     """Write one scenario out as its own folder of files."""
     root = folder_for(destination, scenario.name)
     (root / "checks").mkdir(parents=True, exist_ok=True)
 
-    body = scenario.model_dump()
-    # The code lives in its own files; keeping a second copy in the JSON would let the two drift
-    # and leave nobody able to say which one ran.
-    body.pop("setup_code", None)
-    body.pop("ready_code", None)
+    body = document_for(scenario)
     (root / "scenario.json").write_text(
         json.dumps(body, indent=2, ensure_ascii=False), encoding="utf-8"
     )
@@ -167,6 +178,14 @@ def write_folder(scenario: Scenario, catalogue: Catalogue, destination: Path) ->
         (root / "checks" / f"{name}.py").write_text(
             sub_goal.check.rstrip() + "\n" + _RUNNABLE, encoding="utf-8"
         )
+
+    # A rewrite can drop a sub-goal, and a check left behind from the previous shape reads like a
+    # check this scenario still makes. Keyed on sub_goals rather than on what this pass wrote: a
+    # catalogue that cannot supply a body is a reason to leave the file alone, not to delete it.
+    wanted = {f"{name}.py" for name in scenario.sub_goals}
+    for stale in (root / "checks").glob("*.py"):
+        if stale.name not in wanted:
+            stale.unlink()
     return root
 
 
@@ -184,10 +203,16 @@ def read_folder(destination: Path, name: str) -> Scenario | None:
 
 
 def write_index(scenarios: list[Scenario], destination: Path) -> Path:
-    """The whole suite at a glance, over the folders.
+    """The whole suite, over the folders.
 
     Regenerated from the folders rather than maintained alongside them, so it can never disagree
     with what is actually on disk.
+
+    It carries each scenario in full rather than a summary of it. This file is the only view of the
+    suite anything outside the sandbox gets: the platform reads it straight into the stage output
+    the Scenarios tab renders. A summary here meant the caller, the branch, the seeded data and the
+    known-good solution never reached the tab at all, and a scenario that had all of them showed as
+    a row of blanks.
     """
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
@@ -196,11 +221,7 @@ def write_index(scenarios: list[Scenario], destination: Path) -> Path:
         json.dumps(
             [
                 {
-                    "name": one.name,
-                    "use_case": one.use_case,
-                    "tests": one.tests,
-                    "instruction": one.instruction,
-                    "sub_goals": one.sub_goals,
+                    **document_for(one),
                     "steps": len(one.solution),
                     "folder": f"{SCENARIOS}/{one.name}",
                 }
@@ -232,3 +253,59 @@ def read_all(destination: Path) -> list[Scenario]:
         if scenario is not None:
             found.append(scenario)
     return found
+
+
+def _tools_selected(body: str) -> set[str]:
+    """Every tool name this check narrows the calls to, in either quoting style."""
+    return {
+        m.group(1) or m.group(2)
+        for m in re.finditer(r"""c\.name\s*==\s*(?:'([^']*)'|"([^"]*)")""", body)
+    }
+
+
+def check_problems(folder: Path) -> list[str]:
+    """Checks that cannot fail for the reason their scenario exists.
+
+    Two shapes, both read off the files that actually run rather than the intention behind them.
+
+    **Plumbing only.** A check that touches neither ``world`` nor the call's ``arguments`` asserts
+    that a tool was reached and nothing else, so every agent that reaches it passes and an agent that
+    did the right thing another way fails.
+
+    **The same tool twice.** Two checks on one scenario narrowing to the same tool, neither reading
+    ``world``, are two readings of one call. A real hundred-scenario suite shipped
+    `lookup_weather_executed` and `weather_lookup_succeeded` together on seventy scenarios: one
+    asserted a successful call carrying a location, the other a successful call carrying a non-empty
+    location, and neither said what the caller was told.
+
+    Deliberately narrow. An earlier version called any check without a literal comparison thin and
+    flagged 19 of 19 on a suite whose checks assert `caller_explicitly_confirmed is not True` and
+    `kind in ("pickup", "dropoff")`, because it only understood single quotes. A check that cries
+    wolf is worse than no check. Advisory either way.
+    """
+    problems: list[str] = []
+    plumbing = 0
+    for scenario_dir in sorted(one for one in (folder / SCENARIOS).glob("*") if one.is_dir()):
+        by_tool: dict[str, list[str]] = defaultdict(list)
+        for check in sorted(scenario_dir.glob("checks/*.py")):
+            body = check.read_text(encoding="utf-8").split("if __name__")[0]
+            inside = body.replace("def check(world, calls):", "")
+            reads_world = "world" in inside
+            reads_arguments = "arguments" in inside
+            if not reads_world and not reads_arguments:
+                plumbing += 1
+            if not reads_world:
+                for tool in _tools_selected(inside):
+                    by_tool[tool].append(check.stem)
+        for tool, names in sorted(by_tool.items()):
+            if len(names) > 1:
+                problems.append(
+                    f"{scenario_dir.name}: {', '.join(sorted(names))} all read the same {tool} call "
+                    "and none of them reads the world, so they are one claim written more than once"
+                )
+    if plumbing:
+        problems.append(
+            f"{plumbing} checks assert only that a tool was called, touching neither its arguments "
+            "nor the world. Every agent that reaches the tool passes them."
+        )
+    return problems

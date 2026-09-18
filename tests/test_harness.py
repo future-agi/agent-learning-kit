@@ -1933,14 +1933,18 @@ def test_every_stage_publishes_exactly_the_tools_it_claims(tmp_path):
     from fi.alk.harness import scenario_tools as scenarios
 
     root, contract = _saved_world(tmp_path)
-    # The scenario surface depends on how many were asked for: a request too small to be worth
-    # several writers is not offered the tool that runs them. So the agreement to hold is between
-    # a session and the surface claimed for its own request, not one fixed list.
-    for wanted in (1, scenarios.FEWEST_WORTH_DELEGATING):
+    # One surface whatever the size asked for: fanning out is delegation now, not a tool, so a
+    # small request and a large one publish the same list.
+    for wanted in (1, 20):
         server, _kept = scenarios.scenario_tools(contract, root, root, wanted=wanted)
-        assert _published(server) == sorted(scenarios.tool_names(wanted))
-    assert "generate_suite" not in scenarios.tool_names(1)
-    assert "generate_suite" in scenarios.tool_names(scenarios.FEWEST_WORTH_DELEGATING)
+        assert _published(server) == sorted(scenarios.tool_names())
+    # A worker is handed the same server with the one tool that rewrites the index withheld.
+    worker_side, _kept = scenarios.scenario_tools(
+        contract, root, root, wanted=20, can_save=False
+    )
+    assert _published(worker_side) == sorted(
+        name for name in scenarios.tool_names() if name != "save_scenarios"
+    )
 
     built, _world = world.world_tools(contract, root)
     assert _published(built) == sorted(world.TOOL_NAMES)
@@ -4959,6 +4963,76 @@ def test_a_kept_scenario_becomes_a_folder_of_files(tmp_path):
     assert again is not None
     assert again.setup_code.strip() == "def setup(world):\n    pass"
     assert again.solution == scenario.solution
+
+
+def test_a_rewrite_leaves_no_check_behind_for_a_sub_goal_it_dropped(tmp_path):
+    """A dropped sub-goal takes its check file with it. A check left on disk reads like a check the
+    scenario still makes, and an edit that narrows a scenario would quietly widen what it claims."""
+    from fi.alk.harness.folder import folder_for, write_folder
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    scenario = Scenario.model_validate(_delta())
+    write_folder(scenario, catalogue, root)
+    checks = folder_for(root, scenario.name) / "checks"
+    assert (checks / "item-added.py").exists()
+
+    write_folder(scenario.model_copy(update={"sub_goals": []}), catalogue, root)
+    assert not (checks / "item-added.py").exists()
+
+
+def test_a_word_a_contract_only_contains_inside_another_word_does_not_count(tmp_path):
+    """"age" sits inside "agent", and every contract says agent. Matching on substrings alone made
+    an age edit consequential everywhere, which costs a rewrite and a re-proof for nothing."""
+    from fi.alk.harness.amend_scenarios import bearing_on
+    from fi.alk.harness.contract import AgentContract
+
+    innocent = AgentContract(
+        one_liner="A kiosk ordering agent that can manage a package.",
+        real_use_cases=["add an item to the cart"],
+    )
+    assert bearing_on(innocent, ["age_group"]) == []
+
+    genuine = AgentContract(
+        one_liner="A life insurance agent.",
+        hard_constraints=["Applicants over 60 complete the senior questionnaire."],
+    )
+    assert bearing_on(genuine, ["age_group"]) == ["age_group"]
+
+
+def test_a_persona_value_the_scenario_seeded_is_consequential(tmp_path):
+    """The contract says what an agent reasons about. It cannot say what a scenario wrote into the
+    world, and a caller giving a different name than the seeded record is one the agent cannot
+    find. The fixture records what was seeded, so it is what settles this."""
+    from fi.alk.harness.amend_scenarios import seeded_among
+
+    scenario = Scenario.model_validate(
+        {
+            **_delta(),
+            "fixture": {"name": "Ada", "email": "ada@example.com"},
+            "persona": {"name": "Ada", "occupation": "Student", "accent": "Neutral"},
+        }
+    )
+    assert seeded_among(scenario, ["name", "occupation", "accent"]) == ["name"]
+
+    unseeded = scenario.model_copy(update={"fixture": {}})
+    assert seeded_among(unseeded, ["name", "occupation", "accent"]) == []
+
+
+def test_a_rewrite_keeps_checks_a_catalogue_cannot_rebuild(tmp_path):
+    """A rewrite that cannot look up a sub-goal's body must leave the check on disk. Amending a
+    scenario reaches this with an empty catalogue, and deleting there would strip the very files
+    that make the scenario gradeable."""
+    from fi.alk.harness.catalogue import Catalogue
+    from fi.alk.harness.folder import folder_for, write_folder
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    scenario = Scenario.model_validate(_delta())
+    write_folder(scenario, catalogue, root)
+    check = folder_for(root, scenario.name) / "checks" / "item-added.py"
+    assert check.exists()
+
+    write_folder(scenario, Catalogue(), root)
+    assert check.exists(), "an unrebuildable check was deleted rather than left alone"
 
 
 def test_a_check_file_runs_on_its_own_and_agrees_with_the_harness(tmp_path):

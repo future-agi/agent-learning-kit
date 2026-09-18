@@ -38,6 +38,23 @@ scenario about handing off tests the offer or the attempt, and the work that wou
 in a separate scenario. A sub-goal that only holds once somebody answers will fail on a correct
 handoff.
 
+## The channel, and which parts of it are real
+
+Five questions describe any channel. Answered for a phone call, with what this harness can actually
+make happen and what it cannot. **Only vary what is applied.** A scenario that claims a condition
+nothing produces is a test of nothing, and it reads as coverage.
+
+| Question | On a call | Can you vary it? |
+|---|---|---|
+| How clean is the input? | accent, non-native speech, disfluency | **yes**, through who the caller is |
+| What is the channel? | PSTN or WebRTC leg | no, the run decides |
+| How reliable is it? | latency, jitter, packet loss | **no.** Nothing exposes these. Do not write them |
+| What competes with the signal? | `background_noise` | **yes**, per scenario |
+| How is state exposed? | audio only, nothing is visible | fixed, and it is the point |
+
+So the two levers are who is calling and what is behind them. That is less than a phone network can
+do to a call, and writing the rest anyway would be inventing coverage.
+
 ## What this modality lets you vary
 
 `background_noise` is per scenario, not a suite setting. Choose it from the situation rather than
