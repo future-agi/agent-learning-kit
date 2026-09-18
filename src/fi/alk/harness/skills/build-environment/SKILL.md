@@ -184,6 +184,14 @@ So before `save_world`, reconcile the two directions:
 Adopting the agent's own store or loader usually gets this right for free, which is one more reason
 to prefer it. `create_schema` is where the risk lives, because then the column list is yours.
 
+**Every column the agent's schema marks NOT NULL has to be in your rows.** The runtime seed is that
+schema followed by inserts built from your rows, so a column you leave out is inserted as NULL and
+postgres refuses the whole seed. It refuses at the first bad row, and the only thing the failure
+report shows is a harmless notice from the `DROP TABLE` at the top, pointing at the wrong line. Go
+through each table you seed and check its rows carry every required column, including the dull ones:
+a fare estimate, a status, a created timestamp, the foreign keys. `save_world` refuses a world that
+leaves one out and names it, but finding out there costs you a repair pass.
+
 **A tool that checks a secret needs somewhere for that secret to live.** If the agent can send a
 code, verify a code, look up a reference or confirm a token, the world needs the table that holds
 it, and the tool has to read that table. Declaring the pair without the table leaves a tool that
