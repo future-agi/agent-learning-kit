@@ -189,7 +189,9 @@ class Conversation:
             self.stage, _ = scenario_stage.open_stage(
                 contract, out=self.out, wanted=wanted, ask=self.ask
             )
-            opening = scenario_stage.opening(contract, wanted, written)
+            opening = scenario_stage.opening(
+                contract, wanted, written, hands_out=wanted > scenario_stage.HANDS_OUT_ABOVE
+            )
         self._grant_flow()
         await self.stage.__aenter__()
         return opening

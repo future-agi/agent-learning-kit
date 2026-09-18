@@ -2281,3 +2281,17 @@ def test_suite_progress_names_overlays_that_assert_nothing() -> None:
     said = " ".join(redteam_problems(plain + [lazy, real]))
     assert "lazy" in said
     assert "real:" not in said
+
+
+def test_a_resumed_suite_that_is_handed_out_is_briefed_not_written() -> None:
+    """The loop has no submit_scenario above the hand-out size, so telling it to change one breaks."""
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.scenarios import opening
+
+    contract = AgentContract(agent="a")
+    big = opening(contract, 50, existing=50, hands_out=True)
+    small = opening(contract, 8, existing=8, hands_out=False)
+
+    assert "do not write scenarios yourself" in big and "scenario_writer" in big
+    assert "inspect_scenario" not in big
+    assert "inspect_scenario" in small

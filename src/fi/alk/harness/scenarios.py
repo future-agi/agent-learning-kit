@@ -71,6 +71,9 @@ WRITER_TOOLS = ("inspect_world", "try_calls", "add_sub_goal", "submit_scenario")
 # orchestrator holding the writing tools writes, which is what it did, and then pays for the
 # suite in its own context instead of in its writers'.
 WRITES_A_SCENARIO = ("try_calls", "submit_scenario")
+# The reviewer reads the suite whole, which is the one job that grows with the suite, so it gets
+# its own ceiling rather than the stage's: uncapped it can spend what the next round needs.
+REVIEWER_TURNS = int(os.environ.get("ALK_HARNESS_REVIEWER_TURNS", "90") or 90)
 
 
 def turns_for(wanted: int) -> int:
@@ -202,7 +205,7 @@ def reviewer_worker(
                     ],
                 )
             },
-            max_turns=budget,
+            max_turns=min(REVIEWER_TURNS, budget),
         )
     }
 
@@ -261,12 +264,13 @@ def open_stage(
             # The loop cannot ration what it cannot see. Without this it has no reason to believe
             # writing the suite alone will not fit, and it runs out mid-suite instead of delegating.
             + (
-                f"\n\nYou have {budget} turns for this whole stage, and every tool call spends one. "
-                f"Writing one scenario takes several: exploring the world, probing calls, submitting, "
-                f"and fixing what the gates refuse. Work out whether {wanted} of them fit in {budget} "
-                f"before you start writing, because running out mid-suite loses the turns you spent. "
-                f"A writer you brief reads the world in its own context, which is cheaper than "
-                f"carrying it in yours, but its turns come out of this same budget."
+                f"\n\nYou have {budget} turns for this whole stage and every tool call spends one, "
+                f"including the calls your writers make: a writer reads the world in its own "
+                f"context, which is far cheaper than carrying it in yours, but its turns come out "
+                f"of this same budget. A writer may spend up to {WRITER_TURNS} and the reviewer up "
+                f"to {REVIEWER_TURNS}, so across all rounds together brief at most "
+                f"{max((budget - REVIEWER_TURNS) // WRITER_TURNS, 1)} writers and keep turns back "
+                f"for yourself. Running out mid-suite loses everything the spent turns bought."
             )
             + (
                 f"\n\nWrite {wanted} scenarios."
@@ -315,6 +319,14 @@ def opening(
             "suite_progress to see what is still empty; brief the next round from that. When the "
             "count is met run suite_reviewer, brief a round for whatever it names, then "
             "save_scenarios."
+        )
+    if existing and hands_out:
+        return (
+            f"There are already {existing} scenarios for {contract.agent!r}, and they are "
+            "loaded. You are the orchestrator and do not write scenarios yourself. Call "
+            "suite_progress to see where the suite stands, then brief scenario_writer with the "
+            "cells to change or add and what each must cover. A scenario submitted under an "
+            "existing name replaces it, so say plainly which names a writer may reuse."
         )
     if existing:
         return (
