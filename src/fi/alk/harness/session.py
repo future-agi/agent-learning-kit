@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Callable
 
@@ -207,6 +208,12 @@ class Stage:
         self.name = name
         self.session_id: str | None = None
         self.history: list[Turn] = []
+        # Which tools this stage spent its turns on, and which of those calls came back refused.
+        # A stage that runs long is answering one of two different questions, and only the split
+        # says which: too many probes, or the same work submitted again after a gate said no.
+        self.tool_calls: Counter[str] = Counter()
+        self.tool_refusals: Counter[str] = Counter()
+        self._awaiting: dict[str, str] = {}
         # What actually got billed, read back rather than assumed. Asking for a model is not the
         # same as getting one: a request that quietly does not take shows up only on the
         # invoice, weeks later, as a number nobody can explain.
@@ -290,6 +297,8 @@ class Stage:
                     events.append(Event(TEXT, text=part.text))
                 elif isinstance(part, Call):
                     turn.tools_used.append(part.name)
+                    self.tool_calls[part.name] += 1
+                    self._awaiting[part.id] = part.name
                     events.append(
                         Event(
                             TOOL,
@@ -303,6 +312,9 @@ class Stage:
                     )
             return events
         if isinstance(received, ToolReturned):
+            refused_tool = self._awaiting.pop(received.id, "")
+            if received.is_error and refused_tool:
+                self.tool_refusals[refused_tool] += 1
             # What a tool said back is the only view a caller has of whether the work is
             # going well. Dropping it leaves a run that can only be diagnosed by guessing.
             events = [
@@ -335,6 +347,8 @@ class Stage:
                 received.tokens_in,
                 received.tokens_out,
                 received.tokens_cached,
+                dict(self.tool_calls),
+                dict(self.tool_refusals),
             )
             turn.error = _why_it_failed(received) if failed else ""
             self.session_id = received.session_id or self.session_id

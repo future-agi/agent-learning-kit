@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import random
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -57,6 +58,10 @@ TURNS_EACH_HANDED_OUT = 9
 HANDS_OUT_ABOVE = 20
 # Enough to write a handful without the budget being the thing that stops it.
 TURNS_FLOOR = 120
+# One writer's own ceiling. A worker is a smaller agent with a smaller goal: it reads the world
+# once, writes its slice, and reports. Given the stage's budget instead it can spend the suite's
+# turns on its own part, and nothing is left for the rest.
+WRITER_TURNS = int(os.environ.get("ALK_HARNESS_WRITER_TURNS", "110") or 110)
 
 
 def turns_for(wanted: int) -> int:
@@ -92,9 +97,10 @@ def writer_worker(
     briefing loop's own instrument: a writer that reads it starts deciding what the suite needs
     instead of writing what it was given.
 
-    ``budget`` is the stage's own, not a share of it. A worker never needs the whole suite's
-    turns, but a ceiling set too low truncates its part silently and ``save_scenarios`` then
-    refuses the whole suite on the count.
+    ``budget`` is the stage's, and a writer is capped well below it. Every call a writer makes
+    is spent from the same budget as the loop that briefed it, so an uncapped writer can spend
+    the suite's turns on one slice. A writer that runs out says so and the loop hands the rest
+    of its brief to the next round.
     """
     return {
         WRITER: WorkerSpec(
@@ -131,7 +137,7 @@ def writer_worker(
                     ],
                 )
             },
-            max_turns=budget,
+            max_turns=min(WRITER_TURNS, budget),
             # Empty inherits the parent's model. A writer is briefed rather than deciding, so a
             # cheaper model may do this work; whether it does is a measurement, not an assumption,
             # because a weaker writer that fails the gates more often spends the saving on retries.

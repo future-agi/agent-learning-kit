@@ -315,6 +315,41 @@ def _pruned_history(callback_context: Any, llm_request: Any) -> None:
     _forget_old_reads(llm_request.contents or [])
 
 
+def _stopped(said: str) -> Any:
+    """A final model reply, which is how a callback ends a run without raising."""
+    from google.adk.models.llm_response import LlmResponse
+    from google.genai import types
+
+    return LlmResponse(
+        content=types.Content(role="model", parts=[types.Part(text=said)])
+    )
+
+
+# When a stage's prompt passes this many tokens, everything but the newest events is replaced by a
+# model written summary. Both halves are one setting: ADK refuses a threshold without a retention.
+COMPACT_ABOVE_TOKENS = int(os.environ.get("ALK_HARNESS_COMPACT_ABOVE", "100000") or 0)
+EVENTS_KEPT_RAW = int(os.environ.get("ALK_HARNESS_EVENTS_KEPT_RAW", "20") or 0)
+
+
+def _compaction() -> Any:
+    """Auto-compaction for a stage that runs for hundreds of turns, or None when it is switched off.
+
+    Forgetting re-readable results costs nothing but can only drop what a later call can fetch
+    again. A summary is the backstop for everything else, and ADK runs it before each model call
+    rather than only between user turns, which is what makes it reach a long authoring stage.
+    """
+    if COMPACT_ABOVE_TOKENS <= 0 or EVENTS_KEPT_RAW <= 0:
+        return None
+    try:
+        from google.adk.apps._configs import EventsCompactionConfig
+    except ImportError:
+        logger.warning("this ADK has no event compaction; long stages will carry their whole history")
+        return None
+    return EventsCompactionConfig(
+        token_threshold=COMPACT_ABOVE_TOKENS, event_retention_size=EVENTS_KEPT_RAW
+    )
+
+
 def _spec_tool(name: str, spec: ToolSpec) -> Any:
     """A ToolSpec as an ADK tool, through ADK's own extension point.
 
@@ -350,6 +385,9 @@ class VertexGeminiSession:
         self._model = model
         self._runner: Any = None
         self._pending: str | None = None
+        # Calls each worker run has taken, keyed by the scope ADK gives that run. A worker is a
+        # smaller agent with a smaller goal; without this its only ceiling is the whole stage's.
+        self._worker_calls: dict[str, int] = {}
         self.session_id = f"gemini-{uuid.uuid4().hex[:12]}"
 
     def _tools(
@@ -389,6 +427,27 @@ class VertexGeminiSession:
         from google.adk.agents import LlmAgent
         from google.genai import types
 
+        def capped(ceiling: int) -> Any:
+            def before(callback_context: Any, llm_request: Any) -> Any:
+                _forget_old_reads(llm_request.contents or [])
+                if ceiling <= 0:
+                    return None
+                run = (
+                    getattr(callback_context, "isolation_scope", None)
+                    or getattr(callback_context, "branch", None)
+                    or ""
+                )
+                self._worker_calls[run] = self._worker_calls.get(run, 0) + 1
+                if self._worker_calls[run] <= ceiling:
+                    return None
+                return _stopped(
+                    f"I have used all {ceiling} of my turns. Everything I submitted is already "
+                    "in the suite. Report what is missing to whoever briefed me so it can be "
+                    "handed to another writer."
+                )
+
+            return before
+
         built: list[Any] = []
         for name, worker in self._spec.workers.items():
             built.append(
@@ -404,13 +463,14 @@ class VertexGeminiSession:
                         worker.builtins or self._spec.builtins,
                         worker.servers or self._spec.servers,
                     ),
-                    before_model_callback=_pruned_history,
+                    before_model_callback=capped(worker.max_turns),
                 )
             )
         return built
 
     async def start(self) -> None:
         from google.adk.agents import LlmAgent
+        from google.adk.apps import App
         from google.adk.runners import Runner
         from google.adk.sessions import InMemorySessionService
         from google.genai import types
@@ -437,8 +497,16 @@ class VertexGeminiSession:
         await sessions.create_session(
             app_name="alk-harness", user_id="stage", session_id=self.session_id
         )
+        # An App rather than a bare agent, because the compaction config hangs off the App and
+        # nothing else turns it on. Its request processor runs before every model call, so a long
+        # authoring stage compacts mid-flight rather than only between user turns.
         self._runner = Runner(
-            agent=agent, app_name="alk-harness", session_service=sessions
+            app=App(
+                name="alk-harness",
+                root_agent=agent,
+                events_compaction_config=_compaction(),
+            ),
+            session_service=sessions,
         )
 
     async def stop(self) -> None:

@@ -109,3 +109,17 @@ def test_forgetting_leaves_the_session_event_alone() -> None:
     _forget_old_reads(request)
     assert _said(request[0]).startswith("[dropped")
     assert all(_said(one) == "x" * 10_000 for one in session)
+
+
+def test_compaction_is_configured_and_can_be_switched_off(monkeypatch) -> None:
+    """ADK only compacts when an App carries the config; a bare agent runs unbounded."""
+    from fi.alk.harness.backends import vertex_gemini
+
+    monkeypatch.setattr(vertex_gemini, "COMPACT_ABOVE_TOKENS", 90_000)
+    monkeypatch.setattr(vertex_gemini, "EVENTS_KEPT_RAW", 12)
+    config = vertex_gemini._compaction()
+    assert config.token_threshold == 90_000
+    assert config.event_retention_size == 12
+
+    monkeypatch.setattr(vertex_gemini, "COMPACT_ABOVE_TOKENS", 0)
+    assert vertex_gemini._compaction() is None

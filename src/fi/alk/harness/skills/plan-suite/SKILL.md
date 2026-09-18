@@ -265,9 +265,13 @@ yourself gives you the overhead of both.
 
 **Work in rounds, not in one fan-out.** A round is:
 
-1. Pick the cells that are still empty and group them into slices of four to eight scenarios.
-2. Brief one writer per slice, up to twelve in the same turn. More than twelve are refused until a
-   slot frees, which wastes the turn that asked.
+1. Pick the cells that are still empty and group them into slices of **about fifteen to twenty
+   scenarios**. A writer reads the world once and then writes its whole slice, so that reading is
+   paid once per writer: slices of three or four spend most of their turns re-reading what the
+   last writer already read.
+2. Brief one writer per slice. Three to five in the first round is the useful size; twelve is the
+   ceiling and more than that are refused until a slot frees, which wastes the turn that asked.
+   Writers briefed in the same turn run at the same time.
 3. Each writer submits its scenarios itself and comes back with a report saying what it wrote and
    what it could not.
 4. Call `suite_progress`. It names what is still empty without returning a single scenario body, so
@@ -279,6 +283,11 @@ Rounds are what make a large suite finish. A writer that misreads its brief is c
 round rather than at the end; the suite stays inside a budget you can watch; and the same loop that
 writes fifty in one or two rounds writes a thousand in fourteen without changing shape. Track rounds
 rather than scenarios: the suite size only decides how many rounds there are.
+
+**A writer has about a hundred turns of its own.** That is enough to read the world, write fifteen
+to twenty scenarios and report. One that runs out says so and stops; whatever it did not reach is
+still empty, `suite_progress` will show it, and the next round hands it to a fresh writer. So a
+writer that misjudges its slice costs one round, never the suite.
 
 Do not brief the next round before the current one reports. You would be guessing at what is still
 empty, and two writers would cover the same cell.
@@ -299,10 +308,10 @@ language without also narrowing its names makes collisions worse, not better: tw
 non-native callers both reached for the same name. Three letters each, no letter to two writers, and
 no two people in the suite share a name.
 
-Prefer more small slices to a few large ones. Each writer then stays inside its turn budget, and one
-that fails costs its own slice rather than a third of the suite. Two signs the sizing is wrong: every
-slice holds one scenario, which means you listed scenarios instead of grouping them; or every slice
-holds the same number, which means you padded to reach a target.
+Two signs the sizing is wrong: every slice holds one or two scenarios, which means you listed
+scenarios instead of grouping them and every writer will re-read the world for almost nothing; or
+every slice holds exactly the same number, which means you padded to reach a target rather than
+grouping cells that belong together.
 
 ## 9. Close it out
 
