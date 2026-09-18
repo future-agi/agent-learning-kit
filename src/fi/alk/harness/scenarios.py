@@ -24,7 +24,13 @@ from .backends import (
     ToolServer,
     WorkerSpec,
 )
-from .config import artifact_dir, chosen_model, discovered_skills, load_skill
+from .config import (
+    artifact_dir,
+    chosen_model,
+    discovered_skills,
+    load_skill,
+    writer_model,
+)
 from .contract import AgentContract
 from .scenario import Scenario, voicemail_enabled
 from .scenario_tools import (
@@ -115,6 +121,10 @@ def writer_worker(
                 )
             },
             max_turns=budget,
+            # Empty inherits the parent's model. A writer is briefed rather than deciding, so a
+            # cheaper model may do this work; whether it does is a measurement, not an assumption,
+            # because a weaker writer that fails the gates more often spends the saving on retries.
+            model=writer_model(),
         )
     }
 
