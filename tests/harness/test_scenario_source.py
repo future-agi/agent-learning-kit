@@ -2363,3 +2363,27 @@ def test_a_reviewer_can_learn_the_names_it_needs_and_the_loop_is_not_charged_for
 
     plain, named = asyncio.run(said({})), asyncio.run(said({"names": True}))
     assert len(named) >= len(plain)
+
+
+def test_a_world_is_refused_when_it_invents_tables_the_agent_schema_lacks(tmp_path) -> None:
+    """The runtime seed is the agent's schema plus these rows, so an invented table has nothing
+    to land in and the seed fails later with only a NOTICE to show for it."""
+    from fi.alk.harness.world.tools import _tables_the_source_lacks
+
+    (tmp_path / "db").mkdir()
+    (tmp_path / "db" / "schema.sql").write_text(
+        'DROP TABLE IF EXISTS users, products CASCADE;\n'
+        "CREATE TABLE users (rider_id TEXT PRIMARY KEY);\n"
+        'CREATE TABLE IF NOT EXISTS "products" (id TEXT PRIMARY KEY);\n',
+        encoding="utf-8",
+    )
+    adopted = {"users": [], "products": [], "sqlite_sequence": []}
+    invented = {"users": [], "fare_products": [], "riders": []}
+
+    assert _tables_the_source_lacks(adopted, str(tmp_path), None) == []
+    assert _tables_the_source_lacks(invented, str(tmp_path), None) == [
+        "fare_products",
+        "riders",
+    ]
+    # A generated world has no source schema to answer to, so nothing is checked.
+    assert _tables_the_source_lacks(invented, "", None) == []

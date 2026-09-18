@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -349,6 +350,46 @@ def _ok(text: str) -> dict[str, Any]:
 
 def _err(text: str) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": text}], "is_error": True}
+
+
+def _tables_the_source_lacks(state: dict, source_root: str, contract: Any) -> list[str]:
+    """World tables the agent's own schema never declares.
+
+    The runtime seed is that schema followed by rows generated from this world, so a table the
+    schema does not declare is one whose inserts cannot match it. The seed then fails at run time
+    with only a NOTICE in the report, which points at the wrong line and reads like a missing
+    table. Cheaper to refuse here, where the names can still be changed.
+    """
+    if not source_root:
+        return []
+    from pathlib import Path as _Path
+
+    from ..bundle_author_v2 import _source_schema_paths
+
+    try:
+        paths = _source_schema_paths(
+            _Path(source_root),
+            contract=contract.model_dump() if hasattr(contract, "model_dump") else None,
+        )
+    except Exception:
+        return []
+    if not paths:
+        return []
+    declared = set()
+    for path in paths:
+        declared |= {
+            name.lower()
+            for name in re.findall(
+                r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"?([A-Za-z_]\w*)"?',
+                path.read_text(encoding="utf-8"),
+                re.IGNORECASE,
+            )
+        }
+    return sorted(
+        name
+        for name in state
+        if name.lower() not in declared and not name.lower().startswith("sqlite_")
+    )
 
 
 def world_tools(
@@ -1301,6 +1342,15 @@ def world_tools(
         schema({"notes": str}, []),
     )
     async def save_world(args: dict[str, Any]) -> dict[str, Any]:
+        strayed = _tables_the_source_lacks(world.state(), source_root, contract)
+        if strayed:
+            return _err(
+                "Not saved. This world holds tables the agent's own schema does not declare: "
+                + ", ".join(strayed)
+                + ". The runtime seed is that schema followed by rows from this world, so those "
+                "rows have nothing to land in and the seed fails once the environment is stood "
+                "up. Adopt the agent's own table names, or drop these tables."
+            )
         data_free = (
             (is_data_free_conversation(contract) or external_runtime)
             and not world.state()
