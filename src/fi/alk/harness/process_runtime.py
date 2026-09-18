@@ -2654,13 +2654,21 @@ def apply_seed_file(
             domain=FailureDomain.ENVIRONMENT,
         )
     if result.returncode != 0:
-        # The tail, not the head: psql prints its NOTICEs before the ERROR that stopped it, so
-        # keeping the first lines reports "table does not exist, skipping" and hides the cause.
-        stderr = (result.stderr or "").strip()[-2000:]
+        # Both streams, tail first. psql prints its NOTICEs to stderr before the ERROR that stopped
+        # it, and where the script echoes statements the ERROR itself lands on stdout, so reporting
+        # the head of stderr alone says "table does not exist, skipping" and never says why.
+        said = "\n".join(
+            part
+            for part in (
+                (result.stderr or "").strip()[-1500:],
+                (result.stdout or "").strip()[-1500:],
+            )
+            if part
+        )
         raise ProcessRuntimeError(
             "seed",
             "seed_failed",
-            f"{file}: exited {result.returncode}" + (f": {stderr}" if stderr else ""),
+            f"{file}: exited {result.returncode}" + (f": {said}" if said else ""),
             process=process_name,
             domain=FailureDomain.ENVIRONMENT,
         )

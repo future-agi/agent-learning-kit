@@ -2365,7 +2365,7 @@ def test_a_reviewer_can_learn_the_names_it_needs_and_the_loop_is_not_charged_for
     assert len(named) >= len(plain)
 
 
-def test_a_world_is_refused_when_it_invents_tables_the_agent_schema_lacks(tmp_path) -> None:
+def test_a_world_is_refused_when_it_invents_tables_or_columns(tmp_path) -> None:
     """The runtime seed is the agent's schema plus these rows, so an invented table has nothing
     to land in and the seed fails later with only a NOTICE to show for it."""
     from fi.alk.harness.world.tools import _tables_the_source_lacks
@@ -2377,13 +2377,22 @@ def test_a_world_is_refused_when_it_invents_tables_the_agent_schema_lacks(tmp_pa
         'CREATE TABLE IF NOT EXISTS "products" (id TEXT PRIMARY KEY);\n',
         encoding="utf-8",
     )
-    adopted = {"users": [], "products": [], "sqlite_sequence": []}
-    invented = {"users": [], "fare_products": [], "riders": []}
+    adopted = {
+        "users": [{"rider_id": "u1"}],
+        "products": [{"id": "p1"}],
+        "sqlite_sequence": [{"anything": 1}],
+    }
+    invented_table = {"users": [{"rider_id": "u1"}], "fare_products": [{"id": "f1"}]}
+    # Matching the table name is not enough: the seed inserts the keys the rows carry, so a
+    # column the schema never declares fails the insert rather than the create.
+    invented_column = {"users": [{"rider_id": "u1", "created_at": "2026-01-01"}]}
 
     assert _tables_the_source_lacks(adopted, str(tmp_path), None) == []
-    assert _tables_the_source_lacks(invented, str(tmp_path), None) == [
-        "fare_products",
-        "riders",
+    assert _tables_the_source_lacks(invented_table, str(tmp_path), None) == [
+        "fare_products (the whole table)"
+    ]
+    assert _tables_the_source_lacks(invented_column, str(tmp_path), None) == [
+        "users.{created_at}"
     ]
     # A generated world has no source schema to answer to, so nothing is checked.
-    assert _tables_the_source_lacks(invented, "", None) == []
+    assert _tables_the_source_lacks(invented_table, "", None) == []

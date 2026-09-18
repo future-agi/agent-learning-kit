@@ -352,8 +352,11 @@ def _err(text: str) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": text}], "is_error": True}
 
 
+_NOT_A_COLUMN = {"CONSTRAINT", "PRIMARY", "FOREIGN", "UNIQUE", "CHECK", "EXCLUDE", ")"}
+
+
 def _tables_the_source_lacks(state: dict, source_root: str, contract: Any) -> list[str]:
-    """World tables the agent's own schema never declares.
+    """Tables and columns the agent's own schema never declares.
 
     The runtime seed is that schema followed by rows generated from this world, so a table the
     schema does not declare is one whose inserts cannot match it. The seed then fails at run time
@@ -375,21 +378,44 @@ def _tables_the_source_lacks(state: dict, source_root: str, contract: Any) -> li
         return []
     if not paths:
         return []
-    declared = set()
+    declared: dict[str, set[str]] = {}
     for path in paths:
-        declared |= {
-            name.lower()
-            for name in re.findall(
-                r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"?([A-Za-z_]\w*)"?',
-                path.read_text(encoding="utf-8"),
-                re.IGNORECASE,
-            )
-        }
-    return sorted(
-        name
-        for name in state
-        if name.lower() not in declared and not name.lower().startswith("sqlite_")
-    )
+        sql = path.read_text(encoding="utf-8")
+        for found in re.finditer(
+            r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"?([A-Za-z_]\w*)"?\s*\(',
+            sql,
+            re.IGNORECASE,
+        ):
+            # Count parentheses rather than matching to the first close: a column is routinely
+            # `VARCHAR(20)` or `CHECK (status IN ('a','b'))`, and either ends the match early.
+            depth, at = 1, found.end()
+            while at < len(sql) and depth:
+                depth += (sql[at] == "(") - (sql[at] == ")")
+                at += 1
+            columns = set()
+            for part in re.split(r",(?![^()]*\))", sql[found.end() : at - 1]):
+                word = part.strip().split(" ")[0].strip('"').strip()
+                if word and word.upper() not in _NOT_A_COLUMN and not word.startswith("--"):
+                    columns.add(word.lower())
+            declared.setdefault(found.group(1).lower(), set()).update(columns)
+
+    problems: list[str] = []
+    for name, rows in state.items():
+        if name.lower().startswith("sqlite_"):
+            continue
+        if name.lower() not in declared:
+            problems.append(f"{name} (the whole table)")
+            continue
+        # The seed inserts exactly the keys these rows carry, so those are the columns that have
+        # to exist. A column the schema never declares fails the insert, not the create.
+        used: set[str] = set()
+        for row in rows if isinstance(rows, list) else list(rows.values()):
+            if isinstance(row, dict):
+                used |= {str(key).lower() for key in row}
+        invented = sorted(used - declared[name.lower()])
+        if invented:
+            problems.append(f"{name}.{{{', '.join(invented)}}}")
+    return problems
 
 
 def world_tools(
@@ -1345,11 +1371,11 @@ def world_tools(
         strayed = _tables_the_source_lacks(world.state(), source_root, contract)
         if strayed:
             return _err(
-                "Not saved. This world holds tables the agent's own schema does not declare: "
-                + ", ".join(strayed)
-                + ". The runtime seed is that schema followed by rows from this world, so those "
-                "rows have nothing to land in and the seed fails once the environment is stood "
-                "up. Adopt the agent's own table names, or drop these tables."
+                "Not saved. This world holds tables and columns the agent's own schema does not "
+                "declare: " + ", ".join(strayed) + ". The runtime seed is that schema followed by "
+                "rows from this world, so an insert naming any of these fails and the environment "
+                "never stands up. Use the agent's own names, or drop what it does not have. A "
+                "column it never declares is one its code never reads."
             )
         data_free = (
             (is_data_free_conversation(contract) or external_runtime)
