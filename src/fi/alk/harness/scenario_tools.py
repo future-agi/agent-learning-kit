@@ -364,9 +364,18 @@ def accept_scenario(
         else "All three gates pass: the world is ready for it, the reference solution passes "
         "its checks, and those checks fail when nothing is done."
     )
+    # The whole list used to be echoed on every submit. On a hundred-scenario suite that is
+    # 207,000 characters of re-listing, quadratic in the count and re-read on every later turn.
+    # The tail is what a writer uses to keep its bearings; `inspect_scenario` has the rest.
+    recent = ", ".join(one.name for one in kept[-5:])
+    more = (
+        f" (and {len(kept) - 5} before them; inspect_scenario names them all if you have lost track)"
+        if len(kept) > 5
+        else ""
+    )
     return _ok(
         f"{scenario.name} {'replaced' if replaced else 'kept'}. {proof_summary}"
-        f"{unproved}\n{len(kept)} so far: " + ", ".join(one.name for one in kept)
+        f"{unproved}\n{len(kept)} so far, most recent: {recent}{more}"
     )
 
 
@@ -418,6 +427,40 @@ def not_ready(kept: list[Scenario], wanted: int, catalogue: Catalogue) -> list[s
             "suite. Reuse the catalogue where the same thing is being checked."
         )
     return problems
+
+
+def _rows_of(table: Any) -> list[Any]:
+    """A table as a list of rows, whichever way the store happens to key them."""
+    return list(table.values()) if isinstance(table, dict) else list(table or [])
+
+
+def _what_moved(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
+    """The rows the calls actually changed, and nothing else.
+
+    What a writer needs after running a reference solution is what its calls did, which is a small
+    set of rows. Re-printing every small table on every probe instead cost a real 100-scenario ride
+    suite most of its bill: the world has twelve tables, several under six rows, so each probe echoed
+    about 5KB of unchanged rows into a conversation that is re-read on every later turn. Measured at
+    206k tokens of context per turn against 28k for a one-table world.
+
+    Saying **nothing changed** is information the old dump could not express: a solution whose calls
+    leave the world untouched cannot be checked against world state, and the writer needs to know
+    that before it writes checks that can only ever pass.
+    """
+    lines: list[str] = []
+    for name in sorted(after):
+        was = {json.dumps(row, sort_keys=True, default=str) for row in _rows_of(before.get(name))}
+        now = [row for row in _rows_of(after.get(name))
+               if json.dumps(row, sort_keys=True, default=str) not in was]
+        if now:
+            lines.append(f"{name}: {len(now)} changed — " + brief(now, limit=900))
+    gone = [name for name in sorted(before)
+            if len(_rows_of(before.get(name))) > len(_rows_of(after.get(name)))]
+    for name in gone:
+        lines.append(
+            f"{name}: {len(_rows_of(before[name])) - len(_rows_of(after.get(name)))} row(s) removed"
+        )
+    return lines or ["nothing in the world changed, so no check can read these calls from state"]
 
 
 def _coverage_gaps(coverage: dict[str, Any]) -> str:
@@ -579,6 +622,9 @@ def scenario_tools(
             if not applied.ok:
                 return _err(f"the setup did not run: {applied.said}")
             world.calls = []
+            # The world as the scenario's own setup left it, so what is reported below is what the
+            # calls did and not what the fixture already contained.
+            before = world.state()
             lines: list[str] = []
             for step in args.get("calls") or []:
                 if not isinstance(step, dict):
@@ -599,9 +645,7 @@ def scenario_tools(
                 "state afterwards: "
                 + ", ".join(f"{n}.count={len(r)}" for n, r in sorted(state.items()))
             )
-            for name, rows in sorted(state.items()):
-                if rows and len(rows) <= 6:
-                    lines.append(f"{name}: " + brief(rows, limit=1200))
+            lines.extend(_what_moved(before, state))
             return _ok("\n".join(lines) or "no calls were made")
         finally:
             world.close()

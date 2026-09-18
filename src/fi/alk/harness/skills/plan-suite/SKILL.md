@@ -143,9 +143,7 @@ coordinate has been written backwards.
 **Declare the grid you dealt when you save.** `save_scenarios` takes a `design`: every level you
 intended per axis, and the pairs that are deliberately not testable. Pass it, or the coverage report
 can only count the levels that happen to appear, and a suite that covered two of six tasks reports
-full coverage because two is all it can see. Measured on a four-scenario suite: without the design it
-read 4 of 4 pairs, 100%. With it, 4 of 8 with one cell masked, 50%, and it named `reschedule` and
-`minor` as planned but never written.
+full coverage because two is all it can see.
 
 ```json
 {"axes": {"task": ["book", "cancel", "reschedule"],
@@ -163,10 +161,8 @@ heard of declares its own and the arithmetic still works.
 Keywords are how somebody finds a scenario in a suite of a thousand. They are not a description of
 the caller and they never reach the call, so a term that reads like a trait is the wrong kind of
 word. Decide the whole suite's keyword vocabulary here, before the first brief goes out, and deal it
-in the briefs the way you deal accents and name initials. A writer cannot see its siblings, so twelve
-writers left to choose their own words produce twelve vocabularies for the same ideas: measured on a
-real suite, 143 distinct keywords across 100 scenarios, 108 of them used exactly once, and `hang up`,
-`end call`, `bye` and `goodbye` all meaning the same thing.
+in the briefs the way you deal accents and name initials. A writer cannot see its siblings, so
+writers left to choose their own words produce one vocabulary each for the same ideas.
 
 **The vocabulary is the coordinate, written down.** You have already placed every scenario on the
 axes. A keyword is that placement in a word somebody would search for, which is why it costs nothing
@@ -179,9 +175,8 @@ to derive and why it cannot drift:
 | what is being done to it | O, the overlay | `interruption`, `topic_switch`, `prompt_injection`, `silence`, `refusal_bait` |
 | the conditions | X, whatever this agent's kind file says can be varied | `noisy_line`, `code_switching`, `outbound_call` on a call; `pasted_blob`, `split_message`, `self_correction` in a chat |
 
-Take the X levels from the kind file you were given rather than from this table. It is the one
-that knows which conditions its modality can actually apply, and a kind added later carries its
-own without this list being touched.
+Take the X levels from the kind file you were given, not from this table: it knows which conditions
+its modality can actually apply, and a kind added later carries its own.
 
 W and D are **not** keywords. The caller and their state are already columns of their own, and a
 keyword that restates a column filters nothing.
@@ -189,8 +184,7 @@ keyword that restates a column filters nothing.
 **Rules that make a keyword worth clicking.**
 
 - **Never restate something already shown.** Not the use case, not the situation, not a sub-goal,
-  not any persona field. On the measured suite this one rule removed 193 of 445 uses: `weather` was
-  the use case, and the four city names were parameter values dealt by the plan.
+  not any persona field. A term that repeats the use case or a parameter value filters nothing.
 - **Nothing on more than about a third of the suite.** `weather` sat on 91 of 100, so clicking it
   removed nine rows. A term that is true of nearly everything carries no information.
 - **Nothing on fewer than three scenarios.** A chip that returns one row is an annotation, and 108
