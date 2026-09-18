@@ -215,6 +215,7 @@ def open_stage(
     destination = out or artifact_dir(contract.agent)
     server, kept = scenario_tools(contract, destination, destination, wanted=wanted)
     budget = max_turns or turns_for(wanted)
+    hands_out = wanted > HANDS_OUT_ABOVE
     spec = SessionSpec(
         # The agent and its world before the method: grounding evidence read before the
         # instructions that operate on it is followed more closely than the same evidence
@@ -222,9 +223,16 @@ def open_stage(
         system_prompt=(
             f"## This agent\n\n{contract.brief(with_data=True, sample_rows=3)}"
             f"\n\n## Its world\n\n{world_summary(destination)}"
-            f"\n\n{load_skill(SKILL)}"
-            # The preamble is shared by every skill, so the second one carries only its method.
-            f"\n\n{load_skill(PLAN_SKILL, preamble=False)}"
+            # One role per session. A suite this size is handed out, so this session plans and
+            # briefs and never writes, and the writing method belongs to the writers rather than
+            # here. Carrying it anyway is what made the loop behave like a writer.
+            + (
+                f"\n\n{load_skill(PLAN_SKILL)}"
+                if hands_out
+                else f"\n\n{load_skill(SKILL)}"
+                # The preamble is shared by every skill, so the second carries only its method.
+                f"\n\n{load_skill(PLAN_SKILL, preamble=False)}"
+            )
             # Whatever this kind of agent adds on top. A file under skills/kinds/ that
             # declares `applies_to: modality=<kind>` is appended here, so supporting a
             # new kind of agent is adding that file and nothing else.
@@ -273,7 +281,26 @@ def open_stage(
     return Stage(spec, name=SKILL), destination
 
 
-def opening(contract: AgentContract, wanted: int = 10, existing: int = 0) -> str:
+def opening(
+    contract: AgentContract,
+    wanted: int = 10,
+    existing: int = 0,
+    *,
+    hands_out: bool = False,
+) -> str:
+    if not existing and hands_out:
+        return (
+            f"Write {wanted} scenarios for {contract.agent!r}.\n\n"
+            "Look at the world first with inspect_world so the cells you plan name real records, "
+            "and read the sub-goals already defined. Then declare the plan with aim_for: the "
+            "axes, their levels, and the keyword vocabulary the whole suite draws from.\n\n"
+            "You are the orchestrator. You do not write scenarios yourself. Brief "
+            "scenario_writer with the cells each writer covers, how many scenarios that is "
+            "worth, and its share of the people; take the reports they come back with; call "
+            "suite_progress to see what is still empty; brief the next round from that. When the "
+            "count is met run suite_reviewer, brief a round for whatever it names, then "
+            "save_scenarios."
+        )
     if existing:
         return (
             f"There are already {existing} scenarios for {contract.agent!r}, and they are "
@@ -434,7 +461,10 @@ async def write(
         # The planning turn is the expensive one to lose: a refusal here costs the whole suite, not
         # one slice, so it waits the same way a writer does.
         await survive_refusal(
-            lambda: stage.say(opening(contract, wanted), on_event=on_event),
+            lambda: stage.say(
+                opening(contract, wanted, hands_out=wanted > HANDS_OUT_ABOVE),
+                on_event=on_event,
+            ),
             what="the opening turn",
             on_event=on_event,
         )

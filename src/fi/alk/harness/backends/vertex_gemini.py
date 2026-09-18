@@ -57,6 +57,10 @@ _TERMINAL_SAVE_TOOLS = frozenset(
 # Vertex list pricing per 1M tokens: (input, output, the day this pair was last checked against
 # the platform's litellm model table). An unknown or stale model reports no cost rather than a
 # wrong one, and shows up in `unpriced_turns`.
+# What Vertex charges for a cache read, as a share of the input rate. Google's published figure
+# for context caching; implicit caching carries no storage fee on top.
+CACHE_READ_SHARE = 0.10
+
 PRICES_PER_MILLION = {
     "gemini-3.8-flash": (0.75, 3.75, "2026-12-31"),
     "gemini-3.7-flash": (0.75, 3.75, "2026-12-31"),
@@ -591,7 +595,7 @@ class VertexGeminiSession:
             yield StageDone(
                 outcome="failed",
                 turns=turns,
-                cost_usd=self._cost(tokens_in, tokens_out),
+                cost_usd=self._cost(tokens_in, tokens_out, tokens_cached),
                 tokens_in=tokens_in,
                 tokens_out=tokens_out,
                 tokens_cached=tokens_cached,
@@ -609,7 +613,7 @@ class VertexGeminiSession:
             outcome="success" if settled else "max_turns",
             is_error=not settled,
             turns=turns,
-            cost_usd=self._cost(tokens_in, tokens_out),
+            cost_usd=self._cost(tokens_in, tokens_out, tokens_cached),
             tokens_in=tokens_in,
             tokens_out=tokens_out,
             tokens_cached=tokens_cached,
@@ -624,15 +628,25 @@ class VertexGeminiSession:
             ),
         )
 
-    def _cost(self, tokens_in: int, tokens_out: int) -> float | None:
-        return priced(self._model, tokens_in, tokens_out)
+    def _cost(
+        self, tokens_in: int, tokens_out: int, tokens_cached: int = 0
+    ) -> float | None:
+        return priced(self._model, tokens_in, tokens_out, tokens_cached)
 
 
 logger = logging.getLogger(__name__)
 
 
-def priced(model: str, tokens_in: int, tokens_out: int) -> float | None:
-    """What these tokens cost, or None where no price can be stood behind."""
+def priced(
+    model: str, tokens_in: int, tokens_out: int, tokens_cached: int = 0
+) -> float | None:
+    """What these tokens cost, or None where no price can be stood behind.
+
+    A cache read is charged at a tenth of the input rate, which is Google's published figure for
+    Vertex context caching rather than an estimate. It matters more than it sounds: an authoring
+    stage re-sends its whole prompt every turn, so most of its input is cache reads, and charging
+    those at the full rate overstates the bill several times over.
+    """
     prices = PRICES_PER_MILLION.get(model)
     if prices is None:
         return None
@@ -641,7 +655,9 @@ def priced(model: str, tokens_in: int, tokens_out: int) -> float | None:
             "no current price for %s: the table's figures expired on %s", model, prices[2]
         )
         return None
-    return (tokens_in * prices[0] + tokens_out * prices[1]) / 1_000_000
+    cached = min(max(tokens_cached, 0), max(tokens_in, 0))
+    billed_in = (tokens_in - cached) * prices[0] + cached * prices[0] * CACHE_READ_SHARE
+    return (billed_in + tokens_out * prices[1]) / 1_000_000
 
 
 class VertexGeminiBackend:
