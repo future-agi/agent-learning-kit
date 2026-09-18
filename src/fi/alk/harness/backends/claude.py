@@ -10,6 +10,7 @@ name rather than implemented here.
 """
 
 from __future__ import annotations
+import os
 
 from typing import Any, AsyncIterator
 
@@ -19,6 +20,7 @@ from claude_agent_sdk import (
     ClaudeSDKClient,
     ResultMessage,
     SdkMcpTool,
+    StreamEvent,
     SystemMessage,
     TextBlock,
     ToolResultBlock,
@@ -70,9 +72,16 @@ def _flattened(content: Any) -> str:
 class ClaudeSession:
     """One Claude Code session, translated to the neutral reply vocabulary."""
 
-    def __init__(self, options: ClaudeAgentOptions) -> None:
+    def __init__(
+        self,
+        options: ClaudeAgentOptions,
+        *,
+        streaming: bool = False,
+    ) -> None:
         self._options = options
+        self._streaming = streaming
         self._client: ClaudeSDKClient | None = None
+        self._mirror_errors: list[str] = []
 
     async def start(self) -> None:
         self._client = ClaudeSDKClient(options=self._options)
@@ -88,6 +97,18 @@ class ClaudeSession:
             raise RuntimeError("session is not open")
         await self._client.query(message)
 
+    async def interrupt(self) -> bool:
+        if self._client is None:
+            return False
+        await self._client.interrupt()
+        return True
+
+    async def resume(self, invocation_id: str) -> None:
+        del invocation_id
+        raise RuntimeError(
+            "Claude Agent SDK resumes sessions, not interrupted invocations"
+        )
+
     async def replies(self) -> AsyncIterator[Any]:
         if self._client is None:
             raise RuntimeError("session is not open")
@@ -96,13 +117,40 @@ class ClaudeSession:
                 yield reply
 
     def _translate(self, received: Any) -> list[Any]:
+        if isinstance(received, StreamEvent):
+            event = received.event
+            delta = event.get("delta") if isinstance(event, dict) else None
+            if (
+                isinstance(event, dict)
+                and event.get("type") == "content_block_delta"
+                and isinstance(delta, dict)
+                and delta.get("type") == "text_delta"
+                and delta.get("text")
+            ):
+                return [
+                    ModelReply(
+                        parts=[
+                            Say(
+                                text=str(delta["text"]),
+                                partial=True,
+                                event_id=received.uuid,
+                            )
+                        ]
+                    )
+                ]
+            return []
+        if type(received).__name__ == "MirrorErrorMessage":
+            self._mirror_errors.append(
+                str(getattr(received, "error", "session transcript mirror failed"))
+            )
+            return []
         if isinstance(received, SystemMessage):
             data = received.data if isinstance(received.data, dict) else {}
             return [SessionOpened(session_id=data.get("session_id"))]
         if isinstance(received, AssistantMessage):
             parts: list[Any] = []
             for block in received.content:
-                if isinstance(block, TextBlock):
+                if isinstance(block, TextBlock) and not self._streaming:
                     parts.append(Say(text=block.text))
                 elif isinstance(block, ToolUseBlock):
                     parts.append(
@@ -112,6 +160,10 @@ class ClaudeSession:
         if isinstance(received, ResultMessage):
             # subtype alone is not the outcome. A call that failed upstream still arrives with
             # subtype "success", so the error facts ride along and Stage decides what failed.
+            errors = [
+                *list(getattr(received, "errors", None) or []),
+                *self._mirror_errors,
+            ]
             return [
                 StageDone(
                     outcome=received.subtype,
@@ -120,9 +172,11 @@ class ClaudeSession:
                     **_tokens(getattr(received, "model_usage", None)),
                     session_id=received.session_id,
                     models=set(getattr(received, "model_usage", None) or {}),
-                    is_error=bool(getattr(received, "is_error", False)),
+                    is_error=bool(
+                        getattr(received, "is_error", False) or self._mirror_errors
+                    ),
                     api_error_status=getattr(received, "api_error_status", None),
-                    errors=list(getattr(received, "errors", None) or []),
+                    errors=errors,
                 )
             ]
         blocks = getattr(received, "content", None)
@@ -163,7 +217,14 @@ class ClaudeBackend:
     default_model = DEFAULT_MODEL
 
     def can_drive(self, model: str) -> bool:
-        return "claude" in (model or "").lower()
+        named = (model or "").lower()
+        if "claude" in named:
+            return True
+        gateway_ready = bool(
+            os.environ.get("ALK_CLAUDE_GATEWAY_URL", "").strip()
+            and os.environ.get("ALK_CLAUDE_GATEWAY_API_KEY", "").strip()
+        )
+        return gateway_ready and "gemini" in named
 
     def create(self, spec: SessionSpec) -> ClaudeSession:
         from ..config import (
@@ -182,17 +243,30 @@ class ClaudeBackend:
                 for tool_spec in server.tools
             ),
         ]
+        context = spec.conversation
+        env = provider_env(spec.model)
+        if context is not None:
+            env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
+            env["CLAUDE_CODE_PROJECT_DIR_NAME"] = context.session_id
+            if context.config_dir:
+                env["CLAUDE_CONFIG_DIR"] = context.config_dir
         options = ClaudeAgentOptions(
+            tools=list(spec.builtins),
             system_prompt=spec.system_prompt,
             allowed_tools=allowed,
             mcp_servers={
                 server_name: _sdk_server(server)
                 for server_name, server in spec.servers.items()
             },
+            strict_mcp_config=True,
             setting_sources=[],
             max_turns=spec.max_turns,
             model=spec.model,
-            env=provider_env(spec.model),
+            env=env,
+            include_partial_messages=bool(context and context.streaming),
+            resume=context.resume_session_id if context is not None else None,
+            session_store=context.transcript_store if context is not None else None,
+            session_store_flush="eager",
         )
         if spec.cwd is not None:
             options.cwd = spec.cwd
@@ -208,4 +282,7 @@ class ClaudeBackend:
             )
         if spec.thinking:
             options.thinking = thinking_config()
-        return ClaudeSession(options)
+        return ClaudeSession(
+            options,
+            streaming=bool(context and context.streaming),
+        )
