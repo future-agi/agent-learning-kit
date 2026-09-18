@@ -290,6 +290,30 @@ def _off_the_grid(coverage: Any, grid: dict[str, list[str]] | None) -> str:
     return ""
 
 
+def _credentials_the_world_lacks(scenario: Scenario, trial: Any) -> list[str]:
+    """Values handed to the caller, used by the solution, and absent from the world after setup."""
+    claimed = _handed_to_the_caller(scenario.fixture)
+    if not claimed:
+        return []
+    used = json.dumps([step.arguments for step in scenario.solution], default=str).lower()
+    wanted = [one for one in claimed if str(one[1]).lower() in used]
+    if not wanted:
+        return []
+    try:
+        held = json.dumps(trial.state(), default=str)
+    except Exception:
+        return []
+    missing = [f"{key}={value}" for key, value in wanted if value not in held]
+    if not missing:
+        return []
+    return [
+        "the caller is handed "
+        + ", ".join(missing)
+        + ", the solution passes it to a tool, and the world does not hold it after setup runs. "
+        "Seed it in setup, or use a value the world already has"
+    ]
+
+
 def accept_scenario(
     payload: dict[str, Any],
     *,
@@ -338,6 +362,10 @@ def accept_scenario(
             allow_empty_solution=allow_empty_solution,
         )
         problems.extend(contract_sequence_problems(scenario, hard_constraints or []))
+        # A credential the caller is handed, that the correct agent then passes to a tool, has to
+        # be in the world once setup has run. Advisory at save time this is found after the suite
+        # is written; refused here it costs the writer one turn and it can seed the record.
+        problems.extend(_credentials_the_world_lacks(scenario, trial))
     finally:
         trial.close()
 

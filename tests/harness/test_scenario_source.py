@@ -2432,3 +2432,33 @@ def test_aim_for_names_the_overlay_levels_nothing_can_check() -> None:
     assert "emergency_crisis" in said and "destructive" in said
     # The one the catalogue can already check must not be named.
     assert "prompt_injection," not in said
+
+
+def test_a_credential_the_world_lacks_is_refused_at_submit() -> None:
+    """Found at save time the suite is written; refused here it costs the writer one turn."""
+    from types import SimpleNamespace
+
+    from fi.alk.harness.scenario import Scenario, Step
+    from fi.alk.harness.scenario_tools import _credentials_the_world_lacks
+
+    world = SimpleNamespace(state=lambda: {"places": [{"place_id": "plc_real_01"}]})
+
+    looked_up_and_missing = Scenario(
+        name="a",
+        fixture={"pickup_place_id": "plc_dana_home_01"},
+        solution=[Step(tool="set_pickup", arguments={"place_id": "plc_dana_home_01"})],
+    )
+    looked_up_and_present = Scenario(
+        name="b",
+        fixture={"pickup_place_id": "plc_real_01"},
+        solution=[Step(tool="set_pickup", arguments={"place_id": "plc_real_01"})],
+    )
+    never_looked_up = Scenario(
+        name="c",
+        fixture={"caller_phone": "+14155550199"},
+        solution=[Step(tool="book_ride", arguments={"product": "uberx"})],
+    )
+
+    assert _credentials_the_world_lacks(looked_up_and_missing, world)
+    assert _credentials_the_world_lacks(looked_up_and_present, world) == []
+    assert _credentials_the_world_lacks(never_looked_up, world) == []
