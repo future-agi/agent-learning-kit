@@ -67,6 +67,10 @@ WRITER_TURNS = int(os.environ.get("ALK_HARNESS_WRITER_TURNS", "110") or 110)
 # the contract all belong to the loop that briefed it; offered here they get used, and a tool a
 # writer has no business calling is turns and context spent on nothing.
 WRITER_TOOLS = ("inspect_world", "try_calls", "add_sub_goal", "submit_scenario")
+# The two tools that write a scenario. A loop that hands the suite out is not offered them: an
+# orchestrator holding the writing tools writes, which is what it did, and then pays for the
+# suite in its own context instead of in its writers'.
+WRITES_A_SCENARIO = ("try_calls", "submit_scenario")
 
 
 def turns_for(wanted: int) -> int:
@@ -216,6 +220,17 @@ def open_stage(
     server, kept = scenario_tools(contract, destination, destination, wanted=wanted)
     budget = max_turns or turns_for(wanted)
     hands_out = wanted > HANDS_OUT_ABOVE
+    loop_server = (
+        ToolServer(
+            name=server.name,
+            version=server.version,
+            tools=[
+                spec for spec in server.tools if spec.name not in WRITES_A_SCENARIO
+            ],
+        )
+        if hands_out
+        else server
+    )
     spec = SessionSpec(
         # The agent and its world before the method: grounding evidence read before the
         # instructions that operate on it is followed more closely than the same evidence
@@ -261,7 +276,7 @@ def open_stage(
                 + ". Submitting one under an existing name replaces it."
             )
         ),
-        servers={SCENARIO_SERVER: server},
+        servers={SCENARIO_SERVER: loop_server},
         # Delegation is offered, never imposed. Whether a suite is worth splitting is a judgement
         # about this suite, so the skill argues it and the stage decides; a threshold in code here
         # decided it for every suite alike and was wrong at both ends.

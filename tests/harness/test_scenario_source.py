@@ -2214,3 +2214,47 @@ def test_a_record_the_agent_creates_is_not_a_missing_credential() -> None:
         # the create-shaped one is skipped before that, by the rule rather than by the failure.
         assert grounding_problems([guest], _P(tmp)) == []
         assert grounding_problems([looked_up], _P(tmp)) == []
+
+
+def test_an_orchestrating_loop_is_not_offered_the_writing_tools(tmp_path, monkeypatch) -> None:
+    """It held try_calls and submit_scenario, so it wrote the suite itself and paid for it."""
+    from fi.alk.harness import scenarios as stage
+    from fi.alk.harness.contract import AgentContract
+
+    from fi.alk.harness.backends import ToolServer, ToolSpec
+    from fi.alk.harness.scenario_tools import TOOL_NAMES
+
+    async def handler(args):
+        return {"content": "ok"}
+
+    monkeypatch.setattr(stage, "world_summary", lambda _: "a world")
+    monkeypatch.setattr(stage, "load_skill", lambda *a, **k: "a skill")
+    monkeypatch.setattr(stage, "discovered_skills", lambda **k: "")
+    monkeypatch.setattr(
+        stage,
+        "scenario_tools",
+        lambda *a, **k: (
+            ToolServer(
+                name="scenarios",
+                version="1",
+                tools=[
+                    ToolSpec(name=n, description=n, input_schema={}, handler=handler)
+                    for n in TOOL_NAMES
+                ],
+            ),
+            [],
+        ),
+    )
+    contract = AgentContract(agent="a")
+
+    big, _ = stage.open_stage(contract, out=tmp_path / "big", wanted=50)
+    small, _ = stage.open_stage(contract, out=tmp_path / "small", wanted=8)
+    offered = lambda spec: {
+        t.name for t in spec.servers[stage.SCENARIO_SERVER].tools
+    }
+
+    assert not offered(big.spec) & set(stage.WRITES_A_SCENARIO)
+    assert "aim_for" in offered(big.spec) and "suite_progress" in offered(big.spec)
+    assert "save_scenarios" in offered(big.spec)
+    # Below the hand-out size the loop writes the suite itself and still needs them.
+    assert set(stage.WRITES_A_SCENARIO) <= offered(small.spec)
