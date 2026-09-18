@@ -1149,6 +1149,27 @@ def scenario_tools(
                 + ", ".join(f"{axis} ({len(levels)})" for axis, levels in grid.items())
                 + "; a scenario placed anywhere else is refused before it is proved"
             )
+        # The levels of an overlay-shaped axis are the ones that need a sub-goal each, and this is
+        # the moment the harness can see both lists. Said here it costs one line; found at save
+        # time the suite is already written, which is how 31 of 52 overlay scenarios in a
+        # hundred-scenario suite came to assert nothing.
+        if grid:
+            held = " ".join(one.name for one in catalogue.sub_goals).lower()
+            for axis, levels in grid.items():
+                if not any(word in axis.lower() for word in ("overlay", "adversar", "attack")):
+                    continue
+                nameless = [
+                    level
+                    for level in levels
+                    if level.strip().lower() not in ("none", "")
+                    and not any(part in held for part in level.lower().split("_") if len(part) > 3)
+                ]
+                if nameless:
+                    said += (
+                        f". Nothing in the catalogue can fail for {', '.join(nameless)}, so a "
+                        "scenario carrying one would assert only the plain task. Add a sub-goal "
+                        "for each with add_sub_goal before you hand any of them out"
+                    )
         if vocabulary:
             target["keywords"] = vocabulary
             said += (

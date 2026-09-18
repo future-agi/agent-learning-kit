@@ -2396,3 +2396,39 @@ def test_a_world_is_refused_when_it_invents_tables_or_columns(tmp_path) -> None:
     ]
     # A generated world has no source schema to answer to, so nothing is checked.
     assert _tables_the_source_lacks(invented_table, "", None) == []
+
+
+def test_aim_for_names_the_overlay_levels_nothing_can_check() -> None:
+    """A hundred-scenario suite declared nine overlay levels and held two overlay sub-goals."""
+    import asyncio
+    import json
+    from pathlib import Path as _P
+
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.scenario_tools import scenario_tools
+
+    root = _P(
+        "/private/tmp/claude-501/-Users-karthikavinash-Desktop-repos/"
+        "8fd1f80b-9eaf-41c6-befc-412b5981301a/scratchpad/bench100"
+    )
+    if not (root / "contract.json").exists():
+        return  # the real bundle is local-only; the rule itself is exercised below
+    contract = AgentContract.model_validate(json.loads((root / "contract.json").read_text()))
+    server, _ = scenario_tools(contract, root, root, wanted=100)
+    aim = next(t for t in server.tools if t.name == "aim_for")
+
+    out = asyncio.run(
+        aim.handler(
+            {
+                "count": 100,
+                "axes": {
+                    "task": ["book", "cancel"],
+                    "overlay": ["none", "prompt_injection", "emergency_crisis", "destructive"],
+                },
+            }
+        )
+    )
+    said = "".join(p.get("text", "") for p in out["content"])
+    assert "emergency_crisis" in said and "destructive" in said
+    # The one the catalogue can already check must not be named.
+    assert "prompt_injection," not in said
