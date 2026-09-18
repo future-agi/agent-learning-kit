@@ -2191,8 +2191,8 @@ def test_the_submit_reply_says_what_the_names_are_for() -> None:
     assert "do not read them" in source
 
 
-def test_a_record_the_agent_creates_is_not_a_missing_credential() -> None:
-    """A guest booking hands over a phone precisely because no rider holds it yet."""
+def test_only_a_value_the_agent_looks_up_is_a_missing_credential() -> None:
+    """A guest hands over a phone so the agent can reach them, never to be queried."""
     from pathlib import Path as _P
     import tempfile
 
@@ -2202,12 +2202,12 @@ def test_a_record_the_agent_creates_is_not_a_missing_credential() -> None:
     guest = Scenario(
         name="guest",
         fixture={"credentials": {"phone": "+14155550220"}},
-        solution=[Step(tool="create_guest_rider", arguments={"first_name": "Dana"})],
+        solution=[Step(tool="book_ride", arguments={"first_name": "Dana"})],
     )
     looked_up = Scenario(
         name="known",
         fixture={"credentials": {"phone": "+14155550220"}},
-        solution=[Step(tool="get_saved_places", arguments={})],
+        solution=[Step(tool="find_rider", arguments={"phone": "+14155550220"})],
     )
     with tempfile.TemporaryDirectory() as tmp:
         # No world to restore, so `prepared` raises and both are skipped; what this pins is that
