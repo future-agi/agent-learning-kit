@@ -47,6 +47,7 @@ from .scenario import (
     contract_sequence_problems,
     coverage_report,
     keyword_problems,
+    redteam_problems,
     suite_diversity_problems,
     validate_scenario,
     voicemail_enabled,
@@ -1067,6 +1068,7 @@ def scenario_tools(
         # Read back after writing, because it is the check files on disk that get run, not the
         # intention behind them. Advisory: a thin check is still a check and still saves.
         noted = noted + check_problems(destination) + grounding_problems(kept, world_root)
+        noted = noted + redteam_problems(kept)
         diversity = suite_diversity_problems(kept) + keyword_problems(kept)
         # How much of the space this suite covered, written beside it so the number and the
         # scenarios it describes can never drift apart.
