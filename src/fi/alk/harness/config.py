@@ -312,7 +312,7 @@ def discovered_skills(**about: str) -> str:
     return "\n\n---\n\n" + "\n\n---\n\n".join(text for _name, text in found)
 
 
-def load_skill(name: str) -> str:
+def load_skill(name: str, *, preamble: bool = True) -> str:
     """One stage's instructions, behind what the harness as a whole is for.
 
     Every stage gets the same opening: what this harness produces, why the division between what
@@ -337,7 +337,7 @@ def load_skill(name: str) -> str:
             f"\n\n---\n\n# references/{reference.name}\n\n"
             f"{reference.read_text(encoding='utf-8')}"
         )
-    if not HARNESS.exists():
+    if not preamble or not HARNESS.exists():
         return stage
     return (
         f"{HARNESS.read_text(encoding='utf-8')}\n\n"

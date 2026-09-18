@@ -95,7 +95,7 @@ def writer_worker(
                 "them different from what the other writers were given."
             ),
             instructions=(
-                f"## This agent\n\n{contract.brief(with_data=True)}"
+                f"## This agent\n\n{contract.brief(with_data=True, sample_rows=3)}"
                 f"\n\n## Its world\n\n{world_summary(destination)}"
                 f"\n\n{load_skill(SKILL)}"
                 + discovered_skills(
@@ -201,10 +201,11 @@ def open_stage(
         # instructions that operate on it is followed more closely than the same evidence
         # buried between the instructions and the task.
         system_prompt=(
-            f"## This agent\n\n{contract.brief(with_data=True)}"
+            f"## This agent\n\n{contract.brief(with_data=True, sample_rows=3)}"
             f"\n\n## Its world\n\n{world_summary(destination)}"
             f"\n\n{load_skill(SKILL)}"
-            f"\n\n{load_skill(PLAN_SKILL)}"
+            # The preamble is shared by every skill, so the second one carries only its method.
+            f"\n\n{load_skill(PLAN_SKILL, preamble=False)}"
             # Whatever this kind of agent adds on top. A file under skills/kinds/ that
             # declares `applies_to: modality=<kind>` is appended here, so supporting a
             # new kind of agent is adding that file and nothing else.

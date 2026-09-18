@@ -7532,3 +7532,26 @@ def test_a_check_that_only_asks_whether_a_tool_was_called_is_refused():
         "        return 'wrong date'\n",
     ):
         assert not validate_sub_goal(SubGoal(name="ok", what="w", check=body))
+
+
+def test_the_system_prompt_stays_within_budget():
+    """Prose added to a skill multiplies by every turn and every sub-agent, so it needs a decision."""
+    import pathlib
+    from pathlib import Path
+
+    from fi.alk.harness.config import load_skill
+    from fi.alk.harness.contract import AgentContract
+
+    sample = Path(__file__).parent / "fixtures" / "ride-contract.json"
+    contract = (
+        AgentContract.model_validate_json(sample.read_text())
+        if sample.exists()
+        else AgentContract(agent="budget", one_liner="x", modality="voice")
+    )
+    kinds = (pathlib.Path(load_skill.__globals__["SKILLS_ROOT"]) / "kinds" / "voice.md").read_text()
+    sub_agent = (
+        contract.brief(with_data=True, sample_rows=3) + load_skill("write-scenarios") + kinds
+    )
+    main_loop = sub_agent + load_skill("plan-suite", preamble=False)
+    assert len(sub_agent) <= 75_000, f"sub-agent prompt is {len(sub_agent)} chars"
+    assert len(main_loop) <= 95_000, f"main loop prompt is {len(main_loop)} chars"

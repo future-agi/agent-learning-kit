@@ -421,12 +421,14 @@ def accept_scenario(
     # The whole list used to be echoed on every submit. On a hundred-scenario suite that is
     # 207,000 characters of re-listing, quadratic in the count and re-read on every later turn.
     # The tail is what a writer uses to keep its bearings; `inspect_scenario` has the rest.
-    recent = ", ".join(one.name for one in kept[-5:])
-    more = (
-        f" (and {len(kept) - 5} before them; inspect_scenario names them all if you have lost track)"
-        if len(kept) > 5
-        else ""
-    )
+    # Names, bounded. Echoing the whole suite was quadratic, but withholding it cost far more: the
+    # session lost its bearings and re-read the suite with inspect_scenario, whose replies are larger
+    # and stay in context for the rest of the run.
+    names = [one.name for one in kept]
+    recent, more = ", ".join(names), ""
+    if len(recent) > 2000:
+        recent = ", ".join(names[-20:])
+        more = f" (and {len(names) - 20} before them; inspect_scenario names them all)"
     strayed = (
         "\nKeywords outside the suite's vocabulary, replaced with what the plan dealt: "
         + ", ".join(sorted(set(outside)))

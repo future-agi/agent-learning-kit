@@ -409,7 +409,7 @@ def reworker_for(contract: Any, destination: Any, *, ask: Any = None) -> Any:
         )
         spec = SessionSpec(
             system_prompt=(
-                f"## This agent\n\n{contract.brief(with_data=True)}"
+                f"## This agent\n\n{contract.brief(with_data=True, sample_rows=3)}"
                 f"\n\n## Its world\n\n{world_summary(destination)}"
                 f"\n\n{load_skill('write-scenarios')}"
                 "\n\n## What you are doing\n\nOne scenario already exists and somebody has changed "

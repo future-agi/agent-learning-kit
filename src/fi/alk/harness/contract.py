@@ -352,6 +352,26 @@ class Dependency(BaseModel):
         return bool(self.engine) and self.reached.has_seam()
 
 
+def _sampled(environment: Any, keep: int) -> tuple[Any, str]:
+    """A few rows per table, and a line saying where the rest is."""
+    if not isinstance(environment, dict):
+        return environment, ""
+    trimmed: dict[str, Any] = {}
+    held = 0
+    for name, rows in environment.items():
+        if isinstance(rows, list):
+            trimmed[name] = rows[:keep]
+            held += max(0, len(rows) - keep)
+        else:
+            trimmed[name] = rows
+    if not held:
+        return environment, ""
+    return trimmed, (
+        f"Showing the first {keep} rows of each table; {held} more are in the world. "
+        "inspect_world returns any table in full, so read it there rather than assuming.\n"
+    )
+
+
 def _reached(one: Dependency) -> str:
     if not one.engine and not one.reached.has_seam():
         return ""
@@ -475,7 +495,9 @@ class AgentContract(BaseModel):
     def tool_names(self) -> set[str]:
         return {tool.name for tool in self.tools}
 
-    def brief(self, *, full_schema: bool = True, with_data: bool = False) -> str:
+    def brief(
+        self, *, full_schema: bool = True, with_data: bool = False, sample_rows: int = 0
+    ) -> str:
         """The grounding block handed to the model on every downstream call.
 
         ``with_data`` includes the agent's real starting records rather than only their shape.
@@ -529,12 +551,16 @@ class AgentContract(BaseModel):
                 + json.dumps(self.data_schema)[: 24000 if with_data else 2400]
             )
         if self.base_environment and with_data:
+            data, note = self.base_environment, ""
+            if sample_rows:
+                data, note = _sampled(self.base_environment, sample_rows)
             parts.append(
                 "THE AGENT'S REAL STARTING DATA. Reproduce this exactly, including anything\n"
                 "that looks like a mistake: a misspelled id, an item marked unavailable, an odd\n"
                 "price. The world is a replica of what the agent has, not a corrected version,\n"
                 "and a test written against a corrected world will not catch the real bug.\n"
-                + json.dumps(self.base_environment, ensure_ascii=False)
+                + note
+                + json.dumps(data, ensure_ascii=False)
             )
         if self.dependencies:
             parts.append(
