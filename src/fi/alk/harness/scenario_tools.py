@@ -50,6 +50,8 @@ from .scenario import (
     redteam_problems,
     unpinned_callers,
     suite_diversity_problems,
+    tidy_keywords,
+    vocabulary_from,
     validate_scenario,
     voicemail_enabled,
 )
@@ -255,6 +257,38 @@ def crowded_field(kept: list[Scenario], candidate: Any, wanted: int) -> str:
     return ""
 
 
+def _off_the_grid(coverage: Any, grid: dict[str, list[str]] | None) -> str:
+    """Why this coordinate is not on the grid the plan dealt, or "" when it is.
+
+    Silent when no grid was declared, so a plan that declares none behaves exactly as before.
+    """
+    if not grid or not isinstance(coverage, dict):
+        return ""
+    folded = {
+        axis: {level.casefold(): level for level in levels}
+        for axis, levels in grid.items()
+    }
+    for axis, level in coverage.items():
+        name, value = str(axis).strip(), str(level or "").strip()
+        if not name or not value:
+            continue
+        if name not in folded:
+            return (
+                f"coverage names the axis {name!r}, which is not one the plan deals. The grid is: "
+                + "; ".join(f"{one} = {', '.join(levels)}" for one, levels in grid.items())
+                + ". Place this scenario on those axes, or ask for the axis to be added to the "
+                "grid. An axis one scenario invents adds a column to the coverage denominator "
+                "that nothing else can ever fill."
+            )
+        if value.casefold() not in folded[name]:
+            return (
+                f"coverage puts {name} at {value!r}, which is not a level the plan deals. "
+                f"{name} may be: {', '.join(grid[name])}. Use the level from your brief; a level "
+                "per scenario is a label, not an axis, and makes the coverage report meaningless."
+            )
+    return ""
+
+
 def accept_scenario(
     payload: dict[str, Any],
     *,
@@ -266,6 +300,7 @@ def accept_scenario(
     allow_empty_solution: bool = False,
     persist: bool = True,
     rename_on_collision: bool = False,
+    vocabulary: list[str] | None = None,
 ) -> dict[str, Any]:
     """Validate one scenario, then prove it. A plain function so both halves are testable.
 
@@ -279,6 +314,12 @@ def accept_scenario(
     them reaching for the same obvious name is a coincidence, and replacing silently destroys
     proved work. Measured once: thirty-four scenarios cleared all three gates and twenty-one
     survived to be saved.
+
+    ``vocabulary`` is the keyword set the planner declared with ``aim_for``. A word outside it is
+    replaced here and named in the reply, never refused: the scenario has already cleared all three
+    gates by this point, and no keyword is worth losing proved work over. Writers cannot see each
+    other, so without this each invents its own words for the same idea and the suite ends with a
+    keyword per row.
     """
     try:
         scenario = Scenario.model_validate(payload)
@@ -335,6 +376,21 @@ def accept_scenario(
     else:
         kept[:] = [one for one in kept if one.name != scenario.name]
     kept.append(scenario)
+    outside: list[str] = []
+    if vocabulary and scenario.persona and scenario.persona.keywords:
+        allowed = {word.strip().casefold(): word.strip() for word in vocabulary if word.strip()}
+        inside: list[str] = []
+        for word in scenario.persona.keywords:
+            settled = allowed.get(word.strip().casefold())
+            if settled:
+                if settled not in inside:
+                    inside.append(settled)
+            else:
+                outside.append(word)
+        # Never emptied: a scenario no filter can reach is worse than one reached by a word the
+        # plan did not pick, so a total miss keeps what the writer chose and only says so.
+        if inside:
+            scenario.persona.keywords = inside
     # A proved scenario is already valuable work. Persist it immediately so a stopped model,
     # browser refresh, process restart, or later scenario failure cannot make the UI say none
     # were written. ``save_scenarios`` remains the suite-level diversity/finality gate.
@@ -373,9 +429,16 @@ def accept_scenario(
         if len(kept) > 5
         else ""
     )
+    strayed = (
+        "\nKeywords outside the suite's vocabulary, replaced with what the plan dealt: "
+        + ", ".join(sorted(set(outside)))
+        + ". Use the vocabulary you were given, or ask for a word to be added to it."
+        if outside
+        else ""
+    )
     return _ok(
         f"{scenario.name} {'replaced' if replaced else 'kept'}. {proof_summary}"
-        f"{unproved}\n{len(kept)} so far, most recent: {recent}{more}"
+        f"{unproved}{strayed}\n{len(kept)} so far, most recent: {recent}{more}"
     )
 
 
@@ -895,7 +958,17 @@ def scenario_tools(
         # asked for the number produced, so it applies to the stage and to every worker alike.
         # Replacing a scenario that already exists stays allowed, because fixing a refused one is
         # how a writer finishes its part.
-        # Before the gates, because a spread refusal is cheap to correct and proving is not.
+        # Before the gates, for the same reason the spread bound is: a label is cheap to correct and
+        # proving is not.
+        #
+        # The coverage report is arithmetic over the grid, so a writer that places a scenario on an
+        # axis nobody declared, or at a level nobody dealt, does not merely mislabel one row: it adds
+        # a column to the denominator. Measured on a 50-scenario run with the grid left undeclared:
+        # a `task` axis with 30 levels across 30 placed scenarios, one per scenario, and three axes
+        # invented by a single writer each. The report was then true arithmetic over noise.
+        strayed = _off_the_grid(args.get("coverage"), target.get("axes"))
+        if strayed:
+            return _err(strayed)
         if wanted and target.get("people") != "alike":
             crowded = crowded_field(
                 kept, Scenario.model_validate(args).persona, wanted
@@ -921,6 +994,7 @@ def scenario_tools(
             allow_empty_solution=tool_free_target,
             persist=can_save,
             rename_on_collision=rename_on_collision,
+            vocabulary=target.get("keywords"),
         )
         if not result.get("is_error"):
             exploration["since_submit"] = 0
@@ -1020,8 +1094,39 @@ def scenario_tools(
         "language or location may then dominate the suite. Set `alike` when they asked for one "
         "kind of caller on purpose, and that bound comes off. Their request decides this, never "
         "your own convenience: a writer that found the bound inconvenient and turned it off has "
-        "made a suite about one person.",
-        schema({"count": int, "people": {"type": "string", "enum": ["varied", "alike"]}}, ["count"]),
+        "made a suite about one person.\n\n"
+        "`keywords` is the suite's whole keyword vocabulary, and only the planner sets it. Declare "
+        "it here before the first brief goes out and deal it to every writer, because a writer "
+        "cannot see what its siblings chose: twelve writers left to invent their own produced 135 "
+        "keywords over 50 scenarios, 86 of them on a single row, which is a wall of chips rather "
+        "than a filter. Your axis levels are in the vocabulary already and are not listed again; "
+        "put here only what the axes do not name and somebody would still search for. A keyword "
+        "outside it is replaced when the scenario is submitted, and the writer is told.\n\n"
+        "`axes` is the grid itself, and it matters more than the keywords do, because the coverage "
+        "report is arithmetic over it. Left undeclared, writers invent their own: a real 50-scenario "
+        "run produced a `task` axis with **30 levels across 30 scenarios**, one per scenario, plus "
+        "three axes only one writer had ever heard of. A denominator built from that says nothing. "
+        "Declare the grid here and deal each cell in its brief.",
+        schema(
+            {
+                "count": int,
+                "people": {"type": "string", "enum": ["varied", "alike"]},
+                "keywords": {"type": "array", "items": {"type": "string"}},
+                "axes": {
+                    "type": "object",
+                    "additionalProperties": {"type": "array", "items": {"type": "string"}},
+                    "description": (
+                        "The grid you are dealing: every axis you vary and every level it may "
+                        'take, for example {"task": ["book_ride", "cancel_ride"], "overlay": '
+                        '["none", "prompt_injection"]}. Axis names are yours, so an agent kind '
+                        "nothing here has heard of declares its own. A scenario may only be "
+                        "placed on these axes at these levels, and submit_scenario says so before "
+                        "it proves anything, which costs a writer a label and never proved work."
+                    ),
+                },
+            },
+            ["count"],
+        ),
     )
     async def aim_for(args: dict[str, Any]) -> dict[str, Any]:
         count = int(args.get("count") or 0)
@@ -1036,6 +1141,27 @@ def scenario_tools(
                 ". Callers may now be alike; the spread bound is off"
                 if people == "alike"
                 else ". No accent, language or location may dominate the suite"
+            )
+        vocabulary = [
+            str(one).strip() for one in (args.get("keywords") or []) if str(one).strip()
+        ]
+        grid = {
+            str(axis).strip(): [str(one).strip() for one in levels if str(one).strip()]
+            for axis, levels in (args.get("axes") or {}).items()
+            if str(axis).strip() and isinstance(levels, list)
+        }
+        if grid:
+            target["axes"] = grid
+            said += (
+                f". The grid is {len(grid)} axes, "
+                + ", ".join(f"{axis} ({len(levels)})" for axis, levels in grid.items())
+                + "; a scenario placed anywhere else is refused before it is proved"
+            )
+        if vocabulary:
+            target["keywords"] = vocabulary
+            said += (
+                f". {len(vocabulary)} keywords are the suite's vocabulary; deal them in the briefs, "
+                "because a writer that never sees the list cannot stay inside it"
             )
         return _ok(said)
 
@@ -1084,6 +1210,20 @@ def scenario_tools(
                                 "items": {"type": "string"},
                             },
                         },
+                        "keywords": {
+                            "type": "array",
+                            "description": (
+                                "The suite's whole keyword vocabulary, and the only words a "
+                                "scenario may carry. Your axis levels are already in it without "
+                                "being listed, since those are how a suite of a thousand is "
+                                "actually filtered; put here only what the axes do not name and "
+                                "somebody would still search for. Anything a writer invents "
+                                "outside this set is dropped when the suite is saved, which is "
+                                "what stops twelve writers producing a hundred and thirty-five "
+                                "one-row chips."
+                            ),
+                            "items": {"type": "string"},
+                        },
                         "masked": {
                             "type": "array",
                             "description": (
@@ -1109,6 +1249,16 @@ def scenario_tools(
         # which is how a suite that asked for fifty and reached twenty-eight saved nothing at all.
         # What is off about the suite is said, not enforced.
         noted = not_ready(kept, target["count"], catalogue)
+        # Before anything is written, because the files on disk are what the platform reads and an
+        # archive holding two spellings of one keyword has already split the filter in two.
+        design = _args.get("design") if isinstance(_args.get("design"), dict) else None
+        # The grid declared to aim_for is the same grid, so a plan that declared it there never has
+        # to repeat it here, and a suite whose save forgot it still gets a real denominator rather
+        # than counting only the levels that happen to appear.
+        if target.get("axes"):
+            design = {**(design or {})}
+            design["axes"] = {**target["axes"], **(design.get("axes") or {})}
+        settled, invented = tidy_keywords(kept, vocabulary_from(design))
         path = write_scenarios(kept, destination, catalogue)
         # Read back after writing, because it is the check files on disk that get run, not the
         # intention behind them. Advisory: a thin check is still a check and still saves.
@@ -1127,9 +1277,20 @@ def scenario_tools(
             except Exception as unreadable:  # noqa: BLE001 - advisory only, never fatal
                 logger.warning("suite remark skipped: %s", unreadable)
         diversity = suite_diversity_problems(kept) + keyword_problems(kept)
+        if settled:
+            noted.append(
+                f"{settled} scenarios had a keyword rewritten: one spelling per word across the "
+                "suite, and bare record values such as an OTP dropped. Nothing else was touched."
+            )
+        if invented:
+            noted.append(
+                f"{len(invented)} keywords were outside the vocabulary you declared and were "
+                "dropped: " + ", ".join(sorted(invented)[:12])
+                + (f" and {len(invented) - 12} more" if len(invented) > 12 else "")
+                + ". Declare them in design.keywords if they belong."
+            )
         # How much of the space this suite covered, written beside it so the number and the
         # scenarios it describes can never drift apart.
-        design = _args.get("design") if isinstance(_args.get("design"), dict) else None
         coverage = coverage_report(kept, design)
         (destination / "coverage.json").write_text(
             json.dumps(coverage, indent=2, ensure_ascii=False), encoding="utf-8"

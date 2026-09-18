@@ -1046,6 +1046,92 @@ def coverage_report(
     return report
 
 
+def vocabulary_from(design: dict | None) -> set[str] | None:
+    """The keyword vocabulary a plan declared, folded for comparison. ``None`` when it declared none.
+
+    The axis levels are in it without being listed. They are what a suite of a thousand is actually
+    filtered by, the plan has already committed to them, and requiring them to be typed twice is a
+    second list to drift.
+    """
+    if not isinstance(design, dict):
+        return None
+    words: set[str] = set()
+    for levels in (design.get("axes") or {}).values():
+        if isinstance(levels, list):
+            words.update(str(one).strip().casefold() for one in levels if str(one).strip())
+    words.update(
+        str(one).strip().casefold()
+        for one in (design.get("keywords") or [])
+        if str(one).strip()
+    )
+    return words or None
+
+
+def tidy_keywords(
+    scenarios: list[Scenario], vocabulary: set[str] | None = None
+) -> tuple[int, set[str]]:
+    """One spelling per keyword across the suite, and no word the plan did not deal. Returns how
+    many scenarios moved and which words were dropped as invented.
+
+    Keywords are the one field every writer chooses while unable to see what the others chose, so a
+    suite written by twelve sub-agents at once fragments in two mechanical ways that no amount of
+    instruction prevents. Measured on a hosted 50-scenario ride suite: 135 distinct keywords, of
+    which 14 were case-only duplicates of each other (``UberX`` on sixteen scenarios and ``uberx``
+    on eight, the same word filtering two different sets) and five were OTP codes.
+
+    Neither needs judgement, which is why this is code and not a line in the skill. Keywords index
+    the suite and never reach the call, so nothing here can change what a scenario tests.
+
+    The surviving spelling is the one most of the suite used, so the suite keeps its own voice
+    rather than being lowercased into ``uberx``.
+
+    Fragmentation is a coordination problem, not a writing one, so the planner owns the vocabulary
+    and this is where that ownership is made real: with a vocabulary, a word outside it is dropped
+    and reported. Without one, only the two mechanical rules apply, so a plan that declares nothing
+    behaves exactly as it did before.
+    """
+    spellings: dict[str, Counter[str]] = defaultdict(Counter)
+    for one in scenarios:
+        for word in (one.persona.keywords if one.persona else []) or []:
+            clean = word.strip()
+            if clean:
+                spellings[clean.casefold()][clean] += 1
+    canonical = {
+        folded: seen.most_common(1)[0][0] for folded, seen in spellings.items()
+    }
+    moved = 0
+    invented: set[str] = set()
+    for one in scenarios:
+        if not one.persona or not one.persona.keywords:
+            continue
+        rewritten: list[str] = []
+        for word in one.persona.keywords:
+            clean = word.strip()
+            if not clean:
+                continue
+            # A keyword that is only digits is a value out of the world, an OTP or a reference
+            # number, and names no class of scenario anybody would search for.
+            if clean.replace(" ", "").replace("-", "").isdigit():
+                continue
+            if vocabulary is not None and clean.casefold() not in vocabulary:
+                invented.add(clean)
+                continue
+            settled = canonical.get(clean.casefold(), clean)
+            if settled not in rewritten:
+                rewritten.append(settled)
+        # Never emptied. A scenario with no keyword at all cannot be found by any filter, which is
+        # worse than one found by a word the plan did not choose, so a suite that strips to nothing
+        # keeps its best-supported word and the drop is reported instead.
+        if not rewritten and one.persona.keywords:
+            rewritten = [
+                canonical.get(one.persona.keywords[0].strip().casefold(), one.persona.keywords[0])
+            ]
+        if rewritten != one.persona.keywords:
+            moved += 1
+            one.persona.keywords = rewritten
+    return moved, invented
+
+
 def keyword_problems(scenarios: list[Scenario]) -> list[str]:
     """Whether the suite's keywords can actually be used to find anything.
 

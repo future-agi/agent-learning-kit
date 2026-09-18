@@ -140,10 +140,17 @@ scenario to a person reading the suite; the situation text and the persona still
 their own and read like a real request from a real person. A scenario whose instruction reads like a
 coordinate has been written backwards.
 
-**Declare the grid you dealt when you save.** `save_scenarios` takes a `design`: every level you
-intended per axis, and the pairs that are deliberately not testable. Pass it, or the coverage report
-can only count the levels that happen to appear, and a suite that covered two of six tasks reports
-full coverage because two is all it can see.
+**Declare the grid to `aim_for` before the first brief, not afterwards.** `aim_for` takes `axes`:
+every axis you vary and every level it may take. A scenario placed anywhere else is refused at
+`submit_scenario` before anything is proved, so the correction costs a label and never proved work.
+
+This is the difference between a coverage report and a number. Measured on a 50-scenario run that
+left the grid undeclared: the writers produced a **`task` axis with 30 levels across 30 placed
+scenarios**, one per scenario, plus three axes a single writer had invented. Every pairwise share in
+that report was true arithmetic over noise.
+
+`save_scenarios` still takes a `design` for the pairs that are deliberately not testable, and the
+axes you gave `aim_for` carry over without being typed again.
 
 ```json
 {"axes": {"task": ["book", "cancel", "reschedule"],
@@ -175,6 +182,17 @@ the caller and they never reach the call, so a term that reads like a trait is t
 word. Decide the whole suite's keyword vocabulary here, before the first brief goes out, and deal it
 in the briefs the way you deal accents and name initials. A writer cannot see its siblings, so
 writers left to choose their own words produce one vocabulary each for the same ideas.
+
+**The vocabulary is yours alone, and it is closed.** Your axis levels are in it already, so you never
+list them twice; `save_scenarios` takes `design.keywords` for the few words the axes do not name and
+somebody would still search for. **A word a writer invents outside that set is dropped when the suite
+is saved**, and you are told which. So a thin `design.keywords` costs the suite its colour, and no
+`design.keywords` at all leaves only the axis levels.
+
+This is not a style rule. Measured on a hosted 50-scenario ride suite written by twelve sub-agents at
+once: **135 distinct keywords, 86 of them on exactly one scenario**, including five OTP codes and
+fourteen pairs that differed only in case, `UberX` filtering sixteen scenarios while `uberx` filtered
+eight others. Declaring the vocabulary took the same suite to **30 keywords and 21 singletons**.
 
 **The vocabulary is the coordinate, written down.** You have already placed every scenario on the
 axes. A keyword is that placement in a word somebody would search for, which is why it costs nothing
