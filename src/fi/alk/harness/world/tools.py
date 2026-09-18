@@ -379,8 +379,10 @@ def _tables_the_source_lacks(state: dict, source_root: str, contract: Any) -> li
     if not paths:
         return []
     declared: dict[str, set[str]] = {}
+    required: dict[str, set[str]] = {}
     for path in paths:
-        sql = path.read_text(encoding="utf-8")
+        # Comments first: a trailing `-- matched against caller_ani` is prose, not a column.
+        sql = re.sub(r"--[^\n]*", "", path.read_text(encoding="utf-8"))
         for found in re.finditer(
             r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"?([A-Za-z_]\w*)"?\s*\(',
             sql,
@@ -392,12 +394,19 @@ def _tables_the_source_lacks(state: dict, source_root: str, contract: Any) -> li
             while at < len(sql) and depth:
                 depth += (sql[at] == "(") - (sql[at] == ")")
                 at += 1
-            columns = set()
+            columns, must = set(), set()
             for part in re.split(r",(?![^()]*\))", sql[found.end() : at - 1]):
                 word = part.strip().split(" ")[0].strip('"').strip()
-                if word and word.upper() not in _NOT_A_COLUMN and not word.startswith("--"):
-                    columns.add(word.lower())
+                if not word or word.upper() in _NOT_A_COLUMN:
+                    continue
+                columns.add(word.lower())
+                said = part.upper()
+                # A column the schema insists on and supplies no default for has to come from
+                # the rows, or the insert puts NULL in it and postgres refuses the whole seed.
+                if "NOT NULL" in said and "DEFAULT" not in said:
+                    must.add(word.lower())
             declared.setdefault(found.group(1).lower(), set()).update(columns)
+            required.setdefault(found.group(1).lower(), set()).update(must)
 
     problems: list[str] = []
     for name, rows in state.items():
@@ -415,6 +424,12 @@ def _tables_the_source_lacks(state: dict, source_root: str, contract: Any) -> li
         invented = sorted(used - declared[name.lower()])
         if invented:
             problems.append(f"{name}.{{{', '.join(invented)}}}")
+        if used:
+            absent = sorted(required.get(name.lower(), set()) - used)
+            if absent:
+                problems.append(
+                    f"{name} rows leave out {', '.join(absent)}, which the schema requires"
+                )
     return problems
 
 

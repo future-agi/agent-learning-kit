@@ -2394,6 +2394,22 @@ def test_a_world_is_refused_when_it_invents_tables_or_columns(tmp_path) -> None:
     assert _tables_the_source_lacks(invented_column, str(tmp_path), None) == [
         "users.{created_at}"
     ]
+    # The mirror case, and the one that actually broke every hosted run: the schema insists on a
+    # column with no default, the rows leave it out, the insert puts NULL there and psql refuses.
+    (tmp_path / "db" / "schema.sql").write_text(
+        "CREATE TABLE users (\n"
+        "  rider_id TEXT PRIMARY KEY,\n"
+        "  phone TEXT NOT NULL,  -- matched against caller_ani\n"
+        "  status TEXT NOT NULL DEFAULT 'active'\n"
+        ");\n",
+        encoding="utf-8",
+    )
+    assert _tables_the_source_lacks(
+        {"users": [{"rider_id": "u1", "phone": "+1"}]}, str(tmp_path), None
+    ) == []
+    assert _tables_the_source_lacks(
+        {"users": [{"rider_id": "u1"}]}, str(tmp_path), None
+    ) == ["users rows leave out phone, which the schema requires"]
     # A generated world has no source schema to answer to, so nothing is checked.
     assert _tables_the_source_lacks(invented_table, "", None) == []
 
