@@ -420,17 +420,14 @@ def accept_scenario(
         else "All three gates pass: the world is ready for it, the reference solution passes "
         "its checks, and those checks fail when nothing is done."
     )
-    # The whole list used to be echoed on every submit. On a hundred-scenario suite that is
-    # 207,000 characters of re-listing, quadratic in the count and re-read on every later turn.
-    # The tail is what a writer uses to keep its bearings; `inspect_scenario` has the rest.
-    # Names, bounded. Echoing the whole suite was quadratic, but withholding it cost far more: the
-    # session lost its bearings and re-read the suite with inspect_scenario, whose replies are larger
-    # and stay in context for the rest of the run.
+    # Names, bounded. Withholding them entirely costs more than echoing them: a session that
+    # cannot see what is taken re-reads the suite to find out, and a read carries a whole
+    # scenario body for the rest of the run. Saying what the list is for is what stops that.
     names = [one.name for one in kept]
     recent, more = ", ".join(names), ""
     if len(recent) > 2000:
         recent = ", ".join(names[-20:])
-        more = f" (and {len(names) - 20} before them; inspect_scenario names them all)"
+        more = f" (and {len(names) - 20} before them)"
     strayed = (
         "\nKeywords outside the suite's vocabulary, replaced with what the plan dealt: "
         + ", ".join(sorted(set(outside)))
@@ -440,7 +437,8 @@ def accept_scenario(
     )
     return _ok(
         f"{scenario.name} {'replaced' if replaced else 'kept'}. {proof_summary}"
-        f"{unproved}{strayed}\n{len(kept)} so far, most recent: {recent}{more}"
+        f"{unproved}{strayed}\n{len(kept)} so far. These names are taken, so do not reuse one "
+        f"and do not read them: {recent}{more}"
     )
 
 

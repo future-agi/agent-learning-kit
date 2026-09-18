@@ -2167,3 +2167,14 @@ def test_a_writer_can_neither_save_nor_read_the_suite_it_is_writing_into(monkeyp
 
     offered = {spec.name for spec in worker.servers[stage.SCENARIO_SERVER].tools}
     assert offered == {"submit_scenario"}
+
+
+def test_the_submit_reply_says_what_the_names_are_for() -> None:
+    """Names without a purpose send a writer reading bodies; the false pointer sent it further."""
+    from fi.alk.harness import scenario_tools
+
+    source = (
+        __import__("pathlib").Path(scenario_tools.__file__).read_text(encoding="utf-8")
+    )
+    assert "inspect_scenario names them all" not in source
+    assert "do not read them" in source
