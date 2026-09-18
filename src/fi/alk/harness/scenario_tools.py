@@ -230,10 +230,9 @@ def crowded_field(kept: list[Scenario], candidate: Any, wanted: int) -> str:
     """Which persona field this scenario would push past its share of the suite, if any.
 
     The plan deals these out across the writers, and a writer that ignores its share produces a
-    suite where everybody is the same person in different clothes. Measured: one suite put 28 of
-    30 callers in the United States and 22 of 30 on one accent, while passing a distinct-values
-    check because three values existed. Refused here rather than reported at the end, because here
-    it costs one turn and there it costs the suite.
+    suite where everybody is the same person in different clothes. A distinct-values check passes
+    on three values, so the share is what is enforced. Refused here because at the end it costs the
+    suite rather than one turn.
     """
     if wanted < FEWEST_FOR_A_SHARE or candidate is None:
         return ""
@@ -312,8 +311,7 @@ def accept_scenario(
     owns the suite it means a deliberate replacement, which is how a refused scenario gets fixed.
     For a writer it cannot mean that: writers share one list and cannot see each other, so two of
     them reaching for the same obvious name is a coincidence, and replacing silently destroys
-    proved work. Measured once: thirty-four scenarios cleared all three gates and twenty-one
-    survived to be saved.
+    proved work.
 
     ``vocabulary`` is the keyword set the planner declared with ``aim_for``. A word outside it is
     replaced here and named in the reply, never refused: the scenario has already cleared all three
@@ -501,10 +499,8 @@ def _what_moved(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
     """The rows the calls actually changed, and nothing else.
 
     What a writer needs after running a reference solution is what its calls did, which is a small
-    set of rows. Re-printing every small table on every probe instead cost a real 100-scenario ride
-    suite most of its bill: the world has twelve tables, several under six rows, so each probe echoed
-    about 5KB of unchanged rows into a conversation that is re-read on every later turn. Measured at
-    206k tokens of context per turn against 28k for a one-table world.
+    set of rows. Echoing every table on every probe puts unchanged rows into a conversation that is
+    re-read on every later turn.
 
     Saying **nothing changed** is information the old dump could not express: a solution whose calls
     leave the world untouched cannot be checked against world state, and the writer needs to know
@@ -958,14 +954,8 @@ def scenario_tools(
         # asked for the number produced, so it applies to the stage and to every worker alike.
         # Replacing a scenario that already exists stays allowed, because fixing a refused one is
         # how a writer finishes its part.
-        # Before the gates, for the same reason the spread bound is: a label is cheap to correct and
-        # proving is not.
-        #
-        # The coverage report is arithmetic over the grid, so a writer that places a scenario on an
-        # axis nobody declared, or at a level nobody dealt, does not merely mislabel one row: it adds
-        # a column to the denominator. Measured on a 50-scenario run with the grid left undeclared:
-        # a `task` axis with 30 levels across 30 placed scenarios, one per scenario, and three axes
-        # invented by a single writer each. The report was then true arithmetic over noise.
+        # Before the gates, like the spread bound: a label is cheap to correct and proving is not.
+        # An undeclared axis or level adds a column to the coverage denominator nothing can fill.
         strayed = _off_the_grid(args.get("coverage"), target.get("axes"))
         if strayed:
             return _err(strayed)
@@ -1434,12 +1424,7 @@ def _handed_to_the_caller(fixture: Any, key: str = "") -> list[tuple[str, str]]:
 def grounding_problems(scenarios: list[Scenario], world_root: Path) -> list[str]:
     """Scenarios that hand the caller a credential the world does not hold once setup has run.
 
-    Measured on a real 200-scenario ride suite: **17 of 17 scenarios naming a six-digit OTP used a
-    code that appears nowhere in `otp_codes`**, with a no-op `setup.py` and a `ready.py` that
-    returned None. `verify-otp-success-dana` told the caller 265512 while the world held 638204 for
-    that phone, so the caller could not possibly succeed.
-
-    The three admission gates all passed, because they ask whether a check *can* fail, not whether it
+    The three admission gates all pass on these, because they ask whether a check *can* fail, not whether it
     can fail for the reason the scenario is about. This asks the separate question: does the person
     on the call have what the call needs.
 

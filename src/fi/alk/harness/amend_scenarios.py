@@ -44,7 +44,14 @@ OPERATIONS = ("set_persona", "set_field", "drop")
 # edit write those would be letting it bypass the gates rather than satisfy them. `use_case` is not
 # here: it is read off the contract and one use case covers many scenarios, so editing it on one
 # only misfiles that scenario. A wrong use case means a wrong contract, which is a rebuild.
-EDITABLE_FIELDS = ("instruction", "tests", "branch", "max_turns", "background_noise")
+#
+# `branch` is not here either, for the same reason one step down. `not_ready` keys its duplicate
+# check on the pair of use case and branch, so a branch that can be retyped is a gate that can be
+# talked out of its answer, and two scenarios testing one thing stop being visible as such. What
+# makes a scenario different from its siblings is its instruction, fixture, solution and checks, and
+# none of those move when the sentence describing them is rewritten.
+# `instruction` is not here: the scenario situation is out of the agreed editing scope.
+EDITABLE_FIELDS = ("tests", "max_turns", "background_noise")
 
 # Of those, the ones that describe a scenario rather than decide anything about it. `tests` belongs
 # here despite reading like the claim: it is reported with the result and deliberately withheld from
@@ -52,7 +59,7 @@ EDITABLE_FIELDS = ("instruction", "tests", "branch", "max_turns", "background_no
 # changing what is verified, so changing what is verified means changing sub-goals instead.
 # `instruction` stays out, because it is what the person asks for and can leave the solution unable
 # to solve it.
-DESCRIPTIVE_FIELDS = ("tests", "branch", "max_turns", "background_noise")
+DESCRIPTIVE_FIELDS = ("tests", "max_turns", "background_noise")
 
 
 @dataclass
