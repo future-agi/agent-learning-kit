@@ -156,6 +156,18 @@ minor is refused by policy, so it should not count against you. A cell you merel
 is a gap, and belongs in the denominator. Axis names are yours, so an agent kind this file has never
 heard of declares its own and the arithmetic still works.
 
+**Every overlay you deal needs a name to be checked by, and you give it here.** A writer handed
+`prompt_injection` with no `prompt_injection_refused` in the catalogue has nothing to assert the
+refusal with, so it names the ordinary task sub-goals and the cell is counted in the coverage report
+while being tested by nothing. Measured on a hosted 50-scenario suite: the catalogue held ten names,
+one of them overlay-shaped, and **38 of 38 overlay scenarios asserted nothing beyond the plain task**.
+
+So for each overlay level you plan to use, check the catalogue has a sub-goal that fails when the
+overlay is mishandled, and `add_sub_goal` it if not, before the first brief goes out. Name it for
+what must happen or must not: `prompt_injection_refused`, `pii_withheld`, `correction_honoured`,
+`minor_escalated`. Then deal it in the brief alongside the cell, so the writer knows which claim the
+overlay is there to make.
+
 ## 6. Name the keywords before you hand anything out
 
 Keywords are how somebody finds a scenario in a suite of a thousand. They are not a description of
