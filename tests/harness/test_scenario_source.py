@@ -1976,11 +1976,13 @@ def test_coverage_report_tells_a_gap_from_a_cell_that_was_never_legal(tmp_path: 
 
 
 def test_check_problems_names_the_check_that_only_proves_the_tool_was_reached(tmp_path: Path) -> None:
-    """Both halves of what a real hundred-scenario suite shipped on seventy of its scenarios.
+    """The two shapes that cannot fail, and the shape that must not be flagged.
 
-    `lookup_weather_executed` and `weather_lookup_succeeded` each assert a successful call carrying
-    a location, so either passes for any agent that reaches the tool at all and neither says what
-    the caller was told. A check naming the value it expects is left alone.
+    A real hundred-scenario suite shipped `lookup_weather_executed` and `weather_lookup_succeeded`
+    together on seventy scenarios, both reading one lookup_weather call. A second suite, written with
+    double quotes, asserts `caller_explicitly_confirmed is not True`; an earlier version of this
+    check understood only single quotes and called 19 of its 19 checks thin, which is worse than
+    saying nothing.
     """
     from fi.alk.harness.folder import check_problems
 
@@ -1988,26 +1990,30 @@ def test_check_problems_names_the_check_that_only_proves_the_tool_was_reached(tm
         folder = tmp_path / "scenarios" / scenario / "checks"
         folder.mkdir(parents=True, exist_ok=True)
         (folder / f"{name}.py").write_text(
-            "def check(world, calls):\n"
-            "    lookups = [c for c in calls if c.name == 'lookup_weather' and c.ok]\n"
-            f"{body}\n    return None\n",
-            encoding="utf-8",
+            f"def check(world, calls):\n{body}\n    return None\n", encoding="utf-8"
         )
 
-    write("thin", "lookup_weather_executed",
+    write("twice", "lookup_weather_executed",
+          "    lookups = [c for c in calls if c.name == 'lookup_weather' and c.ok]\n"
           "    if not any('location' in c.arguments for c in lookups):\n"
-          "        return 'The agent called lookup_weather without a location argument.'")
-    write("thin", "weather_lookup_succeeded",
-          "    if not any(len(c.arguments.get('location', '').strip()) > 0 for c in lookups):\n"
-          "        return 'lookup_weather was not called with a non-empty location.'")
-    write("real", "san_francisco_weather_looked_up",
-          "    if not any('san francisco' in c.arguments.get('location', '').lower() for c in lookups):\n"
-          "        return 'The agent did not look up weather with location San Francisco.'")
+          "        return 'no location'")
+    write("twice", "weather_lookup_succeeded",
+          "    lookups = [c for c in calls if c.name == 'lookup_weather' and c.ok]\n"
+          "    if not any(len(c.arguments.get('location', '')) > 0 for c in lookups):\n"
+          "        return 'empty location'")
+    write("plumbing", "call_ended_on_request",
+          "    if not [c for c in calls if c.name == 'end_call']:\n"
+          "        return 'not ended'")
+    write("double_quoted", "subgoal_book_ride_confirmed",
+          '    book = next((c for c in calls if c.name == "book_ride" and c.ok), None)\n'
+          '    if book.arguments.get("caller_explicitly_confirmed") is not True:\n'
+          '        return "must be explicitly confirmed"')
 
     said = " ".join(check_problems(tmp_path))
-    assert "thin: lookup_weather_executed, weather_lookup_succeeded" in said
-    assert "2 checks assert only that a tool was called" in said
-    assert "san_francisco" not in said
+    assert "twice: lookup_weather_executed, weather_lookup_succeeded" in said
+    assert "1 checks assert only that a tool was called" in said
+    # The double-quoted check reads its arguments, so it is neither plumbing nor a duplicate.
+    assert "double_quoted" not in said
 
 
 def test_fixture_credentials_are_only_flagged_when_they_name_a_record() -> None:

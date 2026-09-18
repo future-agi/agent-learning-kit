@@ -255,61 +255,57 @@ def read_all(destination: Path) -> list[Scenario]:
     return found
 
 
-def _expects_a_value(body: str) -> bool:
-    """Whether a check compares an argument against something concrete, rather than just naming it.
-
-    Everything a check must mention to reach an argument at all is stripped first: the tool it
-    selects on, the key it reads, the empty-string default, and the sentence it returns when it
-    fails, which is the check's own prose and not a claim about the agent. Whatever literal survives is the
-    value the agent is actually being held to, wherever it sits in the expression, which is what a
-    pattern anchored on ``arguments`` missed when a suite wrote ``'san francisco' in ...``.
-    """
-    left = re.sub(r"return\s+'[^']*'", "return", body)
-    left = re.sub(r'return\s+"[^"]*"', "return", left)
-    left = re.sub(r"c\.name\s*==\s*'[^']*'", "", left)
-    left = re.sub(r"\.get\(\s*'[^']*'", ".get(", left)
-    left = re.sub(r"'[^']*'\s+in\s+c\.arguments(?![\.\[])", "", left)
-    left = left.replace("''", "").replace('""', "")
-    return bool(re.search(r"'[^']+'", left))
+def _tools_selected(body: str) -> set[str]:
+    """Every tool name this check narrows the calls to, in either quoting style."""
+    return {
+        m.group(1) or m.group(2)
+        for m in re.finditer(r"""c\.name\s*==\s*(?:'([^']*)'|"([^"]*)")""", body)
+    }
 
 
 def check_problems(folder: Path) -> list[str]:
-    """Checks that were written but do not check anything, read back from what was just saved.
+    """Checks that cannot fail for the reason their scenario exists.
 
-    The rule is already in the writing skill and was followed anyway: a real hundred-scenario suite
-    shipped `lookup_weather_executed` and `weather_lookup_succeeded` on seventy of them, both
-    asserting a successful call carrying a location, neither asserting what the caller was told.
-    Prose did not stop it, so this reads the files.
+    Two shapes, both read off the files that actually run rather than the intention behind them.
 
-    A check earns its place by looking at the world the run left, or by comparing an argument to a
-    value it should have. One that does neither only proves the tool was reached: every agent that
-    reaches it passes, and an agent that behaves correctly by another route fails. Two such checks
-    naming the same tool are one check written twice.
+    **Plumbing only.** A check that touches neither ``world`` nor the call's ``arguments`` asserts
+    that a tool was reached and nothing else, so every agent that reaches it passes and an agent that
+    did the right thing another way fails.
 
-    Advisory, never blocking. The suite saves either way; this only says what is thin.
+    **The same tool twice.** Two checks on one scenario narrowing to the same tool, neither reading
+    ``world``, are two readings of one call. A real hundred-scenario suite shipped
+    `lookup_weather_executed` and `weather_lookup_succeeded` together on seventy scenarios: one
+    asserted a successful call carrying a location, the other a successful call carrying a non-empty
+    location, and neither said what the caller was told.
+
+    Deliberately narrow. An earlier version called any check without a literal comparison thin and
+    flagged 19 of 19 on a suite whose checks assert `caller_explicitly_confirmed is not True` and
+    `kind in ("pickup", "dropoff")`, because it only understood single quotes. A check that cries
+    wolf is worse than no check. Advisory either way.
     """
     problems: list[str] = []
-    thin = 0
+    plumbing = 0
     for scenario_dir in sorted(one for one in (folder / SCENARIOS).glob("*") if one.is_dir()):
         by_tool: dict[str, list[str]] = defaultdict(list)
         for check in sorted(scenario_dir.glob("checks/*.py")):
             body = check.read_text(encoding="utf-8").split("if __name__")[0]
             inside = body.replace("def check(world, calls):", "")
-            if "world" in inside or _expects_a_value(inside):
-                continue
-            thin += 1
-            for tool in set(re.findall(r"c\.name\s*==\s*'([^']+)'", inside)):
-                by_tool[tool].append(check.stem)
+            reads_world = "world" in inside
+            reads_arguments = "arguments" in inside
+            if not reads_world and not reads_arguments:
+                plumbing += 1
+            if not reads_world:
+                for tool in _tools_selected(inside):
+                    by_tool[tool].append(check.stem)
         for tool, names in sorted(by_tool.items()):
             if len(names) > 1:
                 problems.append(
-                    f"{scenario_dir.name}: {', '.join(sorted(names))} all only assert that "
-                    f"{tool} was called, so they are one check written more than once"
+                    f"{scenario_dir.name}: {', '.join(sorted(names))} all read the same {tool} call "
+                    "and none of them reads the world, so they are one claim written more than once"
                 )
-    if thin:
+    if plumbing:
         problems.append(
-            f"{thin} checks assert only that a tool was called. Assert the arguments it was given "
-            "or the state the world was left in, or the check passes for any agent that reaches "
-            "the tool at all."
+            f"{plumbing} checks assert only that a tool was called, touching neither its arguments "
+            "nor the world. Every agent that reaches the tool passes them."
         )
     return problems
