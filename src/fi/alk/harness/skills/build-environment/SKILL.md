@@ -184,6 +184,14 @@ So before `save_world`, reconcile the two directions:
 Adopting the agent's own store or loader usually gets this right for free, which is one more reason
 to prefer it. `create_schema` is where the risk lives, because then the column list is yours.
 
+**A tool that checks a secret needs somewhere for that secret to live.** If the agent can send a
+code, verify a code, look up a reference or confirm a token, the world needs the table that holds
+it, and the tool has to read that table. Declaring the pair without the table leaves a tool that
+accepts anything: a scenario written against it can only assert that the call happened, the caller
+can be handed a code that exists nowhere, and the suite then tests the order of two calls instead
+of the verification it claims to test. Check this for every tool whose name or description says
+verify, confirm, validate, check or authenticate.
+
 ## Seeding
 
 Seed the agent's **real** data. Where the contract records something unavailable, a misspelled
