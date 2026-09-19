@@ -37,9 +37,29 @@ class SubGoal(BaseModel):
     what: str = ""
     check: str = ""
     judged: str = ""
+    # Which overlay level this sub-goal is the claim for, when it is one. An overlay scenario has
+    # to name a sub-goal that fails if the overlay is mishandled, or it tests the plain task with
+    # a different label on it, and this is how a scenario says which sub-goal that is rather than
+    # the reader guessing from the name.
+    overlay: str = ""
 
     def deterministic(self) -> bool:
         return bool(self.check.strip())
+
+    def settles(self, level: str) -> bool:
+        """Whether this sub-goal is the claim an overlay level is checked by.
+
+        Two ways, because the field arrived after suites already existed: the sub-goal says so, or
+        its name carries the level, which is what a well-named `prompt_injection_refused` already
+        does. Both are the sub-goal's own doing; neither infers from the scenario.
+        """
+        wanted = (level or "").strip().lower()
+        if not wanted:
+            return False
+        if self.overlay.strip().lower() == wanted:
+            return True
+        named = self.name.strip().lower()
+        return wanted in named or named in wanted
 
 
 class SuiteEval(BaseModel):

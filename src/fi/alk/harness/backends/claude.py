@@ -142,12 +142,17 @@ class ClaudeSession:
         if isinstance(received, ResultMessage):
             # subtype alone is not the outcome. A call that failed upstream still arrives with
             # subtype "success", so the error facts ride along and Stage decides what failed.
+            counted = _tokens(getattr(received, "model_usage", None))
             return [
                 StageDone(
                     outcome=received.subtype,
                     turns=received.num_turns,
-                    cost_usd=received.total_cost_usd,
-                    **_tokens(getattr(received, "model_usage", None)),
+                    cost_usd=_cost(
+                        getattr(received, "model_usage", None),
+                        counted,
+                        received.total_cost_usd,
+                    ),
+                    **counted,
                     session_id=received.session_id,
                     models=set(getattr(received, "model_usage", None) or {}),
                     is_error=bool(getattr(received, "is_error", False)),
@@ -171,6 +176,29 @@ class ClaudeSession:
         return []
 
 
+def _cost(model_usage: Any, counted: dict[str, int], reported: float | None) -> float | None:
+    """What the run cost, priced here rather than taken from the loop that ran it.
+
+    The CLI prices every call from its own table, which holds Claude models. Given a Gemini id it
+    does not recognise, it still returns a number, and that number was 14x the truth on the first
+    run measured. Where the harness has a price for the model it is the one that stands; where it
+    has none, the CLI's figure is passed through rather than replaced by silence.
+    """
+    from .vertex_gemini import priced
+
+    named = [str(name) for name in (model_usage or {})]
+    ours = [
+        priced(name, counted["tokens_in"], counted["tokens_out"], counted["tokens_cached"])
+        for name in named
+    ]
+    known = [one for one in ours if one is not None]
+    if not known:
+        return reported
+    # One price per model, and a stage runs on one: summing would multiply the same tokens by
+    # however many ids the SDK happened to report.
+    return max(known)
+
+
 def _tokens(model_usage: Any) -> dict[str, int]:
     """Input and output tokens across every model a stage used, for the ledger to audit against.
 
@@ -178,14 +206,24 @@ def _tokens(model_usage: Any) -> dict[str, int]:
     """
     read = 0
     written = 0
+    cached = 0
     for usage in (model_usage or {}).values():
         if isinstance(usage, dict):
             read += int(usage.get("inputTokens") or usage.get("input_tokens") or 0)
             written += int(usage.get("outputTokens") or usage.get("output_tokens") or 0)
+            cached += int(
+                usage.get("cacheReadInputTokens")
+                or usage.get("cache_read_input_tokens")
+                or 0
+            )
         else:
             read += int(getattr(usage, "input_tokens", 0) or 0)
             written += int(getattr(usage, "output_tokens", 0) or 0)
-    return {"tokens_in": read, "tokens_out": written}
+            cached += int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+    # The SDK reports cache reads beside fresh input, the way the Messages API does; the ledger
+    # reads tokens_cached as a part of tokens_in. Left unadded, a turn served almost entirely from
+    # cache looks like a turn that barely sent anything.
+    return {"tokens_in": read + cached, "tokens_out": written, "tokens_cached": cached}
 
 
 class ClaudeBackend:
@@ -247,3 +285,46 @@ class ClaudeBackend:
         if spec.thinking:
             options.thinking = thinking_config()
         return ClaudeSession(options)
+
+
+# The Gemini model this variant runs on unless one is named. Carries its route, because the
+# gateway resolves a bare id to a different provider than the prefixed one, and kept here rather
+# than borrowed from the ADK backend so that changing one route's default never changes the
+# other's.
+GATEWAY_DEFAULT_MODEL = "vertex_ai/gemini-3.5-flash"
+
+
+class ClaudeGatewayBackend(ClaudeBackend):
+    """The same loop, pointed at a gateway that speaks Anthropic Messages in front of Gemini.
+
+    A backend of its own rather than a mode of the one above, because the two differ in the only
+    thing that matters here: which provider gets billed. Selecting it by name is a decision
+    somebody made; a mode that turns itself on from an env var is a decision nobody made.
+
+    It refuses to start without a gateway, and refuses any model the harness may not spend on.
+    Both refusals are here rather than at the first call because the failure they prevent is a
+    bill, and a bill is only visible after the run.
+    """
+
+    name = "claude-gemini"
+    default_model = GATEWAY_DEFAULT_MODEL
+
+    def can_drive(self, model: str) -> bool:
+        from ..config import refuse_a_model_we_cannot_afford
+
+        try:
+            refuse_a_model_we_cannot_afford(model)
+        except ValueError:
+            return False
+        return True
+
+    def create(self, spec: SessionSpec) -> ClaudeSession:
+        import os
+
+        if not os.environ.get("ALK_HARNESS_GATEWAY_URL", "").strip():
+            raise ValueError(
+                "the claude-gemini backend needs ALK_HARNESS_GATEWAY_URL pointing at a gateway "
+                "that serves POST /v1/messages from a Gemini model. Without it the CLI would "
+                "reach Anthropic directly, which is the bill this backend exists to prevent."
+            )
+        return super().create(spec)

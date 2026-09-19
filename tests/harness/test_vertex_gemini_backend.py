@@ -143,3 +143,54 @@ def test_a_cache_read_is_not_charged_at_the_full_input_rate() -> None:
     assert all_cached == round(0.75 * CACHE_READ_SHARE, 6) or abs(all_cached - 0.075) < 1e-9
     # A cached count larger than the input it came from cannot make the bill negative.
     assert priced("gemini-3.7-flash", 1_000, 0, 999_999) >= 0
+
+
+def test_the_claude_sdk_on_gemini_refuses_a_model_we_cannot_afford():
+    """The whole point of this backend is which provider gets billed. It refuses a Claude id
+    rather than driving it, so a stray ALK_HARNESS_MODEL cannot spend on one."""
+    from fi.alk.harness.backends import resolve
+
+    backend = resolve("claude-gemini")
+    assert backend.name == "claude-gemini"
+    assert backend.can_drive("gemini-3.7-flash")
+    assert backend.can_drive("vertex_ai/gemini-3.7-flash")
+    assert not backend.can_drive("claude-sonnet-4-6")
+    assert not backend.can_drive("gpt-4o")
+    assert not backend.can_drive("")
+
+
+def test_the_claude_sdk_on_gemini_refuses_to_start_without_a_gateway(monkeypatch):
+    """Without a gateway the CLI reaches Anthropic directly, which is the bill this backend
+    exists to prevent. Refused at session build, not at the first call."""
+    import pytest
+
+    from fi.alk.harness.backends import SessionSpec, resolve
+
+    monkeypatch.delenv("ALK_HARNESS_GATEWAY_URL", raising=False)
+    backend = resolve("claude-gemini")
+    with pytest.raises(ValueError, match="ALK_HARNESS_GATEWAY_URL"):
+        backend.create(SessionSpec(system_prompt="hi", model="gemini-3.7-flash"))
+
+
+def test_the_gateway_route_never_carries_the_vertex_claude_flag(monkeypatch):
+    """CLAUDE_CODE_USE_VERTEX means Anthropic's own models hosted on Vertex. On the gateway route
+    it must be absent, and the service account must not travel with it either: credentials belong
+    to whoever talks to the provider, and behind a gateway that is the gateway."""
+    from fi.alk.harness.config import provider_env
+
+    monkeypatch.setenv("ALK_HARNESS_GATEWAY_URL", "http://127.0.0.1:8091")
+    monkeypatch.setenv("ALK_HARNESS_GATEWAY_TOKEN", "not-a-real-token")
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/tmp/creds.json")
+    env = provider_env("vertex_ai/gemini-3.7-flash")
+    assert "CLAUDE_CODE_USE_VERTEX" not in env
+    assert "GOOGLE_APPLICATION_CREDENTIALS" not in env
+    assert env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:8091"
+    assert env["CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT"] == "1"
+    # Every model a session can reach is pinned to the one the run chose.
+    for pinned in ("ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL"):
+        assert env[pinned] == "vertex_ai/gemini-3.7-flash"
+
+    monkeypatch.delenv("ALK_HARNESS_GATEWAY_URL")
+    straight = provider_env("gemini-3.7-flash")
+    assert straight["CLAUDE_CODE_USE_VERTEX"] == "1"
+    assert "ANTHROPIC_BASE_URL" not in straight

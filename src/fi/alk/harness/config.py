@@ -139,9 +139,30 @@ def provider_env(model: str | None = None) -> dict[str, str]:
     # model the run asked for.
     chosen = chosen_model(model)
     refuse_a_model_we_cannot_afford(chosen)
+    gateway = os.environ.get("ALK_HARNESS_GATEWAY_URL", "").strip()
     env = {
-        "CLAUDE_CODE_USE_VERTEX": "1",
-        "CLOUD_ML_REGION": os.environ.get("CLOUD_ML_REGION", "global"),
+        # A gateway speaking Anthropic Messages in front of a Gemini model, or the CLI's own
+        # Vertex route. The two are mutually exclusive and picking the wrong one is expensive:
+        # CLAUDE_CODE_USE_VERTEX means Anthropic's models hosted on Vertex, which is not this.
+        **(
+            {
+                "ANTHROPIC_BASE_URL": gateway,
+                "ANTHROPIC_AUTH_TOKEN": os.environ.get(
+                    "ALK_HARNESS_GATEWAY_TOKEN", ""
+                ),
+                # The CLI does not recognise a Gemini id, so it refuses the call on a window it
+                # cannot look up and then compacts against a window it guessed.
+                "CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT": "1",
+                "CLAUDE_CODE_MAX_CONTEXT_TOKENS": os.environ.get(
+                    "ALK_HARNESS_MAX_CONTEXT_TOKENS", "1000000"
+                ),
+            }
+            if gateway
+            else {
+                "CLAUDE_CODE_USE_VERTEX": "1",
+                "CLOUD_ML_REGION": os.environ.get("CLOUD_ML_REGION", "global"),
+            }
+        ),
         "ANTHROPIC_MODEL": chosen,
         "ANTHROPIC_DEFAULT_SONNET_MODEL": chosen,
         "ANTHROPIC_DEFAULT_OPUS_MODEL": chosen,
@@ -149,14 +170,18 @@ def provider_env(model: str | None = None) -> dict[str, str]:
         "ANTHROPIC_SMALL_FAST_MODEL": chosen,
         "CLAUDE_CODE_SUBAGENT_MODEL": chosen,
     }
-    for passthrough in (
-        "ANTHROPIC_VERTEX_PROJECT_ID",
-        "GOOGLE_CLOUD_PROJECT",
-        "GOOGLE_APPLICATION_CREDENTIALS",
-    ):
-        value = os.environ.get(passthrough)
-        if value:
-            env[passthrough] = value
+    # Credentials belong to whoever talks to the provider. Behind a gateway that is the gateway,
+    # and handing the CLI a service account as well would give it a second route to a model this
+    # run never chose.
+    if not gateway:
+        for passthrough in (
+            "ANTHROPIC_VERTEX_PROJECT_ID",
+            "GOOGLE_CLOUD_PROJECT",
+            "GOOGLE_APPLICATION_CREDENTIALS",
+        ):
+            value = os.environ.get(passthrough)
+            if value:
+                env[passthrough] = value
     return env
 
 

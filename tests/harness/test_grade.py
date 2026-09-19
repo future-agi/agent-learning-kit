@@ -289,3 +289,37 @@ def test_a_world_with_state_still_demands_a_check_in_code(tmp_path):
     assert proof.holds is False
     assert "settle what happened by reading it" in proof.broken[0]
     assert proof.judged_only is False
+
+
+def test_a_sealed_world_says_which_commit_its_tools_came_from(tmp_path, monkeypatch):
+    """`source_root` is a sandbox path that stops existing when the job ends, and `restore` needs
+    the agent's own code back before any tool has a body. Without provenance the bundle cannot say
+    what to check out, and the only record is the job row on the platform."""
+    import subprocess
+
+    from fi.alk.harness.world.snapshot import source_provenance
+
+    checkout = tmp_path / "repository"
+    checkout.mkdir()
+    (checkout / "agent.py").write_text("def tool():\n    return 1\n", encoding="utf-8")
+    for argv in (
+        ["init", "-q"],
+        ["config", "user.email", "nobody@example.com"],
+        ["config", "user.name", "nobody"],
+        # A clone URL can carry a token, and the manifest goes to object storage.
+        ["remote", "add", "origin", "https://someone:sekret@github.com/acme/agent.git"],
+        ["add", "-A"],
+        ["commit", "-q", "-m", "first"],
+    ):
+        subprocess.run(["git", "-C", str(checkout), *argv], check=True, capture_output=True)
+
+    found = source_provenance(str(checkout))
+    assert len(found["commit"]) == 40
+    assert found["remote"] == "https://github.com/acme/agent.git"
+    assert "sekret" not in found["remote"]
+    assert found["ref"]
+
+    # A path that is not a checkout says nothing rather than guessing, and a world with no source
+    # root at all is the synthetic case, which has no provenance to record.
+    assert source_provenance(str(tmp_path / "nowhere")) == {}
+    assert source_provenance("") == {}

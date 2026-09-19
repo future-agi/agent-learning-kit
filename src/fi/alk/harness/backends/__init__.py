@@ -71,6 +71,8 @@ _ALIASES = {
     "vertex_gemini": "vertex-gemini",
     "vertexai-gemini": "vertex-gemini",
     "claude-code": "claude",
+    "claude_gemini": "claude-gemini",
+    "claude-sdk": "claude-gemini",
 }
 _LIVE: dict[str, HarnessBackend] = {}
 
@@ -86,6 +88,12 @@ def _load_claude() -> HarnessBackend:
     return ClaudeBackend()
 
 
+def _load_claude_gemini() -> HarnessBackend:
+    from .claude import ClaudeGatewayBackend
+
+    return ClaudeGatewayBackend()
+
+
 def _load_vertex_gemini() -> HarnessBackend:
     from .vertex_gemini import VertexGeminiBackend
 
@@ -93,6 +101,7 @@ def _load_vertex_gemini() -> HarnessBackend:
 
 
 register("claude", _load_claude)
+register("claude-gemini", _load_claude_gemini)
 register("vertex-gemini", _load_vertex_gemini)
 
 

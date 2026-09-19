@@ -242,6 +242,12 @@ Then deal it in the brief alongside the cell, so the writer knows which claim th
 make. **A level with no name is a level you have decided not to test**, so if that is the intention,
 take it off the grid rather than leaving it in the denominator.
 
+**This is now refused, not remarked on.** A scenario carrying an overlay is not kept until it names
+a sub-goal that fails when that overlay is mishandled, and `add_sub_goal` takes `overlay` so the
+sub-goal says which level it is the claim for. So the cost of skipping this step is no longer a
+suite that looks finished and tests nothing: it is writers stopping to invent the names you did not
+deal them, one at a time, without the grid in front of them. Deal the names and the round runs.
+
 Doing it by intention is what fails. Measured on two hosted 50-scenario suites: the first held ten
 sub-goal names, one of them overlay-shaped, and **38 of 38 overlay scenarios asserted nothing beyond
 the plain task**. The second, written after this rule existed, dealt **eleven overlay levels and

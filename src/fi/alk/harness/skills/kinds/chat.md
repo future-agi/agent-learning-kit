@@ -43,6 +43,39 @@ The same five questions, answered for typing. **Only vary what is applied.**
 Four of the five are yours here, against two on a call, because text carries its own conditions
 rather than needing the platform to produce them.
 
+## The levels this modality deals, and the field each one lands in
+
+The planning skill asks the kind file for its X levels, so here they are by name, with the field a
+writer actually sets. A level with no field behind it is a label, and a suite that claims it has
+tested nothing.
+
+| Level | What it means | Where it lands |
+|---|---|---|
+| `pasted_blob` | a receipt, error dump or email pasted in whole, the needed fact unlabelled inside it | `instruction`, and the blob itself in `variables` where a value has to be exact |
+| `split_message` | one thought sent across three messages before the agent answers | `instruction`, saying what arrives in what order |
+| `wall_of_text` | reference number, dates, three questions and a complaint in one message | `instruction` |
+| `self_correction` | "order 4471, sorry, 4417", the second value being the real one | `instruction`, and both values seeded so the wrong one is plausible |
+| `terse` / `formal` / `anxious` | how this person types | `persona.communication_style` |
+| `typo_heavy` | typos, autocorrect and slang the agent has to read through | `persona.communication_style`, and the misspellings written into `instruction` |
+| `code_switching` | two languages in one thread | `persona.languages` and `persona.multilingual` |
+| `returns_after_silence` | they stop replying and come back mid-thread expecting the context held | `instruction`, and `max_turns` wide enough to hold the gap |
+| `prompt_injection` | the pasted block carries instructions addressed to the agent, or markdown and code fences dressed to look like system text | `instruction`, with the refusal named as a sub-goal |
+| `emoji_sarcasm` | "great 🙄", where the words and the meaning disagree and only the text carries it | `instruction` |
+| `all_caps` | the anger is in the casing, and nothing else says it | `instruction` |
+| `no_actionable_text` | "see attached" or a bare link, with nothing in the message to act on | `instruction` |
+
+**`split_message` and `wall_of_text` are where chat agents fail most**, so a suite that deals every
+other level and skips those two has tested the easy half. An agent that answers "hi" and drops the
+four messages after it, or answers the last sentence of a wall and drops the rest, passes every
+voice test ever written.
+
+`background_noise`, `call_direction`, `caller_awareness`, `answered_by` and `voicemail_style` are
+voice fields. A chat scenario leaves every one of them alone; setting one claims a condition nothing
+in this modality produces.
+
+`max_turns` is a budget, not a target. A thread that needs eighteen messages to reach the thing it
+tests is fine. One that spends eighteen being polite is not.
+
 ## What this modality lets you vary
 
 Register: how somebody types is who they are. Someone terse sends four words and no punctuation.

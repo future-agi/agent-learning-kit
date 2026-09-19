@@ -25,6 +25,47 @@ MANIFEST = "manifest.json"
 STATE = "state.json"
 
 
+def source_provenance(source_root: str) -> dict[str, str]:
+    """Which commit of which repository the tools in this world came from.
+
+    A sealed bundle carries `source_root`, but that is a path inside a sandbox that stops existing
+    when the job ends, and `restore` needs the agent's own code back before any tool has a body.
+    Without this the bundle cannot say what to check out, and the only record is the job row on the
+    platform. Read from the checkout rather than passed in, so it stays true for a local build too.
+
+    Any userinfo in the remote is stripped: a clone URL can carry a token, and this file is
+    uploaded to object storage.
+    """
+    import re
+    import subprocess
+
+    root = Path(source_root or "")
+    if not source_root or not (root / ".git").exists():
+        return {}
+    found: dict[str, str] = {}
+    for key, argv in (
+        ("commit", ["rev-parse", "HEAD"]),
+        ("remote", ["remote", "get-url", "origin"]),
+        ("ref", ["rev-parse", "--abbrev-ref", "HEAD"]),
+    ):
+        try:
+            said = subprocess.run(
+                ["git", "-C", str(root), *argv],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        value = (said.stdout or "").strip()
+        if said.returncode == 0 and value:
+            found[key] = value
+    if "remote" in found:
+        found["remote"] = re.sub(r"://[^/@]*@", "://", found["remote"])
+    return found
+
+
 def saved(path: str | Path | None) -> bool:
     """Whether a world has been written here.
 
@@ -142,6 +183,10 @@ def save(
                 # be able to import the tools it was bound to, and a scenario run happens
                 # long after the build stage that found the path.
                 "source_root": world.source_root,
+                # What to check out to get those tools back. `source_root` is a sandbox path that
+                # stops existing when the job ends, so without this the bundle cannot say which
+                # commit of which repository it was built against.
+                "source_provenance": source_provenance(world.source_root),
                 # A run refuses legacy/demo worlds whose handlers were authored by the harness.
                 # New worlds can only acquire handlers through adopt_tool, and a source root is
                 # required for that import to work.

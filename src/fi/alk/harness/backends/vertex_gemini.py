@@ -648,6 +648,11 @@ def priced(
     those at the full rate overstates the bill several times over.
     """
     prices = PRICES_PER_MILLION.get(model)
+    if prices is None and "/" in model:
+        # A gateway names the same model with the route in front of it, "vertex_ai/gemini-2.5-
+        # flash". The price belongs to the model, not the road it arrived by, and an unpriced
+        # model falls back to whatever the loop claimed it cost.
+        prices = PRICES_PER_MILLION.get(model.rsplit("/", 1)[-1])
     if prices is None:
         return None
     if len(prices) > 2 and date.today().isoformat() > str(prices[2]):
