@@ -1,0 +1,68 @@
+# The gateway as it runs INSIDE a hosted sandbox, and nothing more.
+#
+# The Claude Agent SDK speaks one wire format, Anthropic Messages, and will talk to whatever
+# ANTHROPIC_BASE_URL points at. Pointing it at a loopback gateway that serves Gemini is what lets
+# the harness run on that SDK without a tunnel, without exposing anything publicly, and without
+# the sandbox depending on a gateway deployed somewhere else.
+#
+# Deliberately minimal. One provider, Gemini model ids only. No aliases, no other providers, no
+# key material: those belong to the cloud deployment's own configuration and must not travel
+# inside a template image. Everything secret here arrives through the environment at start.
+
+server:
+  # Loopback only. Nothing outside the sandbox can reach this, and nothing needs to.
+  host: "127.0.0.1"
+  port: 8090
+  read_timeout: 30s
+  # Long, because a single authoring turn against a large tool surface is not a quick request.
+  write_timeout: 600s
+  idle_timeout: 120s
+  shutdown_timeout: 10s
+  max_request_body_size: 33554432
+  default_request_timeout: 300s
+
+providers:
+  vertex_ai:
+    # Computed by the launcher, because the two forms do not share a shape: a region is a
+    # hostname prefix, `global` is not, and `https://global-aiplatform.googleapis.com` is a 404.
+    base_url: "${AGENTCC_VERTEX_BASE_URL}"
+    api_format: "gemini"
+    # The service account the platform already uploads for the ADK path. The gateway reads it
+    # itself and mints its own bearer, so no token is ever written into this file.
+    credentials_file: "${GOOGLE_APPLICATION_CREDENTIALS}"
+    default_timeout: 300s
+    max_concurrent: 32
+    conn_pool_size: 32
+    models:
+      - vertex_ai/gemini-3.5-flash
+      - vertex_ai/gemini-3.5-flash-lite
+      - vertex_ai/gemini-3.1-flash-preview
+      - vertex_ai/gemini-3.1-flash-lite
+      - vertex_ai/gemini-3-flash-preview
+      - vertex_ai/gemini-3-pro-preview
+      - vertex_ai/gemini-2.5-flash
+      - vertex_ai/gemini-2.5-flash-lite
+      - vertex_ai/gemini-2.5-pro
+
+auth:
+  enabled: true
+  keys:
+    # Minted by the launcher at start and never leaves the sandbox. It exists so a stray process
+    # in the guest cannot drive the model through this port, not to authenticate anyone remote.
+    - name: "sandbox-harness"
+      key: "${AGENTCC_SANDBOX_KEY}"
+      owner: "harness"
+      # Internal, because the gateway's own service account is what reaches Vertex and a key that
+      # is not internal is refused any globally-credentialed provider. Safe to say here and only
+      # here: this gateway listens on loopback inside one sandbox, and the one client is the
+      # harness process beside it.
+      key_type: "internal"
+      providers:
+        - vertex_ai
+
+logging:
+  level: "info"
+  # The prompts carry the agent under test's own data. They stay in the sandbox and are not worth
+  # writing twice.
+  log_request_body: false
+  log_response_body: false
