@@ -380,6 +380,7 @@ def _tables_the_source_lacks(state: dict, source_root: str, contract: Any) -> li
         return []
     declared: dict[str, set[str]] = {}
     required: dict[str, set[str]] = {}
+    cites: dict[str, dict[str, tuple[str, str]]] = {}
     for path in paths:
         # Comments first: a trailing `-- matched against caller_ani` is prose, not a column.
         sql = re.sub(r"--[^\n]*", "", path.read_text(encoding="utf-8"))
@@ -395,6 +396,7 @@ def _tables_the_source_lacks(state: dict, source_root: str, contract: Any) -> li
                 depth += (sql[at] == "(") - (sql[at] == ")")
                 at += 1
             columns, must = set(), set()
+            points_at: dict[str, tuple[str, str]] = {}
             for part in re.split(r",(?![^()]*\))", sql[found.end() : at - 1]):
                 word = part.strip().split(" ")[0].strip('"').strip()
                 if not word or word.upper() in _NOT_A_COLUMN:
@@ -407,8 +409,18 @@ def _tables_the_source_lacks(state: dict, source_root: str, contract: Any) -> li
                 insists = "NOT NULL" in said or "PRIMARY KEY" in said
                 if insists and "DEFAULT" not in said:
                     must.add(word.lower())
+                # `rider_id TEXT REFERENCES users(rider_id)`: the row it points at has to exist,
+                # or the insert trips the foreign key and takes the whole seed with it.
+                cite = re.search(
+                    r'REFERENCES\s+"?([A-Za-z_]\w*)"?\s*\(\s*"?([A-Za-z_]\w*)"?',
+                    part,
+                    re.IGNORECASE,
+                )
+                if cite:
+                    points_at[word.lower()] = (cite.group(1).lower(), cite.group(2).lower())
             declared.setdefault(found.group(1).lower(), set()).update(columns)
             required.setdefault(found.group(1).lower(), set()).update(must)
+            cites.setdefault(found.group(1).lower(), {}).update(points_at)
 
     problems: list[str] = []
     for name, rows in state.items():
@@ -431,6 +443,36 @@ def _tables_the_source_lacks(state: dict, source_root: str, contract: Any) -> li
             if absent:
                 problems.append(
                     f"{name} rows leave out {', '.join(absent)}, which the schema requires"
+                )
+    # Foreign keys last, once every table's rows are in hand: a reference is only danglng
+    # relative to what the rest of the world holds.
+    held: dict[str, set[str]] = {}
+    for name, rows in state.items():
+        for row in rows if isinstance(rows, list) else list(rows.values()):
+            if isinstance(row, dict):
+                for key, value in row.items():
+                    held.setdefault(f"{name.lower()}.{str(key).lower()}", set()).add(str(value))
+    for name, rows in state.items():
+        for column, (target, target_column) in cites.get(name.lower(), {}).items():
+            # An empty target is not a reason to skip: a reference into a table with no rows is
+            # exactly the dangling case, and skipping it is how the seed failure gets through.
+            if target not in {name.lower() for name in state}:
+                continue
+            there = held.get(f"{target}.{target_column}", set())
+            dangling = sorted(
+                {
+                    str(row[key])
+                    for row in (rows if isinstance(rows, list) else list(rows.values()))
+                    if isinstance(row, dict)
+                    for key in row
+                    if str(key).lower() == column and row[key] is not None
+                }
+                - there
+            )
+            if dangling:
+                problems.append(
+                    f"{name}.{column} points at {target}.{target_column} rows that do not "
+                    f"exist: {', '.join(dangling[:5])}"
                 )
     return problems
 

@@ -2532,3 +2532,36 @@ def test_an_array_column_is_typed_from_the_adopted_schema(tmp_path) -> None:
     found = _schema_column_types([tmp_path / "schema.sql"])
     assert found[("places", "aliases")] == "text[]"
     assert found[("places", "is_open")] == "boolean"
+
+
+def test_a_dangling_foreign_key_is_refused(tmp_path) -> None:
+    """The seed trips the constraint and takes the whole file with it."""
+    from fi.alk.harness.world.tools import _tables_the_source_lacks
+
+    (tmp_path / "db").mkdir()
+    (tmp_path / "db" / "schema.sql").write_text(
+        "CREATE TABLE users (rider_id TEXT PRIMARY KEY);\n"
+        "CREATE TABLE wallets (\n"
+        "  id TEXT PRIMARY KEY,\n"
+        "  rider_id TEXT NOT NULL REFERENCES users(rider_id)\n"
+        ");\n",
+        encoding="utf-8",
+    )
+    sound = {
+        "users": [{"rider_id": "u1"}],
+        "wallets": [{"id": "w1", "rider_id": "u1"}],
+    }
+    dangling = {
+        "users": [{"rider_id": "u1"}],
+        "wallets": [{"id": "w1", "rider_id": "u9"}],
+    }
+    empty_target = {"users": [], "wallets": [{"id": "w1", "rider_id": "u1"}]}
+
+    assert _tables_the_source_lacks(sound, str(tmp_path), None) == []
+    assert _tables_the_source_lacks(dangling, str(tmp_path), None) == [
+        "wallets.rider_id points at users.rider_id rows that do not exist: u9"
+    ]
+    # An empty target table is the dangling case too, not a reason to skip.
+    assert _tables_the_source_lacks(empty_target, str(tmp_path), None) == [
+        "wallets.rider_id points at users.rider_id rows that do not exist: u1"
+    ]
