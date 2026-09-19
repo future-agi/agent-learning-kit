@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .catalogue import Catalogue
+from .catalogue import Catalogue, SubGoal
 from .scenario import Scenario
 from .world.runtime import GeneratedWorld
 
@@ -189,6 +189,43 @@ def write_folder(scenario: Scenario, catalogue: Catalogue, destination: Path) ->
     return root
 
 
+def refresh_check(destination: Path, sub_goal: SubGoal) -> list[str]:
+    """Bring every folder that names this sub-goal into step with its new definition.
+
+    A sub-goal can be defined after the scenarios that name it are already on disk, and defining
+    it is what decides whether it is settled in code or by a judge. Without this, a sub-goal that
+    gains a check leaves those folders with no `checks/<name>.py`, which the bundle reader refuses
+    an hour later, and one that loses its check leaves a file nothing in the catalogue backs.
+    Returns the scenarios it touched.
+    """
+    root = Path(destination) / SCENARIOS
+    if not root.is_dir():
+        return []
+    touched: list[str] = []
+    for folder in sorted(one for one in root.iterdir() if one.is_dir()):
+        body = folder / "scenario.json"
+        if not body.is_file():
+            continue
+        try:
+            named = json.loads(body.read_text(encoding="utf-8")).get("sub_goals") or []
+        except (OSError, ValueError):
+            continue
+        if sub_goal.name not in named:
+            continue
+        path = folder / "checks" / f"{sub_goal.name}.py"
+        if sub_goal.deterministic():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                sub_goal.check.rstrip() + "\n" + _RUNNABLE, encoding="utf-8"
+            )
+        elif path.is_file():
+            path.unlink()
+        else:
+            continue
+        touched.append(folder.name)
+    return touched
+
+
 def read_folder(destination: Path, name: str) -> Scenario | None:
     """One scenario, reassembled from its folder."""
     root = folder_for(destination, name)
@@ -261,6 +298,43 @@ def _tools_selected(body: str) -> set[str]:
         m.group(1) or m.group(2)
         for m in re.finditer(r"""c\.name\s*==\s*(?:'([^']*)'|"([^"]*)")""", body)
     }
+
+
+def unchecked_sub_goals(folder: Path, catalogue: Catalogue) -> list[str]:
+    """Scenarios naming a sub-goal the catalogue settles in code with no check file to settle it.
+
+    The bundle reader refuses exactly this, an hour later and on a machine nobody is watching:
+    absence of the file is what marks a sub-goal judged, so a check that never reached the folder
+    reads as assessed and is measured by nothing. Read here off the same two sources the reader
+    compares, so the answer cannot differ from its.
+    """
+    settled = {one.name for one in catalogue.sub_goals if one.deterministic()}
+    if not settled:
+        return []
+    problems: list[str] = []
+    for scenario_dir in sorted(
+        one for one in (Path(folder) / SCENARIOS).glob("*") if one.is_dir()
+    ):
+        body = scenario_dir / "scenario.json"
+        if not body.is_file():
+            continue
+        try:
+            named = json.loads(body.read_text(encoding="utf-8")).get("sub_goals") or []
+        except (OSError, ValueError):
+            continue
+        missing = [
+            name
+            for name in named
+            if name in settled
+            and not (scenario_dir / "checks" / f"{name}.py").is_file()
+        ]
+        if missing:
+            problems.append(
+                f"{scenario_dir.name}: {', '.join(sorted(missing))} settled in code by the "
+                "catalogue but no check file was written, so nothing would measure it. Define "
+                "it again with add_sub_goal and save"
+            )
+    return problems
 
 
 def check_problems(folder: Path) -> list[str]:

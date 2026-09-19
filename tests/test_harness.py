@@ -7583,3 +7583,70 @@ def test_the_system_prompt_stays_within_budget():
     main_loop = sub_agent + load_skill("plan-suite", preamble=False)
     assert len(sub_agent) <= 75_000, f"sub-agent prompt is {len(sub_agent)} chars"
     assert len(main_loop) <= 95_000, f"main loop prompt is {len(main_loop)} chars"
+
+
+def test_a_sub_goal_defined_after_the_fact_reaches_the_folders_already_written(tmp_path):
+    """A scenario can name a sub-goal the catalogue has not settled yet. When defining it gives it
+    a check, the folders already on disk have to gain that file: the bundle reader refuses a
+    code-settled sub-goal with no check, long after the session that could have fixed it ended."""
+    from fi.alk.harness.catalogue import SubGoal
+    from fi.alk.harness.folder import folder_for, refresh_check
+    from fi.alk.harness.scenario_tools import write_scenarios
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    scenario = Scenario.model_validate(
+        _delta(
+            sub_goals=["item-added", "refusal-explained"],
+            setup_code="def setup(world):\n    pass\n",
+            ready_code="def ready(world):\n    return None\n",
+        )
+    )
+    write_scenarios([scenario], root, catalogue)
+    here = folder_for(root, scenario.name)
+    # Judged when it was written, so no file.
+    assert not (here / "checks" / "refusal-explained.py").exists()
+
+    settled = SubGoal(
+        name="refusal-explained",
+        what="the agent said why it refused",
+        check="def check(world, calls):\n    return None\n",
+    )
+    assert refresh_check(root, settled) == [scenario.name]
+    assert "def check(world, calls)" in (
+        here / "checks" / "refusal-explained.py"
+    ).read_text()
+
+    # And a sub-goal that stops being settled in code takes its file away again, so nothing on
+    # disk claims a check the catalogue no longer holds.
+    judged = SubGoal(name="refusal-explained", what="…", judged="ask a model")
+    assert refresh_check(root, judged) == [scenario.name]
+    assert not (here / "checks" / "refusal-explained.py").exists()
+
+
+def test_a_save_says_which_scenarios_name_a_check_that_never_reached_the_folder(tmp_path):
+    """The bundle reader refuses this an hour later on a machine nobody is watching. Said at the
+    save, the session that could still fix it is the one that hears about it."""
+    from fi.alk.harness.catalogue import SubGoal
+    from fi.alk.harness.folder import folder_for, unchecked_sub_goals
+    from fi.alk.harness.scenario_tools import write_scenarios
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    scenario = Scenario.model_validate(
+        _delta(
+            setup_code="def setup(world):\n    pass\n",
+            ready_code="def ready(world):\n    return None\n",
+        )
+    )
+    write_scenarios([scenario], root, catalogue)
+    assert unchecked_sub_goals(root, catalogue) == []
+
+    (folder_for(root, scenario.name) / "checks" / "item-added.py").unlink()
+    said = unchecked_sub_goals(root, catalogue)
+    assert len(said) == 1 and "item-added" in said[0]
+
+    # A sub-goal the catalogue leaves to a judge has no file by design, and is not a problem.
+    catalogue.sub_goals = [
+        one if one.name != "item-added" else SubGoal(name="item-added", what="…", judged="ask")
+        for one in catalogue.sub_goals
+    ]
+    assert unchecked_sub_goals(root, catalogue) == []

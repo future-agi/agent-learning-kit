@@ -371,6 +371,16 @@ update a payment method | saved card asked for with no OTP this call | x5 | expe
    overlay none. The sub-goal that must fail if it slips: otp_verified_before_card
 ```
 
+**Close each brief with the one-line titles of the other slices going out in this round.** A
+writer that cannot see what its siblings hold writes what they are writing: it reaches for the
+obvious reading of its own cell, and so does the writer next to it. Naming their cells costs a line
+each and is the only thing that lets a writer tell "mine" from "somebody else's". Say it plainly:
+
+```
+   Others in this round are covering: cancel a booked ride after pickup | add a saved place
+   with a partial address | switch payment mid-ride. Stay out of theirs.
+```
+
 Do not hand one writer every scenario in a single cell. A writer given a whole cell has to invent
 all of that cell's variety by itself, which is the situation planning exists to prevent. **A writer cannot see the others' briefs**, so anything that has to stay spread across the
 suite has to be dealt out in the briefs, one share each.

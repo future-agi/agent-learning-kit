@@ -35,6 +35,8 @@ from .folder import (
     apply_setup,
     check_problems,
     read_all,
+    refresh_check,
+    unchecked_sub_goals,
     write_folder,
     write_index,
 )
@@ -770,11 +772,23 @@ def scenario_tools(
         ]
         catalogue.sub_goals.append(sub_goal)
         save_catalogue(catalogue, destination)
+        # Defining a sub-goal decides whether it is settled in code, and scenarios naming it may
+        # already be on disk from an earlier round. Their folders are brought into step now, or
+        # the bundle reader refuses them long after the session that could have fixed them ended.
+        restated = refresh_check(destination, sub_goal)
         return _ok(
             f"{sub_goal.name} added"
             + ("" if sub_goal.deterministic() else " (judged, not deterministic)")
             + f". The catalogue has {len(catalogue.sub_goals)}: "
             + ", ".join(sorted(catalogue.names()))
+            + (
+                f". Rewrote its check in {len(restated)} scenario"
+                + ("s" if len(restated) != 1 else "")
+                + " already written: "
+                + ", ".join(restated)
+                if restated
+                else ""
+            )
         )
 
     @tool(
@@ -1366,6 +1380,7 @@ def scenario_tools(
         # or one setup that will not replay is a reason to say less, not a reason to lose the save.
         for remark in (
             lambda: check_problems(destination),
+            lambda: unchecked_sub_goals(destination, catalogue),
             lambda: grounding_problems(kept, world_root),
             lambda: redteam_problems(kept),
             lambda: unpinned_callers(kept, set(world_summary_tables(world_root))),
