@@ -403,7 +403,9 @@ def _tables_the_source_lacks(state: dict, source_root: str, contract: Any) -> li
                 said = part.upper()
                 # A column the schema insists on and supplies no default for has to come from
                 # the rows, or the insert puts NULL in it and postgres refuses the whole seed.
-                if "NOT NULL" in said and "DEFAULT" not in said:
+                # PRIMARY KEY counts: it is NOT NULL without saying so.
+                insists = "NOT NULL" in said or "PRIMARY KEY" in said
+                if insists and "DEFAULT" not in said:
                     must.add(word.lower())
             declared.setdefault(found.group(1).lower(), set()).update(columns)
             required.setdefault(found.group(1).lower(), set()).update(must)

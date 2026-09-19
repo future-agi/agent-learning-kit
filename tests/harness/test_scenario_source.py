@@ -2495,3 +2495,40 @@ def test_the_seed_renders_a_boolean_the_agent_schema_declares(tmp_path) -> None:
     found = _schema_column_types([tmp_path / "schema.sql"])
     assert found[("payment_methods", "is_default")] == "boolean"
     assert ("payment_methods", "last4") not in found
+
+
+def test_a_primary_key_counts_as_required(tmp_path) -> None:
+    """`rider_id TEXT PRIMARY KEY` never says NOT NULL, and postgres refuses a NULL there."""
+    from fi.alk.harness.world.tools import _tables_the_source_lacks
+
+    (tmp_path / "db").mkdir()
+    (tmp_path / "db" / "schema.sql").write_text(
+        "CREATE TABLE users (\n"
+        "  rider_id TEXT PRIMARY KEY,\n"
+        "  nickname TEXT\n"
+        ");\n",
+        encoding="utf-8",
+    )
+    assert _tables_the_source_lacks(
+        {"users": [{"rider_id": "u1"}]}, str(tmp_path), None
+    ) == []
+    assert _tables_the_source_lacks(
+        {"users": [{"nickname": "Dana"}]}, str(tmp_path), None
+    ) == ["users rows leave out rider_id, which the schema requires"]
+
+
+def test_an_array_column_is_typed_from_the_adopted_schema(tmp_path) -> None:
+    """SQLite stores an array as the JSON text "[]"; postgres wants {} and refuses otherwise."""
+    from fi.alk.harness.bundle_author_v2 import _schema_column_types
+
+    (tmp_path / "schema.sql").write_text(
+        "CREATE TABLE places (\n"
+        "  place_id TEXT PRIMARY KEY,\n"
+        "  aliases TEXT[] NOT NULL DEFAULT '{}',\n"
+        "  is_open BOOLEAN NOT NULL\n"
+        ");\n",
+        encoding="utf-8",
+    )
+    found = _schema_column_types([tmp_path / "schema.sql"])
+    assert found[("places", "aliases")] == "text[]"
+    assert found[("places", "is_open")] == "boolean"
