@@ -183,44 +183,60 @@ class _Desk:
 
     async def _run(self, named: str, worker: WorkerSpec, brief: str) -> str:
         async with self._room:
-            session = self._open_child(_child_of(self._spec, worker))
-            await session.start()
-            try:
-                await session.send(brief)
-                said: list[str] = []
-                seen: list[Any] = []
-                async for reply in session.replies():
-                    if isinstance(reply, ModelReply):
-                        parts = []
-                        for part in reply.parts:
-                            if isinstance(part, Call):
-                                # Stamped here because nothing downstream can know it: a child
-                                # session has no idea it is one, and the ledger is keyed on this.
-                                parts.append(dataclasses.replace(part, by=named))
-                            else:
-                                if isinstance(part, Say) and part.text.strip():
-                                    said.append(part.text)
-                                parts.append(part)
-                        seen.append(dataclasses.replace(reply, parts=parts))
-                    elif isinstance(reply, ToolReturned):
-                        seen.append(reply)
-                    elif isinstance(reply, StageDone):
-                        self.tokens_in += reply.tokens_in
-                        self.tokens_out += reply.tokens_out
-                        self.tokens_cached += reply.tokens_cached
-                        self.cost_usd += reply.cost_usd or 0.0
-                        self.models.update(reply.models)
-                        if reply.outcome != "success" and not said:
-                            said.append(
-                                f"{named} ended on {reply.outcome} with nothing written."
-                            )
-                async with self._lock:
-                    self._seen.extend(seen)
-                return "\n".join(one.strip() for one in said if one.strip()).strip() or (
-                    f"{named} finished without saying anything."
-                )
-            finally:
-                await session.stop()
+            # On its own thread with its own loop, and not merely for tidiness. This runs inside
+            # a tool handler, which the SDK calls from its own task context, and starting a second
+            # SDK client there leaves both waiting: the child never issues a single request and
+            # the parent never gets its result. A thread gives the child a loop of its own, and
+            # the two clients stop sharing anything.
+            said, seen, spent = await asyncio.to_thread(
+                self._drive, named, _child_of(self._spec, worker), brief
+            )
+            async with self._lock:
+                self._seen.extend(seen)
+            self.tokens_in += spent.tokens_in
+            self.tokens_out += spent.tokens_out
+            self.tokens_cached += spent.tokens_cached
+            self.cost_usd += spent.cost_usd or 0.0
+            self.models.update(spent.models)
+            return said
+
+    def _drive(self, named: str, child: SessionSpec, brief: str) -> tuple[str, list[Any], StageDone]:
+        return asyncio.run(self._drive_alone(named, child, brief))
+
+    async def _drive_alone(
+        self, named: str, child: SessionSpec, brief: str
+    ) -> tuple[str, list[Any], StageDone]:
+        """One worker, start to finish, on a loop nothing else is using."""
+        session = self._open_child(child)
+        await session.start()
+        try:
+            await session.send(brief)
+            said: list[str] = []
+            seen: list[Any] = []
+            spent = StageDone(outcome="success")
+            async for reply in session.replies():
+                if isinstance(reply, ModelReply):
+                    parts = []
+                    for part in reply.parts:
+                        if isinstance(part, Call):
+                            # Stamped here because nothing downstream can know it: a child
+                            # session has no idea it is one, and the ledger is keyed on this.
+                            parts.append(dataclasses.replace(part, by=named))
+                        else:
+                            if isinstance(part, Say) and part.text.strip():
+                                said.append(part.text)
+                            parts.append(part)
+                    seen.append(dataclasses.replace(reply, parts=parts))
+                elif isinstance(reply, ToolReturned):
+                    seen.append(reply)
+                elif isinstance(reply, StageDone):
+                    spent = reply
+                    if reply.outcome != "success" and not said:
+                        said.append(f"{named} ended on {reply.outcome} with nothing written.")
+            written = "\n".join(one.strip() for one in said if one.strip()).strip()
+            return written or f"{named} finished without saying anything.", seen, spent
+        finally:
+            await session.stop()
 
     def drain(self) -> list[Any]:
         """What the workers have done since this was last asked, for the parent's own stream."""

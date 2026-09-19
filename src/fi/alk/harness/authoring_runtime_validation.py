@@ -186,15 +186,12 @@ async def validate_once(
                 f"{time.monotonic() - started:.0f}s",
                 flush=True,
             )
-            # Collect all executable setup errors before spending a model review or
-            # a repair attempt. Each scenario still gets an independent clean world.
-            first_pass = time.monotonic()
-            await check_setups([])
-            print(
-                f"runtime validation: first setup pass {time.monotonic() - first_pass:.0f}s "
-                f"for {len(scenarios)} scenarios",
-                flush=True,
-            )
+            # The invariants are authored before the suite is walked, not after, so the suite is
+            # walked once. Every scenario's world is torn down and resealed for it, and that reset
+            # is the whole cost of this stage: walking twice meant 2N rebuilds where N would do,
+            # which at 60 scenarios is 60 wasted and at 500 is 500. The price is that the model
+            # review is paid even when a setup is broken, which is one call against N rebuilds.
+            invariants: list = []
             if external_provider:
                 # A connect-only provider owns its state and executes its tools outside
                 # this sandbox. There is no harness-owned source database to probe or
@@ -204,27 +201,27 @@ async def validate_once(
                     "skipping local source-data invariant review",
                     flush=True,
                 )
-                return len(scenarios)
-            phase = "environment"
-            await provider.reset(runtime, work_directory=work)
-            baseline = await factory.create(runtime, rng=random.Random(job.seed or 0))
-            print("runtime validation: reviewing source data invariants", flush=True)
-            invariants = await author_invariants(
-                source, authoring, baseline.read_only(), endpoints=runtime.endpoints
-            )
-            # Review probes may have effects; none belongs in the test baseline.
-            await provider.reset(runtime, work_directory=work)
-            baseline = await factory.create(runtime, rng=random.Random(job.seed or 0))
-            await check_invariants(baseline.read_only(), invariants)
-            phase = "scenarios"
-            if invariants:
-                second_pass = time.monotonic()
-                await check_setups(invariants)
-                print(
-                    f"runtime validation: second setup pass "
-                    f"{time.monotonic() - second_pass:.0f}s with {len(invariants)} invariants",
-                    flush=True,
+            else:
+                phase = "environment"
+                await provider.reset(runtime, work_directory=work)
+                baseline = await factory.create(runtime, rng=random.Random(job.seed or 0))
+                print("runtime validation: reviewing source data invariants", flush=True)
+                invariants = await author_invariants(
+                    source, authoring, baseline.read_only(), endpoints=runtime.endpoints
                 )
+                # Review probes may have effects; none belongs in the test baseline.
+                await provider.reset(runtime, work_directory=work)
+                baseline = await factory.create(runtime, rng=random.Random(job.seed or 0))
+                await check_invariants(baseline.read_only(), invariants)
+
+            phase = "scenarios"
+            only_pass = time.monotonic()
+            await check_setups(invariants)
+            print(
+                f"runtime validation: setup pass {time.monotonic() - only_pass:.0f}s for "
+                f"{len(scenarios)} scenarios with {len(invariants)} invariants",
+                flush=True,
+            )
             print(
                 f"runtime validation: complete in {time.monotonic() - started:.0f}s",
                 flush=True,
