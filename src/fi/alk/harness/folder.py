@@ -21,8 +21,10 @@ something you can argue with.
 
 from __future__ import annotations
 
+import ast
 import json
 import re
+import textwrap
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -293,11 +295,30 @@ def read_all(destination: Path) -> list[Scenario]:
 
 
 def _tools_selected(body: str) -> set[str]:
-    """Every tool name this check narrows the calls to, in either quoting style."""
-    return {
-        m.group(1) or m.group(2)
-        for m in re.finditer(r"""c\.name\s*==\s*(?:'([^']*)'|"([^"]*)")""", body)
-    }
+    """Every tool name this check narrows the calls to.
+
+    Parsed rather than matched on a variable name. The regex this replaces required the loop
+    variable to be called ``c``, so a real suite writing ``call.name == "book_ride"`` was invisible
+    to it and the duplicate-claim remark never fired once across a hundred scenarios.
+    """
+    try:
+        tree = ast.parse(textwrap.dedent(body))
+    except SyntaxError:
+        return set()
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Compare) or not node.ops:
+            continue
+        if not isinstance(node.ops[0], ast.Eq):
+            continue
+        left, right = node.left, node.comparators[0]
+        if isinstance(right, ast.Attribute) and right.attr == "name":
+            left, right = right, left
+        if not (isinstance(left, ast.Attribute) and left.attr == "name"):
+            continue
+        if isinstance(right, ast.Constant) and isinstance(right.value, str):
+            found.add(right.value)
+    return found
 
 
 def unchecked_sub_goals(folder: Path, catalogue: Catalogue) -> list[str]:

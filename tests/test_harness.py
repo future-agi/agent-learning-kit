@@ -7748,3 +7748,25 @@ def test_a_redeclared_grid_only_ever_grows(tmp_path):
     assert "task (3)" in text, text
     # The dropped level survives, so nothing already placed on it is stranded.
     assert "overlay" in text
+
+
+def test_the_duplicate_claim_remark_does_not_depend_on_what_the_loop_variable_is_called(tmp_path):
+    """The rule matched `c.name == "..."` by regex, so a real suite writing `call.name == "..."`
+    was invisible to it: the remark fired zero times across a hundred scenarios that plainly had
+    the shape, including an injection claim that only restated the booking claim on the same call."""
+    from fi.alk.harness.folder import _tools_selected
+
+    for body in (
+        'for c in calls:\n    if c.name == "book_ride":\n        return None\n',
+        'for call in calls:\n    if call.name == "book_ride":\n        return None\n',
+        'c = next((one for one in calls if one.name == "book_ride"), None)\n',
+        "c = next((one for one in calls if one.name == 'book_ride'), None)\n",
+        'if "book_ride" == call.name:\n    return None\n',
+    ):
+        assert _tools_selected(body) == {"book_ride"}, body
+
+    # Nothing to find, and nothing invented from a name that is not a tool selection.
+    assert _tools_selected("return None\n") == set()
+    assert _tools_selected("if call.tool == \"book_ride\":\n    return None\n") == set()
+    # Unparseable text says nothing rather than guessing.
+    assert _tools_selected("def (:\n") == set()
