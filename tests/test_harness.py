@@ -7712,3 +7712,39 @@ def test_an_overlay_scenario_that_asserts_nothing_is_refused(tmp_path):
         kept=[],
     )
     assert not settled.get("is_error"), settled
+
+
+def test_a_scenario_placed_nowhere_is_refused_once_a_grid_is_dealt(tmp_path):
+    """Measured on a hundred-scenario run: 50 of 100 set no coordinate at all, so the coverage
+    report counted them in the denominator and nothing in the numerator. A label is cheap to
+    correct and proving is not, so this is refused before the gates."""
+    from fi.alk.harness.scenario_tools import _off_the_grid
+
+    grid = {"task": ["book_ride", "cancel_ride"], "overlay": ["none", "prompt_injection"]}
+    assert _off_the_grid({}, grid)
+    assert _off_the_grid(None, grid)
+    assert _off_the_grid({"task": "", "overlay": ""}, grid)
+    assert not _off_the_grid({"task": "book_ride", "overlay": "none"}, grid)
+    # A plan that deals no grid behaves exactly as it did before the grid existed.
+    assert not _off_the_grid({}, None)
+    assert not _off_the_grid(None, {})
+
+
+def test_a_redeclared_grid_only_ever_grows(tmp_path):
+    """A grid that drops a level makes every scenario already placed there retroactively off-grid,
+    and nothing re-checks them. One run called aim_for three times and ended with 24 task levels
+    against 10 planned and half the suite unplaced."""
+    import asyncio
+
+    from fi.alk.harness.scenario_tools import scenario_tools
+
+    root, _contract, _catalogue = _built_environment(tmp_path)
+    server, _kept = scenario_tools(_contract, root, root, wanted=4)
+    aim = next(one for one in server.tools if one.name == "aim_for")
+
+    asyncio.run(aim.handler({"count": 4, "axes": {"task": ["a", "b"], "overlay": ["none"]}}))
+    said = asyncio.run(aim.handler({"count": 4, "axes": {"task": ["b", "c"]}}))
+    text = said["content"][0]["text"]
+    assert "task (3)" in text, text
+    # The dropped level survives, so nothing already placed on it is stranded.
+    assert "overlay" in text

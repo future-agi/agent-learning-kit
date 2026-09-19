@@ -359,3 +359,28 @@ def test_a_judged_reason_that_describes_a_check_is_refused():
         check="def check(world, calls):\n    return None if calls else 'nothing happened'\n",
     )
     assert not [one for one in validate_sub_goal(settled) if "tool call" in one]
+
+
+def test_an_overlay_claim_is_recognised_by_its_shared_first_word():
+    """A real suite named the claim for `emergency_crisis` as `emergency_escalated`. Neither string
+    contains the other, so the earlier substring rule would have refused three properly written
+    scenarios. The declared field stays the exact route; the name match is a migration fallback and
+    is deliberately generous, because letting one through costs a remark and refusing a good one
+    costs a writer its work."""
+    from fi.alk.harness.catalogue import SubGoal
+
+    def goal(name, overlay=""):
+        return SubGoal(
+            name=name, what="x", overlay=overlay,
+            check="def check(world, calls):\n    return None\n",
+        )
+
+    assert goal("emergency_escalated").settles("emergency_crisis")
+    assert goal("prompt_injection_refused").settles("prompt_injection")
+    # The declared field is exact and does not need the name to agree.
+    assert goal("pii_withheld", "privacy_pii").settles("privacy_pii")
+    # An ordinary task sub-goal still settles no overlay.
+    assert not goal("book_ride_confirmed").settles("prompt_injection")
+    assert not goal("otp_verified").settles("emergency_crisis")
+    # And a short shared word is not evidence of anything.
+    assert not goal("otp_verified").settles("otp_pressure")

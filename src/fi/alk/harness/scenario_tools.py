@@ -265,8 +265,18 @@ def _off_the_grid(coverage: Any, grid: dict[str, list[str]] | None) -> str:
 
     Silent when no grid was declared, so a plan that declares none behaves exactly as before.
     """
-    if not grid or not isinstance(coverage, dict):
+    if not grid:
         return ""
+    if not isinstance(coverage, dict) or not any(
+        str(level or "").strip() for level in coverage.values()
+    ):
+        return (
+            "this scenario is placed nowhere. The plan deals a grid and every scenario has to say "
+            "where it sits on it, or the coverage report counts it in the denominator and nothing "
+            "in the numerator: one run left 50 of 100 unplaced this way. The grid is: "
+            + "; ".join(f"{one} = {', '.join(levels)}" for one, levels in grid.items())
+            + ". Set coverage from the cell your brief dealt you."
+        )
     folded = {
         axis: {level.casefold(): level for level in levels}
         for axis, levels in grid.items()
@@ -1236,7 +1246,17 @@ def scenario_tools(
             if str(axis).strip() and isinstance(levels, list)
         }
         if grid:
-            target["axes"] = grid
+            # Merged, never replaced. A redeclared grid that drops a level makes every scenario
+            # already placed there retroactively off-grid, and nothing re-checks them: one run
+            # called aim_for three times and ended with 24 task levels against 10 planned and half
+            # the suite unplaced. Declaring is additive; narrowing is not a thing you can do to a
+            # denominator scenarios have already been counted against.
+            merged = {axis: list(levels) for axis, levels in (target.get("axes") or {}).items()}
+            for axis, levels in grid.items():
+                seen = merged.setdefault(axis, [])
+                seen.extend(level for level in levels if level not in seen)
+            target["axes"] = merged
+            grid = merged
             said += (
                 f". The grid is {len(grid)} axes, "
                 + ", ".join(f"{axis} ({len(levels)})" for axis, levels in grid.items())

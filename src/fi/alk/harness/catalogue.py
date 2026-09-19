@@ -59,7 +59,15 @@ class SubGoal(BaseModel):
         if self.overlay.strip().lower() == wanted:
             return True
         named = self.name.strip().lower()
-        return wanted in named or named in wanted
+        if wanted in named or named in wanted:
+            return True
+        # A shared first word, which is how a real suite named the claim for `emergency_crisis`:
+        # `emergency_escalated`. Neither string contains the other, and refusing that scenario
+        # would have been the gate misfiring on a claim that was properly made. The field above is
+        # the exact route; this stays deliberately generous, because letting one through costs a
+        # remark and refusing a good one costs a writer its work.
+        first = wanted.split("_")[0]
+        return len(first) > 3 and named.split("_")[0] == first
 
 
 class SuiteEval(BaseModel):
