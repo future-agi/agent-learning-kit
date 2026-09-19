@@ -1498,10 +1498,30 @@ def test_a_world_reverts_to_a_checkpoint():
 def test_provider_env_pins_the_model_and_never_invents_a_project(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_VERTEX_PROJECT_ID", raising=False)
     monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
-    env = provider_env("claude-sonnet-4-6")
+    env = provider_env("gemini-3.7-flash")
     assert env["CLAUDE_CODE_USE_VERTEX"] == "1"
-    assert env["ANTHROPIC_MODEL"] == "claude-sonnet-4-6"
+    assert env["ANTHROPIC_MODEL"] == "gemini-3.7-flash"
     assert "ANTHROPIC_VERTEX_PROJECT_ID" not in env
+
+
+def test_a_model_we_cannot_afford_is_refused_before_it_is_ever_reached(monkeypatch):
+    """The Gemini credits are what we have; a Claude id must never reach a provider."""
+    import pytest as _pytest
+
+    from fi.alk.harness.config import refuse_a_model_we_cannot_afford
+
+    refuse_a_model_we_cannot_afford("gemini-3.7-flash")
+    refuse_a_model_we_cannot_afford("gemini-2.5-flash-lite")
+    for forbidden in ("claude-sonnet-4-6", "sonnet", "claude-opus-5", "haiku"):
+        with _pytest.raises(ValueError, match="may only spend on"):
+            refuse_a_model_we_cannot_afford(forbidden)
+    # An unrecognised id is refused too: that is how a default slips through.
+    with _pytest.raises(ValueError, match="not recognisably"):
+        refuse_a_model_we_cannot_afford("gpt-4o")
+    with _pytest.raises(ValueError, match="no model was chosen"):
+        refuse_a_model_we_cannot_afford("")
+    with _pytest.raises(ValueError):
+        provider_env("claude-sonnet-4-6")
 
 
 def test_qualified_tool_name_matches_the_mcp_convention():

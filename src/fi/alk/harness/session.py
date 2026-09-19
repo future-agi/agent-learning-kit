@@ -355,6 +355,20 @@ class Stage:
             turn.error = _why_it_failed(received) if failed else ""
             self.session_id = received.session_id or self.session_id
             self.models_used |= received.models
+            billed_what_we_cannot_afford = self.forbidden_models()
+            if billed_what_we_cannot_afford:
+                # Loud and immediate. A run that has started spending on these is worth killing
+                # now rather than discovering on an invoice.
+                logger.error(
+                    "STOPPING: the provider billed %s, which this harness may not spend on. "
+                    "Asked for %r.",
+                    ", ".join(sorted(billed_what_we_cannot_afford)),
+                    self._spec.model,
+                )
+                raise RuntimeError(
+                    "the provider billed a model this harness may not spend on: "
+                    + ", ".join(sorted(billed_what_we_cannot_afford))
+                )
             unexpected = self.unexpected_models()
             return [
                 Event(
@@ -401,6 +415,22 @@ class Stage:
         if not asked:
             return set()
         return {used for used in self.models_used if asked.split("-2")[0] not in used}
+
+    def forbidden_models(self) -> set[str]:
+        """Models that were actually billed and that this harness may not spend on.
+
+        Asking for a Gemini model is not the same as being served one: a gateway can substitute,
+        a CLI can fall back to its own default, an env var can route to Anthropic's models hosted
+        on Vertex. This reads what the provider said it billed, which is the only account that
+        matters.
+        """
+        from .config import FORBIDDEN
+
+        return {
+            used
+            for used in self.models_used
+            if any(word in (used or "").lower() for word in FORBIDDEN)
+        }
 
     @property
     def spent_usd(self) -> float:

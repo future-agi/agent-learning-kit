@@ -96,6 +96,37 @@ def provisioning(enabled: bool | None = None) -> bool:
     }
 
 
+# Models this harness is allowed to spend on. Karthik's constraint, and it is a hard one: the
+# Gemini credits are what we have, Claude models are what we cannot afford. `CLAUDE_CODE_USE_VERTEX`
+# is the specific trap, because it means Anthropic's own models hosted on Vertex rather than
+# Google's, so a single stray flag spends on exactly what is forbidden.
+BILLABLE = ("gemini",)
+FORBIDDEN = ("claude", "sonnet", "opus", "haiku")
+
+
+def refuse_a_model_we_cannot_afford(model: str) -> None:
+    """Raise unless this is a model we are allowed to spend on.
+
+    Called wherever a model is resolved rather than once at the edge, because the ways a Claude id
+    can arrive are many: a default, an env var, a worker override, a gateway that silently
+    substitutes. One check at the boundary would miss most of them.
+    """
+    named = (model or "").strip().lower()
+    if not named:
+        raise ValueError("no model was chosen; refusing to let the provider pick one")
+    if any(word in named for word in FORBIDDEN):
+        raise ValueError(
+            f"refusing to run on {model!r}: this harness may only spend on "
+            f"{', '.join(BILLABLE)} models. Set ALK_HARNESS_MODEL to a Gemini model."
+        )
+    if not any(word in named for word in BILLABLE):
+        raise ValueError(
+            f"refusing to run on {model!r}: it is not recognisably a "
+            f"{'/'.join(BILLABLE)} model, and an unrecognised id is how a Claude model gets "
+            "billed by accident."
+        )
+
+
 def provider_env(model: str | None = None) -> dict[str, str]:
     """The provider block passed to the session.
 
@@ -107,6 +138,7 @@ def provider_env(model: str | None = None) -> dict[str, str]:
     # by twenty writers then runs on whatever that preference happens to be rather than on the
     # model the run asked for.
     chosen = chosen_model(model)
+    refuse_a_model_we_cannot_afford(chosen)
     env = {
         "CLAUDE_CODE_USE_VERTEX": "1",
         "CLOUD_ML_REGION": os.environ.get("CLOUD_ML_REGION", "global"),
