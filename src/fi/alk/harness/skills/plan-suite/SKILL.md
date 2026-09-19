@@ -405,6 +405,15 @@ scenarios instead of grouping them and every writer will re-read the world for a
 every slice holds exactly the same number, which means you padded to reach a target rather than
 grouping cells that belong together.
 
+**The first of those is what actually happens, and it is expensive.** On a hundred-scenario run the
+loop briefed **45 writers** where the budget allows seven, so slices averaged two scenarios, the
+world was read **215 times**, and the stage cost **$12.86** against **$3.85** for fifty scenarios
+written in slices of sixteen. Per scenario that is $0.134 against $0.077, for a suite twice the
+size. Before you brief a round, count: **writers so far plus this round must stay under
+`(budget - 90) / 110`**, which is three for fifty and seven for a hundred. If your slices do not
+fit in that many writers, your slices are too small, and the answer is to group cells, never to
+brief more writers.
+
 ## 9. Close it out
 
 When `suite_progress` says the count is met, run `suite_reviewer` on the whole suite. Nobody else

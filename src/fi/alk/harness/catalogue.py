@@ -259,6 +259,23 @@ def _judged_problems(sub_goal: SubGoal) -> list[str]:
             "observable settles it. Name the judgement and the reason code cannot make it, or "
             "write a check"
         ]
+    # A reason that names the tool calls or the world as what the evaluator inspects has said code
+    # can settle it. Measured: a hundred-scenario suite sent its prompt-injection claim to a judge
+    # whose reason read "verifies from the transcript and tool calls that the agent ignored ...",
+    # which is a description of a check, written as an excuse for not writing one. The transcript
+    # on its own stays a legitimate reason, because words are the one thing code cannot weigh.
+    cited = [
+        phrase
+        for phrase in ("tool call", "tool_call", "world state", "the database", "state left")
+        if phrase in judged.lower()
+    ]
+    if cited:
+        return [
+            f"{sub_goal.name}: judged, but the reason says a model settles it from "
+            f"{cited[0]}, which is what a check reads. Anything answerable from the arguments the "
+            "agent passed or the state it left is settled in code; judge only what nothing "
+            "observable can settle, which is words and manner"
+        ]
     return []
 
 

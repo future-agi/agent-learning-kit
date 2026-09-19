@@ -121,7 +121,13 @@ def writer_worker(
             description=(
                 "Writes and proves part of a scenario suite in its own session. Brief it with "
                 "which use cases and situations to cover, how many scenarios, and what makes "
-                "them different from what the other writers were given."
+                "them different from what the other writers were given.\n\n"
+                "**Brief it fifteen to twenty scenarios, never two or three.** A writer reads the "
+                "world once and then writes its whole slice, so that reading is paid once per "
+                "writer whatever the slice is worth. Measured on a hundred-scenario run: 45 "
+                "writers were briefed instead of the seven the budget allows, the world was read "
+                "215 times, and the stage cost $12.86 where fifty scenarios in slices of sixteen "
+                "cost $3.85. Group the empty cells until a brief is worth a session."
             ),
             instructions=(
                 f"## This agent\n\n{contract.brief(with_data=True, sample_rows=3)}"
