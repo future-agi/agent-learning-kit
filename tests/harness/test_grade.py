@@ -417,3 +417,35 @@ def test_a_hosted_world_still_says_which_commit_its_tools_came_from(tmp_path):
     # to a checkout nobody can point at is worse than saying nothing.
     assert source_provenance(str(tmp_path / "nowhere")) == {}
     assert source_provenance(str(tmp_path / "source" / "deeper")) == {}
+
+
+def test_validation_lanes_deal_every_scenario_exactly_once():
+    """Validation resets and replays every scenario's setup against a real runtime, and that reset
+    is the whole cost of the stage: 50 scenarios took about 36 minutes, which is two passes at
+    roughly twenty seconds a reset. Lanes make it parallel, and the one thing that must not change
+    is which scenarios get checked."""
+    for count in (1, 7, 50, 100, 500):
+        for lanes in (1, 2, 3, 4, 8):
+            scenarios = list(range(count))
+            shares = [scenarios[index::lanes] for index in range(lanes)]
+            dealt = [one for share in shares for one in share]
+            assert sorted(dealt) == scenarios, (count, lanes)
+            assert len(dealt) == len(set(dealt)), (count, lanes)
+            # No lane carries more than one extra, so no lane draws the whole tail.
+            sizes = [len(share) for share in shares if share]
+            assert max(sizes) - min(sizes) <= 1, (count, lanes, sizes)
+
+
+def test_validation_lane_count_defaults_to_one(monkeypatch):
+    """A deployment that sets nothing behaves exactly as it did before lanes existed."""
+    import os
+
+    monkeypatch.delenv("ALK_VALIDATION_INSTANCES", raising=False)
+    assert max(1, int(os.environ.get("ALK_VALIDATION_INSTANCES", "1") or 1)) == 1
+    monkeypatch.setenv("ALK_VALIDATION_INSTANCES", "4")
+    assert max(1, int(os.environ.get("ALK_VALIDATION_INSTANCES", "1") or 1)) == 4
+    # Nonsense never means fewer than one lane, because zero lanes checks nothing.
+    monkeypatch.setenv("ALK_VALIDATION_INSTANCES", "0")
+    assert max(1, int(os.environ.get("ALK_VALIDATION_INSTANCES", "1") or 1)) == 1
+    monkeypatch.setenv("ALK_VALIDATION_INSTANCES", "")
+    assert max(1, int(os.environ.get("ALK_VALIDATION_INSTANCES", "1") or 1)) == 1
