@@ -25,6 +25,33 @@ MANIFEST = "manifest.json"
 STATE = "state.json"
 
 
+def _provenance_from_job(source_root: Path) -> dict[str, str]:
+    """The same three facts, read from the job record beside the source.
+
+    Checked against a real hosted run: `/work/source` has no `.git`, and `/work/job.json` carries
+    `source.repository`, `source.ref` and `source.commit_sha`. Without this the manifest field is
+    written empty exactly where it is most needed.
+    """
+    for candidate in (source_root.parent / "job.json", source_root / "job.json"):
+        try:
+            body = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        named = body.get("source") if isinstance(body, dict) else None
+        if not isinstance(named, dict):
+            continue
+        found = {
+            key: str(named.get(source) or "")
+            for key, source in (
+                ("commit", "commit_sha"),
+                ("remote", "repository"),
+                ("ref", "ref"),
+            )
+        }
+        return {key: value for key, value in found.items() if value}
+    return {}
+
+
 def source_provenance(source_root: str) -> dict[str, str]:
     """Which commit of which repository the tools in this world came from.
 
@@ -40,8 +67,14 @@ def source_provenance(source_root: str) -> dict[str, str]:
     import subprocess
 
     root = Path(source_root or "")
-    if not source_root or not (root / ".git").exists():
+    # A path that is not there is not a source, and answering for it would attribute this world to
+    # a checkout nobody can point at.
+    if not source_root or not root.is_dir():
         return {}
+    if not (root / ".git").exists():
+        # The hosted path materialises the source without a `.git`, so asking git there answers
+        # nothing. The job record sitting beside it already knows, and it is the same three facts.
+        return _provenance_from_job(root)
     found: dict[str, str] = {}
     for key, argv in (
         ("commit", ["rev-parse", "HEAD"]),

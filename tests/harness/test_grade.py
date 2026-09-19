@@ -384,3 +384,36 @@ def test_an_overlay_claim_is_recognised_by_its_shared_first_word():
     assert not goal("otp_verified").settles("emergency_crisis")
     # And a short shared word is not evidence of anything.
     assert not goal("otp_verified").settles("otp_pressure")
+
+
+def test_a_hosted_world_still_says_which_commit_its_tools_came_from(tmp_path):
+    """Checked against a real hosted run and it was empty there: `/work/source` has no `.git`, so
+    asking git answered nothing exactly where the field was most needed. `/work/job.json` sits
+    beside it and carries the same three facts."""
+    import json
+
+    from fi.alk.harness.world.snapshot import source_provenance
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (tmp_path / "job.json").write_text(
+        json.dumps(
+            {
+                "source": {
+                    "repository": "future-agi/ride-voice-agent",
+                    "ref": "codex/outbound-ride-confirmation",
+                    "commit_sha": "554c5cc6cd4be5ae21984a432bf6459d18d51433",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    found = source_provenance(str(source))
+    assert found["commit"] == "554c5cc6cd4be5ae21984a432bf6459d18d51433"
+    assert found["remote"] == "future-agi/ride-voice-agent"
+    assert found["ref"] == "codex/outbound-ride-confirmation"
+
+    # A path that is not there says nothing, even with a job record beside it: attributing a world
+    # to a checkout nobody can point at is worse than saying nothing.
+    assert source_provenance(str(tmp_path / "nowhere")) == {}
+    assert source_provenance(str(tmp_path / "source" / "deeper")) == {}
