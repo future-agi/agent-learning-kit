@@ -627,6 +627,38 @@ def _source_schema_paths(
     return [unique[key] for key in sorted(unique)]
 
 
+def _schema_column_types(paths: list[Path]) -> dict[tuple[str, str], str]:
+    """Column declarations read off the agent's own schema, keyed by table and column.
+
+    SQLite erases the distinction the target cares about: a BOOLEAN column comes back as INTEGER,
+    so its rows render as 0 and 1 and PostgreSQL refuses the insert with "column is of type boolean
+    but expression is of type integer". The adopted schema is the authority on what these columns
+    really are, and nothing else in this path reads it.
+    """
+    declared: dict[tuple[str, str], str] = {}
+    for path in paths:
+        sql = re.sub(r"--[^\n]*", "", path.read_text(encoding="utf-8"))
+        for found in re.finditer(
+            r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"?([A-Za-z_]\w*)"?\s*\(',
+            sql,
+            re.IGNORECASE,
+        ):
+            depth, at = 1, found.end()
+            while at < len(sql) and depth:
+                depth += (sql[at] == "(") - (sql[at] == ")")
+                at += 1
+            for part in re.split(r",(?![^()]*\))", sql[found.end() : at - 1]):
+                words = part.strip().split()
+                if len(words) < 2:
+                    continue
+                name = words[0].strip('"')
+                if name.upper() in ("PRIMARY", "FOREIGN", "UNIQUE", "CHECK", "CONSTRAINT"):
+                    continue
+                if words[1].upper().startswith("BOOL"):
+                    declared[(found.group(1).lower(), name.lower())] = "boolean"
+    return declared
+
+
 def _adopted_seed_sql(
     authoring: Path,
     *,
@@ -654,7 +686,10 @@ def _adopted_seed_sql(
         if sqlite.is_file():
             rows = _sqlite_sql(
                 sqlite,
-                contract_declarations=_contract_column_declarations(contract or {}),
+                contract_declarations={
+                    **_contract_column_declarations(contract or {}),
+                    **_schema_column_types(source_schemas),
+                },
                 include_schema=False,
             )
             return schema_sql + "\n" + rows, adopted + ["world.sqlite"]

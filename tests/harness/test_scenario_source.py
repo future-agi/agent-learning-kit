@@ -2478,3 +2478,20 @@ def test_a_credential_the_world_lacks_is_refused_at_submit() -> None:
     assert _credentials_the_world_lacks(looked_up_and_missing, world)
     assert _credentials_the_world_lacks(looked_up_and_present, world) == []
     assert _credentials_the_world_lacks(never_looked_up, world) == []
+
+
+def test_the_seed_renders_a_boolean_the_agent_schema_declares(tmp_path) -> None:
+    """SQLite has no boolean, so 0/1 reaches postgres and it refuses the whole seed."""
+    from fi.alk.harness.bundle_author_v2 import _schema_column_types
+
+    (tmp_path / "schema.sql").write_text(
+        "CREATE TABLE payment_methods (\n"
+        "  id TEXT PRIMARY KEY,\n"
+        "  is_default BOOLEAN NOT NULL,  -- stored as 0/1 in sqlite\n"
+        "  last4 TEXT NOT NULL\n"
+        ");\n",
+        encoding="utf-8",
+    )
+    found = _schema_column_types([tmp_path / "schema.sql"])
+    assert found[("payment_methods", "is_default")] == "boolean"
+    assert ("payment_methods", "last4") not in found
