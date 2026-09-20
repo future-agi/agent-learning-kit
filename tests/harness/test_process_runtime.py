@@ -7188,6 +7188,27 @@ def test_admit_parallelism_clamps_on_observed_cpu() -> None:
     )
 
 
+def test_two_cpu_experiment_admits_two_worlds_only_when_opted_in() -> None:
+    resources = {
+        "cpu_observed": 2.0,
+        "mem_observed_gib": 4.0,
+        "cpu_declared": 2.0,
+        "mem_declared_gib": 4.0,
+    }
+    assert pr.admit_parallelism(2, **resources) == 1
+    assert (
+        pr.admit_parallelism(2, **resources, experimental_two_slots_on_2cpu=True) == 2
+    )
+    assert (
+        pr.admit_parallelism(
+            2,
+            **{**resources, "cpu_observed": 1.9},
+            experimental_two_slots_on_2cpu=True,
+        )
+        == 1
+    )
+
+
 def test_admit_parallelism_falls_back_to_declared_per_dimension() -> None:
     # The declared bound is used when observation fails.
     assert (

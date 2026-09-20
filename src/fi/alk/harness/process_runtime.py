@@ -345,6 +345,7 @@ def consumable_declared_ports(manifest: EnvironmentBundleV2) -> dict[int, str]:
 # measures. The formula shape is normative (C2 §2); only the numbers are provisional.
 
 _ADMISSION_R_CPU = 0.5  # vCPU harness reserve
+_ADMISSION_R_CPU_EXPERIMENTAL = 0.4  # test-only 2-vCPU / two-world reserve
 _ADMISSION_R_MEM = 1.0  # GiB harness reserve
 _ADMISSION_C_WORLD = 0.6  # vCPU per-world in-call cost (voice tier)
 _ADMISSION_M_WORLD = 0.7  # GiB per-world in-call cost
@@ -465,6 +466,7 @@ def admit_parallelism(
     mem_observed_gib: float | None,
     cpu_declared: float | None,
     mem_declared_gib: float | None,
+    experimental_two_slots_on_2cpu: bool = False,
 ) -> int:
     """Bound slots by CPU and memory; refuse execution when no world fits."""
     import math
@@ -496,6 +498,12 @@ def admit_parallelism(
                 "both observed and declared resource bounds are unavailable",
                 domain=FailureDomain.INFRASTRUCTURE,
             )
+        if (
+            reserve == _ADMISSION_R_CPU
+            and experimental_two_slots_on_2cpu
+            and min(bounds) == 2.0
+        ):
+            reserve = _ADMISSION_R_CPU_EXPERIMENTAL
         fits.append(math.floor((min(bounds) - reserve) / cost))
     admitted = min(fits)
     if admitted < 1:
@@ -5215,6 +5223,9 @@ class ProcessRuntimeProvider:
             mem_observed_gib=mem_observed,
             cpu_declared=cpu_declared,
             mem_declared_gib=mem_declared,
+            experimental_two_slots_on_2cpu=(
+                os.environ.get("ALK_EXPERIMENTAL_TWO_SLOTS_ON_2CPU") == "1"
+            ),
         )
 
     def _run_pre_plan_scan(
