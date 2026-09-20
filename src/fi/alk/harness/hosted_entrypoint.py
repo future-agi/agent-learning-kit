@@ -33,6 +33,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Protocol, Sequence
 
+from . import observability
 from . import outbound as ob
 from .bundle_v2 import BundleV2Error, EnvironmentBundleV2, load_bundle_v2
 from .call_runner import CallRunnerContext, CallRunnerImpl
@@ -73,6 +74,51 @@ from .world.handle import HostedWorld
 from .world.stores.postgres import AttachedPostgresStore
 
 logger = logging.getLogger(__name__)
+
+
+class _JobIdFilter(logging.Filter):
+    """Stamp every log record with the job this runner is serving.
+
+    One runner process serves exactly one job, so the id is process-wide rather than per-task
+    state. Concurrent runs are separate processes, but their stdout is collected into one place,
+    and a line with no job id cannot be attributed to a run at all -- which is the difference
+    between reading a log and guessing at it.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.job_id = "-"
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not hasattr(record, "job_id"):
+            record.job_id = self.job_id
+        return True
+
+
+_JOB_ID_FILTER = _JobIdFilter()
+
+
+def configure_runner_logging(job_id: str | None) -> None:
+    """Put the job id on every line this process emits, including libraries' lines.
+
+    Installed on the root logger rather than ours, because the lines that are hardest to attribute
+    are the ones from livekit, httpx and the model clients.
+    """
+    _JOB_ID_FILTER.job_id = str(job_id or "-")
+    root = logging.getLogger()
+    for handler in root.handlers:
+        handler.addFilter(_JOB_ID_FILTER)
+    if not root.handlers:
+        handler = logging.StreamHandler()
+        handler.addFilter(_JOB_ID_FILTER)
+        root.addHandler(handler)
+        root.setLevel(logging.INFO)
+    for handler in logging.getLogger().handlers:
+        handler.setFormatter(
+            logging.Formatter(
+                "%(asctime)s %(levelname)s job=%(job_id)s %(name)s: %(message)s"
+            )
+        )
 
 # --- §0.6 exit-code contract --------------------------------------------------------------------
 #
@@ -134,6 +180,11 @@ _SIMULATOR_SECRET_ALIASES = frozenset(
         "ALK_VERTEX_LOCATION",
         "CARTESIA_API_KEY",
         "DEEPGRAM_API_KEY",
+        # Observe configuration: the platform's own account, never the customer's.
+        "FI_API_KEY",
+        "FI_BASE_URL",
+        "FI_HARNESS_PROJECT",
+        "FI_SECRET_KEY",
         "GEMINI_API_KEY",
         "GOOGLE_API_KEY",
         "GOOGLE_APPLICATION_CREDENTIALS",
@@ -141,6 +192,7 @@ _SIMULATOR_SECRET_ALIASES = frozenset(
         "GOOGLE_CLOUD_PROJECT",
         "GOOGLE_GENAI_USE_VERTEXAI",
         "HARNESS_BACKGROUND_NOISE_VOLUME",
+        "HARNESS_OBSERVABILITY",
         "LIVEKIT_URL",
         "LIVEKIT_API_KEY",
         "LIVEKIT_API_SECRET",
@@ -665,25 +717,26 @@ def _default_build_call_runner(
     connector = context.job.agent.connector.lower()
     modality = _bundle_contract_modality(context.bundle_dir)
     if connector == "retell_chat":
-        from .retell_chat_call_runner import RetellChatCallRunner
+        from .chat_worker import IsolatedChatCallRunner
 
-        return RetellChatCallRunner(adapter, context)
+        return IsolatedChatCallRunner(adapter, context)
     if connector in _VOICE_CONNECTORS or (connector == "auto" and modality == "voice"):
         # The understand stage read this off the agent's own instructions, so the contract is the
         # only source. Carried through the process environment because `CallRunnerImpl` is handed a
         # context and a scenario document, neither of which reaches the contract; this is an
         # internal hop, not a knob, and nothing outside sets it.
         declared = _bundle_contract_value(context.bundle_dir, "call_direction")
+        call_environ = dict(os.environ)
         if declared:
-            os.environ["ALK_CALL_DIRECTION"] = declared
-        return CallRunnerImpl(adapter, context)
+            call_environ["ALK_CALL_DIRECTION"] = declared
+        return CallRunnerImpl(adapter, context, environ=call_environ)
     # Repository-hosted text targets advertise their concrete HTTP interface in the frozen
     # contract adopted into Bundle V2. Connector-only Vapi/Retell remains on the existing
     # NotWired path and is deliberately not inferred as repository chat.
     if (context.bundle_dir / "contract.json").is_file():
-        from .chat_call_runner import HostedChatCallRunner
+        from .chat_worker import IsolatedChatCallRunner
 
-        return HostedChatCallRunner(adapter, context)
+        return IsolatedChatCallRunner(adapter, context)
     return NotWiredCallRunner()
 
 
@@ -1040,6 +1093,7 @@ class OutboundAdapter:
     def stage_changed(self, to: HarnessStage) -> None:
         frm = self._current_stage.value if self._stage_started else None
         self._stage_started = True
+        observability.stage(to.value)
         self._emit_event(
             stage=to,
             type_=ob.OutboundEventType.STAGE_CHANGED,
@@ -1205,6 +1259,9 @@ class OutboundAdapter:
                 "transcript_artifact": transcript_artifact,
                 "recording_artifacts": recording_artifacts,
             }
+            stop_reason = getattr(receipt.call, "stop_reason", None)
+            if stop_reason:
+                call["stop_reason"] = stop_reason
         elif receipt.call is not None:
             # `hosted_scheduler.CallSummary.started_at` is `str | None`, but
             # `outbound.CallSummary.started_at` requires a real timestamp -- per the contract a
@@ -1809,6 +1866,10 @@ async def run_job(
         logger.error("capabilities load failed: %s: %s", exc.code, exc.message)
         return EXIT_BOOT_FAILURE
 
+    # Every line from here on is attributable. Done as early as the id is known, which is
+    # immediately after capabilities load.
+    configure_runner_logging(getattr(capabilities, "job_id", None))
+
     channel_state = ob.ChannelState()
     transport = deps.build_transport()
     retry_policy = deps.retry_policy()
@@ -1850,6 +1911,7 @@ async def run_job(
     # held outside the try so an exception on any path after this line still lets the
     # `finally` below close whatever was actually provisioned.
     pool: WorldPool | None = None
+    call_runner: CallRunner | None = None
 
     def cancel_requested() -> bool:
         requested = cancel_state.requested() or adapter.is_fenced
@@ -2010,6 +2072,10 @@ async def run_job(
             # build a reportable failure from, and every downstream stage assumes a valid `job`.
             logger.error("job.json invalid: %s", exc)
             return EXIT_CRASHED
+
+        observability.begin(
+            job.job_id, job.run_id, (job.metadata or {}).get("telemetry")
+        )
 
         if job.seed is None:
             logger.warning(
@@ -2367,6 +2433,15 @@ async def run_job(
                 )  # idempotent backstop for any path above that missed one.
             except Exception:  # noqa: BLE001 - a finally must never mask the real exit path
                 logger.exception("pool.close() failed in the run_job finally backstop")
+        if call_runner is not None:
+            close_call_runner = getattr(call_runner, "close", None)
+            if callable(close_call_runner):
+                try:
+                    result = close_call_runner()
+                    if hasattr(result, "__await__"):
+                        await result
+                except Exception:  # noqa: BLE001 - cleanup must never mask the real exit path
+                    logger.exception("call runner close failed in the run_job finally backstop")
         restore_sigterm()
 
 
@@ -2385,7 +2460,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--output", required=True, type=Path, help="/work/artifacts")
     args = parser.parse_args(argv)
-    return asyncio.run(run_job(args.job, args.source, args.output))
+    try:
+        return asyncio.run(run_job(args.job, args.source, args.output))
+    finally:
+        observability.end()
 
 
 if __name__ == "__main__":

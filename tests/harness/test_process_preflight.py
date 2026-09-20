@@ -175,7 +175,9 @@ def _build_bundle(
 
 def test_a_clean_bundle_passes_the_whole_checklist(tmp_path: Path) -> None:
     manifest = _build_bundle(tmp_path)
-    result = preflight_bundle(tmp_path, manifest, parallelism=2, secret_refs=TARGET_PROVIDER_REFS)
+    result = preflight_bundle(
+        tmp_path, manifest, parallelism=2, secret_refs=TARGET_PROVIDER_REFS
+    )
     assert result is None
 
 
@@ -186,7 +188,9 @@ def test_a_file_whose_bytes_changed_after_sealing_is_rejected(tmp_path: Path) ->
     manifest = _build_bundle(tmp_path)
     (tmp_path / "db" / "schema.sql").write_bytes(b"MUTATED")
     with pytest.raises(PreflightError, match="bundle_file_changed") as excinfo:
-        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+        )
     assert excinfo.value.code == "bundle_file_changed"
 
 
@@ -194,7 +198,9 @@ def test_a_files_entry_missing_from_disk_is_rejected(tmp_path: Path) -> None:
     manifest = _build_bundle(tmp_path)
     (tmp_path / "db" / "schema.sql").unlink()
     with pytest.raises(PreflightError, match="bundle_file_missing"):
-        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+        )
 
 
 def test_a_bundle_digest_that_does_not_match_the_recomputed_value_is_rejected(
@@ -203,7 +209,9 @@ def test_a_bundle_digest_that_does_not_match_the_recomputed_value_is_rejected(
     manifest = _build_bundle(tmp_path)
     tampered = manifest.model_copy(update={"digest": "sha256:" + "9" * 64})
     with pytest.raises(PreflightError, match="bundle_digest_mismatch"):
-        preflight_bundle(tmp_path, tampered, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, tampered, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+        )
 
 
 # --- item 2: path safety on the filesystem --------------------------------------------------------
@@ -215,7 +223,9 @@ def test_a_symlink_anywhere_under_the_bundle_is_rejected(tmp_path: Path) -> None
     manifest = _build_bundle(tmp_path)
     (tmp_path / "evil-link").symlink_to(tmp_path / "db" / "schema.sql")
     with pytest.raises(PreflightError, match="bundle_symlink_forbidden"):
-        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+        )
 
 
 def test_the_root_manifest_json_itself_being_a_symlink_is_rejected(
@@ -231,7 +241,9 @@ def test_the_root_manifest_json_itself_being_a_symlink_is_rejected(
     (tmp_path / "manifest.json").unlink()
     (tmp_path / "manifest.json").symlink_to(outside)
     with pytest.raises(PreflightError, match="bundle_symlink_forbidden"):
-        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+        )
 
 
 def test_a_file_present_on_disk_but_not_listed_in_files_is_rejected(
@@ -243,7 +255,9 @@ def test_a_file_present_on_disk_but_not_listed_in_files_is_rejected(
     would have hashed it in; `unlisted_files` writes the same bytes without listing them at all."""
     manifest = _build_bundle(tmp_path, unlisted_files={".env": b"SECRET=1\n"})
     with pytest.raises(PreflightError, match="bundle_file_unlisted"):
-        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+        )
 
 
 # --- item 3: secret material in the bundle's own files -------------------------------------------
@@ -252,7 +266,9 @@ def test_a_file_present_on_disk_but_not_listed_in_files_is_rejected(
 def test_a_dotenv_file_in_the_bundle_is_rejected(tmp_path: Path) -> None:
     manifest = _build_bundle(tmp_path, extra_files={".env": b"SECRET=1\n"})
     with pytest.raises(PreflightError, match="secret_in_bundle"):
-        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+        )
 
 
 def test_high_entropy_secret_content_in_a_bundle_file_is_rejected(
@@ -263,7 +279,9 @@ def test_high_entropy_secret_content_in_a_bundle_file_is_rejected(
         extra_files={"db/notes.sql": b"-----BEGIN RSA PRIVATE KEY-----\nabc\n"},
     )
     with pytest.raises(PreflightError, match="secret_in_bundle"):
-        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+        )
 
 
 # --- item 4: unknown-field translation ------------------------------------------------------------
@@ -280,7 +298,9 @@ def test_an_unknown_field_added_to_the_manifest_on_disk_is_rejected(
     raw["mounts"] = ["/data"]
     (tmp_path / "manifest.json").write_text(json.dumps(raw), encoding="utf-8")
     with pytest.raises(PreflightError, match="unknown_field") as excinfo:
-        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+        )
     assert excinfo.value.code == "unknown_field"
 
 
@@ -293,7 +313,9 @@ def test_a_valid_but_drifted_manifest_on_disk_is_rejected(tmp_path: Path) -> Non
     raw["processes"][1]["run_command"] = ["python", "other.py"]
     (tmp_path / "manifest.json").write_text(json.dumps(raw), encoding="utf-8")
     with pytest.raises(PreflightError, match="bundle_manifest_drifted") as excinfo:
-        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+        )
     assert excinfo.value.code == "bundle_manifest_drifted"
 
 
@@ -302,7 +324,9 @@ def test_an_unreadable_manifest_json_on_disk_is_rejected(tmp_path: Path) -> None
     manifest = _build_bundle(tmp_path)
     (tmp_path / "manifest.json").write_text("{not valid json", encoding="utf-8")
     with pytest.raises(PreflightError, match="bundle_manifest_invalid"):
-        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+        )
 
 
 def test_a_non_extra_forbidden_model_rejection_surfaces_its_own_code(
@@ -318,7 +342,9 @@ def test_a_non_extra_forbidden_model_rejection_surfaces_its_own_code(
     raw["digest"] = "not-a-valid-digest"
     (tmp_path / "manifest.json").write_text(json.dumps(raw), encoding="utf-8")
     with pytest.raises(PreflightError, match="bundle_digest_invalid") as excinfo:
-        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+        )
     assert excinfo.value.code == "bundle_digest_invalid"
 
 
@@ -356,7 +382,9 @@ def test_a_placeholder_outside_the_closed_vocabulary_is_rejected(
 
     manifest = _build_bundle(tmp_path, body_overrides=mutate)
     with pytest.raises(PreflightError, match="unknown_placeholder"):
-        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+        )
 
 
 def test_a_port_placeholder_naming_an_unknown_process_is_rejected(
@@ -368,7 +396,9 @@ def test_a_port_placeholder_naming_an_unknown_process_is_rejected(
 
     manifest = _build_bundle(tmp_path, body_overrides=mutate)
     with pytest.raises(PreflightError, match="unknown_placeholder"):
-        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+        )
 
 
 def test_a_port_placeholder_with_an_empty_name_falls_through_to_unknown_placeholder(
@@ -385,7 +415,9 @@ def test_a_port_placeholder_with_an_empty_name_falls_through_to_unknown_placehol
 
     manifest = _build_bundle(tmp_path, body_overrides=mutate)
     with pytest.raises(PreflightError, match="unknown_placeholder"):
-        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+        )
 
 
 def test_a_token_naming_a_capability_with_no_configuration_name_is_capability_unresolved(
@@ -404,7 +436,9 @@ def test_a_token_naming_a_capability_with_no_configuration_name_is_capability_un
 
     manifest = _build_bundle(tmp_path, body_overrides=mutate)
     with pytest.raises(PreflightError, match="capability_unresolved"):
-        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+        )
 
 
 def test_build_environment_rejects_any_placeholder_even_a_legal_one(
@@ -420,7 +454,9 @@ def test_build_environment_rejects_any_placeholder_even_a_legal_one(
 
     manifest = _build_bundle(tmp_path, body_overrides=mutate)
     with pytest.raises(PreflightError, match="unknown_placeholder"):
-        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+        )
 
 
 def test_the_fixed_and_named_placeholders_are_accepted(tmp_path: Path) -> None:
@@ -430,22 +466,30 @@ def test_the_fixed_and_named_placeholders_are_accepted(tmp_path: Path) -> None:
     def mutate(body: dict[str, Any]) -> dict[str, Any]:
         body["processes"][1]["environment"]["SCRATCH"] = "{{WORLD_DIR}}"
         body["processes"][1]["environment"]["DB"] = "{{DB_NAME}}"
-        body["processes"][1]["environment"]["PEER"] = "{{HOST_postgres}}:{{PORT_postgres}}"
+        body["processes"][1]["environment"]["PEER"] = (
+            "{{HOST_postgres}}:{{PORT_postgres}}"
+        )
         return body
 
     manifest = _build_bundle(tmp_path, body_overrides=mutate)
-    result = preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+    result = preflight_bundle(
+        tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+    )
     assert result is None
 
 
 def test_a_build_command_requiring_root_is_rejected(tmp_path: Path) -> None:
     def mutate(body: dict[str, Any]) -> dict[str, Any]:
-        body["processes"][1]["build_commands"] = [["apt-get", "install", "-y", "ffmpeg"]]
+        body["processes"][1]["build_commands"] = [
+            ["apt-get", "install", "-y", "ffmpeg"]
+        ]
         return body
 
     manifest = _build_bundle(tmp_path, body_overrides=mutate)
     with pytest.raises(PreflightError, match="build_requires_root"):
-        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+        )
 
 
 def test_a_build_command_with_sudo_anywhere_in_the_step_is_rejected(
@@ -456,12 +500,16 @@ def test_a_build_command_with_sudo_anywhere_in_the_step_is_rejected(
     argv list (not just as argv[0]) must trip it too."""
 
     def mutate(body: dict[str, Any]) -> dict[str, Any]:
-        body["processes"][1]["build_commands"] = [["scripts/setup.sh", "--with-sudo", "sudo"]]
+        body["processes"][1]["build_commands"] = [
+            ["scripts/setup.sh", "--with-sudo", "sudo"]
+        ]
         return body
 
     manifest = _build_bundle(tmp_path, body_overrides=mutate)
     with pytest.raises(PreflightError, match="build_requires_root"):
-        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+        )
 
 
 def test_a_target_provider_ref_no_process_lists_is_rejected(tmp_path: Path) -> None:
@@ -471,7 +519,9 @@ def test_a_target_provider_ref_no_process_lists_is_rejected(tmp_path: Path) -> N
 
     manifest = _build_bundle(tmp_path, body_overrides=mutate)
     with pytest.raises(PreflightError, match="secret_unclaimed"):
-        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+        )
 
 
 def test_customer_process_cannot_claim_simulator_provider_secrets(
@@ -529,7 +579,9 @@ def test_a_depends_on_naming_an_unknown_process_is_rejected(tmp_path: Path) -> N
 
     manifest = _build_bundle(tmp_path, body_overrides=mutate)
     with pytest.raises(PreflightError, match="depends_on_unresolved"):
-        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+        )
 
 
 def test_a_depends_on_cycle_is_rejected(tmp_path: Path) -> None:
@@ -540,7 +592,9 @@ def test_a_depends_on_cycle_is_rejected(tmp_path: Path) -> None:
 
     manifest = _build_bundle(tmp_path, body_overrides=mutate)
     with pytest.raises(PreflightError, match="depends_on_cycle"):
-        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+        )
 
 
 def test_an_engine_version_outside_the_catalog_pin_is_rejected(tmp_path: Path) -> None:
@@ -550,11 +604,15 @@ def test_an_engine_version_outside_the_catalog_pin_is_rejected(tmp_path: Path) -
 
     manifest = _build_bundle(tmp_path, body_overrides=mutate)
     with pytest.raises(PreflightError, match="engine_unsupported"):
-        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+        )
 
 
 @pytest.mark.parametrize("colliding_port", [14000, 14099, 15000, 15799])
-def test_a_fixed_port_colliding_with_a_port_formula_band_is_rejected(tmp_path: Path, colliding_port: int) -> None:
+def test_a_fixed_port_colliding_with_a_port_formula_band_is_rejected(
+    tmp_path: Path, colliding_port: int
+) -> None:
     """F11, p5-round1-review: `fixed_port` forces effective parallelism to 1, but the literal
     value was never checked against the provisioner's own port-formula bands — a bundle declaring
     `fixed_port: 14000` collides with a job-shared engine at ordinal 0, and the failure mode is an
@@ -567,7 +625,9 @@ def test_a_fixed_port_colliding_with_a_port_formula_band_is_rejected(tmp_path: P
 
     manifest = _build_bundle(tmp_path, body_overrides=mutate)
     with pytest.raises(PreflightError, match="fixed_port_reserved"):
-        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+        )
 
 
 @pytest.mark.parametrize("colliding_port", [24000, 24099, 25000, 25799])
@@ -586,7 +646,9 @@ def test_a_fixed_port_colliding_with_the_rabbitmq_management_band_is_rejected(
 
     manifest = _build_bundle(tmp_path, body_overrides=mutate)
     with pytest.raises(PreflightError, match="fixed_port_reserved"):
-        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+        )
 
 
 def test_a_fixed_port_outside_both_bands_is_accepted(tmp_path: Path) -> None:
@@ -595,7 +657,12 @@ def test_a_fixed_port_outside_both_bands_is_accepted(tmp_path: Path) -> None:
         return body
 
     manifest = _build_bundle(tmp_path, body_overrides=mutate)
-    assert preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS) is None
+    assert (
+        preflight_bundle(
+            tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+        )
+        is None
+    )
 
 
 def test_a_postgres_capability_with_no_store_entry_is_rejected(tmp_path: Path) -> None:
@@ -609,7 +676,9 @@ def test_a_postgres_capability_with_no_store_entry_is_rejected(tmp_path: Path) -
 
     manifest = _build_bundle(tmp_path, body_overrides=mutate)
     with pytest.raises(PreflightError, match="seed_missing"):
-        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+        )
 
 
 def _reseal_schema_sql(tmp_path: Path, content: bytes) -> EnvironmentBundleV2:
@@ -640,9 +709,13 @@ def test_the_reserved_conformance_name_in_migration_content_is_rejected(
     tmp_path: Path,
 ) -> None:
     _build_bundle(tmp_path)
-    manifest = _reseal_schema_sql(tmp_path, b"CREATE TABLE _alk_conformance (id int);\n")
+    manifest = _reseal_schema_sql(
+        tmp_path, b"CREATE TABLE _alk_conformance (id int);\n"
+    )
     with pytest.raises(PreflightError, match="reserved_name"):
-        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+        )
 
 
 def test_the_reserved_conformance_name_is_matched_case_insensitively(
@@ -652,9 +725,13 @@ def test_the_reserved_conformance_name_is_matched_case_insensitively(
     `CREATE TABLE _ALK_CONFORMANCE` creates the reserved table under its lower-case name — a
     case-sensitive scan would miss exactly the evasion this exists to catch."""
     _build_bundle(tmp_path)
-    manifest = _reseal_schema_sql(tmp_path, b"CREATE TABLE _ALK_CONFORMANCE (id int);\n")
+    manifest = _reseal_schema_sql(
+        tmp_path, b"CREATE TABLE _ALK_CONFORMANCE (id int);\n"
+    )
     with pytest.raises(PreflightError, match="reserved_name"):
-        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+        )
 
 
 def test_a_similarly_named_table_and_a_comment_mentioning_the_reserved_name_are_accepted(
@@ -669,7 +746,9 @@ def test_a_similarly_named_table_and_a_comment_mentioning_the_reserved_name_are_
         tmp_path,
         b"CREATE TABLE alk_conformance_backup (id int);\n-- never create _alk_conformance here\n",
     )
-    result = preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+    result = preflight_bundle(
+        tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+    )
     assert result is None
 
 
@@ -687,7 +766,9 @@ def test_a_migration_path_not_listed_in_files_is_rejected(tmp_path: Path) -> Non
     # On disk, but never hashed into files[].
     (tmp_path / "db" / "extra.sql").write_bytes(b"-- extra\n")
     with pytest.raises(PreflightError, match="bundle_file_unlisted"):
-        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+        )
 
 
 def test_a_seed_file_path_that_does_not_exist_on_disk_is_rejected(
@@ -699,7 +780,9 @@ def test_a_seed_file_path_that_does_not_exist_on_disk_is_rejected(
 
     manifest = _build_bundle(tmp_path, body_overrides=mutate)
     with pytest.raises(PreflightError, match="seed_file_missing"):
-        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+        )
 
 
 def test_a_recorded_inputs_digest_that_does_not_match_the_seed_files_is_rejected(
@@ -715,7 +798,9 @@ def test_a_recorded_inputs_digest_that_does_not_match_the_seed_files_is_rejected
 
     manifest = _build_bundle(tmp_path, body_overrides=mutate)
     with pytest.raises(PreflightError, match="inputs_digest_mismatch"):
-        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+        )
 
 
 # --- item 6: no_sql_store ------------------------------------------------------------------------
@@ -735,7 +820,9 @@ def test_a_process_bundle_with_no_postgres_capability_is_rejected(
 
     manifest = _build_bundle(tmp_path, body_overrides=mutate, include_seed=False)
     with pytest.raises(PreflightError, match="no_sql_store"):
-        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+        )
 
 
 # --- item 7: resource sanity ---------------------------------------------------------------------
@@ -759,11 +846,15 @@ def test_more_than_100_processes_is_rejected(tmp_path: Path) -> None:
 
     manifest = _build_bundle(tmp_path, body_overrides=mutate)
     with pytest.raises(PreflightError, match="process_count_exceeded"):
-        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+        )
 
 
 @pytest.mark.parametrize("parallelism", [0, 9], ids=["below-range", "above-range"])
-def test_parallelism_outside_1_to_8_is_rejected(tmp_path: Path, parallelism: int) -> None:
+def test_parallelism_outside_1_to_8_is_rejected(
+    tmp_path: Path, parallelism: int
+) -> None:
     manifest = _build_bundle(tmp_path)
     with pytest.raises(PreflightError, match="parallelism_out_of_range"):
         preflight_bundle(
@@ -788,9 +879,13 @@ def test_a_secret_file_and_an_unknown_placeholder_together_report_the_earlier_nu
         body["processes"][1]["environment"]["FOO"] = "{{NOT_A_REAL_TOKEN}}"
         return body
 
-    manifest = _build_bundle(tmp_path, body_overrides=mutate, extra_files={".env": b"SECRET=1\n"})
+    manifest = _build_bundle(
+        tmp_path, body_overrides=mutate, extra_files={".env": b"SECRET=1\n"}
+    )
     with pytest.raises(PreflightError, match="secret_in_bundle"):
-        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+        )
 
 
 def test_a_changed_file_and_a_reserved_name_together_report_the_earlier_numbered_item(
@@ -800,9 +895,13 @@ def test_a_changed_file_and_a_reserved_name_together_report_the_earlier_numbered
     both a byte-level tamper the digest catches and a reserved name the content scan would catch,
     but the manifest is never resealed, so item 1 sees it first."""
     manifest = _build_bundle(tmp_path)
-    (tmp_path / "db" / "schema.sql").write_bytes(b"CREATE TABLE _alk_conformance (id int);\n")
+    (tmp_path / "db" / "schema.sql").write_bytes(
+        b"CREATE TABLE _alk_conformance (id int);\n"
+    )
     with pytest.raises(PreflightError, match="bundle_file_changed"):
-        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+        )
 
 
 def test_a_placeholder_and_bad_parallelism_together_report_the_earlier_numbered_item(
@@ -816,7 +915,9 @@ def test_a_placeholder_and_bad_parallelism_together_report_the_earlier_numbered_
 
     manifest = _build_bundle(tmp_path, body_overrides=mutate)
     with pytest.raises(PreflightError, match="unknown_placeholder"):
-        preflight_bundle(tmp_path, manifest, parallelism=99, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=99, secret_refs=TARGET_PROVIDER_REFS
+        )
 
 
 def test_a_compose_bundle_with_an_unlisted_file_reports_compose_not_hosted(
@@ -860,7 +961,9 @@ def test_a_compose_bundle_with_a_changed_listed_file_reports_compose_not_hosted(
         include_seed=False,
     )
     (tmp_path / "compose.yaml").write_bytes(b"services: {}\n")
-    (tmp_path / "db" / "schema.sql").write_bytes(b"MUTATED")  # still listed in files[]; unsealed.
+    (tmp_path / "db" / "schema.sql").write_bytes(
+        b"MUTATED"
+    )  # still listed in files[]; unsealed.
     with pytest.raises(PreflightError, match="compose_not_hosted"):
         preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs={})
 
@@ -945,14 +1048,20 @@ def _static_leading_text(node: ast.expr) -> str | None:
     (a fully dynamic value, e.g. a bare name or an f-string starting with a `{...}`)."""
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
-    if isinstance(node, ast.JoinedStr) and node.values and isinstance(node.values[0], ast.Constant):
+    if (
+        isinstance(node, ast.JoinedStr)
+        and node.values
+        and isinstance(node.values[0], ast.Constant)
+    ):
         return str(node.values[0].value)
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
         return _static_leading_text(node.left)
     return None
 
 
-def _raised_codes(source_text: str, callee_name: str, *, whole_first_argument: bool) -> set[str]:
+def _raised_codes(
+    source_text: str, callee_name: str, *, whole_first_argument: bool
+) -> set[str]:
     codes: set[str] = set()
     for node in ast.walk(ast.parse(source_text)):
         if not isinstance(node, ast.Call):
@@ -1096,7 +1205,9 @@ def test_the_extraction_itself_finds_a_nonempty_set_in_every_source() -> None:
         "ValueError",
         whole_first_argument=False,
     )
-    assert "unknown_field" in preflight_codes  # the `return`-not-`raise` case (see module note).
+    assert (
+        "unknown_field" in preflight_codes
+    )  # the `return`-not-`raise` case (see module note).
     assert "compose_not_hosted" in preflight_codes
     assert len(bundle_v2_codes) > 10
     assert "bundle_path_unsafe" in _raised_codes(
@@ -1122,7 +1233,9 @@ def test_the_extraction_itself_finds_a_nonempty_set_in_every_source() -> None:
 # `_raised_codes`.
 
 
-def _raised_codes_at_index(source_text: str, callee_name: str, *, index: int) -> set[str]:
+def _raised_codes_at_index(
+    source_text: str, callee_name: str, *, index: int
+) -> set[str]:
     codes: set[str] = set()
     for node in ast.walk(ast.parse(source_text)):
         if not isinstance(node, ast.Call):
@@ -1163,6 +1276,8 @@ _SECTION_2F_CODES = frozenset(
         # cannot be salvaged into a W=1 run. Crosses the outbound seam as a surfaced failure reason
         # (NOT a `parallelism_degraded` degrade event); `agent` domain (the customer agent's defect).
         "port_not_consumable",
+        "resource_capacity_unknown",
+        "resource_capacity_unavailable",
     }
 )
 # `ProcessRuntimeError` also raises codes that are deliberately INTERNAL-only — each marks a
@@ -1195,7 +1310,9 @@ def test_every_section_2f_code_process_runtime_raises_is_in_the_closed_table() -
     # not a NEW §2f code — it deliberately reuses the EXISTING §2e model-layer code as a backstop
     # for when the model layer is bypassed, so `_SECTION_2E_CODES` is a legitimate source too, not
     # just §2f's own six entries.
-    unlisted = raised - _SECTION_2F_CODES - _SECTION_2E_CODES - _INTERNAL_ONLY_RUNTIME_CODES
+    unlisted = (
+        raised - _SECTION_2F_CODES - _SECTION_2E_CODES - _INTERNAL_ONLY_RUNTIME_CODES
+    )
     assert not unlisted, (
         f"raised but not in §2f's table (nor §2e's, nor a documented internal-only code): {sorted(unlisted)}"
     )
@@ -1222,9 +1339,12 @@ def _consumable_agent(body: dict[str, Any], **agent_overrides: Any) -> dict[str,
     return body
 
 
-def test_a_consumable_process_wired_via_sh_c_and_env_dollar_key_passes(tmp_path: Path) -> None:
+def test_a_consumable_process_wired_via_sh_c_and_env_dollar_key_passes(
+    tmp_path: Path,
+) -> None:
     """C1 §1 one-clause check: {{PORT_<self>}} in an environment value the run_command references
     by $KEY inside sh -c is the ONLY valid wiring — and it passes."""
+
     def mutate(body: dict[str, Any]) -> dict[str, Any]:
         return _consumable_agent(
             body,
@@ -1240,14 +1360,19 @@ def test_a_consumable_process_wired_via_sh_c_and_env_dollar_key_passes(tmp_path:
 
     manifest = _build_bundle(tmp_path, body_overrides=mutate)
     assert (
-        preflight_bundle(tmp_path, manifest, parallelism=4, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=4, secret_refs=TARGET_PROVIDER_REFS
+        )
         is None
     )
 
 
-def test_a_consumable_token_only_in_an_unreferenced_env_var_is_unwired(tmp_path: Path) -> None:
+def test_a_consumable_token_only_in_an_unreferenced_env_var_is_unwired(
+    tmp_path: Path,
+) -> None:
     """The token sits in an env var, but the run_command never references it — env-token presence
     alone is not wiring (C1 §1)."""
+
     def mutate(body: dict[str, Any]) -> dict[str, Any]:
         return _consumable_agent(
             body,
@@ -1263,12 +1388,17 @@ def test_a_consumable_token_only_in_an_unreferenced_env_var_is_unwired(tmp_path:
 
     manifest = _build_bundle(tmp_path, body_overrides=mutate)
     with pytest.raises(PreflightError, match="fixed_port_consumable_unwired"):
-        preflight_bundle(tmp_path, manifest, parallelism=4, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=4, secret_refs=TARGET_PROVIDER_REFS
+        )
 
 
-def test_a_consumable_token_placed_directly_in_the_argv_is_unwired(tmp_path: Path) -> None:
+def test_a_consumable_token_placed_directly_in_the_argv_is_unwired(
+    tmp_path: Path,
+) -> None:
     """run_command is exec'd verbatim, never rendered — the argv-token clause was DELETED (C1
     v1.3), so a {{PORT_<self>}} token in an argv no longer satisfies the check."""
+
     def mutate(body: dict[str, Any]) -> dict[str, Any]:
         return _consumable_agent(
             body,
@@ -1283,11 +1413,16 @@ def test_a_consumable_token_placed_directly_in_the_argv_is_unwired(tmp_path: Pat
 
     manifest = _build_bundle(tmp_path, body_overrides=mutate)
     with pytest.raises(PreflightError, match="fixed_port_consumable_unwired"):
-        preflight_bundle(tmp_path, manifest, parallelism=4, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=4, secret_refs=TARGET_PROVIDER_REFS
+        )
 
 
-def test_two_processes_declaring_the_same_fixed_port_is_a_duplicate(tmp_path: Path) -> None:
+def test_two_processes_declaring_the_same_fixed_port_is_a_duplicate(
+    tmp_path: Path,
+) -> None:
     """C1 §1: two SourceProcesses cannot both bind the same port in the shared namespace."""
+
     def mutate(body: dict[str, Any]) -> dict[str, Any]:
         body["processes"][1] = {**body["processes"][1], "fixed_port": 8080}
         body["processes"].append(
@@ -1308,17 +1443,23 @@ def test_two_processes_declaring_the_same_fixed_port_is_a_duplicate(tmp_path: Pa
 
     manifest = _build_bundle(tmp_path, body_overrides=mutate)
     with pytest.raises(PreflightError, match="fixed_port_duplicate"):
-        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+        )
 
 
 def test_agent_name_missing_job_id_at_w_gt_1_is_rejected(tmp_path: Path) -> None:
     def mutate(body: dict[str, Any]) -> dict[str, Any]:
-        body["processes"][1]["environment"]["LIVEKIT_AGENT_NAME"] = "agent-w{{WORLD_INDEX}}"
+        body["processes"][1]["environment"]["LIVEKIT_AGENT_NAME"] = (
+            "agent-w{{WORLD_INDEX}}"
+        )
         return body
 
     manifest = _build_bundle(tmp_path, body_overrides=mutate)
     with pytest.raises(PreflightError, match="agent_name_not_world_unique"):
-        preflight_bundle(tmp_path, manifest, parallelism=2, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=2, secret_refs=TARGET_PROVIDER_REFS
+        )
 
 
 def test_agent_name_missing_world_index_at_w_gt_1_is_rejected(tmp_path: Path) -> None:
@@ -1328,18 +1469,25 @@ def test_agent_name_missing_world_index_at_w_gt_1_is_rejected(tmp_path: Path) ->
 
     manifest = _build_bundle(tmp_path, body_overrides=mutate)
     with pytest.raises(PreflightError, match="agent_name_not_world_unique"):
-        preflight_bundle(tmp_path, manifest, parallelism=4, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=4, secret_refs=TARGET_PROVIDER_REFS
+        )
 
 
 def test_agent_name_not_world_unique_is_accepted_at_w1(tmp_path: Path) -> None:
     """The guard is W>1 only — a degraded/serial job (parallelism=1) keeps a plain name."""
+
     def mutate(body: dict[str, Any]) -> dict[str, Any]:
-        body["processes"][1]["environment"]["LIVEKIT_AGENT_NAME"] = "agent-w{{WORLD_INDEX}}"
+        body["processes"][1]["environment"]["LIVEKIT_AGENT_NAME"] = (
+            "agent-w{{WORLD_INDEX}}"
+        )
         return body
 
     manifest = _build_bundle(tmp_path, body_overrides=mutate)
     assert (
-        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+        )
         is None
     )
 
@@ -1347,6 +1495,8 @@ def test_agent_name_not_world_unique_is_accepted_at_w1(tmp_path: Path) -> None:
 def test_agent_name_with_both_placeholders_passes_at_high_w(tmp_path: Path) -> None:
     manifest = _build_bundle(tmp_path)  # base body already carries both placeholders.
     assert (
-        preflight_bundle(tmp_path, manifest, parallelism=8, secret_refs=TARGET_PROVIDER_REFS)
+        preflight_bundle(
+            tmp_path, manifest, parallelism=8, secret_refs=TARGET_PROVIDER_REFS
+        )
         is None
     )

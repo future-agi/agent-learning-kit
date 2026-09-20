@@ -11,6 +11,7 @@ All three are recorded, because how a conversation ended is often the finding.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -56,6 +57,38 @@ class Transcript:
 
     def spoken(self) -> str:
         return "\n".join(f"{turn.speaker}: {turn.text}" for turn in self.exchanges)
+
+    def canonical_messages(self) -> list[dict[str, str]]:
+        """The turns in the role convention the judge reads: `user` said it, `assistant` answered."""
+        return [
+            {
+                "role": "assistant" if turn.speaker == "agent" else "user",
+                "content": turn.text,
+            }
+            for turn in self.exchanges
+        ]
+
+    def artifact(self) -> bytes:
+        """Return the lossless transcript wire format used by hosted ingestion."""
+        return (
+            json.dumps(
+                {
+                    "transcript": self.spoken(),
+                    "messages": [
+                        {
+                            "role": "user"
+                            if turn.speaker == "customer"
+                            else "assistant",
+                            "content": turn.text,
+                        }
+                        for turn in self.exchanges
+                    ],
+                    "ended": self.ended,
+                },
+                sort_keys=True,
+            )
+            + "\n"
+        ).encode("utf-8")
 
     def actions(self) -> str:
         if not self.calls:

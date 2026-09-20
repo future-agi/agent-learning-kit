@@ -24,7 +24,15 @@ from typing import Any
 from ..backends import tool, tool_server
 
 from ..amend import add_rule, drop_rule, fix_tool, set_modality, widen
-from ..catalogue import SubGoal, load_catalogue, save_catalogue, validate_sub_goal
+from ..catalogue import (
+    SubGoal,
+    catalogue_problems,
+    load_catalogue,
+    save_catalogue,
+    compares_to_a_value,
+    validate_sub_goal,
+    weak_check_advisory,
+)
 from ..checks import run_check, run_world_check
 from ..contract import AgentContract, is_data_free_conversation
 from ..simulator import (
@@ -349,6 +357,7 @@ def world_tools(
     *,
     source_root: str = "",
     deferred_runtime: bool = False,
+    external_runtime: bool = False,
 ) -> Any:
     """A server exposing the world-building surface for one agent.
 
@@ -407,7 +416,7 @@ def world_tools(
             # harness-authored handler and must not be smoke-called outside their captured RTC
             # session state while the world is being constructed.
             world.runtime_tools = set(contract.tool_names())
-    elif deferred_runtime:
+    elif deferred_runtime or external_runtime:
         # Hosted authoring runs on a control-plane worker without Docker. The repository's
         # exact processes and declared datastore are compiled into Bundle V2 and started in
         # Daytona; this lightweight store exists only to author baseline data, checks and
@@ -424,6 +433,9 @@ def world_tools(
     else:
         world = GeneratedWorld(":memory:", kind=named)
     world.name = contract.agent
+    world.external_runtime = external_runtime or bool(
+        getattr(world, "external_runtime", False)
+    )
     world.refusal_signature = contract.refusal_signature
     if source_root:
         world.reach(source_root)
@@ -513,6 +525,12 @@ def world_tools(
         {"sql": str},
     )
     async def create_schema(args: dict[str, Any]) -> dict[str, Any]:
+        if external_runtime:
+            return _err(
+                "The connected provider owns its external state. A local schema would be a "
+                "shadow implementation and cannot affect the agent under test. Keep this "
+                "world empty."
+            )
         try:
             applies = getattr(world.store, "apply", None)
             if applies is not None:
@@ -536,6 +554,11 @@ def world_tools(
         {"table": str, "rows": list},
     )
     async def seed(args: dict[str, Any]) -> dict[str, Any]:
+        if external_runtime:
+            return _err(
+                "The connected provider owns its external state. Local seed data cannot reach "
+                "that agent and would make the scenario proof false. Keep this world empty."
+            )
         table, rows = str(args["table"]), args.get("rows") or []
         written = 0
         for row in rows:
@@ -564,6 +587,11 @@ def world_tools(
         {"sql": str},
     )
     async def change_data(args: dict[str, Any]) -> dict[str, Any]:
+        if external_runtime:
+            return _err(
+                "There is no harness-controlled provider datastore to change in connect-only "
+                "mode. Keep this world empty."
+            )
         statement = str(args.get("sql") or "").strip()
         verb = statement.split(None, 1)[0].upper() if statement else ""
         if verb not in ("UPDATE", "DELETE"):
@@ -590,6 +618,10 @@ def world_tools(
         schema({"module": str, "callable": str}, ["module", "callable"]),
     )
     async def adopt_state(args: dict[str, Any]) -> dict[str, Any]:
+        if external_runtime:
+            return _err(
+                "A source-free provider connection has no local state loader to adopt."
+            )
         module = str(args["module"])
         called = str(args["callable"])
         world.reach(source_root)
@@ -620,6 +652,10 @@ def world_tools(
         schema({"path": str, "note": str}, ["path"]),
     )
     async def adopt_store(args: dict[str, Any]) -> dict[str, Any]:
+        if external_runtime:
+            return _err(
+                "A source-free provider connection has no local store to adopt."
+            )
         given = str(args["path"]).strip()
         found = Path(given)
         if not found.is_absolute() and source_root:
@@ -783,6 +819,11 @@ def world_tools(
         schema({"name": str, "calls": list, "expect_state": dict}, ["name", "calls"]),
     )
     async def declare_sequence(args: dict[str, Any]) -> dict[str, Any]:
+        if external_runtime:
+            return _err(
+                "Provider tools execute only during the live conversation. Do not invent a "
+                "local reference sequence; use judged sub-goals and an empty solution."
+            )
         name = str(args.get("name") or f"sequence-{len(sequences)}")
         calls = args.get("calls") or []
 
@@ -1072,10 +1113,15 @@ def world_tools(
         ]
         catalogue.sub_goals.append(sub_goal)
         save_catalogue(catalogue, destination)
+        # Said on acceptance rather than as a refusal: a truthiness check is weak, not unusable,
+        # and a gate the authoring loop cannot satisfy fails the run instead of improving it.
+        advisory = weak_check_advisory(sub_goal)
         settled = sum(1 for one in catalogue.sub_goals if one.deterministic())
         return _ok(
             f"{sub_goal.name} added. The catalogue has {len(catalogue.sub_goals)}, "
-            f"{settled} settled by code: " + ", ".join(sorted(catalogue.names()))
+            f"{settled} settled by code: "
+            + ", ".join(sorted(catalogue.names()))
+            + (f"\n\nWorth strengthening: {advisory}" if advisory else "")
         )
 
     @tool(
@@ -1173,7 +1219,7 @@ def world_tools(
     )
     async def add_world_check(args: dict[str, Any]) -> dict[str, Any]:
         if (
-            is_data_free_conversation(contract)
+            (is_data_free_conversation(contract) or external_runtime)
             and not world.state()
             and not world.handlers
         ):
@@ -1256,7 +1302,7 @@ def world_tools(
     )
     async def save_world(args: dict[str, Any]) -> dict[str, Any]:
         data_free = (
-            is_data_free_conversation(contract)
+            (is_data_free_conversation(contract) or external_runtime)
             and not world.state()
             and not world.handlers
         )
@@ -1300,6 +1346,13 @@ def world_tools(
                 "add_world_check: what has to be true for this world to be worth testing "
                 "against, as code.\n\n" + WORLD_CHECK_HELP
             )
+        # Per-sub-goal validation cannot see the shape of the set, and the shape is what decides
+        # whether the suite grades anything: a catalogue that is mostly judged reports opinions.
+        if shape_problems := catalogue_problems(
+            catalogue.sub_goals,
+            world_is_observable=bool(world.state()) or bool(world.handlers),
+        ):
+            return _err("Not saved.\n  - " + "\n  - ".join(shape_problems))
         failing, cannot_fail, _survived = _verified()
         if failing:
             return _err(
@@ -1384,11 +1437,19 @@ def world_tools(
         )
         draft_path.unlink(missing_ok=True)
         tables = world.state()
+        # How many checks judge a VALUE rather than the presence of one. Reported as a fact at the
+        # point of saving, because the per-sub-goal note is easy to read past and this number is
+        # what decides whether the suite would catch an agent that acted on a misheard detail.
+        coded = [one for one in catalogue.sub_goals if one.deterministic()]
+        strong = [one for one in coded if compares_to_a_value(one.check)]
         return _ok(
             f"Saved to {path}.\n"
             f"{len(world.handlers)} tools, {len(tables)} collections, "
             f"{sum(_size(held) for held in tables.values())} records, "
             f"{len(world_checks)} world checks.\n"
+            f"{len(strong)} of {len(coded)} checks compare a value against an expectation; the "
+            "rest only test that an argument was present, which an agent acting on a misheard "
+            "detail would pass.\n"
             + (
                 "Tool/data probes not applicable; conversational runtime proof remains required."
                 if data_free

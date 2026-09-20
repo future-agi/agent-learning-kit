@@ -134,8 +134,8 @@ class RetellCallOriginator:
     coroutine, not Retell's server-side dial — a slow response can leave a
     live, billed call with no id in hand. Because ``from_number`` is the
     customer's production Retell number, the guard is fenced hard: proven
-    filter vocabulary only, a client-side window and exact-destination
-    match, and at most one stop.
+    filter vocabulary only, a client-side window, exact destination and
+    per-originator metadata ownership, and at most one unambiguous stop.
     """
 
     _base_url = "https://api.retellai.com"
@@ -161,6 +161,8 @@ class RetellCallOriginator:
         self._agent_id = agent_id
         self._from_number = from_number
         self._destination = destination
+        self._call_marker = uuid.uuid4().hex
+        self._start_attempted = False
         # Track ownership of the raw httpx client ourselves rather than via
         # AsyncRetell.close() — that call closes whatever http_client it was
         # given, owned or not, which would close a caller-injected client.
@@ -208,12 +210,16 @@ class RetellCallOriginator:
         )
 
     async def start(self) -> RetellCall:
+        if self._start_attempted:
+            raise ValueError("retell_originator_already_started")
+        self._start_attempted = True
         # Non-2xx raises retell.APIStatusError (a subclass covers each HTTP
         # status); we let it propagate, same failure surface as before.
         response = await self._client.call.create_phone_call(
             from_number=self._from_number,
             to_number=self._destination,
             override_agent_id=self._agent_id,
+            metadata={"futureagi_call_id": self._call_marker},
         )
         # A 2xx without a JSON content-type is passed through by the SDK as
         # raw text (or NoneType for a 204), not the typed PhoneCallResponse
@@ -397,12 +403,14 @@ class RetellCallOriginator:
         # never no_candidates (the "page genuinely empty" signal).
         has_more = bool(getattr(response, "has_more", False))
         if len(rows) == self._LIST_CALLS_LIMIT or has_more:
+            # Truncated/full page: ordering isn't guaranteed, so our own call
+            # may be off the page. A partial view of the customer's production
+            # account cannot establish ownership — fail closed, stop nothing.
             logger.warning(
                 "retell_reconcile_page_full",
                 extra={"row_count": len(rows), "has_more": has_more},
             )
-            if not rows:
-                return []
+            return []
 
         if not rows:
             # The likely inert mode: a range filter on start_timestamp can't
@@ -492,19 +500,38 @@ class RetellCallOriginator:
             )
             return []
 
-        stoppable = [
+        owned = [
             row
             for row in destination_matches
+            if isinstance(row.get("metadata"), dict)
+            and row["metadata"].get("futureagi_call_id") == self._call_marker
+        ]
+        if not owned:
+            logger.warning("retell_reconcile_no_owned_call")
+            return []
+
+        stoppable = [
+            row
+            for row in owned
             if str(row.get("call_status") or "").lower() in self._STOPPABLE_STATUSES
         ]
         if not stoppable:
             return []
 
-        # Our own dial is the last event inside the window; stop only the
-        # latest match and leave every other in-window match alone.
-        stoppable.sort(key=lambda row: row["start_timestamp"], reverse=True)
-        target, ambiguous = stoppable[0], stoppable[1:]
+        if len(stoppable) != 1:
+            # More than one in-window stoppable row from our line to the leased
+            # DID. Source number + destination + window does not single out our
+            # own call — concurrent calls, a duplicate request, or a prior
+            # timed-out attempt could all sit here — and this is the customer's
+            # production account, so fail closed and stop nothing. Log the count
+            # only, never the third-party ids.
+            logger.warning(
+                "retell_reconcile_ambiguous",
+                extra={"stoppable": len(stoppable)},
+            )
+            return []
 
+        target = stoppable[0]
         call_id = target.get("call_id")
         has_id = isinstance(call_id, str)
         if not has_id or not _CALL_ID_PATTERN.fullmatch(call_id):
@@ -515,15 +542,6 @@ class RetellCallOriginator:
                 extra={"has_id": has_id, "count": len(stoppable)},
             )
             return []
-
-        if ambiguous:
-            # The id we stopped is ours by construction (validated above);
-            # the others are the customer's rows and only their count
-            # belongs in our logs.
-            logger.warning(
-                "retell_reconcile_ambiguous",
-                extra={"stopped_call_id": call_id, "left_alone": len(ambiguous)},
-            )
 
         try:
             await self.stop(call_id, timeout=self._RECONCILE_TIMEOUT)

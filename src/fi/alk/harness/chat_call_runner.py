@@ -467,9 +467,8 @@ class HostedChatCallRunner:
             ) from exc
 
         ended = datetime.now(timezone.utc)
-        rendered_transcript = transcript.spoken() + "\n"
         transcript_id = await self._adapter.upload_artifact(
-            rendered_transcript.encode("utf-8"),
+            transcript.artifact(),
             kind=ArtifactKind.TRANSCRIPT,
             scenario_key=scenario.scenario_key,
         )
@@ -503,4 +502,5 @@ class HostedChatCallRunner:
             ended_at=format_rfc3339_millis(ended),
             duration_ms=_duration_ms(started, ended),
             transcript_artifact=transcript_id,
+            messages=tuple(transcript.canonical_messages()),
         )

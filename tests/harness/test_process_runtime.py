@@ -885,6 +885,56 @@ def test_build_environment_is_merged_into_the_build_step_env(tmp_path: Path) -> 
     assert captured["FOO"] == "bar"
 
 
+def test_built_model_assets_survive_parallel_spawn_and_reset_without_sharing(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    process = _source_process(build_commands=[["download-model"]])
+
+    def build_run(step, *, env, **kwargs):
+        Path(env["HF_HUB_CACHE"], "model.bin").write_bytes(b"downloaded")
+        Path(env["HOME"], "home-asset").write_bytes(b"home asset")
+        return subprocess.CompletedProcess(step, 0)
+
+    build = pr.build_process_tree(
+        process, source_root=source, build_root=tmp_path / "build", run=build_run
+    )
+    environments = []
+
+    def runner(argv, *, env, **kwargs):
+        environments.append(env)
+        assert Path(env["HF_HUB_CACHE"], "model.bin").read_bytes() == b"downloaded"
+        assert Path(env["HOME"], "home-asset").read_bytes() == b"home asset"
+        return FakeHandle()
+
+    plan = dc_replace(_solo_port_plan("svc"), effective_instances=2)
+
+    def spawn(index):
+        pr.spawn_source_process(
+            process,
+            build_dir=build,
+            world_dir=tmp_path / f"world-{index}",
+            world_index=index,
+            port_plan=plan,
+            configuration_addresses={},
+            secret_values={},
+            secret_purposes={},
+            runner=runner,
+        )
+
+    spawn(0)
+    Path(environments[0]["HF_HUB_CACHE"], "model.bin").write_bytes(b"mutated")
+    spawn(1)
+    assert environments[0]["HF_HUB_CACHE"] != environments[1]["HF_HUB_CACHE"]
+    assert (
+        Path(build, ".alk-runtime/cache/huggingface/hub/model.bin").read_bytes()
+        == b"downloaded"
+    )
+    spawn(0)
+    assert (
+        Path(environments[0]["HF_HUB_CACHE"], "model.bin").read_bytes() == b"downloaded"
+    )
+
+
 def test_build_runs_every_step_once_per_call_in_order(tmp_path: Path) -> None:
     (tmp_path / "source" / "svc").mkdir(parents=True)
     order: list[list[str]] = []
@@ -2239,6 +2289,8 @@ def test_spawn_world_spawns_in_dependency_order_and_waits_between(
         lambda body: {**body, "readiness": []}
     )  # skip real readiness waits
     plan = pr.plan_ports(manifest, instances=2)
+    for name in ("tools-api", "agent"):
+        pr.build_tree_dir(tmp_path, name).mkdir(parents=True)
     credentials = pr.generate_engine_credentials(manifest, token=lambda: "PW")
     spawn_order: list[str] = []
 
@@ -2364,6 +2416,8 @@ def test_spawn_world_waits_for_terminal_source_process_started_check(
 def test_spawn_world_reuses_job_shared_handles_across_worlds(tmp_path: Path) -> None:
     manifest = _manifest(lambda body: {**body, "readiness": []})
     plan = pr.plan_ports(manifest, instances=2)
+    for name in ("tools-api", "agent"):
+        pr.build_tree_dir(tmp_path, name).mkdir(parents=True)
     credentials = pr.generate_engine_credentials(manifest, token=lambda: "PW")
     spawned_argv0s: list[str] = []
 
@@ -2923,6 +2977,11 @@ def _spawn_context(
     work_directory: Path,
 ) -> pr.SpawnContext:
     port_plan = pr.plan_ports(manifest, instances=instances)
+    for process in manifest.processes:
+        if isinstance(process, SourceProcess):
+            pr.build_tree_dir(work_directory, process.name).mkdir(
+                parents=True, exist_ok=True
+            )
     credentials = _postgres_creds(manifest)
     return pr.SpawnContext(
         work_directory=work_directory,
@@ -4681,6 +4740,8 @@ def _sql_spy_provider(**overrides: Any) -> pr.ProcessRuntimeProvider:
         rabbitmq_declare=lambda **kwargs: None,
         rabbitmq_delete=lambda **kwargs: None,
         rabbitmq_import=lambda **kwargs: None,
+        cpu_observer=lambda: 64.0,
+        mem_observer=lambda: 64.0,
     )
     kwargs.update(overrides)
     return pr.ProcessRuntimeProvider(**kwargs)
@@ -7052,7 +7113,9 @@ def _consumable_manifest(
 # --- item 1: plan_ports consumability (pure) -------------------------------------------------
 
 
-def test_plan_ports_consumable_at_w_gt_1_allocates_formula_ports_excluding_declared() -> None:
+def test_plan_ports_consumable_at_w_gt_1_allocates_formula_ports_excluding_declared() -> (
+    None
+):
     manifest = _consumable_manifest(fixed_port=8080)
     plan = pr.plan_ports(manifest, instances=4)
     assert plan.effective_instances == 4
@@ -7069,7 +7132,9 @@ def test_plan_ports_consumable_at_w1_honors_the_declared_port() -> None:
     manifest = _consumable_manifest(fixed_port=8080)
     plan = pr.plan_ports(manifest, instances=1)
     assert plan.effective_instances == 1
-    assert plan.port_for("tools-api", 0) == 8080  # honored exactly, plan-time W=1 carve-out.
+    assert (
+        plan.port_for("tools-api", 0) == 8080
+    )  # honored exactly, plan-time W=1 carve-out.
 
 
 def test_plan_ports_non_consumable_fixed_port_still_forces_effective_one() -> None:
@@ -7111,31 +7176,62 @@ def test_plan_ports_mixed_bundle_lands_at_effective_one_and_honors_consumable() 
 
 def test_admit_parallelism_clamps_on_observed_cpu() -> None:
     # cpu_fit = floor((2.1 - 0.5) / (0.6 + 0.2)) = floor(2.0) = 2
-    assert pr.admit_parallelism(
-        4, cpu_observed=2.1, mem_observed_gib=None, cpu_declared=None, mem_declared_gib=None
-    ) == 2
+    assert (
+        pr.admit_parallelism(
+            4,
+            cpu_observed=2.1,
+            mem_observed_gib=64.0,
+            cpu_declared=None,
+            mem_declared_gib=None,
+        )
+        == 2
+    )
 
 
 def test_admit_parallelism_falls_back_to_declared_per_dimension() -> None:
-    # observed cpu None -> declared 1.0 -> cpu_fit = floor((1-0.5)/0.8)=0 -> W'=max(1,0)=1
-    assert pr.admit_parallelism(
-        4, cpu_observed=None, mem_observed_gib=8.0, cpu_declared=1.0, mem_declared_gib=None
-    ) == 1
+    # The declared bound is used when observation fails.
+    assert (
+        pr.admit_parallelism(
+            4,
+            cpu_observed=None,
+            mem_observed_gib=8.0,
+            cpu_declared=1.4,
+            mem_declared_gib=None,
+        )
+        == 1
+    )
 
 
-def test_admit_parallelism_no_bound_does_not_clamp() -> None:
-    assert pr.admit_parallelism(
-        4, cpu_observed=None, mem_observed_gib=None, cpu_declared=None, mem_declared_gib=None
-    ) == 4
+def test_admit_parallelism_unknown_capacity_fails_closed() -> None:
+    with pytest.raises(pr.ProcessRuntimeError, match="resource_capacity_unknown"):
+        pr.admit_parallelism(
+            4,
+            cpu_observed=None,
+            mem_observed_gib=None,
+            cpu_declared=None,
+            mem_declared_gib=None,
+        )
 
 
-def test_admit_parallelism_never_zero_or_above_requested() -> None:
-    assert pr.admit_parallelism(
-        4, cpu_observed=0.1, mem_observed_gib=0.1, cpu_declared=None, mem_declared_gib=None
-    ) == 1
-    assert pr.admit_parallelism(
-        2, cpu_observed=64.0, mem_observed_gib=256.0, cpu_declared=None, mem_declared_gib=None
-    ) == 2
+def test_admit_parallelism_refuses_zero_capacity_and_never_exceeds_requested() -> None:
+    with pytest.raises(pr.ProcessRuntimeError, match="resource_capacity_unavailable"):
+        pr.admit_parallelism(
+            4,
+            cpu_observed=0.1,
+            mem_observed_gib=0.1,
+            cpu_declared=None,
+            mem_declared_gib=None,
+        )
+    assert (
+        pr.admit_parallelism(
+            2,
+            cpu_observed=64.0,
+            mem_observed_gib=256.0,
+            cpu_declared=None,
+            mem_declared_gib=None,
+        )
+        == 2
+    )
 
 
 # --- cgroup-v2 delegated-subtree observation (pure) ------------------------------------------
@@ -7244,7 +7340,12 @@ def test_scan_loopback_ports_finds_all_three_forms() -> None:
 
 
 def test_parse_bind_error_port_reads_the_errored_port() -> None:
-    assert pr.parse_bind_error_port("OSError: [Errno 48] Address already in use: 0.0.0.0:8081") == 8081
+    assert (
+        pr.parse_bind_error_port(
+            "OSError: [Errno 48] Address already in use: 0.0.0.0:8081"
+        )
+        == 8081
+    )
     assert pr.parse_bind_error_port("started_check timed out") is None
 
 
@@ -7321,7 +7422,9 @@ def test_attribute_consumable_owner_colliding_on_its_own_port_is_terminal() -> N
 def test_attribute_non_owner_on_a_consumable_port_is_not_terminal() -> None:
     """(b) a NON-owner (agent) colliding on tools-api's declared consumable port is NOT the
     arm-4 defect — it falls through to the declared-port graceful arm (world_start_failed)."""
-    manifest = _consumable_manifest(fixed_port=8080)  # tools-api owns 8080, agent does not.
+    manifest = _consumable_manifest(
+        fixed_port=8080
+    )  # tools-api owns 8080, agent does not.
     plan = pr.plan_ports(manifest, instances=2)
     reason = pr.attribute_world_start_failure(
         process_name="agent",  # NOT the owner of 8080.
@@ -7333,7 +7436,9 @@ def test_attribute_non_owner_on_a_consumable_port_is_not_terminal() -> None:
     assert reason == "world_start_failed"
 
 
-def test_attribute_unrecoverable_none_process_on_consumable_port_is_not_terminal() -> None:
+def test_attribute_unrecoverable_none_process_on_consumable_port_is_not_terminal() -> (
+    None
+):
     """(c) an unrecoverable failure (process_name is None) on a declared consumable port never
     fires the terminal arm — `.get() == None` is False — and falls through gracefully."""
     manifest = _consumable_manifest(fixed_port=8080)
@@ -7352,13 +7457,15 @@ def test_attribute_unrecoverable_none_process_on_consumable_port_is_not_terminal
 # --- integration: admission clamp (item 3) ---------------------------------------------------
 
 
-def test_provision_admission_clamps_to_one_and_records_resource_limited(tmp_path: Path) -> None:
+def test_provision_admission_clamps_to_one_and_records_resource_limited(
+    tmp_path: Path,
+) -> None:
     manifest = _manifest()
     source, bundle_dir = _provision_dirs(tmp_path)
     provider = _sql_spy_provider(
         secrets_path=tmp_path / "secrets.json",
-        cpu_observer=lambda: 1.0,  # cpu_fit = floor((1-0.5)/0.8) = 0 -> W'=1
-        mem_observer=lambda: None,
+        cpu_observer=lambda: 1.4,
+        mem_observer=lambda: 64.0,
     )
     runtimes = asyncio.run(
         provider.provision(
@@ -7384,7 +7491,7 @@ def test_provision_admission_falls_back_to_declared_when_observed_read_raises(
     tmp_path: Path,
 ) -> None:
     (tmp_path / "job.json").write_text(
-        json.dumps({"job_id": "j", "runtime": {"cpu_units": 1, "memory_mb": 64000}})
+        json.dumps({"job_id": "j", "runtime": {"cpu_units": 1.4, "memory_mb": 64000}})
     )
     manifest = _manifest()
     source, bundle_dir = _provision_dirs(tmp_path)
@@ -7394,7 +7501,7 @@ def test_provision_admission_falls_back_to_declared_when_observed_read_raises(
 
     provider = _sql_spy_provider(
         secrets_path=tmp_path / "secrets.json",
-        cpu_observer=boom,  # falls back to declared cpu_units=1 -> cpu_fit 0 -> W'=1
+        cpu_observer=boom,  # falls back to the declared CPU bound.
         mem_observer=lambda: None,  # memory declared 64GiB is generous; cpu binds.
     )
     runtimes = asyncio.run(
@@ -7412,7 +7519,7 @@ def test_provision_admission_falls_back_to_declared_when_observed_read_raises(
     assert build["degrade_reason"] == "resource_limited"
 
 
-def test_provision_no_observed_no_declared_does_not_clamp(tmp_path: Path) -> None:
+def test_provision_no_observed_no_declared_refuses_execution(tmp_path: Path) -> None:
     manifest = _manifest()
     source, bundle_dir = _provision_dirs(tmp_path)
     provider = _sql_spy_provider(
@@ -7420,19 +7527,17 @@ def test_provision_no_observed_no_declared_does_not_clamp(tmp_path: Path) -> Non
         cpu_observer=lambda: None,
         mem_observer=lambda: None,
     )
-    runtimes = asyncio.run(
-        provider.provision(
-            manifest,
-            source=source,
-            bundle_dir=bundle_dir,
-            work_directory=tmp_path,
-            instances=3,
-            require_declared_user=False,
+    with pytest.raises(pr.ProcessRuntimeError, match="resource_capacity_unknown"):
+        asyncio.run(
+            provider.provision(
+                manifest,
+                source=source,
+                bundle_dir=bundle_dir,
+                work_directory=tmp_path,
+                instances=3,
+                require_declared_user=False,
+            )
         )
-    )
-    assert [r.world_index for r in runtimes] == [0, 1, 2]
-    build = json.loads((tmp_path / "artifacts" / "build.json").read_text())
-    assert build["degrade_events"] == []
 
 
 # --- integration: pre-plan scan (item 2) -----------------------------------------------------
@@ -7440,19 +7545,23 @@ def test_provision_no_observed_no_declared_does_not_clamp(tmp_path: Path) -> Non
 
 def _no_clamp(**overrides: Any) -> dict[str, Any]:
     base: dict[str, Any] = dict(
-        cpu_observer=lambda: None,
-        mem_observer=lambda: None,
+        cpu_observer=lambda: 64.0,
+        mem_observer=lambda: 64.0,
         listener_probe=lambda port: False,
     )
     base.update(overrides)
     return base
 
 
-def test_provision_scan_degrade_tier_declared_port_degrades_to_one(tmp_path: Path) -> None:
+def test_provision_scan_degrade_tier_declared_port_degrades_to_one(
+    tmp_path: Path,
+) -> None:
     manifest = _consumable_manifest(fixed_port=8080)
     source, bundle_dir = _provision_dirs(tmp_path)
     secrets_path = tmp_path / "secrets.json"
-    secrets_path.write_text(json.dumps({"LIVEKIT_API_KEY": "http://localhost:8080/tools"}))
+    secrets_path.write_text(
+        json.dumps({"LIVEKIT_API_KEY": "http://localhost:8080/tools"})
+    )
     provider = _sql_spy_provider(
         secrets_path=secrets_path,
         secret_purpose_map={"LIVEKIT_API_KEY": "target_provider"},
@@ -7477,7 +7586,9 @@ def test_provision_scan_degrade_tier_declared_port_degrades_to_one(tmp_path: Pat
     ]
 
 
-def test_provision_scan_warn_tier_non_declared_port_runs_at_requested_w(tmp_path: Path) -> None:
+def test_provision_scan_warn_tier_non_declared_port_runs_at_requested_w(
+    tmp_path: Path,
+) -> None:
     manifest = _consumable_manifest(fixed_port=8080)
     source, bundle_dir = _provision_dirs(tmp_path)
     secrets_path = tmp_path / "secrets.json"
@@ -7596,7 +7707,9 @@ def _inject_world_failure(
     provider._ensure_world = wrapped  # type: ignore[method-assign]
 
 
-def test_provision_main_loop_partial_failure_continues_on_prefix(tmp_path: Path) -> None:
+def test_provision_main_loop_partial_failure_continues_on_prefix(
+    tmp_path: Path,
+) -> None:
     manifest = _manifest()
     source, bundle_dir = _provision_dirs(tmp_path)
     provider = _sql_spy_provider(secrets_path=tmp_path / "secrets.json", **_no_clamp())
@@ -7611,7 +7724,10 @@ def test_provision_main_loop_partial_failure_continues_on_prefix(tmp_path: Path)
             require_declared_user=False,
         )
     )
-    assert [r.world_index for r in runtimes] == [0, 1]  # contiguous prefix, no renumbering.
+    assert [r.world_index for r in runtimes] == [
+        0,
+        1,
+    ]  # contiguous prefix, no renumbering.
     build = json.loads((tmp_path / "artifacts" / "build.json").read_text())
     assert build["effective_parallelism"] == 2
     assert build["degrade_events"] == [
@@ -7619,7 +7735,9 @@ def test_provision_main_loop_partial_failure_continues_on_prefix(tmp_path: Path)
     ]
 
 
-def test_provision_world_zero_failure_on_first_build_is_a_job_failure(tmp_path: Path) -> None:
+def test_provision_world_zero_failure_on_first_build_is_a_job_failure(
+    tmp_path: Path,
+) -> None:
     manifest = _manifest()
     source, bundle_dir = _provision_dirs(tmp_path)
     provider = _sql_spy_provider(secrets_path=tmp_path / "secrets.json", **_no_clamp())
@@ -7712,8 +7830,8 @@ def test_provision_gate_listener_check_finds_declared_listener_terminal(
     source, bundle_dir = _provision_dirs(tmp_path)
     provider = _sql_spy_provider(
         secrets_path=tmp_path / "secrets.json",
-        cpu_observer=lambda: None,
-        mem_observer=lambda: None,
+        cpu_observer=lambda: 64.0,
+        mem_observer=lambda: 64.0,
         listener_probe=lambda port: port == 8080,  # a lying consumable left 8080 bound.
     )
     with pytest.raises(pr.ProcessRuntimeError) as excinfo:
@@ -7770,7 +7888,9 @@ def test_raise_port_not_consumable_generic_wording() -> None:
 # --- integration: per-build-identity freeze (item 6) -----------------------------------------
 
 
-def test_provision_reconcile_carries_the_first_port_plan_forward(tmp_path: Path) -> None:
+def test_provision_reconcile_carries_the_first_port_plan_forward(
+    tmp_path: Path,
+) -> None:
     manifest = _manifest()
     source, bundle_dir = _provision_dirs(tmp_path)
     provider = _sql_spy_provider(secrets_path=tmp_path / "secrets.json", **_no_clamp())
@@ -7805,13 +7925,19 @@ def test_provision_digest_rebuild_carries_ledger_forward_and_reclassifies_ports(
 ) -> None:
     # First build (W=4): a warn-tier secret whose port is NOT declared -> retained, no degrade.
     manifest_a = _manifest()
-    manifest_b = _consumable_manifest(fixed_port=18090)  # NEWLY declares the retained port.
+    manifest_b = _consumable_manifest(
+        fixed_port=18090
+    )  # NEWLY declares the retained port.
     manifest_b = _manifest(
         lambda body: {
             **body,
             "processes": [
                 body["processes"][0],
-                {**body["processes"][1], "fixed_port": 18090, "fixed_port_consumable": True},
+                {
+                    **body["processes"][1],
+                    "fixed_port": 18090,
+                    "fixed_port_consumable": True,
+                },
                 body["processes"][2],
             ],
             "digest": "sha256:" + "9" * 64,
@@ -7866,11 +7992,11 @@ def test_provision_digest_rebuild_fresh_admission_above_ceiling_appends_no_resou
     manifest_a = _manifest()
     manifest_b = _manifest(lambda body: {**body, "digest": "sha256:" + "9" * 64})
     source, bundle_dir = _provision_dirs(tmp_path)
-    cpu_box: dict[str, float | None] = {"value": None}  # first build: no admission clamp.
+    cpu_box: dict[str, float | None] = {"value": 64.0}
     provider = _sql_spy_provider(
         secrets_path=tmp_path / "secrets.json",
         cpu_observer=lambda: cpu_box["value"],
-        mem_observer=lambda: None,
+        mem_observer=lambda: 64.0,
         listener_probe=lambda port: False,
     )
     # First build (W=4): admission does not clamp; world 2 dies -> world_start_failed 4->2.
@@ -7999,15 +8125,19 @@ def test_spawn_guarded_keys_is_exactly_the_two_remaining_members() -> None:
     assert pr._SPAWN_GUARDED_KEYS == ("LIVEKIT_AGENT_NAME", "FI_WORKER_HEALTH_PORT")
 
 
-def test_provision_two_stage_degrade_yields_two_ordered_ledger_entries(tmp_path: Path) -> None:
+def test_provision_two_stage_degrade_yields_two_ordered_ledger_entries(
+    tmp_path: Path,
+) -> None:
     """C2 checklist 15: resource_limited (4->3) then world_start_failed (3->2) → two entries,
     in causal order, requested constant."""
     manifest = _manifest()
     source, bundle_dir = _provision_dirs(tmp_path)
     provider = _sql_spy_provider(
         secrets_path=tmp_path / "secrets.json",
-        cpu_observer=lambda: 3.1,  # cpu_fit = floor((3.1-0.5)/0.8) = floor(3.25) = 3 -> W'=3
-        mem_observer=lambda: None,
+        cpu_observer=lambda: (
+            3.1
+        ),  # cpu_fit = floor((3.1-0.5)/0.8) = floor(3.25) = 3 -> W'=3
+        mem_observer=lambda: 64.0,
         listener_probe=lambda port: False,
     )
     _inject_world_failure(provider, 2, process="agent", log="boom (no bind error)")
@@ -8050,9 +8180,9 @@ def test_provision_reconcile_failure_re_raises_and_leaves_ledger_unchanged(
         )
     )
     assert [r.world_index for r in first] == [0, 1]
-    ledger_before = json.loads(
-        (tmp_path / "artifacts" / "build.json").read_text()
-    )["degrade_events"]
+    ledger_before = json.loads((tmp_path / "artifacts" / "build.json").read_text())[
+        "degrade_events"
+    ]
     # Mark world 1 sick so the reconcile call actually rebuilds it, and make that rebuild fail.
     provider._runtimes[1].state = pr.RuntimeState.UNHEALTHY
     _inject_world_failure(provider, 1, process="agent", log="rebuild failed")
@@ -8084,11 +8214,13 @@ def test_provision_digest_rebuild_normalizes_ledger_to_strictly_decreasing_chain
     manifest_a = _manifest()
     manifest_b = _manifest(lambda body: {**body, "digest": "sha256:" + "9" * 64})
     source, bundle_dir = _provision_dirs(tmp_path)
-    cpu_box: dict[str, float | None] = {"value": 3.1}  # cpu_fit floor((3.1-0.5)/0.8)=3 -> W'=3.
+    cpu_box: dict[str, float | None] = {
+        "value": 3.1
+    }  # cpu_fit floor((3.1-0.5)/0.8)=3 -> W'=3.
     provider = _sql_spy_provider(
         secrets_path=tmp_path / "secrets.json",
         cpu_observer=lambda: cpu_box["value"],
-        mem_observer=lambda: None,
+        mem_observer=lambda: 64.0,
         listener_probe=lambda port: False,
     )
     # First build (W=4): admission clamps to 3 (resource_limited 4->3); world 2 dies afterward
@@ -8115,7 +8247,7 @@ def test_provision_digest_rebuild_normalizes_ledger_to_strictly_decreasing_chain
     # existing resource_limited entry's to_w to 1 IN PLACE would leave [resource_limited 4->1,
     # world_start_failed 3->2] (to_w 1,2 -- NOT strictly decreasing); normalization reorders by
     # to_w descending and re-derives from_w into a monotone chain.
-    cpu_box["value"] = 1.0  # cpu_fit floor((1-0.5)/0.8)=0 -> W'=1.
+    cpu_box["value"] = 1.4  # One world fits with control-process headroom.
     second = asyncio.run(
         provider.provision(
             manifest_b,
@@ -8152,11 +8284,13 @@ def test_provision_failed_rebuild_preserves_carried_ceiling_and_ledger(
     manifest_a = _manifest()
     manifest_b = _manifest(lambda body: {**body, "digest": "sha256:" + "9" * 64})
     source, bundle_dir = _provision_dirs(tmp_path)
-    cpu_box: dict[str, float | None] = {"value": 2.1}  # cpu_fit floor((2.1-0.5)/0.8)=2 -> W'=2.
+    cpu_box: dict[str, float | None] = {
+        "value": 2.1
+    }  # cpu_fit floor((2.1-0.5)/0.8)=2 -> W'=2.
     provider = _sql_spy_provider(
         secrets_path=tmp_path / "secrets.json",
         cpu_observer=lambda: cpu_box["value"],
-        mem_observer=lambda: None,
+        mem_observer=lambda: 64.0,
         listener_probe=lambda port: False,
     )
     # First build (W=4): admission clamps to 2 -> resource_limited 4->2, effective ceiling 2.

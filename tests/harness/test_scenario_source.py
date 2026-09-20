@@ -55,6 +55,21 @@ class _FakeJob:
     run_id: str = "job-1"
 
 
+@pytest.fixture(autouse=True)
+def _judged_sub_goals_decided_without_a_model(monkeypatch):
+    """These tests are about wrapping scenarios, not about judging.
+
+    A judged sub-goal now goes to a model, so without this the two consumer-proof tests would make
+    a live call and assert on the verdict rather than on the wrapping.
+    """
+    from fi.alk.harness import hosted_scheduler
+
+    async def _held(goal, world, calls, *, messages=()):
+        return True, f"{goal.name}: stubbed for a scenario-source test"
+
+    monkeypatch.setattr(hosted_scheduler, "_judge", _held)
+
+
 def _write_scenario(
     scenarios_root: Path,
     name: str,
@@ -454,7 +469,12 @@ def test_mutation_vacuous_empty_check_pass_is_caught(tmp_path: Path) -> None:
         ss.load_scenarios(tmp_path)
 
     def _always_allow_empty(
-        source: str, *, label: str, entry: str, allow_empty: bool = True
+        source: str,
+        *,
+        label: str,
+        entry: str,
+        allow_empty: bool = True,
+        defer_execution: bool = False,
     ):
         # The mutant: `allow_empty` is accepted but ignored -- `check` is treated exactly like
         # `setup`/`ready` again, as if the R1-2 fix's `allow_empty=False` call-site edit were
@@ -689,73 +709,6 @@ def test_unreadable_scenarios_directory_makes_bundle_has_scenarios_false_not_an_
         assert ss.bundle_has_scenarios(tmp_path) is False
     finally:
         root.chmod(0o755)
-
-
-def test_mutation_revert_r1_1_containment_reproduces_the_untyped_escapes(
-    tmp_path: Path,
-) -> None:
-    # Revert-verify-restore: a SCRATCH copy of this module's pre-R1-1-fix content (never a tracked
-    # file -- this module did not exist as a tracked file before this task either, see the mutation
-    # section's own DUPLICATION DISCLOSURE below) is imported under a private name and driven
-    # through the exact same fixtures the tests above use. It reproduces every one of the four
-    # untyped escapes the fix closes; the real, fixed `ss` module does not.
-    import importlib.util
-    import sys as _sys
-
-    prefix_path = Path(
-        "/private/tmp/claude-501/-Users-khushalsonawat-Desktop-future-agi/"
-        "12a30b1b-5fe7-4808-ae3f-103ab50c6ebc/scratchpad/p12fix1/scenario_source_prefix.py"
-    )
-    if not prefix_path.is_file():
-        pytest.skip("pre-fix scratch copy not present in this environment")
-    module_name = "_p12_scenario_source_prefix"
-    spec = importlib.util.spec_from_file_location(module_name, prefix_path)
-    assert spec is not None and spec.loader is not None
-    prefix = importlib.util.module_from_spec(spec)
-    # dataclasses' `from __future__ import annotations` string-annotation resolution looks the
-    # module up in `sys.modules` by name -- registered (and cleaned up after) purely for that,
-    # never left behind for anything else to import.
-    _sys.modules[module_name] = prefix
-    try:
-        spec.loader.exec_module(prefix)
-
-        # (a) module-level sys.exit(0) -- pre-fix: raw SystemExit escapes `load_scenarios` itself.
-        root = tmp_path / "a" / ss.SCENARIOS_DIRNAME
-        _write_scenario(
-            root, "s1", scenario_key="s1", setup_code="import sys\nsys.exit(0)\n"
-        )
-        with pytest.raises(SystemExit):
-            prefix.load_scenarios(tmp_path / "a")
-        with pytest.raises(ss.ScenarioDocumentInvalid):
-            ss.load_scenarios(tmp_path / "a")
-
-        # (b) non-UTF-8 setup.py -- pre-fix: raw UnicodeDecodeError escapes.
-        root_b = tmp_path / "b" / ss.SCENARIOS_DIRNAME
-        folder_b = _write_scenario(root_b, "s1", scenario_key="s1")
-        (folder_b / "setup.py").write_bytes(
-            b"def setup(world):\n    return '\xff\xfe'\n"
-        )
-        with pytest.raises(UnicodeDecodeError):
-            prefix.load_scenarios(tmp_path / "b")
-        with pytest.raises(ss.ScenarioDocumentInvalid):
-            ss.load_scenarios(tmp_path / "b")
-
-        # (c) unreadable setup.py (chmod 000) -- pre-fix: raw PermissionError escapes.
-        root_c = tmp_path / "c" / ss.SCENARIOS_DIRNAME
-        folder_c = _write_scenario(
-            root_c, "s1", scenario_key="s1", setup_code="def setup(world):\n    pass\n"
-        )
-        setup_path = folder_c / "setup.py"
-        setup_path.chmod(0o000)
-        try:
-            with pytest.raises(PermissionError):
-                prefix.load_scenarios(tmp_path / "c")
-            with pytest.raises(ss.ScenarioDocumentInvalid):
-                ss.load_scenarios(tmp_path / "c")
-        finally:
-            setup_path.chmod(0o644)
-    finally:
-        del _sys.modules[module_name]
 
 
 # =================================================================================================
@@ -1184,9 +1137,7 @@ def test_real_write_folder_round_trip_matches_the_adapters_reading(
 # =================================================================================================
 
 
-def test_load_timeout_converts_a_hanging_module_level_scenario_into_a_typed_failure() -> (
-    None
-):
+def test_hosted_load_never_executes_module_level_scenario_code() -> None:
     async def scenario() -> None:
         tmp_path = Path(tempfile.mkdtemp(prefix="p12-load-timeout-"))
         root = tmp_path / ss.SCENARIOS_DIRNAME
@@ -1196,19 +1147,23 @@ def test_load_timeout_converts_a_hanging_module_level_scenario_into_a_typed_fail
             scenario_key="s1",
             # Module-level, not inside setup() -- runs during `_compile_entry`'s `exec`, i.e.
             # during the load itself, which is exactly what a real budget must bound.
-            setup_code="import time\ntime.sleep(1.5)\ndef setup(world):\n    pass\n",
+            setup_code="raise RuntimeError('module executed in loader')\ndef setup(world):\n    pass\n",
         )
         source = ss.BundleScenarioSource()
-        with mock.patch.object(ss, "_LOAD_TIMEOUT_SECONDS", 0.1):
-            with pytest.raises(ss.ScenarioDocumentInvalid, match="exceeded"):
-                await source.build(
-                    object(),
-                    object(),
-                    object(),
-                    pool=object(),
-                    world_factory=object(),
-                    bundle_dir=tmp_path,
-                )
+
+        async def passthrough(client, scenarios, **kwargs):
+            return scenarios
+
+        with mock.patch.object(ss, "register_with_platform", passthrough):
+            loaded = await source.build(
+                _FakeJob(run_id="job-1"),
+                object(),
+                object(),
+                pool=object(),
+                world_factory=object(),
+                bundle_dir=tmp_path,
+            )
+        assert [item.scenario_key for item in loaded] == ["s1"]
 
     asyncio.run(scenario())
 
@@ -1264,7 +1219,9 @@ def test_mutation_skip_compile_check_is_killed(tmp_path: Path) -> None:
 
     # Mutant: a "compiler" that never raises on a bad compile, returning a no-op instead --
     # simulates deleting the try/except around `compile()`/`exec()` in `_compile_entry`.
-    def _never_fails(source: str, *, label: str, entry: str):
+    def _never_fails(
+        source: str, *, label: str, entry: str, defer_execution: bool = False
+    ):
         del source, label, entry
         return lambda *args: None
 
@@ -1820,3 +1777,46 @@ def test_the_provision_payload_carries_the_modality_so_evals_bind_to_the_right_i
 
     # Omitted rather than empty, so an older platform is unaffected.
     assert "modality" not in ss._provision_payload("run", [], [], "", "")
+
+
+def test_a_judged_sub_goal_is_exactly_one_with_no_check_file(tmp_path: Path) -> None:
+    """The scheduler routes on `judged` alone, so judged has to mean "no code settles this".
+
+    If a coded sub-goal ever arrived judged-truthy, its check would be skipped in favour of a model
+    call. Nothing asserted the equivalence until this test.
+    """
+    _write_scenario(
+        tmp_path / ss.SCENARIOS_DIRNAME,
+        "mixed",
+        scenario_key="mixed",
+        sub_goals=["coded", "judged_only"],
+        checks={"coded": "def check(world, calls):\n    return None\n"},
+    )
+    scenario = ss.load_scenarios(tmp_path)[0]
+    by_name = {goal.name: goal for goal in scenario.sub_goals}
+
+    assert by_name["coded"].judged == "", "a sub-goal with a check file must not be judged"
+    assert by_name["coded"].check is not ss._judged_placeholder_check
+    assert by_name["judged_only"].judged, "no check file means a model has to decide it"
+    assert by_name["judged_only"].check is ss._judged_placeholder_check
+
+
+def test_restoring_claims_never_makes_a_coded_sub_goal_judged(tmp_path: Path) -> None:
+    """`_with_claims` guards this deliberately; removing the guard would skip real checks."""
+    _write_scenario(
+        tmp_path / ss.SCENARIOS_DIRNAME,
+        "coded",
+        scenario_key="coded",
+        sub_goals=["coded"],
+        checks={"coded": "def check(world, calls):\n    return None\n"},
+    )
+    scenario = ss.load_scenarios(tmp_path)[0]
+    # A catalogue that claims the coded sub-goal is judged, which is the shape validate_sub_goal
+    # accepts today: a working check AND a judged claim on the same sub-goal.
+    restored = ss._with_claims(
+        scenario,
+        {"coded": {"what": "the row is written", "judged": "a model must weigh tone"}},
+    )
+    goal = restored.sub_goals[0]
+    assert goal.judged == "", "a coded sub-goal must stay coded whatever the catalogue claims"
+    assert goal.what == "the row is written", "the description is still restored"

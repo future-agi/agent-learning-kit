@@ -17,6 +17,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from . import spend
+from . import observability
 from .build import open_stage as build_stage
 from .build import opening as build_opening
 from .build import require_buildable
@@ -140,9 +142,19 @@ def _missing_scenario_adjustments(
 
 
 async def _understand(args: argparse.Namespace) -> int:
-    source = resolve(args.kind, name=args.name, root=args.path)
+    if args.kind == "provider":
+        source = resolve(
+            args.kind,
+            name=args.name,
+            profile=getattr(args, "provider_profile", None) or {},
+            scratch=args.path,
+        )
+    else:
+        source = resolve(args.kind, name=args.name, root=args.path)
     job = getattr(args, "job", None)
-    offered = (getattr(job, "metadata", None) or {}).get("available_evals") if job else None
+    offered = (
+        (getattr(job, "metadata", None) or {}).get("available_evals") if job else None
+    )
     stage, destination = open_stage(
         source,
         out=Path(args.out) if args.out else None,
@@ -226,8 +238,13 @@ async def _build(args: argparse.Namespace) -> int:
     print(f"out:   {destination}\n")
 
     source_root = _source_root(destination, args.path or "")
+    external_runtime = bool(getattr(args, "external_runtime", False))
     try:
-        require_buildable(contract, source_root)
+        require_buildable(
+            contract,
+            source_root,
+            external_runtime=external_runtime,
+        )
     except RuntimeError as failed:
         print(str(failed), file=sys.stderr)
         return 1
@@ -254,6 +271,7 @@ async def _build(args: argparse.Namespace) -> int:
         ask=permission_gate(_ask_operator) if args.interactive else None,
         source_root=source_root,
         deferred_runtime=bool(getattr(args, "skip_source_provision", False)),
+        external_runtime=external_runtime,
     )
     deferred_runtime = bool(getattr(args, "skip_source_provision", False))
     await _converse(
@@ -262,6 +280,7 @@ async def _build(args: argparse.Namespace) -> int:
             contract,
             provisioned=environment is not None,
             deferred_runtime=deferred_runtime,
+            external_runtime=external_runtime,
         )
         + _guidance(args),
         interactive=args.interactive,
@@ -718,11 +737,14 @@ async def _auto(args: argparse.Namespace) -> int:
     (destination / "job.json").write_text(
         job.model_dump_json(indent=2) + "\n", encoding="utf-8"
     )
+    # Beside the authoring output, so the platform reads the running total while the sandbox lives.
+    spend.journal_to(destination / "cost.json")
     events = BufferedEventSink(EventOutbox(destination.parent, destination.name))
     event_sequence = 0
 
     def emit(event_type: str, stage: str, **payload: Any) -> None:
         nonlocal event_sequence
+        observability.stage_event(event_type, stage, payload)
         events.write(
             CanonicalEvent.create(
                 run_id=job.run_id,
@@ -775,6 +797,7 @@ async def _auto(args: argparse.Namespace) -> int:
                 model=args.model,
                 guidance=[],
                 job=job,
+                provider_profile=getattr(args, "provider_profile", None),
             ),
         ),
         (
@@ -791,6 +814,10 @@ async def _auto(args: argparse.Namespace) -> int:
                 # scenarios, but must not start customer Compose/Docker resources on the control
                 # plane worker merely to describe them.
                 skip_source_provision=authoring_only,
+                # A source-free provider connection deliberately keeps the provider's deployed
+                # HTTP tools in place. Their real execution is observed during calls; no local
+                # source entrypoint exists or is required.
+                external_runtime=authoring_only and args.kind == "provider",
             ),
         ),
         (

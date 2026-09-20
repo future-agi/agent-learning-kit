@@ -335,6 +335,7 @@ def _report(
     ended_at: datetime | None = None,
     no_cases: bool = False,
     run_id: str = "sim-run-1",
+    result_metadata: dict[str, Any] | None = None,
 ) -> SimulationReport:
     messages = messages if messages is not None else [{"role": "user", "content": "hi"}]
     started_at = started_at or datetime.now(timezone.utc)
@@ -343,7 +344,10 @@ def _report(
     if not no_cases:
         assert case_status is not None
         result = SimTestCaseResult(
-            persona=_persona(), transcript=transcript, messages=messages
+            persona=_persona(),
+            transcript=transcript,
+            messages=messages,
+            metadata=result_metadata or {},
         )
         cases.append(
             SimulationTestCaseResult(
@@ -570,6 +574,7 @@ def test_completed_call_uploads_transcript_and_returns_populated_outcome(
             messages=messages,
             started_at=started,
             ended_at=ended,
+            result_metadata={"stop_reason": "simulator_end_call"},
         )
 
     adapter = FakeAdapter()
@@ -586,6 +591,7 @@ def test_completed_call_uploads_transcript_and_returns_populated_outcome(
     assert outcome.transcript_artifact is not None
     assert outcome.transcript_artifact.startswith("sha256:")
     assert outcome.calls == ()  # http_tool: STOPPED, always zero -- CONTRACT NOTE 1
+    assert outcome.stop_reason == "simulator_end_call"
     assert len(adapter.uploads) == 1
 
 
@@ -1054,6 +1060,111 @@ def test_silent_agent_mapping_is_scoped_to_zero_turns_only(tmp_path: Path) -> No
     )
     assert exc.partial is not None
     assert exc.partial.turns == 2
+    assert exc.code == "target_agent_stalled"
+
+
+def test_silence_after_caller_turn_is_attributed_to_target_agent(
+    tmp_path: Path,
+) -> None:
+    _job_obj, context = _context(tmp_path=tmp_path)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+
+    async def place_call(spec):
+        return _report(
+            case_status=CaseStatus.FAILED,
+            failure=SimulationFailure(
+                stage=FailureStage.RUNNING,
+                code="conversation_silence_timeout",
+                message="Conversation produced no new speech for the stall deadline",
+                retryable=True,
+            ),
+            transcript="assistant: Is that correct?\nuser: Yes, that is correct.",
+            messages=[
+                {"role": "assistant", "content": "Is that correct?"},
+                {"role": "user", "content": "Yes, that is correct."},
+            ],
+        )
+
+    exc = _run_expect_abort(
+        cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call),
+        _FakeScenario("k1"),
+        _runtime(metadata={"livekit_agent_name": "agent-w0"}),
+    )
+    assert exc.code == "target_agent_stalled"
+    assert "Target agent produced no response" in str(exc)
+
+
+def test_provider_tool_failure_is_attributed_to_target_agent(tmp_path: Path) -> None:
+    _job_obj, context = _context(tmp_path=tmp_path)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+
+    async def place_call(spec):
+        return _report(
+            case_status=CaseStatus.FAILED,
+            failure=SimulationFailure(
+                stage=FailureStage.RUNNING,
+                code="target_agent_tool_failed",
+                message="Target agent tool 'lookup_account' failed: ENOTFOUND api.example.com",
+                retryable=False,
+            ),
+            result_metadata={
+                "evidence": [
+                    {
+                        "source_id": "retell-call",
+                        "adapter": "retell",
+                        "evidence_class": "provider_reported",
+                        "metadata": {
+                            "tool_calls": [
+                                {
+                                    "name": "lookup_account",
+                                    "ok": False,
+                                    "error": "ENOTFOUND api.example.com",
+                                }
+                            ]
+                        },
+                    }
+                ]
+            },
+        )
+
+    exc = _run_expect_abort(
+        cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call),
+        _FakeScenario("k1"),
+        _runtime(metadata={"livekit_agent_name": "agent-w0"}),
+    )
+    assert exc.code == "target_agent_tool_failed"
+    assert "lookup_account" in str(exc)
+
+
+def test_silence_after_complete_target_turn_is_attributed_to_simulator(
+    tmp_path: Path,
+) -> None:
+    _job_obj, context = _context(tmp_path=tmp_path)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+
+    async def place_call(spec):
+        return _report(
+            case_status=CaseStatus.FAILED,
+            failure=SimulationFailure(
+                stage=FailureStage.RUNNING,
+                code="conversation_stalled",
+                message="Conversation produced no new speech for the stall deadline",
+                retryable=True,
+            ),
+            transcript="user: Continue.\nassistant: Is that correct?",
+            messages=[
+                {"role": "user", "content": "Continue."},
+                {"role": "assistant", "content": "Is that correct?"},
+            ],
+        )
+
+    exc = _run_expect_abort(
+        cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call),
+        _FakeScenario("k1"),
+        _runtime(metadata={"livekit_agent_name": "agent-w0"}),
+    )
+    assert exc.code == "simulator_stalled"
+    assert "Simulated caller produced no response" in str(exc)
 
 
 # =================================================================================================
@@ -1249,11 +1360,22 @@ def test_construction_exports_target_provider_secrets_to_environ_once(
 ) -> None:
     fake_environ: dict[str, str] = {}
     _job_obj, context = _context(tmp_path=tmp_path)
-    cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
-    assert fake_environ[LIVEKIT_API_KEY] == "lk-key"
-    assert fake_environ[LIVEKIT_API_SECRET] == "lk-secret"
-    assert fake_environ[DEEPGRAM_API_KEY] == "dg-key"
-    assert fake_environ[GEMINI_API_KEY] == "gm-key"
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
+    assert runner._environ[LIVEKIT_API_KEY] == "lk-key"
+    assert runner._environ[LIVEKIT_API_SECRET] == "lk-secret"
+    assert runner._environ[DEEPGRAM_API_KEY] == "dg-key"
+    assert runner._environ[GEMINI_API_KEY] == "gm-key"
+
+
+def test_vapi_control_key_is_only_exported_to_private_call_environment(tmp_path):
+    _job_obj, context = _context(
+        tmp_path=tmp_path,
+        secrets={**_ALL_SECRETS, "VAPI_PUBLIC_API_KEY": "public-control-key"},
+    )
+    parent_environment = {}
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, environ=parent_environment)
+    assert runner._environ["VAPI_PUBLIC_API_KEY"] == "public-control-key"
+    assert "VAPI_PUBLIC_API_KEY" not in parent_environment
 
 
 def test_construction_never_exports_secrets_outside_the_target_provider_map(
@@ -1263,8 +1385,8 @@ def test_construction_never_exports_secrets_outside_the_target_provider_map(
     secrets = dict(_ALL_SECRETS)
     secrets["UNRELATED_ALIAS"] = "should-not-export"
     _job_obj, context = _context(tmp_path=tmp_path, secrets=secrets)
-    cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
-    assert "UNRELATED_ALIAS" not in fake_environ
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
+    assert "UNRELATED_ALIAS" not in runner._environ
 
 
 def test_construction_uses_platform_simulator_key_without_exposing_agent_model_key(
@@ -1285,10 +1407,10 @@ def test_construction_uses_platform_simulator_key_without_exposing_agent_model_k
         secrets=target,
         simulator_secrets=simulator,
     )
-    cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
-    assert fake_environ[DEEPGRAM_API_KEY] == "platform-deepgram-key"
-    assert fake_environ[GEMINI_API_KEY] == "platform-gemini-key"
-    assert "ANTHROPIC_API_KEY" not in fake_environ
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
+    assert runner._environ[DEEPGRAM_API_KEY] == "platform-deepgram-key"
+    assert runner._environ[GEMINI_API_KEY] == "platform-gemini-key"
+    assert "ANTHROPIC_API_KEY" not in runner._environ
 
 
 def test_hosted_run_never_falls_back_to_customer_simulator_keys(tmp_path: Path) -> None:
@@ -1300,8 +1422,8 @@ def test_hosted_run_never_falls_back_to_customer_simulator_keys(tmp_path: Path) 
         simulator_secrets={},
     )
     runner = cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
-    assert DEEPGRAM_API_KEY not in fake_environ
-    assert GEMINI_API_KEY not in fake_environ
+    assert DEEPGRAM_API_KEY not in runner._environ
+    assert GEMINI_API_KEY not in runner._environ
     assert runner._missing_config is not None
 
 
@@ -1312,9 +1434,9 @@ def test_local_sdk_remains_byok_for_simulator_credentials(tmp_path: Path) -> Non
         execution=ExecutionMode.LOCAL,
         simulator_secrets={},
     )
-    cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
-    assert fake_environ[DEEPGRAM_API_KEY] == "dg-key"
-    assert fake_environ[GEMINI_API_KEY] == "gm-key"
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
+    assert runner._environ[DEEPGRAM_API_KEY] == "dg-key"
+    assert runner._environ[GEMINI_API_KEY] == "gm-key"
 
 
 def test_platform_simulator_credentials_win_without_replacing_target_livekit(
@@ -1330,15 +1452,34 @@ def test_platform_simulator_credentials_win_without_replacing_target_livekit(
 
     runner = cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
 
-    assert fake_environ[LIVEKIT_API_KEY] == "lk-key"
-    assert fake_environ[LIVEKIT_API_SECRET] == "lk-secret"
-    assert fake_environ[DEEPGRAM_API_KEY] == "platform-deepgram"
-    assert fake_environ[GEMINI_API_KEY] == "platform-gemini"
+    assert runner._environ[LIVEKIT_API_KEY] == "lk-key"
+    assert runner._environ[LIVEKIT_API_SECRET] == "lk-secret"
+    assert runner._environ[DEEPGRAM_API_KEY] == "platform-deepgram"
+    assert runner._environ[GEMINI_API_KEY] == "platform-gemini"
     assert (
-        fake_environ["GOOGLE_APPLICATION_CREDENTIALS"]
+        runner._environ["GOOGLE_APPLICATION_CREDENTIALS"]
         == "/run/futureagi/platform-vertex.json"
     )
     assert runner._missing_config is None
+
+
+def test_close_quiesces_livekit_objects_before_event_loop_shutdown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_environ: dict[str, str] = {}
+    _job_obj, context = _context(tmp_path=tmp_path)
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
+    collections: list[None] = []
+    monkeypatch.setattr(cr.gc, "collect", lambda: collections.append(None))
+
+    async def close_twice() -> None:
+        await runner.close()
+        await runner.close()
+
+    asyncio.run(close_twice())
+
+    assert collections == [None, None]
+    assert runner._closed is True
 
 
 def test_provider_voice_uses_platform_livekit_without_exposing_customer_livekit(
@@ -1368,16 +1509,19 @@ def test_provider_voice_uses_platform_livekit_without_exposing_customer_livekit(
 
     runner = cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
 
-    assert fake_environ[LIVEKIT_API_KEY] == "platform-livekit-key"
-    assert fake_environ[LIVEKIT_API_SECRET] == "platform-livekit-secret"
-    assert fake_environ[RETELL_API_KEY] == "customer-retell-key"
+    assert runner._environ[LIVEKIT_API_KEY] == "platform-livekit-key"
+    assert runner._environ[LIVEKIT_API_SECRET] == "platform-livekit-secret"
+    assert runner._environ[RETELL_API_KEY] == "customer-retell-key"
     assert runner._livekit_url == "wss://platform-livekit.example"
     assert runner._missing_config is None
 
 
 def test_auto_connector_resolves_to_livekit_from_target_secrets() -> None:
     job = _job(connector="auto")
-    assert cr._resolve_connector(job, {cr.LIVEKIT_URL_ALIAS: "wss://x.livekit.cloud"}) == "livekit"
+    assert (
+        cr._resolve_connector(job, {cr.LIVEKIT_URL_ALIAS: "wss://x.livekit.cloud"})
+        == "livekit"
+    )
 
 
 def test_auto_connector_resolves_to_livekit_from_config() -> None:
@@ -1417,7 +1561,9 @@ def _timed_out_runner(tmp_path: Path, turns: int):
     return cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
 
 
-def test_a_timed_out_call_with_a_real_conversation_is_graded_not_aborted(tmp_path: Path) -> None:
+def test_a_timed_out_call_with_a_real_conversation_is_graded_not_aborted(
+    tmp_path: Path,
+) -> None:
     """An intake agent may ask thirty to fifty questions, so reaching the deadline is an ordinary
     outcome. A measured 51-turn call lost all three sub-goals to `held: null` because the timeout was
     treated as infrastructure."""
@@ -1426,7 +1572,9 @@ def test_a_timed_out_call_with_a_real_conversation_is_graded_not_aborted(tmp_pat
         _FakeScenario("k1"),
         _runtime(metadata={"livekit_agent_name": "a-w0"}),
     )
-    assert outcome is not None, "a timed-out call that held a conversation must still be graded"
+    assert outcome is not None, (
+        "a timed-out call that held a conversation must still be graded"
+    )
 
 
 def test_a_timed_out_call_that_never_got_going_still_aborts(tmp_path: Path) -> None:
@@ -1437,3 +1585,26 @@ def test_a_timed_out_call_that_never_got_going_still_aborts(tmp_path: Path) -> N
         _runtime(metadata={"livekit_agent_name": "a-w0"}),
     )
     assert "voice_call_not_completed" in str(aborted)
+
+
+def test_the_returned_outcome_keeps_the_transcript_the_judge_needs():
+    """The final outcome used to be rebuilt field by field, which dropped `messages` in silence.
+
+    A judged sub-goal about what was said then had no transcript, and the judge could only answer
+    that it could not tell -- observed on a real localhost run before this was fixed.
+    """
+    from dataclasses import replace
+
+    from fi.alk.harness.hosted_scheduler import CallOutcome
+
+    said = ({"role": "user", "content": "call me back tomorrow"},)
+    base = CallOutcome(
+        calls=(),
+        turns=12,
+        started_at="2026-09-10T00:00:00.000Z",
+        ended_at="2026-09-10T00:01:24.000Z",
+        duration_ms=84000,
+        transcript_artifact="sha256:" + "0" * 64,
+        messages=said,
+    )
+    assert replace(base, calls=()).messages == said

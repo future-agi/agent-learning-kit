@@ -46,9 +46,16 @@ RUN python3.12 -m venv /opt/alk-venv \
     && ln -s /opt/node22/bin/node /usr/local/bin/node22 \
     && ln -s /usr/lib/postgresql/16/bin/postgres /usr/local/bin/postgres \
     && ln -s /usr/lib/postgresql/16/bin/initdb /usr/local/bin/initdb \
+    && ln -s /opt/erlang/bin/erl /usr/local/bin/erl \
+    && ln -s /opt/erlang/bin/epmd /usr/local/bin/epmd \
+    && ln -s /opt/erlang/bin/escript /usr/local/bin/escript \
+    && printf '#!/bin/sh\nexec /opt/rabbitmq/sbin/rabbitmq-diagnostics "$@"\n' > /usr/local/bin/rabbitmq-diagnostics \
+    && printf '#!/bin/sh\nexec /opt/rabbitmq/sbin/rabbitmq-plugins "$@"\n' > /usr/local/bin/rabbitmq-plugins \
     && printf '#!/bin/sh\nexec /opt/rabbitmq/sbin/rabbitmq-server "$@"\n' > /usr/local/bin/rabbitmq-server \
     && printf '#!/bin/sh\nexec /opt/rabbitmq/sbin/rabbitmqctl "$@"\n' > /usr/local/bin/rabbitmqctl \
-    && chmod 0755 /usr/local/bin/npm20 /usr/local/bin/npm22 /usr/local/bin/rabbitmq-server /usr/local/bin/rabbitmqctl
+    && chmod 0755 /usr/local/bin/npm20 /usr/local/bin/npm22 \
+      /usr/local/bin/rabbitmq-diagnostics /usr/local/bin/rabbitmq-plugins \
+      /usr/local/bin/rabbitmq-server /usr/local/bin/rabbitmqctl
 
 # Catalog entries are executable promises. Fail the snapshot build if either alternate Python
 # cannot create and execute a writable project-local venv.
@@ -59,6 +66,12 @@ RUN python3.11 -m venv /tmp/python311-smoke \
     && python3.14 -m venv /tmp/python314-smoke \
     && /tmp/python314-smoke/bin/python -c 'import encodings, sys; assert sys.version_info[:2] == (3, 14)' \
     && rm -rf /tmp/python311-smoke /tmp/python313-smoke /tmp/python314-smoke
+
+# E2B command sessions use a provider-owned default PATH rather than the image ENV. Keep every
+# RabbitMQ launcher self-contained through /usr/local/bin and fail the image build if Erlang
+# resolution regresses.
+RUN rabbitmqctl version | grep -Eq '^3\.13\.' \
+    && rabbitmq-plugins list -m | grep -qx rabbitmq_management
 
 RUN groupadd --gid 2000 svc-control \
     && useradd --uid 2000 --gid 2000 --create-home --shell /bin/bash svc-control \
@@ -78,7 +91,7 @@ WORKDIR /opt/alk
 # Daytona's direct-image builder can reuse an image when only build-context
 # files change.  Bump this source revision whenever guest code changes so a
 # hosted test cannot silently execute an older installed ALK.
-ARG ALK_HOSTED_SOURCE_REVISION=20260908-runtime-namespace-boundary-r56
+ARG ALK_HOSTED_SOURCE_REVISION=20260916-parallel-world-slots-local-r1
 LABEL io.futureagi.alk-source-revision="${ALK_HOSTED_SOURCE_REVISION}"
 COPY pyproject.toml README.md ./
 COPY src ./src
@@ -87,8 +100,13 @@ COPY hosted-snapshot/catalog.json /opt/alk/hosted-snapshot-catalog.json
 ENV PIP_DEFAULT_TIMEOUT=300 \
     PIP_RETRIES=10 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
+# The ADK instrumentor is installed without its declared dependencies: it still pins
+# google-genai<2 while google-adk 2.7 needs >=2.12, and it works against 2.12. Resolving it
+# normally would either fail the build or hold the image back a major version. An absent or
+# broken instrumentor is skipped at runtime, so a failure here costs tracing, never a run.
 RUN --mount=type=cache,target=/root/.cache/pip \
     /opt/alk-venv/bin/pip install '.[livekit,harness-ui,harness-stores]' \
+    && /opt/alk-venv/bin/pip install --no-deps 'traceai-google-adk>=0.1.5' \
     && chmod -R a-w /opt/alk /opt/alk-venv
 
 ENV PATH="/opt/alk-venv/bin:/usr/lib/postgresql/16/bin:/opt/erlang/bin:/opt/rabbitmq/sbin:/opt/node22/bin:${PATH}" \

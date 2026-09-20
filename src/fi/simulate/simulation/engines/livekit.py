@@ -110,6 +110,13 @@ _FINAL_TURN_COMMIT_WAIT_SECONDS = 30.0
 # The hosted platform inflates ``cleanup_timeout`` to carry the whole run
 # budget (observed 1470s); as a per-step cleanup bound it must stay capped.
 _MAX_CLEANUP_TIMEOUT_SECONDS = 60.0
+# A dead LiveKit signal connection can leave any one SDK cleanup await pending
+# indefinitely. The case-level deadline is still the outer bound, but no
+# single best-effort operation may consume it all and starve every cleanup that
+# follows. Session close gets longer because it drains several SDK activities.
+_CLEANUP_STEP_TIMEOUT_SECONDS = 8.0
+_SESSION_CLEANUP_TIMEOUT_SECONDS = 15.0
+_BACKGROUND_AUDIO_CLEANUP_TIMEOUT_SECONDS = 5.0
 _NO_CONVERSATION_TIMEOUT_SECONDS = 120.0
 # How long the side that was meant to speak first is given before the simulated person speaks
 # instead. Both sides are voice agents waiting to be addressed, so when the one that placed the call
@@ -1347,11 +1354,14 @@ class LiveKitEngine(BaseEngine):
         # actually waits, so every path gets the same bound however it got there.
         _cleanup_started: list[float] = []
 
-        def _cleanup_budget() -> float:
+        def _cleanup_budget(
+            cap: float = _CLEANUP_STEP_TIMEOUT_SECONDS,
+        ) -> float:
             if not _cleanup_started:
                 _cleanup_started.append(time.monotonic())
             spent = time.monotonic() - _cleanup_started[0]
-            return max(1.0, cleanup_timeout - spent)
+            remaining = max(0.1, cleanup_timeout - spent)
+            return min(cap, remaining)
 
         api_key = os.environ.get(runtime.api_key_env)
         api_secret = os.environ.get(runtime.api_secret_env)
@@ -1647,7 +1657,8 @@ class LiveKitEngine(BaseEngine):
                 # The AGENT's direction; it picks which half of the role block the caller gets.
                 call_type=(
                     "outbound"
-                    if os.environ.get("HARNESS_CALL_DIRECTION", "").strip().lower() == "outbound"
+                    if os.environ.get("HARNESS_CALL_DIRECTION", "").strip().lower()
+                    == "outbound"
                     else "inbound"
                 ),
                 # `name` is an identity for dispatch, not a label for the caller to hear.
@@ -2258,7 +2269,9 @@ class LiveKitEngine(BaseEngine):
                     # 17 messages and both reported 570004ms and no test case.
                     await asyncio.wait_for(
                         customer_agent._stop_background_audio(),
-                        timeout=_cleanup_budget(),
+                        timeout=_cleanup_budget(
+                            _BACKGROUND_AUDIO_CLEANUP_TIMEOUT_SECONDS
+                        ),
                     )
                 except Exception:
                     logger.warning("background audio not closed cleanly", exc_info=True)
@@ -2287,7 +2300,7 @@ class LiveKitEngine(BaseEngine):
                 try:
                     await _close_agent_session(
                         session_to_close,
-                        timeout=_cleanup_budget(),
+                        timeout=_cleanup_budget(_SESSION_CLEANUP_TIMEOUT_SECONDS),
                     )
                 except Exception as exc:
                     _record_cleanup_error(
@@ -2361,7 +2374,7 @@ class LiveKitEngine(BaseEngine):
                         provider_call_id=provider_call_id,
                         originator_name=transport.inbound_call_originator,
                         case_started_at=case_started_at,
-                        cleanup_timeout=cleanup_timeout,
+                        cleanup_timeout=_cleanup_budget(),
                     )
                     for operation, exc in finalize_result.cleanup_errors:
                         _record_cleanup_error(
@@ -2490,6 +2503,7 @@ class LiveKitEngine(BaseEngine):
                     resolved_call_id = provider_summary.metadata.get("call_id")
                     if resolved_call_id:
                         provider_call_id = str(resolved_call_id)
+                _reconcile_provider_observation(outcome, provider_summary)
                 _recover_successful_provider_end_call(outcome, provider_summary)
             outcome.provider_artifacts.extend(provider_artifacts)
         outcome.metadata.update(
@@ -2805,10 +2819,91 @@ def _find_target_audio(
 # backstop for a conversation that has genuinely stalled or already finished but
 # never hung up. Kept long so normal turn-gaps (STT endpoint + LLM + TTS latency)
 # never trip it — the run is never cut off at a message count.
-_SILENCE_BACKSTOP_SECONDS = 60.0
+_SILENCE_BACKSTOP_SECONDS = 90.0
 
-# Mutual silence this long in a conversation both sides joined is a finished call, not a stalled one.
-_SETTLED_SILENCE_SECONDS = 12.0
+# Mutual silence in a conversation both sides joined is a finished call, not a stalled one. A
+# thinking agent is working rather than silent, so the timer holds while either side is busy: no
+# fixed window fits both a 4.3s and a 25.2s reply. The measured fallback covers providers that
+# report no thinking state, stretching to the slowest reply this call has seen.
+_SETTLED_SILENCE_FLOOR_SECONDS = 12.0
+_SETTLED_LATENCY_MULTIPLE = 2.0
+
+# LiveKit reports OUR SIMULATED CALLER as "assistant" and the TARGET AGENT as "user", because the
+# caller is this session's agent and the target connects as the remote party. The published
+# transcript swaps them (see _canonical_report_messages), so session-native code must never reuse
+# the published convention. Named here because reading it the wrong way round is silent: a check
+# still runs, still passes its tests, and watches the wrong side of the call.
+_CALLER = "assistant"
+_TARGET = "user"
+
+# AgentState describes THIS SESSION'S AGENT, our caller; UserState describes the target. UserState
+# has no "thinking", so this pair stops us cutting off our own caller mid-thought and cannot see a
+# target composing a reply. The measured window below is what protects a slow target.
+_AGENT_BUSY_STATES = frozenset({"initializing", "thinking", "speaking"})
+_USER_BUSY_STATES = frozenset({"speaking"})
+
+
+def _either_side_busy(session: Any) -> bool:
+    """Whether work is in flight, as opposed to a conversation that has gone quiet."""
+    return (
+        getattr(session, "agent_state", None) in _AGENT_BUSY_STATES
+        or getattr(session, "user_state", None) in _USER_BUSY_STATES
+    )
+
+
+def _settled_silence_window(
+    observed_agent_reply: float, backstop_seconds: float
+) -> float:
+    """How long silence must last before a settled call is treated as over."""
+    return min(
+        backstop_seconds,
+        max(
+            _SETTLED_SILENCE_FLOOR_SECONDS,
+            observed_agent_reply * _SETTLED_LATENCY_MULTIPLE,
+        ),
+    )
+
+
+def _turn_gap_seconds(
+    previous: dict[str, Any], current: dict[str, Any]
+) -> float | None:
+    """Silence between one turn finishing and the next starting, in seconds.
+
+    Uses the real audio timing the transport reports and falls back to the wall-clock stamp for
+    text-only turns. Returns None when neither side is timed, so a caller can tell "no gap" from
+    "not measurable" rather than reading an absent measurement as zero.
+    """
+    start = current.get("started_speaking_at") or current.get("created_at") or None
+    end = previous.get("stopped_speaking_at") or previous.get("created_at") or None
+    if not start or not end:
+        return None
+    gap = float(start) - float(end)
+    return gap if gap >= 0 else None
+
+
+def _observed_agent_reply_seconds(messages: list[dict[str, Any]]) -> float:
+    """The slowest reply this agent has actually produced on this call.
+
+    Read from the transport rather than tracked against the poll loop's own clock, so it is also
+    correct for history that arrives in bulk (a resume, a reconnect) where there was no live
+    transition to observe. Prefers LiveKit's reported end-to-end latency and falls back to the gap
+    between the caller finishing and the agent starting, which is the wait a listener would hear.
+    """
+    slowest = 0.0
+    previous: dict[str, Any] | None = None
+    for message in messages:
+        if not message.get("content"):
+            continue
+        if message.get("role") == _TARGET:
+            reported = message.get("e2e_latency")
+            if reported:
+                slowest = max(slowest, float(reported))
+            elif previous is not None and previous.get("role") == _CALLER:
+                gap = _turn_gap_seconds(previous, message)
+                if gap is not None:
+                    slowest = max(slowest, gap)
+        previous = message
+    return slowest
 
 
 async def _wait_for_conversation_end(
@@ -2856,11 +2951,13 @@ async def _wait_for_conversation_end(
         "target_disconnected": asyncio.create_task(target_disconnected.wait()),
         "room_disconnected": asyncio.create_task(room_disconnected.wait()),
         "simulator_end_call": asyncio.create_task(customer_agent.end_requested.wait()),
-        "conversation_settled": asyncio.create_task(
+        "conversation_stalled": asyncio.create_task(
             _wait_for_conversation_silence(
                 session,
                 # A stub agent in a test carries no floor; absent means never settle early.
-                min_turn_messages=int(getattr(customer_agent, "_min_turn_messages", 0) or 0),
+                min_turn_messages=int(
+                    getattr(customer_agent, "_min_turn_messages", 0) or 0
+                ),
             )
         ),
         "closing_loop": asyncio.create_task(_wait_for_closing_loop(session)),
@@ -2926,7 +3023,7 @@ async def _wait_for_conversation_end(
             # that would otherwise report the same call as a stall.
             "closing_loop",
             "conversation_silence_timeout",
-            "conversation_settled",
+            "conversation_stalled",
             "provider_disconnected",
             "closed",
         ):
@@ -2936,6 +3033,7 @@ async def _wait_for_conversation_end(
             return "monitor_failed"
         return "session_closed"
     finally:
+        _remove_room_listener(session, "close", on_close)
         _remove_room_listener(
             room,
             "participant_disconnected",
@@ -2957,20 +3055,52 @@ _CLOSING_PHRASES = (
 _CLOSING_EXCHANGE_LIMIT = 4
 
 
+# Words a farewell is allowed to be made of. Anything outside this set is substance, whatever the
+# turn's length: "yes it is, bye" is an answer and ending on it would cut a live call short.
+_CLOSING_FILLER = frozenset(
+    """
+    a again alright and bye byebye care cheers day drive evening fine good goodbye great
+    have later lovely morning much nice night ok okay perfect right safe see so soon sounds
+    speak sure take talk thank thanks then to tomorrow too well wonderful you your
+    """.split()
+)
+
+
 def _is_closing_only(text: str) -> bool:
     """Whether a turn is nothing but a farewell.
 
     Deliberately narrow: a turn that closes AND carries anything else (a question, a fact, a
     correction) is still conversation, and ending on it would cut a live call short.
+
+    Decided on whether every word is farewell filler rather than on a word count. A cap of six
+    words classified "Sounds great, thanks. Talk tomorrow. Bye." as a farewell and "Sounds good,
+    talk to you then. Bye." as conversation, purely because the second has one more word, and the
+    engine then asked the caller for two further turns and got two more goodbyes.
     """
     stripped = "".join(
         character.lower() if character.isalnum() or character.isspace() else " "
         for character in (text or "")
     ).split()
-    if not stripped or len(stripped) > 6:
+    if not stripped or len(stripped) > 12:
         return False
     joined = " ".join(stripped)
-    return any(phrase in joined for phrase in _CLOSING_PHRASES)
+    if not any(phrase in joined for phrase in _CLOSING_PHRASES):
+        return False
+    return not (set(stripped) - _CLOSING_FILLER)
+
+
+def _stop_any_further_speech(session: Any) -> None:
+    """Cancel anything already in flight, so the farewell is the last thing said.
+
+    Noticing the farewell only stops us asking for the NEXT turn. A reply already being generated
+    still plays, which is how "Take care." arrived after a correct goodbye on a measured call. The
+    farewell itself is already in history, meaning its own audio finished, so there is nothing of
+    the caller's left to cut off here.
+    """
+    try:
+        session.interrupt(force=True)
+    except Exception:  # noqa: BLE001 - nothing in flight, or a session already shutting down
+        logger.debug("nothing to interrupt when the call was closed", exc_info=True)
 
 
 async def _wait_for_closing_loop(
@@ -2987,9 +3117,24 @@ async def _wait_for_closing_loop(
     """
     while True:
         messages = _session_messages(session)
-        tail = [
+        spoken = [
             message for message in messages if (message.get("content") or "").strip()
-        ][-limit:]
+        ]
+        # The caller's own farewell is the end of the call from its side, so there is no reason to
+        # ask it for another turn. Waiting for a loop of farewells is what produced "Talk
+        # tomorrow. Bye." followed by "Take care." and then "Bye." -- three closings where the
+        # first was already correct. Rule 10 of the caller's prompt says exactly this, and an
+        # instruction cannot enforce it: the model only speaks again because it was asked to.
+        if (
+            _turns_from_each_side(spoken) >= 1
+            and spoken
+            and spoken[-1].get("role") == _CALLER
+            and _is_closing_only(str(spoken[-1].get("content") or ""))
+        ):
+            logger.info("the caller said goodbye, ending the call")
+            _stop_any_further_speech(session)
+            return
+        tail = spoken[-limit:]
         if len(tail) == limit and all(
             _is_closing_only(str(message.get("content") or "")) for message in tail
         ):
@@ -2997,8 +3142,12 @@ async def _wait_for_closing_loop(
                 "closing loop: last %d turns were farewells only, ending the call",
                 limit,
             )
+            _stop_any_further_speech(session)
             return
-        await asyncio.sleep(1.0)
+        # A turn lands in history only after its TTS finishes, so every poll interval between the
+        # farewell committing and this noticing is time in which the caller can be asked for
+        # another turn. Measured: one trailing turn survived at a one-second poll.
+        await asyncio.sleep(0.25)
 
 
 async def _wait_for_conversation_silence(
@@ -3031,18 +3180,26 @@ async def _wait_for_conversation_silence(
             stable_since = None
             await asyncio.sleep(0.1)
             continue
-        participant_speaking = (
-            getattr(session, "agent_state", None) == "speaking"
-            or getattr(session, "user_state", None) == "speaking"
-        )
+        now = loop.time()
+        participant_busy = _either_side_busy(session)
         floor, _ = _turn_requirements(min_turn_messages)
-        settled = min_turn_messages > 0 and _turns_from_each_side(messages) >= max(2, floor // 3)
-        effective_quiet = _SETTLED_SILENCE_SECONDS if settled else quiet_seconds
-        if participant_speaking:
+        # Far enough in for the measured window to beat the fixed one. A third of the floor is a
+        # threshold, not a derived figure: enough turns to have timed a reply, well short of done.
+        settled = min_turn_messages > 0 and _turns_from_each_side(messages) >= max(
+            2, floor // 3
+        )
+        effective_quiet = (
+            _settled_silence_window(
+                _observed_agent_reply_seconds(messages), quiet_seconds
+            )
+            if settled
+            else quiet_seconds
+        )
+        if participant_busy:
             stable_since = None
         elif stable_since is None or signature != last_signature:
-            stable_since = loop.time()
-        elif loop.time() - stable_since >= effective_quiet:
+            stable_since = now
+        elif now - stable_since >= effective_quiet:
             return
         last_signature = signature
         await asyncio.sleep(0.1)
@@ -3179,13 +3336,10 @@ async def _wait_for_agent_first_silence(
     while True:
         messages = _session_messages(session)
         signature = tuple((message["role"], message["content"]) for message in messages)
-        participant_speaking = (
-            getattr(session, "agent_state", None) == "speaking"
-            or getattr(session, "user_state", None) == "speaking"
-        )
-        # A turn lands in history only after its TTS finishes, so an in-flight
-        # utterance longer than the timeout must count as activity.
-        if signature != last_signature or participant_speaking:
+        # A turn lands in history only after its TTS finishes, so an in-flight utterance longer
+        # than the timeout must count as activity -- and so must an agent that is still thinking,
+        # or the caller opens over the top of a reply that was on its way.
+        if signature != last_signature or _either_side_busy(session):
             last_signature = signature
             last_change = asyncio.get_running_loop().time()
         roles = {message["role"] for message in messages if message["content"]}
@@ -3474,6 +3628,76 @@ def _recover_successful_provider_end_call(
     outcome.metadata["provider_end_call_recovered"] = True
 
 
+def _reconcile_provider_observation(
+    outcome: _CaseOutcome,
+    provider_summary: EvidenceSourceSummary,
+) -> None:
+    """Recover provider-native speech and deterministic target tool failures."""
+    raw_messages = provider_summary.metadata.get("messages")
+    provider_messages: list[dict[str, Any]] = []
+    if isinstance(raw_messages, list):
+        for raw in raw_messages:
+            if not isinstance(raw, dict):
+                continue
+            role = str(raw.get("role") or "").strip().lower()
+            content = str(raw.get("content") or "").strip()
+            if role not in {"user", "assistant"} or not content:
+                continue
+            provider_messages.append(dict(raw))
+    if provider_messages and not outcome.messages:
+        outcome.messages = provider_messages
+        outcome.transcript = "\n".join(
+            f"{message['role']}: {message['content']}" for message in provider_messages
+        )
+        outcome.metadata["provider_transcript_recovered"] = True
+
+    calls = provider_summary.metadata.get("tool_calls")
+    failed_call = (
+        next(
+            (
+                call
+                for call in calls
+                if isinstance(call, dict)
+                and call.get("ok") is False
+                and str(call.get("type") or "").lower() != "end_call"
+            ),
+            None,
+        )
+        if isinstance(calls, list)
+        else None
+    )
+    if failed_call is None or outcome.failure is None:
+        return
+    if outcome.failure.code not in {
+        "insufficient_conversation",
+        "target_disconnected",
+        "room_disconnected",
+        "no_conversation",
+        "conversation_stalled",
+        "conversation_silence_timeout",
+    }:
+        return
+    name = str(failed_call.get("name") or "unknown")
+    error = str(failed_call.get("error") or "tool call failed")
+    if len(error) > 500:
+        error = error[:500]
+    outcome.status = TestCaseStatus.FAILED
+    outcome.failure = SimulationFailure(
+        stage=FailureStage.RUNNING,
+        code="target_agent_tool_failed",
+        message=f"Target agent tool {name!r} failed: {error}",
+        retryable=False,
+        provider=str(provider_summary.metadata.get("provider") or "provider"),
+        details={
+            "tool_name": name,
+            "provider_end_reason": str(
+                provider_summary.metadata.get("end_reason") or ""
+            ),
+        },
+    )
+    outcome.metadata["provider_tool_failure_attributed"] = True
+
+
 def _turn_requirements(min_turn_messages: int) -> tuple[int, bool]:
     """The turn floor and whether alternation is required: a mailbox is held to its greeting alone."""
     if _answered_by_voicemail():
@@ -3595,6 +3819,7 @@ def _conversation_outcome(
         )
     stalled = {
         "conversation_silence_timeout",
+        "conversation_stalled",
         "session_closed",
         "no_conversation",
         "monitor_failed",
@@ -3607,6 +3832,9 @@ def _conversation_outcome(
         message = {
             "conversation_silence_timeout": (
                 "Agent-first conversation stalled after it began"
+            ),
+            "conversation_stalled": (
+                "Conversation produced no new speech for the stall deadline"
             ),
             "session_closed": (
                 "Conversation session closed before a natural end condition"
@@ -4000,7 +4228,13 @@ def _remove_room_listener(room: rtc.Room, event: str, listener) -> None:
 
 
 async def _close_agent_session(session: AgentSession, *, timeout: float) -> None:
-    """Close without cancelling LiveKit's recursive activity teardown on timeout."""
+    """Close a session without abandoning teardown on the event loop.
+
+    A shielded, timed-out ``aclose`` used to keep running after the case had
+    returned. Repeating that in a soak test accumulated SDK activities until
+    the guest process failed. Graceful close gets a bounded opportunity; after
+    that, cancel and reap it because room and process teardown are independent.
+    """
     close_session = getattr(session, "aclose", None)
     if close_session is None:
         session.shutdown(drain=False)
@@ -4009,7 +4243,12 @@ async def _close_agent_session(session: AgentSession, *, timeout: float) -> None
     try:
         await asyncio.wait_for(asyncio.shield(close_task), timeout=timeout)
     except asyncio.TimeoutError:
-        close_task.add_done_callback(_consume_background_task_result)
+        close_task.cancel()
+        try:
+            await asyncio.wait_for(close_task, timeout=1.0)
+        except (Exception, asyncio.CancelledError):
+            if not close_task.done():
+                close_task.add_done_callback(_consume_background_task_result)
         raise
 
 

@@ -22,7 +22,9 @@ payloads and merges the platform-assigned `scenario_id`s back onto each scenario
 from __future__ import annotations
 
 import asyncio
+import ast
 import json
+import logging
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Sequence
@@ -39,10 +41,13 @@ if TYPE_CHECKING:
 # documents live at `<bundle_dir>/<SCENARIOS_DIRNAME>/<name>/...`, matching `folder.py`'s own
 # `SCENARIOS` constant, so a write_folder destination of `<bundle_dir>` lands correctly with no
 # translation. Kept as one module-level constant so a later contract can move it in one edit.
+logger = logging.getLogger(__name__)
+
 SCENARIOS_DIRNAME = "scenarios"
 
 _CHECKS_DIRNAME = "checks"
 _SCENARIO_JSON = "scenario.json"
+_CATALOGUE_JSON = "sub_goals.json"
 _SETUP_PY = "setup.py"
 _READY_PY = "ready.py"
 
@@ -119,7 +124,12 @@ def _judged_placeholder_check(world: Any, calls: Any) -> None:
 
 
 def _compile_entry(
-    source: str, *, label: str, entry: str, allow_empty: bool = True
+    source: str,
+    *,
+    label: str,
+    entry: str,
+    allow_empty: bool = True,
+    defer_execution: bool = False,
 ) -> Callable[..., object]:
     """One scenario code-text -> a bare callable that raises, compiled ONCE here rather than per
     call. Mirrors `folder.py`'s `_run` in exactly two respects: `compile(source, name, "exec")`
@@ -153,6 +163,24 @@ def _compile_entry(
         # SyntaxError is the common case; a NUL byte in the source raises ValueError on some
         # interpreter versions (R1-1) rather than SyntaxError -- both are the same content defect.
         raise ScenarioDocumentInvalid(f"{label} would not compile: {exc}") from exc
+    if defer_execution:
+        definitions = ast.parse(source).body
+        if not any(
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == entry
+            for node in definitions
+        ):
+            raise ScenarioDocumentInvalid(f"{label} defines no {entry}()")
+
+        def deferred(*args: object) -> object:
+            # Compatibility for injected worlds; hosted worlds execute the source in a worker.
+            namespace: dict[str, Any] = {}
+            exec(code, namespace)  # noqa: S102 - compatibility for injected local worlds
+            return namespace[entry](*args)
+
+        deferred._alk_source = source
+        deferred._alk_entry = entry
+        return deferred
     namespace: dict[str, Any] = {}
     try:
         exec(code, namespace)  # noqa: S102 - scenario code is meant to be exec'd; see CONTRACT QUESTIONS
@@ -166,6 +194,8 @@ def _compile_entry(
     function = namespace.get(entry)
     if not callable(function):
         raise ScenarioDocumentInvalid(f"{label} defines no {entry}()")
+    function._alk_source = source
+    function._alk_entry = entry
     return function
 
 
@@ -179,6 +209,7 @@ class _CompiledSubGoal:
     name: str
     judged: str
     check: Callable[[Any, Any], object]
+    what: str = ""
 
 
 @dataclass(frozen=True)
@@ -316,11 +347,45 @@ def _declared_tool_names(bundle_dir: Path) -> set[str]:
         return set()
 
 
+def _load_catalogue_claims(bundle_dir: Path) -> dict[str, dict[str, str]]:
+    """`sub_goals.json`'s `what`/`judged` text, which `folder.py` never writes into a scenario
+    folder. Without it a judged sub-goal reaches the platform as a name and nothing to decide.
+    """
+    path = bundle_dir / _CATALOGUE_JSON
+    if not path.is_file():
+        # Without this every sub-goal reaches the platform with no description, so a pass explains
+        # itself as "the check found nothing wrong" and a judged one arrives with nothing to
+        # decide. Said out loud because the symptom shows up two systems away from the cause.
+        logger.warning(
+            "no %s beside the scenarios in %s: sub-goals will carry no description or claim",
+            _CATALOGUE_JSON,
+            bundle_dir,
+        )
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+    entries = raw.get("sub_goals") if isinstance(raw, dict) else None
+    if not isinstance(entries, list):
+        return {}
+    claims: dict[str, dict[str, str]] = {}
+    for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
+            continue
+        claims[entry["name"]] = {
+            "what": str(entry.get("what") or ""),
+            "judged": str(entry.get("judged") or ""),
+        }
+    return claims
+
+
 def _load_one(
     folder: Path,
     *,
     settled_in_code: set[str] | None = None,
     declared_tools: set[str] | None = None,
+    defer_execution: bool = False,
 ) -> _CompiledScenario:
     """One scenario folder -> a `Scenario`-protocol object. Mirrors `folder.py`'s documented
     layout (`scenario.json` + `setup.py` + `ready.py` + `checks/<goal>.py`) but reads
@@ -387,10 +452,16 @@ def _load_one(
     setup_code = _read_text(folder / _SETUP_PY, label=folder.name)
     ready_code = _read_text(folder / _READY_PY, label=folder.name)
     setup = _compile_entry(
-        setup_code, label=f"{folder.name}/{_SETUP_PY}", entry="setup"
+        setup_code,
+        label=f"{folder.name}/{_SETUP_PY}",
+        entry="setup",
+        defer_execution=defer_execution,
     )
     ready = _compile_entry(
-        ready_code, label=f"{folder.name}/{_READY_PY}", entry="ready"
+        ready_code,
+        label=f"{folder.name}/{_READY_PY}",
+        entry="ready",
+        defer_execution=defer_execution,
     )
 
     sub_goals: list[_CompiledSubGoal] = []
@@ -402,6 +473,7 @@ def _load_one(
                 check_code,
                 label=f"{folder.name}/{_CHECKS_DIRNAME}/{name}.py",
                 entry="check",
+                defer_execution=defer_execution,
                 allow_empty=False,  # R1-2: an existing-but-empty check file is invalid, never a
                 # vacuous pass -- absence of the file is what means "judged".
             )
@@ -432,7 +504,41 @@ def _load_one(
     )
 
 
-def load_scenarios(bundle_dir: Path) -> list[_CompiledScenario]:
+def _with_claims(
+    scenario: _CompiledScenario, claims: dict[str, dict[str, str]]
+) -> _CompiledScenario:
+    """Restore each sub-goal's real claim from the catalogue.
+
+    `_load_one` can only tell that a sub-goal is judged, never what it was meant to decide:
+    `folder.py` writes no file for one. Without this the platform judge gets a name and a
+    placeholder, which is not something a verdict can be reached from.
+
+    `what` is restored for CODED sub-goals too, not only judged ones. A check says nothing when it
+    holds, so `what` is the only thing a reader has to tell a real pass from one nobody wrote a
+    check for; withholding it left every passing sub-goal explaining itself as "the check found
+    nothing wrong". `judged` stays restricted to judged sub-goals, since a coded one has no claim
+    for a model to decide.
+    """
+    if not claims:
+        return scenario
+    restored = tuple(
+        replace(
+            goal,
+            judged=(claims[goal.name].get("judged") or goal.judged)
+            if goal.judged
+            else goal.judged,
+            what=claims[goal.name].get("what", "") or goal.what,
+        )
+        if goal.name in claims
+        else goal
+        for goal in scenario.sub_goals
+    )
+    return replace(scenario, sub_goals=restored)
+
+
+def load_scenarios(
+    bundle_dir: Path, *, defer_execution: bool = False
+) -> list[_CompiledScenario]:
     """Every scenario document under `<bundle_dir>/scenarios/`, compiled and wrapped, in the same
     sorted-by-folder-name order `folder.py`'s `read_all` uses. Raises `ScenarioDocumentInvalid` on
     the FIRST unreadable or malformed folder -- unlike `read_all`, which skips one and continues;
@@ -453,15 +559,20 @@ def load_scenarios(bundle_dir: Path) -> list[_CompiledScenario]:
         ) from exc
     settled_in_code = _deterministic_names(bundle_dir)
     declared_tools = _declared_tool_names(bundle_dir)
+    claims = _load_catalogue_claims(bundle_dir)
     scenarios: list[_CompiledScenario] = []
     for folder in entries:
         if not folder.is_dir():
             continue
         scenarios.append(
-            _load_one(
-                folder,
-                settled_in_code=settled_in_code,
-                declared_tools=declared_tools,
+            _with_claims(
+                _load_one(
+                    folder,
+                    settled_in_code=settled_in_code,
+                    declared_tools=declared_tools,
+                    defer_execution=defer_execution,
+                ),
+                claims,
             )
         )
     if not scenarios:
@@ -493,7 +604,7 @@ class BundleScenarioSource:
         # `preflight_bundle`, rather than stalling every other in-flight scenario behind it.
         try:
             scenarios = await asyncio.wait_for(
-                asyncio.to_thread(load_scenarios, bundle_dir),
+                asyncio.to_thread(load_scenarios, bundle_dir, defer_execution=True),
                 timeout=_LOAD_TIMEOUT_SECONDS,
             )
         except asyncio.TimeoutError as exc:

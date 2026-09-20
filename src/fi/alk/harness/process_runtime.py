@@ -144,6 +144,8 @@ SECTION_2F_DOMAIN: dict[str, FailureDomain] = {
     # this entry keeps the code inside §2f's closed table so `_section_2f_code` passes it through
     # intact instead of clamping the actionable terminal to `spawn_failed`.
     "port_not_consumable": FailureDomain.AGENT,
+    "resource_capacity_unknown": FailureDomain.INFRASTRUCTURE,
+    "resource_capacity_unavailable": FailureDomain.INFRASTRUCTURE,
 }
 
 
@@ -409,10 +411,14 @@ def _cgroup_cpu_quota() -> float | None:
             pass
     try:
         quota = int(
-            Path("/sys/fs/cgroup/cpu/cpu.cfs_quota_us").read_text(encoding="utf-8").strip()
+            Path("/sys/fs/cgroup/cpu/cpu.cfs_quota_us")
+            .read_text(encoding="utf-8")
+            .strip()
         )
         period = int(
-            Path("/sys/fs/cgroup/cpu/cpu.cfs_period_us").read_text(encoding="utf-8").strip()
+            Path("/sys/fs/cgroup/cpu/cpu.cfs_period_us")
+            .read_text(encoding="utf-8")
+            .strip()
         )
         if quota > 0 and period > 0:
             return quota / period
@@ -460,26 +466,46 @@ def admit_parallelism(
     cpu_declared: float | None,
     mem_declared_gib: float | None,
 ) -> int:
-    """C2 §2's `W' = max(1, min(W_requested, cpu_fit, mem_fit))`, per-dimension fail-closed
-    (D29): a dimension whose observed read failed/None/unbounded falls back to its DECLARED
-    job.json value; a dimension with neither observed nor declared bound does not constrain W'
-    (its fit term is dropped). `max(1, …)` is load-bearing — admission NEVER raises and never
-    yields 0. Returns W' in `1..requested`."""
-    if requested <= 1:
-        return max(1, requested)
+    """Bound slots by CPU and memory; refuse execution when no world fits."""
+    import math
 
     fits: list[int] = [requested]
-    cpu = cpu_observed if cpu_observed is not None else cpu_declared
-    if cpu is not None:
-        cpu_fit = int((cpu - _ADMISSION_R_CPU) // (_ADMISSION_C_WORLD + _ADMISSION_C_CALL))
-        fits.append(cpu_fit)
-    mem = mem_observed_gib if mem_observed_gib is not None else mem_declared_gib
-    if mem is not None:
-        mem_fit = int(
-            (mem - _ADMISSION_R_MEM) // (_ADMISSION_M_WORLD + _ADMISSION_M_CALL)
+    for observed, declared, reserve, cost in (
+        (
+            cpu_observed,
+            cpu_declared,
+            _ADMISSION_R_CPU,
+            _ADMISSION_C_WORLD + _ADMISSION_C_CALL,
+        ),
+        (
+            mem_observed_gib,
+            mem_declared_gib,
+            _ADMISSION_R_MEM,
+            _ADMISSION_M_WORLD + _ADMISSION_M_CALL,
+        ),
+    ):
+        bounds = [
+            value
+            for value in (observed, declared)
+            if value is not None and math.isfinite(value)
+        ]
+        if not bounds:
+            raise ProcessRuntimeError(
+                "admission",
+                "resource_capacity_unknown",
+                "both observed and declared resource bounds are unavailable",
+                domain=FailureDomain.INFRASTRUCTURE,
+            )
+        fits.append(math.floor((min(bounds) - reserve) / cost))
+    admitted = min(fits)
+    if admitted < 1:
+        raise ProcessRuntimeError(
+            "admission",
+            "resource_capacity_unavailable",
+            "sandbox resources cannot fit one world and the control process",
+            domain=FailureDomain.INFRASTRUCTURE,
         )
-        fits.append(mem_fit)
-    return max(1, min(fits))
+    return admitted
 
 
 # --- C2 §4 pre-plan literal-endpoint secret scan ----------------------------------------------
@@ -617,7 +643,10 @@ def _default_listener_probe(port: int) -> bool:
     `localhost:<port>` in the sandbox's single shared network namespace. A connect that
     succeeds (or is refused with EISCONN-class) means a listener exists; connection-refused
     means none. Point-in-time by design (the known residual is recorded in C1 §4)."""
-    for family, addr in ((socket.AF_INET, ("127.0.0.1", port)), (socket.AF_INET6, ("::1", port))):
+    for family, addr in (
+        (socket.AF_INET, ("127.0.0.1", port)),
+        (socket.AF_INET6, ("::1", port)),
+    ):
         sock = socket.socket(family, socket.SOCK_STREAM)
         sock.settimeout(0.2)
         try:
@@ -1266,6 +1295,17 @@ def build_process_tree(
         stage="build",
         domain=FailureDomain.AGENT,
     )
+    from .runtime_files import prepare_runtime_environment
+
+    try:
+        runtime_environment = prepare_runtime_environment(build_dir)
+    except OSError as exc:
+        raise ProcessRuntimeError(
+            "build",
+            "build_failed",
+            "could not prepare build caches",
+            process=process.name,
+        ) from exc
     if resolved_user is not None:
         _chown_tree(
             build_dir, uid=resolved_user.pw_uid, gid=resolved_user.pw_gid, chown=chown
@@ -1274,6 +1314,7 @@ def build_process_tree(
     spawn_gid = resolved_user.pw_gid if resolved_user is not None else None
 
     env = _base_process_env(build_dir, process.build_environment)
+    env.update(runtime_environment)
     for step in process.build_commands:
         result = None
         for network_attempt in range(max(0, build_step_network_retries) + 1):
@@ -2093,8 +2134,57 @@ def spawn_source_process(
                 key,
                 process.name,
             )
+    runtime_dir = build_dir
+    if port_plan.effective_instances > 1:
+        runtime_dir = world_dir / "runtime"
+        try:
+            # Stop/reap precedes every spawn/reset. Never reuse another world's
+            # writable tree or hard-link files back to the shared build.
+            if runtime_dir.is_symlink():
+                raise OSError("runtime directory must not be a symlink")
+            if runtime_dir.exists():
+                shutil.rmtree(runtime_dir)
+            _copytree_preserving_symlinks(build_dir, runtime_dir)
+            for path in (runtime_dir, *runtime_dir.rglob("*")):
+                if not path.is_symlink():
+                    path.chmod(path.stat().st_mode | 0o200)
+            from .runtime_files import relocate_runtime_files
+
+            relocate_runtime_files(build_dir, runtime_dir)
+            if resolved_user is not None:
+                _chown_tree(
+                    runtime_dir,
+                    uid=resolved_user.pw_uid,
+                    gid=resolved_user.pw_gid,
+                    chown=chown,
+                )
+        except OSError as exc:
+            raise ProcessRuntimeError(
+                "spawn",
+                "spawn_failed",
+                "could not isolate runtime files",
+                process=process.name,
+            ) from exc
+    from .runtime_files import prepare_runtime_environment
+
+    try:
+        runtime_environment = prepare_runtime_environment(runtime_dir)
+        if resolved_user is not None:
+            _chown_tree(
+                runtime_dir / ".alk-runtime",
+                uid=resolved_user.pw_uid,
+                gid=resolved_user.pw_gid,
+                chown=chown,
+            )
+    except OSError as exc:
+        raise ProcessRuntimeError(
+            "spawn",
+            "spawn_failed",
+            "could not prepare runtime caches",
+            process=process.name,
+        ) from exc
     env = _base_process_env(
-        build_dir,
+        runtime_dir,
         {
             **(process.build_environment or {}),
             **rendered,
@@ -2102,7 +2192,23 @@ def spawn_source_process(
             **authoritative_endpoints,
         },
     )
+    env.update(runtime_environment)
     command = list(process.run_command)
+    if port_plan.effective_instances > 1:
+        for name, directory in (
+            ("TMPDIR", "tmp"),
+            ("PYTHONPYCACHEPREFIX", "pycache"),
+        ):
+            path = world_dir / directory
+            if path.is_symlink():
+                path.unlink()
+            elif path.exists():
+                shutil.rmtree(path)
+            path.mkdir(exist_ok=True)
+            if resolved_user is not None:
+                chown(path, resolved_user.pw_uid, resolved_user.pw_gid)
+            env[name] = str(path)
+        env["TMP"] = env["TEMP"] = env["TMPDIR"]
     if sitecustomize_hook is not None:
         # Python imports ``sitecustomize`` at interpreter startup. Put the ALK-owned hook first
         # on PYTHONPATH so it is installed in the parent worker and every LiveKit job child.
@@ -2114,7 +2220,7 @@ def spawn_source_process(
     try:
         handle = runner(
             command,
-            cwd=build_dir,
+            cwd=runtime_dir,
             env=env,
             log_path=world_dir / "process.log",
             user=resolved_user.pw_uid if resolved_user is not None else None,
@@ -5025,9 +5131,7 @@ class ProcessRuntimeProvider:
                 event["to_w"] = to_w
                 self._normalize_degrade_ledger()
                 return
-        self._degrade_ledger.append(
-            {"reason": reason, "from_w": from_w, "to_w": to_w}
-        )
+        self._degrade_ledger.append({"reason": reason, "from_w": from_w, "to_w": to_w})
         self._normalize_degrade_ledger()
 
     def _normalize_degrade_ledger(self) -> None:
@@ -5055,9 +5159,8 @@ class ProcessRuntimeProvider:
         self, work_directory: Path
     ) -> tuple[float | None, float | None]:
         """The DECLARED job.json fit inputs (C2 §2 fail-closed fallback): `runtime.cpu_units`
-        (vCPU) and `runtime.memory_mb`→GiB. Absent/unreadable job.json → `(None, None)` (the
-        local/test lane and the fallback's own no-declared case — the fit term is then simply
-        dropped, never forcing a clamp)."""
+        (vCPU) and `runtime.memory_mb`→GiB. An absent or unreadable file returns
+        `(None, None)`; admission then requires observed bounds for both dimensions."""
         path = work_directory / "job.json"
         if not path.is_file():
             return (None, None)
@@ -5082,7 +5185,9 @@ class ProcessRuntimeProvider:
         if self._secret_purpose_map is not None:
             return
         declared = _read_job_secret_purposes(work_directory)
-        missing = sorted(alias for alias in declared if alias not in self._secret_values)
+        missing = sorted(
+            alias for alias in declared if alias not in self._secret_values
+        )
         if missing:
             raise ProcessRuntimeError(
                 "secrets",
@@ -5094,7 +5199,7 @@ class ProcessRuntimeProvider:
 
     def _run_admission(self, requested: int, work_directory: Path) -> int:
         """Stage 1 — C2 §2 admission clamp using RUNTIME-OBSERVED sandbox resources with a
-        per-dimension DECLARED fallback. Never raises, never yields 0 or above `requested`."""
+        per-dimension DECLARED fallback. Refuses execution if no safe slot fits."""
         try:
             cpu_observed = self._cpu_observer()
         except Exception:  # observation must never raise admission (C2 §2)
@@ -5338,7 +5443,9 @@ class ProcessRuntimeProvider:
         # C2 §1 rule 4's crisp trichotomy, keyed on WHICH branch runs. FIRST BUILD and DIGEST
         # REBUILD both take the first-call branch (plan + scan run, stage-5 catches ARMED);
         # RECONCILE takes the else branch (carry the first plan forward, catches NOT armed).
-        first_or_rebuild = self._manifest is None or self._bundle_digest != bundle_digest
+        first_or_rebuild = (
+            self._manifest is None or self._bundle_digest != bundle_digest
+        )
         is_digest_rebuild = (
             self._manifest is not None and self._bundle_digest != bundle_digest
         )
@@ -5576,9 +5683,7 @@ class ProcessRuntimeProvider:
                     # down whatever this world published, drop the ceiling to k, ledger
                     # `world_start_failed`, re-write build.json.
                     self._teardown_world(world_index)
-                    self._append_degrade(
-                        "world_start_failed", effective, world_index
-                    )
+                    self._append_degrade("world_start_failed", effective, world_index)
                     effective = world_index
                     self._effective_ceiling = effective
                     self._mirror_ledger(build_output, requested, effective)
@@ -5972,6 +6077,8 @@ class ProcessRuntimeProvider:
         environment (`LIVEKIT_AGENT_NAME` / `HARNESS_TOOL_TRACE`); a bundle that does not set them
         simply omits the key, and the CallRunner then fails typed-and-loud rather than guessing."""
         control = self._manifest.runtime.control_service
+        if control is None:
+            return {}
         process = next((p for p in self._manifest.processes if p.name == control), None)
         env = dict(getattr(process, "environment", {}) or {})
         world_dir = world_scratch_dir(
