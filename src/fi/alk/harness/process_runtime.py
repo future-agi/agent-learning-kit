@@ -3432,10 +3432,15 @@ def apply_seed_file(
                 apply_postgres_world_ir(file, **world_kwargs)
             except Exception as exc:
                 diagnostics = tuple(getattr(exc, "diagnostics", ()))
+                # Say which statement or column refused. Without it a hosted run dies with a
+                # sentence that names the stage and nothing else, and the sandbox is gone.
+                said = "; ".join(
+                    f"{item.code}: {item.message}" for item in diagnostics
+                ) or f"{type(exc).__name__}: {exc}"
                 raise ProcessRuntimeError(
                     "seed",
                     "seed_failed",
-                    "canonical World IR could not be compiled or applied",
+                    f"canonical World IR could not be compiled or applied: {said[:700]}",
                     process=process_name,
                     domain=FailureDomain.ENVIRONMENT,
                     diagnostics=diagnostics,
