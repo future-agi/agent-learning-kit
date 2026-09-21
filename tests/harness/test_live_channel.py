@@ -212,7 +212,8 @@ def test_a_stage_that_cannot_call_its_workers_is_refused_at_once():
     spec = SessionSpec(system_prompt="x", servers={"scenarios": ToolServer(name="scenarios")})
     spec.workers = {"writer": WorkerSpec(description="w", instructions="w")}
 
-    _can_reach_its_workers(spec, ["mcp__workers__delegate"])
+    # The SDK's own sub-agent tools. There is no second delegation implementation to reach for.
+    _can_reach_its_workers(spec, ["Agent", "Task"])
     _can_reach_its_workers(SessionSpec(system_prompt="x"), ["mcp__scenarios__inspect_world"])
 
     with pytest.raises(ValueError) as refused:

@@ -53,7 +53,6 @@ DEFAULT_MODEL = "claude-sonnet-4-6"
 # is denied by the very gate the workers exist to pass.
 DELEGATION_TOOLS = ("Agent", "Task")
 
-
 def _can_reach_its_workers(spec: SessionSpec, allowed: list[str]) -> None:
     """Refuse a session whose workers it has no way to call, before it spends an hour on it.
 
@@ -68,7 +67,7 @@ def _can_reach_its_workers(spec: SessionSpec, allowed: list[str]) -> None:
     reachable = set(allowed)
     if reachable & set(DELEGATION_TOOLS):
         return
-    if any(name.endswith(f"__{DELEGATION_HANDOFF}") for name in reachable):
+    if any(name in DELEGATION_TOOLS for name in reachable):
         return
     raise ValueError(
         f"this stage has workers ({', '.join(sorted(spec.workers))}) and no way to call them: "
@@ -101,7 +100,11 @@ def _definition(worker: WorkerSpec, parent: SessionSpec) -> AgentDefinition:
     different model is a difference nobody asked for and nothing on screen would explain.
     """
     tools = [name for name in worker.granted(parent) if name != DELEGATE_TOOL]
-    if DELEGATE_TOOL in (worker.builtins or parent.builtins):
+    # Only when the worker itself asks for it, never by inheriting the stage's. A worker that could
+    # hand out again would spend the stage's budget on a tree of its own and nothing on screen would
+    # say which of them wrote what. Workers declare no builtins, so reading the parent's here handed
+    # every writer the delegation tools by accident.
+    if DELEGATE_TOOL in (worker.builtins or ()):
         tools.extend(DELEGATION_TOOLS)
     return AgentDefinition(
         description=worker.description,
@@ -118,156 +121,6 @@ def _definition(worker: WorkerSpec, parent: SessionSpec) -> AgentDefinition:
 
 # The server and tool a session publishes when it runs its workers itself. Qualified the way
 # every other harness tool is, so the gate, the ledger and the skills all read it the same way.
-DELEGATION_SERVER = "workers"
-DELEGATION_HANDOFF = "delegate"
-
-
-class _Desk:
-    """Runs a stage's workers in child sessions of its own, instead of the CLI's sub-agents.
-
-    The bundled CLI has its own sub-agent tool, and on a gateway route it does not finish: a
-    worker with no tools reports back, and a worker that calls one runs, executes the tool, and
-    then the delegating turn never receives a result. The gateway answered every request it was
-    given and the CLI simply stopped asking, so the stall is inside a lifecycle nobody documents.
-
-    A stage only ever needed "brief these workers and give me what they wrote". That is a tool,
-    and a child session is a thing this backend already knows how to build, so the capability is
-    put back on the two pieces that demonstrably work rather than on an internal we cannot see.
-
-    What a worker did still reaches the stage: its calls are replayed onto the parent's stream
-    carrying its name, and its tokens and cost are folded into the parent's ``StageDone``. Without
-    that the ledger would attribute a stage's whole spend to the loop and report a fraction of it.
-    """
-
-    def __init__(
-        self, spec: SessionSpec, open_child: Callable[[SessionSpec], "ClaudeSession"]
-    ) -> None:
-        self._spec = spec
-        self._open_child = open_child
-        self._seen: list[Any] = []
-        self._lock = asyncio.Lock()
-        # The ceiling is the harness's, not this backend's: a stage plans against the same number.
-        self._room = asyncio.Semaphore(MOST_WORKERS_AT_ONCE)
-        self.tokens_in = 0
-        self.tokens_out = 0
-        self.tokens_cached = 0
-        self.cost_usd = 0.0
-        self.models: set[str] = set()
-
-    @property
-    def tool_name(self) -> str:
-        return qualified(DELEGATION_SERVER, DELEGATION_HANDOFF)
-
-    def server(self) -> ToolServer:
-        """The one tool a delegating stage is given, described by the workers it can run."""
-        roster = "\n".join(
-            f"  - `{name}`: {worker.description}"
-            for name, worker in self._spec.workers.items()
-        )
-        return ToolServer(
-            name=DELEGATION_SERVER,
-            tools=[
-                ToolSpec(
-                    name=DELEGATION_HANDOFF,
-                    description=(
-                        "Hand part of this stage to a worker, which does it in a session of its "
-                        "own and reports back. Name the worker and write its brief: what to "
-                        "cover, how much of it, and what makes its part different from what the "
-                        "others were given. The call returns what that worker wrote, so several "
-                        "briefs in one turn run at the same time.\n\n"
-                        f"The workers you may run:\n{roster}"
-                    ),
-                    input_schema={"worker": str, "brief": str},
-                    handler=self._handle,
-                )
-            ],
-        )
-
-    async def _handle(self, args: dict[str, Any]) -> dict[str, Any]:
-        named = str(args.get("worker") or "").strip()
-        brief = str(args.get("brief") or "").strip()
-        worker = self._spec.workers.get(named)
-        if worker is None:
-            return _said(
-                f"there is no worker called {named!r}. The ones you may run are: "
-                + ", ".join(self._spec.workers)
-                or "none",
-                is_error=True,
-            )
-        if not brief:
-            return _said(
-                f"{named} was given no brief, so there is nothing for it to do. Say what to "
-                "cover, how much, and what makes it different from the other briefs.",
-                is_error=True,
-            )
-        try:
-            return _said(await self._run(named, worker, brief))
-        except Exception as broke:  # noqa: BLE001 - a worker that dies is the stage's news
-            return _said(f"{named} did not finish: {type(broke).__name__}: {broke}", is_error=True)
-
-    async def _run(self, named: str, worker: WorkerSpec, brief: str) -> str:
-        async with self._room:
-            # On its own thread with its own loop, and not merely for tidiness. This runs inside
-            # a tool handler, which the SDK calls from its own task context, and starting a second
-            # SDK client there leaves both waiting: the child never issues a single request and
-            # the parent never gets its result. A thread gives the child a loop of its own, and
-            # the two clients stop sharing anything.
-            said, seen, spent = await asyncio.to_thread(
-                self._drive, named, _child_of(self._spec, worker), brief
-            )
-            async with self._lock:
-                self._seen.extend(seen)
-            self.tokens_in += spent.tokens_in
-            self.tokens_out += spent.tokens_out
-            self.tokens_cached += spent.tokens_cached
-            self.cost_usd += spent.cost_usd or 0.0
-            self.models.update(spent.models)
-            return said
-
-    def _drive(self, named: str, child: SessionSpec, brief: str) -> tuple[str, list[Any], StageDone]:
-        return asyncio.run(self._drive_alone(named, child, brief))
-
-    async def _drive_alone(
-        self, named: str, child: SessionSpec, brief: str
-    ) -> tuple[str, list[Any], StageDone]:
-        """One worker, start to finish, on a loop nothing else is using."""
-        session = self._open_child(child)
-        await session.start()
-        try:
-            await session.send(brief)
-            said: list[str] = []
-            seen: list[Any] = []
-            spent = StageDone(outcome="success")
-            async for reply in session.replies():
-                if isinstance(reply, ModelReply):
-                    parts = []
-                    for part in reply.parts:
-                        if isinstance(part, Call):
-                            # Stamped here because nothing downstream can know it: a child
-                            # session has no idea it is one, and the ledger is keyed on this.
-                            parts.append(dataclasses.replace(part, by=named))
-                        else:
-                            if isinstance(part, Say) and part.text.strip():
-                                said.append(part.text)
-                            parts.append(part)
-                    seen.append(dataclasses.replace(reply, parts=parts))
-                elif isinstance(reply, ToolReturned):
-                    seen.append(reply)
-                elif isinstance(reply, StageDone):
-                    spent = reply
-                    if reply.outcome != "success" and not said:
-                        said.append(f"{named} ended on {reply.outcome} with nothing written.")
-            written = "\n".join(one.strip() for one in said if one.strip()).strip()
-            return written or f"{named} finished without saying anything.", seen, spent
-        finally:
-            await session.stop()
-
-    def drain(self) -> list[Any]:
-        """What the workers have done since this was last asked, for the parent's own stream."""
-        taken, self._seen = self._seen, []
-        return taken
-
-
 def _said(text: str, *, is_error: bool = False) -> dict[str, Any]:
     """A tool result in the shape every harness tool already returns."""
     reply: dict[str, Any] = {"content": [{"type": "text", "text": text}]}
@@ -313,12 +166,11 @@ def _flattened(content: Any) -> str:
 class ClaudeSession:
     """One Claude Code session, translated to the neutral reply vocabulary."""
 
-    def __init__(self, options: ClaudeAgentOptions, desk: "_Desk | None" = None) -> None:
+    def __init__(self, options: ClaudeAgentOptions) -> None:
         self._options = options
         self._client: ClaudeSDKClient | None = None
         # None for every session that runs no workers, which is every session this backend built
         # before delegation existed.
-        self._desk = desk
 
     async def start(self) -> None:
         self._client = ClaudeSDKClient(options=self._options)
@@ -339,30 +191,7 @@ class ClaudeSession:
             raise RuntimeError("session is not open")
         async for received in self._client.receive_response():
             for reply in self._translate(received):
-                # A worker's calls belong on this stream before the stage is told it ended, or
-                # the ledger sees the totals and never sees what they were spent on.
-                if self._desk is not None and isinstance(reply, StageDone):
-                    for worked in self._desk.drain():
-                        yield worked
-                    reply = self._with_workers(reply)
                 yield reply
-
-    def _with_workers(self, done: StageDone) -> StageDone:
-        """The stage's own figures plus everything its workers spent inside it."""
-        desk = self._desk
-        if desk is None:
-            return done
-        priced = done.cost_usd
-        if desk.cost_usd:
-            priced = (priced or 0.0) + desk.cost_usd
-        return dataclasses.replace(
-            done,
-            tokens_in=done.tokens_in + desk.tokens_in,
-            tokens_out=done.tokens_out + desk.tokens_out,
-            tokens_cached=done.tokens_cached + desk.tokens_cached,
-            cost_usd=priced,
-            models=done.models | desk.models,
-        )
 
     def _translate(self, received: Any) -> list[Any]:
         if isinstance(received, SystemMessage):
@@ -473,13 +302,13 @@ class ClaudeBackend:
         return "claude" in (model or "").lower()
 
     def create(self, spec: SessionSpec) -> ClaudeSession:
-        return ClaudeSession(self._options(spec, None))
+        return ClaudeSession(self._options(spec))
 
-    def _options(self, spec: SessionSpec, desk: "_Desk | None") -> ClaudeAgentOptions:
-        """The SDK options for one session, with or without a desk running its workers.
+    def _options(self, spec: SessionSpec) -> ClaudeAgentOptions:
+        """The SDK options for one session.
 
-        ``desk`` is None on the route that hands workers to the SDK's own sub-agents, which is
-        every session this backend built before delegation moved into the harness.
+        Workers are handed to the SDK's own sub-agents. There is no second delegation
+        implementation in this backend: one way to run a worker, and it is the SDK's.
         """
         from ..config import (
             UNWANTED,
@@ -493,23 +322,30 @@ class ClaudeBackend:
         # inside this session, so building the gate from the parent's tools alone would deny a
         # worker the very tools it was given.
         allowed = [name for name in spec.granted_anywhere() if name != DELEGATE_TOOL]
-        servers = {**spec.servers}
-        for worker in spec.workers.values():
-            servers.update(worker.servers)
+        # Union the tools per server name rather than letting the last worker win. The parent, the
+        # writer and the reviewer all publish under the same server name with different subsets, so
+        # `update` handed every sub-agent whichever subset was merged last: on one run that was the
+        # reviewer's read-only set, and the writers could not submit a single scenario. What each
+        # agent may actually call is already restricted by its own `tools` allowlist in
+        # `_definition`, so registering the union here is safe and is what makes that allowlist mean
+        # anything.
+        servers: dict[str, ToolServer] = {}
+        for source in (spec.servers, *(worker.servers for worker in spec.workers.values())):
+            for server_name, server in (source or {}).items():
+                existing = servers.get(server_name)
+                if existing is None:
+                    servers[server_name] = server
+                    continue
+                seen = {tool.name for tool in existing.tools}
+                servers[server_name] = dataclasses.replace(
+                    existing,
+                    tools=[*existing.tools, *(t for t in server.tools if t.name not in seen)],
+                )
         environment = dict(provider_env(spec.model))
         if spec.workers:
-            # Bound both fan-out paths to the same number. The desk runs workers as our own
-            # sessions, but the CLI's own agent tool stays reachable and defaults higher than
-            # the desk's semaphore, so leaving it unset lets the two add up.
+            # How many sub-agents the CLI may run at once. This is the only fan-out ceiling now.
             environment["CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"] = str(MOST_WORKERS_AT_ONCE)
-        if spec.workers and desk is None:
             allowed.extend(DELEGATION_TOOLS)
-        if desk is not None:
-            # A worker's own tools are run by its own session, so the parent is granted the one
-            # tool that hands work out and nothing the workers hold.
-            allowed = [name for name in spec.granted() if name != DELEGATE_TOOL]
-            allowed.append(desk.tool_name)
-            servers = {**spec.servers, DELEGATION_SERVER: desk.server()}
         _can_reach_its_workers(spec, allowed)
         options = ClaudeAgentOptions(
             system_prompt=_prompt_for(spec.system_prompt),
@@ -524,8 +360,6 @@ class ClaudeBackend:
                     for name, worker in spec.workers.items()
                 }
                 or None
-                if desk is None
-                else None
             ),
             setting_sources=[],
             max_turns=spec.max_turns,
@@ -609,10 +443,4 @@ class ClaudeGatewayBackend(ClaudeBackend):
                 "that serves POST /v1/messages from a Gemini model. Without it the CLI would "
                 "reach Anthropic directly, which is the bill this backend exists to prevent."
             )
-        if not spec.workers:
-            return ClaudeSession(self._options(spec, None))
-        # This route runs its workers itself. The SDK's own sub-agent never returns a result to
-        # the delegating turn once the worker calls a tool, and a child session is a thing this
-        # backend already builds correctly.
-        desk = _Desk(spec, lambda child: ClaudeSession(self._options(child, None)))
-        return ClaudeSession(self._options(spec, desk), desk)
+        return ClaudeSession(self._options(spec))

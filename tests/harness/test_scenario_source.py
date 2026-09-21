@@ -2218,8 +2218,9 @@ def test_only_a_value_the_agent_looks_up_is_a_missing_credential() -> None:
         assert grounding_problems([looked_up], _P(tmp)) == []
 
 
-def test_an_orchestrating_loop_is_not_offered_the_writing_tools(tmp_path, monkeypatch) -> None:
-    """It held try_calls and submit_scenario, so it wrote the suite itself and paid for it."""
+def test_the_loop_holds_both_methods_and_decides_for_itself(tmp_path, monkeypatch) -> None:
+    """There is no hand-out threshold. A constant deciding for every suite alike was wrong at both
+    ends, so the loop keeps its writing tools AND its workers and judges which to use."""
     from fi.alk.harness import scenarios as stage
     from fi.alk.harness.contract import AgentContract
 
@@ -2255,7 +2256,8 @@ def test_an_orchestrating_loop_is_not_offered_the_writing_tools(tmp_path, monkey
         t.name for t in spec.servers[stage.SCENARIO_SERVER].tools
     }
 
-    assert not offered(big.spec) & set(stage.WRITES_A_SCENARIO)
+    assert set(stage.WRITES_A_SCENARIO) <= offered(big.spec)
+    assert big.spec.workers, "the loop must still be able to hand work out"
     assert "aim_for" in offered(big.spec) and "suite_progress" in offered(big.spec)
     assert "save_scenarios" in offered(big.spec)
     # Below the hand-out size the loop writes the suite itself and still needs them.
@@ -2285,18 +2287,19 @@ def test_suite_progress_names_overlays_that_assert_nothing() -> None:
     assert "real:" not in said
 
 
-def test_a_resumed_suite_that_is_handed_out_is_briefed_not_written() -> None:
-    """The loop has no submit_scenario above the hand-out size, so telling it to change one breaks."""
+def test_a_resumed_suite_is_told_to_read_before_it_changes_anything() -> None:
+    """One opening whatever the size. There is no hand-out threshold: the loop holds both methods
+    and decides for itself whether to write the suite or brief writers for it."""
     from fi.alk.harness.contract import AgentContract
     from fi.alk.harness.scenarios import opening
 
     contract = AgentContract(agent="a")
-    big = opening(contract, 50, existing=50, hands_out=True)
-    small = opening(contract, 8, existing=8, hands_out=False)
+    big = opening(contract, 50, existing=50)
+    small = opening(contract, 8, existing=8)
 
-    assert "do not write scenarios yourself" in big and "scenario_writer" in big
-    assert "inspect_scenario" not in big
-    assert "inspect_scenario" in small
+    # Same instruction whatever the size; only the count it quotes differs.
+    assert "inspect_scenario" in big and "inspect_scenario" in small
+    assert "do not write scenarios yourself" not in big
 
 
 def test_a_writer_is_told_which_named_tools_are_not_its_job() -> None:

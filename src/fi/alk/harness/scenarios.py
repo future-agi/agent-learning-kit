@@ -48,15 +48,11 @@ logger = logging.getLogger(__name__)
 SKILL = "write-scenarios"
 PLAN_SKILL = "plan-suite"
 
-# Turns a scenario costs in practice: look at the world, rehearse the calls, submit, and often
-# one more to correct what a gate refused.
-TURNS_EACH = 3
-# A briefed writer reads the world again in its own context, and its turns come out of the same
-# budget as the loop that briefed it, so a handed-out suite spends more turns than one written
-# in a single session.
-TURNS_EACH_HANDED_OUT = 9
-# The suite size above which the skill has the loop hand the writing out rather than do it.
-HANDS_OUT_ABOVE = 20
+# Turns a scenario costs in practice: look at the world, rehearse the calls, submit, and often one
+# more to correct what a gate refused. A briefed writer reads the world again in its own context and
+# its turns come out of this same budget, so the rate is the handed-out one: the loop decides whether
+# to hand out, and a budget that assumed it would not is a budget that cannot afford the decision.
+TURNS_EACH = 9
 # Enough to write a handful without the budget being the thing that stops it.
 TURNS_FLOOR = 120
 # One writer's own ceiling. A worker is a smaller agent with a smaller goal: it reads the world
@@ -85,8 +81,7 @@ def turns_for(wanted: int) -> int:
     that asked for fifty and reached twenty-eight saved nothing at all. The budget has to follow
     the request, or the request cannot be honoured.
     """
-    each = TURNS_EACH_HANDED_OUT if wanted > HANDS_OUT_ABOVE else TURNS_EACH
-    return max(TURNS_FLOOR, wanted * each + 40)
+    return max(TURNS_FLOOR, wanted * TURNS_EACH + 40)
 
 
 # Named with underscores because one backend sanitises a worker name into an identifier and the
@@ -272,17 +267,18 @@ def open_stage(
     destination = out or artifact_dir(contract.agent)
     server, kept = scenario_tools(contract, destination, destination, wanted=wanted)
     budget = max_turns or turns_for(wanted)
-    hands_out = wanted > HANDS_OUT_ABOVE
+    # How many writers the turn budget can afford, and how many of those may be in flight together.
+    # Briefing fewer than this in one message costs a whole extra wave of writer-lifetimes, which is
+    # the difference between a large suite taking one writer's time and taking several.
+    affordable = max((budget - REVIEWER_TURNS) // WRITER_TURNS, 1)
+    at_once = max(min(affordable, MOST_WORKERS_AT_ONCE), 1)
+    slice_size = max(-(-wanted // at_once), 1)
     loop_server = (
         ToolServer(
             name=server.name,
             version=server.version,
-            tools=[
-                spec for spec in server.tools if spec.name not in WRITES_A_SCENARIO
-            ],
+            tools=list(server.tools),
         )
-        if hands_out
-        else server
     )
     spec = SessionSpec(
         # The agent and its world before the method: grounding evidence read before the
@@ -294,13 +290,11 @@ def open_stage(
             # One role per session. A suite this size is handed out, so this session plans and
             # briefs and never writes, and the writing method belongs to the writers rather than
             # here. Carrying it anyway is what made the loop behave like a writer.
-            + (
-                f"\n\n{load_skill(PLAN_SKILL)}"
-                if hands_out
-                else f"\n\n{load_skill(SKILL)}"
-                # The preamble is shared by every skill, so the second carries only its method.
-                f"\n\n{load_skill(PLAN_SKILL, preamble=False)}"
-            )
+            # Both methods, always. Whether to write the suite here or brief writers for it is
+            # a judgement about this suite, so the loop needs the plan and the writing method in
+            # front of it either way. A threshold in code decided it for every suite alike.
+            + f"\n\n{load_skill(SKILL)}"
+            + f"\n\n{load_skill(PLAN_SKILL, preamble=False)}"
             # Whatever this kind of agent adds on top. A file under skills/kinds/ that
             # declares `applies_to: modality=<kind>` is appended here, so supporting a
             # new kind of agent is adding that file and nothing else.
@@ -310,11 +304,20 @@ def open_stage(
                 voicemail="on" if voicemail_enabled() else "off",
                 conversational="yes" if contract.conversational else "no",
             )
-            + f"\n\nAt most {MOST_WORKERS_AT_ONCE} writers may run at the same time. Brief a "
-            f"batch, wait for it to report, then brief the next: launching a second batch while "
-            f"the first is still running is refused, and a refused launch has written nothing. "
-            f"If a launch comes back saying the concurrent limit is reached, that writer does "
-            f"not exist. Wait for running writers to report and brief it again. Never say work "
+            + f"\n\nPlan the grid first, cut it into {at_once} slices of about {slice_size} "
+            f"scenarios each, then LAUNCH ALL {at_once} before you collect anything. Launching "
+            f"returns immediately with a handle and the writer keeps going in the background, so "
+            f"every one you launch is writing while you launch the next. Only when all {at_once} "
+            f"are launched do you collect.\n\n"
+            f"Collect with wait_for_all false: it comes back as soon as any writer is done, and "
+            f"you launch a replacement for the next slice straight away, keeping {at_once} "
+            f"writing at all times. Repeat until suite_progress reports the count.\n\n"
+            f"The one thing that destroys this is launching a writer and collecting before "
+            f"launching the rest, which runs them one at a time for no reason. Each brief must "
+            f"name different cells so no two writers are given the same work. "
+            f"A launch above the limit is refused, and a refused launch has written nothing: if "
+            f"a launch comes back saying the concurrent limit is reached, that writer does not "
+            f"exist, so wait for a running writer to report and brief it again. Never say work "
             f"is running in the background on the strength of a launch you did not see succeed, "
             f"and check suite_progress before you believe your own count."
             # The loop cannot ration what it cannot see. Without this it has no reason to believe
@@ -360,35 +363,7 @@ def opening(
     contract: AgentContract,
     wanted: int = 10,
     existing: int = 0,
-    *,
-    hands_out: bool = False,
 ) -> str:
-    if not existing and hands_out:
-        return (
-            f"Write {wanted} scenarios for {contract.agent!r}.\n\n"
-            "Look at the world first with inspect_world so the cells you plan name real records, "
-            "and read the sub-goals already defined. Then declare the plan with aim_for: the "
-            "axes, their levels, and the keyword vocabulary the whole suite draws from.\n\n"
-            "You are the orchestrator. You do not write scenarios yourself. Brief "
-            "scenario_writer with the cells each writer covers, how many scenarios that is "
-            "worth, and its share of the people; take the reports they come back with; call "
-            "suite_progress to see what is still empty; brief the next round from that. When the "
-            "count is met run suite_reviewer, brief a round for whatever it names, then "
-            "save_scenarios.\n\n"
-            "A plan is not a suite. Describing the scenarios in your reply writes nothing to "
-            "disk, and a stage that ends having described them has produced nothing at all. "
-            "You are finished when suite_progress reports the count, not when you can list "
-            "what the suite would contain. Until it does, the next thing you do is brief "
-            "another round."
-        )
-    if existing and hands_out:
-        return (
-            f"There are already {existing} scenarios for {contract.agent!r}, and they are "
-            "loaded. You are the orchestrator and do not write scenarios yourself. Call "
-            "suite_progress to see where the suite stands, then brief scenario_writer with the "
-            "cells to change or add and what each must cover. A scenario submitted under an "
-            "existing name replaces it, so say plainly which names a writer may reuse."
-        )
     if existing:
         return (
             f"There are already {existing} scenarios for {contract.agent!r}, and they are "
@@ -550,7 +525,7 @@ async def write(
         # one slice, so it waits the same way a writer does.
         await survive_refusal(
             lambda: stage.say(
-                opening(contract, wanted, hands_out=wanted > HANDS_OUT_ABOVE),
+                opening(contract, wanted),
                 on_event=on_event,
             ),
             what="the opening turn",
