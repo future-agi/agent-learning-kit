@@ -98,6 +98,51 @@ def provisioning(enabled: bool | None = None) -> bool:
     }
 
 
+# Models this harness is allowed to spend on. Karthik's constraint, and it is a hard one: the
+# Gemini credits are what we have, Claude models are what we cannot afford. `CLAUDE_CODE_USE_VERTEX`
+# is the specific trap, because it means Anthropic's own models hosted on Vertex rather than
+# Google's, so a single stray flag spends on exactly what is forbidden.
+BILLABLE = ("gemini",)
+FORBIDDEN = ("claude", "sonnet", "opus", "haiku")
+
+
+def refuse_a_model_we_cannot_afford(model: str) -> None:
+    """Raise unless this is a model we are allowed to spend on.
+
+    Called wherever a model is resolved rather than once at the edge, because the ways a Claude id
+    can arrive are many: a default, an env var, a worker override, a gateway that silently
+    substitutes. One check at the boundary would miss most of them.
+    """
+    named = (model or "").strip().lower()
+    if not named:
+        raise ValueError("no model was chosen; refusing to let the provider pick one")
+    if any(word in named for word in FORBIDDEN):
+        raise ValueError(
+            f"refusing to run on {model!r}: this harness may only spend on "
+            f"{', '.join(BILLABLE)} models. Set ALK_HARNESS_MODEL to a Gemini model."
+        )
+    if not any(word in named for word in BILLABLE):
+        raise ValueError(
+            f"refusing to run on {model!r}: it is not recognisably a "
+            f"{'/'.join(BILLABLE)} model, and an unrecognised id is how a Claude model gets "
+            "billed by accident."
+        )
+
+
+def gateway_wire_model(model: str) -> str:
+    """The name the SDK puts on the wire for `model`.
+
+    The Claude Agent SDK validates a model name locally before it makes a request, so a Gemini id
+    never leaves the process. Behind Agent Command Center the wire carries a Claude-shaped alias
+    the gateway resolves back to the model this run chose; everywhere else the name is its own.
+    """
+    if not os.environ.get("AGENTCC_API_KEY", "").strip():
+        return model
+    if "claude" in (model or "").lower():
+        return model
+    return os.environ.get("AGENTCC_CLAUDE_MODEL_ALIAS", "claude-sonnet-4-6").strip()
+
+
 def provider_env(model: str | None = None) -> dict[str, str]:
     """The provider block passed to the session.
 
@@ -111,6 +156,10 @@ def provider_env(model: str | None = None) -> dict[str, str]:
     # by twenty writers then runs on whatever that preference happens to be rather than on the
     # model the run asked for.
     chosen = chosen_model(model)
+    refuse_a_model_we_cannot_afford(chosen)
+    # Agent Command Center speaks Anthropic Messages in front of the model this run chose. The
+    # SDK validates a model name locally before it makes a request, so the wire carries a
+    # Claude-shaped alias the gateway maps back to `chosen`; the alias is never what is billed.
     agentcc_key = os.environ.get("AGENTCC_API_KEY", "").strip()
     if agentcc_key:
         base_url = (
@@ -118,22 +167,28 @@ def provider_env(model: str | None = None) -> dict[str, str]:
             .strip()
             .rstrip("/")
         )
+        wire = gateway_wire_model(chosen)
         return {
-            # AUTH_TOKEN is sent as a Bearer token, which is how Agent CC virtual keys
-            # authenticate. API_KEY would instead use Anthropic's x-api-key header.
+            # AUTH_TOKEN is sent as a Bearer token, which is how a virtual key authenticates.
+            # API_KEY would instead use Anthropic's x-api-key header.
             "ANTHROPIC_AUTH_TOKEN": agentcc_key,
             "ANTHROPIC_BASE_URL": base_url,
-            # Explicitly turn off the direct Vertex transport in case it is enabled in the
-            # parent process. ClaudeAgentOptions.env is merged over the parent environment.
+            # Turn off the direct Vertex transport in case the parent process has it on:
+            # ClaudeAgentOptions.env is merged over the parent environment, and Vertex here
+            # would mean Anthropic's own models hosted on Vertex, which is not this.
             "CLAUDE_CODE_USE_VERTEX": "0",
-            "ANTHROPIC_MODEL": chosen,
-            "ANTHROPIC_DEFAULT_SONNET_MODEL": chosen,
-            "ANTHROPIC_DEFAULT_OPUS_MODEL": chosen,
-            "ANTHROPIC_DEFAULT_HAIKU_MODEL": chosen,
-            "ANTHROPIC_SMALL_FAST_MODEL": chosen,
-            "CLAUDE_CODE_SUBAGENT_MODEL": chosen,
+            "ANTHROPIC_MODEL": wire,
+            "ANTHROPIC_DEFAULT_SONNET_MODEL": wire,
+            "ANTHROPIC_DEFAULT_OPUS_MODEL": wire,
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL": wire,
+            "ANTHROPIC_SMALL_FAST_MODEL": wire,
+            # Sub-agents run on the same alias, so a suite written by twenty of them cannot
+            # land on whatever the CLI would otherwise prefer.
+            "CLAUDE_CODE_SUBAGENT_MODEL": wire,
         }
     env = {
+        # The CLI's own Vertex route. CLAUDE_CODE_USE_VERTEX means Anthropic's models hosted on
+        # Vertex, so this path is only reachable for a model we are allowed to spend on.
         "CLAUDE_CODE_USE_VERTEX": "1",
         "CLOUD_ML_REGION": os.environ.get("CLOUD_ML_REGION", "global"),
         "ANTHROPIC_MODEL": chosen,
@@ -278,10 +333,44 @@ def artifact_dir(agent: str, root: str | Path | None = None) -> Path:
 HARNESS = SKILLS_ROOT / "harness.md"
 
 
+def declared_modalities() -> tuple[str, ...]:
+    """Every modality a kind file under ``skills/kinds/`` says it is for.
+
+    The point of the kind directory is that supporting a new sort of agent is adding a file. That
+    only holds if the contract will *accept* the new modality, and until this existed the accepted
+    list was a tuple in code, so a browser or computer-use agent needed an edit in two more places
+    before its file could ever be read.
+
+    Read from ``applies_to`` rather than from the file name, because that is the declaration the
+    matcher already trusts.
+    """
+    root = SKILLS_ROOT / "kinds"
+    found: set[str] = set()
+    if not root.is_dir():
+        return ()
+    for path in sorted(root.glob("*.md")):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        head = text.split("---")[1] if text.startswith("---") and "---" in text[3:] else ""
+        for line in head.splitlines():
+            if not line.strip().lower().startswith("applies_to:"):
+                continue
+            for clause in line.split(":", 1)[1].split(","):
+                key, _, value = clause.strip().lower().partition("=")
+                if key.strip() == "modality" and value.strip():
+                    found.add(value.strip())
+    return tuple(sorted(found))
+
+
 def discovered_skills(**about: str) -> str:
     """Every extra skill that says it applies to this agent, found by looking rather than by name.
 
-    A skill is a markdown file under ``skills/kinds/`` whose first lines declare what it is for::
+    Two directories are read. ``skills/kinds/`` is what kind of agent this is: voice, chat,
+    browser, and whatever a customer turns up with next. ``skills/modules/`` is everything that
+    cuts across kinds: the people an agent talks to apply to voice and chat alike and to no
+    agent that talks to nobody. Both use the same declaration, so where a file lives says what
+    sort of thing it is and nothing else.
+
+    A skill is a markdown file under either whose first lines declare what it is for::
 
         ---
         name: voice
@@ -294,16 +383,19 @@ def discovered_skills(**about: str) -> str:
 
     Naming each kind in code would mean editing code to add one, and there will be many: voice, chat,
     browser, and whatever a customer turns up with next. **Adding support for a kind of agent is
-    adding a file here.**
+    adding a file to ``kinds/``, and adding something that cuts across them is adding one to
+    ``modules/``.** Deleting either file removes what it taught, which is how the people block
+    stops existing for an agent that talks to nobody.
     """
-    root = SKILLS_ROOT / "kinds"
-    if not root.is_dir():
-        return ""
+    roots = [SKILLS_ROOT / "kinds", SKILLS_ROOT / "modules"]
     wanted = {
         key.lower(): str(value).strip().lower() for key, value in about.items() if value
     }
     found: list[tuple[str, str]] = []
-    for path in sorted(root.glob("*.md")):
+    for path in sorted(
+        (one for root in roots if root.is_dir() for one in root.glob("*.md")),
+        key=lambda one: one.stem,
+    ):
         text = path.read_text(encoding="utf-8")
         head = text.split("---")[1] if text.startswith("---") and "---" in text[3:] else ""
         applies = ""
@@ -329,7 +421,7 @@ def discovered_skills(**about: str) -> str:
     return "\n\n---\n\n" + "\n\n---\n\n".join(text for _name, text in found)
 
 
-def load_skill(name: str) -> str:
+def load_skill(name: str, *, preamble: bool = True) -> str:
     """One stage's instructions, behind what the harness as a whole is for.
 
     Every stage gets the same opening: what this harness produces, why the division between what
@@ -354,7 +446,7 @@ def load_skill(name: str) -> str:
             f"\n\n---\n\n# references/{reference.name}\n\n"
             f"{reference.read_text(encoding='utf-8')}"
         )
-    if not HARNESS.exists():
+    if not preamble or not HARNESS.exists():
         return stage
     return (
         f"{HARNESS.read_text(encoding='utf-8')}\n\n"
@@ -362,3 +454,15 @@ def load_skill(name: str) -> str:
         "# The stage you are in now\n\n"
         f"{stage}"
     )
+
+
+def writer_model() -> str:
+    """The model a scenario writer runs on, from ALK_HARNESS_WRITER_MODEL.
+
+    Empty by default, which inherits the parent's model and is what has always happened. A writer is
+    handed its brief, the contract, the world and the skill, so it is doing constrained work rather
+    than deciding what the suite should be, and a cheaper model may be enough for it. Whether it is
+    enough is a question for a measured run: a writer that fails the admission gates more often
+    spends the saving on retries, and the gates are what protect scenario quality.
+    """
+    return os.environ.get("ALK_HARNESS_WRITER_MODEL", "").strip()

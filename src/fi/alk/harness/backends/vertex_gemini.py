@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import uuid
 from datetime import date
 from typing import Any, AsyncIterator
@@ -60,6 +61,10 @@ _TERMINAL_SAVE_TOOLS = frozenset(
 # Vertex list pricing per 1M tokens: (input, output, the day this pair was last checked against
 # the platform's litellm model table). An unknown or stale model reports no cost rather than a
 # wrong one, and shows up in `unpriced_turns`.
+# What Vertex charges for a cache read, as a share of the input rate. Google's published figure
+# for context caching; implicit caching carries no storage fee on top.
+CACHE_READ_SHARE = 0.10
+
 PRICES_PER_MILLION = {
     "gemini-3.8-flash": (0.75, 3.75, "2026-12-31"),
     "gemini-3.7-flash": (0.75, 3.75, "2026-12-31"),
@@ -232,6 +237,127 @@ def _successful_terminal_save(name: str, response: Any) -> bool:
     )
 
 
+# Tools whose result the model can fetch again. ADK re-sends the whole conversation on every call,
+# so anything left in it is paid for once per remaining turn; only these may be dropped, because
+# only these can be recovered by spending one.
+_REREADABLE = frozenset(
+    {
+        "inspect_world",
+        "inspect_scenario",
+        "inspect_environment",
+        "query_world",
+        "check_world",
+        "read_scenario",
+        "read_scenarios",
+        "read_source",
+        "read_transcript",
+        "try_calls",
+        "Read",
+        "Grep",
+        "Glob",
+    }
+)
+
+_READS_KEPT_WHOLE = 2
+_READ_CHARS_BEFORE_FORGETTING = 60_000
+_FORGOTTEN = "[dropped to keep this session small] "
+
+
+def _bare(name: str) -> str:
+    return name.rsplit("__", 1)[-1]
+
+
+def _forget_old_reads(contents: list[Any]) -> None:
+    """Collapse superseded reads, keeping the newest few of each tool whole.
+
+    The replacement names the call that brings one back, so a turn recovers anything this costs.
+    ADK shallow-copies a Part into the request, so the whole ``function_response`` is replaced
+    rather than its ``response`` edited: editing in place would rewrite the stored session event.
+    """
+    from google.genai import types
+
+    arguments: dict[str, str] = {}
+    reads: list[tuple[Any, str, str]] = []
+    held = 0
+    for content in contents:
+        for part in getattr(content, "parts", None) or []:
+            call = getattr(part, "function_call", None)
+            if call is not None:
+                arguments[getattr(call, "id", "") or ""] = json.dumps(
+                    dict(getattr(call, "args", None) or {}), default=str
+                )[:160]
+            answer = getattr(part, "function_response", None)
+            if answer is None:
+                continue
+            name = _bare(getattr(answer, "name", "") or "")
+            if name not in _REREADABLE:
+                continue
+            text = _flattened(getattr(answer, "response", None))
+            if text.startswith(_FORGOTTEN):
+                continue
+            held += len(text)
+            reads.append((part, name, getattr(answer, "id", "") or ""))
+    if held <= _READ_CHARS_BEFORE_FORGETTING:
+        return
+    recent: dict[str, int] = {}
+    for part, name, call_id in reversed(reads):
+        recent[name] = recent.get(name, 0) + 1
+        if recent[name] <= _READS_KEPT_WHOLE:
+            continue
+        said = arguments.get(call_id, "")
+        part.function_response = types.FunctionResponse(
+            id=call_id or None,
+            name=part.function_response.name,
+            response={
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"{_FORGOTTEN}call {name}({said}) again if you still need it.",
+                    }
+                ]
+            },
+        )
+
+
+def _pruned_history(callback_context: Any, llm_request: Any) -> None:
+    _forget_old_reads(llm_request.contents or [])
+
+
+def _stopped(said: str) -> Any:
+    """A final model reply, which is how a callback ends a run without raising."""
+    from google.adk.models.llm_response import LlmResponse
+    from google.genai import types
+
+    return LlmResponse(
+        content=types.Content(role="model", parts=[types.Part(text=said)])
+    )
+
+
+# When a stage's prompt passes this many tokens, everything but the newest events is replaced by a
+# model written summary. Both halves are one setting: ADK refuses a threshold without a retention.
+COMPACT_ABOVE_TOKENS = int(os.environ.get("ALK_HARNESS_COMPACT_ABOVE", "100000") or 0)
+EVENTS_KEPT_RAW = int(os.environ.get("ALK_HARNESS_EVENTS_KEPT_RAW", "20") or 0)
+
+
+def _compaction() -> Any:
+    """Auto-compaction for a stage that runs for hundreds of turns, or None when it is switched off.
+
+    Forgetting re-readable results costs nothing but can only drop what a later call can fetch
+    again. A summary is the backstop for everything else, and ADK runs it before each model call
+    rather than only between user turns, which is what makes it reach a long authoring stage.
+    """
+    if COMPACT_ABOVE_TOKENS <= 0 or EVENTS_KEPT_RAW <= 0:
+        return None
+    try:
+        from google.adk.apps._configs import EventsCompactionConfig
+    except ImportError:
+        logger.warning("this ADK has no event compaction; long stages will carry their whole history")
+        return None
+    return EventsCompactionConfig(
+        token_threshold=COMPACT_ABOVE_TOKENS, event_retention_size=EVENTS_KEPT_RAW
+    )
+
+
 def _spec_tool(name: str, spec: ToolSpec) -> Any:
     """A ToolSpec as an ADK tool, through ADK's own extension point.
 
@@ -267,27 +393,92 @@ class VertexGeminiSession:
         self._model = model
         self._runner: Any = None
         self._pending: str | None = None
+        # Calls each worker run has taken, keyed by the scope ADK gives that run. A worker is a
+        # smaller agent with a smaller goal; without this its only ceiling is the whole stage's.
+        self._worker_calls: dict[str, int] = {}
         self.session_id = f"gemini-{uuid.uuid4().hex[:12]}"
 
-    def _tools(self) -> list[Any]:
+    def _tools(
+        self,
+        builtins: tuple[str, ...] | None = None,
+        servers: dict[str, Any] | None = None,
+    ) -> list[Any]:
         # ASK_TOOL is deliberately absent: unattended runs never call it, and declaring a tool
         # this backend cannot answer would cost the model a turn finding that out.
+        # DELEGATE_TOOL is absent for the same reason it is not a tool here at all: ADK exposes
+        # a sub-agent as a tool itself, so asking for one by name would declare it twice.
+        builtins = self._spec.builtins if builtins is None else builtins
+        servers = self._spec.servers if servers is None else servers
         offered: list[Any] = []
-        wanted = {name for name in self._spec.builtins if name in FILE_TOOLS}
+        wanted = {name for name in builtins if name in FILE_TOOLS}
         offered.extend(
             _spec_tool(spec.name, spec)
             for spec in file_tools(self._spec.cwd)
             if spec.name in wanted
         )
-        for server_name, server in self._spec.servers.items():
+        for server_name, server in servers.items():
             offered.extend(
                 _spec_tool(qualified(server_name, spec.name), spec)
                 for spec in server.tools
             )
         return offered
 
+    def _workers(self) -> list[Any]:
+        """Every declared worker as a sub-agent this loop may run.
+
+        ``mode="single_turn"`` is ADK's own answer to the same need the other backend meets with
+        a sub-agent definition: the parent exposes the sub-agent as a tool and runs it inline,
+        so the delegating turn receives the worker's report rather than handing the conversation
+        over. A worker with no tools of its own inherits the parent's, which is what a worker
+        doing part of the parent's job should have.
+        """
+        from google.adk.agents import LlmAgent
+        from google.genai import types
+
+        def capped(ceiling: int) -> Any:
+            def before(callback_context: Any, llm_request: Any) -> Any:
+                _forget_old_reads(llm_request.contents or [])
+                if ceiling <= 0:
+                    return None
+                run = (
+                    getattr(callback_context, "isolation_scope", None)
+                    or getattr(callback_context, "branch", None)
+                    or ""
+                )
+                self._worker_calls[run] = self._worker_calls.get(run, 0) + 1
+                if self._worker_calls[run] <= ceiling:
+                    return None
+                return _stopped(
+                    f"I have used all {ceiling} of my turns. Everything I submitted is already "
+                    "in the suite. Report what is missing to whoever briefed me so it can be "
+                    "handed to another writer."
+                )
+
+            return before
+
+        built: list[Any] = []
+        for name, worker in self._spec.workers.items():
+            built.append(
+                LlmAgent(
+                    name=re.sub(r"[^0-9A-Za-z_]", "_", name),
+                    description=worker.description,
+                    model=worker.model or self._model,
+                    mode="single_turn",
+                    static_instruction=types.Content(
+                        role="user", parts=[types.Part(text=worker.instructions)]
+                    ),
+                    tools=self._tools(
+                        worker.builtins or self._spec.builtins,
+                        worker.servers or self._spec.servers,
+                    ),
+                    before_model_callback=capped(worker.max_turns),
+                )
+            )
+        return built
+
     async def start(self) -> None:
         from google.adk.agents import LlmAgent
+        from google.adk.apps import App
         from google.adk.runners import Runner
         from google.adk.sessions import InMemorySessionService
         from google.genai import types
@@ -307,13 +498,23 @@ class VertexGeminiSession:
                 role="user", parts=[types.Part(text=self._spec.system_prompt)]
             ),
             tools=self._tools(),
+            sub_agents=self._workers(),
+            before_model_callback=_pruned_history,
         )
         sessions = InMemorySessionService()
         await sessions.create_session(
             app_name="alk-harness", user_id="stage", session_id=self.session_id
         )
+        # An App rather than a bare agent, because the compaction config hangs off the App and
+        # nothing else turns it on. Its request processor runs before every model call, so a long
+        # authoring stage compacts mid-flight rather than only between user turns.
         self._runner = Runner(
-            agent=agent, app_name="alk-harness", session_service=sessions
+            app=App(
+                name="alk-harness",
+                root_agent=agent,
+                events_compaction_config=_compaction(),
+            ),
+            session_service=sessions,
         )
 
     async def stop(self) -> None:
@@ -367,6 +568,7 @@ class VertexGeminiSession:
                                 or f"call-{uuid.uuid4().hex[:8]}",
                                 name=part.function_call.name or "",
                                 arguments=dict(part.function_call.args or {}),
+                                by=getattr(event, "author", "") or "",
                             )
                         )
                     if getattr(part, "function_response", None):
@@ -399,7 +601,7 @@ class VertexGeminiSession:
             yield StageDone(
                 outcome="failed",
                 turns=turns,
-                cost_usd=self._cost(tokens_in, tokens_out),
+                cost_usd=self._cost(tokens_in, tokens_out, tokens_cached),
                 tokens_in=tokens_in,
                 tokens_out=tokens_out,
                 tokens_cached=tokens_cached,
@@ -417,7 +619,7 @@ class VertexGeminiSession:
             outcome="success" if settled else "max_turns",
             is_error=not settled,
             turns=turns,
-            cost_usd=self._cost(tokens_in, tokens_out),
+            cost_usd=self._cost(tokens_in, tokens_out, tokens_cached),
             tokens_in=tokens_in,
             tokens_out=tokens_out,
             tokens_cached=tokens_cached,
@@ -432,16 +634,31 @@ class VertexGeminiSession:
             ),
         )
 
-    def _cost(self, tokens_in: int, tokens_out: int) -> float | None:
-        return priced(self._model, tokens_in, tokens_out)
+    def _cost(
+        self, tokens_in: int, tokens_out: int, tokens_cached: int = 0
+    ) -> float | None:
+        return priced(self._model, tokens_in, tokens_out, tokens_cached)
 
 
 logger = logging.getLogger(__name__)
 
 
-def priced(model: str, tokens_in: int, tokens_out: int) -> float | None:
-    """What these tokens cost, or None where no price can be stood behind."""
+def priced(
+    model: str, tokens_in: int, tokens_out: int, tokens_cached: int = 0
+) -> float | None:
+    """What these tokens cost, or None where no price can be stood behind.
+
+    A cache read is charged at a tenth of the input rate, which is Google's published figure for
+    Vertex context caching rather than an estimate. It matters more than it sounds: an authoring
+    stage re-sends its whole prompt every turn, so most of its input is cache reads, and charging
+    those at the full rate overstates the bill several times over.
+    """
     prices = PRICES_PER_MILLION.get(model)
+    if prices is None and "/" in model:
+        # A gateway names the same model with the route in front of it, "vertex_ai/gemini-2.5-
+        # flash". The price belongs to the model, not the road it arrived by, and an unpriced
+        # model falls back to whatever the loop claimed it cost.
+        prices = PRICES_PER_MILLION.get(model.rsplit("/", 1)[-1])
     if prices is None:
         return None
     if len(prices) > 2 and date.today().isoformat() > str(prices[2]):
@@ -451,7 +668,9 @@ def priced(model: str, tokens_in: int, tokens_out: int) -> float | None:
             prices[2],
         )
         return None
-    return (tokens_in * prices[0] + tokens_out * prices[1]) / 1_000_000
+    cached = min(max(tokens_cached, 0), max(tokens_in, 0))
+    billed_in = (tokens_in - cached) * prices[0] + cached * prices[0] * CACHE_READ_SHARE
+    return (billed_in + tokens_out * prices[1]) / 1_000_000
 
 
 class VertexGeminiBackend:
