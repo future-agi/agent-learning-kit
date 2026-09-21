@@ -17,11 +17,12 @@ import hashlib
 import json
 import os
 import re
-from collections import Counter
-from math import ceil
+from collections import Counter, defaultdict
+from itertools import combinations
+from math import ceil, log
 from typing import Any, ClassVar
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .catalogue import Catalogue
 from .simulator import variables_in
@@ -114,19 +115,29 @@ class Persona(BaseModel):
             or self.metadata
         )
 
-    def missing_profile_fields(self) -> list[str]:
-        """The minimum needed for a scenario to exercise caller variation intentionally."""
-        missing = [
-            name
-            for name, value in (
-                ("name", self.name),
-                ("personality", self.personality),
-                ("communication_style", self.communication_style),
-                ("initial_message", self.initial_message),
-                ("accent", self.accent),
-            )
-            if not value.strip()
+    def missing_profile_fields(self, *, spoken: bool = True) -> list[str]:
+        """The minimum needed for a scenario to exercise caller variation intentionally.
+
+        ``spoken`` is what the platform needs to pick a voice. Off a call there is no voice to
+        pick, and demanding these anyway makes a writer invent them: a chat suite came back with
+        a caller in the United Kingdom, named Mei-Ling Zhou, given an Indian accent, because the
+        field was required and nothing in the situation said what to put there.
+        """
+        wanted = [
+            ("name", self.name),
+            ("personality", self.personality),
+            ("communication_style", self.communication_style),
+            ("initial_message", self.initial_message),
         ]
+        if spoken:
+            wanted.extend(
+                (
+                    ("accent", self.accent),
+                    ("gender", self.gender),
+                    ("age_group", self.age_group),
+                )
+            )
+        missing = [name for name, value in wanted if not value.strip()]
         if not self.languages:
             missing.append("languages")
         if not self.keywords:
@@ -154,8 +165,6 @@ class Persona(BaseModel):
             behavior.append(f"- Personality: {self.personality}")
         if self.communication_style:
             behavior.append(f"- Communication Style: {self.communication_style}")
-        if self.keywords:
-            behavior.append("- Key Traits: " + ", ".join(self.keywords))
         if behavior:
             parts.append("# YOUR PERSONALITY & COMMUNICATION\n\n" + "\n".join(behavior))
 
@@ -246,6 +255,29 @@ class Scenario(BaseModel):
     # What a correct agent would do. Run by the gates, never by the agent under test.
     solution: list[Step] = Field(default_factory=list)
 
+    # Where this scenario sits on the axes the plan varied, one value per named dimension, for
+    # example {"task": "book_ride", "counterparty": "first_time", "overlay": "interruption"}.
+    #
+    # The plan already computes this to brief a writer and then throws it away, which is why
+    # nothing can answer "how much of the space did we test". Carrying it costs nothing and makes
+    # the coverage report arithmetic rather than guesswork.
+    #
+    # Deliberately an open dict rather than named fields: the axes differ per modality, a scenario
+    # written before this existed simply has none, and nothing downstream may require it. It never
+    # reaches the simulated caller.
+    coverage: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("coverage", mode="after")
+    @classmethod
+    def _one_spelling_per_level(cls, coverage: dict[str, str]) -> dict[str, str]:
+        """One spelling per axis and per level, whatever the plan wrote.
+
+        The overlay table offers `privacy/PII` and `prompt-injection`; suites have also written
+        `privacy_pii` and `prompt_injection`. Both are the same cell, and unfolded they split every
+        filter that reads the grid: one suite reported seven of eight red-team overlays absent while
+        six were present under the other spelling.
+        """
+        return {level_name(axis): level_name(level) for axis, level in (coverage or {}).items()}
     # Which entries of the shared catalogue must hold. Named, not restated, so results roll up
     # across the suite: the same sub-goal failing in seven of twelve scenarios is one sentence.
     sub_goals: list[str] = Field(default_factory=list)
@@ -298,6 +330,19 @@ class Scenario(BaseModel):
         }
 
 
+# "The agent must enforce the minor safety policy" in an instruction hands the caller the answer,
+# and a caller who knows it leads the agent there. `will` is left alone on purpose: "the agent will
+# ask for your code" describes what happens to them, which is theirs to know.
+# The negative form hands over more than the positive one: "you accept that the agent cannot disclose
+# it" tells the caller the refusal is coming and that they are to take it, so nobody pushes and the
+# overlay tests nothing. One in a hundred and forty-two real scenarios, and it neutered its own cell.
+_DIRECTS_THE_AGENT = re.compile(
+    r"\bthe (?:agent|assistant)\s+"
+    r"(?:must|should|cannot|can't|will not|won't|is not able to|is unable to)\b",
+    re.IGNORECASE,
+)
+
+
 def validate_scenario(
     scenario: Scenario,
     catalogue: Catalogue,
@@ -305,6 +350,7 @@ def validate_scenario(
     simulator_prompt: str = "",
     *,
     allow_empty_solution: bool = False,
+    spoken: bool = True,
 ) -> list[str]:
     """Problems that make a scenario unusable, found without running anything.
 
@@ -316,10 +362,26 @@ def validate_scenario(
         problems.append("no name")
     if not scenario.instruction.strip():
         problems.append("no instruction: there is nothing for the run to be about")
+    if _DIRECTS_THE_AGENT.search(scenario.instruction or ""):
+        problems.append(
+            "the instruction tells the person what the agent must do. They are the caller, not the "
+            "examiner: write what they want and how they behave, and let the sub-goals say what "
+            "the agent has to get right. A caller who has been handed the answer leads the agent "
+            "to it, and the scenario stops testing anything"
+        )
+    if not scenario.tests.strip():
+        problems.append(
+            "no tests line: say in one line what this scenario is trying to find out, in words "
+            "the report can carry"
+        )
+    elif _slug(scenario.tests) == _slug(scenario.name):
+        problems.append(
+            "tests just restates the name: say what this scenario is trying to find out instead"
+        )
     if scenario.persona is not None and not scenario.persona.described():
         problems.append("persona has no details")
     elif scenario.persona is not None and (
-        missing := scenario.persona.missing_profile_fields()
+        missing := scenario.persona.missing_profile_fields(spoken=spoken)
     ):
         problems.append("persona is incomplete: " + ", ".join(missing))
     elif scenario.persona is not None:
@@ -699,9 +761,8 @@ def naming_problems(scenario: Scenario) -> list[str]:
 
     The folder name is how a failure is read weeks later. A caller's name in it says the caller was
     carrying the difference the test should have been carrying, which is the same mistake as planning
-    a second scenario because the person could be somebody else. Measured on an earlier suite: twelve
-    of thirty one were still named for the caller after the skill asked them not to be, which is why
-    this is checked rather than requested.
+    a second scenario because the person could be somebody else. Checked rather than requested, since
+    asking did not hold.
     """
     caller = str(getattr(scenario.persona, "name", "") or "").strip().lower()
     if not caller:
@@ -724,10 +785,7 @@ def hollow_scenario_problems(scenario: Scenario) -> list[str]:
     """Whether the scenario tests reaching an outcome, or only the outcome itself.
 
     A reference solution of one call, graded by one sub-goal naming that same call, is passed by an
-    agent that makes that call the moment it answers, having established nothing. Measured on a
-    suite of a hundred, eleven scenarios were a single `transfer_to_human` step graded by a single
-    `transferred_to_human` sub-goal, differing from each other only in the pretext, and every one of
-    them was passed by an agent that transfers every caller on arrival.
+    agent that makes that call the moment it answers, having established nothing.
 
     The bar is in the write skill and was not enough on its own, so it is checked here.
     """
@@ -792,12 +850,9 @@ _ONLY_TOUCHES_EXISTING = re.compile(r"world\.(?:change|drop)\s*\(")
 def self_sufficiency_problems(scenario: Scenario) -> list[str]:
     """Whether this scenario owns the records its outcome turns on, or borrows them.
 
-    A setup that only adjusts rows it did not create is building the test on state it does not
-    control: the row belongs to the frozen base, so a second scenario adjusting the same row is
-    testing the same record from two directions and neither describes a world it owns. Measured on
-    a fan-out suite of 86, sixty seven were one or two `world.change` calls against base rows, four
-    scenarios deep on the same rider, and the reused verification codes were the visible symptom of
-    it.
+    A setup that only adjusts rows it did not create builds the test on state it does not control:
+    the row belongs to the frozen base, so two scenarios adjusting it test the same record from two
+    directions and neither owns the world it describes.
 
     An empty setup stays legal. That is the documented case where the target's store is
     process-local with no seam, so the scenario cannot alter it and says so by touching nothing.
@@ -910,12 +965,407 @@ def rare_event_ceiling(suite_size: int) -> int:
     return max(1, ceil(suite_size * RARE_CONDITION_SHARE))
 
 
+def _against_plan(
+    axis: str, counts: "Counter[str]", planned: dict[str, list[str]]
+) -> dict[str, Any]:
+    """The levels the plan promised for this axis and the ones no scenario ever used.
+
+    Only a declared axis gets these keys, so a report on an undeclared suite keeps the shape it
+    always had and nothing downstream has to learn two formats.
+    """
+    levels = planned.get(axis)
+    if not levels:
+        return {}
+    unused = [one for one in levels if one not in counts]
+    return {
+        "planned": len(levels),
+        "unused": unused,
+        "share": round((len(levels) - len(unused)) / len(levels), 3) if levels else 0.0,
+    }
+
+
+# The canonical keys are the framework's and every gate keys off them, but nobody outside this repo
+# knows what a "counterparty" or an "overlay_vector" is. These are what a reader should be shown.
+_AXIS_LABELS: dict[str, str] = {
+    "task": "What they want done",
+    "counterparty": "Who is calling",
+    "disposition": "Account and trip state",
+    "interface": "How the call sounds",
+    "interaction": "How the conversation goes",
+    "overlay": "What makes it hard",
+    "overlay_vector": "How it reaches the agent",
+    "overlay_intensity": "How obvious it is",
+}
+_LEVEL_LABELS: dict[str, str] = {
+    "none": "Nothing, a plain request",
+    "absent": "Nothing, a plain request",
+    "prompt_injection": "Prompt injection",
+    "social_engineering": "Social engineering",
+    "privacy_pii": "Asks for personal data",
+    "out_of_scope": "Off-topic request",
+    "destructive": "Destructive request",
+    "minor_vulnerable": "Unaccompanied minor or vulnerable caller",
+    "emergency_crisis": "Emergency or crisis",
+    "fraud_policy_abuse": "Fraud or policy abuse",
+    "spoken": "Spoken by the caller",
+    "spoken_caller": "Spoken by the caller",
+    "background_audio": "Carried in the background audio",
+    "subtle": "Subtle, easy to miss",
+    "overt": "Overt, stated outright",
+}
+
+
+def _readable(key: str) -> str:
+    """A level name a person can read, without inventing meaning the key does not carry."""
+    known = _LEVEL_LABELS.get(key)
+    if known:
+        return known
+    return key.replace("_", " ").replace("-", " ").strip().capitalize()
+
+
+def _overlay_triple_mask(
+    planned: dict[str, list[str]], scenarios: list[Scenario]
+) -> set[tuple[str, str]]:
+    """Cells the framework itself forbids, so they leave the denominator without being declared.
+
+    `overlay = none` carries `overlay_vector = none` and `overlay_intensity = absent`, and a real
+    overlay carries neither. Nothing else can hold, so counting those cells as gaps reports holes
+    that can never be filled: one real suite read 56% on `overlay_intensity x overlay_vector` when
+    every reachable cell was covered.
+    """
+
+    def levels(axis: str) -> list[str]:
+        if planned.get(axis):
+            return list(planned[axis])
+        return sorted(
+            {
+                str((one.coverage or {}).get(axis, "")).strip()
+                for one in scenarios
+                if str((one.coverage or {}).get(axis, "")).strip()
+            }
+        )
+
+    overlays, vectors, intensities = (
+        levels("overlay"),
+        levels("overlay_vector"),
+        levels("overlay_intensity"),
+    )
+    blocked: set[tuple[str, str]] = set()
+    for overlay in overlays:
+        carries = overlay != "none"
+        for vector in vectors:
+            if carries == (vector == "none"):
+                blocked.add((f"overlay={overlay}", f"overlay_vector={vector}"))
+        for intensity in intensities:
+            if carries == (intensity == "absent"):
+                blocked.add((f"overlay={overlay}", f"overlay_intensity={intensity}"))
+    for intensity in intensities:
+        for vector in vectors:
+            if (intensity == "absent") != (vector == "none"):
+                blocked.add(
+                    (f"overlay_intensity={intensity}", f"overlay_vector={vector}")
+                )
+    return blocked | {(b, a) for a, b in blocked}
+
+
+def coverage_report(
+    scenarios: list[Scenario], design: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """What share of the space this suite actually exercised, per axis and per pair.
+
+    Answers the question the suite exists to answer and currently cannot: how much did we test. It
+    reads only what is already on each scenario, so it never asks a writer for anything extra and a
+    scenario authored before the coordinate existed is counted as unplaced rather than dropped.
+
+    Two numbers per axis, and they mean different things. ``levels`` is how many distinct values the
+    suite used, which is breadth. ``spread`` is how evenly it used them, one when every level is
+    equally represented and near zero when one level swamps the rest. A suite can be broad and still
+    lopsided, and only the pair tells you that.
+
+    ``design`` is optional and is what the plan intended, against what the suite did. Without it the
+    report can only count what it sees, so a level nobody ever wrote is invisible and an absent pair
+    cannot be told apart from one that was never legal. Shape::
+
+        {"axes": {"task": ["book", "cancel"], "counterparty": ["first_time", "minor"]},
+         "masked": [["task=book", "counterparty=minor"]]}
+
+    ``masked`` names pairs that are deliberately not testable, so they leave the denominator rather
+    than counting as a gap. Anything the plan does not declare is simply not checked against.
+    """
+    total = len(scenarios)
+    if not total:
+        return {"scenarios": 0, "axes": {}, "pairs": {}, "placed": 0}
+
+    # What the plan said it would cover. Axis names are the plan's own, never a fixed list, which is
+    # what lets a browser or computer-use agent declare axes this module has never heard of.
+    declared = design or {}
+    planned: dict[str, list[str]] = {
+        str(axis): [str(level).strip() for level in levels if str(level).strip()]
+        for axis, levels in (declared.get("axes") or {}).items()
+    }
+    masked = {
+        (str(pair[0]).strip(), str(pair[1]).strip())
+        for pair in (declared.get("masked") or [])
+        if isinstance(pair, (list, tuple)) and len(pair) == 2
+    }
+    masked |= {(b, a) for a, b in masked}
+    masked |= _overlay_triple_mask(planned, scenarios)
+
+    placed = [one for one in scenarios if one.coverage]
+    axes: dict[str, Counter] = defaultdict(Counter)
+    # A use case is what the scenario is for, not a dimension it varies along, and its values are
+    # whole sentences. Reported on its own so it never appears in an axis picker.
+    use_cases: Counter = Counter()
+    for one in placed:
+        for axis, level in one.coverage.items():
+            if str(level).strip():
+                axes[axis][str(level).strip()] += 1
+
+    # The use case is an axis whether or not the plan named it, because it is how a suite is read.
+    for one in scenarios:
+        if one.use_case.strip():
+            use_cases[one.use_case.strip()] += 1
+
+    def spread(counts: Counter) -> float:
+        """1.0 when every level is used equally, approaching 0 when one level dominates."""
+        seen = sum(counts.values())
+        if seen <= 0 or len(counts) <= 1:
+            return 0.0
+        share = [n / seen for n in counts.values()]
+        entropy = -sum(p * log(p) for p in share if p > 0)
+        return round(entropy / log(len(counts)), 3)
+
+    report: dict[str, Any] = {
+        "scenarios": total,
+        "placed": len(placed),
+        "axes": {
+            axis: {
+                "levels": len(counts),
+                "spread": spread(counts),
+                "counts": dict(counts.most_common()),
+                **_against_plan(axis, counts, planned),
+            }
+            for axis, counts in sorted(axes.items())
+        },
+        "pairs": {},
+    }
+
+    # Pairwise is where the gaps actually hide: a suite can cover every level of two axes and never
+    # put a hard counterparty together with a hard task.
+    named = sorted(axes)
+    for first, second in combinations(named, 2):
+        seen = Counter()
+        for one in placed:
+            a, b = one.coverage.get(first, ""), one.coverage.get(second, "")
+            if str(a).strip() and str(b).strip():
+                seen[(str(a).strip(), str(b).strip())] += 1
+        if not seen:
+            continue
+        first_levels = planned.get(first) or sorted(axes[first])
+        second_levels = planned.get(second) or sorted(axes[second])
+        blocked = sum(
+            1
+            for a in first_levels
+            for b in second_levels
+            if (f"{first}={a}", f"{second}={b}") in masked
+        )
+        possible = max(len(first_levels) * len(second_levels) - blocked, 0)
+        report["pairs"][f"{first} x {second}"] = {
+            "covered": len(seen),
+            "possible": possible,
+            "masked": blocked,
+            "share": round(len(seen) / possible, 3) if possible else 0.0,
+            # A grid with more reachable cells than the suite has scenarios cannot be filled, so its
+            # share is arithmetic rather than a verdict. Say so instead of showing a red cell.
+            "scorable": possible <= total,
+        }
+    report["use_cases"] = dict(use_cases.most_common())
+    report["labels"] = {
+        "axes": {axis: _AXIS_LABELS.get(axis, _readable(axis)) for axis in report["axes"]},
+        "levels": {
+            level: _readable(level)
+            for axis in report["axes"]
+            for level in report["axes"][axis]["counts"]
+        },
+    }
+    return report
+
+
+def uncovered_cells(
+    scenarios: list[Scenario], design: dict[str, Any] | None, limit: int = 24
+) -> list[str]:
+    """Pairs the plan allows that nothing has reached yet, as ``axis=level x axis=level``.
+
+    The coverage report counts what is missing; a loop handing work out has to name it, because a
+    writer is briefed on cells rather than on a share.
+    """
+    declared = design or {}
+    planned: dict[str, list[str]] = {
+        str(axis): [str(level).strip() for level in levels if str(level).strip()]
+        for axis, levels in (declared.get("axes") or {}).items()
+    }
+    if len(planned) < 2:
+        return []
+    masked = {
+        (str(pair[0]).strip(), str(pair[1]).strip())
+        for pair in (declared.get("masked") or [])
+        if isinstance(pair, (list, tuple)) and len(pair) == 2
+    }
+    masked |= {(b, a) for a, b in masked}
+    seen = {
+        (first, str(one.coverage.get(first, "")).strip(), second, str(one.coverage.get(second, "")).strip())
+        for one in scenarios
+        if one.coverage
+        for first, second in combinations(sorted(planned), 2)
+    }
+    empty: list[str] = []
+    for first, second in combinations(sorted(planned), 2):
+        for a in planned[first]:
+            for b in planned[second]:
+                if (f"{first}={a}", f"{second}={b}") in masked:
+                    continue
+                if (first, a, second, b) in seen:
+                    continue
+                empty.append(f"{first}={a} x {second}={b}")
+                if len(empty) >= limit:
+                    return empty
+    return empty
+
+
+def vocabulary_from(design: dict | None) -> set[str] | None:
+    """The keyword vocabulary a plan declared, folded for comparison. ``None`` when it declared none.
+
+    The axis levels are in it without being listed. They are what a suite of a thousand is actually
+    filtered by, the plan has already committed to them, and requiring them to be typed twice is a
+    second list to drift.
+    """
+    if not isinstance(design, dict):
+        return None
+    words: set[str] = set()
+    for levels in (design.get("axes") or {}).values():
+        if isinstance(levels, list):
+            words.update(str(one).strip().casefold() for one in levels if str(one).strip())
+    words.update(
+        str(one).strip().casefold()
+        for one in (design.get("keywords") or [])
+        if str(one).strip()
+    )
+    return words or None
+
+
+def tidy_keywords(
+    scenarios: list[Scenario], vocabulary: set[str] | None = None
+) -> tuple[int, set[str]]:
+    """Settle one spelling per keyword and drop any word the plan did not deal.
+
+    Returns how many scenarios moved and which words were dropped. Keywords index the suite and
+    never reach the call, so nothing here changes what a scenario tests. The surviving spelling is
+    the one most of the suite used. Without a vocabulary only the mechanical rules apply.
+    """
+    spellings: dict[str, Counter[str]] = defaultdict(Counter)
+    for one in scenarios:
+        for word in (one.persona.keywords if one.persona else []) or []:
+            clean = word.strip()
+            if clean:
+                spellings[clean.casefold()][clean] += 1
+    canonical = {
+        folded: seen.most_common(1)[0][0] for folded, seen in spellings.items()
+    }
+    moved = 0
+    invented: set[str] = set()
+    for one in scenarios:
+        if not one.persona or not one.persona.keywords:
+            continue
+        rewritten: list[str] = []
+        for word in one.persona.keywords:
+            clean = word.strip()
+            if not clean:
+                continue
+            # A keyword that is only digits is a value out of the world, an OTP or a reference
+            # number, and names no class of scenario anybody would search for.
+            if clean.replace(" ", "").replace("-", "").isdigit():
+                continue
+            if vocabulary is not None and clean.casefold() not in vocabulary:
+                invented.add(clean)
+                continue
+            settled = canonical.get(clean.casefold(), clean)
+            if settled not in rewritten:
+                rewritten.append(settled)
+        # Never emptied. A scenario with no keyword at all cannot be found by any filter, which is
+        # worse than one found by a word the plan did not choose, so a suite that strips to nothing
+        # keeps its best-supported word and the drop is reported instead.
+        if not rewritten and one.persona.keywords:
+            rewritten = [
+                canonical.get(one.persona.keywords[0].strip().casefold(), one.persona.keywords[0])
+            ]
+        if rewritten != one.persona.keywords:
+            moved += 1
+            one.persona.keywords = rewritten
+    return moved, invented
+
+
+def keyword_problems(scenarios: list[Scenario]) -> list[str]:
+    """Whether the suite's keywords can actually be used to find anything.
+
+    Keywords are the one field a writer chooses for the whole suite while being unable to see what
+    the other writers chose, so left unchecked they fragment. The plan skill decides the
+    vocabulary; this refuses a suite that ignored it.
+    """
+    problems: list[str] = []
+    total = len(scenarios)
+    if total < 8:
+        return problems
+    used = [
+        [word.strip().lower() for word in (one.persona.keywords if one.persona else []) if word.strip()]
+        for one in scenarios
+    ]
+    counts = Counter(word for words in used for word in set(words))
+    if not counts:
+        return problems
+
+    most = max(16, total // 50)
+    if len(counts) > most:
+        worst = ", ".join(word for word, _ in counts.most_common()[: -6 : -1])
+        problems.append(
+            f"{len(counts)} distinct keywords across {total} scenarios; at most {most}. "
+            f"A filter nobody can scan is not a filter. Rarely used: {worst}"
+        )
+
+    broad = [word for word, seen in counts.items() if seen > max(3, round(total * 0.4))]
+    if broad:
+        problems.append(
+            "these keywords are on more than 40% of the suite and so filter almost nothing: "
+            + ", ".join(sorted(broad))
+        )
+
+    rare = [word for word, seen in counts.items() if seen < 3]
+    if len(rare) > max(2, total // 10):
+        problems.append(
+            f"{len(rare)} keywords appear on fewer than 3 scenarios; a chip returning one row is a "
+            "note, not a filter"
+        )
+
+    crowded = [
+        one.name for one, words in zip(scenarios, used) if len(set(words)) > 5
+    ]
+    if crowded:
+        problems.append(
+            "more than 5 keywords on: " + ", ".join(sorted(crowded)[:5])
+        )
+    return problems
+
+
 def suite_diversity_problems(scenarios: list[Scenario]) -> list[str]:
     """Whether a conversational suite represents meaningfully different people and data."""
     if len(scenarios) < 4:
         return []
     problems: list[str] = []
     personas = [one.persona for one in scenarios if one.persona]
+    # A persona is a lever, not a requirement. An agent that talks to nobody has no callers to be
+    # distinct from each other, and judging it on caller names reported two failures for a suite
+    # that was correct. Nothing below applies when there are none.
+    if not personas:
+        return problems
     names = [one.name.strip().lower() for one in personas if one and one.name.strip()]
     unique_names = len(set(names))
     required_names = min(len(scenarios), max(3, ceil(len(scenarios) * 0.9)))
@@ -1046,3 +1496,117 @@ def _setup_signature(scenario: Scenario) -> str:
     return (
         "" if not meaningful else ast.dump(ast.Module(body=meaningful, type_ignores=[]))
     )
+
+
+def redteam_problems(scenarios: list[Scenario]) -> list[str]:
+    """Scenarios whose overlay changes nothing they assert, so the overlay is not being tested.
+
+    An overlay is the reason a cell exists: an injection to refuse, a correction to honour, a
+    vulnerable caller to escalate. If every sub-goal the scenario names is one the plain task
+    scenarios name too, then nothing it checks depends on the overlay happening at all, and the run
+    passes whether the agent handled it or ignored it.
+
+    The overlay level is read from ``coverage``, whatever the plan called it, so this works for an
+    agent kind this module has never heard of. Advisory.
+    """
+    ordinary: set[str] = set()
+    attacking: list[Scenario] = []
+    for one in scenarios:
+        level = str((one.coverage or {}).get("overlay", "")).strip().lower()
+        if level and level not in {"none", "na", "n/a", "-"}:
+            attacking.append(one)
+        else:
+            ordinary.update(one.sub_goals)
+
+    problems = [
+        f"{one.name}: carries the overlay {str((one.coverage or {}).get('overlay', '')).strip()!r} "
+        "but every sub-goal it names is one the ordinary scenarios name too, so nothing it asserts "
+        "depends on that overlay having happened. Name what the overlay must produce, or must "
+        "prevent, as its own sub-goal."
+        for one in attacking
+        if one.sub_goals and not (set(one.sub_goals) - ordinary)
+    ]
+    if len(problems) > 1:
+        # Named by level, so the plan knows which add_sub_goal calls to make.
+        bare: dict[str, int] = {}
+        for one in attacking:
+            if one.sub_goals and not (set(one.sub_goals) - ordinary):
+                level = str((one.coverage or {}).get("overlay", "")).strip()
+                bare[level] = bare.get(level, 0) + 1
+        problems.append(
+            f"{len(problems)} of {len(attacking)} scenarios carrying an overlay assert nothing "
+            "beyond the plain task, so those cells are counted in the coverage report and tested by "
+            "nothing. These levels have no name to be checked by: "
+            + ", ".join(f"{level or 'unnamed'} ({count})" for level, count in sorted(bare.items()))
+            + ". Add one sub-goal per level with add_sub_goal, naming what the overlay must produce "
+            "or must prevent, and deal it in the briefs."
+        )
+    return problems
+
+
+def level_name(text: str) -> str:
+    """One spelling for an axis or a level: lower case, words joined by single underscores."""
+    return re.sub(r"[^a-z0-9]+", "_", str(text or "").strip().casefold()).strip("_")
+
+
+_NAMES_A_CALLER = re.compile(
+    r"(^|_)(phone|msisdn|caller_id|rider_id|account|customer_id|user_id|email)s?$",
+    re.IGNORECASE,
+)
+
+
+def _pinned_identity(fixture: Any, key: str = "") -> list[str]:
+    """Anything in the fixture that says who is calling."""
+    if isinstance(fixture, dict):
+        return [one for k, v in fixture.items() for one in _pinned_identity(v, str(k))]
+    if isinstance(fixture, list):
+        return [one for v in fixture for one in _pinned_identity(v, key)]
+    text = str(fixture).strip()
+    return [f"{key}={text}"] if _NAMES_A_CALLER.search(key) and text else []
+
+
+def unpinned_callers(
+    scenarios: list[Scenario], world_tables: set[str] | None = None
+) -> list[str]:
+    """Scenarios that leave who is calling to the run, in a suite where everything else pins it.
+
+    A voice run always arrives from some number. If the scenario does not say which, the runtime
+    picks, and every claim the instruction makes about the caller is then unverifiable.
+
+    A scenario that claims the caller is unknown but pins no number runs on whoever owns the number
+    the run dials, so it asserts an absence it never established.
+
+    Calibrated against the suite: if no scenario pins an identity the agent usually has no such
+    concept, and nothing is reported.
+
+    A suite calibrated only against itself goes quiet when it fails uniformly, so a world holding a
+    table of people is the second opinion that turns that silence into a finding.
+
+    A guest caller is a legitimate scenario. The fix is to pin a number belonging to nobody, not to
+    stop writing guests. Advisory.
+    """
+    pinned = [one for one in scenarios if _pinned_identity(one.fixture)]
+    if len(pinned) == len(scenarios):
+        return []
+    if not pinned:
+        people = {"users", "riders", "customers", "callers", "accounts", "people", "members"}
+        if not (world_tables or set()) & people:
+            return []
+        return [
+            f"not one of {len(scenarios)} scenarios says who is calling, yet the world has a table "
+            "of people. Every claim any instruction makes about the caller is unverifiable, and the "
+            "run picks whoever happens to own the number it dials."
+        ]
+    loose = [one for one in scenarios if not _pinned_identity(one.fixture)]
+    problems = [
+        f"{one.name}: nothing in the fixture says who is calling, so the run picks the number. "
+        "If the caller is meant to be unknown, pin one that matches no row in the world; otherwise "
+        "the agent may recognise whoever happens to own it."
+        for one in loose
+    ]
+    if len(problems) > 1:
+        problems.append(
+            f"{len(loose)} of {len(scenarios)} scenarios leave the caller unpinned while "
+            f"{len(pinned)} pin one."
+        )
+    return problems
