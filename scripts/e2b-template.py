@@ -546,7 +546,7 @@ def certify_template(
         disk_path = "/tmp/futureagi-certification-disk-kib"
         _sandbox_command(
             sandbox,
-            f"df -Pk /work | awk 'NR == 2 {{print $2}}' > {disk_path}",
+            f"df -Pk /work | awk 'NR == 2 {{print $4}}' > {disk_path}",
             label="disk-capacity",
         )
         disk_output = sandbox.files.read(disk_path, user="svc-control")
