@@ -62,10 +62,10 @@ class Conversation:
     stage: Stage | None = None
     # Set by the flow tool when the open stage hands a request to the stage that owns it.
     _handoff: dict = field(default_factory=dict)
-    spent_usd: float = 0.0
-    history: list[str] = field(default_factory=list)
     _found: dict[str, Any] = field(default_factory=dict)
     configure_stage: Callable[[str, SessionSpec], SessionSpec] | None = None
+    control_only: bool = False
+    spent_usd: float = 0.0
 
     def __post_init__(self) -> None:
         # Read off the artifacts rather than defaulting to the first stage. An agent whose world
@@ -163,18 +163,18 @@ class Conversation:
             raise RuntimeError("cannot go further before there is a contract")
         if stage_name == BUILD:
             source_root = str(getattr(self.source, "root", "") or "")
-            build_stage.require_buildable(contract, source_root)
-            from .provision import provision_if_present
+            if not self.control_only:
+                build_stage.require_buildable(contract, source_root)
+                from .provision import provision_if_present
 
-            await asyncio.to_thread(
-                provision_if_present, source_root, self.out, contract
-            )
+                await asyncio.to_thread(
+                    provision_if_present, source_root, self.out, contract
+                )
             self.stage, _ = build_stage.open_stage(
                 contract,
                 out=self.out,
                 ask=self.ask,
-                # Where the agent's own code lives, so its tools can be bound to rather
-                # than rewritten. Empty for an agent given as a specification.
+                # Where the agent's own code lives, so its tools can be bound to rather than rewritten.
                 source_root=source_root,
             )
             opening = build_stage.opening(contract)
@@ -299,7 +299,6 @@ class Conversation:
         self, message: str, on_event: Callable[..., Any] | None = None
     ) -> None:
         """Send a message to whichever stage is open."""
-        self.history.append(message)
         if self.stage is None:
             await self.open_quietly()
         await self.stage.say(message, on_event=on_event)  # type: ignore[union-attr]
@@ -429,12 +428,8 @@ def open_conversation(
     wanted: int = 10,
     workspace: Path | None = None,
     configure_stage: Callable[[str, SessionSpec], SessionSpec] | None = None,
+    control_only: bool = False,
 ) -> Conversation:
-    """Open the harness. With nothing, it starts by asking which agent you mean.
-
-    Naming the agent up front is a shortcut for coming back to one already in progress, not the
-    way in. Everything it needs can be said.
-    """
     source = resolve(kind, name=name, root=path) if name and path else None
     return Conversation(
         source=source,
@@ -443,6 +438,7 @@ def open_conversation(
         wanted=wanted,
         workspace=workspace,
         configure_stage=configure_stage,
+        control_only=control_only,
     )
 
 

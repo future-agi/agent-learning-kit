@@ -30,6 +30,7 @@ class ConversationEndpoints(BaseModel):
     commands: str
     events: str
     rerun: str
+    adjust: str
     run_status: str
     workspace: str
 
@@ -40,6 +41,7 @@ class ConversationEndpoints(BaseModel):
         "commands",
         "events",
         "rerun",
+        "adjust",
         "run_status",
         "workspace",
         "session_store",
@@ -125,11 +127,14 @@ class ConversationClient:
     ) -> None:
         self.capabilities = capabilities
         self.transport = transport or RequestsTransport()
-        self.command_watermark = 0
+        self.command_watermark = int(
+            capabilities.turn_context.get("command_watermark") or 0
+        )
         self.event_watermark = int(
             capabilities.turn_context.get("event_watermark") or 0
         )
         self.turn_context = dict(capabilities.turn_context)
+        self._emit_lock = asyncio.Lock()
 
     async def commands(self) -> list[dict[str, Any]]:
         separator = "&" if "?" in self.capabilities.endpoints.commands else "?"
@@ -153,39 +158,48 @@ class ConversationClient:
         function_call_id: str | None = None,
         acknowledge_through: int | None = None,
     ) -> dict[str, Any]:
-        sequence = self.event_watermark + 1
-        event: dict[str, Any] = {
-            "schema_version": EVENT_SCHEMA_VERSION,
-            "event_id": f"ce-{uuid.uuid4().hex}",
-            "conversation_id": self.capabilities.conversation_id,
-            "sequence": sequence,
-            "kind": kind,
-            "message_id": message_id,
-            "stage": stage,
-            "invocation_id": invocation_id,
-            "function_call_id": function_call_id,
-            "emitted_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-            "payload": payload or {},
-        }
-        event["digest"] = _canonical_digest(event)
-        acknowledged = (
-            self.command_watermark
-            if acknowledge_through is None
-            else acknowledge_through
-        )
-        body = await self._request(
-            "POST",
-            self.capabilities.endpoints.events,
-            json_body={
+        # Provider IDs may include long signed metadata. Only the correlation key
+        # crosses this channel; the SDK retains the original ID for tool replies.
+        if function_call_id and len(function_call_id) > 255:
+            function_call_id = "call-" + hashlib.sha256(
+                function_call_id.encode("utf-8")
+            ).hexdigest()
+        async with self._emit_lock:
+            sequence = self.event_watermark + 1
+            event: dict[str, Any] = {
                 "schema_version": EVENT_SCHEMA_VERSION,
-                "acknowledged_through": acknowledged,
-                "events": [event],
-            },
-        )
-        self.event_watermark = int(body["acked_through_sequence"])
-        if acknowledge_through is not None:
-            self.command_watermark = max(self.command_watermark, acknowledge_through)
-        return event
+                "event_id": f"ce-{uuid.uuid4().hex}",
+                "conversation_id": self.capabilities.conversation_id,
+                "sequence": sequence,
+                "kind": kind,
+                "message_id": message_id,
+                "stage": stage,
+                "invocation_id": invocation_id,
+                "function_call_id": function_call_id,
+                "emitted_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "payload": payload or {},
+            }
+            event["digest"] = _canonical_digest(event)
+            acknowledged = (
+                self.command_watermark
+                if acknowledge_through is None
+                else acknowledge_through
+            )
+            body = await self._request(
+                "POST",
+                self.capabilities.endpoints.events,
+                json_body={
+                    "schema_version": EVENT_SCHEMA_VERSION,
+                    "acknowledged_through": acknowledged,
+                    "events": [event],
+                },
+            )
+            self.event_watermark = int(body["acked_through_sequence"])
+            if acknowledge_through is not None:
+                self.command_watermark = max(
+                    self.command_watermark, acknowledge_through
+                )
+            return event
 
     async def checkpoint(self, workspace: Path) -> dict[str, Any]:
         body = await asyncio.to_thread(_workspace_archive, workspace)
@@ -222,6 +236,16 @@ class ConversationClient:
         return await self._request(
             "GET",
             self.capabilities.endpoints.run_status,
+        )
+
+    async def adjust(self, instruction: str) -> dict[str, Any]:
+        return await self._request(
+            "POST",
+            self.capabilities.endpoints.adjust,
+            json_body={
+                "instruction": instruction,
+                "client_request_id": f"conversation-{uuid.uuid4().hex}",
+            },
         )
 
     async def load_session(self, key: dict[str, Any]) -> dict[str, Any]:

@@ -15,7 +15,10 @@ from fi.alk.harness.chat_policy import (
     load_chat_policy,
 )
 from fi.alk.harness.hosted_chat_entrypoint import HostedChatRuntime
-from fi.alk.harness.hosted_conversation import ConversationCapabilities
+from fi.alk.harness.hosted_conversation import (
+    ConversationCapabilities,
+    ConversationClient,
+)
 from fi.alk.harness.session import Event as RuntimeEvent
 
 
@@ -42,11 +45,13 @@ def _capabilities() -> ConversationCapabilities:
                 "conversation_id": conversation_id,
                 "stage": "run",
                 "event_watermark": 0,
+                "command_watermark": 0,
             },
             "endpoints": {
                 "commands": f"{prefix}/commands/",
                 "events": f"{prefix}/events/",
                 "rerun": f"{prefix}/rerun/",
+                "adjust": f"{prefix}/adjust/",
                 "run_status": f"{prefix}/run-status/",
                 "workspace": f"{prefix}/workspace/",
                 "session_store": f"{prefix}/session-store/",
@@ -54,6 +59,121 @@ def _capabilities() -> ConversationCapabilities:
             },
         }
     )
+
+
+def test_conversation_turn_does_not_require_undeclared_history():
+    from fi.alk.harness.chat import Conversation
+
+    class StageStub:
+        spent_usd = 0.25
+
+        async def say(self, _message, on_event=None):
+            del on_event
+
+        async def __aexit__(self, *_args):
+            return None
+
+    conversation = Conversation(stage=StageStub(), stage_name="run")
+
+    asyncio.run(conversation.say("what is happening?"))
+    asyncio.run(conversation.close())
+    assert conversation.spent_usd == 0.25
+
+
+def test_conversation_client_starts_from_durable_command_watermark():
+    capabilities = _capabilities()
+    capabilities.turn_context["command_watermark"] = 7
+
+    client = ConversationClient(capabilities)
+
+    assert client.command_watermark == 7
+
+
+def test_conversation_client_bounds_long_provider_call_ids():
+    capabilities = _capabilities()
+
+    class Transport:
+        def __init__(self):
+            self.body = None
+
+        def request(self, _method, _url, *, headers, json_body=None, timeout):
+            del headers, timeout
+            self.body = json_body
+            return type(
+                "Response",
+                (),
+                {
+                    "status_code": 200,
+                    "body": {"acked_through_sequence": 1},
+                },
+            )()
+
+    transport = Transport()
+    client = ConversationClient(capabilities, transport=transport)
+
+    asyncio.run(
+        client.emit(
+            "tool_started",
+            function_call_id="provider-signature-" + ("x" * 500),
+        )
+    )
+
+    call_id = transport.body["events"][0]["function_call_id"]
+    assert len(call_id) <= 255
+    assert call_id.startswith("call-")
+
+
+def test_authoring_activity_pump_does_not_replay_existing_lines(tmp_path):
+    events_path = tmp_path / "harness-events.jsonl"
+    events_path.write_text(
+        json.dumps(
+            {
+                "event_type": "harness.stage.done",
+                "payload": {"stage": "scenarios", "status": 0},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    class ActivityClient:
+        def __init__(self):
+            self.events = []
+
+        async def emit(self, kind, **kwargs):
+            self.events.append((kind, kwargs))
+
+    runtime = object.__new__(HostedChatRuntime)
+    runtime.workspace = tmp_path
+    runtime.client = ActivityClient()
+    runtime.stopping = asyncio.Event()
+
+    async def exercise():
+        task = asyncio.create_task(runtime._pump_authoring_activity())
+        await asyncio.sleep(0)
+        assert runtime.client.events == []
+        with events_path.open("a", encoding="utf-8") as stream:
+            stream.write(
+                json.dumps(
+                    {
+                        "event_type": "harness.stage.done",
+                        "payload": {"stage": "run", "status": 0},
+                    }
+                )
+                + "\n"
+            )
+        for _ in range(20):
+            if runtime.client.events:
+                break
+            await asyncio.sleep(0.05)
+        runtime.stopping.set()
+        await task
+
+    asyncio.run(exercise())
+    assert len(runtime.client.events) == 1
+    assert runtime.client.events[0][0] == "authoring_activity"
+
+
 
 
 def test_chat_policy_gates_stages_without_redeclaring_stage_tools(tmp_path):
@@ -102,6 +222,84 @@ harness_chat:
         "mcp__run__run_simulation",
         "mcp__flow__route_to_stage",
     ]
+
+
+def test_active_authoring_chat_answers_read_only_and_requests_adjustments(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("ALK_HARNESS", "claude")
+    policy_path = tmp_path / "policy.yaml"
+    policy_path.write_text(
+        """schema_version: 1
+harness_chat:
+  enabled: true
+  stages:
+    understand:
+      enabled: true
+  lifecycle:
+    request_user_input: true
+""",
+        encoding="utf-8",
+    )
+
+    class ControlClient:
+        def __init__(self):
+            self.capabilities = _capabilities()
+            self.turn_context = {
+                **self.capabilities.turn_context,
+                "capabilities": {"control_only": True},
+            }
+            self.adjustments = []
+
+        async def adjust(self, instruction):
+            self.adjustments.append(instruction)
+            return {"status": "pending", "instruction": instruction}
+
+        async def run_status(self):
+            return {"state": "running", "stage": "generating_scenarios"}
+
+    async def mutation_tool(_args):
+        return {"content": []}
+
+    client = ControlClient()
+    runtime = HostedChatRuntime(
+        client=client,  # type: ignore[arg-type]
+        policy=load_chat_policy(policy_path),
+        workspace=tmp_path,
+        source=tmp_path,
+        job={"metadata": {"agent_name": "demo"}, "scenario_count": 1},
+    )
+    spec = SessionSpec(
+        system_prompt="understand",
+        servers={
+            "mutations": ToolServer(
+                name="mutations",
+                tools=[ToolSpec("save_contract", "write", {}, mutation_tool)],
+            )
+        },
+        builtins=("Read", "Glob", "Grep", "Write", "Bash"),
+    )
+
+    configured = runtime._configure_stage("understand", spec)
+
+    assert set(configured.granted()) == {
+        "Read",
+        "Glob",
+        "Grep",
+        "AskUserQuestion",
+        "mcp__platform-control__get_run_status",
+        "mcp__platform-control__request_adjustment",
+    }
+    adjustment_tool = next(
+        tool
+        for tool in configured.servers["platform-control"].tools
+        if tool.name == "request_adjustment"
+    )
+    result = asyncio.run(
+        adjustment_tool.handler({"instruction": "Add a failed payment scenario"})
+    )
+    assert client.adjustments == ["Add a failed payment scenario"]
+    assert '"status": "pending"' in result["content"][0]["text"]
 
 
 def test_chat_policy_rejects_unknown_stages(tmp_path):

@@ -23,6 +23,8 @@ _SIMULATOR_SECRETS_PATH = Path("/run/futureagi/simulator-secrets.json")
 _PASSTHROUGH = {
     # Not a credential: authoring writes the scenarios, so the switch has to reach it.
     "ALK_VOICEMAIL_SCENARIOS",
+    "ALK_CLAUDE_GATEWAY_URL",
+    "ALK_CLAUDE_GATEWAY_API_KEY",
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_VERTEX_PROJECT_ID",
     "ANTHROPIC_VERTEX_REGION",
@@ -34,8 +36,6 @@ _PASSTHROUGH = {
     "GOOGLE_GENAI_USE_VERTEXAI",
     "OPENAI_API_KEY",
 }
-
-
 def _load_values(path: Path) -> dict[str, str]:
     body = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(body, dict):
@@ -150,6 +150,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         _TARGET_SECRETS_PATH.chmod(0o600)
         forwarded.extend(["--target-secrets", str(_TARGET_SECRETS_PATH)])
+    if "--conversation-capabilities" in forwarded:
+        os.environ["ALK_FOREGROUND_COORDINATOR"] = "1"
     job_id, run_id, telemetry = _authoring_job_context(forwarded)
     if job_id:
         observability.begin(job_id, run_id, telemetry)

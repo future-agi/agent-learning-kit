@@ -53,9 +53,7 @@ PLATFORM_BOOTSTRAP_COMMAND = (
     "rm -f /usr/local/bin/python && "
     "printf '#!/bin/sh\\nexec /opt/alk-venv/bin/python \"$@\"\\n' "
     "> /usr/local/bin/python && chmod 0755 /usr/local/bin/python && "
-    "ln -sfn /opt/alk-venv/bin/pip /usr/local/bin/pip && "
-    "ln -sfn /opt/alk-venv/bin/uv /usr/local/bin/uv && "
-    "ln -sfn /opt/alk-venv/bin/uvx /usr/local/bin/uvx"
+    "ln -sfn /opt/alk-venv/bin/pip /usr/local/bin/pip"
 )
 HOSTED_RUNTIME_ENV = {
     "PATH": (
@@ -66,6 +64,8 @@ HOSTED_RUNTIME_ENV = {
     "PIP_DEFAULT_TIMEOUT": "300",
     "PIP_RETRIES": "10",
     "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+    "SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt",
+    "PIP_CERT": "/etc/ssl/certs/ca-certificates.crt",
     "PYTHONDONTWRITEBYTECODE": "1",
     "XDG_RUNTIME_DIR": "/run/user/2000",
 }
@@ -441,6 +441,7 @@ trap - EXIT
 def _rabbitmq_check(version: str) -> str:
     major_minor = ".".join(version.split(".")[:2])
     return f"""
+export PATH=/opt/erlang/bin:/opt/rabbitmq/sbin:/usr/local/bin:/usr/bin:/bin
 set -eu
 rabbitmqctl version | grep -Eq '^{re.escape(major_minor)}\\.'
 root=$(mktemp -d /tmp/alk-rabbitmq-cert.XXXXXX)
@@ -522,6 +523,14 @@ def certify_template(
         expected_digest = hashlib.sha256(expected_catalog).hexdigest()
         print(f"CERTIFIED catalog sha256:{expected_digest}")
         checks.append("catalog")
+        _sandbox_command(
+            sandbox,
+            "command -v uv >/dev/null && command -v uvx >/dev/null && "
+            "uv --version && uvx --version",
+            label="binary-uv",
+        )
+        checks.append("binary-uv")
+
 
         for label, command in _base_checks(catalog):
             _sandbox_command(sandbox, command, label=label)

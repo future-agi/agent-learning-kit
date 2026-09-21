@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import traceback
 import json
 import signal
 import uuid
@@ -11,7 +12,14 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from .backends import ASK_TOOL, ConversationSession, SessionSpec, resolve
+from .backends import (
+    ASK_TOOL,
+    ConversationSession,
+    SessionSpec,
+    resolve,
+    tool,
+    tool_server,
+)
 from .chat import Conversation, open_conversation
 from .chat_policy import EffectiveChatPolicy, apply_chat_policy, load_chat_policy
 from .hosted_conversation import (
@@ -20,11 +28,43 @@ from .hosted_conversation import (
     PlatformSessionStore,
     load_conversation_capabilities,
 )
-from .session import ARTIFACT, DONE, RESULT, TEXT, TOOL, Event
+from .tools import schema
+from .session import ARTIFACT, DONE, RESULT, TEXT, TOOL, Event, Stage
 
 _PENDING_QUESTION = ".futureagi-pending-question.json"
 _JOURNAL = ".futureagi-conversation.json"
 _PROVIDER_SESSIONS = ".futureagi-provider-sessions.json"
+
+
+class CoordinatorConversation:
+    """One foreground model that owns the user conversation and delegates stage work."""
+
+    def __init__(self, stage: Stage) -> None:
+        self.stage = stage
+        self.stage_name = "reception"
+        self.opened = False
+
+    async def say(
+        self, message: str, on_event: Any | None = None
+    ) -> Any:
+        if not self.opened:
+            await self.stage.__aenter__()
+            self.opened = True
+        return await self.stage.say(message, on_event=on_event)
+
+    async def resume(self, invocation_id: str, on_event: Any | None = None) -> Any:
+        if not self.opened:
+            await self.stage.__aenter__()
+            self.opened = True
+        return await self.stage.resume_turn(invocation_id, on_event=on_event)
+
+    async def interrupt_response(self) -> bool:
+        return await self.stage.interrupt_response()
+
+    async def close(self) -> None:
+        if self.opened:
+            await self.stage.__aexit__()
+            self.opened = False
 
 
 class HostedChatRuntime:
@@ -58,18 +98,96 @@ class HostedChatRuntime:
         self._tool_names: dict[str, str] = {}
         self.conversation = self._conversation()
 
-    def _conversation(self) -> Conversation:
+    def _conversation(self) -> Conversation | CoordinatorConversation:
         metadata = self.job.get("metadata") or {}
         name = str(metadata.get("agent_name") or self.job.get("name") or "agent")
-        return open_conversation(
-            name=name,
-            path=str(self.source),
-            kind="repo",
-            out=self.workspace,
-            wanted=int(self.job.get("scenario_count") or 10),
-            workspace=self.source,
+        if not self._control_only():
+            return open_conversation(
+                name=name,
+                path=str(self.source),
+                kind="repo",
+                out=self.workspace,
+                wanted=int(self.job.get("scenario_count") or 10),
+                workspace=self.source,
+                ask=self._ask,
+                configure_stage=self._configure_stage,
+                control_only=False,
+            )
+        identity = self.client.capabilities.identity
+        spec = SessionSpec(
+            system_prompt=(
+                "You are the foreground harness coordinator. The authoring stages run as "
+                "background workers in this same sandbox. Answer the user immediately from "
+                "run status and observable progress; do not reconstruct or execute Understand, "
+                "Build, Scenarios, or Run yourself. Use get_run_status for progress. Explicit "
+                "changes go through request_adjustment and are applied by the worker at a safe "
+                "boundary. AskUserQuestion is available only when the worker reports a genuine "
+                "missing requirement; never invent a question."
+            ),
+            servers={"platform-control": self._control_server()},
+            builtins=("Read", "Glob", "Grep", ASK_TOOL),
+            max_turns=12,
             ask=self._ask,
-            configure_stage=self._configure_stage,
+            conversation=ConversationSession(
+                app_name=identity.app_name,
+                user_id=identity.user_id,
+                session_id=f"{identity.app_name}-{self.client.capabilities.conversation_id}-coordinator",
+                transcript_store=self.transcript_store,
+                config_dir=str(self.workspace / ".claude-coordinator"),
+                turn_context=dict(self.client.turn_context),
+            ),
+        )
+        configured = apply_chat_policy(spec, stage="reception", policy=self.policy)
+        return CoordinatorConversation(Stage(configured, name="coordinator"))
+    def _control_only(self) -> bool:
+        capabilities = self.client.turn_context.get("capabilities") or {}
+        return bool(capabilities.get("control_only"))
+
+    def _control_server(self):
+        @tool(
+            "get_run_status",
+            "Read the current authoring or simulation run status.",
+            schema({}, []),
+        )
+        async def get_run_status(_args: dict[str, Any]) -> dict[str, Any]:
+            status = await self.client.run_status()
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": json.dumps(status, sort_keys=True),
+                    }
+                ]
+            }
+
+        @tool(
+            "request_adjustment",
+            "Request a change to the active authoring run. Use this only when the user "
+            "asks to change the environment, scenarios, or agent interpretation. Questions "
+            "must be answered directly without calling this tool.",
+            schema({"instruction": str}, ["instruction"]),
+        )
+        async def request_adjustment(args: dict[str, Any]) -> dict[str, Any]:
+            instruction = str(args.get("instruction") or "").strip()
+            if not instruction:
+                return {
+                    "content": [{"type": "text", "text": "instruction is required"}],
+                    "is_error": True,
+                }
+            result = await self.client.adjust(instruction)
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": json.dumps(result, sort_keys=True),
+                    }
+                ]
+            }
+
+        return tool_server(
+            name="platform-control",
+            version="0.1.0",
+            tools=[get_run_status, request_adjustment],
         )
 
     def _configure_stage(self, stage: str, spec: SessionSpec) -> SessionSpec:
@@ -79,6 +197,7 @@ class HostedChatRuntime:
         resume_session_id = self._provider_sessions().get(
             f"{self.backend_name}:{stage}"
         )
+        control_only = self._control_only()
         hosted_prompt = (
             "\n\n## Hosted conversation behavior\n"
             "Reply directly to the user in this conversation. For an actionable "
@@ -88,8 +207,22 @@ class HostedChatRuntime:
             "derived from the workspace. Use route_to_stage when another harness "
             "stage owns the request; stages are an internal detail."
         )
+        if control_only:
+            hosted_prompt += (
+                "\n\nThe initial authoring run is active. This is a side conversation: "
+                "answer questions without interrupting or changing the authoring workspace. "
+                "When the user explicitly requests a change, call request_adjustment; the "
+                "active runner applies it at a safe stage boundary. Use get_run_status for "
+                "current progress. Never treat a question as an adjustment."
+            )
         servers = spec.servers
-        if stage == "run":
+        builtins = tuple(dict.fromkeys((*spec.builtins, ASK_TOOL)))
+        if control_only:
+            servers = {"platform-control": self._control_server()}
+            builtins = tuple(
+                name for name in builtins if name in {"Read", "Glob", "Grep", ASK_TOOL}
+            )
+        elif stage == "run":
             servers = {
                 server_name: replace(
                     server,
@@ -111,7 +244,7 @@ class HostedChatRuntime:
             spec,
             servers=servers,
             system_prompt=spec.system_prompt + hosted_prompt,
-            builtins=tuple(dict.fromkeys((*spec.builtins, ASK_TOOL))),
+            builtins=builtins,
             ask=self._ask,
             conversation=ConversationSession(
                 app_name=capabilities.identity.app_name,
@@ -127,22 +260,72 @@ class HostedChatRuntime:
         )
         return apply_chat_policy(configured, stage=stage, policy=self.policy)
 
-    async def run(self) -> None:
+    async def _pump_authoring_activity(self) -> None:
+        """Forward the active harness's safe observable events through this same lease."""
+        path = self.workspace / "harness-events.jsonl"
+        try:
+            offset = len(path.read_text(encoding="utf-8").splitlines())
+        except OSError:
+            offset = 0
         while not self.stopping.is_set():
-            commands = await self.client.commands()
-            pending = [
-                command
-                for command in commands
-                if int(command["sequence"]) > self.client.command_watermark
-            ]
-            if not pending:
+            try:
+                lines = path.read_text(encoding="utf-8").splitlines()
+            except OSError:
+                lines = []
+            while offset < len(lines):
+                line = lines[offset]
+                offset += 1
                 try:
-                    await asyncio.wait_for(self.stopping.wait(), timeout=0.5)
-                except TimeoutError:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    offset -= 1
+                    break
+                if not isinstance(event, dict):
                     continue
-                break
-            await self._handle(pending[0])
-        await self.conversation.close()
+                payload = event.get("payload") or {}
+                if not isinstance(payload, dict):
+                    payload = {"value": payload}
+                try:
+                    await self.client.emit(
+                        "authoring_activity",
+                        stage=str(payload.get("stage") or "authoring"),
+                        payload={
+                            "event_type": event.get("event_type"),
+                            "event": payload,
+                        },
+                    )
+                except ConversationTransportError:
+                    offset -= 1
+                    break
+            try:
+                await asyncio.wait_for(self.stopping.wait(), timeout=0.5)
+            except TimeoutError:
+                continue
+
+
+    async def run(self) -> None:
+        activity_task = asyncio.create_task(self._pump_authoring_activity())
+        try:
+            while not self.stopping.is_set():
+                commands = await self.client.commands()
+                pending = [
+                    command
+                    for command in commands
+                    if int(command["sequence"]) > self.client.command_watermark
+                ]
+                if not pending:
+                    try:
+                        await asyncio.wait_for(self.stopping.wait(), timeout=0.5)
+                    except TimeoutError:
+                        continue
+                    break
+                await self._handle(pending[0])
+        finally:
+            self.stopping.set()
+            activity_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await activity_task
+            await self.conversation.close()
 
     async def _handle(self, command: dict[str, Any]) -> None:
         sequence = int(command["sequence"])
@@ -257,6 +440,7 @@ class HostedChatRuntime:
                 command_sequence=sequence,
             )
         except Exception as exc:  # noqa: BLE001 - turn boundary reports provider/tool failures.
+            traceback.print_exc()
             await queue.put(None)
             await pump
             message = f"I couldn't complete that turn: {type(exc).__name__}."
@@ -583,6 +767,8 @@ class HostedChatRuntime:
 
     async def _checkpoint(self) -> dict[str, Any]:
         self._record_provider_session()
+        if self._control_only():
+            return {"control_only": True, "stored": False}
         return await self.client.checkpoint(self.workspace)
 
     def _provider_sessions(self) -> dict[str, str]:

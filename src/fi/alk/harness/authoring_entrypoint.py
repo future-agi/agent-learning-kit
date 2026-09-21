@@ -112,6 +112,11 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
         type=Path,
         help="Control-owned sanitized profile reused across authoring retries",
     )
+    parser.add_argument(
+        "--conversation-capabilities",
+        type=Path,
+        help="Conversation capability document for messages delivered to the current stage",
+    )
     args = parser.parse_args(argv)
 
     job = HarnessJob.model_validate(json.loads(args.job.read_text(encoding="utf-8")))
@@ -140,11 +145,18 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
         kind=source_kind,
         out=str(args.output.resolve()),
         count=job.scenario_count,
+        interactive=False,
         model=None,
+        guidance=[],
+        adjustments_path=str(args.adjustments) if args.adjustments else None,
+        conversation_capabilities_path=(
+            str(args.conversation_capabilities)
+            if args.conversation_capabilities
+            else None
+        ),
+        authoring_only=True,
         run_model=None,
         job=job,
-        adjustments_path=str(args.adjustments) if args.adjustments else None,
-        authoring_only=True,
         provider_profile=profile if source_free_provider else None,
     )
     previous_profile_path = os.environ.get(PROVIDER_IMPORT_PROFILE_PATH_ENV)

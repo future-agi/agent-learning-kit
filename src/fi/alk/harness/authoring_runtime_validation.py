@@ -38,7 +38,10 @@ async def validate_once(
     from .hosted_scheduler import _classify_ready, _run_phase
     from .job import ProviderExecutionMode, SourceKind
     from .process_preflight import preflight_bundle
-    from .process_runtime import ProcessRuntimeProvider
+    from .process_runtime import (
+        ProcessRuntimeProvider,
+        fixed_sandbox_user_resolver,
+    )
     from .scenario_source import load_scenarios
     from .source_data_invariants import author_invariants, check_invariants
 
@@ -65,7 +68,7 @@ async def validate_once(
         provider = ProcessRuntimeProvider(
             secrets_path=secrets,
             secret_purpose_map=job_secret_purposes(job),
-            user_resolver=lambda _name: None,
+            user_resolver=fixed_sandbox_user_resolver,
             require_declared_user=False,
             public_url_resolver=lambda port, ttl: _resolve_hosted_public_url(
                 capabilities, transport, port=port, expires_in_seconds=ttl

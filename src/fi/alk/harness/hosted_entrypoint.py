@@ -63,6 +63,7 @@ from .process_runtime import (
     EnvironmentRuntime,
     ProcessRuntimeError,
     ProcessRuntimeProvider,
+    fixed_sandbox_user_resolver,
     RuntimeEndpoint,
 )
 from .scenario_source import (
@@ -119,6 +120,7 @@ def configure_runner_logging(job_id: str | None) -> None:
                 "%(asctime)s %(levelname)s job=%(job_id)s %(name)s: %(message)s"
             )
         )
+
 
 # --- §0.6 exit-code contract --------------------------------------------------------------------
 #
@@ -1625,7 +1627,7 @@ class HostedEntrypointDeps:
         [ob.HostedCapabilities, ob.Transport], WorldProvisioner
     ] = field(
         default=lambda capabilities, transport: ProcessRuntimeProvider(
-            user_resolver=lambda _name: None,
+            user_resolver=fixed_sandbox_user_resolver,
             require_declared_user=False,
             public_url_resolver=lambda port, ttl: _resolve_hosted_public_url(
                 capabilities, transport, port=port, expires_in_seconds=ttl
@@ -2339,7 +2341,9 @@ async def run_job(
                     if hasattr(result, "__await__"):
                         await result
                 except Exception:  # noqa: BLE001 - cleanup must never mask the real exit path
-                    logger.exception("call runner close failed in the run_job finally backstop")
+                    logger.exception(
+                        "call runner close failed in the run_job finally backstop"
+                    )
         restore_sigterm()
 
 
