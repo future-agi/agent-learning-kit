@@ -144,9 +144,20 @@ async def validate_once(
                     # depend on which lane happened to be quicker.
                     raise RuntimeValidationError(phase, "\n".join(sorted(failures)))
 
+            # What a reset actually costs, measured on this path: the drop and recreate of the
+            # world's own logical database is fast, and the terminate-and-respawn of the agent's
+            # processes around it is the twenty seconds. Validation runs setup and ready only, so
+            # it needs a pristine store, not pristine processes: their connections are terminated
+            # by the drop and a pooled client reconnects on its next statement. Off unless asked,
+            # because a process that caches across scenarios would show up here as a ready failure
+            # and that is a worse trade to make silently.
+            in_place = os.environ.get("ALK_VALIDATION_RESET_IN_PLACE", "") == "1"
+
             async def check_setup(scenario, invariants, against=None):
                 against = runtime if against is None else against
-                await provider.reset(against, work_directory=work)
+                await provider.reset(
+                    against, work_directory=work, keep_processes=in_place
+                )
                 world = await factory.create(against, rng=random.Random(job.seed or 0))
                 for name, fn, target, timeout in (
                     ("setup", scenario.setup, world, 30.0),

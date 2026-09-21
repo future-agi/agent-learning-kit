@@ -358,6 +358,52 @@ def unchecked_sub_goals(folder: Path, catalogue: Catalogue) -> list[str]:
     return problems
 
 
+def unasserted_behaviour(scenarios: list[Scenario], folder: Path) -> list[str]:
+    """Tools the reference solution calls that no check for that scenario ever reads.
+
+    A scenario's solution is what a correct agent does. A tool it calls that nothing asserts is a
+    step the agent may simply skip and still pass, and it is usually the step the scenario is named
+    for. Six of sixty on a real suite called `get_booking_status` last, said in their `tests` line
+    that they checked the booking status, and named only booking sub-goals: an agent that booked the
+    ride and never looked it up passed all six.
+
+    Advisory, and narrow on purpose. It reports a tool no check mentions at all, not one checked
+    loosely, because plenty of solution steps are setup that nothing should assert.
+    """
+    problems: list[str] = []
+    for scenario in scenarios:
+        used = [step.tool for step in (scenario.solution or []) if step.tool]
+        if not used:
+            continue
+        checks = folder_for(folder, scenario.name) / "checks"
+        if not checks.is_dir():
+            continue
+        asserted = ""
+        for check in sorted(checks.glob("*.py")):
+            asserted += check.read_text(encoding="utf-8", errors="replace").split("if __name__")[0]
+        # The last call, unasserted, and **claimed**. Two earlier versions cried wolf: flagging any
+        # unasserted tool reported 53 of 60, and flagging every unasserted last call reported 13 of
+        # 30, because a solution that ends `view_cart` to confirm what it just did is not a
+        # scenario about viewing the cart. What separates the real fault is the scenario saying it
+        # tests that thing: six ended on a status lookup, said so in their tests line, and asserted
+        # only the booking. So the claim is the discriminator, not the tool.
+        outcome = used[-1]
+        claimed = f"{scenario.name} {scenario.tests or ''}".lower()
+        spoken = [word for word in re.split(r"[^a-z]+", outcome.lower()) if len(word) > 3]
+        # The words together, not scattered. Requiring each one separately flagged a scenario
+        # whose tests line said "sends payment link SMS ... upon explicit confirmation", because
+        # `send` and `confirmation` both appeared while neither referred to send_confirmation_sms,
+        # and its payment-link SMS was asserted. Adjacent is the strictest reading and the only one
+        # that has not cried wolf; it misses a paraphrase, which is the right way to be wrong.
+        together = re.search(r"\W+".join(spoken), claimed) if spoken else None
+        if outcome not in asserted and together:
+            problems.append(
+                f"{scenario.name}: it says it tests {outcome}, its reference solution ends there, "
+                "and no check mentions it, so an agent that stops short of it passes anyway"
+            )
+    return problems
+
+
 def check_problems(folder: Path) -> list[str]:
     """Checks that cannot fail for the reason their scenario exists.
 

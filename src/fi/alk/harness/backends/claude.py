@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import tempfile
 from typing import Any, AsyncIterator, Callable
 
 from claude_agent_sdk import (
@@ -51,6 +52,29 @@ DEFAULT_MODEL = "claude-sonnet-4-6"
 # on the version, and the gate matches on the reported name, so both are granted or delegation
 # is denied by the very gate the workers exist to pass.
 DELEGATION_TOOLS = ("Agent", "Task")
+
+
+def _can_reach_its_workers(spec: SessionSpec, allowed: list[str]) -> None:
+    """Refuse a session whose workers it has no way to call, before it spends an hour on it.
+
+    A stage that hands its work out has its own writing tools taken away on purpose, so the
+    delegation tool is the only thing it can still produce with. Missing that, it can read and
+    plan and nothing else, and it does not fail: it writes the suite out as prose, says the
+    tools are not connected yet, and ends reporting success with nothing saved. Twice, an hour
+    each, before this was written.
+    """
+    if not spec.workers:
+        return
+    reachable = set(allowed)
+    if reachable & set(DELEGATION_TOOLS):
+        return
+    if any(name.endswith(f"__{DELEGATION_HANDOFF}") for name in reachable):
+        return
+    raise ValueError(
+        f"this stage has workers ({', '.join(sorted(spec.workers))}) and no way to call them: "
+        "no delegation tool is reachable, so it can only read. Reachable: "
+        f"{sorted(reachable)}"
+    )
 
 
 def _sdk_server(server: ToolServer) -> Any:
@@ -473,17 +497,22 @@ class ClaudeBackend:
         for worker in spec.workers.values():
             servers.update(worker.servers)
         environment = dict(provider_env(spec.model))
+        if spec.workers:
+            # Bound both fan-out paths to the same number. The desk runs workers as our own
+            # sessions, but the CLI's own agent tool stays reachable and defaults higher than
+            # the desk's semaphore, so leaving it unset lets the two add up.
+            environment["CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"] = str(MOST_WORKERS_AT_ONCE)
         if spec.workers and desk is None:
             allowed.extend(DELEGATION_TOOLS)
-            environment["CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"] = str(MOST_WORKERS_AT_ONCE)
         if desk is not None:
             # A worker's own tools are run by its own session, so the parent is granted the one
             # tool that hands work out and nothing the workers hold.
             allowed = [name for name in spec.granted() if name != DELEGATE_TOOL]
             allowed.append(desk.tool_name)
             servers = {**spec.servers, DELEGATION_SERVER: desk.server()}
+        _can_reach_its_workers(spec, allowed)
         options = ClaudeAgentOptions(
-            system_prompt=spec.system_prompt,
+            system_prompt=_prompt_for(spec.system_prompt),
             allowed_tools=allowed,
             mcp_servers={
                 server_name: _sdk_server(server)
@@ -525,6 +554,26 @@ class ClaudeBackend:
 # than borrowed from the ADK backend so that changing one route's default never changes the
 # other's.
 GATEWAY_DEFAULT_MODEL = "vertex_ai/gemini-3.5-flash"
+
+
+# The SDK puts a string system prompt straight onto the CLI's argv, and a stage's prompt is the
+# agent's contract, its world summary and a skill or three. One conversation opened against a live
+# run crashed the guest with "[Errno 7] Argument list too long" and cost the job an attempt, because
+# argv is capped and a prompt is not. The SDK already accepts a file instead, so anything large goes
+# through a file and small prompts keep the exact shape they had.
+_PROMPT_ON_ARGV = 16_000
+
+
+def _prompt_for(prompt: str | None) -> Any:
+    """The prompt as the SDK should receive it: inline while small, a file once it is not."""
+    if not prompt or len(prompt) <= _PROMPT_ON_ARGV:
+        return prompt
+    handle = tempfile.NamedTemporaryFile(
+        "w", suffix=".md", prefix="alk-system-prompt-", delete=False, encoding="utf-8"
+    )
+    with handle as written:
+        written.write(prompt)
+    return {"type": "file", "path": handle.name}
 
 
 class ClaudeGatewayBackend(ClaudeBackend):

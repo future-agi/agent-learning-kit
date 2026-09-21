@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Callable
 
 from . import spend
+from .live import Channel, carrying, folded_in
 from .backends import (
     Call,
     HarnessBackend,
@@ -201,9 +202,16 @@ class Stage:
         *,
         name: str = "",
         backend: HarnessBackend | None = None,
+        overheard: bool = True,
     ) -> None:
         self._spec = spec
         self._backend = backend
+        # Whether a person watching the run should see this stage's turns. True for the stages that
+        # build something, because the conversation is how somebody follows the run. False for a
+        # stage that grades: a judge reading a transcript and recording a verdict is backend work,
+        # its result belongs in the receipt, and echoing its tool calls into the chat made a
+        # verdict about the agent look like part of the conversation.
+        self._overheard = overheard
         self._session: HarnessSession | None = None
         self.name = name
         self.session_id: str | None = None
@@ -218,6 +226,9 @@ class Stage:
         # same as getting one: a request that quietly does not take shows up only on the
         # invoice, weeks later, as a number nobody can explain.
         self.models_used: set[str] = set()
+        # Inert unless this run was given somewhere to talk. Read before each turn rather than
+        # between stages, because a stage is twenty minutes and a conversation is not.
+        self.channel = Channel()
 
     @property
     def spec(self) -> SessionSpec:
@@ -245,6 +256,7 @@ class Stage:
     async def __aenter__(self) -> "Stage":
         if self._backend is None:
             self._backend = resolve()
+        self._spec.servers = carrying(self.channel, self._spec.servers)
         self._session = self._backend.create(self._spec)
         await self._session.start()
         return self
@@ -258,7 +270,10 @@ class Stage:
         """Send a message and yield events as they arrive."""
         if self._session is None:
             raise RuntimeError("stage is not open; use it as an async context manager")
-        await self._session.send(message)
+        said = self.channel.waiting() if self._overheard else []
+        for one in said:
+            self.channel.record("said", one, stage=self.name)
+        await self._session.send(folded_in(message, said))
         turn = Turn()
         replies = self._session.replies().__aiter__()
         # A stage may ask for a longer silence than the default, because for some stages silence
@@ -282,6 +297,10 @@ class Stage:
                 # so a front end showing several stages can tell them apart.
                 event.detail.setdefault("stage", self.name)
                 turn.events.append(event)
+                if self._overheard:
+                    self.channel.record(
+                        event.kind, event.text, tool=event.tool, **event.detail
+                    )
                 yield event
         self.history.append(turn)
 

@@ -38,8 +38,9 @@ def _drive(monkeypatch, decision: dict, *, world=None, raises: bool = False):
     world = world or _World()
 
     class _Stage:
-        def __init__(self, spec, name=""):
-            self.spec, self.name = spec, name
+        def __init__(self, spec, name="", overheard=True):
+            # Mirrors the real signature: a judging stage is never overheard in the chat.
+            self.spec, self.name, self.overheard = spec, name, overheard
 
         async def __aenter__(self):
             return self
@@ -160,3 +161,16 @@ def test_the_judge_is_given_what_was_said_not_only_what_was_done():
     assert "user: one large fries" in rendered
     assert "your order is one large fries" in rendered
     assert len(rendered) <= judge_module._TRANSCRIPT_LIMIT + 8
+
+
+def test_a_judging_stage_is_not_overheard_in_the_chat() -> None:
+    """A verdict about the agent appeared in the run's conversation, which is backend work."""
+    from pathlib import Path as _P
+
+    source = _P("src/fi/alk/harness/judge.py").read_text(encoding="utf-8")
+    assert 'name="judge-sub-goals", overheard=False' in source
+
+    session = _P("src/fi/alk/harness/session.py").read_text(encoding="utf-8")
+    # The mirror into the chat is conditional, both for what the stage says and what it hears.
+    assert "if self._overheard:" in session
+    assert "self.channel.waiting() if self._overheard else []" in session

@@ -310,7 +310,13 @@ def open_stage(
                 voicemail="on" if voicemail_enabled() else "off",
                 conversational="yes" if contract.conversational else "no",
             )
-            + f"\n\nAt most {MOST_WORKERS_AT_ONCE} writers may run at the same time."
+            + f"\n\nAt most {MOST_WORKERS_AT_ONCE} writers may run at the same time. Brief a "
+            f"batch, wait for it to report, then brief the next: launching a second batch while "
+            f"the first is still running is refused, and a refused launch has written nothing. "
+            f"If a launch comes back saying the concurrent limit is reached, that writer does "
+            f"not exist. Wait for running writers to report and brief it again. Never say work "
+            f"is running in the background on the strength of a launch you did not see succeed, "
+            f"and check suite_progress before you believe your own count."
             # The loop cannot ration what it cannot see. Without this it has no reason to believe
             # writing the suite alone will not fit, and it runs out mid-suite instead of delegating.
             + (
@@ -368,7 +374,12 @@ def opening(
             "worth, and its share of the people; take the reports they come back with; call "
             "suite_progress to see what is still empty; brief the next round from that. When the "
             "count is met run suite_reviewer, brief a round for whatever it names, then "
-            "save_scenarios."
+            "save_scenarios.\n\n"
+            "A plan is not a suite. Describing the scenarios in your reply writes nothing to "
+            "disk, and a stage that ends having described them has produced nothing at all. "
+            "You are finished when suite_progress reports the count, not when you can list "
+            "what the suite would contain. Until it does, the next thing you do is brief "
+            "another round."
         )
     if existing and hands_out:
         return (

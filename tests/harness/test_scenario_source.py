@@ -1930,8 +1930,10 @@ def test_coverage_report_answers_how_much_of_the_space_was_tested(tmp_path: Path
     # placement it does not have.
     mixed = coverage_report(suite([{"task": "book"}, {}, {}]))
     assert mixed["scenarios"] == 3 and mixed["placed"] == 1
-    # The use case is an axis whether or not the plan named one.
-    assert mixed["axes"]["use_case"]["levels"] == 1
+    # A use case is what the scenario is for, not a dimension it varies along, and its values are
+    # whole sentences. It is reported on its own so it never reaches an axis picker.
+    assert "use_case" not in mixed["axes"]
+    assert mixed["use_cases"] == {"book a ride": 3}
 
     # An empty suite answers rather than raising.
     assert coverage_report([])["scenarios"] == 0
@@ -2438,8 +2440,14 @@ def test_aim_for_names_the_overlay_levels_nothing_can_check() -> None:
             {
                 "count": 100,
                 "axes": {
-                    "task": ["book", "cancel"],
+                    "task": ["create-ride", "cancel-ride"],
+                    "counterparty": ["self_authenticated"],
+                    "disposition": ["card_valid", "card_expired"],
+                    "interface": ["quiet_line"],
+                    "interaction": ["single_request"],
                     "overlay": ["none", "prompt_injection", "emergency_crisis", "destructive"],
+                    "overlay_vector": ["none", "spoken"],
+                    "overlay_intensity": ["absent", "overt"],
                 },
             }
         )
@@ -2565,3 +2573,201 @@ def test_a_dangling_foreign_key_is_refused(tmp_path) -> None:
     assert _tables_the_source_lacks(empty_target, str(tmp_path), None) == [
         "wallets.rider_id points at users.rider_id rows that do not exist: u1"
     ]
+
+
+def test_a_caller_the_record_does_not_know_is_reported(monkeypatch) -> None:
+    """One suite gave three callers a name the account they phone from does not carry."""
+    from pathlib import Path as _P
+
+    from fi.alk.harness import scenario_tools
+    from fi.alk.harness.scenario import Persona, Scenario
+
+    rows = {
+        "users": [{"rider_id": "rdr_eli", "first_name": "Eli", "phone": "+14155550108"}],
+        "saved_places": [{"rider_id": "rdr_eli", "name": "Home"}],
+    }
+    monkeypatch.setattr(
+        scenario_tools, "restore", lambda _root: type("W", (), {"state": lambda _s: rows})()
+    )
+
+    def caller(name: str) -> Scenario:
+        return Scenario(
+            name=f"call_{name.lower()}",
+            fixture={"rider_id": "rdr_eli", "phone": "+14155550108"},
+            persona=Persona(name=name),
+        )
+
+    said = scenario_tools.persona_off_the_record([caller("Liam")], _P("/tmp"))
+    assert said and "is named Eli" in said[0]
+    # The record's own name, and a surname of the writer's own beside it, both hold.
+    assert scenario_tools.persona_off_the_record([caller("Eli")], _P("/tmp")) == []
+    assert scenario_tools.persona_off_the_record([caller("Eli Navarro")], _P("/tmp")) == []
+    # A guest the world holds no row for is silent, not refused.
+    guest = Scenario(
+        name="guest", fixture={"phone": "+14165550199"}, persona=Persona(name="Chloe")
+    )
+    assert scenario_tools.persona_off_the_record([guest], _P("/tmp")) == []
+
+
+
+def test_one_spelling_per_level_however_the_plan_wrote_it() -> None:
+    """A suite reported seven of eight red-team overlays absent while six were present as slashes."""
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _off_the_grid
+
+    slashes = Scenario(name="a", coverage={"Overlay": "privacy/PII", "task": "book_ride"})
+    assert slashes.coverage == {"overlay": "privacy_pii", "task": "book_ride"}
+
+    # The plan deals one spelling, the writer submits the other, and they are the same cell.
+    grid = {"overlay": ["none", "privacy/PII"], "task": ["book_ride"]}
+    assert _off_the_grid({"overlay": "privacy_pii", "task": "book_ride"}, grid) == ""
+    # A level the plan never dealt is still refused.
+    assert "not a level the plan deals" in _off_the_grid(
+        {"overlay": "invented", "task": "book_ride"}, grid
+    )
+    # And an axis left out is still refused, whichever way the grid spells it.
+    assert "says nothing about" in _off_the_grid({"task": "book_ride"}, grid)
+
+
+def test_an_empty_collection_names_its_fields(tmp_path) -> None:
+    """Told only "0 rows", writers built the row with the agent's tools instead of seeding it."""
+    import sqlite3
+
+    from fi.alk.harness import scenario_tools
+
+    class _World:
+        def __init__(self, path):
+            self.connection = sqlite3.connect(path)
+            self.connection.execute("CREATE TABLE bookings (booking_ref TEXT, status TEXT)")
+            self.connection.execute("CREATE TABLE users (rider_id TEXT)")
+            self.connection.execute("INSERT INTO users VALUES ('rdr_dana')")
+
+        def state(self):
+            return {"bookings": [], "users": [{"rider_id": "rdr_dana"}]}
+
+        def close(self):
+            self.connection.close()
+
+    world = _World(tmp_path / "w.sqlite")
+    assert scenario_tools._fields_of(world, "bookings") == ["booking_ref", "status"]
+    # A collection that already holds rows is left as a count: there is a row to copy.
+    assert scenario_tools._fields_of(world, "users") == ["rider_id"]
+    # A world whose store cannot say is silent rather than broken.
+    assert scenario_tools._fields_of(object(), "bookings") == []
+    world.close()
+
+
+def test_a_broken_proof_says_so_instead_of_blaming_setup() -> None:
+    """Nine refusals in one run read "the world is not ready" with no reason and the wrong fix."""
+    from fi.alk.harness.prove import Proof
+
+    judged_only = Proof()
+    judged_only.broken = ["none of this sub-goal's checks is in code"]
+    said = judged_only.why()
+    assert "broken, not failing" in said
+    assert "setup.py" not in said
+
+    # A real ready failure still reports the ready gate, with the sentence ready() returned.
+    not_ready = Proof()
+    not_ready.why_not_ready = "no booking row exists for bk_1"
+    assert "the world is not ready" in not_ready.why()
+    assert "no booking row exists for bk_1" in not_ready.why()
+
+    # And a scenario that is both broken and genuinely not ready keeps the gate's own reason.
+    both = Proof()
+    both.broken = ["ready.py raised TypeError"]
+    both.why_not_ready = "ready.py raised TypeError"
+    assert "the world is not ready" in both.why()
+
+
+def test_a_level_past_a_third_of_the_suite_is_refused_while_somewhere_thinner_exists() -> None:
+    """Three suites in a row put half their scenarios on one level and nothing said a word."""
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _over_its_share
+
+    grid = {"task": ["book_ride", "cancel_ride", "check_status"]}
+    booked = [
+        Scenario(name=f"b{one}", coverage={"task": "book_ride"}) for one in range(7)
+    ]
+
+    said = _over_its_share({"task": "book_ride"}, grid, booked, 20)
+    assert "whole share" in said and "cancel_ride" in said
+    # A thin level is always allowed.
+    assert _over_its_share({"task": "cancel_ride"}, grid, booked, 20) == ""
+    # Small suites are left alone: a third of eight is not a meaningful bound.
+    assert _over_its_share({"task": "book_ride"}, grid, booked, 8) == ""
+    # And when every other level is also at its share, the crowding is the plan's to fix.
+    everywhere = booked + [
+        Scenario(name=f"c{one}", coverage={"task": "cancel_ride"}) for one in range(7)
+    ] + [Scenario(name=f"s{one}", coverage={"task": "check_status"}) for one in range(7)]
+    assert _over_its_share({"task": "book_ride"}, grid, everywhere, 20) == ""
+
+
+def test_the_grid_has_to_be_the_frameworks_axes() -> None:
+    """A run declared task, payment_state, caller_awareness, interface, overlay and called it six."""
+    from fi.alk.harness.scenario_tools import CANONICAL_AXES, _grid_off_the_framework
+
+    whole = {axis: ["one"] for axis in CANONICAL_AXES}
+    # task carries the one shape that is checkable exactly, since the twelve operations are closed.
+    whole["task"] = ["cancel-ride"]
+    assert _grid_off_the_framework(whole) == ""
+    assert _grid_off_the_framework({}) == ""
+
+    # A level named as though it were an axis is corrected by name, not just refused.
+    drifted = {**whole, "payment_state": ["card_expired"]}
+    del drifted["disposition"]
+    said = _grid_off_the_framework(drifted)
+    assert "payment_state (a level of disposition)" in said
+    assert "Missing: disposition" in said
+
+    # An axis left out is named, because a missing axis is invisible in the report.
+    short = {axis: ["one"] for axis in CANONICAL_AXES if axis != "interaction"}
+    assert "Missing: interaction" in _grid_off_the_framework(short)
+
+
+def test_task_levels_have_to_be_operation_object() -> None:
+    """A run declared `book_ride_cash`, which is a verb phrase carrying a disposition level."""
+    from fi.alk.harness.scenario_tools import CANONICAL_AXES, _grid_off_the_framework
+
+    grid = {axis: ["one"] for axis in CANONICAL_AXES}
+    grid["task"] = ["create-ride", "cancel-ride", "retrieve-booking-status"]
+    assert _grid_off_the_framework(grid) == ""
+
+    grid["task"] = ["book_ride_cash", "cancel-ride"]
+    said = _grid_off_the_framework(grid)
+    assert "book_ride_cash" in said
+    assert "cancel-ride" not in said.split("These are not:")[1]
+    # The twelve are named so the correction is actionable, not just a refusal.
+    assert "authenticate" in said and "handoff" in said
+
+
+def test_an_instruction_naming_a_record_the_world_lacks_is_refused() -> None:
+    """One scenario declared origin seed, seeded nothing, and named two places that never existed."""
+    from types import SimpleNamespace
+
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _identifiers_the_instruction_invents
+
+    world = SimpleNamespace(
+        state=lambda: {"places": [{"place_id": "plc_market_st"}, {"place_id": "plc_sfo"}]}
+    )
+
+    invented = Scenario(
+        name="a",
+        instruction="You ask for a ride from plc_blr_airport to plc_market_st.",
+    )
+    said = _identifiers_the_instruction_invents(invented, world)
+    assert said and "plc_blr_airport" in said[0]
+    assert "plc_market_st" not in said[0]
+
+    # Every id real: silent.
+    real = Scenario(name="b", instruction="From plc_market_st to plc_sfo, please.")
+    assert _identifiers_the_instruction_invents(real, world) == []
+
+    # A prefix this world never uses is somebody else's shape, so it says nothing.
+    other = Scenario(name="c", instruction="Charge it to acct_99 like last time.")
+    assert _identifiers_the_instruction_invents(other, world) == []
+
+    # A world that holds no identifiers at all cannot judge one.
+    bare = SimpleNamespace(state=lambda: {"notes": [{"text": "hello"}]})
+    assert _identifiers_the_instruction_invents(invented, bare) == []

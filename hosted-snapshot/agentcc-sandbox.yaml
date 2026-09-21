@@ -34,6 +34,11 @@ providers:
     max_concurrent: 32
     conn_pool_size: 32
     models:
+      # 3.7-flash first because it is what the harness actually runs on and what every cost
+      # figure is measured against. A cheaper model missing from this list is not a smaller bill,
+      # it is a silent fallback to a dearer one.
+      - vertex_ai/gemini-3.7-flash
+      - vertex_ai/gemini-3.6-flash
       - vertex_ai/gemini-3.5-flash
       - vertex_ai/gemini-3.5-flash-lite
       - vertex_ai/gemini-3.1-flash-preview

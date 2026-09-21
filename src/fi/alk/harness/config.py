@@ -309,6 +309,34 @@ def artifact_dir(agent: str, root: str | Path | None = None) -> Path:
 HARNESS = SKILLS_ROOT / "harness.md"
 
 
+def declared_modalities() -> tuple[str, ...]:
+    """Every modality a kind file under ``skills/kinds/`` says it is for.
+
+    The point of the kind directory is that supporting a new sort of agent is adding a file. That
+    only holds if the contract will *accept* the new modality, and until this existed the accepted
+    list was a tuple in code, so a browser or computer-use agent needed an edit in two more places
+    before its file could ever be read.
+
+    Read from ``applies_to`` rather than from the file name, because that is the declaration the
+    matcher already trusts.
+    """
+    root = SKILLS_ROOT / "kinds"
+    found: set[str] = set()
+    if not root.is_dir():
+        return ()
+    for path in sorted(root.glob("*.md")):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        head = text.split("---")[1] if text.startswith("---") and "---" in text[3:] else ""
+        for line in head.splitlines():
+            if not line.strip().lower().startswith("applies_to:"):
+                continue
+            for clause in line.split(":", 1)[1].split(","):
+                key, _, value = clause.strip().lower().partition("=")
+                if key.strip() == "modality" and value.strip():
+                    found.add(value.strip())
+    return tuple(sorted(found))
+
+
 def discovered_skills(**about: str) -> str:
     """Every extra skill that says it applies to this agent, found by looking rather than by name.
 

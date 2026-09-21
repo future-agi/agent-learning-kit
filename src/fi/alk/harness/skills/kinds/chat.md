@@ -43,6 +43,27 @@ The same five questions, answered for typing. **Only vary what is applied.**
 Four of the five are yours here, against two on a call, because text carries its own conditions
 rather than needing the platform to produce them.
 
+## This modality's answers to the five interface questions
+
+The planning skill asks every kind file the same five questions about the interface axis. These are
+chat's answers, and a level belonging to a call claims a condition typing cannot produce.
+
+| question | chat answers with |
+|---|---|
+| how clean is the input | clean prose · typos and broken grammar · a pasted block · a wall of text · one word at a time |
+| what channel it arrives on | web widget · SMS · a messaging app, wherever the run says it is |
+| how reliable and timely it is | replies arriving at once · a long gap mid-thread · a message sent before the thought is finished |
+| what competing signal exists | a second person in the thread · a quoted earlier conversation · content pasted from elsewhere |
+| how state is exposed | text, so anything can be shown: links, markdown, long values the reader can copy rather than repeat |
+
+**Interaction, this modality's tempo.** Single request or multi-turn; fresh, resumed or interrupted;
+and the two specific to typing, a burst of messages faster than the agent can answer, and a message
+sent before the sentence is complete.
+
+**Overlay vector, where adversarial content arrives in a chat.** Typed by the person, or carried
+inside something they paste: a quoted email, a log, a block that reads like instructions. Spoken and
+background-audio vectors belong to a call. Intensity is the planner's to deal, subtle or overt.
+
 ## The levels this modality deals, and the field each one lands in
 
 The planning skill asks the kind file for its X levels, so here they are by name, with the field a

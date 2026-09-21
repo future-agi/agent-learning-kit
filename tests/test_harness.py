@@ -2397,6 +2397,7 @@ def test_a_persona_must_contain_the_profile_that_drives_variation():
     scenario = Scenario(
         name="thin-persona",
         instruction="Place an order.",
+        tests="whether a persona with only a name still varies anything",
         persona=Persona(name="Maya"),
         solution=[{"tool": "place", "arguments": {}}],
         sub_goals=["placed"],
@@ -2537,6 +2538,7 @@ def _delta(**overrides):
         "name": "adds-a-big-mac",
         "use_case": "order an item",
         "instruction": "Order one Big Mac.",
+        "tests": "whether the agent reaches the menu before adding the item it was asked for",
         "fixture": {"origin": "seed", "item_id": "big_mac"},
         # Two steps because one is refused: a solution that jumps straight to the outcome is
         # passed by an agent that fires that call on arrival, having established nothing.
@@ -3813,6 +3815,7 @@ def test_a_tool_free_conversation_can_use_an_empty_judged_solution_with_state(tm
         "use_case": "payment collection",
         "branch": "customer requests an installment plan",
         "instruction": "Verify the account and ask for an installment plan.",
+        "tests": "whether the agent verifies the account before discussing a plan",
         "fixture": {"origin": "seed"},
         "solution": [],
         "sub_goals": ["handled_payment_conversation"],

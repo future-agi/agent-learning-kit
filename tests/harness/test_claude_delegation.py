@@ -220,3 +220,20 @@ def test_a_worker_falls_back_to_its_stage_and_never_hands_out_again():
     # A worker that names its own model keeps it; one that does not runs on the stage's.
     own = dataclasses.replace(parent.workers["adder"], model="vertex_ai/gemini-2.5-flash")
     assert _child_of(parent, own).model == "vertex_ai/gemini-2.5-flash"
+
+
+def test_a_large_system_prompt_travels_as_a_file_not_as_argv() -> None:
+    """One conversation opened against a live run crashed the guest with "Argument list too long"."""
+    from fi.alk.harness.backends.claude import _prompt_for
+
+    short = "stay inline"
+    assert _prompt_for(short) == short
+    assert _prompt_for(None) is None
+    assert _prompt_for("") == ""
+
+    # A stage prompt is the contract, the world summary and the skills, which is far past ARG_MAX.
+    whole = "a stage prompt " * 4000
+    handed = _prompt_for(whole)
+    assert handed["type"] == "file"
+    with open(handed["path"], encoding="utf-8") as written:
+        assert written.read() == whole

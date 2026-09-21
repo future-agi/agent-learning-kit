@@ -34,6 +34,7 @@ from .folder import (
     SCENARIOS,
     apply_setup,
     check_problems,
+    unasserted_behaviour,
     read_all,
     refresh_check,
     unchecked_sub_goals,
@@ -51,6 +52,8 @@ from .scenario import (
     coverage_report,
     keyword_problems,
     redteam_problems,
+    level_name,
+    _pinned_identity,
     unpinned_callers,
     suite_diversity_problems,
     tidy_keywords,
@@ -66,6 +69,37 @@ from .world.snapshot import read_manifest, restore
 logger = logging.getLogger(__name__)
 
 SCENARIO_SERVER = "scenarios"
+
+
+def _is_spoken(contract: Any) -> bool:
+    """Whether this agent is reached by talking, which is what a voice belongs to."""
+    return str(getattr(contract, "modality", "") or "").strip().lower() != "chat"
+
+
+def _no_longer_hold(
+    destination: Path, catalogue: Catalogue, names: list[str], world_root: Path
+) -> list[tuple[str, str]]:
+    """Of the scenarios whose check was just rewritten, the ones that no longer pass it."""
+    if not names:
+        return []
+    wanted = set(names)
+    failed: list[tuple[str, str]] = []
+    for scenario in load_scenarios(destination):
+        if scenario.name not in wanted:
+            continue
+        try:
+            proof = prove(scenario, catalogue, world_root)
+        except Exception as exc:  # noqa: BLE001 - a scenario that cannot be proved is the finding
+            failed.append((scenario.name, type(exc).__name__))
+            continue
+        if not proof.holds:
+            why = "not ready" if not proof.ready else (
+                "the reference solution no longer passes it"
+                if not proof.solvable
+                else "the check now passes with nothing done"
+            )
+            failed.append((scenario.name, why))
+    return failed
 
 
 def _mailbox_fields() -> dict[str, Any]:
@@ -260,6 +294,162 @@ def crowded_field(kept: list[Scenario], candidate: Any, wanted: int) -> str:
     return ""
 
 
+# A scenario is a coordinate over the same axes for every agent, which is what lets one suite be
+# compared with the next and one framework cover voice, chat and whatever comes after. The names are
+# fixed here; everything about *what they contain* stays in `plan-suite/SKILL.md` and the kind files,
+# which is where levels are meant to be edited. Overlay carries three of them because folding the
+# vector and the intensity into the type would turn nine types into thirty-six labels and break every
+# count that reads them.
+CANONICAL_AXES = (
+    "task",
+    "counterparty",
+    "disposition",
+    "interface",
+    "interaction",
+    "overlay",
+    "overlay_vector",
+    "overlay_intensity",
+)
+
+# The names a plan reaches for instead, each of which is a level of an axis rather than an axis. Said
+# back by name because "declare the canonical axes" is advice and "payment_state is a level of
+# disposition" is a correction somebody can act on: one run declared exactly these.
+_LEVELS_MISTAKEN_FOR_AXES = {
+    "payment_state": "disposition",
+    "otp_state": "disposition",
+    "account_status": "disposition",
+    "caller_awareness": "interaction",
+    "channel_condition": "interface",
+    "rider_type": "counterparty",
+    "counterparty_type": "counterparty",
+    "payment_type": "disposition",
+    "use_case": "task",
+}
+
+
+# The twelve are closed, which is the whole reason the task axis can be exhaustive: every request is
+# one of these applied to something the agent owns. Reads, writes, or manages the process, and there
+# is no fourth kind. Written this way the denominator is the crossing, so "41 of 63 cells, and here
+# are the 22 we did not test" is arithmetic rather than a feeling.
+OPERATIONS = (
+    "retrieve",
+    "compare",
+    "explain",
+    "diagnose",
+    "create",
+    "update",
+    "cancel",
+    "execute",
+    "configure",
+    "authenticate",
+    "navigate",
+    "handoff",
+)
+
+
+def _tasks_not_operation_object(levels: list[str]) -> str:
+    """Why these task levels are not `operation-object`, or "" when they are."""
+    astray = [
+        one
+        for one in levels
+        if level_name(one).split("_")[0] not in OPERATIONS
+    ]
+    if not astray:
+        return ""
+    return (
+        "task levels are one of the twelve operations applied to one of this agent's own objects, "
+        "written operation-object: cancel-ride, retrieve-booking-status, authenticate-payment-method. "
+        "These are not: " + ", ".join(sorted(astray)[:8]) + ". The twelve are "
+        + ", ".join(OPERATIONS)
+        + ". Two things go wrong when a level is a phrase instead: the coverage denominator stops "
+        "being the crossing, so nobody can say which cells were never tested, and the phrase usually "
+        "smuggles in a level of another axis, `book_ride_cash` carries a payment state that belongs "
+        "to disposition."
+    )
+
+
+def _grid_off_the_framework(axes: dict[str, list[str]]) -> str:
+    """Why this grid is not the framework's axes, or "" when it is."""
+    if not axes:
+        return ""
+    declared = {level_name(axis) for axis in axes}
+    missing = [axis for axis in CANONICAL_AXES if axis not in declared]
+    invented = sorted(axis for axis in declared if axis not in CANONICAL_AXES)
+    if not missing and not invented:
+        return _tasks_not_operation_object(
+            [
+                str(one)
+                for axis, levels in axes.items()
+                if level_name(axis) == "task"
+                for one in (levels or [])
+            ]
+        )
+    said = [
+        "a scenario is a coordinate over the same axes for every agent, and this grid is not those "
+        "axes. They are: " + ", ".join(CANONICAL_AXES) + "."
+    ]
+    if invented:
+        said.append(
+            "These are not axes: "
+            + ", ".join(
+                f"{one} (a level of {_LEVELS_MISTAKEN_FOR_AXES[one]})"
+                if one in _LEVELS_MISTAKEN_FOR_AXES
+                else one
+                for one in invented
+            )
+            + ". What an agent's states turn out to be are levels; the axis they belong to keeps its "
+            "name, so the next suite for this agent can be compared with this one."
+        )
+    if missing:
+        said.append(
+            "Missing: "
+            + ", ".join(missing)
+            + ". Declare every one, even where this agent has a single level of it, because an axis "
+            "left out removes a question from the coverage report and nobody can see that it is gone."
+        )
+    return " ".join(said)
+
+
+def _over_its_share(
+    coverage: Any, grid: dict[str, list[str]] | None, kept: list[Scenario], wanted: int
+) -> str:
+    """Why this coordinate is a level the suite already has enough of, or "" when it is not.
+
+    Three suites in a row put half their scenarios on one level while every level was used and every
+    scenario placed, so nothing the report showed was wrong and the suite still tested one cell over
+    and over. A third is the bound: above it a level is no longer a sample, it is the suite.
+
+    Refused only while somewhere better exists, so a writer is never cornered: if every other declared
+    level of that axis is also at its share, the crowding is the plan's to fix and this says nothing.
+    """
+    if not grid or wanted < 12 or not isinstance(coverage, dict):
+        return ""
+    share = max(1, (wanted + 2) // 3)
+    for axis, levels in grid.items():
+        mine = level_name(coverage.get(axis) or coverage.get(level_name(axis)) or "")
+        if not mine or len(levels) < 3:
+            continue
+        counted: Counter[str] = Counter(
+            level_name((one.coverage or {}).get(axis, "")) for one in kept
+        )
+        if counted.get(mine, 0) < share:
+            continue
+        thin = [
+            one
+            for one in levels
+            if counted.get(level_name(one), 0) < share and level_name(one) != mine
+        ]
+        if not thin:
+            continue
+        return (
+            f"{axis} is already at {counted[mine]} of {wanted} on {mine!r}, which is its whole share "
+            f"of this suite. A level past a third stops being a sample and becomes the suite, and the "
+            f"next scenario there proves nothing the earlier ones did not. Write one of these instead: "
+            + ", ".join(sorted(thin)[:8])
+        )
+    return ""
+
+
 def _off_the_grid(coverage: Any, grid: dict[str, list[str]] | None) -> str:
     """Why this coordinate is not on the grid the plan dealt, or "" when it is.
 
@@ -277,12 +467,30 @@ def _off_the_grid(coverage: Any, grid: dict[str, list[str]] | None) -> str:
             + "; ".join(f"{one} = {', '.join(levels)}" for one, levels in grid.items())
             + ". Set coverage from the cell your brief dealt you."
         )
+    # Every declared axis, not just one of them. A scenario carrying only `task` is placed on the
+    # task axis and missing from the overlay axis entirely, so the coverage grid counts fewer
+    # scenarios than the suite holds: a suite of fifteen showed three in its overlay rows, and a
+    # reader sees a grid whose cells do not add up to the suite and cannot tell which half is
+    # wrong. Placed everywhere or placed nowhere.
+    placed = {level_name(axis) for axis in (coverage or {}) if str(coverage[axis] or "").strip()}
+    absent = [axis for axis in grid if level_name(axis) not in placed]
+    if absent:
+        return (
+            "this scenario says nothing about " + ", ".join(sorted(absent)) + ", and the plan deals "
+            + ("that axis" if len(absent) == 1 else "those axes")
+            + ". A scenario missing an axis is absent from that row of the coverage grid, so the "
+            "grid stops adding up to the suite. Give every axis a value, using the level that "
+            "means the ordinary case where nothing is applied. The grid is: "
+            + "; ".join(f"{one} = {', '.join(levels)}" for one, levels in grid.items())
+        )
+    # Folded through the same spelling the scenario's own coverage is stored under, so a plan that
+    # deals `privacy/PII` and a writer that submits `privacy_pii` are one level rather than two.
     folded = {
-        axis: {level.casefold(): level for level in levels}
+        level_name(axis): {level_name(level): level for level in levels}
         for axis, levels in grid.items()
     }
     for axis, level in coverage.items():
-        name, value = str(axis).strip(), str(level or "").strip()
+        name, value = level_name(axis), level_name(level)
         if not name or not value:
             continue
         if name not in folded:
@@ -293,7 +501,7 @@ def _off_the_grid(coverage: Any, grid: dict[str, list[str]] | None) -> str:
                 "grid. An axis one scenario invents adds a column to the coverage denominator "
                 "that nothing else can ever fill."
             )
-        if value.casefold() not in folded[name]:
+        if value not in folded[name]:
             return (
                 f"coverage puts {name} at {value!r}, which is not a level the plan deals. "
                 f"{name} may be: {', '.join(grid[name])}. Use the level from your brief; a level "
@@ -344,6 +552,62 @@ def _overlay_asserts_nothing(scenario: Scenario, catalogue: Catalogue) -> list[s
     ]
 
 
+# An identifier is a prefix, an underscore and a name: `plc_blr_airport`, `rdr_arjun`, `ord_2`. The
+# shape is the agent's own, so it is read off the world rather than listed here, which is what keeps
+# this from inventing a pattern a different agent does not use.
+def _world_identifiers(state: dict[str, list[dict[str, Any]]]) -> set[str]:
+    """Every identifier-shaped value the world holds, for reading an instruction against."""
+    found: set[str] = set()
+    for rows in (state or {}).values():
+        for row in rows if isinstance(rows, list) else []:
+            if not isinstance(row, dict):
+                continue
+            for value in row.values():
+                text = str(value)
+                if _AN_IDENTIFIER.fullmatch(text):
+                    found.add(text)
+    return found
+
+
+_AN_IDENTIFIER = re.compile(r"[a-z]{2,5}_[a-z0-9_]{2,40}")
+
+
+def _identifiers_the_instruction_invents(scenario: Scenario, trial: Any) -> list[str]:
+    """Identifiers the caller is told to say that the world does not hold after setup.
+
+    The fixture check above reads values handed over as data. This reads the instruction, because a
+    scenario can name a record in prose and never put it in the fixture: one declared `origin: seed`,
+    seeded nothing, and told the caller to ask for two places that exist nowhere. The caller then
+    cannot succeed and the agent is blamed for it.
+
+    Keyed on the identifier shape the world itself uses, so a run whose ids look like something else
+    is simply silent. Measured across nine suites: it fires on exactly those two, and on nothing else.
+    """
+    spoken = set(_AN_IDENTIFIER.findall(scenario.instruction or ""))
+    if not spoken:
+        return []
+    try:
+        held = _world_identifiers(trial.state())
+    except Exception:  # noqa: BLE001 - a world that cannot be read is not the scenario's fault
+        return []
+    if not held:
+        return []
+    # Only the prefixes this world actually uses, so a word that merely looks like an id is ignored.
+    prefixes = {one.split("_", 1)[0] for one in held}
+    missing = sorted(
+        one for one in spoken if one.split("_", 1)[0] in prefixes and one not in held
+    )
+    if not missing:
+        return []
+    return [
+        "the instruction has the caller name "
+        + ", ".join(missing)
+        + ", which the world does not hold after setup runs. Seed those records in setup_code, or "
+        "name ones the world already has: a caller who asks for a record that does not exist cannot "
+        "get what the scenario says they came for, and the agent takes the blame for it"
+    ]
+
+
 def _credentials_the_world_lacks(scenario: Scenario, trial: Any) -> list[str]:
     """Values handed to the caller, used by the solution, and absent from the world after setup."""
     claimed = _handed_to_the_caller(scenario.fixture)
@@ -380,6 +644,7 @@ def accept_scenario(
     persist: bool = True,
     rename_on_collision: bool = False,
     vocabulary: list[str] | None = None,
+    spoken: bool = True,
 ) -> dict[str, Any]:
     """Validate one scenario, then prove it. A plain function so both halves are testable.
 
@@ -414,12 +679,14 @@ def accept_scenario(
             trial.state(),
             simulator_prompt,
             allow_empty_solution=allow_empty_solution,
+            spoken=spoken,
         )
         problems.extend(contract_sequence_problems(scenario, hard_constraints or []))
         # A credential the caller is handed, that the correct agent then passes to a tool, has to
         # be in the world once setup has run. Advisory at save time this is found after the suite
         # is written; refused here it costs the writer one turn and it can seed the record.
         problems.extend(_credentials_the_world_lacks(scenario, trial))
+        problems.extend(_identifiers_the_instruction_invents(scenario, trial))
         # An overlay with nothing that can fail it is the defect every advisory has failed to
         # stop. Refused at the one moment a writer can still settle it.
         problems.extend(_overlay_asserts_nothing(scenario, catalogue))
@@ -837,6 +1104,10 @@ def scenario_tools(
         # already be on disk from an earlier round. Their folders are brought into step now, or
         # the bundle reader refuses them long after the session that could have fixed them ended.
         restated = refresh_check(destination, sub_goal)
+        # Rewriting a check is not the same as the scenario still passing it. A scenario proved
+        # against one definition keeps its proof while quietly inheriting another, and the suite
+        # ships graded by a check nothing ever ran against it. Three of sixty did exactly that.
+        broken = _no_longer_hold(destination, catalogue, restated, world_root)
         return _ok(
             f"{sub_goal.name} added"
             + ("" if sub_goal.deterministic() else " (judged, not deterministic)")
@@ -848,6 +1119,14 @@ def scenario_tools(
                 + " already written: "
                 + ", ".join(restated)
                 if restated
+                else ""
+            )
+            + (
+                f". {len(broken)} of them no longer pass it and are not provable as written: "
+                + "; ".join(f"{name} ({why})" for name, why in broken)
+                + ". Submit each again, either fixing the scenario or naming a sub-goal that "
+                "matches what it actually proves."
+                if broken
                 else ""
             )
         )
@@ -881,7 +1160,7 @@ def scenario_tools(
                 },
                 "tests": {
                     "type": "string",
-                    "description": "One line: what this scenario is trying to find out.",
+                    "description": "Required, one line: what this scenario is trying to find out. This is the sentence the coverage report carries, so write the question it settles, not the name again.",
                 },
                 "background_noise": {
                     "type": "string",
@@ -966,8 +1245,10 @@ def scenario_tools(
                         "communication_style",
                         "initial_message",
                         "languages",
-                        "accent",
                         "keywords",
+                        # Off a call there is no voice to pick, so asking for an accent makes a
+                        # writer invent one against a situation that says nothing about it.
+                        *(["accent"] if _is_spoken(contract) else []),
                     ],
                 },
                 "variables": {
@@ -1064,19 +1345,40 @@ def scenario_tools(
         strayed = _off_the_grid(args.get("coverage"), target.get("axes"))
         if strayed:
             return _err(strayed)
+        crowded_level = _over_its_share(
+            args.get("coverage"), target.get("axes"), kept, wanted
+        )
+        if crowded_level:
+            return _err(crowded_level)
         if wanted and target.get("people") != "alike":
             crowded = crowded_field(
                 kept, Scenario.model_validate(args).persona, wanted
             ) if args.get("persona") else ""
             if crowded:
                 return _err(crowded)
+        # The caller's own name is the cheapest thing to get wrong and the most visible: the agent
+        # greets by the name on the account, so a persona the record does not know misreports who was
+        # served in every line of the transcript. Refused here rather than remarked on at save,
+        # because renaming a person costs a writer nothing and proving costs it a minute.
+        if args.get("persona") and args.get("fixture"):
+            try:
+                stranger = persona_off_the_record(
+                    [Scenario.model_validate(args)], world_root
+                )
+            except Exception:  # noqa: BLE001 - a malformed scenario is the validator's to report
+                stranger = []
+            if stranger:
+                return _err(stranger[0])
         if wanted:
             named = str(args.get("name") or "").strip()
             already = any(one.name == named for one in kept)
             if not already and len(kept) >= wanted:
                 return _err(
                     f"This is complete: {len(kept)} of {wanted} written. Do not write another. "
-                    "Say what you covered and what you could not, and stop. Submitting again under "
+                    "Say in two or three lines what you covered and what you could not, and stop. Not one "
+                    "entry per scenario: the folders and the coverage report already hold "
+                    "every caller, keyword and outcome, and restating twenty of them is paid "
+                    "for in output tokens. Submitting again under "
                     "an existing name is the only submission left to you, for fixing one of yours."
                 )
         result = accept_scenario(
@@ -1090,6 +1392,7 @@ def scenario_tools(
             persist=can_save,
             rename_on_collision=rename_on_collision,
             vocabulary=target.get("keywords"),
+            spoken=_is_spoken(contract),
         )
         if not result.get("is_error"):
             exploration["since_submit"] = 0
@@ -1201,7 +1504,18 @@ def scenario_tools(
         "report is arithmetic over it. Left undeclared, writers invent their own: a real 50-scenario "
         "run produced a `task` axis with **30 levels across 30 scenarios**, one per scenario, plus "
         "three axes only one writer had ever heard of. A denominator built from that says nothing. "
-        "Declare the grid here and deal each cell in its brief.",
+        "Declare the grid here and deal each cell in its brief.\n\n"
+        "The grid is always these eight axes, whatever the agent: **task** what needs doing, "
+        "written `operation-object` from the twelve operations crossed with this agent's own "
+        "objects; **counterparty** who is being served; **disposition** the state they and the "
+        "world are in that changes the right answer; **interface** the conditions the session "
+        "runs under; **interaction** the shape of the exchange; **overlay** what is deliberately "
+        "making it hard, from the closed list; **overlay_vector** where that adversarial content "
+        "arrives; **overlay_intensity** absent, subtle or overt. The levels are yours and come "
+        "from this agent: whatever states you found are levels of `disposition`, not axes of "
+        "their own, and the interface and interaction levels come from the kind file you were "
+        "given. Declare all eight even where one has a single level, so two suites for one agent "
+        "can be compared.",
         schema(
             {
                 "count": int,
@@ -1246,6 +1560,11 @@ def scenario_tools(
             if str(axis).strip() and isinstance(levels, list)
         }
         if grid:
+            wrong = _grid_off_the_framework(
+                {**(target.get("axes") or {}), **grid}
+            )
+            if wrong:
+                return _err(wrong)
             # Merged, never replaced. A redeclared grid that drops a level makes every scenario
             # already placed there retroactively off-grid, and nothing re-checks them: one run
             # called aim_for three times and ended with 24 task levels against 10 planned and half
@@ -1452,7 +1771,9 @@ def scenario_tools(
         for remark in (
             lambda: check_problems(destination),
             lambda: unchecked_sub_goals(destination, catalogue),
+            lambda: unasserted_behaviour(kept, destination),
             lambda: grounding_problems(kept, world_root),
+            lambda: persona_off_the_record(kept, world_root),
             lambda: redteam_problems(kept),
             lambda: unpinned_callers(kept, set(world_summary_tables(world_root))),
         ):
@@ -1569,12 +1890,34 @@ def tool_names() -> tuple[str, ...]:
 TOOL_NAMES = tool_names()
 
 
+def _fields_of(world: Any, collection: str) -> list[str]:
+    """The column names of one collection, for a world whose store can say. Empty when it cannot."""
+    try:
+        rows = world.connection.execute(f'PRAGMA table_info("{collection}")').fetchall()
+    except Exception:  # noqa: BLE001 - not every world has a connection, and none must break for this
+        return []
+    return [str(row[1]) for row in rows]
+
+
 def world_summary(world_root: Path) -> str:
     """What is in the built environment, for grounding the writer before it asks."""
     world = restore(world_root)
     try:
         state = world.state()
-        lines = [f"  {name}: {len(rows)} rows" for name, rows in sorted(state.items())]
+        # An empty collection is the one a writer cannot copy a row from, and the one a cell like
+        # cancellation depends on. Told only "0 rows", twelve of twelve cancel and status scenarios
+        # on a sixty-scenario run had the agent build the row with its own tools across twelve steps
+        # rather than seed it. Naming the fields is what makes seeding as easy as booking.
+        lines = [
+            f"  {name}: {len(rows)} rows"
+            + (
+                f" (fields: {', '.join(_fields_of(world, name))}). Nothing to copy: seed one in "
+                "setup_code if your scenario needs it to exist"
+                if not rows and _fields_of(world, name)
+                else ""
+            )
+            for name, rows in sorted(state.items())
+        ]
         catalogue = load_catalogue(world_root)
         if catalogue.sub_goals:
             lines.append(
@@ -1652,6 +1995,74 @@ def grounding_problems(scenarios: list[Scenario], world_root: Path) -> list[str]
             problems.append(
                 f"{scenario.name}: the caller is handed {', '.join(missing)}, which the world does "
                 "not hold after setup runs, so the caller cannot succeed"
+            )
+    return problems
+
+
+_A_NAME_FIELD = re.compile(r"(^|_)(name|names)$", re.IGNORECASE)
+
+
+def _named_in(rows: Any, pinned: list[str]) -> set[str]:
+    """Every name field on the rows that hold one of these identifiers, as written."""
+    found: set[str] = set()
+    for table in (rows or {}).values():
+        for row in table if isinstance(table, list) else []:
+            if not isinstance(row, dict):
+                continue
+            values = {str(v).strip().casefold() for v in row.values()}
+            if not values & {one.casefold() for one in pinned}:
+                continue
+            found |= {
+                str(value).strip()
+                for key, value in row.items()
+                if _A_NAME_FIELD.search(str(key)) and str(value).strip()
+            }
+    return found
+
+
+def _words(text: str) -> set[str]:
+    return {one for one in re.split(r"[^\w]+", str(text).casefold()) if one}
+
+
+def persona_off_the_record(scenarios: list[Scenario], world_root: Path) -> list[str]:
+    """Callers whose own name is nowhere on the record the agent's lookup will return.
+
+    The agent greets by the name on the account. Somebody who says they are Liam on the row a
+    lookup of their number returns as Eli is two people, and every transcript after that misreports
+    who was served.
+
+    Only the rows the fixture's own identifiers appear in are read, and only the persona name is
+    compared, so a guest the world does not hold and a world that names nobody are both silent.
+    Advisory.
+    """
+    problems: list[str] = []
+    base = None
+    for scenario in scenarios:
+        pinned = [
+            one.split("=", 1)[1]
+            for one in _pinned_identity(scenario.fixture)
+            if "=" in one and one.split("=", 1)[1]
+        ]
+        mine = _words(scenario.persona.name or "")
+        if not pinned or not mine:
+            continue
+        try:
+            if base is None:
+                base = restore(world_root).state()
+            known = _named_in(base, pinned)
+            if not known:
+                # Only worth restoring and replaying setup for the scenarios that seed their own
+                # caller, which is the minority and the only case the base world cannot answer.
+                trial, _applied, _ready = prepared(scenario, world_root)
+                known = _named_in(trial.state(), pinned)
+        except Exception:
+            continue
+        if known and not (set().union(*(_words(one) for one in known)) & mine):
+            problems.append(
+                f"{scenario.name}: the caller is {scenario.persona.name!r}, but the record "
+                f"{', '.join(sorted(pinned))} identifies is named "
+                f"{', '.join(sorted(known))}. The agent greets by the name on the account, so pin "
+                "the persona to the record or seed a record for this person."
             )
     return problems
 
