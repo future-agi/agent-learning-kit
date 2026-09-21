@@ -3389,8 +3389,16 @@ def test_redact_outbound_text_scrubs_userinfo_and_extra_secrets() -> None:
     )
     assert redact_outbound_text("no secrets here") == "no secrets here"
     assert (
-        redact_outbound_text("token=abc123 leaked", extra_secret_values=("abc123",))
+        redact_outbound_text(
+            "token=abc123def456 leaked", extra_secret_values=("abc123def456",)
+        )
         == "token=*** leaked"
+    )
+    # A short declared value is configuration, not a credential. Substring-replacing one corrupted
+    # every graded receipt of a real hosted run: "on" turned "confirms" into "c***firms".
+    assert (
+        redact_outbound_text("the agent confirms consent only", extra_secret_values=("on",))
+        == "the agent confirms consent only"
     )
 
 

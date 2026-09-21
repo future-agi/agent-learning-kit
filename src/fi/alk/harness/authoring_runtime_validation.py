@@ -9,8 +9,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import random
 import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -73,9 +75,18 @@ async def validate_once(
             provider_attempt_id=capabilities.attempt_id,
             provider_expires_at=capabilities.expires_at,
         )
+        # How many copies of the agent's runtime to validate against at once. Every scenario is
+        # checked against a world that is torn down and resealed for it, and that reset is the
+        # whole cost of this stage: measured at 50 scenarios it was about 36 minutes, which is two
+        # passes over the suite at roughly twenty seconds a reset. The work is embarrassingly
+        # parallel because each instance owns its own ports and its own databases, so lanes do not
+        # see each other. One by default, so a deployment that sets nothing behaves exactly as it
+        # did. These are processes inside the one sandbox, never more sandboxes.
+        lanes = max(1, int(os.environ.get("ALK_VALIDATION_INSTANCES", "1") or 1))
         executor = ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix="runtime-validation"
+            max_workers=lanes, thread_name_prefix="runtime-validation"
         )
+        started = time.monotonic()
         phase = "environment"
         try:
             bundle = work / "bundle"
@@ -94,9 +105,12 @@ async def validate_once(
                 source=source,
                 bundle_dir=bundle,
                 work_directory=work,
-                instances=1,
+                instances=lanes,
             )
             factory = ProcessWorldFactory(work)
+            # The provider may hand back fewer than asked when ports or memory do not allow it,
+            # so the lanes that actually exist are the ones the suite is split across.
+            lanes = len(runtimes) or 1
             runtime = runtimes[0]
             phase = "scenarios"
             scenarios = await asyncio.to_thread(load_scenarios, bundle)
@@ -106,18 +120,45 @@ async def validate_once(
                 )
 
             async def check_setups(invariants):
-                failures = []
-                for scenario in scenarios:
-                    try:
-                        await check_setup(scenario, invariants)
-                    except RuntimeValidationError as exc:
-                        failures.append(str(exc))
-                if failures:
-                    raise RuntimeValidationError(phase, "\n".join(failures))
+                # Dealt round-robin so every lane gets the same mix of cheap and expensive
+                # setups rather than one lane drawing the whole tail.
+                shares = [scenarios[index::lanes] for index in range(lanes)]
+                failures: list[str] = []
 
-            async def check_setup(scenario, invariants):
-                await provider.reset(runtime, work_directory=work)
-                world = await factory.create(runtime, rng=random.Random(job.seed or 0))
+                async def lane(own, against):
+                    for scenario in own:
+                        try:
+                            await check_setup(scenario, invariants, against)
+                        except RuntimeValidationError as exc:
+                            failures.append(str(exc))
+
+                await asyncio.gather(
+                    *(
+                        lane(share, runtimes[index])
+                        for index, share in enumerate(shares)
+                        if share
+                    )
+                )
+                if failures:
+                    # Sorted because lanes finish out of order and a diff of two runs should not
+                    # depend on which lane happened to be quicker.
+                    raise RuntimeValidationError(phase, "\n".join(sorted(failures)))
+
+            # What a reset actually costs, measured on this path: the drop and recreate of the
+            # world's own logical database is fast, and the terminate-and-respawn of the agent's
+            # processes around it is the twenty seconds. Validation runs setup and ready only, so
+            # it needs a pristine store, not pristine processes: their connections are terminated
+            # by the drop and a pooled client reconnects on its next statement. Off unless asked,
+            # because a process that caches across scenarios would show up here as a ready failure
+            # and that is a worse trade to make silently.
+            in_place = os.environ.get("ALK_VALIDATION_RESET_IN_PLACE", "") == "1"
+
+            async def check_setup(scenario, invariants, against=None):
+                against = runtime if against is None else against
+                await provider.reset(
+                    against, work_directory=work, keep_processes=in_place
+                )
+                world = await factory.create(against, rng=random.Random(job.seed or 0))
                 for name, fn, target, timeout in (
                     ("setup", scenario.setup, world, 30.0),
                     ("ready", scenario.ready, world.read_only(), 15.0),
@@ -148,9 +189,20 @@ async def validate_once(
                                 f"{scenario.scenario_key}: ready precondition did not hold",
                             )
 
-            # Collect all executable setup errors before spending a model review or
-            # a repair attempt. Each scenario still gets an independent clean world.
-            await check_setups([])
+            # Timed out loud, because this stage is the whole wall clock of a large suite and
+            # the only way to size a change to it is a number from a real run.
+            print(
+                f"runtime validation: {len(scenarios)} scenarios across {lanes} lane"
+                f"{'s' if lanes != 1 else ''}, environment ready in "
+                f"{time.monotonic() - started:.0f}s",
+                flush=True,
+            )
+            # The invariants are authored before the suite is walked, not after, so the suite is
+            # walked once. Every scenario's world is torn down and resealed for it, and that reset
+            # is the whole cost of this stage: walking twice meant 2N rebuilds where N would do,
+            # which at 60 scenarios is 60 wasted and at 500 is 500. The price is that the model
+            # review is paid even when a setup is broken, which is one call against N rebuilds.
+            invariants: list = []
             if external_provider:
                 # A connect-only provider owns its state and executes its tools outside
                 # this sandbox. There is no harness-owned source database to probe or
@@ -160,21 +212,31 @@ async def validate_once(
                     "skipping local source-data invariant review",
                     flush=True,
                 )
-                return len(scenarios)
-            phase = "environment"
-            await provider.reset(runtime, work_directory=work)
-            baseline = await factory.create(runtime, rng=random.Random(job.seed or 0))
-            print("runtime validation: reviewing source data invariants", flush=True)
-            invariants = await author_invariants(
-                source, authoring, baseline.read_only(), endpoints=runtime.endpoints
-            )
-            # Review probes may have effects; none belongs in the test baseline.
-            await provider.reset(runtime, work_directory=work)
-            baseline = await factory.create(runtime, rng=random.Random(job.seed or 0))
-            await check_invariants(baseline.read_only(), invariants)
+            else:
+                phase = "environment"
+                await provider.reset(runtime, work_directory=work)
+                baseline = await factory.create(runtime, rng=random.Random(job.seed or 0))
+                print("runtime validation: reviewing source data invariants", flush=True)
+                invariants = await author_invariants(
+                    source, authoring, baseline.read_only(), endpoints=runtime.endpoints
+                )
+                # Review probes may have effects; none belongs in the test baseline.
+                await provider.reset(runtime, work_directory=work)
+                baseline = await factory.create(runtime, rng=random.Random(job.seed or 0))
+                await check_invariants(baseline.read_only(), invariants)
+
             phase = "scenarios"
-            if invariants:
-                await check_setups(invariants)
+            only_pass = time.monotonic()
+            await check_setups(invariants)
+            print(
+                f"runtime validation: setup pass {time.monotonic() - only_pass:.0f}s for "
+                f"{len(scenarios)} scenarios with {len(invariants)} invariants",
+                flush=True,
+            )
+            print(
+                f"runtime validation: complete in {time.monotonic() - started:.0f}s",
+                flush=True,
+            )
             return len(scenarios)
         except RuntimeValidationError as exc:
             raise RuntimeValidationError(

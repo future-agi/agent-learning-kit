@@ -96,6 +96,37 @@ def provisioning(enabled: bool | None = None) -> bool:
     }
 
 
+# Models this harness is allowed to spend on. Karthik's constraint, and it is a hard one: the
+# Gemini credits are what we have, Claude models are what we cannot afford. `CLAUDE_CODE_USE_VERTEX`
+# is the specific trap, because it means Anthropic's own models hosted on Vertex rather than
+# Google's, so a single stray flag spends on exactly what is forbidden.
+BILLABLE = ("gemini",)
+FORBIDDEN = ("claude", "sonnet", "opus", "haiku")
+
+
+def refuse_a_model_we_cannot_afford(model: str) -> None:
+    """Raise unless this is a model we are allowed to spend on.
+
+    Called wherever a model is resolved rather than once at the edge, because the ways a Claude id
+    can arrive are many: a default, an env var, a worker override, a gateway that silently
+    substitutes. One check at the boundary would miss most of them.
+    """
+    named = (model or "").strip().lower()
+    if not named:
+        raise ValueError("no model was chosen; refusing to let the provider pick one")
+    if any(word in named for word in FORBIDDEN):
+        raise ValueError(
+            f"refusing to run on {model!r}: this harness may only spend on "
+            f"{', '.join(BILLABLE)} models. Set ALK_HARNESS_MODEL to a Gemini model."
+        )
+    if not any(word in named for word in BILLABLE):
+        raise ValueError(
+            f"refusing to run on {model!r}: it is not recognisably a "
+            f"{'/'.join(BILLABLE)} model, and an unrecognised id is how a Claude model gets "
+            "billed by accident."
+        )
+
+
 def provider_env(model: str | None = None) -> dict[str, str]:
     """The provider block passed to the session.
 
@@ -107,9 +138,31 @@ def provider_env(model: str | None = None) -> dict[str, str]:
     # by twenty writers then runs on whatever that preference happens to be rather than on the
     # model the run asked for.
     chosen = chosen_model(model)
+    refuse_a_model_we_cannot_afford(chosen)
+    gateway = os.environ.get("ALK_HARNESS_GATEWAY_URL", "").strip()
     env = {
-        "CLAUDE_CODE_USE_VERTEX": "1",
-        "CLOUD_ML_REGION": os.environ.get("CLOUD_ML_REGION", "global"),
+        # A gateway speaking Anthropic Messages in front of a Gemini model, or the CLI's own
+        # Vertex route. The two are mutually exclusive and picking the wrong one is expensive:
+        # CLAUDE_CODE_USE_VERTEX means Anthropic's models hosted on Vertex, which is not this.
+        **(
+            {
+                "ANTHROPIC_BASE_URL": gateway,
+                "ANTHROPIC_AUTH_TOKEN": os.environ.get(
+                    "ALK_HARNESS_GATEWAY_TOKEN", ""
+                ),
+                # The CLI does not recognise a Gemini id, so it refuses the call on a window it
+                # cannot look up and then compacts against a window it guessed.
+                "CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT": "1",
+                "CLAUDE_CODE_MAX_CONTEXT_TOKENS": os.environ.get(
+                    "ALK_HARNESS_MAX_CONTEXT_TOKENS", "1000000"
+                ),
+            }
+            if gateway
+            else {
+                "CLAUDE_CODE_USE_VERTEX": "1",
+                "CLOUD_ML_REGION": os.environ.get("CLOUD_ML_REGION", "global"),
+            }
+        ),
         "ANTHROPIC_MODEL": chosen,
         "ANTHROPIC_DEFAULT_SONNET_MODEL": chosen,
         "ANTHROPIC_DEFAULT_OPUS_MODEL": chosen,
@@ -117,14 +170,18 @@ def provider_env(model: str | None = None) -> dict[str, str]:
         "ANTHROPIC_SMALL_FAST_MODEL": chosen,
         "CLAUDE_CODE_SUBAGENT_MODEL": chosen,
     }
-    for passthrough in (
-        "ANTHROPIC_VERTEX_PROJECT_ID",
-        "GOOGLE_CLOUD_PROJECT",
-        "GOOGLE_APPLICATION_CREDENTIALS",
-    ):
-        value = os.environ.get(passthrough)
-        if value:
-            env[passthrough] = value
+    # Credentials belong to whoever talks to the provider. Behind a gateway that is the gateway,
+    # and handing the CLI a service account as well would give it a second route to a model this
+    # run never chose.
+    if not gateway:
+        for passthrough in (
+            "ANTHROPIC_VERTEX_PROJECT_ID",
+            "GOOGLE_CLOUD_PROJECT",
+            "GOOGLE_APPLICATION_CREDENTIALS",
+        ):
+            value = os.environ.get(passthrough)
+            if value:
+                env[passthrough] = value
     return env
 
 
@@ -252,6 +309,34 @@ def artifact_dir(agent: str, root: str | Path | None = None) -> Path:
 HARNESS = SKILLS_ROOT / "harness.md"
 
 
+def declared_modalities() -> tuple[str, ...]:
+    """Every modality a kind file under ``skills/kinds/`` says it is for.
+
+    The point of the kind directory is that supporting a new sort of agent is adding a file. That
+    only holds if the contract will *accept* the new modality, and until this existed the accepted
+    list was a tuple in code, so a browser or computer-use agent needed an edit in two more places
+    before its file could ever be read.
+
+    Read from ``applies_to`` rather than from the file name, because that is the declaration the
+    matcher already trusts.
+    """
+    root = SKILLS_ROOT / "kinds"
+    found: set[str] = set()
+    if not root.is_dir():
+        return ()
+    for path in sorted(root.glob("*.md")):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        head = text.split("---")[1] if text.startswith("---") and "---" in text[3:] else ""
+        for line in head.splitlines():
+            if not line.strip().lower().startswith("applies_to:"):
+                continue
+            for clause in line.split(":", 1)[1].split(","):
+                key, _, value = clause.strip().lower().partition("=")
+                if key.strip() == "modality" and value.strip():
+                    found.add(value.strip())
+    return tuple(sorted(found))
+
+
 def discovered_skills(**about: str) -> str:
     """Every extra skill that says it applies to this agent, found by looking rather than by name.
 
@@ -312,7 +397,7 @@ def discovered_skills(**about: str) -> str:
     return "\n\n---\n\n" + "\n\n---\n\n".join(text for _name, text in found)
 
 
-def load_skill(name: str) -> str:
+def load_skill(name: str, *, preamble: bool = True) -> str:
     """One stage's instructions, behind what the harness as a whole is for.
 
     Every stage gets the same opening: what this harness produces, why the division between what
@@ -337,7 +422,7 @@ def load_skill(name: str) -> str:
             f"\n\n---\n\n# references/{reference.name}\n\n"
             f"{reference.read_text(encoding='utf-8')}"
         )
-    if not HARNESS.exists():
+    if not preamble or not HARNESS.exists():
         return stage
     return (
         f"{HARNESS.read_text(encoding='utf-8')}\n\n"

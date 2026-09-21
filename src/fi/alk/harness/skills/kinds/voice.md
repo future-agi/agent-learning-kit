@@ -55,6 +55,54 @@ nothing produces is a test of nothing, and it reads as coverage.
 So the two levers are who is calling and what is behind them. That is less than a phone network can
 do to a call, and writing the rest anyway would be inventing coverage.
 
+## This modality's answers to the five interface questions
+
+The planning skill asks every kind file the same five questions about the interface axis, and each
+answers in its own terms. These are voice's answers; a level from another modality claims a condition
+a call cannot produce. Add to this table when the runtime grows a lever; the planner reads whatever is
+here.
+
+| question | voice answers with |
+|---|---|
+| how clean is the input | quiet line · background noise (vehicle, street, crowd, retail) · accent · non-native speech · code-switching |
+| what channel it arrives on | inbound call · outbound call, and whoever picks up |
+| how reliable and timely it is | fluent speech · disfluency and self-correction · long pauses |
+| what competing signal exists | a second voice nearby · background media · a caller talking over the agent |
+| how state is exposed | audio only: nothing can be shown, every value has to be said and heard back |
+
+**Interaction, this modality's tempo.** Single request or multi-turn; fresh, resumed or interrupted;
+and the two that are specific to a call, barge-in while the agent is speaking, and a long silence the
+agent has to handle without abandoning the caller.
+
+**Overlay vector, where adversarial content arrives on a call.** Spoken by the caller, or carried in
+background audio someone else is producing. Not pasted text, not a hidden element: those belong to
+modalities that have a screen. The intensity is the planner's to deal, subtle or overt, and a suite of
+overt injections has tested the easy half.
+
+## The levels this modality deals, and the field each one lands in
+
+The planning skill asks the kind file for its X levels. A level with no field behind it is a label.
+
+| Level | Where it lands |
+|---|---|
+| `quiet_line` | `background_noise` false, the control a noisy scenario is measured against |
+| `noisy_line` | `background_noise`, the string naming the place: vehicle, street, crowd, retail |
+| `accented` | `persona.accent` |
+| `non_native` | `persona.accent` with `persona.languages` |
+| `code_switching` | `persona.languages` and `persona.multilingual` |
+| `disfluent` | `persona.communication_style`, with both values seeded where one is corrected aloud |
+| `terse` / `formal` / `anxious` | `persona.communication_style` |
+| `outbound_expecting` | `call_direction` outbound, `caller_awareness` "expecting" |
+| `outbound_partial` | `call_direction` outbound, `caller_awareness` "partial" |
+| `outbound_unaware` | `call_direction` outbound, `caller_awareness` "unaware" |
+
+**`outbound_unaware` is where voice agents fail most**: a person who did not dial and does not know
+why anyone is ringing has no request to answer, and a suite that skips it has tested the easy half.
+Some runs add further levels; take those from the files you were given rather than from this one.
+
+Chat fields (`pasted_blob`, `wall_of_text`, `typo_heavy` and the rest) belong to typing. Setting one
+here claims a condition nothing in this modality produces.
+
 ## What this modality lets you vary
 
 `background_noise` is per scenario, not a suite setting. Choose it from the situation rather than

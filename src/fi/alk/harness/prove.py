@@ -86,6 +86,13 @@ class Proof:
 
     def why(self) -> str:
         """What to fix, in the order worth fixing it."""
+        # Before the gates, because a broken proof names itself and never reached them. A proof can
+        # come back broken with the ready gate untouched, and reporting the gate then sends the
+        # writer to rewrite a setup that was never the problem: nine refusals in one run of fourteen
+        # were told "the world is not ready" with no reason attached, when the real fault was
+        # sub-goals with no check in code.
+        if self.broken and not self.why_not_ready:
+            return "these checks are broken, not failing:\n  - " + "\n  - ".join(self.broken)
         if not self.ready:
             return (
                 "the world is not ready for this scenario, so running it would test us rather "

@@ -19,10 +19,12 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Callable
 
 from . import spend
+from .live import Channel, carrying, folded_in
 from .backends import (
     Call,
     HarnessBackend,
@@ -200,17 +202,33 @@ class Stage:
         *,
         name: str = "",
         backend: HarnessBackend | None = None,
+        overheard: bool = True,
     ) -> None:
         self._spec = spec
         self._backend = backend
+        # Whether a person watching the run should see this stage's turns. True for the stages that
+        # build something, because the conversation is how somebody follows the run. False for a
+        # stage that grades: a judge reading a transcript and recording a verdict is backend work,
+        # its result belongs in the receipt, and echoing its tool calls into the chat made a
+        # verdict about the agent look like part of the conversation.
+        self._overheard = overheard
         self._session: HarnessSession | None = None
         self.name = name
         self.session_id: str | None = None
         self.history: list[Turn] = []
+        # Which tools this stage spent its turns on, and which of those calls came back refused.
+        # A stage that runs long is answering one of two different questions, and only the split
+        # says which: too many probes, or the same work submitted again after a gate said no.
+        self.tool_calls: Counter[str] = Counter()
+        self.tool_refusals: Counter[str] = Counter()
+        self._awaiting: dict[str, str] = {}
         # What actually got billed, read back rather than assumed. Asking for a model is not the
         # same as getting one: a request that quietly does not take shows up only on the
         # invoice, weeks later, as a number nobody can explain.
         self.models_used: set[str] = set()
+        # Inert unless this run was given somewhere to talk. Read before each turn rather than
+        # between stages, because a stage is twenty minutes and a conversation is not.
+        self.channel = Channel()
 
     @property
     def spec(self) -> SessionSpec:
@@ -238,6 +256,7 @@ class Stage:
     async def __aenter__(self) -> "Stage":
         if self._backend is None:
             self._backend = resolve()
+        self._spec.servers = carrying(self.channel, self._spec.servers)
         self._session = self._backend.create(self._spec)
         await self._session.start()
         return self
@@ -251,7 +270,10 @@ class Stage:
         """Send a message and yield events as they arrive."""
         if self._session is None:
             raise RuntimeError("stage is not open; use it as an async context manager")
-        await self._session.send(message)
+        said = self.channel.waiting() if self._overheard else []
+        for one in said:
+            self.channel.record("said", one, stage=self.name)
+        await self._session.send(folded_in(message, said))
         turn = Turn()
         replies = self._session.replies().__aiter__()
         # A stage may ask for a longer silence than the default, because for some stages silence
@@ -275,6 +297,10 @@ class Stage:
                 # so a front end showing several stages can tell them apart.
                 event.detail.setdefault("stage", self.name)
                 turn.events.append(event)
+                if self._overheard:
+                    self.channel.record(
+                        event.kind, event.text, tool=event.tool, **event.detail
+                    )
                 yield event
         self.history.append(turn)
 
@@ -290,6 +316,10 @@ class Stage:
                     events.append(Event(TEXT, text=part.text))
                 elif isinstance(part, Call):
                     turn.tools_used.append(part.name)
+                    # Keyed by who called it: a delegating stage has to be able to tell its own
+                    # spending from its workers', and the name alone cannot.
+                    self.tool_calls[f"{part.by or 'loop'}:{part.name}"] += 1
+                    self._awaiting[part.id] = f"{part.by or 'loop'}:{part.name}"
                     events.append(
                         Event(
                             TOOL,
@@ -303,6 +333,9 @@ class Stage:
                     )
             return events
         if isinstance(received, ToolReturned):
+            refused_tool = self._awaiting.pop(received.id, "")
+            if received.is_error and refused_tool:
+                self.tool_refusals[refused_tool] += 1
             # What a tool said back is the only view a caller has of whether the work is
             # going well. Dropping it leaves a run that can only be diagnosed by guessing.
             events = [
@@ -335,10 +368,26 @@ class Stage:
                 received.tokens_in,
                 received.tokens_out,
                 received.tokens_cached,
+                dict(self.tool_calls),
+                dict(self.tool_refusals),
             )
             turn.error = _why_it_failed(received) if failed else ""
             self.session_id = received.session_id or self.session_id
             self.models_used |= received.models
+            billed_what_we_cannot_afford = self.forbidden_models()
+            if billed_what_we_cannot_afford:
+                # Loud and immediate. A run that has started spending on these is worth killing
+                # now rather than discovering on an invoice.
+                logger.error(
+                    "STOPPING: the provider billed %s, which this harness may not spend on. "
+                    "Asked for %r.",
+                    ", ".join(sorted(billed_what_we_cannot_afford)),
+                    self._spec.model,
+                )
+                raise RuntimeError(
+                    "the provider billed a model this harness may not spend on: "
+                    + ", ".join(sorted(billed_what_we_cannot_afford))
+                )
             unexpected = self.unexpected_models()
             return [
                 Event(
@@ -385,6 +434,22 @@ class Stage:
         if not asked:
             return set()
         return {used for used in self.models_used if asked.split("-2")[0] not in used}
+
+    def forbidden_models(self) -> set[str]:
+        """Models that were actually billed and that this harness may not spend on.
+
+        Asking for a Gemini model is not the same as being served one: a gateway can substitute,
+        a CLI can fall back to its own default, an env var can route to Anthropic's models hosted
+        on Vertex. This reads what the provider said it billed, which is the only account that
+        matters.
+        """
+        from .config import FORBIDDEN
+
+        return {
+            used
+            for used in self.models_used
+            if any(word in (used or "").lower() for word in FORBIDDEN)
+        }
 
     @property
     def spent_usd(self) -> float:

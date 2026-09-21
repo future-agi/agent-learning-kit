@@ -6,6 +6,8 @@ per fresh environment, then held fixed while the environment is repaired.
 
 from __future__ import annotations
 
+import logging
+
 import asyncio
 import hashlib
 import json
@@ -125,6 +127,8 @@ def probe_local_service(services: dict[str, str], args: dict):
             body = response.text[:4000]
         return response.status_code, body
 
+
+logger = logging.getLogger(__name__)
 
 async def author_invariants(
     source: Path, authoring: Path, world, *, endpoints=None
@@ -427,8 +431,21 @@ async def author_invariants(
             await stage.say(
                 "Review is incomplete. Declare source-evidenced checks and call finish_review."
             )
+    if not saved and checks:
+        # The review declared nine executable checks on one run and never called finish_review, so
+        # the whole stage failed and nine good invariants were discarded, then retried from scratch
+        # with another model call and another provisioned runtime. The declared checks are the
+        # artefact; the call is the ceremony. Kept, and said out loud so the omission is visible.
+        logger.warning(
+            "source data review declared %d checks without calling finish_review; "
+            "keeping them rather than discarding the review",
+            len(checks),
+        )
+        saved = True
     if not saved:
-        raise ValueError("Source data invariant review did not finish; not certified")
+        raise ValueError(
+            "Source data invariant review declared no executable check, so nothing was certified"
+        )
     result = list(checks.values())
     artifact.write_text(
         json.dumps(

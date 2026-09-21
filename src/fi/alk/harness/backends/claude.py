@@ -11,7 +11,10 @@ name rather than implemented here.
 
 from __future__ import annotations
 
-from typing import Any, AsyncIterator
+import asyncio
+import dataclasses
+import tempfile
+from typing import Any, AsyncIterator, Callable
 
 from claude_agent_sdk import (
     AgentDefinition,
@@ -38,7 +41,9 @@ from .base import (
     StageDone,
     ToolReturned,
     ToolServer,
+    ToolSpec,
     WorkerSpec,
+    qualified,
 )
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
@@ -47,6 +52,28 @@ DEFAULT_MODEL = "claude-sonnet-4-6"
 # on the version, and the gate matches on the reported name, so both are granted or delegation
 # is denied by the very gate the workers exist to pass.
 DELEGATION_TOOLS = ("Agent", "Task")
+
+def _can_reach_its_workers(spec: SessionSpec, allowed: list[str]) -> None:
+    """Refuse a session whose workers it has no way to call, before it spends an hour on it.
+
+    A stage that hands its work out has its own writing tools taken away on purpose, so the
+    delegation tool is the only thing it can still produce with. Missing that, it can read and
+    plan and nothing else, and it does not fail: it writes the suite out as prose, says the
+    tools are not connected yet, and ends reporting success with nothing saved. Twice, an hour
+    each, before this was written.
+    """
+    if not spec.workers:
+        return
+    reachable = set(allowed)
+    if reachable & set(DELEGATION_TOOLS):
+        return
+    if any(name in DELEGATION_TOOLS for name in reachable):
+        return
+    raise ValueError(
+        f"this stage has workers ({', '.join(sorted(spec.workers))}) and no way to call them: "
+        "no delegation tool is reachable, so it can only read. Reachable: "
+        f"{sorted(reachable)}"
+    )
 
 
 def _sdk_server(server: ToolServer) -> Any:
@@ -73,7 +100,11 @@ def _definition(worker: WorkerSpec, parent: SessionSpec) -> AgentDefinition:
     different model is a difference nobody asked for and nothing on screen would explain.
     """
     tools = [name for name in worker.granted(parent) if name != DELEGATE_TOOL]
-    if DELEGATE_TOOL in (worker.builtins or parent.builtins):
+    # Only when the worker itself asks for it, never by inheriting the stage's. A worker that could
+    # hand out again would spend the stage's budget on a tree of its own and nothing on screen would
+    # say which of them wrote what. Workers declare no builtins, so reading the parent's here handed
+    # every writer the delegation tools by accident.
+    if DELEGATE_TOOL in (worker.builtins or ()):
         tools.extend(DELEGATION_TOOLS)
     return AgentDefinition(
         description=worker.description,
@@ -85,6 +116,41 @@ def _definition(worker: WorkerSpec, parent: SessionSpec) -> AgentDefinition:
         # Blocking, so the delegating turn receives the worker's report rather than a handle to
         # a run that outlives the stage that started it.
         background=False,
+    )
+
+
+# The server and tool a session publishes when it runs its workers itself. Qualified the way
+# every other harness tool is, so the gate, the ledger and the skills all read it the same way.
+def _said(text: str, *, is_error: bool = False) -> dict[str, Any]:
+    """A tool result in the shape every harness tool already returns."""
+    reply: dict[str, Any] = {"content": [{"type": "text", "text": text}]}
+    if is_error:
+        reply["is_error"] = True
+    return reply
+
+
+def _child_of(parent: SessionSpec, worker: WorkerSpec) -> SessionSpec:
+    """The session one worker runs in.
+
+    Everything the worker did not name falls back to the parent's, which is what makes a worker a
+    part of its stage rather than a session with its own opinions. It gets no workers of its own:
+    a stage hands work out once, and a worker that could hand out again would spend the stage's
+    budget somewhere nobody is watching.
+    """
+    return SessionSpec(
+        system_prompt=worker.instructions,
+        servers=dict(worker.servers or parent.servers),
+        builtins=tuple(
+            name for name in (worker.builtins or parent.builtins) if name != DELEGATE_TOOL
+        ),
+        cwd=parent.cwd,
+        max_turns=worker.max_turns,
+        model=worker.model or parent.model,
+        ask=parent.ask,
+        gated=parent.gated,
+        thinking=parent.thinking,
+        permission_override=parent.permission_override,
+        idle_timeout_seconds=parent.idle_timeout_seconds,
     )
 
 
@@ -103,6 +169,8 @@ class ClaudeSession:
     def __init__(self, options: ClaudeAgentOptions) -> None:
         self._options = options
         self._client: ClaudeSDKClient | None = None
+        # None for every session that runs no workers, which is every session this backend built
+        # before delegation existed.
 
     async def start(self) -> None:
         self._client = ClaudeSDKClient(options=self._options)
@@ -142,12 +210,17 @@ class ClaudeSession:
         if isinstance(received, ResultMessage):
             # subtype alone is not the outcome. A call that failed upstream still arrives with
             # subtype "success", so the error facts ride along and Stage decides what failed.
+            counted = _tokens(getattr(received, "model_usage", None))
             return [
                 StageDone(
                     outcome=received.subtype,
                     turns=received.num_turns,
-                    cost_usd=received.total_cost_usd,
-                    **_tokens(getattr(received, "model_usage", None)),
+                    cost_usd=_cost(
+                        getattr(received, "model_usage", None),
+                        counted,
+                        received.total_cost_usd,
+                    ),
+                    **counted,
                     session_id=received.session_id,
                     models=set(getattr(received, "model_usage", None) or {}),
                     is_error=bool(getattr(received, "is_error", False)),
@@ -171,6 +244,29 @@ class ClaudeSession:
         return []
 
 
+def _cost(model_usage: Any, counted: dict[str, int], reported: float | None) -> float | None:
+    """What the run cost, priced here rather than taken from the loop that ran it.
+
+    The CLI prices every call from its own table, which holds Claude models. Given a Gemini id it
+    does not recognise, it still returns a number, and that number was 14x the truth on the first
+    run measured. Where the harness has a price for the model it is the one that stands; where it
+    has none, the CLI's figure is passed through rather than replaced by silence.
+    """
+    from .vertex_gemini import priced
+
+    named = [str(name) for name in (model_usage or {})]
+    ours = [
+        priced(name, counted["tokens_in"], counted["tokens_out"], counted["tokens_cached"])
+        for name in named
+    ]
+    known = [one for one in ours if one is not None]
+    if not known:
+        return reported
+    # One price per model, and a stage runs on one: summing would multiply the same tokens by
+    # however many ids the SDK happened to report.
+    return max(known)
+
+
 def _tokens(model_usage: Any) -> dict[str, int]:
     """Input and output tokens across every model a stage used, for the ledger to audit against.
 
@@ -178,14 +274,24 @@ def _tokens(model_usage: Any) -> dict[str, int]:
     """
     read = 0
     written = 0
+    cached = 0
     for usage in (model_usage or {}).values():
         if isinstance(usage, dict):
             read += int(usage.get("inputTokens") or usage.get("input_tokens") or 0)
             written += int(usage.get("outputTokens") or usage.get("output_tokens") or 0)
+            cached += int(
+                usage.get("cacheReadInputTokens")
+                or usage.get("cache_read_input_tokens")
+                or 0
+            )
         else:
             read += int(getattr(usage, "input_tokens", 0) or 0)
             written += int(getattr(usage, "output_tokens", 0) or 0)
-    return {"tokens_in": read, "tokens_out": written}
+            cached += int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+    # The SDK reports cache reads beside fresh input, the way the Messages API does; the ledger
+    # reads tokens_cached as a part of tokens_in. Left unadded, a turn served almost entirely from
+    # cache looks like a turn that barely sent anything.
+    return {"tokens_in": read + cached, "tokens_out": written, "tokens_cached": cached}
 
 
 class ClaudeBackend:
@@ -196,6 +302,14 @@ class ClaudeBackend:
         return "claude" in (model or "").lower()
 
     def create(self, spec: SessionSpec) -> ClaudeSession:
+        return ClaudeSession(self._options(spec))
+
+    def _options(self, spec: SessionSpec) -> ClaudeAgentOptions:
+        """The SDK options for one session.
+
+        Workers are handed to the SDK's own sub-agents. There is no second delegation
+        implementation in this backend: one way to run a worker, and it is the SDK's.
+        """
         from ..config import (
             UNWANTED,
             gate_hooks,
@@ -208,25 +322,45 @@ class ClaudeBackend:
         # inside this session, so building the gate from the parent's tools alone would deny a
         # worker the very tools it was given.
         allowed = [name for name in spec.granted_anywhere() if name != DELEGATE_TOOL]
-        servers = {**spec.servers}
-        for worker in spec.workers.values():
-            servers.update(worker.servers)
+        # Union the tools per server name rather than letting the last worker win. The parent, the
+        # writer and the reviewer all publish under the same server name with different subsets, so
+        # `update` handed every sub-agent whichever subset was merged last: on one run that was the
+        # reviewer's read-only set, and the writers could not submit a single scenario. What each
+        # agent may actually call is already restricted by its own `tools` allowlist in
+        # `_definition`, so registering the union here is safe and is what makes that allowlist mean
+        # anything.
+        servers: dict[str, ToolServer] = {}
+        for source in (spec.servers, *(worker.servers for worker in spec.workers.values())):
+            for server_name, server in (source or {}).items():
+                existing = servers.get(server_name)
+                if existing is None:
+                    servers[server_name] = server
+                    continue
+                seen = {tool.name for tool in existing.tools}
+                servers[server_name] = dataclasses.replace(
+                    existing,
+                    tools=[*existing.tools, *(t for t in server.tools if t.name not in seen)],
+                )
         environment = dict(provider_env(spec.model))
         if spec.workers:
-            allowed.extend(DELEGATION_TOOLS)
+            # How many sub-agents the CLI may run at once. This is the only fan-out ceiling now.
             environment["CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"] = str(MOST_WORKERS_AT_ONCE)
+            allowed.extend(DELEGATION_TOOLS)
+        _can_reach_its_workers(spec, allowed)
         options = ClaudeAgentOptions(
-            system_prompt=spec.system_prompt,
+            system_prompt=_prompt_for(spec.system_prompt),
             allowed_tools=allowed,
             mcp_servers={
                 server_name: _sdk_server(server)
                 for server_name, server in servers.items()
             },
-            agents={
-                name: _definition(worker, spec)
-                for name, worker in spec.workers.items()
-            }
-            or None,
+            agents=(
+                {
+                    name: _definition(worker, spec)
+                    for name, worker in spec.workers.items()
+                }
+                or None
+            ),
             setting_sources=[],
             max_turns=spec.max_turns,
             model=spec.model,
@@ -246,4 +380,67 @@ class ClaudeBackend:
             )
         if spec.thinking:
             options.thinking = thinking_config()
-        return ClaudeSession(options)
+        return options
+
+
+# The Gemini model this variant runs on unless one is named. Carries its route, because the
+# gateway resolves a bare id to a different provider than the prefixed one, and kept here rather
+# than borrowed from the ADK backend so that changing one route's default never changes the
+# other's.
+GATEWAY_DEFAULT_MODEL = "vertex_ai/gemini-3.5-flash"
+
+
+# The SDK puts a string system prompt straight onto the CLI's argv, and a stage's prompt is the
+# agent's contract, its world summary and a skill or three. One conversation opened against a live
+# run crashed the guest with "[Errno 7] Argument list too long" and cost the job an attempt, because
+# argv is capped and a prompt is not. The SDK already accepts a file instead, so anything large goes
+# through a file and small prompts keep the exact shape they had.
+_PROMPT_ON_ARGV = 16_000
+
+
+def _prompt_for(prompt: str | None) -> Any:
+    """The prompt as the SDK should receive it: inline while small, a file once it is not."""
+    if not prompt or len(prompt) <= _PROMPT_ON_ARGV:
+        return prompt
+    handle = tempfile.NamedTemporaryFile(
+        "w", suffix=".md", prefix="alk-system-prompt-", delete=False, encoding="utf-8"
+    )
+    with handle as written:
+        written.write(prompt)
+    return {"type": "file", "path": handle.name}
+
+
+class ClaudeGatewayBackend(ClaudeBackend):
+    """The same loop, pointed at a gateway that speaks Anthropic Messages in front of Gemini.
+
+    A backend of its own rather than a mode of the one above, because the two differ in the only
+    thing that matters here: which provider gets billed. Selecting it by name is a decision
+    somebody made; a mode that turns itself on from an env var is a decision nobody made.
+
+    It refuses to start without a gateway, and refuses any model the harness may not spend on.
+    Both refusals are here rather than at the first call because the failure they prevent is a
+    bill, and a bill is only visible after the run.
+    """
+
+    name = "claude-gemini"
+    default_model = GATEWAY_DEFAULT_MODEL
+
+    def can_drive(self, model: str) -> bool:
+        from ..config import refuse_a_model_we_cannot_afford
+
+        try:
+            refuse_a_model_we_cannot_afford(model)
+        except ValueError:
+            return False
+        return True
+
+    def create(self, spec: SessionSpec) -> ClaudeSession:
+        import os
+
+        if not os.environ.get("ALK_HARNESS_GATEWAY_URL", "").strip():
+            raise ValueError(
+                "the claude-gemini backend needs ALK_HARNESS_GATEWAY_URL pointing at a gateway "
+                "that serves POST /v1/messages from a Gemini model. Without it the CLI would "
+                "reach Anthropic directly, which is the bill this backend exists to prevent."
+            )
+        return ClaudeSession(self._options(spec))

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import random
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -35,6 +36,7 @@ from .contract import AgentContract
 from .scenario import Scenario, voicemail_enabled
 from .scenario_tools import (
     SCENARIO_SERVER,
+    TOOL_NAMES,
     load_scenarios,
     scenario_tools,
     world_summary,
@@ -46,11 +48,29 @@ logger = logging.getLogger(__name__)
 SKILL = "write-scenarios"
 PLAN_SKILL = "plan-suite"
 
-# Turns a scenario costs in practice: look at the world, rehearse the calls, submit, and often
-# one more to correct what a gate refused.
-TURNS_EACH = 3
+# Turns a scenario costs in practice: look at the world, rehearse the calls, submit, and often one
+# more to correct what a gate refused. A briefed writer reads the world again in its own context and
+# its turns come out of this same budget, so the rate is the handed-out one: the loop decides whether
+# to hand out, and a budget that assumed it would not is a budget that cannot afford the decision.
+TURNS_EACH = 9
 # Enough to write a handful without the budget being the thing that stops it.
 TURNS_FLOOR = 120
+# One writer's own ceiling. A worker is a smaller agent with a smaller goal: it reads the world
+# once, writes its slice, and reports. Given the stage's budget instead it can spend the suite's
+# turns on its own part, and nothing is left for the rest.
+WRITER_TURNS = int(os.environ.get("ALK_HARNESS_WRITER_TURNS", "110") or 110)
+# Everything a writer needs to write its slice, and nothing else. Read the world, rehearse the
+# calls, name what is checked, submit. Planning the suite, reading it back, saving it and changing
+# the contract all belong to the loop that briefed it; offered here they get used, and a tool a
+# writer has no business calling is turns and context spent on nothing.
+WRITER_TOOLS = ("inspect_world", "try_calls", "add_sub_goal", "submit_scenario")
+# The two tools that write a scenario. A loop that hands the suite out is not offered them: an
+# orchestrator holding the writing tools writes, which is what it did, and then pays for the
+# suite in its own context instead of in its writers'.
+WRITES_A_SCENARIO = ("try_calls", "submit_scenario")
+# The reviewer reads the suite whole, which is the one job that grows with the suite, so it gets
+# its own ceiling rather than the stage's: uncapped it can spend what the next round needs.
+REVIEWER_TURNS = int(os.environ.get("ALK_HARNESS_REVIEWER_TURNS", "90") or 90)
 
 
 def turns_for(wanted: int) -> int:
@@ -79,23 +99,33 @@ def writer_worker(
     agent and its world up front because a worker never sees the parent's conversation.
 
     It gets the stage's own tool server, so a scenario it proves lands in the same list the
-    stage later saves from. ``save_scenarios`` is the one tool withheld: saving rewrites the
-    index and deletes folders it does not know about, so two workers saving at once would each
-    remove the other's work. The stage saves once, when the fan-out is done.
+    stage later saves from. Two tools are withheld. ``save_scenarios`` rewrites the index and
+    deletes folders it does not know about, so two workers saving at once would each remove the
+    other's work; the stage saves once, when the fan-out is done. ``suite_progress`` is the
+    briefing loop's own instrument: a writer that reads it starts deciding what the suite needs
+    instead of writing what it was given.
 
-    ``budget`` is the stage's own, not a share of it. A worker never needs the whole suite's
-    turns, but a ceiling set too low truncates its part silently and ``save_scenarios`` then
-    refuses the whole suite on the count.
+    It is given ``WRITER_TOOLS`` and nothing else. ``budget`` is the stage's, and a writer is
+    capped well below it. Every call a writer makes
+    is spent from the same budget as the loop that briefed it, so an uncapped writer can spend
+    the suite's turns on one slice. A writer that runs out says so and the loop hands the rest
+    of its brief to the next round.
     """
     return {
         WRITER: WorkerSpec(
             description=(
                 "Writes and proves part of a scenario suite in its own session. Brief it with "
                 "which use cases and situations to cover, how many scenarios, and what makes "
-                "them different from what the other writers were given."
+                "them different from what the other writers were given.\n\n"
+                "**Brief it fifteen to twenty scenarios, never two or three.** A writer reads the "
+                "world once and then writes its whole slice, so that reading is paid once per "
+                "writer whatever the slice is worth. Measured on a hundred-scenario run: 45 "
+                "writers were briefed instead of the seven the budget allows, the world was read "
+                "215 times, and the stage cost $12.86 where fifty scenarios in slices of sixteen "
+                "cost $3.85. Group the empty cells until a brief is worth a session."
             ),
             instructions=(
-                f"## This agent\n\n{contract.brief(with_data=True)}"
+                f"## This agent\n\n{contract.brief(with_data=True, sample_rows=3)}"
                 f"\n\n## Its world\n\n{world_summary(destination)}"
                 f"\n\n{load_skill(SKILL)}"
                 + discovered_skills(
@@ -103,24 +133,61 @@ def writer_worker(
                     voicemail="on" if voicemail_enabled() else "off",
                     conversational="yes" if contract.conversational else "no",
                 )
+                + (
+                    "\n\n## Not yours to do\n\nThe method above names tools this session does "
+                    "not have: "
+                    + ", ".join(
+                        f"`{name}`"
+                        for name in TOOL_NAMES
+                        if name not in WRITER_TOOLS
+                    )
+                    + ". Planning the suite, saving it, reading it back and changing the contract "
+                    "belong to whoever briefed you. Where the method tells you to reach for one, "
+                    "say so in your report instead and it will be done for you."
+                )
                 + "\n\n## Your part of the suite\n\nYou are one writer among several working "
-                "on the same suite at the same time, and you cannot see what the others were "
-                "given. Write only what your brief names. Submit each scenario with "
-                "submit_scenario as you prove it, rather than holding them to the end. Do not "
-                "save the suite; whoever briefed you saves once when every writer is done. "
-                "When you finish, name every scenario you wrote and say which part of your "
-                "brief you could not cover, if any."
+                "on the same suite at the same time. Your brief names what the others were "
+                "given; that list is there so you can stay out of theirs, not so you can "
+                "cover it. Write only what your own brief names: a scenario that strays is "
+                "either a duplicate of somebody else's or a gap in yours. The names already "
+                "taken come back with every submission.\n\n"
+                "Each scenario carries its use case verbatim and its own one-line `branch` "
+                "saying what makes it different from the others you write here. **Branches are "
+                "where the variety lives**: the ordinary path, the branch that cannot be "
+                "completed, the rule under pressure, state that has to carry across turns, the "
+                "same request against a differently seeded world.\n\n"
+                "What each one has to be, before you submit it:\n"
+                "  - every value real, read out of the world with inspect_world, never invented\n"
+                "  - an instruction that is a circumstance the person is living through, not a "
+                "script of lines to say\n"
+                "  - a setup that makes true whatever the instruction presumes, and a ready "
+                "check that proves it\n"
+                "  - a solution worked out with try_calls first, so the gates are not where you "
+                "find out it cannot be passed\n"
+                "  - sub-goals named from the shared catalogue, and checks that assert the right "
+                "call with the right arguments or the right end state, never that something "
+                "merely happened\n"
+                "  - a scenario a competent agent could plausibly fail. If any correct "
+                "implementation passes it for free, it teaches nothing and is not worth the "
+                "run\n\n"
+                "**The number in your brief is yours, not the suite's.** Every submission "
+                "reports how many the whole suite holds, across every writer; that count is not "
+                "your target and reaching it is not your job. Write what you were asked for and "
+                "stop.\n\n"
+                "Look at the world first, and read the sub-goals already defined. Submit each "
+                "scenario with submit_scenario as you prove it rather than holding them to the "
+                "end, then stop: do not save, and do not ask what to do next. When you finish, "
+                "name every scenario you wrote and say which part of your brief you could not "
+                "cover, if any."
             ),
             servers={
                 SCENARIO_SERVER: ToolServer(
                     name=server.name,
                     version=server.version,
-                    tools=[
-                        spec for spec in server.tools if spec.name != "save_scenarios"
-                    ],
+                    tools=[spec for spec in server.tools if spec.name in WRITER_TOOLS],
                 )
             },
-            max_turns=budget,
+            max_turns=min(WRITER_TURNS, budget),
             # Empty inherits the parent's model. A writer is briefed rather than deciding, so a
             # cheaper model may do this work; whether it does is a measurement, not an assumption,
             # because a weaker writer that fails the gates more often spends the saving on retries.
@@ -134,7 +201,7 @@ REVIEWER = "suite_reviewer"
 # What a reviewer may touch. Reading the suite and the world is the whole job; a reviewer that
 # could submit would answer its own objection instead of reporting it, and one that could save
 # would rewrite the index underneath the writers still running.
-REVIEWER_TOOLS = ("inspect_world", "inspect_scenario")
+REVIEWER_TOOLS = ("inspect_world", "inspect_scenario", "suite_progress")
 
 
 def reviewer_worker(
@@ -166,6 +233,10 @@ def reviewer_worker(
                 "is already well covered, and do not report a gap you cannot name a scenario "
                 "for. A suite of the right size that covers what matters is finished, and "
                 "saying so is the useful answer.\n\n"
+                "Start with suite_progress(names=true): it names every scenario written and the cell each "
+                "sits in, which is the only way to learn a name, and inspect_scenario needs one. "
+                "Read the scenarios whose names or cells look like the gap you suspect; you do "
+                "not need to read them all.\n\n"
                 "Report each gap as the use case, the scenario that is missing in one line, and "
                 "why it matters. Report nothing when there is nothing to report."
                 f"\n\n## This agent\n\n{contract.brief()}"
@@ -179,7 +250,7 @@ def reviewer_worker(
                     ],
                 )
             },
-            max_turns=budget,
+            max_turns=min(REVIEWER_TURNS, budget),
         )
     }
 
@@ -196,15 +267,34 @@ def open_stage(
     destination = out or artifact_dir(contract.agent)
     server, kept = scenario_tools(contract, destination, destination, wanted=wanted)
     budget = max_turns or turns_for(wanted)
+    # How many writers the turn budget can afford, and how many of those may be in flight together.
+    # Briefing fewer than this in one message costs a whole extra wave of writer-lifetimes, which is
+    # the difference between a large suite taking one writer's time and taking several.
+    affordable = max((budget - REVIEWER_TURNS) // WRITER_TURNS, 1)
+    at_once = max(min(affordable, MOST_WORKERS_AT_ONCE), 1)
+    slice_size = max(-(-wanted // at_once), 1)
+    loop_server = (
+        ToolServer(
+            name=server.name,
+            version=server.version,
+            tools=list(server.tools),
+        )
+    )
     spec = SessionSpec(
         # The agent and its world before the method: grounding evidence read before the
         # instructions that operate on it is followed more closely than the same evidence
         # buried between the instructions and the task.
         system_prompt=(
-            f"## This agent\n\n{contract.brief(with_data=True)}"
+            f"## This agent\n\n{contract.brief(with_data=True, sample_rows=3)}"
             f"\n\n## Its world\n\n{world_summary(destination)}"
-            f"\n\n{load_skill(SKILL)}"
-            f"\n\n{load_skill(PLAN_SKILL)}"
+            # One role per session. A suite this size is handed out, so this session plans and
+            # briefs and never writes, and the writing method belongs to the writers rather than
+            # here. Carrying it anyway is what made the loop behave like a writer.
+            # Both methods, always. Whether to write the suite here or brief writers for it is
+            # a judgement about this suite, so the loop needs the plan and the writing method in
+            # front of it either way. A threshold in code decided it for every suite alike.
+            + f"\n\n{load_skill(SKILL)}"
+            + f"\n\n{load_skill(PLAN_SKILL, preamble=False)}"
             # Whatever this kind of agent adds on top. A file under skills/kinds/ that
             # declares `applies_to: modality=<kind>` is appended here, so supporting a
             # new kind of agent is adding that file and nothing else.
@@ -214,7 +304,33 @@ def open_stage(
                 voicemail="on" if voicemail_enabled() else "off",
                 conversational="yes" if contract.conversational else "no",
             )
-            + f"\n\nAt most {MOST_WORKERS_AT_ONCE} writers may run at the same time."
+            + f"\n\nPlan the grid first, cut it into {at_once} slices of about {slice_size} "
+            f"scenarios each, then LAUNCH ALL {at_once} before you collect anything. Launching "
+            f"returns immediately with a handle and the writer keeps going in the background, so "
+            f"every one you launch is writing while you launch the next. Only when all {at_once} "
+            f"are launched do you collect.\n\n"
+            f"Collect with wait_for_all false: it comes back as soon as any writer is done, and "
+            f"you launch a replacement for the next slice straight away, keeping {at_once} "
+            f"writing at all times. Repeat until suite_progress reports the count.\n\n"
+            f"The one thing that destroys this is launching a writer and collecting before "
+            f"launching the rest, which runs them one at a time for no reason. Each brief must "
+            f"name different cells so no two writers are given the same work. "
+            f"A launch above the limit is refused, and a refused launch has written nothing: if "
+            f"a launch comes back saying the concurrent limit is reached, that writer does not "
+            f"exist, so wait for a running writer to report and brief it again. Never say work "
+            f"is running in the background on the strength of a launch you did not see succeed, "
+            f"and check suite_progress before you believe your own count."
+            # The loop cannot ration what it cannot see. Without this it has no reason to believe
+            # writing the suite alone will not fit, and it runs out mid-suite instead of delegating.
+            + (
+                f"\n\nYou have {budget} turns for this whole stage and every tool call spends one, "
+                f"including the calls your writers make: a writer reads the world in its own "
+                f"context, which is far cheaper than carrying it in yours, but its turns come out "
+                f"of this same budget. A writer may spend up to {WRITER_TURNS} and the reviewer up "
+                f"to {REVIEWER_TURNS}, so across all rounds together brief at most "
+                f"{max((budget - REVIEWER_TURNS) // WRITER_TURNS, 1)} writers and keep turns back "
+                f"for yourself. Running out mid-suite loses everything the spent turns bought."
+            )
             + (
                 f"\n\nWrite {wanted} scenarios."
                 if not kept
@@ -223,7 +339,7 @@ def open_stage(
                 + ". Submitting one under an existing name replaces it."
             )
         ),
-        servers={SCENARIO_SERVER: server},
+        servers={SCENARIO_SERVER: loop_server},
         # Delegation is offered, never imposed. Whether a suite is worth splitting is a judgement
         # about this suite, so the skill argues it and the stage decides; a threshold in code here
         # decided it for every suite alike and was wrong at both ends.
@@ -243,7 +359,11 @@ def open_stage(
     return Stage(spec, name=SKILL), destination
 
 
-def opening(contract: AgentContract, wanted: int = 10, existing: int = 0) -> str:
+def opening(
+    contract: AgentContract,
+    wanted: int = 10,
+    existing: int = 0,
+) -> str:
     if existing:
         return (
             f"There are already {existing} scenarios for {contract.agent!r}, and they are "
@@ -404,7 +524,10 @@ async def write(
         # The planning turn is the expensive one to lose: a refusal here costs the whole suite, not
         # one slice, so it waits the same way a writer does.
         await survive_refusal(
-            lambda: stage.say(opening(contract, wanted), on_event=on_event),
+            lambda: stage.say(
+                opening(contract, wanted),
+                on_event=on_event,
+            ),
             what="the opening turn",
             on_event=on_event,
         )

@@ -20,6 +20,9 @@ _SECRETS_PATH = Path("/run/futureagi/secrets.json")
 _ADC_PATH = Path("/work/.authoring-credentials/google.json")
 _TARGET_SECRETS_PATH = Path("/run/futureagi/authoring-target-secrets.json")
 _SIMULATOR_SECRETS_PATH = Path("/run/futureagi/simulator-secrets.json")
+# Where a hosted run can be talked to while it runs. Beside the corrections inbox, because it
+# is the same idea reaching the stage a turn later instead of a stage later.
+_CHAT_PATH = Path("/run/futureagi/chat")
 _PASSTHROUGH = {
     # Not a credential: authoring writes the scenarios, so the switch has to reach it.
     "ALK_VOICEMAIL_SCENARIOS",
@@ -137,6 +140,7 @@ def main(argv: list[str] | None = None) -> int:
     all_values = _load_values(_SECRETS_PATH)
     values = _platform_simulator_values(all_values)
     _configure_generation_environment(values)
+    os.environ.setdefault("ALK_HARNESS_CHAT_DIR", str(_CHAT_PATH))
     _configure_observability_environment(all_values)
     target_values = {
         name: all_values[name]

@@ -23,6 +23,7 @@ other's dependencies installed.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Awaitable, Callable, Protocol, runtime_checkable
 
@@ -100,7 +101,11 @@ KNOWN_BUILTINS = (*FILE_TOOLS, ASK_TOOL, DELEGATE_TOOL)
 # The one ceiling on fan-out: how many workers may be in flight at once. A safety limit on the
 # machine rather than a judgement about the work, so it stays in code while the decision to
 # delegate at all stays with the model. Told to the stage as well, so it plans against it.
-MOST_WORKERS_AT_ONCE = 12
+# Writers a stage may run at the same time. This is what decides wall clock on a large suite: a
+# thousand scenarios in slices of twenty is fifty writers, and how many rounds that takes is the
+# suite divided by this. Raising it trades wall clock against the provider's rate limit, which a
+# refused session pays back as backoff, so it is tunable rather than fixed.
+MOST_WORKERS_AT_ONCE = int(os.environ.get("ALK_HARNESS_WORKERS_AT_ONCE", "12") or 12)
 
 
 @dataclass
@@ -222,6 +227,9 @@ class Call:
     id: str
     name: str
     arguments: dict[str, Any] = field(default_factory=dict)
+    # Which agent made the call. Empty when the backend does not distinguish one. Without it a
+    # stage that delegates cannot tell its own spending from its workers'.
+    by: str = ""
 
 
 @dataclass

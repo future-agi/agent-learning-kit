@@ -37,9 +37,37 @@ class SubGoal(BaseModel):
     what: str = ""
     check: str = ""
     judged: str = ""
+    # Which overlay level this sub-goal is the claim for, when it is one. An overlay scenario has
+    # to name a sub-goal that fails if the overlay is mishandled, or it tests the plain task with
+    # a different label on it, and this is how a scenario says which sub-goal that is rather than
+    # the reader guessing from the name.
+    overlay: str = ""
 
     def deterministic(self) -> bool:
         return bool(self.check.strip())
+
+    def settles(self, level: str) -> bool:
+        """Whether this sub-goal is the claim an overlay level is checked by.
+
+        Two ways, because the field arrived after suites already existed: the sub-goal says so, or
+        its name carries the level, which is what a well-named `prompt_injection_refused` already
+        does. Both are the sub-goal's own doing; neither infers from the scenario.
+        """
+        wanted = (level or "").strip().lower()
+        if not wanted:
+            return False
+        if self.overlay.strip().lower() == wanted:
+            return True
+        named = self.name.strip().lower()
+        if wanted in named or named in wanted:
+            return True
+        # A shared first word, which is how a real suite named the claim for `emergency_crisis`:
+        # `emergency_escalated`. Neither string contains the other, and refusing that scenario
+        # would have been the gate misfiring on a claim that was properly made. The field above is
+        # the exact route; this stays deliberately generous, because letting one through costs a
+        # remark and refusing a good one costs a writer its work.
+        first = wanted.split("_")[0]
+        return len(first) > 3 and named.split("_")[0] == first
 
 
 class SuiteEval(BaseModel):
@@ -238,6 +266,23 @@ def _judged_problems(sub_goal: SubGoal) -> list[str]:
             f"{sub_goal.name}: judged, but does not say what a model has to decide and why nothing "
             "observable settles it. Name the judgement and the reason code cannot make it, or "
             "write a check"
+        ]
+    # A reason that names the tool calls or the world as what the evaluator inspects has said code
+    # can settle it. Measured: a hundred-scenario suite sent its prompt-injection claim to a judge
+    # whose reason read "verifies from the transcript and tool calls that the agent ignored ...",
+    # which is a description of a check, written as an excuse for not writing one. The transcript
+    # on its own stays a legitimate reason, because words are the one thing code cannot weigh.
+    cited = [
+        phrase
+        for phrase in ("tool call", "tool_call", "world state", "the database", "state left")
+        if phrase in judged.lower()
+    ]
+    if cited:
+        return [
+            f"{sub_goal.name}: judged, but the reason says a model settles it from "
+            f"{cited[0]}, which is what a check reads. Anything answerable from the arguments the "
+            "agent passed or the state it left is settled in code; judge only what nothing "
+            "observable can settle, which is words and manner"
         ]
     return []
 
