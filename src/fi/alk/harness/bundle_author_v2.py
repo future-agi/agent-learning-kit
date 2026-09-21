@@ -758,6 +758,46 @@ def _source_schema_paths(
     return [unique[key] for key in sorted(unique)]
 
 
+def _schema_column_types(paths: list[Path]) -> dict[tuple[str, str], str]:
+    """Column declarations read off the agent's own schema, keyed by table and column.
+
+    SQLite erases the distinctions the target cares about: a BOOLEAN comes back as INTEGER and
+    renders as 0 or 1, an array comes back as the JSON text "[]" rather than "{}", and postgres
+    refuses both. The adopted schema is the authority on what these columns really are, and
+    nothing else in this path reads it.
+    """
+    declared: dict[tuple[str, str], str] = {}
+    for path in paths:
+        sql = re.sub(r"--[^\n]*", "", path.read_text(encoding="utf-8"))
+        for found in re.finditer(
+            r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"?([A-Za-z_]\w*)"?\s*\(',
+            sql,
+            re.IGNORECASE,
+        ):
+            depth, at = 1, found.end()
+            while at < len(sql) and depth:
+                depth += (sql[at] == "(") - (sql[at] == ")")
+                at += 1
+            for part in re.split(r",(?![^()]*\))", sql[found.end() : at - 1]):
+                words = part.strip().split()
+                if len(words) < 2:
+                    continue
+                name = words[0].strip('"')
+                if name.upper() in ("PRIMARY", "FOREIGN", "UNIQUE", "CHECK", "CONSTRAINT"):
+                    continue
+                kind = words[1].upper()
+                rest = " ".join(words[1:]).upper()
+                if kind.startswith("BOOL"):
+                    declared[(found.group(1).lower(), name.lower())] = "boolean"
+                elif "[]" in rest or kind.startswith("ARRAY"):
+                    # SQLite keeps an array as the JSON text "[]"; postgres wants "{}" and
+                    # refuses the literal with "malformed array literal".
+                    declared[(found.group(1).lower(), name.lower())] = "text[]"
+                elif kind.startswith("JSONB"):
+                    declared[(found.group(1).lower(), name.lower())] = "jsonb"
+    return declared
+
+
 def _adopted_seed_sql(
     authoring: Path,
     *,
@@ -785,7 +825,10 @@ def _adopted_seed_sql(
         if sqlite.is_file():
             rows = _sqlite_sql(
                 sqlite,
-                contract_declarations=_contract_column_declarations(contract or {}),
+                contract_declarations={
+                    **_contract_column_declarations(contract or {}),
+                    **_schema_column_types(source_schemas),
+                },
                 include_schema=False,
             )
             return schema_sql + "\n" + rows, adopted + ["world.sqlite"]

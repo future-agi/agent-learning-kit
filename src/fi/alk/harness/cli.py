@@ -406,6 +406,32 @@ async def _environment(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _amend(args) -> int:
+    """Apply a change-set to a bundle, and print one receipt per change as JSON.
+
+    Invoked rather than imported, because that is how every other stage of this harness is reached:
+    the caller owns the bundle and the storage, and the harness owns what a scenario has to hold.
+    Receipts go to stdout so a caller can read them without parsing logs.
+    """
+    import json as _json
+    import sys as _sys
+
+    from .amend_scenarios import amend_bundle
+
+    raw = _sys.stdin.read() if args.changes == "-" else Path(args.changes).read_text(
+        encoding="utf-8"
+    )
+    try:
+        outcome = amend_bundle(Path(args.out), _json.loads(raw), rework=args.rework)
+    except ValueError as refused:
+        # A malformed change-set is the caller's to fix, so it is said on stderr and nothing is
+        # written. Exit 2 keeps it distinguishable from a bundle that could not be read at all.
+        print(str(refused), file=_sys.stderr)
+        return 2
+    print(_json.dumps(outcome))
+    return 0
+
+
 async def _scenarios(args: argparse.Namespace) -> int:
     destination = Path(args.out) if args.out else artifact_dir(args.name)
     contract = load(destination)
@@ -1283,6 +1309,27 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     scenarios.set_defaults(run=_scenarios, interactive=True)
+
+    amend = sub.add_parser(
+        "amend", help="apply a change-set to a saved suite and re-prove what it touches"
+    )
+    amend.add_argument("--out", required=True, help="the bundle to amend")
+    amend.add_argument(
+        "--changes",
+        required=True,
+        metavar="PATH",
+        help="a futureagi.scenario-changes.v1 document, or - to read it from stdin",
+    )
+    amend.add_argument(
+        "--no-rework",
+        dest="rework",
+        action="store_false",
+        help=(
+            "apply only what cannot affect the suite's correctness and refuse the rest, "
+            "instead of working out whether the world, the solution and the checks still hold"
+        ),
+    )
+    amend.set_defaults(run=_amend, rework=True)
 
     live = sub.add_parser(
         "live", help="run the scenarios against the real agent, as a conversation"
