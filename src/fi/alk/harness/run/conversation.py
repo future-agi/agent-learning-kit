@@ -257,6 +257,18 @@ async def converse(
             record("customer", said)
         else:
             transcript.ended = RAN_OUT
+    except Exception as exc:
+        # Preserve simulator usage already consumed before a target/provider failure.  Call
+        # runners attach this partial transcript to the failed usage record instead of silently
+        # dropping a paid attempt that never reached a normal return.
+        transcript.calls = list(target.world.calls) if hasattr(target, "world") else []
+        transcript.spent_usd = target.spent_usd + customer.spent_usd
+        (
+            transcript.simulator_input_tokens,
+            transcript.simulator_output_tokens,
+        ) = getattr(customer, "simulator_tokens", (0, 0))
+        setattr(exc, "partial_transcript", transcript)
+        raise
     finally:
         await customer.__aexit__(None, None, None)
         await target.close()

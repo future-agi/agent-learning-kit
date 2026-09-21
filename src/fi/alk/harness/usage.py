@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import tempfile
@@ -14,14 +15,37 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlsplit, urlunsplit
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .job import FailureDomain
 from .outbound import HostedCapabilities, Transport, TransportError
 
+
+logger = logging.getLogger(__name__)
 USAGE_SCHEMA_VERSION = "futureagi.harness-usage.v1"
 SIMULATOR_FUNDING_ALIAS = "ALK_SIMULATOR_FUNDING"
 UsageAction = Literal["text_call", "voice_call"]
+UsageOutcome = Literal["completed", "failed"]
 Funding = Literal["platform", "customer"]
+_FAILURE_DOMAINS_BY_CODE = {
+    "usage_exhausted": FailureDomain.PLATFORM_SYNC,
+    "usage_check_failed": FailureDomain.PLATFORM_SYNC,
+    "world_unavailable": FailureDomain.ENVIRONMENT,
+    "target_agent_stalled": FailureDomain.AGENT,
+    "target_agent_tool_failed": FailureDomain.AGENT,
+    "simulator_stalled": FailureDomain.SIMULATOR,
+    "driver_crashed": FailureDomain.SIMULATOR,
+    "evidence_missing": FailureDomain.SIMULATOR,
+}
+
+
+def failure_domain_for_code(code: str | None) -> FailureDomain:
+    """Map the scheduler's closed failure codes to the usage-report domain."""
+
+    return _FAILURE_DOMAINS_BY_CODE.get(
+        str(code or ""),
+        FailureDomain.INFRASTRUCTURE,
+    )
 
 
 class UsageUnavailable(RuntimeError):
@@ -53,6 +77,16 @@ class UsageRecord(BaseModel):
     amount: float = Field(ge=0, allow_inf_nan=False)
     occurred_at: datetime
     funding: Funding
+    outcome: UsageOutcome = "completed"
+    failure_domain: FailureDomain | None = None
+
+    @model_validator(mode="after")
+    def _validate_failure(self) -> "UsageRecord":
+        if self.outcome == "failed" and self.failure_domain is None:
+            raise ValueError("failed usage records must include failure_domain")
+        if self.outcome == "completed" and self.failure_domain is not None:
+            raise ValueError("completed usage records cannot include failure_domain")
+        return self
 
 
 class UsageJournal:
@@ -98,6 +132,8 @@ class UsageJournal:
         amount: float,
         funding: Funding,
         occurred_at: datetime | None = None,
+        outcome: UsageOutcome = "completed",
+        failure_domain: FailureDomain | None = None,
         record_key: str | None = None,
     ) -> UsageRecord:
         if not math.isfinite(amount) or amount < 0:
@@ -121,6 +157,8 @@ class UsageJournal:
                     or existing.scenario_key != scenario_key
                     or existing.amount != amount
                     or existing.funding != funding
+                    or existing.outcome != outcome
+                    or existing.failure_domain != failure_domain
                 ):
                     raise UsageUnavailable(
                         f"usage record {record_id} was replayed with different facts"
@@ -133,6 +171,8 @@ class UsageJournal:
                 amount=amount,
                 occurred_at=occurred_at or datetime.now(timezone.utc),
                 funding=funding,
+                outcome=outcome,
+                failure_domain=failure_domain,
             )
             self._records.append(record)
             self._flush()
@@ -182,7 +222,7 @@ class UsageJournal:
 
 def simulator_funding(environ: Mapping[str, str] | None = None) -> Funding:
     value = (environ or os.environ).get(SIMULATOR_FUNDING_ALIAS, "").strip().lower()
-    return "platform" if value == "platform" else "customer"
+    return "customer" if value == "customer" else "platform"
 
 
 def _usage_endpoint(scenarios_endpoint: str) -> str:
@@ -241,6 +281,8 @@ class UsageReporter:
         amount: float,
         funding: Funding,
         occurred_at: datetime | None = None,
+        outcome: UsageOutcome = "completed",
+        failure_domain: FailureDomain | None = None,
         record_key: str | None = None,
     ) -> UsageRecord:
         record = self.journal.append(
@@ -250,6 +292,8 @@ class UsageReporter:
             amount=amount,
             funding=funding,
             occurred_at=occurred_at,
+            outcome=outcome,
+            failure_domain=failure_domain,
         )
         self.report()
         return record
@@ -263,6 +307,18 @@ class UsageReporter:
                     headers=self._capabilities.auth_headers(),
                     json_body=self.journal.payload(),
                 )
-        except TransportError:
+        except TransportError as exc:
+            logger.warning(
+                "Hosted usage report transport failed for attempt %s: %s",
+                self.journal.attempt_id,
+                exc,
+            )
             return False
-        return 200 <= response.status_code < 300
+        if not 200 <= response.status_code < 300:
+            logger.warning(
+                "Hosted usage report rejected for attempt %s with HTTP %s",
+                self.journal.attempt_id,
+                response.status_code,
+            )
+            return False
+        return True

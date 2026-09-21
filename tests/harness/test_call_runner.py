@@ -21,6 +21,7 @@ from typing import Any
 import pytest
 
 from fi.alk.harness import call_runner as cr
+from fi.alk.harness import chat_call_runner as chat
 from fi.alk.harness.bundle_v2 import EvidenceSeam
 from fi.alk.harness.hosted_scheduler import CallAborted, CallOutcome
 from fi.alk.harness.job import (
@@ -1585,9 +1586,40 @@ def test_completed_voice_call_reports_measured_duration(tmp_path: Path) -> None:
         "action": "voice_call",
         "scenario_key": "k1",
         "amount": 0.5,
-        "funding": "customer",
-        "record_key": "measured-run",
+        "funding": "platform",
+        "outcome": "completed",
+        "failure_domain": None,
     }
+
+
+def test_failed_text_call_reports_partial_tokens_and_failure_domain() -> None:
+    class Reporter:
+        def __init__(self) -> None:
+            self.recorded: list[dict[str, Any]] = []
+
+        def record(self, **facts: Any) -> None:
+            self.recorded.append(facts)
+
+    reporter = Reporter()
+    partial = chat.Transcript(simulator_input_tokens=11, simulator_output_tokens=7)
+    failure = CallAborted("simulator stalled", code="simulator_stalled")
+
+    async def record() -> None:
+        setattr(failure, "partial_transcript", partial)
+        await chat._record_text_usage(
+            reporter,
+            scenario_key="k1",
+            started=datetime.now(timezone.utc),
+            funding="platform",
+            transcript=None,
+            failure=failure,
+        )
+
+    asyncio.run(record())
+
+    assert reporter.recorded[0]["amount"] == 18
+    assert reporter.recorded[0]["outcome"] == "failed"
+    assert reporter.recorded[0]["failure_domain"] == "simulator"
 
 
 def test_a_timed_out_call_with_a_real_conversation_is_graded_not_aborted(

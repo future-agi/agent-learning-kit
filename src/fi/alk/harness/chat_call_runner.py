@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import time
@@ -22,9 +23,61 @@ from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime
 from .run.conversation import TargetConversationEnded, Transcript, converse
 from .scenario import Scenario as ConversationScenario
-from .usage import UsageDenied, UsageUnavailable, simulator_funding
+from .usage import (
+    UsageDenied,
+    UsageUnavailable,
+    failure_domain_for_code,
+    simulator_funding,
+)
 from .world.runtime import Call, GeneratedWorld
 from .world.stores.postgres import AttachedPostgresStore
+
+logger = logging.getLogger(__name__)
+
+
+async def _record_text_usage(
+    reporter: Any,
+    *,
+    scenario_key: str,
+    started: datetime,
+    funding: str,
+    transcript: Transcript | None,
+    failure: BaseException | None,
+) -> None:
+    if reporter is None:
+        return
+    partial = transcript or getattr(failure, "partial_transcript", None)
+    simulator_tokens = (
+        partial.simulator_input_tokens + partial.simulator_output_tokens
+        if isinstance(partial, Transcript)
+        else 0
+    )
+    completed = transcript is not None
+    try:
+        await asyncio.to_thread(
+            reporter.record,
+            action="text_call",
+            scenario_key=scenario_key,
+            amount=simulator_tokens,
+            funding=funding,
+            occurred_at=started,
+            outcome="completed" if completed else "failed",
+            failure_domain=(
+                None
+                if completed
+                else failure_domain_for_code(getattr(failure, "code", "call_failed"))
+            ),
+        )
+    except Exception:  # noqa: BLE001 - call failure must not hide a metering warning
+        logger.exception(
+            "Could not record hosted text usage for scenario %s",
+            scenario_key,
+        )
+    if simulator_tokens == 0:
+        logger.warning(
+            "Hosted text call produced no simulator tokens for scenario %s",
+            scenario_key,
+        )
 
 
 DEFAULT_CHAT_TARGET_TIMEOUT_SECONDS = 120.0
@@ -395,7 +448,6 @@ class HostedChatCallRunner:
             self._contract = AgentContract.model_validate_json(
                 contract_path.read_text(encoding="utf-8")
             )
-        self._scenario_attempt_counts: dict[str, int] = {}
 
     async def run(
         self,
@@ -448,10 +500,6 @@ class HostedChatCallRunner:
                 "scenario": scenario.scenario_key,
             },
         )
-        scenario_attempt = (
-            self._scenario_attempt_counts.get(scenario.scenario_key, 0) + 1
-        )
-        self._scenario_attempt_counts[scenario.scenario_key] = scenario_attempt
         funding = simulator_funding()
         if self._context.usage_reporter is not None and funding == "platform":
             try:
@@ -465,6 +513,8 @@ class HostedChatCallRunner:
                     f"text_usage_check_failed: {exc}", code="usage_check_failed"
                 ) from exc
         started = datetime.now(timezone.utc)
+        transcript: Transcript | None = None
+        failure: CallAborted | None = None
         try:
             transcript = await _drive_conversation(
                 _HostedChatTarget(
@@ -478,27 +528,27 @@ class HostedChatCallRunner:
                 self._contract,
                 self._context.bundle_dir,
             )
-        except CallAborted:
+        except CallAborted as exc:
+            failure = exc
             raise
         except Exception as exc:  # noqa: BLE001 - convert target transport failures to call faults
-            raise CallAborted(
-                f"chat_target_failed: {type(exc).__name__}: {exc}"
-            ) from exc
+            wrapped = CallAborted(f"chat_target_failed: {type(exc).__name__}: {exc}")
+            partial = getattr(exc, "partial_transcript", None)
+            if partial is not None:
+                setattr(wrapped, "partial_transcript", partial)
+            failure = wrapped
+            raise wrapped from exc
+        finally:
+            await _record_text_usage(
+                self._context.usage_reporter,
+                scenario_key=scenario.scenario_key,
+                started=started,
+                funding=funding,
+                transcript=transcript,
+                failure=failure,
+            )
 
         ended = datetime.now(timezone.utc)
-        simulator_tokens = (
-            transcript.simulator_input_tokens + transcript.simulator_output_tokens
-        )
-        if self._context.usage_reporter is not None and simulator_tokens > 0:
-            await asyncio.to_thread(
-                self._context.usage_reporter.record,
-                action="text_call",
-                scenario_key=scenario.scenario_key,
-                amount=simulator_tokens,
-                funding=funding,
-                occurred_at=started,
-                record_key=str(scenario_attempt),
-            )
         transcript_id = await self._adapter.upload_artifact(
             transcript.artifact(),
             kind=ArtifactKind.TRANSCRIPT,

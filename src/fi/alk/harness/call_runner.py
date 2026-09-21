@@ -54,10 +54,17 @@ from .background_noise import scenario_source
 from .bundle_v2 import EvidenceSeam
 from .hosted_scheduler import CallAborted, CallOutcome
 from .hosted_scheduler import Scenario as HostedScenario
-from .job import ExecutionMode, HarnessJob, ProviderExecutionMode
+from .job import ExecutionMode, FailureDomain, HarnessJob, ProviderExecutionMode
 from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime
-from .usage import UsageDenied, UsageReporter, UsageUnavailable, simulator_funding
+from .usage import (
+    UsageDenied,
+    UsageOutcome,
+    UsageReporter,
+    UsageUnavailable,
+    failure_domain_for_code,
+    simulator_funding,
+)
 from .scenario import DEFAULT_VOICEMAIL_STYLE, voicemail_enabled
 from .voicemail_audio import clip_for
 from .simulator_voice import (
@@ -1386,7 +1393,11 @@ class CallRunnerImpl:
             )
             raise WorldUnavailable(f"target agent never joined the room: {reason}")
 
-        async def record_voice_usage() -> None:
+        async def record_voice_usage(
+            *,
+            outcome: UsageOutcome = "completed",
+            failure_domain: FailureDomain | None = None,
+        ) -> None:
             if self._context.usage_reporter is None:
                 return
             await asyncio.to_thread(
@@ -1396,7 +1407,8 @@ class CallRunnerImpl:
                 amount=base.duration_ms / 60_000,
                 funding=simulator_funding(self._environ),
                 occurred_at=case_started_at,
-                record_key=report.run_id,
+                outcome=outcome,
+                failure_domain=failure_domain,
             )
 
         # A genuinely silent agent-first call (agent joined, zero conversational turns) reaches
@@ -1430,24 +1442,40 @@ class CallRunnerImpl:
             attributed = _attributed_stall(case)
             if attributed is not None:
                 code, reason = attributed
-                await record_voice_usage()
+                await record_voice_usage(
+                    outcome="failed",
+                    failure_domain=failure_domain_for_code(code),
+                )
                 raise CallAborted(reason, partial=base, code=code)
             if (
                 case.failure is not None
                 and case.failure.code == "target_agent_tool_failed"
             ):
-                await record_voice_usage()
+                await record_voice_usage(
+                    outcome="failed",
+                    failure_domain=failure_domain_for_code("target_agent_tool_failed"),
+                )
                 raise CallAborted(
                     case.failure.message,
                     partial=base,
                     code="target_agent_tool_failed",
                 )
-            await record_voice_usage()
+            await record_voice_usage(
+                outcome="failed",
+                failure_domain=failure_domain_for_code("voice_call_not_completed"),
+            )
             raise CallAborted(
                 f"voice_call_not_completed: {case.status.value}: {reason}", partial=base
             )
 
-        await record_voice_usage()
+        await record_voice_usage(
+            outcome="failed" if is_silent_agent else "completed",
+            failure_domain=(
+                failure_domain_for_code("simulator_stalled")
+                if is_silent_agent
+                else None
+            ),
+        )
         # Never fabricate calls for a call that produced no conversation -- the scheduler's own
         # coverage guarantee turns an empty `calls` tuple into evidence_missing/simulator
         # regardless of turns (hosted_scheduler.py's own unconditioned-on-turns rule).
