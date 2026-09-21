@@ -1670,6 +1670,27 @@ def scenario_tools(
                 + "; ".join(shown)
                 + ("" if len(shown) == len(placed) else f"; and {len(placed) - len(shown)} before them")
             )
+        # A task only ever seen under an attack is a task whose ordinary path nothing tests. The
+        # plan says every task gets one plain scenario first; said here it costs one more round,
+        # found at the end it costs the suite. Measured on a hosted 3: two of three task levels.
+        plain = {
+            one.coverage.get("task")
+            for one in kept
+            if str(one.coverage.get("overlay") or "none") == "none"
+        }
+        overlaid = {
+            one.coverage.get("task")
+            for one in kept
+            if str(one.coverage.get("overlay") or "none") != "none"
+        }
+        never_plain = sorted(
+            level for level in overlaid - plain if level
+        )
+        if never_plain:
+            lines.append(
+                "task levels only ever seen with an overlay, brief one plain scenario for each: "
+                + ", ".join(never_plain[:12])
+            )
         by_worker = Counter(one.use_case.strip() for one in kept if one.use_case.strip())
         if by_worker:
             lines.append(
