@@ -434,6 +434,11 @@ def _bundle_unavailable_code(raw_message: str) -> str:
     return code if code in _SECTION_2E_CODES else "bundle_manifest_invalid"
 
 
+# Where authoring leaves its generic-pipeline artifacts in the guest. The run phase reads the
+# source model from here so it compiles the world against what certified it.
+_GENERIC_ARTIFACT_ROOT = Path("/work/authoring/generic-harness")
+
+
 class DefaultBundleSource:
     """Looks for an already-authored bundle at `work_directory / bundle_dir_name`. This is a
     placeholder location this module invented (see the module-level STUCK DECISION note) — a real
@@ -1893,6 +1898,12 @@ class HostedEntrypointDeps:
             ),
             provider_attempt_id=capabilities.attempt_id,
             provider_expires_at=capabilities.expires_at,
+            # The world was certified against a source model composed from the authoring tree's
+            # discovered schema. Without the same root here the run inspects Postgres alone, and a
+            # World IR that certified clean is refused when the run builds the environment.
+            generic_artifact_root=_GENERIC_ARTIFACT_ROOT
+            if _GENERIC_ARTIFACT_ROOT.is_dir()
+            else None,
         )
     )
     # The real call runner needs `OutboundAdapter.upload_artifact` to satisfy the invariant that
