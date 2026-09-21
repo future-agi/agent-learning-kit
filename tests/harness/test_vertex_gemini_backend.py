@@ -178,10 +178,20 @@ def test_the_gateway_route_never_carries_the_vertex_claude_flag(monkeypatch):
     assert env["CLAUDE_CODE_USE_VERTEX"] == "0"
     assert "GOOGLE_APPLICATION_CREDENTIALS" not in env
     assert env["ANTHROPIC_BASE_URL"] == "https://gateway.example.test"
-    # The wire carries the alias the gateway resolves; every reachable model is pinned to it, so
-    # a suite written by twenty sub-agents cannot land on the CLI's own preference.
+    # The wire carries the real id, so the job chooses its model rather than gateway config, and
+    # every model the session can reach is pinned to it: a suite written by forty sub-agents
+    # cannot land on the CLI's own preference.
     for pinned in ("ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL"):
-        assert env[pinned] == "claude-sonnet-4-6"
+        assert env[pinned] == "vertex_ai/gemini-3.7-flash"
+    # A model the SDK does not know has no window to look up, so the run declares one.
+    assert env["CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT"] == "1"
+
+    # A gateway that publishes only Claude-shaped names is served by naming its alias.
+    monkeypatch.setenv("AGENTCC_CLAUDE_MODEL_ALIAS", "claude-sonnet-4-6")
+    aliased = provider_env("vertex_ai/gemini-3.7-flash")
+    assert aliased["ANTHROPIC_MODEL"] == "claude-sonnet-4-6"
+    assert "CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT" not in aliased
+    monkeypatch.delenv("AGENTCC_CLAUDE_MODEL_ALIAS")
 
     monkeypatch.delenv("AGENTCC_API_KEY")
     straight = provider_env("gemini-3.7-flash")

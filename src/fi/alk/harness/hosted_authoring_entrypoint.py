@@ -20,9 +20,6 @@ _SECRETS_PATH = Path("/run/futureagi/secrets.json")
 _ADC_PATH = Path("/work/.authoring-credentials/google.json")
 _TARGET_SECRETS_PATH = Path("/run/futureagi/authoring-target-secrets.json")
 _SIMULATOR_SECRETS_PATH = Path("/run/futureagi/simulator-secrets.json")
-# Where a hosted run can be talked to while it runs. Beside the corrections inbox, because it
-# is the same idea reaching the stage a turn later instead of a stage later.
-_CHAT_PATH = Path("/run/futureagi/chat")
 _PASSTHROUGH = {
     "AGENTCC_API_KEY",
     "AGENTCC_BASE_URL",
@@ -156,7 +153,6 @@ def main(argv: list[str] | None = None) -> int:
         }
     )
     _configure_generation_environment(values)
-    os.environ.setdefault("ALK_HARNESS_CHAT_DIR", str(_CHAT_PATH))
     _configure_observability_environment(all_values)
     target_values = {
         name: all_values[name]

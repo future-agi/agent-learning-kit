@@ -73,15 +73,25 @@ WRITES_A_SCENARIO = ("try_calls", "submit_scenario")
 REVIEWER_TURNS = int(os.environ.get("ALK_HARNESS_REVIEWER_TURNS", "90") or 90)
 
 
-def turns_for(wanted: int) -> int:
-    """A turn budget that grows with the suite being asked for.
+def writers_for(wanted: int) -> int:
+    """How many writers a suite of this size needs, from what one writer can afford to write."""
+    most_a_writer_can_write = max(WRITER_TURNS // TURNS_EACH, 1)
+    return max(-(-wanted // most_a_writer_can_write), 1)
 
+
+def turns_for(wanted: int) -> int:
+    """A turn budget that affords one writer per slice, plus the reviewer and the loop itself.
+
+    Derived rather than guessed, because the budget is what decides how many writers the loop may
+    brief at once, and briefing fewer than the suite needs is what turns one round into several.
     A fixed ceiling is what made asking for a large suite pointless: generation stopped partway
     through, and `save_scenarios` refuses a count that does not match what was asked for, so a run
-    that asked for fifty and reached twenty-eight saved nothing at all. The budget has to follow
-    the request, or the request cannot be honoured.
+    that asked for fifty and reached twenty-eight saved nothing at all.
     """
-    return max(TURNS_FLOOR, wanted * TURNS_EACH + 40)
+    writers = writers_for(wanted)
+    # The loop spends a turn per brief it sends, plus the planning and progress calls around them.
+    own = 40 + writers
+    return max(TURNS_FLOOR, writers * WRITER_TURNS + REVIEWER_TURNS + own)
 
 
 # Named with underscores because one backend sanitises a worker name into an identifier and the
@@ -272,7 +282,11 @@ def open_stage(
     # the difference between a large suite taking one writer's time and taking several.
     affordable = max((budget - REVIEWER_TURNS) // WRITER_TURNS, 1)
     at_once = max(min(affordable, MOST_WORKERS_AT_ONCE), 1)
-    slice_size = max(-(-wanted // at_once), 1)
+    # A writer cannot write more than its own turn budget buys, so a slice is capped by what it
+    # can afford rather than only by how many writers there are. Briefed beyond it, a writer runs
+    # out mid-slice and the cells it was given come back empty after the whole round was waited on.
+    most_a_writer_can_write = max(WRITER_TURNS // TURNS_EACH, 1)
+    slice_size = max(min(-(-wanted // at_once), most_a_writer_can_write), 1)
     loop_server = (
         ToolServer(
             name=server.name,
@@ -304,22 +318,18 @@ def open_stage(
                 voicemail="on" if voicemail_enabled() else "off",
                 conversational="yes" if contract.conversational else "no",
             )
-            + f"\n\nPlan the grid first, cut it into {at_once} slices of about {slice_size} "
-            f"scenarios each, then LAUNCH ALL {at_once} before you collect anything. Launching "
-            f"returns immediately with a handle and the writer keeps going in the background, so "
-            f"every one you launch is writing while you launch the next. Only when all {at_once} "
-            f"are launched do you collect.\n\n"
-            f"Collect with wait_for_all false: it comes back as soon as any writer is done, and "
-            f"you launch a replacement for the next slice straight away, keeping {at_once} "
-            f"writing at all times. Repeat until suite_progress reports the count.\n\n"
-            f"The one thing that destroys this is launching a writer and collecting before "
-            f"launching the rest, which runs them one at a time for no reason. Each brief must "
-            f"name different cells so no two writers are given the same work. "
-            f"A launch above the limit is refused, and a refused launch has written nothing: if "
-            f"a launch comes back saying the concurrent limit is reached, that writer does not "
-            f"exist, so wait for a running writer to report and brief it again. Never say work "
-            f"is running in the background on the strength of a launch you did not see succeed, "
-            f"and check suite_progress before you believe your own count."
+            + f"\n\nPlan the grid first, then cut it into slices of about {slice_size} "
+            f"scenarios and brief {at_once} writers. Brief them by putting all {at_once} "
+            f"{WRITER} calls in ONE message: sub-agents briefed in the same message run at the "
+            f"same time, and briefing one, waiting for it, then briefing the next runs them one "
+            f"at a time for no reason. That single choice is the difference between a large suite "
+            f"taking one writer's time and taking {at_once} times as long.\n\n"
+            f"Each brief must name different cells, so no two writers are given the same work. "
+            f"When the writers report, call suite_progress: it names the cells still empty "
+            f"without returning a scenario body, and the next {at_once} briefs go out the same "
+            f"way, in one message, for those cells. Repeat until suite_progress reports the "
+            f"count. Never say work is running in the background on the strength of a brief you "
+            f"did not see accepted, and check suite_progress before you believe your own count."
             # The loop cannot ration what it cannot see. Without this it has no reason to believe
             # writing the suite alone will not fit, and it runs out mid-suite instead of delegating.
             + (
