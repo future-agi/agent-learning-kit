@@ -3268,6 +3268,27 @@ def test_short_explicit_farewell_disconnect_is_completed_for_eval() -> None:
     }
 
 
+def test_customer_declines_more_items_before_disconnect_is_completed_for_eval() -> None:
+    messages = [
+        {"role": "user", "content": "Can I get a Happy Meal and two cheeseburgers?"},
+        {"role": "assistant", "content": "Got it. Anything else for you today?"},
+        {"role": "user", "content": "No, that's everything. Cheers!"},
+    ]
+
+    outcome = livekit._conversation_outcome(
+        "target_disconnected",
+        messages,
+        min_turn_messages=6,
+    )
+
+    assert outcome.status == CaseStatus.COMPLETED
+    assert outcome.failure is None
+    assert outcome.metadata == {
+        "stop_reason": "target_disconnected",
+        "short_terminal_exchange": True,
+    }
+
+
 def test_provider_end_call_evidence_recovers_short_call_for_eval() -> None:
     outcome = livekit._failure_outcome(
         CaseStatus.FAILED,

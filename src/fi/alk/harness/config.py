@@ -34,6 +34,8 @@ def credentials_hint() -> str:
     which is a legitimate setup and an easy accident. The accident produces a provider auth
     error several layers down, so it is worth saying out loud which one is in play.
     """
+    if os.environ.get("AGENTCC_API_KEY", "").strip():
+        return "credentials: Agent Command Center virtual key"
     named = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
     if named:
         return f"credentials: {Path(named).name}"
@@ -99,14 +101,38 @@ def provisioning(enabled: bool | None = None) -> bool:
 def provider_env(model: str | None = None) -> dict[str, str]:
     """The provider block passed to the session.
 
-    Claude Code resolves the GCP project from ``GOOGLE_CLOUD_PROJECT``, the credential file, or
-    the active gcloud configuration, in that order, so an unset project id is not an error here.
+    With ``AGENTCC_API_KEY`` set, Claude Code speaks the Anthropic Messages protocol to Agent
+    Command Center.  The gateway translates that request to the provider selected by the model
+    name.  Otherwise Claude Code talks to Anthropic on Vertex directly and resolves the GCP
+    project from ``GOOGLE_CLOUD_PROJECT``, the credential file, or active gcloud configuration.
     """
     # Every model a session can reach is pinned to the same one. Naming only the main model
     # leaves the sub-agent and fast-path settings to the CLI's own preference, and a suite written
     # by twenty writers then runs on whatever that preference happens to be rather than on the
     # model the run asked for.
     chosen = chosen_model(model)
+    agentcc_key = os.environ.get("AGENTCC_API_KEY", "").strip()
+    if agentcc_key:
+        base_url = (
+            os.environ.get("AGENTCC_BASE_URL", "https://gateway.futureagi.com")
+            .strip()
+            .rstrip("/")
+        )
+        return {
+            # AUTH_TOKEN is sent as a Bearer token, which is how Agent CC virtual keys
+            # authenticate. API_KEY would instead use Anthropic's x-api-key header.
+            "ANTHROPIC_AUTH_TOKEN": agentcc_key,
+            "ANTHROPIC_BASE_URL": base_url,
+            # Explicitly turn off the direct Vertex transport in case it is enabled in the
+            # parent process. ClaudeAgentOptions.env is merged over the parent environment.
+            "CLAUDE_CODE_USE_VERTEX": "0",
+            "ANTHROPIC_MODEL": chosen,
+            "ANTHROPIC_DEFAULT_SONNET_MODEL": chosen,
+            "ANTHROPIC_DEFAULT_OPUS_MODEL": chosen,
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL": chosen,
+            "ANTHROPIC_SMALL_FAST_MODEL": chosen,
+            "CLAUDE_CODE_SUBAGENT_MODEL": chosen,
+        }
     env = {
         "CLAUDE_CODE_USE_VERTEX": "1",
         "CLOUD_ML_REGION": os.environ.get("CLOUD_ML_REGION", "global"),

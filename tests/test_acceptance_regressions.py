@@ -392,6 +392,7 @@ def test_vapi_originator_supports_provider_managed_phone_number() -> None:
 
     asyncio.run(run())
     assert [request.url.path for request in requests] == [
+        "/assistant/assistant-123",
         "/phone-number/phone-123",
         "/call",
     ]

@@ -16,6 +16,7 @@ scenarios and grading do not change.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 from pathlib import Path
 import socket
@@ -322,6 +323,12 @@ class RepositoryChatTarget:
                 ),
                 protocol=self.interface.protocol,
                 include_tools=self.interface.include_tools,
+                request_template=self.interface.request_template,
+                response_path=self.interface.response_path,
+                setup_requests=[
+                    item.model_dump(mode="python")
+                    for item in self.interface.setup_requests
+                ],
                 timeout=30.0,
                 metadata={
                     "target": "submitted_repository_runtime",
@@ -502,6 +509,33 @@ def resolve(key: str) -> Callable[..., Target]:
             f"no target {key!r}; registered targets are {', '.join(sorted(_REGISTRY))}"
         )
     return _REGISTRY[key]
+
+
+def create_target(
+    key: str,
+    contract: AgentContract,
+    world: GeneratedWorld,
+    **context: Any,
+) -> Target:
+    """Construct a registered target with the execution context it understands.
+
+    Targets deliberately have different needs: a reconstructed local target needs a model,
+    while a submitted repository runtime needs its provisioned world directory and scenario
+    name.  Filtering the shared context against the factory signature keeps the runner generic
+    and lets future transports opt into new context without special-casing their keys here.
+    """
+    factory = resolve(key)
+    parameters = inspect.signature(factory).parameters.values()
+    accepts_any = any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters
+    )
+    accepted = {parameter.name for parameter in parameters}
+    kwargs = {
+        name: value
+        for name, value in context.items()
+        if accepts_any or name in accepted
+    }
+    return factory(contract, world, **kwargs)
 
 
 def supported() -> tuple[str, ...]:

@@ -38,8 +38,8 @@ from .targets import (
     LocalAgent,
     RepositoryChatTarget,
     Target,
+    create_target,
     register_target,
-    resolve,
     supported,
 )
 
@@ -130,6 +130,7 @@ __all__ = [
     "Target",
     "Transcript",
     "converse",
+    "create_target",
     "register_target",
     "run_scenario",
     "run_suite",
@@ -185,7 +186,14 @@ async def run_scenario(
                 if on_exchange:
                     on_exchange(exchange)
         else:
-            agent = resolve(target)(contract, world, model=model)
+            agent = create_target(
+                target,
+                contract,
+                world,
+                model=model,
+                world_root=world_root,
+                scenario_name=scenario.name,
+            )
             transcript = await converse(
                 agent,
                 scenario,

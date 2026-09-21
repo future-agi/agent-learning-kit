@@ -170,6 +170,7 @@ exclude = [
 dev = [
   "build>=1.5",
   "hatchling>=1.25",
+  "hypothesis>=6.140",
   "pytest>=8.3",
   "ruff>=0.9",
   # Also in the harness-ui extra. Repeated here so that syncing without that extra does not

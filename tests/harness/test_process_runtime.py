@@ -1223,6 +1223,24 @@ def test_build_process_tree_preserves_a_within_tree_symlink_as_a_symlink(
     assert (build_dir / "link.txt").read_text() == "hello"
 
 
+def test_build_process_tree_ignores_a_local_virtual_environment(
+    tmp_path: Path,
+) -> None:
+    """A developer's generated venv is not submitted source and may contain host-only links."""
+    svc_dir = tmp_path / "source" / "svc"
+    (svc_dir / ".venv" / "bin").mkdir(parents=True)
+    (svc_dir / "agent.py").write_text("print('ready')\n", encoding="utf-8")
+    (svc_dir / ".venv" / "bin" / "python").symlink_to("/host/python")
+
+    process = _source_process(working_directory="svc", build_commands=[])
+    build_dir = pr.build_process_tree(
+        process, source_root=tmp_path / "source", build_root=tmp_path / "build"
+    )
+
+    assert (build_dir / "agent.py").is_file()
+    assert not (build_dir / ".venv").exists()
+
+
 def test_build_process_tree_rejects_a_symlinked_working_directory_path_component(
     tmp_path: Path,
 ) -> None:
@@ -1891,7 +1909,7 @@ def test_spawn_managed_process_bootstraps_postgres_once_via_sync_run(
     assert len(bootstrap_calls) == 1
     assert bootstrap_calls[0][0] == "initdb"
     assert "--encoding=UTF8" in bootstrap_calls[0]
-    assert "--locale=C.UTF-8" in bootstrap_calls[0]
+    assert "--locale=C" in bootstrap_calls[0]
     assert run_calls[0][0] == "postgres"
     # No pwfile left behind after bootstrap.
     assert not any(p.name.endswith(".pwfile") for p in data_dir.parent.glob(".*"))
@@ -3147,6 +3165,234 @@ def test_apply_seed_file_postgres_env_keeps_path_and_adds_pgpassword(
     _, kwargs = calls[0]
     assert kwargs["env"]["PGPASSWORD"] == "s3cr3t"
     assert "PATH" in kwargs["env"]
+
+
+def test_apply_seed_file_imports_sqlite_world_without_psql(
+    tmp_path: Path, monkeypatch
+) -> None:
+    world = tmp_path / "seed" / "world.sqlite"
+    world.parent.mkdir()
+    world.write_bytes(b"sqlite fixture")
+    credentials = pr.EngineCredentials(username="harness", password="pw")
+    calls: list[dict[str, Any]] = []
+
+    def import_world(file: Path, **kwargs: Any) -> None:
+        calls.append({"file": file, **kwargs})
+
+    monkeypatch.setattr(pr, "apply_postgres_sqlite_world", import_world)
+
+    def unexpected_psql(*args: Any, **kwargs: Any) -> Any:
+        pytest.fail("typed SQLite worlds must not be passed to psql")
+
+    pr.apply_seed_file(
+        pr.ManagedEngine.POSTGRES,
+        world,
+        port=14000,
+        dbname="baseline",
+        credentials=credentials,
+        process_name="postgres",
+        sync_run=unexpected_psql,
+        source_digest="sha256:" + "a" * 64,
+    )
+
+    assert calls == [
+        {
+            "file": world,
+            "port": 14000,
+            "dbname": "baseline",
+            "credentials": credentials,
+            "source_digest": "sha256:" + "a" * 64,
+        }
+    ]
+
+
+def test_apply_seed_file_compiles_canonical_world_ir_without_psql(
+    tmp_path: Path, monkeypatch
+) -> None:
+    world = tmp_path / "seed" / "world-ir.json"
+    world.parent.mkdir()
+    world.write_text("{}", encoding="utf-8")
+    credentials = pr.EngineCredentials(username="harness", password="pw")
+    calls: list[dict[str, Any]] = []
+
+    def apply_world(file: Path, **kwargs: Any) -> None:
+        calls.append({"file": file, **kwargs})
+
+    monkeypatch.setattr(pr, "apply_postgres_world_ir", apply_world)
+
+    pr.apply_seed_file(
+        pr.ManagedEngine.POSTGRES,
+        world,
+        port=14000,
+        dbname="baseline",
+        credentials=credentials,
+        process_name="postgres",
+        sync_run=lambda *_args, **_kwargs: pytest.fail(
+            "canonical World IR must not be passed to psql"
+        ),
+        source_digest="sha256:" + "a" * 64,
+    )
+
+    assert calls == [
+        {
+            "file": world,
+            "port": 14000,
+            "dbname": "baseline",
+            "credentials": credentials,
+            "source_digest": "sha256:" + "a" * 64,
+        }
+    ]
+
+
+def test_typed_postgres_seed_persists_the_accepted_source_and_world(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Certification inputs are emitted only after the compiled seed is accepted."""
+    import sqlite3
+
+    from fi.alk.harness import certification
+    from fi.alk.harness.compile import postgres as postgres_compiler
+    from fi.alk.harness.source_model import SourceModel
+    from fi.alk.harness.source_schema import postgres as postgres_schema
+    from fi.alk.harness.world_import import sqlite as sqlite_import
+    from fi.alk.harness.world_ir import WorldIR
+
+    world_path = tmp_path / "world.sqlite"
+    with sqlite3.connect(world_path):
+        pass
+    source = SourceModel.create(source_digest="sha256:" + "a" * 64, engine="postgres")
+    world = WorldIR.create(source_model_fingerprint=source.fingerprint, tables=())
+    compiled = object()
+    applied = []
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+    fake_psycopg = types.ModuleType("psycopg")
+    fake_psycopg.connect = lambda **_kwargs: Connection()
+    monkeypatch.setitem(sys.modules, "psycopg", fake_psycopg)
+    monkeypatch.setattr(postgres_schema, "inspect_postgres", lambda *_a, **_k: source)
+    monkeypatch.setattr(
+        sqlite_import,
+        "import_sqlite_world",
+        lambda *_a, **_k: types.SimpleNamespace(world=world),
+    )
+    monkeypatch.setattr(
+        postgres_compiler, "compile_postgres", lambda *_a, **_k: compiled
+    )
+    monkeypatch.setattr(
+        postgres_compiler,
+        "apply_postgres",
+        lambda connection, program: applied.append((connection, program)),
+    )
+
+    artifact_root = tmp_path / "artifacts"
+    pr.apply_postgres_sqlite_world(
+        world_path,
+        port=5432,
+        dbname="baseline",
+        credentials=pr.EngineCredentials(username="harness", password="pw"),
+        source_digest=source.source_digest,
+        artifact_root=artifact_root,
+    )
+
+    store = certification.GenericHarnessArtifactStore(artifact_root)
+    assert store.read_source_model() == source
+    assert store.read_world_ir() == world
+    assert applied and applied[0][1] is compiled
+
+
+def test_apply_seed_file_requires_provenance_for_typed_world(tmp_path: Path) -> None:
+    world = tmp_path / "world.sqlite"
+    world.write_bytes(b"sqlite fixture")
+
+    with pytest.raises(pr.ProcessRuntimeError, match="internal_source_digest_missing"):
+        pr.apply_seed_file(
+            pr.ManagedEngine.POSTGRES,
+            world,
+            port=14000,
+            dbname="baseline",
+            credentials=pr.EngineCredentials(username="harness", password="pw"),
+            process_name="postgres",
+            sync_run=lambda *args, **kwargs: pytest.fail("must not execute"),
+        )
+
+
+def test_apply_seed_file_preserves_structured_world_diagnostics(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from fi.alk.harness.diagnostics import DiagnosticLocation, HarnessDiagnostic
+    from fi.alk.harness.job import HarnessStage
+
+    world = tmp_path / "world.sqlite"
+    world.write_bytes(b"sqlite fixture")
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.VALIDATING_ENVIRONMENT,
+        component="world_import",
+        code="array_shape_mismatch",
+        message="array is malformed",
+        location=DiagnosticLocation(table="users", column="tags"),
+    )
+
+    def reject(*args: Any, **kwargs: Any) -> None:
+        raise pr.GenericWorldSeedError((diagnostic,))
+
+    monkeypatch.setattr(pr, "apply_postgres_sqlite_world", reject)
+
+    with pytest.raises(pr.ProcessRuntimeError) as raised:
+        pr.apply_seed_file(
+            pr.ManagedEngine.POSTGRES,
+            world,
+            port=14000,
+            dbname="baseline",
+            credentials=pr.EngineCredentials(username="harness", password="pw"),
+            process_name="postgres",
+            sync_run=lambda *args, **kwargs: pytest.fail("must not execute"),
+            source_digest="sha256:" + "a" * 64,
+        )
+
+    assert raised.value.diagnostics == (diagnostic,)
+    assert "array is malformed" not in str(raised.value)
+    assert "array_shape_mismatch at users.tags" in str(raised.value)
+
+
+def test_apply_seed_file_types_unadapted_world_import_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    world = tmp_path / "world.sqlite"
+    world.write_bytes(b"sqlite fixture")
+
+    class CatalogueInspectionFailure(RuntimeError):
+        pass
+
+    def reject(*args: Any, **kwargs: Any) -> None:
+        raise CatalogueInspectionFailure("private database details")
+
+    monkeypatch.setattr(pr, "apply_postgres_sqlite_world", reject)
+
+    with pytest.raises(pr.ProcessRuntimeError) as raised:
+        pr.apply_seed_file(
+            pr.ManagedEngine.POSTGRES,
+            world,
+            port=14000,
+            dbname="baseline",
+            credentials=pr.EngineCredentials(username="harness", password="pw"),
+            process_name="postgres",
+            sync_run=lambda *args, **kwargs: pytest.fail("must not execute"),
+            source_digest="sha256:" + "a" * 64,
+        )
+
+    assert raised.value.diagnostics[0].code == "world_import_runtime_error"
+    assert raised.value.diagnostics[0].location is not None
+    assert raised.value.diagnostics[0].location.process == "CatalogueInspectionFailure"
+    assert "private database details" not in str(raised.value)
+    assert "world_import_runtime_error at CatalogueInspectionFailure" in str(
+        raised.value
+    )
 
 
 def test_apply_seed_file_redis_pipes_file_content_over_stdin(tmp_path: Path) -> None:
@@ -4869,6 +5115,67 @@ def test_environment_backed_provider_is_created_exposed_and_destroyed(
 
     asyncio.run(provider.close(work_directory=tmp_path))
     assert lifecycle_calls == ["provision", "destroy"]
+
+
+def test_provider_provision_failure_surfaces_redacted_provider_output(
+    tmp_path: Path,
+) -> None:
+    def lifecycle_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        if argv[-1] != "provision":
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        secret = kwargs["env"]["VAPI_API_KEY"]
+        return subprocess.CompletedProcess(
+            argv,
+            1,
+            stdout="",
+            stderr=f"provider rejected assistant definition using {secret}",
+        )
+
+    manifest = _manifest(
+        lambda body: {
+            **body,
+            "metadata": {
+                "provider_lifecycle": {
+                    "type": "vapi",
+                    "scope": "world",
+                    "process": "agent",
+                    "public_capability": "tools",
+                    "provision": {"command": ["python", "provider.py", "provision"]},
+                    "destroy": {"command": ["python", "provider.py", "destroy"]},
+                    "required_secrets": ["VAPI_API_KEY"],
+                }
+            },
+        }
+    )
+    source, bundle_dir = _provision_dirs(tmp_path)
+    (source / "provider.py").write_text("# lifecycle", encoding="utf-8")
+    secrets_path = tmp_path / "secrets.json"
+    secrets_path.write_text(
+        json.dumps({"VAPI_API_KEY": "test-secret-value"}), encoding="utf-8"
+    )
+    provider = _sql_spy_provider(
+        secrets_path=secrets_path,
+        secret_purpose_map={"VAPI_API_KEY": "target_provider"},
+        sync_run=lifecycle_run,
+        public_url_resolver=lambda port, _ttl: f"https://signed.example/{port}",
+    )
+
+    with pytest.raises(pr.ProcessRuntimeError) as exc_info:
+        asyncio.run(
+            provider.provision(
+                manifest,
+                source=source,
+                bundle_dir=bundle_dir,
+                work_directory=tmp_path,
+                instances=1,
+                require_declared_user=False,
+            )
+        )
+
+    message = str(exc_info.value)
+    assert "provider rejected assistant definition" in message
+    assert "[REDACTED]" in message
+    assert "test-secret-value" not in message
 
 
 def test_provider_import_is_cloned_after_readiness_and_destroyed_from_receipt(

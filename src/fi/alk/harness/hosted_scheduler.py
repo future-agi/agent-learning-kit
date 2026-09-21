@@ -389,6 +389,7 @@ _CODE_DOMAIN: dict[str, FailureDomain] = {
     # give a retry genuine success probability); classified scenario-errored, never world
     # retirement (C3 §7 decision 2).
     "voice_dispatch_unacknowledged": FailureDomain.INFRASTRUCTURE,
+    "target_agent_failed": FailureDomain.AGENT,
     "target_agent_stalled": FailureDomain.AGENT,
     "target_agent_tool_failed": FailureDomain.AGENT,
     "simulator_stalled": FailureDomain.SIMULATOR,

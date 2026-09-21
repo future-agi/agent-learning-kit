@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Iterable
 
 from pydantic import BaseModel, Field
+import yaml
 
 from fi.simulate.runtime.spec import SecretRef
 
@@ -159,6 +160,40 @@ _PLACEHOLDER_VALUE = re.compile(
     re.IGNORECASE,
 )
 _COMPOSE_VARIABLE = re.compile(r"\$\{([A-Z][A-Z0-9_]{2,})(?:(:?[-?])([^}]*))?\}")
+
+
+def _literal_compose_environment(content: str) -> set[str]:
+    """Names given concrete values by Compose, not host interpolation."""
+
+    try:
+        document = yaml.safe_load(content)
+    except yaml.YAMLError:
+        return set()
+    services = document.get("services") if isinstance(document, dict) else None
+    if not isinstance(services, dict):
+        return set()
+    names: set[str] = set()
+    for service in services.values():
+        environment = service.get("environment") if isinstance(service, dict) else None
+        if isinstance(environment, dict):
+            pairs = environment.items()
+        elif isinstance(environment, list):
+            pairs = (
+                item.split("=", 1)
+                for item in environment
+                if isinstance(item, str) and "=" in item
+            )
+        else:
+            continue
+        for name, value in pairs:
+            if (
+                isinstance(name, str)
+                and isinstance(value, (str, int, float, bool))
+                and str(value).strip()
+                and "$" not in str(value)
+            ):
+                names.add(name.upper())
+    return names
 _PYTHON_REQUIRED = re.compile(r"os\.environ\s*\[\s*['\"]([A-Z][A-Z0-9_]{2,})['\"]\s*\]")
 _PYTHON_GETENV = re.compile(
     r"(?:os\.getenv|os\.environ\.get)\s*\(\s*['\"]([A-Z][A-Z0-9_]{2,})['\"](?:\s*,\s*([^\)]+))?"
@@ -340,6 +375,7 @@ def discover_credentials(
     secret_refs: dict[str, SecretRef] | None = None,
     provided_environment: Iterable[str] = (),
     scan_paths: Iterable[str | Path] | None = None,
+    template_secrets_required: bool = True,
 ) -> CredentialManifest:
     """Inspect declarations and environment reads without executing submitted code."""
     root = Path(root).expanduser().resolve()
@@ -422,14 +458,19 @@ def discover_credentials(
                     # A blank non-secret setting in an example file documents a knob; it
                     # does not prove that the selected runtime path needs a value. Strict
                     # source reads and Compose's :? operator remain authoritative. Secret
-                    # placeholders stay required because SDKs commonly consume them without
-                    # an explicit getenv call in customer code.
+                    # placeholders stay required by default because SDKs commonly consume them
+                    # without an explicit getenv call in customer code. Generic certification
+                    # may defer template-only names to runtime inspection; strict reads and SDK
+                    # constructor evidence remain required in that mode.
                     required=(
-                        not usable_default and _kind(name) is RequirementKind.SECRET
+                        template_secrets_required
+                        and not usable_default
+                        and _kind(name) is RequirementKind.SECRET
                     ),
                     declared_default=usable_default,
                 )
         if path.name.lower() in _COMPOSE_NAMES:
+            configured.update(_literal_compose_environment(content))
             for match in _COMPOSE_VARIABLE.finditer(content):
                 operator, fallback = match.group(2), (match.group(3) or "").strip()
                 # Compose substitutes an unset plain ${NAME} with an empty string. Only its

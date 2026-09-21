@@ -138,12 +138,18 @@ async def author_invariants(
             raise ValueError(f"Duplicate scenario key: {key}")
         scenarios[key] = path
     artifact = authoring / ARTIFACT
-    # Do not manufacture business data merely to satisfy a SQL-review gate. This exemption
-    # requires both the accepted contract and the actual runtime store to be data-free.
+    # Do not manufacture SQL data merely to satisfy a SQL-review gate. A graph may have
+    # rich in-process state and tools yet no relational store for a SELECT invariant to
+    # examine. Require the observed runtime world to be empty as well as the contract's
+    # explicit in-process/no-data declaration; tool execution is certified separately.
     contract_path = authoring / "contract.json"
     if contract_path.is_file():
         contract = AgentContract.model_validate_json(contract_path.read_text())
-        if is_data_free_conversation(contract):
+        in_process_store = bool(
+            contract.data_store
+            and contract.data_store.kind.strip().lower() == "in_process"
+        )
+        if is_data_free_conversation(contract) or in_process_store:
             state = await asyncio.to_thread(world.state)
             business_tables = set(state) - {
                 "harness_seed_sentinel",
@@ -152,7 +158,11 @@ async def author_invariants(
             if not business_tables:
                 evidence = {
                     "status": "not_applicable",
-                    "reason": "No custom tools, data-store seam, dependencies or runtime business tables",
+                    "reason": (
+                        "In-process agent state has no runtime SQL business tables"
+                        if in_process_store
+                        else "No custom tools, data-store seam, dependencies or runtime business tables"
+                    ),
                     "checks": [],
                     "tool_execution_proven": False,
                     "contract_sha256": hashlib.sha256(

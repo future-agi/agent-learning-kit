@@ -198,9 +198,84 @@ class HarnessExecutor:
             run_model=run_model,
             job=job,
             adjustments_path=str(adjustments_path) if adjustments_path else None,
+            # Generic local runs must author first, then pass the same Bundle V2 runtime
+            # certification and scheduler used by hosted execution.  Letting `_auto` execute its
+            # legacy call stage here bypasses generated adapters and makes unfamiliar frameworks
+            # fail merely because they do not expose a handwritten HTTP endpoint.
+            authoring_only=job.metadata.get("generic_harness_v1") is True,
         )
         status = await _auto(args)
+        completed_scenarios = _scenario_count(output) if status in (0, 2) else 0
+        generic_failure: HarnessFailure | None = None
+        if status == 0 and job.metadata.get("generic_harness_v1") is True:
+            from .authoring_runtime_validation import RuntimeValidationError
+            from .local_certified_runtime import (
+                LocalCertifiedRunError,
+                run_local_certified,
+            )
+
+            try:
+                status, completed_scenarios = await run_local_certified(
+                    job, source=source, authoring=output
+                )
+            except RuntimeValidationError as exc:
+                domain = (
+                    FailureDomain.SIMULATOR
+                    if exc.phase == "scenarios"
+                    else FailureDomain.ENVIRONMENT
+                )
+                generic_failure = HarnessFailure(
+                    domain=domain,
+                    stage=(
+                        HarnessStage.VALIDATING_SCENARIOS
+                        if exc.phase == "scenarios"
+                        else HarnessStage.VALIDATING_ENVIRONMENT
+                    ),
+                    code=f"generic_{exc.phase}_validation_failed",
+                    message=str(exc),
+                    retryable=False,
+                )
+                status = 1
+            except LocalCertifiedRunError as exc:
+                try:
+                    domain = FailureDomain(exc.domain)
+                except ValueError:
+                    domain = FailureDomain.INFRASTRUCTURE
+                generic_failure = HarnessFailure(
+                    domain=domain,
+                    stage=HarnessStage.RUNNING,
+                    code=exc.code,
+                    message=str(exc),
+                    retryable=False,
+                )
+                completed_scenarios = exc.completed_scenarios
+                status = 1
+            except Exception as exc:  # noqa: BLE001 - convert worker escapes into typed status
+                from .process_runtime import ProcessRuntimeError
+
+                carried = getattr(exc, "domain", None)
+                domain = (
+                    carried
+                    if isinstance(carried, FailureDomain)
+                    else FailureDomain.ENVIRONMENT
+                    if isinstance(exc, ProcessRuntimeError)
+                    else FailureDomain.INFRASTRUCTURE
+                )
+                generic_failure = HarnessFailure(
+                    domain=domain,
+                    stage=(
+                        HarnessStage.BUILDING_ENVIRONMENT
+                        if isinstance(exc, ProcessRuntimeError)
+                        else HarnessStage.RUNNING
+                    ),
+                    code=getattr(exc, "code", "generic_local_execution_failed"),
+                    message=f"{type(exc).__name__}: {exc}",
+                    retryable=False,
+                )
+                status = 1
         failure = _failure_from_events(output) if status not in (0, 2) else None
+        if generic_failure is not None:
+            failure = generic_failure
         return HarnessJobStatus(
             job_id=job.job_id,
             run_id=job.run_id,
@@ -214,7 +289,7 @@ class HarnessExecutor:
                 else f"exit {status}"
             ),
             failure=failure,
-            completed_scenarios=_scenario_count(output) if status in (0, 2) else 0,
+            completed_scenarios=completed_scenarios,
             total_scenarios=_scenario_count(output) or job.scenario_count,
         )
 
