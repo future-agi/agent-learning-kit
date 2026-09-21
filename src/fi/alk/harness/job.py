@@ -18,7 +18,7 @@ from fi.simulate.runtime.spec import RuntimeIsolation, RuntimeRequirements, Secr
 from .github import parse_github_location
 
 HARNESS_JOB_SCHEMA_VERSION = "futureagi.harness-job.v1"
-MAX_HOSTED_SCENARIO_COUNT = 200
+MAX_HOSTED_SCENARIO_COUNT = 5000
 
 
 class ExecutionMode(str, Enum):
@@ -201,7 +201,7 @@ class HarnessJob(BaseModel):
     execution: ExecutionMode
     source: RepositorySource
     agent: AgentConnection
-    scenario_count: int = Field(default=10, ge=1, le=1000)
+    scenario_count: int = Field(default=10, ge=1, le=MAX_HOSTED_SCENARIO_COUNT)
     seed: int | None = None
     runtime: RuntimeRequirements = Field(default_factory=RuntimeRequirements)
     security: SandboxSecurityPolicy = Field(default_factory=SandboxSecurityPolicy)
