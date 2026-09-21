@@ -354,8 +354,8 @@ class ClaudeBackend:
     def create(self, spec: SessionSpec) -> ClaudeSession:
         from ..config import gateway_wire_model
 
-        # The gateway is told which model to run; the session reports that model back rather than
-        # the alias the SDK put on the wire, so spend is attributed to what was actually billed.
+        # An alias on the wire is not what was billed, so the session reports the model the run
+        # chose. With the real id on the wire there is nothing to correct.
         reported = spec.model if gateway_wire_model(spec.model) != spec.model else None
         return ClaudeSession(self._options(spec), reported_model=reported)
 
@@ -369,15 +369,17 @@ class ClaudeBackend:
             UNWANTED,
             gate_hooks,
             permission_gate,
+            behind_gateway,
             gateway_wire_model,
             provider_env,
             thinking_config,
         )
 
-        # Behind the gateway the SDK still validates the model name locally, so the wire carries
-        # a Claude-shaped alias the gateway maps back to the model this run chose.
+        # Tool schemas are translated for the provider behind the gateway, which is a property of
+        # the route rather than of the name on the wire: it applies whether the wire carries the
+        # real id or an alias.
         wire_model = gateway_wire_model(spec.model)
-        gateway_compatible = wire_model != spec.model
+        gateway_compatible = behind_gateway(spec.model)
         # Everything the session or any of its workers may call. A worker's calls are made
         # inside this session, so building the gate from the parent's tools alone would deny a
         # worker the very tools it was given.

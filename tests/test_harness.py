@@ -1576,11 +1576,23 @@ def test_claude_backend_accepts_gateway_models_only_with_agentcc(monkeypatch):
 
     monkeypatch.setenv("AGENTCC_API_KEY", "sk-agentcc-test")
     assert ClaudeBackend().can_drive("vertexai/gemini-3.7-flash")
-    options = ClaudeBackend().create(
+    # The wire carries the real id: the gateway routes by model name, so the job chooses its
+    # model instead of a gateway alias deciding it.
+    options = ClaudeBackend()._options(
         SessionSpec(system_prompt="x", model="vertex_ai/gemini-3.7-flash")
-    )._options
-    assert options.model == "claude-sonnet-4-6"
-    assert options.env["ANTHROPIC_MODEL"] == "claude-sonnet-4-6"
+    )
+    assert options.model == "vertex_ai/gemini-3.7-flash"
+    assert options.env["ANTHROPIC_MODEL"] == "vertex_ai/gemini-3.7-flash"
+    # The SDK will not call a model whose window it cannot look up unless told not to enforce it.
+    assert options.env["CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT"] == "1"
+
+    # A gateway that publishes only Claude-shaped names is served by naming its alias.
+    monkeypatch.setenv("AGENTCC_CLAUDE_MODEL_ALIAS", "claude-sonnet-4-6")
+    aliased = ClaudeBackend()._options(
+        SessionSpec(system_prompt="x", model="vertex_ai/gemini-3.7-flash")
+    )
+    assert aliased.model == "claude-sonnet-4-6"
+    assert aliased.env["ANTHROPIC_MODEL"] == "claude-sonnet-4-6"
 
 
 def test_claude_gateway_schema_uses_scalar_types_for_gemini():
@@ -4561,15 +4573,31 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
 
     # Offered values, derived from where they are defined rather than listed here, so a new one
     # cannot make this test wrong.
+    from fi.alk.harness.background_noise import (
+        _BUILTIN_BY_ENVIRONMENT,
+        _SILENT_ENVIRONMENTS,
+    )
+    from fi.alk.harness.scenario import _AXIS_LABELS, _LEVEL_LABELS
+
     ignore = (
         fields
         | set(MODALITIES)
         | set(CALL_DIRECTIONS)
         | set(CALLER_AWARENESS)
         | set(FIXTURE_ORIGINS)
+        # The coverage vocabulary: the axes a scenario is a coordinate over, the levels they are
+        # dealt from, and the places a caller can be heard in.
+        | set(_AXIS_LABELS)
+        | set(_LEVEL_LABELS)
+        | set(_BUILTIN_BY_ENVIRONMENT)
+        | set(_SILENT_ENVIRONMENTS)
         # A fixture key, and one tool argument the skills name while explaining a tool.
         | {"origin", "matching"}
         | {"handle", "check", "args", "db", "world", "calls", "json", "ToolError"}
+        # Worked examples name the example agent's own tools, its tables and its sub-goals the
+        # same way instructions name a tool. They belong to the example, not to this stage.
+        | {"book_ride", "cancel_ride", "verify_otp", "bookings"}
+        | {"social_engineering_resisted", "true", "or"}
     )
 
     for stage, tools in surface.items():
@@ -7689,8 +7717,13 @@ def test_the_system_prompt_stays_within_budget():
         contract.brief(with_data=True, sample_rows=3) + load_skill("write-scenarios") + kinds
     )
     main_loop = sub_agent + load_skill("plan-suite", preamble=False)
-    assert len(sub_agent) <= 75_000, f"sub-agent prompt is {len(sub_agent)} chars"
-    assert len(main_loop) <= 95_000, f"main loop prompt is {len(main_loop)} chars"
+    # Measured, not guessed: the writing skill is about 19k tokens and the plan another 10k. A
+    # writer pays its prompt once per session and the provider caches the prefix for the rest, so
+    # a suite of 500 written by thirty sub-agents pays it thirty times, not five hundred. The
+    # budget is here to make growth a decision rather than a drift; the lever that actually
+    # decides cost is turns per scenario.
+    assert len(sub_agent) <= 90_000, f"sub-agent prompt is {len(sub_agent)} chars"
+    assert len(main_loop) <= 130_000, f"main loop prompt is {len(main_loop)} chars"
 
 
 def test_a_sub_goal_defined_after_the_fact_reaches_the_folders_already_written(tmp_path):
@@ -7850,8 +7883,22 @@ def test_a_redeclared_grid_only_ever_grows(tmp_path):
     server, _kept = scenario_tools(_contract, root, root, wanted=4)
     aim = next(one for one in server.tools if one.name == "aim_for")
 
-    asyncio.run(aim.handler({"count": 4, "axes": {"task": ["a", "b"], "overlay": ["none"]}}))
-    said = asyncio.run(aim.handler({"count": 4, "axes": {"task": ["b", "c"]}}))
+    # Every axis is declared, because a grid that names only some of them is refused: an axis
+    # left out removes a question from the coverage report and nobody can see that it is gone.
+    full = {
+        "task": ["retrieve-booking", "cancel-ride"],
+        "counterparty": ["rider"],
+        "disposition": ["calm"],
+        "interface": ["phone"],
+        "interaction": ["inbound"],
+        "overlay": ["none"],
+        "overlay_vector": ["none"],
+        "overlay_intensity": ["absent"],
+    }
+    asyncio.run(aim.handler({"count": 4, "axes": full}))
+    said = asyncio.run(
+        aim.handler({"count": 4, "axes": {**full, "task": ["cancel-ride", "update-booking"]}})
+    )
     text = said["content"][0]["text"]
     assert "task (3)" in text, text
     # The dropped level survives, so nothing already placed on it is stranded.

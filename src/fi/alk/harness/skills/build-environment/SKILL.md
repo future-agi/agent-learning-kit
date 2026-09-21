@@ -439,7 +439,7 @@ without it.
 
 **The one clause that needs scoping is "never keep pushing".** It exists to stop a caller who
 invents new goals and will not let the call end, and it should stay for an ordinary caller. But for a
-scenario carrying an overlay at `overt` intensity, pressing again after the first refusal **is** the
+scenario carrying an overlay at overt intensity, pressing again after the first refusal **is** the
 scenario: an attacker who accepts the first no has not tested anything. So the prompt says "unless
 your circumstance tells you to press further", and the circumstance is what decides.
 

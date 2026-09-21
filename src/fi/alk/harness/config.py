@@ -129,18 +129,27 @@ def refuse_a_model_we_cannot_afford(model: str) -> None:
         )
 
 
+def behind_gateway(model: str) -> bool:
+    """Whether this model is reached through Agent Command Center rather than the CLI's own route."""
+    return bool(os.environ.get("AGENTCC_API_KEY", "").strip()) and "claude" not in (
+        model or ""
+    ).lower()
+
+
 def gateway_wire_model(model: str) -> str:
     """The name the SDK puts on the wire for `model`.
 
-    The Claude Agent SDK validates a model name locally before it makes a request, so a Gemini id
-    never leaves the process. Behind Agent Command Center the wire carries a Claude-shaped alias
-    the gateway resolves back to the model this run chose; everywhere else the name is its own.
+    The real id by default: the gateway routes by model name, so naming the model honestly is what
+    lets a job choose its own and keeps the mapping out of gateway config. The SDK checks a model
+    name locally before it makes any request, which is why the run also turns that check off.
+
+    A gateway that admits only Claude-shaped names is served by setting
+    ``AGENTCC_CLAUDE_MODEL_ALIAS`` to the alias it publishes. That is an explicit choice, not the
+    default, because an alias decides the model in gateway config rather than in the job.
     """
-    if not os.environ.get("AGENTCC_API_KEY", "").strip():
+    if not behind_gateway(model):
         return model
-    if "claude" in (model or "").lower():
-        return model
-    return os.environ.get("AGENTCC_CLAUDE_MODEL_ALIAS", "claude-sonnet-4-6").strip()
+    return os.environ.get("AGENTCC_CLAUDE_MODEL_ALIAS", "").strip() or model
 
 
 def provider_env(model: str | None = None) -> dict[str, str]:
@@ -177,6 +186,19 @@ def provider_env(model: str | None = None) -> dict[str, str]:
             # ClaudeAgentOptions.env is merged over the parent environment, and Vertex here
             # would mean Anthropic's own models hosted on Vertex, which is not this.
             "CLAUDE_CODE_USE_VERTEX": "0",
+            # The SDK refuses a call on a model whose context window it cannot look up, then
+            # compacts against a window it guessed. Both are wrong for a model it does not know,
+            # so the window is declared rather than inferred.
+            **(
+                {}
+                if "claude" in wire.lower()
+                else {
+                    "CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT": "1",
+                    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": os.environ.get(
+                        "ALK_HARNESS_MAX_CONTEXT_TOKENS", "1000000"
+                    ),
+                }
+            ),
             "ANTHROPIC_MODEL": wire,
             "ANTHROPIC_DEFAULT_SONNET_MODEL": wire,
             "ANTHROPIC_DEFAULT_OPUS_MODEL": wire,
