@@ -391,6 +391,7 @@ _ACCENTED_INTERFACE = frozenset(
 )
 _DISFLUENT_INTERFACE = frozenset({"disfluent", "disfluent_speech", "hesitant"})
 _NOISY_INTERFACE = frozenset({"noisy_line", "noisy", "in_car", "street_noise"})
+_QUIET_INTERFACE = frozenset({"quiet_line", "quiet", "clear_line"})
 _ACCENT_NOT_SET = frozenset({"", "neutral", "none", "standard", "n/a"})
 _DISFLUENT_STYLE = re.compile(r"hesit|disflu|stammer|halting|repet", re.IGNORECASE)
 
@@ -476,8 +477,17 @@ def _condition_the_call_lacks(scenario: Scenario) -> str:
         return f"interface {level}, persona accent not set"
     if level in _DISFLUENT_INTERFACE and not _DISFLUENT_STYLE.search(style):
         return f"interface {level}, nothing hesitant in the communication style"
-    if level in _NOISY_INTERFACE and (noise is False or noise is None or noise == ""):
+    # The level names vary by deployment: noisy_line, noisy_street, noisy_transit, noisy_vehicle.
+    # Matching a fixed list misses every one a kind file invents, so match the family.
+    if (level in _NOISY_INTERFACE or level.startswith("noisy")) and (
+        noise is False or noise is None or noise == ""
+    ):
         return f"interface {level}, background noise off"
+    # The control is only a control with the bed off. Claimed quiet with noise on, the scenario
+    # reports a clear line the call never had and every noisy scenario loses what it is measured
+    # against. Measured on a hosted 100: 16 of the first 52.
+    if level in _QUIET_INTERFACE and not (noise is False or noise is None or noise == ""):
+        return f"interface {level}, background noise on"
     return ""
 
 

@@ -93,6 +93,21 @@ The planning skill asks the kind file for its X levels. A level with no field be
 | `disfluent` | `persona.communication_style`, with both values seeded where one is corrected aloud |
 | `terse` / `formal` / `anxious` | `persona.communication_style` |
 | `outbound_expecting` | `call_direction` outbound, `caller_awareness` "expecting" |
+
+Two ways this table gets read wrongly, both measured on a fresh hundred.
+
+**`quiet_line` means the bed is OFF, and it is the only level that means that.** Sixteen scenarios in
+fifty-two carried `quiet_line` with the noise bed switched on. The coordinate then reports that the agent
+managed on a clear line when it never had one, and every noisy scenario in the suite loses the control it
+was supposed to be measured against. Noise is not a sensible default to leave on: on this level it is the
+thing being ruled out.
+
+**An accent counts only if this deployment's voices actually differ on it.** `accented` lands in
+`persona.accent`, and that field chooses a voice from the catalogue configured for the run. Accents the
+catalogue maps to the same voices as the default are not audible: the coordinate says accented, the caller
+sounds exactly like the control, and the level tested nothing. Before dealing `accented`, check which
+values in the persona vocabulary reach a different voice, and deal only those. If none does, the level is
+not available in this deployment and the honest thing is to leave it out of the plan and say so.
 | `outbound_partial` | `call_direction` outbound, `caller_awareness` "partial" |
 | `outbound_unaware` | `call_direction` outbound, `caller_awareness` "unaware" |
 
