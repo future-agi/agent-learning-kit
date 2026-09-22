@@ -70,6 +70,7 @@ from .scenario_source import (
     ScenarioDocumentInvalid,
     bundle_has_scenarios,
 )
+from .usage import UsageJournal, UsageReporter
 from .world.handle import HostedWorld
 from .world.stores.postgres import AttachedPostgresStore
 
@@ -119,6 +120,7 @@ def configure_runner_logging(job_id: str | None) -> None:
                 "%(asctime)s %(levelname)s job=%(job_id)s %(name)s: %(message)s"
             )
         )
+
 
 # --- §0.6 exit-code contract --------------------------------------------------------------------
 #
@@ -1810,6 +1812,11 @@ async def run_job(
     scenarios_client = deps.build_scenarios_client(
         capabilities, transport, channel_state
     )
+    usage_reporter = UsageReporter(
+        capabilities,
+        transport,
+        UsageJournal(work_directory / "usage.json", attempt_id=capabilities.attempt_id),
+    )
 
     adapter = OutboundAdapter(
         capabilities,
@@ -1878,6 +1885,12 @@ async def run_job(
         `scheduler_result` is only ever passed by the three call sites reached AFTER
         `scheduler.run()` -- pre-run terminals (`_fail`, the boundary `_canceled()` checks) have
         no `RunResult` and pass nothing, so this stays a no-op there."""
+        if not await asyncio.to_thread(usage_reporter.report):
+            logger.error(
+                "Hosted usage report could not be delivered before terminalization "
+                "for attempt %s",
+                job.attempt_id,
+            )
         # Artifact bytes must be uploaded before the terminal-referenced complete manifest.  The
         # terminal event itself remains before receipts and the manifest on the outbound channel.
         await adapter.ensure_terminal_artifacts(
@@ -2283,6 +2296,7 @@ async def run_job(
             simulator_provider_secret_values=simulator_provider_secret_values,
             attempt_number=capabilities.attempt_number,
             source_directory=source,
+            usage_reporter=usage_reporter,
         )
         call_runner = deps.build_call_runner(adapter, call_runner_context)
         scheduler = HostedScheduler(
