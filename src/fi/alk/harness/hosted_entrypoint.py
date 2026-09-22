@@ -1353,8 +1353,13 @@ class OutboundAdapter:
         )
 
     async def scenario_retried(
-        self, *, scenario_key: str, from_world: int, to_world: int
+        self, *, scenario_key: str, from_world: int, to_world: int, cause: str = ""
     ) -> None:
+        # Same budget and order as world_unhealthy: redact first, then truncate, because the
+        # builder's own redaction runs after this call and cannot shrink an over-long string.
+        redacted = ob.redact_outbound_text(cause, self._extra_secret_values)
+        if len(redacted) > 200:
+            redacted = redacted[:200]
         await self._aemit_event(
             stage=HarnessStage.RUNNING,
             type_=ob.OutboundEventType.SCENARIO_RETRIED,
@@ -1362,6 +1367,7 @@ class OutboundAdapter:
                 "scenario_key": scenario_key,
                 "from_world": from_world,
                 "to_world": to_world,
+                "cause": redacted,
             },
         )
 

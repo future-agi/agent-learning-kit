@@ -864,9 +864,9 @@ class _FakeOutbound:
         self.events.append(("scenario_started", {"scenario_key": scenario_key}))
 
     async def scenario_retried(
-        self, *, scenario_key: str, from_world: int, to_world: int
+        self, *, scenario_key: str, from_world: int, to_world: int, cause: str = ""
     ) -> None:
-        self.events.append(("scenario_retried", {}))
+        self.events.append(("scenario_retried", {"cause": cause}))
 
     async def world_unhealthy(self, *, world_index: int, cause: str) -> None:
         self.events.append(("world_unhealthy", {"cause": cause}))
