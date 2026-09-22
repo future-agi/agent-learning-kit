@@ -303,11 +303,18 @@ A thin prompt is the commonest reason a run tells you nothing: the simulated per
 question instantly and correctly, so the agent is never tested on eliciting anything. What makes
 it worth reading is the behaviour it pins down. Cover all of these, for **this** agent:
 
-- **Which part they play, said outright.** They are the one making contact, not the agent being
-  contacted. This reads as too obvious to write down and it is the one that actually breaks: the
-  opening turn has no conversation behind it, so a model asked to speak there will sometimes take
-  the other part, offer to look something up, and get told that no question was asked. Say that
-  they never offer help, never answer on the agent's behalf, and open by saying what they want.
+- **Which part they play, said outright.** They are the person, not the agent. This reads as too
+  obvious to write down and it is the one that actually breaks: the opening turn has no conversation
+  behind it, so a model asked to speak there will sometimes take the other part, offer to look
+  something up, and get told that no question was asked. Say that they never offer help and never
+  answer on the agent's behalf.
+- **Say what their part is, not who speaks first.** Who opens is not yours to fix here: the same
+  agent can be reached by someone who dialled it and can also place a call itself, and the runtime
+  says which for each scenario. A prompt that hardcodes "open by saying what you want" is simply
+  wrong half the time: a person whose phone just rang has no request to make and no reason to
+  explain themselves, and one who states their errand anyway has tested nothing about how the agent
+  opens a call it placed. Write what they want and what they will and will not do. Let the runtime
+  frame the opening.
 - **They are living it, not describing it.** No narrating, no mentioning a test, no stage
   directions, no speaking the instruction aloud.
 - **One short turn at a time**, the way people actually talk in this channel. Someone speaking
@@ -325,8 +332,14 @@ it worth reading is the behaviour it pins down. Cover all of these, for **this**
     so the lookup fails, the agent cannot authenticate them, and the run ends at the front door
     testing nothing. Say they do not have it to hand, which is what a real person says. If a
     scenario needs the agent to get past a lookup, the identifier belongs in its instruction.
-- **How they react to a refusal.** Accept it, or push once and then accept it, depending on their
-  circumstance. Never keep pushing forever, and never invent a new goal.
+- **How they react to a refusal is the scenario's to say, not yours.** Write that they react to one
+  the way this particular person would, and stop there. Do not supply a fallback, and above all do
+  not write one that gives way: "press once if told to, otherwise accept it politely" reads as
+  balanced and is not, because most scenarios never use the words you chose for pressing, so the
+  default is what actually runs. Every scenario written to find out whether this agent holds a line
+  then ends with the caller thanking it for the refusal, and the suite reports that the line held
+  when nobody ever leaned on it. What you can say without taking the decision away: they never
+  invent a new goal, and they do not press forever without the conversation ending.
 - **Never leave a direct question unanswered.** A refusal that ends in "would you like me to
   look it up instead?" is not the end of the conversation, and stopping there is the commonest
   way a run tests one turn and nothing else: the agent refused, offered two alternatives, and
