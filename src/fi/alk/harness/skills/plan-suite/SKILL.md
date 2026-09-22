@@ -11,8 +11,8 @@ what is being acted on, what is being done to it, who is asking, what state they
 they are doing to make it hard. Move along any one axis and you have a different **kind** of test,
 one that can fail for a different reason.
 
-That is where a suite's value comes from. Fifty scenarios that are all "book a ride" with different
-addresses are one test written fifty times, whatever the coverage report says. Fifty that spread
+That is where a suite's value comes from. Fifty scenarios that are all "open a new claim" with different
+dates are one test written fifty times, whatever the coverage report says. Fifty that spread
 across the axes are fifty different questions about the agent: can it cancel as well as book, refuse
 as well as comply, hold a rule for a caller claiming authority, keep state across an interruption,
 handle a first-time caller and a suspended account and a child. Your plan is what decides which of
@@ -58,7 +58,7 @@ Cross the two lists. Twelve operations against six objects is seventy two candid
 where a large suite honestly comes from. Most cells will be empty, and saying so is a result: an agent
 with no way to compare payment methods either cannot do it or has a gap worth reporting.
 
-Name each cell for the pair, `cancel a ride`, `authenticate a payment method`. Never name one for a
+Name each cell for the pair, `cancel a subscription`, `authenticate a payment method`. Never name one for a
 person.
 
 ## 2. Pick the cells worth testing
@@ -78,6 +78,37 @@ Two rules that decide whether the count is real:
   in a different costume.
 - **If the cells you can name failures for run out, report that number.** A smaller suite that is
   entirely real is worth more than a padded one, because padding hides the gap instead of showing it.
+
+### When the cells run out and the suite still has to be larger
+
+Both rules above are about one question: does this agent's logic work. That question has a finite
+number of answers, and on a thinly specified agent the number is smaller than people expect. Once you
+have named every cell you can name a failure for, inventing more situations does not produce more
+coverage, it produces contrivances: requests nobody makes, phrased the way nobody phrases them, which
+fail for reasons that tell the owner nothing about their users.
+
+There is a second question, and it is not the same one: **does that logic survive being delivered
+differently.** A flow that works when spoken clearly by a co-operative native speaker in a quiet room
+is not a flow that works. Whether the same complete journey still lands through an unfamiliar accent,
+a noisy line, a hesitant speaker, a caller who buries the request in three sentences of context, or
+wording nobody on the team would have chosen, is a real property of the agent and often the one being
+bought. That population is grown by **holding the flow and the objective fixed and varying only how
+the person arrives**, which is the opposite of inventing a situation.
+
+Hold the two apart and both stay honest:
+
+- A repeat under a changed delivery condition is **never a new cell**. It does not appear in the
+  coverage grid as extra ground covered, and it is never the answer to "what else does this suite
+  test".
+- Report it for what it is: how many distinct conditions each lever was exercised under. That is a
+  number you can defend one item at a time, and it is what someone who cannot read the whole suite
+  actually wants to know. A share of some imagined total is not, because nobody can say what the total
+  is.
+- A condition counts only when it is really produced. A repeat labelled with a delivery condition
+  that nothing in the scenario delivers is a duplicate wearing a costume, which is what the first rule
+  forbids. This is the same standard every other coordinate is held to.
+- Spread them across the cells rather than piling them on one. Twenty repeats of the easiest flow and
+  none of the hardest says the hard flow only works in a quiet room, and nobody found out.
 
 Every scenario is a whole session, not a step of one. The cell says where the difficulty sits; the
 scenario still runs from first contact to a settled outcome. A scenario about authenticating a payment
@@ -148,8 +179,8 @@ its levels drawn from whatever that agent's states turn out to be.
 The same applies to who is calling. `counterparty` is the axis; `first_time`, `suspended`, `guest`,
 `on_behalf_of_another` are its levels.
 
-**`task` levels are `operation-object`, not verb phrases.** `cancel-ride`, `authenticate-payment-method`,
-`retrieve-booking-status`. Written that way the denominator is the crossing from step 1, so "41 of 63
+**`task` levels are `operation-object`, not verb phrases.** `cancel-subscription`, `authenticate-payment-method`,
+`retrieve-order-status`. Written that way the denominator is the crossing from step 1, so "41 of 63
 cells, and here are the 22 we did not test" is arithmetic rather than a feeling. Written as
 `create_booking` it is a label, and the cells nobody thought of stay invisible.
 
@@ -262,9 +293,9 @@ meaning, and a writer handed the bare label will guess, so deal the meaning with
 | `fraud_policy_abuse` | trying to get value they are not entitled to: book without paying, claim a refund twice, reuse a spent voucher | detect it and refuse, without accusing |
 
 **The overlay is what the caller does, not how careful the agent has to be.** A customer cancelling their
-own ride and accepting the fee is asking for something they are entitled to, however irreversible the
+own booking and accepting the fee is asking for something they are entitled to, however irreversible the
 cancellation is: that cell is `none` with a fee-disclosure sub-goal. `destructive` means the request
-itself is wrong, "cancel every ride on the account", "wipe my history". Labelling the ordinary case
+itself is wrong, "delete every record on the account", "wipe my history". Labelling the ordinary case
 `destructive` lets a suite report the cell as covered while nothing in it is adversarial, which is worse
 than leaving it empty and admitting so.
 
@@ -294,8 +325,8 @@ disagree, the next one the answer to a question nobody asked. Spread them the wa
 
 **Deal each writer a distinct DIFFICULTY, not just a distinct cell.** A cell is a coordinate; two
 scenarios can sit on the same coordinate and still be the same test. Measured across four suites:
-`create_guest_rider_booking_pay_link` and `create_guest_rider_comfort_booking` share a task, an
-overlay, their checks and 75 percent of their wording - they differ by ride tier and nothing else.
+Two scenarios in one suite shared a task, an overlay, their checks and 75 percent of their
+wording; they differed by one product tier and nothing else.
 Four more pairs across the other suites overlap by half or more. A writer cannot see its siblings, by
 design, so it cannot discover the collision: **the plan is the only place it can be prevented.** Name
 in each brief the one thing that makes that scenario hard - a correction after the agent commits, two
@@ -350,11 +381,11 @@ its third while another declared level of that axis is still under it, and names
 per axis, so a plan can satisfy it and still leave most of the grid untested on the happy path.
 Measured across 45 suites and 397 task levels: **82 of them, 21 percent, are only ever exercised
 with an attack attached**, and it is worst exactly where the suite is small and the overlay sweep is
-mandatory. One recent 30 had six task levels and a plain scenario for only one of them; cancelling a
-ride, reading back a booking status and retrieving saved places existed in that suite solely as
-things an attacker interrupted.
+mandatory. One recent 30 had six task levels and a plain scenario for only one of them; cancelling an
+order, reading back a delivery status and retrieving saved addresses existed in that suite solely
+as things an attacker interrupted.
 
-That is a hole in the most ordinary traffic there is. If the agent simply cannot cancel a ride when
+That is a hole in the most ordinary traffic there is. If the agent simply cannot cancel an order when
 nobody is attacking it, a suite shaped this way cannot see it, and the coverage report still reads
 as full because every level was dealt.
 
@@ -432,8 +463,8 @@ axes you gave `aim_for` carry over without being typed again.
  "masked": [["task=book", "counterparty=minor"]]}
 ```
 
-A masked pair is one that cannot happen, not one you skipped: booking a ride for an unaccompanied
-minor is refused by policy, so it should not count against you. A cell you merely ran out of room for
+A masked pair is one that cannot happen, not one you skipped: dispensing a controlled medicine to
+an unverified caller is refused by policy, so it should not count against you. A cell you merely ran out of room for
 is a gap, and belongs in the denominator. Axis names are yours, so an agent kind this file has never
 heard of declares its own and the arithmetic still works.
 
@@ -478,7 +509,7 @@ somebody would still search for. **A word a writer invents outside that set is d
 is saved**, and you are told which. So a thin `design.keywords` costs the suite its colour, and no
 `design.keywords` at all leaves only the axis levels.
 
-This is not a style rule. Measured on a hosted 50-scenario ride suite written by twelve sub-agents at
+This is not a style rule. Measured on a hosted 50-scenario suite written by twelve sub-agents at
 once: **135 distinct keywords, 86 of them on exactly one scenario**, including five OTP codes and
 fourteen pairs that differed only in case, `PriorityTier` filtering sixteen scenarios while `prioritytier` filtered
 eight others. Declaring the vocabulary took the same suite to **30 keywords and 21 singletons**.
@@ -592,8 +623,8 @@ obvious reading of its own cell, and so does the writer next to it. Naming their
 each and is the only thing that lets a writer tell "mine" from "somebody else's". Say it plainly:
 
 ```
-   Others in this round are covering: cancel a booked ride after pickup | add a saved place
-   with a partial address | switch payment mid-ride. Stay out of theirs.
+   Others in this round are covering: cancel a booked delivery after dispatch | add a saved
+   address with a partial postcode | switch payment mid-checkout. Stay out of theirs.
 ```
 
 Do not hand one writer every scenario in a single cell. A writer given a whole cell has to invent
