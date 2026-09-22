@@ -58,7 +58,7 @@ TURNS_FLOOR = 120
 # One writer's own ceiling. A worker is a smaller agent with a smaller goal: it reads the world
 # once, writes its slice, and reports. Given the stage's budget instead it can spend the suite's
 # turns on its own part, and nothing is left for the rest.
-WRITER_TURNS = int(os.environ.get("ALK_HARNESS_WRITER_TURNS", "110") or 110)
+WRITER_TURNS = int(os.environ.get("ALK_HARNESS_WRITER_TURNS", "300") or 300)
 # Everything a writer needs to write its slice, and nothing else. Read the world, rehearse the
 # calls, name what is checked, submit. Planning the suite, reading it back, saving it and changing
 # the contract all belong to the loop that briefed it; offered here they get used, and a tool a
@@ -70,7 +70,7 @@ WRITER_TOOLS = ("inspect_world", "try_calls", "add_sub_goal", "submit_scenario")
 WRITES_A_SCENARIO = ("try_calls", "submit_scenario")
 # The reviewer reads the suite whole, which is the one job that grows with the suite, so it gets
 # its own ceiling rather than the stage's: uncapped it can spend what the next round needs.
-REVIEWER_TURNS = int(os.environ.get("ALK_HARNESS_REVIEWER_TURNS", "90") or 90)
+REVIEWER_TURNS = int(os.environ.get("ALK_HARNESS_REVIEWER_TURNS", "200") or 200)
 
 
 def writers_for(wanted: int) -> int:
@@ -91,7 +91,10 @@ def turns_for(wanted: int) -> int:
     writers = writers_for(wanted)
     # The loop spends a turn per brief it sends, plus the planning and progress calls around them.
     own = 40 + writers
-    return max(TURNS_FLOOR, writers * WRITER_TURNS + REVIEWER_TURNS + own)
+    # Headroom, deliberately generous: a refused submission costs turns, there are several ways to
+    # be refused, and a stage that runs out mid-suite loses everything the spent turns bought. The
+    # ceiling exists to stop a runaway, not to ration the work.
+    return max(TURNS_FLOOR, (writers * WRITER_TURNS + REVIEWER_TURNS + own) * 3)
 
 
 # Named with underscores because one backend sanitises a worker name into an identifier and the
