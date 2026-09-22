@@ -97,6 +97,21 @@ class AgentConnection(BaseModel):
     def _provider_mode_is_explicit_and_safe(self) -> "AgentConnection":
         connector = self.connector.strip().lower()
         provider_connector = "retell" if connector == "retell_chat" else connector
+        if "phone_number" in self.config and connector != "phone":
+            if (
+                connector not in {"vapi", "retell"}
+                or self.mode is not ProviderExecutionMode.CONNECT_ONLY
+            ):
+                raise ValueError("provider_phone_requires_connect_only_voice")
+            if not _E164_PHONE.fullmatch(
+                str(self.config.get("phone_number") or "").strip()
+            ):
+                raise ValueError("provider_phone_requires_e164_phone_number")
+            if any(
+                str(name).lower().startswith(("sip_", "livekit_"))
+                for name in self.config
+            ):
+                raise ValueError("phone_dialer_config_is_platform_owned")
         if self.mode is ProviderExecutionMode.ENVIRONMENT_BACKED:
             if connector == "retell_chat":
                 raise ValueError("retell_chat_environment_backed_not_supported")
@@ -147,7 +162,9 @@ class AgentConnection(BaseModel):
             if target_key and not str(self.config.get(target_key) or "").strip():
                 raise ValueError(f"connect_only_requires_{target_key}")
         elif self.mode is not None and provider_connector not in {"vapi", "retell"}:
-            raise ValueError("provider_mode_only_supported_for_vapi_retell_or_phone_connect_only")
+            raise ValueError(
+                "provider_mode_only_supported_for_vapi_retell_or_phone_connect_only"
+            )
         return self
 
 

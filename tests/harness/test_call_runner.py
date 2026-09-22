@@ -683,16 +683,26 @@ def test_provider_connect_only_builds_direct_target_spec(
     assert captured["spec"].environment.config["params"]["min_turn_messages"] == 5
 
 
-def test_phone_connect_only_dials_with_platform_sip_credentials(tmp_path: Path) -> None:
+@pytest.mark.parametrize("connector", ["phone", "vapi", "retell"])
+def test_phone_connect_only_dials_with_platform_sip_credentials(
+    tmp_path: Path, connector: str
+) -> None:
     _job_obj, context = _context(
         tmp_path=tmp_path,
-        connector="phone",
+        connector=connector,
         mode=ProviderExecutionMode.CONNECT_ONLY,
         config={
             "phone_number": "+14155551234",
             "target_system_prompt": "You help callers book appointments.",
+            **(
+                {"assistant_id": "existing-agent"}
+                if connector == "vapi"
+                else {"agent_id": "existing-agent"}
+                if connector == "retell"
+                else {}
+            ),
         },
-        secrets={},
+        secrets={"VAPI_API_KEY": "test-vapi", "RETELL_API_KEY": "test-retell"},
         simulator_secrets={
             "LIVEKIT_URL": "wss://platform-livekit.example",
             "LIVEKIT_API_KEY": "platform-livekit-key",
@@ -710,7 +720,9 @@ def test_phone_connect_only_dials_with_platform_sip_credentials(tmp_path: Path) 
         captured["spec"] = spec
         return _report()
 
-    runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call, environ={})
+    runner = cr.CallRunnerImpl(
+        FakeAdapter(), context, place_call=place_call, environ={}
+    )
     _run(runner, _FakeScenario("phone-call"), _runtime())
 
     definition = captured["spec"].environment.config["agent_definition"]
@@ -774,7 +786,9 @@ def test_phone_connect_only_does_not_launch_customer_source(tmp_path: Path) -> N
     assert plan.control_service is None
 
 
-def test_phone_connect_only_requires_platform_sip_not_target_sip(tmp_path: Path) -> None:
+def test_phone_connect_only_requires_platform_sip_not_target_sip(
+    tmp_path: Path,
+) -> None:
     _job_obj, context = _context(
         tmp_path=tmp_path,
         connector="phone",

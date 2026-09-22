@@ -316,7 +316,9 @@ def _check_config(
         required.append(VAPI_API_KEY_ALIAS)
     elif connector == "retell":
         required.append(RETELL_API_KEY_ALIAS)
-    elif connector == "phone":
+    if connector == "phone" or (
+        connector in {"vapi", "retell"} and config.get("phone_number")
+    ):
         required.extend((SIP_OUTBOUND_TRUNK_ID_ALIAS, SIP_OUTBOUND_FROM_NUMBER_ALIAS))
     if "deepgram" in {stt_provider, tts_provider}:
         if not simulator_value(DEEPGRAM_API_KEY_ALIAS):
@@ -476,6 +478,10 @@ def _build_spec(
 
     simulator = simulator_definition(setting, doc.get("persona"))
     connector = connector.strip().lower()
+    # Match the platform agent-definition inbound-phone path. Provider IDs still
+    # supply authoring context, but the call itself dials the existing number.
+    if connector in {"vapi", "retell"} and simulator_config.get("phone_number"):
+        connector = "phone"
     provider_agent: simulate.AgentDefinition | None = None
     if connector == "vapi":
         if not provider_target_id:
