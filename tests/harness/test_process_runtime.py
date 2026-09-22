@@ -3185,6 +3185,66 @@ def test_apply_seed_file_compiles_canonical_world_ir_without_psql(
     ]
 
 
+@pytest.mark.parametrize("schema_changed", [False, True])
+def test_canonical_seed_replays_bundled_discovery_without_authoring_directory(
+    tmp_path: Path, monkeypatch, schema_changed: bool
+) -> None:
+    from contextlib import nullcontext
+
+    from fi.alk.harness.compile import postgres as compiler
+    from fi.alk.harness.source_model import SourceModel
+    from fi.alk.harness.source_schema import postgres as schema
+    from fi.alk.harness.world_ir import WorldIR
+
+    discovered = SourceModel.create(
+        source_digest="sha256:" + "a" * 64,
+        engine="postgres",
+        engine_version="16",
+        configuration_names=("APPLICATION_MODE",),
+    )
+    inspected = SourceModel.create(
+        source_digest=discovered.source_digest,
+        engine="postgres",
+        engine_version="17" if schema_changed else "16",
+    )
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    (seed / "source-model.json").write_text(discovered.model_dump_json())
+    world = WorldIR.create(source_model_fingerprint=discovered.fingerprint, tables=())
+    (seed / "world-ir.json").write_text(world.model_dump_json())
+    applied = []
+    monkeypatch.setitem(
+        sys.modules,
+        "psycopg",
+        types.SimpleNamespace(connect=lambda **_: nullcontext(object())),
+    )
+    monkeypatch.setattr(schema, "inspect_postgres", lambda *_args, **_kwargs: inspected)
+    monkeypatch.setattr(
+        compiler,
+        "apply_postgres",
+        lambda _connection, compiled: applied.append(compiled),
+    )
+
+    def replay():
+        pr.apply_postgres_world_ir(
+            seed / "world-ir.json",
+            port=14000,
+            dbname="baseline",
+            credentials=pr.EngineCredentials(username="harness", password="pw"),
+            source_digest=discovered.source_digest,
+        )
+
+    if schema_changed:
+        with pytest.raises(
+            pr.GenericWorldSeedError, match="source_model_fingerprint_mismatch"
+        ):
+            replay()
+        assert not applied
+    else:
+        replay()
+        assert applied[0].source_schema_hash == discovered.fingerprint
+
+
 def test_typed_postgres_seed_persists_the_accepted_source_and_world(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -3299,6 +3359,43 @@ def test_apply_seed_file_preserves_structured_world_diagnostics(
     assert raised.value.diagnostics == (diagnostic,)
     assert "array is malformed" not in str(raised.value)
     assert "array_shape_mismatch at users.tags" in str(raised.value)
+
+
+def test_apply_seed_file_reports_safe_canonical_world_error_code(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from fi.alk.harness.diagnostics import HarnessDiagnostic
+    from fi.alk.harness.job import HarnessStage
+
+    world = tmp_path / "world-ir.json"
+    world.write_text("{}")
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.VALIDATING_ENVIRONMENT,
+        component="postgres_compiler",
+        code="foreign_key_missing",
+        message="private row contents must not be shown",
+    )
+
+    def reject(*args: Any, **kwargs: Any) -> None:
+        raise pr.GenericWorldSeedError((diagnostic,))
+
+    monkeypatch.setattr(pr, "apply_postgres_world_ir", reject)
+
+    with pytest.raises(pr.ProcessRuntimeError) as raised:
+        pr.apply_seed_file(
+            pr.ManagedEngine.POSTGRES,
+            world,
+            port=14000,
+            dbname="baseline",
+            credentials=pr.EngineCredentials(username="harness", password="pw"),
+            process_name="postgres",
+            sync_run=lambda *args, **kwargs: pytest.fail("must not execute"),
+            source_digest="sha256:" + "a" * 64,
+        )
+
+    assert raised.value.diagnostics == (diagnostic,)
+    assert "foreign_key_missing" in str(raised.value)
+    assert "private row contents" not in str(raised.value)
 
 
 def test_apply_seed_file_types_unadapted_world_import_failure(

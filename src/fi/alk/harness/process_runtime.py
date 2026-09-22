@@ -2645,14 +2645,11 @@ def apply_postgres_sqlite_world(
         dbname=dbname,
     ) as postgres:
         source = inspect_postgres(postgres, source_digest=canonical_source_digest)
+        source = _compose_seed_source_model(source, file, artifact_root)
         if artifact_root is not None:
             from .certification import GenericHarnessArtifactStore
-            from .source_discovery import compose_source_models
 
             artifacts = GenericHarnessArtifactStore(artifact_root)
-            discovered_path = artifact_root / artifacts.SOURCE_MODEL
-            if discovered_path.is_file() and not discovered_path.is_symlink():
-                source = compose_source_models(artifacts.read_source_model(), source)
         unsupported = tuple(
             HarnessDiagnostic.create(
                 stage=HarnessStage.VALIDATING_ENVIRONMENT,
@@ -2690,7 +2687,9 @@ def apply_postgres_sqlite_world(
                 else "value_conversion_failed"
             )
             expected_type = (
-                error.logical_type.value if error.logical_type is not None else "unknown"
+                error.logical_type.value
+                if error.logical_type is not None
+                else "unknown"
             )
             sqlite_type = (
                 error.sqlite_type
@@ -2762,6 +2761,28 @@ def apply_postgres_sqlite_world(
             artifacts.write_world_ir(imported.world)
 
 
+def _compose_seed_source_model(source, seed_file: Path, artifact_root: Path | None):
+    """Reconcile bundled code facts with the independently inspected live schema."""
+    from .certification import GenericHarnessArtifactStore
+    from .source_discovery import compose_source_models
+
+    # Bundled metadata is part of the preflight-verified manifest. Prefer it in both
+    # validation and execution so an external authoring directory cannot change
+    # the meaning of otherwise identical bundle bytes.
+    roots = [seed_file.parent]
+    if artifact_root is not None and artifact_root != seed_file.parent:
+        roots.append(artifact_root)
+    for root in roots:
+        path = root / GenericHarnessArtifactStore.SOURCE_MODEL
+        if path.is_symlink():
+            raise ValueError("seed_source_model_symlink")
+        if path.is_file():
+            return compose_source_models(
+                GenericHarnessArtifactStore(root).read_source_model(), source
+            )
+    return source
+
+
 def apply_postgres_world_ir(
     file: Path,
     *,
@@ -2800,7 +2821,7 @@ def apply_postgres_world_ir(
                 HarnessDiagnostic.create(
                     stage=HarnessStage.VALIDATING_ENVIRONMENT,
                     component="world_ir",
-                    code="world_ir_invalid",
+                    code="value_shape_mismatch",
                     message="canonical World IR artifact is invalid",
                     evidence_refs=("artifact://world-ir",),
                 ),
@@ -2815,13 +2836,9 @@ def apply_postgres_world_ir(
         dbname=dbname,
     ) as postgres:
         source = inspect_postgres(postgres, source_digest=canonical_source_digest)
+        source = _compose_seed_source_model(source, file, artifact_root)
         if artifact_root is not None:
             artifacts = GenericHarnessArtifactStore(artifact_root)
-            discovered_path = artifact_root / artifacts.SOURCE_MODEL
-            if discovered_path.is_file() and not discovered_path.is_symlink():
-                from .source_discovery import compose_source_models
-
-                source = compose_source_models(artifacts.read_source_model(), source)
         unsupported = tuple(
             HarnessDiagnostic.create(
                 stage=HarnessStage.VALIDATING_ENVIRONMENT,
@@ -2948,10 +2965,15 @@ def apply_seed_file(
                 apply_postgres_world_ir(file, **world_kwargs)
             except Exception as exc:
                 diagnostics = tuple(getattr(exc, "diagnostics", ()))
+                # The terminal receipt must remain secret-safe, but hiding every compiler
+                # diagnostic made a failed canonical seed impossible to diagnose after the
+                # sandbox was deleted. Diagnostic codes are closed, value-free identifiers.
+                summary = ", ".join(sorted({item.code for item in diagnostics}))
                 raise ProcessRuntimeError(
                     "seed",
                     "seed_failed",
-                    "canonical World IR could not be compiled or applied",
+                    "canonical World IR could not be compiled or applied"
+                    + (f": {summary}" if summary else ""),
                     process=process_name,
                     domain=FailureDomain.ENVIRONMENT,
                     diagnostics=diagnostics,
@@ -3015,7 +3037,7 @@ def apply_seed_file(
                     ]
                     item = diagnostic.code + (f" at {'.'.join(parts)}" if parts else "")
                     if diagnostic.component == "world_import":
-                        detail = diagnostic.message.removeprefix(
+                        detail = diagnostic.redacted_message.removeprefix(
                             "legacy world value could not be normalized: "
                         )
                         if re.fullmatch(

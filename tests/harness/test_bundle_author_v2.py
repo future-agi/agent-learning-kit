@@ -857,7 +857,9 @@ def test_six_supported_shapes_produce_preflight_clean_bundle(
     plan = resolve_environment_plan(source, job)
     assert plan.packaging == packaging
     if case == "uber-compose":
-        proxy = next(process for process in plan.processes if process.name == "tool-proxy")
+        proxy = next(
+            process for process in plan.processes if process.name == "tool-proxy"
+        )
         assert proxy.run_command == [sys.executable, "proxy.py"]
     output = tmp_path / "bundle"
     first = author_bundle_v2(
@@ -1416,8 +1418,16 @@ def test_generic_pipeline_prefers_canonical_world_ir(tmp_path: Path) -> None:
     authoring = _authoring(tmp_path)
     artifact_root = authoring / "generic-harness"
     artifact_root.mkdir()
+    source_model = SourceModel.create(
+        source_digest="sha256:" + source_fingerprint(source),
+        engine="postgres",
+        configuration_names=("APPLICATION_MODE",),
+    )
+    (artifact_root / "source-model.json").write_text(
+        source_model.model_dump_json(), encoding="utf-8"
+    )
     world = WorldIR.create(
-        source_model_fingerprint="sha256:" + "a" * 64,
+        source_model_fingerprint=source_model.fingerprint,
         tables=(),
     )
     (artifact_root / "world-ir.json").write_text(
@@ -1447,6 +1457,11 @@ def test_generic_pipeline_prefers_canonical_world_ir(tmp_path: Path) -> None:
         artifact_root / "world-ir.json"
     ).read_text()
     assert not (output / "seed" / "world.sqlite").exists()
+    assert (output / "seed" / "source-model.json").read_bytes() == (
+        artifact_root / "source-model.json"
+    ).read_bytes()
+    assert "generic-harness/source-model.json" in manifest.provenance.adopted_files
+    assert any(item.path == "seed/source-model.json" for item in manifest.files)
     assert "generic-harness/world-ir.json" in manifest.provenance.adopted_files
     assert (
         "generic-harness/source-model.schema.json" in manifest.provenance.adopted_files
@@ -2146,7 +2161,9 @@ def test_nested_script_runtime_uses_project_environment_without_agent_py(
     assert "ThreadingHTTPServer" in agent.run_command[-1]
 
 
-def test_agent_entrypoint_discovery_ignores_generated_virtualenv(tmp_path: Path) -> None:
+def test_agent_entrypoint_discovery_ignores_generated_virtualenv(
+    tmp_path: Path,
+) -> None:
     source = tmp_path / "source"
     (source / "app").mkdir(parents=True)
     (source / "app" / "agent.py").write_text("print('target')\n")

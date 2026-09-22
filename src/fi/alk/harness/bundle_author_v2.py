@@ -892,6 +892,13 @@ def _generic_postgres_seed_artifacts(
         shutil.copy2(legacy_world, world_path)
         adopted_world = "world.sqlite"
     adopted_contracts: list[str] = []
+    # Runtime seed compilation must see the same code/action facts as validation.
+    # Keep them inside the hashed bundle: the execution sandbox has no authoring
+    # artifact-store dependency and PostgreSQL inspection only recovers state facts.
+    source_model = authoring / "generic-harness" / "source-model.json"
+    if source_model.is_file():
+        shutil.copy2(source_model, seed / "source-model.json")
+        adopted_contracts.append("generic-harness/source-model.json")
     contracts = staging / "contracts"
     for name in ("source-model.schema.json", "world-ir.schema.json"):
         schema = authoring / "generic-harness" / name
@@ -1208,14 +1215,22 @@ def _langgraph_entrypoint(root: Path) -> str | None:
         raise BundleAuthorError(f"langgraph_config_invalid: {exc}") from exc
     graphs = document.get("graphs") if isinstance(document, dict) else None
     if not isinstance(graphs, dict) or len(graphs) != 1:
-        raise BundleAuthorError("langgraph_graph_ambiguous: expected exactly one declared graph")
+        raise BundleAuthorError(
+            "langgraph_graph_ambiguous: expected exactly one declared graph"
+        )
     declaration = next(iter(graphs.values()))
     if not isinstance(declaration, str) or ":" not in declaration:
         raise BundleAuthorError("langgraph_graph_invalid: expected path:attribute")
     file_name, attribute = declaration.rsplit(":", 1)
     graph_path = (root / file_name).resolve()
-    if not graph_path.is_relative_to(root) or not graph_path.is_file() or not graph_path.suffix == ".py":
-        raise BundleAuthorError("langgraph_graph_invalid: graph source must be a Python file in the repository")
+    if (
+        not graph_path.is_relative_to(root)
+        or not graph_path.is_file()
+        or not graph_path.suffix == ".py"
+    ):
+        raise BundleAuthorError(
+            "langgraph_graph_invalid: graph source must be a Python file in the repository"
+        )
     if not attribute.isidentifier():
         raise BundleAuthorError("langgraph_graph_invalid: graph attribute is invalid")
     return f"{graph_path.relative_to(root).as_posix()}:{attribute}"
@@ -1228,8 +1243,10 @@ def _callback_adapter_source() -> str:
 
 
 def _langgraph_adapter_source() -> str:
-    return Path(__file__).with_name("langgraph_http_adapter.py").read_text(
-        encoding="utf-8"
+    return (
+        Path(__file__)
+        .with_name("langgraph_http_adapter.py")
+        .read_text(encoding="utf-8")
     )
 
 
@@ -1671,8 +1688,10 @@ def resolve_environment_plan(
             else None
         )
         is_graph = graph_entrypoint is not None and not discovered_callback
-        is_callback = not is_livekit and not is_graph and (
-            contract_is_callback or discovered_callback is not None
+        is_callback = (
+            not is_livekit
+            and not is_graph
+            and (contract_is_callback or discovered_callback is not None)
         )
         is_command_adapter = bool(
             not is_livekit
@@ -1782,8 +1801,7 @@ def resolve_environment_plan(
             python_command = process.run_command[:-1]
             process = process.model_copy(
                 update={
-                    "run_command": python_command
-                    + ["-c", _langgraph_adapter_source()],
+                    "run_command": python_command + ["-c", _langgraph_adapter_source()],
                     "started_check": StartedCheck(port=True, timeout_seconds=180),
                 }
             )
@@ -2149,7 +2167,8 @@ def author_bundle_v2(
                         }
                     }
                 )
-                if isinstance(process, SourceProcess) and process.name == plan.control_service
+                if isinstance(process, SourceProcess)
+                and process.name == plan.control_service
                 else process
                 for process in plan.processes
             ),
