@@ -759,6 +759,20 @@ judgement, only of reflex.
 These words belong in the coordinate and never in the instruction: overt, overtly, subtle, injection,
 prompt injection, social engineering, adversarial, jailbreak, out of scope, overlay, red team.
 
+**Count the turns your own scenario needs, and set the budget above it.** `max_turns` defaults to 10 and
+the default is what almost everybody ships. Work out instead how many times this person has to speak
+before the outcome is reached: one turn to say what they want, one for each thing the agent has to confirm
+back, one for each identifier or code read aloud, one to approve the summary, one to close - then add the
+friction this scenario exists to create, because a correction, a mishearing, a disambiguation and a change
+of mind each cost a turn or two of their own.
+
+Get this wrong and the run fails for a reason that is ours. Worse, it fails **selectively**: the budget
+bites first on the scenarios with the most friction, which are the ones worth the most, so the suite
+reports that the agent cannot handle complex flows when it was never given room to finish one. Measured on
+a hosted 100: **45 scenarios had twelve or more tool calls in their reference solution and a ten-turn
+budget**, among them several with six sub-goals and sixteen calls. A budget is cheap; a scenario cut off
+one turn from its own outcome is wasted entirely.
+
 **Referring to a disclosure is fine. Telling the caller what it says, and to accept it, is not.** These
 two look alike on the page and only one of them measures anything:
 
