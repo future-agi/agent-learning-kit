@@ -1872,7 +1872,8 @@ def test_keyword_problems_catches_what_a_hundred_scenario_suite_did(tmp_path: Pa
         return [
             Scenario(
                 name=f"s{i}",
-                persona=Persona(name=f"P{i}", keywords=keywords_for(i)),
+                keywords=keywords_for(i),
+                persona=Persona(name=f"P{i}"),
             )
             for i in range(20)
         ]

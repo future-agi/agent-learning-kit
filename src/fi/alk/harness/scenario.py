@@ -90,7 +90,6 @@ class Persona(BaseModel):
     # The first thing this person actually says. Voice agents often greet immediately; leaving
     # this to the simulator model produced generic "Hello?" turns and avoidable silence races.
     initial_message: str = ""
-    keywords: list[str] = Field(default_factory=list)
     languages: list[str] = Field(default_factory=list)
     accent: str = ""
     multilingual: bool = False
@@ -109,7 +108,6 @@ class Persona(BaseModel):
             or self.location
             or self.personality
             or self.communication_style
-            or self.keywords
             or self.languages
             or self.accent
             or self.metadata
@@ -140,8 +138,6 @@ class Persona(BaseModel):
         missing = [name for name, value in wanted if not value.strip()]
         if not self.languages:
             missing.append("languages")
-        if not self.keywords:
-            missing.append("keywords")
         return missing
 
     def format_persona(self) -> str:
@@ -241,6 +237,11 @@ class Scenario(BaseModel):
     # The task. For a conversational agent it fills the simulator prompt's instruction slot; for
     # a browser or coding agent it goes to the agent directly.
     instruction: str = ""
+    # How somebody finds this scenario in a suite of a thousand. They describe the situation, not
+    # the caller: the task, what it touches and the overlay. They never reach the call. They lived
+    # on the persona until now, which made them vanish for any agent that has no caller at all and
+    # tied a property of the test to a property of the person taking it.
+    keywords: list[str] = Field(default_factory=list)
     # Who is making the request. This is deliberately separate from the task so a caller's
     # communication needs do not get buried in an unstructured instruction.
     persona: Persona | None = None
@@ -309,6 +310,22 @@ class Scenario(BaseModel):
     # Slots the caller filled by the run rather than by the scenario. Listed so a template that
     # uses one is not rejected as unfillable at write time.
     RUNTIME_SLOTS: ClassVar[tuple[str, ...]] = ("channel", "situation")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _lift_keywords(cls, data: Any) -> Any:
+        """Read a scenario written while keywords still lived on the persona.
+
+        Every suite authored before the move carries them there, and those documents are durable:
+        they sit in sealed archives that a rerun replays. Lifting on read costs nothing and means
+        no archive has to be rewritten to stay readable.
+        """
+        if not isinstance(data, dict) or data.get("keywords"):
+            return data
+        persona = data.get("persona")
+        if isinstance(persona, dict) and persona.get("keywords"):
+            data = {**data, "keywords": list(persona["keywords"])}
+        return data
 
     @model_validator(mode="after")
     def _identify(self) -> "Scenario":
@@ -1508,7 +1525,7 @@ def tidy_keywords(
     """
     spellings: dict[str, Counter[str]] = defaultdict(Counter)
     for one in scenarios:
-        for word in (one.persona.keywords if one.persona else []) or []:
+        for word in one.keywords or []:
             clean = word.strip()
             if clean:
                 spellings[clean.casefold()][clean] += 1
@@ -1518,10 +1535,10 @@ def tidy_keywords(
     moved = 0
     invented: set[str] = set()
     for one in scenarios:
-        if not one.persona or not one.persona.keywords:
+        if not one.keywords:
             continue
         rewritten: list[str] = []
-        for word in one.persona.keywords:
+        for word in one.keywords:
             clean = word.strip()
             if not clean:
                 continue
@@ -1538,13 +1555,13 @@ def tidy_keywords(
         # Never emptied. A scenario with no keyword at all cannot be found by any filter, which is
         # worse than one found by a word the plan did not choose, so a suite that strips to nothing
         # keeps its best-supported word and the drop is reported instead.
-        if not rewritten and one.persona.keywords:
+        if not rewritten and one.keywords:
             rewritten = [
-                canonical.get(one.persona.keywords[0].strip().casefold(), one.persona.keywords[0])
+                canonical.get(one.keywords[0].strip().casefold(), one.keywords[0])
             ]
-        if rewritten != one.persona.keywords:
+        if rewritten != one.keywords:
             moved += 1
-            one.persona.keywords = rewritten
+            one.keywords = rewritten
     return moved, invented
 
 
@@ -1560,7 +1577,7 @@ def keyword_problems(scenarios: list[Scenario]) -> list[str]:
     if total < 8:
         return problems
     used = [
-        [word.strip().lower() for word in (one.persona.keywords if one.persona else []) if word.strip()]
+        [word.strip().lower() for word in (one.keywords or []) if word.strip()]
         for one in scenarios
     ]
     counts = Counter(word for words in used for word in set(words))

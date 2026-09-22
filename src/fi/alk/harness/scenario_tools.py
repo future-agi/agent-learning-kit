@@ -930,10 +930,10 @@ def accept_scenario(
         kept[:] = [one for one in kept if one.name != scenario.name]
     kept.append(scenario)
     outside: list[str] = []
-    if vocabulary and scenario.persona and scenario.persona.keywords:
+    if vocabulary and scenario.keywords:
         allowed = {word.strip().casefold(): word.strip() for word in vocabulary if word.strip()}
         inside: list[str] = []
-        for word in scenario.persona.keywords:
+        for word in scenario.keywords:
             settled = allowed.get(word.strip().casefold())
             if settled:
                 if settled not in inside:
@@ -943,7 +943,7 @@ def accept_scenario(
         # Never emptied: a scenario no filter can reach is worse than one reached by a word the
         # plan did not pick, so a total miss keeps what the writer chose and only says so.
         if inside:
-            scenario.persona.keywords = inside
+            scenario.keywords = inside
     # A proved scenario is already valuable work. Persist it immediately so a stopped model,
     # browser refresh, process restart, or later scenario failure cannot make the UI say none
     # were written. ``save_scenarios`` remains the suite-level diversity/finality gate.
@@ -1142,7 +1142,16 @@ def scenario_tools(
     # ``branch`` is required because coverage is counted on the use case and branch pair, and the
     # merge drops a repeat of that pair. A writer that leaves it out gives every scenario in its
     # slice the same pair, and all but the first are silently thrown away.
-    scenario_required = ["name", "branch", "instruction", "solution", "sub_goals"]
+    # ``keywords`` was required while it lived on the persona, and it stays required now it sits on
+    # the scenario: a suite whose rows carry none can only be filtered by its axis levels.
+    scenario_required = [
+        "name",
+        "branch",
+        "instruction",
+        "solution",
+        "sub_goals",
+        "keywords",
+    ]
     if contract.conversational:
         scenario_required.append("persona")
 
@@ -1436,7 +1445,6 @@ def scenario_tools(
                             "description": "The caller's natural opening request, specific to "
                             "this scenario. Do not use a generic greeting.",
                         },
-                        "keywords": {"type": "array", "items": {"type": "string"}},
                         "languages": {
                             "type": "array",
                             "items": persona_field("languages"),
@@ -1451,11 +1459,18 @@ def scenario_tools(
                         "communication_style",
                         "initial_message",
                         "languages",
-                        "keywords",
                         # Off a call there is no voice to pick, so asking for an accent makes a
                         # writer invent one against a situation that says nothing about it.
                         *(["accent"] if _is_spoken(contract) else []),
                     ],
+                },
+                "keywords": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "How somebody finds this scenario in a suite of a thousand: "
+                    "the task, what it touches, the overlay. They describe the situation, never "
+                    "the caller, and they never reach the call. Take them from the vocabulary "
+                    "the plan declared; a word outside it is dropped when the suite is saved.",
                 },
                 "variables": {
                     "type": "object",
