@@ -573,7 +573,11 @@ _NAMES_A_DIFFICULTY = re.compile(
     r"|interrupt|instead of|wrong|mistake|mismatch|does not match|insist|pushe?s? back"
     r"|repeats?|unclear|ambigu|confus|silen|hesitat|goes quiet|steps away"
     r"|declin|unavailable|fail|error|expired|invalid|denied|blocked|suspend"
-    r"|sounds? like|swapped|no referent|not serviceable|geocodes? to nothing)\b",
+    r"|sounds? like|swapped|no referent|not serviceable|geocodes? to nothing"
+    # An obligation the agent owes before it may proceed is a difficulty too: it can simply be
+    # skipped, and skipping it is the failure. A surge disclosure read as a plain booking is how
+    # a real test gets mistaken for a control.
+    r"|disclos|surge|waive|policy|before (completing|booking|proceeding)|must (confirm|verify))\b",
     re.IGNORECASE,
 )
 
