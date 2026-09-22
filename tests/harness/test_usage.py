@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
+import logging
+
 
 import pytest
 
@@ -108,6 +110,25 @@ def test_paid_usage_check_fails_closed_on_transport_error(tmp_path) -> None:
     with pytest.raises(UsageUnavailable, match="usage check unavailable"):
         reporter.check("voice_call")
 
+
+def test_usage_record_logs_when_report_is_not_delivered(tmp_path, caplog) -> None:
+    reporter = UsageReporter(
+        _capabilities(),
+        _UnavailableTransport(),
+        UsageJournal(tmp_path / "usage.json", attempt_id="attempt-1"),
+    )
+    caplog.set_level(logging.ERROR)
+
+    record = reporter.record(
+        action="voice_call",
+        scenario_key="account-help",
+        amount=1.25,
+        funding="platform",
+    )
+
+    assert record in reporter.journal.records
+    assert "journaled but not delivered" in caplog.text
+    assert str(record.id) in caplog.text
 
 def test_usage_check_sends_only_the_call_action(tmp_path) -> None:
     transport = _RecordingTransport()

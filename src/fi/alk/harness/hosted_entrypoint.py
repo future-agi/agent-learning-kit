@@ -1885,7 +1885,12 @@ async def run_job(
         `scheduler_result` is only ever passed by the three call sites reached AFTER
         `scheduler.run()` -- pre-run terminals (`_fail`, the boundary `_canceled()` checks) have
         no `RunResult` and pass nothing, so this stays a no-op there."""
-        await asyncio.to_thread(usage_reporter.report)
+        if not await asyncio.to_thread(usage_reporter.report):
+            logger.error(
+                "Hosted usage report could not be delivered before terminalization "
+                "for attempt %s",
+                job.attempt_id,
+            )
         # Artifact bytes must be uploaded before the terminal-referenced complete manifest.  The
         # terminal event itself remains before receipts and the manifest on the outbound channel.
         await adapter.ensure_terminal_artifacts(

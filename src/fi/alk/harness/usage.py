@@ -295,7 +295,16 @@ class UsageReporter:
             outcome=outcome,
             failure_domain=failure_domain,
         )
-        self.report()
+        delivered = self.report()
+        if not delivered:
+            logger.error(
+                "Hosted usage record journaled but not delivered for attempt %s: "
+                "action=%s scenario=%s record_id=%s",
+                self.journal.attempt_id,
+                action,
+                scenario_key,
+                record.id,
+            )
         return record
 
     def report(self) -> bool:

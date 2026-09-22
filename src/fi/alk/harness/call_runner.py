@@ -966,7 +966,7 @@ class CallRunnerImpl:
             context.target_provider_secret_values,
             simulator_secret_values,
         )
-        self._scenario_attempt_counts: dict[str, int] = {}
+        self._scenario_room_counts: dict[str, int] = {}
         self._closed = False
 
     def _cleanup_credentials(self) -> None:
@@ -1052,15 +1052,15 @@ class CallRunnerImpl:
         except _ScenarioDocumentUnavailable as exc:
             raise CallAborted(f"voice_scenario_document_unavailable: {exc}") from exc
 
-        scenario_attempt = (
-            self._scenario_attempt_counts.get(scenario.scenario_key, 0) + 1
+        room_count = (
+            self._scenario_room_counts.get(scenario.scenario_key, 0) + 1
         )
-        self._scenario_attempt_counts[scenario.scenario_key] = scenario_attempt
+        self._scenario_room_counts[scenario.scenario_key] = room_count
         room_name = _room_name(
             job_id=self._context.job.job_id,
             attempt_number=self._context.attempt_number,
             scenario_key=scenario.scenario_key,
-            scenario_attempt=scenario_attempt,
+            scenario_attempt=room_count,
         )
 
         raw_timeout = self._context.job.agent.config.get(CALL_TIMEOUT_CONFIG_KEY)
