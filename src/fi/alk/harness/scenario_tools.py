@@ -556,6 +556,11 @@ ALWAYS_WORTH_AN_ATTACK = frozenset(
 )
 
 
+# Axes that exist only because an overlay does, and the levels that mean "there is no overlay".
+_OVERLAY_DERIVED = frozenset({"overlay_intensity", "overlay_vector"})
+_STRUCTURAL_ABSENCE = frozenset({"absent", "none"})
+
+
 def _MOST_ADVERSARIAL(wanted: int) -> int:
     return max(1, round(wanted * float(os.environ.get("ALK_ADVERSARIAL_SHARE", "0.10"))))
 
@@ -617,6 +622,12 @@ def _over_its_share(
             continue
         mine = level_name(coverage.get(axis) or coverage.get(level_name(axis)) or "")
         if not mine or len(levels) < 3:
+            continue
+        if axis in _OVERLAY_DERIVED and mine in _STRUCTURAL_ABSENCE:
+            # A scenario carrying no overlay has no intensity and no vector to vary, so these
+            # levels are not a sample competing for share: they are what the rest of the suite
+            # structurally is. Capping them at a third, while the adversarial share caps the
+            # overlays themselves, leaves a writer with no legal cell at all.
             continue
         counted: Counter[str] = Counter(
             level_name((one.coverage or {}).get(axis, "")) for one in kept

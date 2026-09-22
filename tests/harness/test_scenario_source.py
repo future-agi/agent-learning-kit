@@ -2787,3 +2787,35 @@ def test_an_instruction_naming_a_record_the_world_lacks_is_refused() -> None:
     # A world that holds no identifiers at all cannot judge one.
     bare = SimpleNamespace(state=lambda: {"notes": [{"text": "hello"}]})
     assert _identifiers_the_instruction_invents(invented, bare) == []
+
+def test_a_suite_without_overlays_is_not_refused_by_the_intensity_share() -> None:
+    """The cap is for samples. A scenario carrying no overlay has no intensity to vary, so
+    `absent` is what most of a healthy suite structurally is, not a level competing for share.
+
+    Capping it deadlocked a real 50-scenario run at 33: the adversarial cap refused every new
+    overlay, and the intensity cap refused every plain scenario, leaving no legal cell at all.
+    """
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _over_its_share
+
+    grid = {
+        "overlay": ["none", "prompt_injection", "social_engineering"],
+        "overlay_intensity": ["absent", "subtle", "overt"],
+        "task": ["book", "cancel", "status"],
+    }
+    kept = [
+        Scenario(
+            name=f"plain{n}",
+            coverage={"overlay": "none", "overlay_intensity": "absent", "task": "book"},
+            sub_goals=["booked"],
+        )
+        for n in range(30)
+    ]
+    plain = {"overlay": "none", "overlay_intensity": "absent", "task": "cancel"}
+    assert _over_its_share(plain, grid, kept, 50) == ""
+
+    # An ordinary axis is still capped: those levels are samples, and one of them becoming the
+    # whole suite is exactly what the cap exists to stop.
+    assert "task is already at" in _over_its_share(
+        {"overlay": "none", "overlay_intensity": "absent", "task": "book"}, grid, kept, 50
+    )
