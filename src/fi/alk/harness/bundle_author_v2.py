@@ -1100,7 +1100,7 @@ def _plan_python(
                     "download-files",
                 ]
             )
-        run = ["uv", "run", "--no-sync", "python", entry]
+        run = [*_uv_run(root), "python", entry]
     elif (root / "requirements.txt").is_file():
         commands = [
             [python, "-m", "venv", ".venv"],
@@ -1134,6 +1134,17 @@ def _docker_python(root: Path) -> str:
     return f"python{direct.group(1)}" if direct else "python3.12"
 
 
+def _uv_run(root: Path) -> list[str]:
+    """`uv run`, skipping the dependency sync only when there is a venv to skip it for.
+
+    `--no-sync` means install nothing. With a prepared venv that is exactly right and saves a
+    minute per process. With no venv, uv creates an empty one and the process dies on its first
+    import — the agent exited on `ModuleNotFoundError: No module named 'dotenv'` before it could
+    register, and four repair rounds went on an environment that could never start.
+    """
+    return ["uv", "run"] if not (root / ".venv").is_dir() else ["uv", "run", "--no-sync"]
+
+
 def _dockerfile_run(root: Path) -> list[str] | None:
     dockerfile = root / "Dockerfile"
     if not dockerfile.is_file():
@@ -1163,7 +1174,7 @@ def _dockerfile_run(root: Path) -> list[str] | None:
     if argv[0] == "python":
         argv[0] = ".venv/bin/python" if (root / "requirements.txt").is_file() else "uv"
         if argv[0] == "uv":
-            argv[1:1] = ["run", "--no-sync", "python"]
+            argv[0:1] = [*_uv_run(root), "python"]
     elif (
         argv[0] in {"uvicorn", "gunicorn", "flask"}
         and (root / "requirements.txt").is_file()
@@ -1175,7 +1186,7 @@ def _dockerfile_run(root: Path) -> list[str] | None:
         if (root / ".venv" / "bin" / argv[0]).is_file():
             argv[0] = f".venv/bin/{argv[0]}"
         else:
-            argv[0:1] = ["uv", "run", "--no-sync", argv[0]]
+            argv[0:1] = [*_uv_run(root), argv[0]]
     return argv
 
 
@@ -1343,12 +1354,21 @@ def _submitted_command(process: SourceProcess, command: list[str]) -> list[str]:
     if not command:
         return list(process.run_command)
     normalized = [str(item) for item in command]
+    # `uv run` may or may not carry `--no-sync`, depending on whether the source had a venv to
+    # skip the sync for, so the prefix is matched on `uv run` and carried forward whole.
+    launcher = (
+        process.run_command[:3]
+        if process.run_command[:3] == ["uv", "run", "--no-sync"]
+        else process.run_command[:2]
+        if process.run_command[:2] == ["uv", "run"]
+        else []
+    )
     if normalized[0] in {"python", "python3", "python3.11", "python3.12", "python3.13"}:
-        if process.run_command[:3] == ["uv", "run", "--no-sync"]:
-            return [*process.run_command[:4], *normalized[1:]]
+        if launcher:
+            return [*launcher, process.run_command[len(launcher)], *normalized[1:]]
         return [process.run_command[0], *normalized[1:]]
-    if process.run_command[:3] == ["uv", "run", "--no-sync"] and normalized[0] != "uv":
-        return ["uv", "run", "--no-sync", *normalized]
+    if launcher and normalized[0] != "uv":
+        return [*launcher, *normalized]
     return normalized
 
 

@@ -2416,8 +2416,10 @@ def test_nested_script_runtime_uses_project_environment_without_agent_py(
 
     agent = next(process for process in plan.processes if process.name == "agent")
     assert agent.working_directory == "."
+    # The fixture ships no `.venv`, so uv installs before it runs. `--no-sync` there would hand
+    # the process an empty environment and it would die on its first import.
     assert agent.environment["ALK_SUBPROCESS_COMMAND"] == json.dumps(
-        ["uv", "run", "--no-sync", "kickoff"]
+        ["uv", "run", "kickoff"]
     )
     assert "ThreadingHTTPServer" in agent.run_command[-1]
 
@@ -2533,11 +2535,28 @@ def test_a_server_command_never_points_at_a_venv_that_was_not_built(tmp_path: Pa
         encoding="utf-8",
     )
 
+    # No venv on disk, so uv must install before it runs: `--no-sync` would hand the process an
+    # empty environment and it would die on its first import.
     without_venv = _dockerfile_run(service)
-    assert without_venv[:4] == ["uv", "run", "--no-sync", "uvicorn"]
+    assert without_venv[:3] == ["uv", "run", "uvicorn"]
 
     binary = service / ".venv" / "bin" / "uvicorn"
     binary.parent.mkdir(parents=True)
     binary.write_text("#!/bin/sh\n", encoding="utf-8")
     with_venv = _dockerfile_run(service)
     assert with_venv[0] == ".venv/bin/uvicorn"
+
+def test_a_prepared_venv_still_skips_the_dependency_sync(tmp_path: Path) -> None:
+    """The sync is skipped only when there is something to skip it for.
+
+    A populated venv makes `--no-sync` right and saves a minute per process; an absent one makes
+    it fatal, because uv creates an empty environment and the process dies on its first import.
+    """
+    from fi.alk.harness.bundle_author_v2 import _uv_run
+
+    service = tmp_path / "agent"
+    service.mkdir()
+    assert _uv_run(service) == ["uv", "run"]
+
+    (service / ".venv" / "bin").mkdir(parents=True)
+    assert _uv_run(service) == ["uv", "run", "--no-sync"]
