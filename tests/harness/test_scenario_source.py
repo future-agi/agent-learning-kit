@@ -2227,11 +2227,12 @@ def test_only_a_value_the_agent_looks_up_is_a_missing_credential() -> None:
         assert grounding_problems([looked_up], _P(tmp)) == []
 
 
-def test_a_suite_too_large_to_write_in_one_context_is_handed_out(tmp_path, monkeypatch) -> None:
-    """Above the hand-out size the loop cannot write, so it must brief sub-agents.
+def test_a_suite_is_always_handed_out(tmp_path, monkeypatch) -> None:
+    """The loop never holds the writing tools, so it must brief sub-agents at any size.
 
     Left to judge it, the loop wrote twenty scenarios itself in one lane and dispatched nobody.
-    A small suite is genuinely faster written in place, so the rule is a size, not a ban.
+    A threshold only moved that judgement call somewhere else, and it was wrong every time it was
+    made, so one path serves every suite.
     """
     from fi.alk.harness import scenarios as stage
     from fi.alk.harness.contract import AgentContract
@@ -2274,8 +2275,9 @@ def test_a_suite_too_large_to_write_in_one_context_is_handed_out(tmp_path, monke
     assert big.spec.workers, "the loop must still be able to hand work out"
     assert "aim_for" in offered(big.spec) and "suite_progress" in offered(big.spec)
     assert "save_scenarios" in offered(big.spec)
-    # Below the hand-out size the loop writes the suite itself and still needs them.
-    assert set(stage.WRITES_A_SCENARIO) <= offered(small.spec)
+    # A small suite takes the same path; nothing about eight scenarios earns the loop its tools.
+    assert not (set(stage.WRITES_A_SCENARIO) & offered(small.spec))
+    assert small.spec.workers, "a small suite is handed out too"
 
 
 def test_suite_progress_names_overlays_that_assert_nothing() -> None:
