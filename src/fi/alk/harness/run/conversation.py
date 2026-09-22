@@ -275,8 +275,10 @@ async def converse(
 
     transcript.calls = list(target.world.calls) if hasattr(target, "world") else []
     transcript.spent_usd = target.spent_usd + customer.spent_usd
+    # Same accessor as the failure path above: a customer that reports no tokens meters zero
+    # rather than taking the whole call down on the way out.
     (
         transcript.simulator_input_tokens,
         transcript.simulator_output_tokens,
-    ) = customer.simulator_tokens
+    ) = getattr(customer, "simulator_tokens", (0, 0))
     return transcript

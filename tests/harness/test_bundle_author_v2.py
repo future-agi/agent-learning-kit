@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from fi.alk.harness.process_runtime import plan_ports
 from fi.alk.harness.bundle_author_v2 import (
     BundleAuthorError,
     _compile_source_tool_handlers,
@@ -2147,6 +2148,46 @@ def test_normal_separate_tools_api_is_still_consumable(tmp_path: Path) -> None:
     control = next(p for p in plan.processes if p.name == "agent")
     assert control.environment["FI_WORKER_HEALTH_PORT"] == "{{PORT_agent}}"
     assert "FI_TOOLS_PORT" not in control.environment
+
+
+def test_livekit_control_worker_health_port_is_consumable(tmp_path: Path) -> None:
+    # The CLI has no `--port`, so 8081 is declared rather than rewritten out of the command, and
+    # declaring it code-fixed forced every bundle carrying a LiveKit worker down to one world. The
+    # harness's own shim consumes FI_WORKER_HEALTH_PORT at worker start, so the declaration is
+    # env-consumable and a suite runs four worlds wide.
+    source = tmp_path / "voice-agent"
+    source.mkdir()
+    (source / "agent.py").write_text(
+        "from livekit.agents import cli, WorkerOptions\n"
+        "cli.run_app(WorkerOptions(entrypoint_fnc=None))\n",
+        encoding="utf-8",
+    )
+    (source / "pyproject.toml").write_text(
+        "[project]\nname='agent'\nversion='1'\n", encoding="utf-8"
+    )
+    (source / "Dockerfile").write_text(
+        'FROM python:3.13\nCMD ["python", "agent.py", "start"]\n', encoding="utf-8"
+    )
+    authoring = _authoring(tmp_path)
+    _write_voice_contract(authoring)
+    job = _job(
+        connector="auto",
+        with_secrets=True,
+        secret_aliases=("LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "LIVEKIT_URL"),
+    )
+
+    bundle = author_bundle_v2(
+        source=source, job=job, authoring=authoring, output=tmp_path / "bundle"
+    )
+
+    agent = next(process for process in bundle.processes if process.name == "agent")
+    assert agent.fixed_port == 8081
+    assert agent.fixed_port_consumable is True
+    assert agent.environment["FI_WORKER_HEALTH_PORT"] == "{{PORT_agent}}"
+
+    ports = plan_ports(bundle, instances=4)
+    assert ports.effective_instances == 4
+    assert ports.degraded_reason is None
 
 
 def test_livekit_worker_carries_the_worker_knob_env(tmp_path: Path) -> None:

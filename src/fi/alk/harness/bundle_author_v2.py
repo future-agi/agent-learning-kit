@@ -1176,6 +1176,10 @@ def _dockerfile_run(root: Path) -> list[str] | None:
 _LIVEKIT_WORKER_SUBCOMMANDS = frozenset({"start", "dev", "connect", "console"})
 
 
+# LiveKit's production CLI binds its health server here and exposes no `--port`.
+_LIVEKIT_CLI_HEALTH_PORT = 8081
+
+
 def _livekit_cli_fixed_health_port(command: list[str]) -> int | None:
     """Describe LiveKit's production CLI port so the runtime can avoid contention.
 
@@ -1185,7 +1189,26 @@ def _livekit_cli_fixed_health_port(command: list[str]) -> int | None:
     OS for an ephemeral port and needs no declaration.
     """
 
-    return 8081 if "start" in command else None
+    return _LIVEKIT_CLI_HEALTH_PORT if "start" in command else None
+
+
+def _knob_bearing_health_port_is_consumable(process: SourceProcess) -> bool:
+    """Whether a LiveKit worker's declared 8081 may parallelize instead of forcing one world.
+
+    The CLI exposes no ``--port``, so the port is declared rather than rewritten out of the
+    command. The harness's own shim reads ``FI_WORKER_HEALTH_PORT`` at worker start and either
+    disables the health server or moves it to the allocated port, so a knob-bearing worker never
+    binds 8081 at W>1. Keying on the knob carrying this process's OWN token is what makes the
+    claim honest: without it the declaration stays code-fixed and degrades to W=1.
+    """
+    # Only the CLI's own health port. A process that is BOTH the knob-bearing worker and an HTTP
+    # server pins a service port instead, and both would resolve to the same token: it stays
+    # code-fixed and degrades to one world honestly.
+    return (
+        process.fixed_port == _LIVEKIT_CLI_HEALTH_PORT
+        and process.environment.get("FI_WORKER_HEALTH_PORT")
+        == f"{{{{PORT_{process.name}}}}}"
+    )
 
 
 def _hands_off_to_livekit_cli(root: Path, entry: str) -> bool:
@@ -1763,6 +1786,14 @@ def resolve_environment_plan(
                         ),
                     }
                 )
+                if process.fixed_port is not None:
+                    process = process.model_copy(
+                        update={
+                            "fixed_port_consumable": (
+                                _knob_bearing_health_port_is_consumable(process)
+                            )
+                        }
+                    )
             processes.append(process)
             if port:
                 slug = "target_http" if service_name == control_name else "tools_api"
@@ -1980,6 +2011,14 @@ def resolve_environment_plan(
             final_run_command = update.get("run_command", process.run_command)
             update["fixed_port"] = _livekit_cli_fixed_health_port(final_run_command)
             process = process.model_copy(update=update)
+            if process.fixed_port is not None:
+                process = process.model_copy(
+                    update={
+                        "fixed_port_consumable": (
+                            _knob_bearing_health_port_is_consumable(process)
+                        )
+                    }
+                )
         processes.append(process)
         if port:
             capabilities["target_http"] = CapabilityV2(
