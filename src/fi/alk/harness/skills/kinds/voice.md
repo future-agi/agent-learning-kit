@@ -96,6 +96,13 @@ The planning skill asks the kind file for its X levels. A level with no field be
 
 Two ways this table gets read wrongly, both measured on a fresh hundred.
 
+**The bed is a finite set of ambiences and it never speaks.** `background_noise` takes one of the
+places the deployment ships - vehicle, street, crowd, retail and whatever else its catalogue lists - or
+`true` to leave the choice to the fixture. Anything you describe that is not one of those is not
+produced: a station announcement, an alarm, a crowd that argues, a voice behind the caller. Those are a
+second speaker under another name, and there is no second speaker. If the situation needs the caller to
+know something the room told them, have the caller say it. Refused at submit.
+
 **`quiet_line` means the bed is OFF, and it is the only level that means that.** Sixteen scenarios in
 fifty-two carried `quiet_line` with the noise bed switched on. The coordinate then reports that the agent
 managed on a clear line when it never had one, and every noisy scenario in the suite loses the control it
