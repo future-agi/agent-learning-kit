@@ -100,6 +100,8 @@ OPENAI_API_KEY_ALIAS = "OPENAI_API_KEY"
 VAPI_API_KEY_ALIAS = "VAPI_API_KEY"
 VAPI_PUBLIC_API_KEY_ALIAS = "VAPI_PUBLIC_API_KEY"
 RETELL_API_KEY_ALIAS = "RETELL_API_KEY"
+SIP_OUTBOUND_TRUNK_ID_ALIAS = "SIP_OUTBOUND_TRUNK_ID"
+SIP_OUTBOUND_FROM_NUMBER_ALIAS = "SIP_OUTBOUND_FROM_NUMBER"
 SIMULATOR_LLM_PROVIDER_ALIAS = "SIMULATOR_LLM_PROVIDER"
 SIMULATOR_LLM_MODEL_ALIAS = "SIMULATOR_LLM_MODEL"
 SIMULATOR_STT_PROVIDER_ALIAS = "SIMULATOR_STT_PROVIDER"
@@ -332,6 +334,8 @@ def _check_config(
         required.append(VAPI_API_KEY_ALIAS)
     elif connector == "retell":
         required.append(RETELL_API_KEY_ALIAS)
+    elif connector == "phone":
+        required.extend((SIP_OUTBOUND_TRUNK_ID_ALIAS, SIP_OUTBOUND_FROM_NUMBER_ALIAS))
     if "deepgram" in {stt_provider, tts_provider}:
         if not simulator_value(DEEPGRAM_API_KEY_ALIAS):
             required.append(DEEPGRAM_API_KEY_ALIAS)
@@ -341,6 +345,8 @@ def _check_config(
             return livekit_values.get(alias)
         if alias in {VAPI_API_KEY_ALIAS, RETELL_API_KEY_ALIAS}:
             return target_provider_secret_values.get(alias)
+        if alias in {SIP_OUTBOUND_TRUNK_ID_ALIAS, SIP_OUTBOUND_FROM_NUMBER_ALIAS}:
+            return simulator_values.get(alias)
         return simulator_value(alias)
 
     missing_aliases = [alias for alias in required if not credential(alias)]
@@ -544,13 +550,29 @@ def _build_spec(
                 "call_id_source": "originator_response",
             },
         )
+    elif connector == "phone":
+        phone_number = str(simulator_config.get("phone_number") or "").strip()
+        if not phone_number:
+            raise ValueError("phone_target_number_unavailable")
+        provider_agent = simulate.AgentDefinition(
+            name="harness-phone-target",
+            system_prompt=str(simulator_config.get("target_system_prompt") or ""),
+            transport={
+                "kind": "sip_outbound",
+                # These come only from the platform simulator channel. A customer config must
+                # never choose the platform trunk or spoof its originating caller ID.
+                "sip_trunk_id": str(environ.get(SIP_OUTBOUND_TRUNK_ID_ALIAS) or ""),
+                "sip_number": str(environ.get(SIP_OUTBOUND_FROM_NUMBER_ALIAS) or ""),
+                "sip_call_to": phone_number,
+            },
+        )
     # A provider-hosted agent owns termination and can legitimately finish an agent-first call
     # after the fifth message: agent greeting, caller request, agent clarification, caller answer,
     # agent confirmation followed by the provider's end-call tool. Requiring the simulator's
     # sixth acknowledgement after Retell/Vapi has already disconnected misclassifies a complete
     # call as infrastructure failure and prevents the tool trace from being graded. Native
     # LiveKit keeps the stricter six-message floor because our simulator owns that hang-up path.
-    min_turn_messages = 5 if connector in {"vapi", "retell"} else 6
+    min_turn_messages = 5 if connector in {"vapi", "retell", "phone"} else 6
     return simulation_spec(
         run_id=run_id,
         room_name=room_name,
@@ -963,6 +985,8 @@ class CallRunnerImpl:
             SIMULATOR_STT_MODEL_ALIAS,
             SIMULATOR_TTS_PROVIDER_ALIAS,
             SIMULATOR_TTS_MODEL_ALIAS,
+            SIP_OUTBOUND_TRUNK_ID_ALIAS,
+            SIP_OUTBOUND_FROM_NUMBER_ALIAS,
             BACKGROUND_NOISE_ALIAS,
             BACKGROUND_NOISE_CATALOG_ALIAS,
             BACKGROUND_NOISE_VOLUME_ALIAS,

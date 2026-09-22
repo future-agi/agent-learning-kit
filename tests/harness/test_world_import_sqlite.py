@@ -123,6 +123,8 @@ def test_import_rejects_malformed_array_before_postgres() -> None:
         import_sqlite_world(connection, source)
 
     assert raised.value.code == "array_value_invalid"
+    assert raised.value.logical_type is LogicalType.ARRAY
+    assert raised.value.sqlite_type == "str"
     assert "not-an-array" not in str(raised.value)
 
 

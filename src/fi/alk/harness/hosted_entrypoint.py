@@ -209,6 +209,8 @@ _SIMULATOR_SECRET_ALIASES = frozenset(
         "LIVEKIT_URL",
         "LIVEKIT_API_KEY",
         "LIVEKIT_API_SECRET",
+        "SIP_OUTBOUND_TRUNK_ID",
+        "SIP_OUTBOUND_FROM_NUMBER",
         "OPENAI_API_KEY",
         "SIMULATOR_LLM_MODEL",
         "SIMULATOR_LLM_PROVIDER",
@@ -701,7 +703,7 @@ class NotWiredCallRunner:
         )
 
 
-_VOICE_CONNECTORS = {"livekit", "vapi", "retell"}
+_VOICE_CONNECTORS = {"livekit", "vapi", "retell", "phone"}
 
 
 def _bundle_contract_value(bundle_dir: Path, key: str) -> str | None:

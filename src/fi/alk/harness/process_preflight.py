@@ -502,9 +502,13 @@ def _verify_secret_purposes(
     provider_import_claims_target_provider = isinstance(
         manifest.metadata.get("provider_import"), dict
     )
-    connect_only_claims_target_provider = isinstance(
-        manifest.metadata.get("provider_connect_only"), dict
-    )
+    connect_only = manifest.metadata.get("provider_connect_only")
+    # Connect-only describes how the target is reached, not inherently who owns
+    # the credentials. Provider APIs need a customer target-provider key, while
+    # the phone connector dials with platform-owned telephony credentials.
+    connect_only_claims_target_provider = isinstance(connect_only, dict) and str(
+        connect_only.get("connector") or ""
+    ).lower() in {"vapi", "retell", "retell_chat"}
     guest_claims_target_provider = (
         process_claims_target_provider
         or lifecycle_claims_target_provider

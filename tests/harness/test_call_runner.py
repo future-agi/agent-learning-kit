@@ -22,6 +22,8 @@ import pytest
 
 from fi.alk.harness import call_runner as cr
 from fi.alk.harness import chat_call_runner as chat
+from fi.alk.harness.authoring_entrypoint import _load_provider_import_profile
+from fi.alk.harness.bundle_author_v2 import resolve_environment_plan
 from fi.alk.harness.bundle_v2 import EvidenceSeam
 from fi.alk.harness.hosted_scheduler import CallAborted, CallOutcome
 from fi.alk.harness.job import (
@@ -680,6 +682,117 @@ def test_provider_connect_only_builds_direct_target_spec(
     # for a complete agent-first clarification flow; no sixth caller acknowledgement is possible
     # after the provider disconnects.
     assert captured["spec"].environment.config["params"]["min_turn_messages"] == 5
+
+
+def test_phone_connect_only_dials_with_platform_sip_credentials(tmp_path: Path) -> None:
+    _job_obj, context = _context(
+        tmp_path=tmp_path,
+        connector="phone",
+        mode=ProviderExecutionMode.CONNECT_ONLY,
+        config={
+            "phone_number": "+14155551234",
+            "target_system_prompt": "You help callers book appointments.",
+        },
+        secrets={},
+        simulator_secrets={
+            "LIVEKIT_URL": "wss://platform-livekit.example",
+            "LIVEKIT_API_KEY": "platform-livekit-key",
+            "LIVEKIT_API_SECRET": "platform-livekit-secret",
+            "DEEPGRAM_API_KEY": "platform-deepgram-key",
+            "GEMINI_API_KEY": "platform-gemini-key",
+            "SIP_OUTBOUND_TRUNK_ID": "trunk-platform",
+            "SIP_OUTBOUND_FROM_NUMBER": "+14155550000",
+        },
+    )
+    _write_scenario_doc(context.bundle_dir, scenario_key="phone-call")
+    captured: dict[str, Any] = {}
+
+    async def place_call(spec):
+        captured["spec"] = spec
+        return _report()
+
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call, environ={})
+    _run(runner, _FakeScenario("phone-call"), _runtime())
+
+    definition = captured["spec"].environment.config["agent_definition"]
+    transport = definition["transport"]
+    assert transport["kind"] == "sip_outbound"
+    assert transport["sip_trunk_id"] == "trunk-platform"
+    assert transport["sip_number"] == "+14155550000"
+    assert transport["sip_call_to"] == "+14155551234"
+    assert definition["system_prompt"] == "You help callers book appointments."
+    assert captured["spec"].environment.config["params"]["min_turn_messages"] == 5
+
+
+def test_phone_connect_only_authoring_uses_only_supplied_prompt() -> None:
+    job = _job(
+        connector="phone",
+        mode=ProviderExecutionMode.CONNECT_ONLY,
+        config={
+            "phone_number": "+14155551234",
+            "target_system_prompt": "You help callers book appointments.",
+        },
+    )
+    assert _load_provider_import_profile(job, None) == {
+        "provider": "phone",
+        "modality": "voice",
+        "phone_number": "+14155551234",
+        "system_prompt": "You help callers book appointments.",
+        "tools": [],
+    }
+
+
+def test_phone_connect_only_rejects_customer_dialer_override() -> None:
+    with pytest.raises(ValueError, match="phone_dialer_config_is_platform_owned"):
+        AgentConnection(
+            connector="phone",
+            mode=ProviderExecutionMode.CONNECT_ONLY,
+            config={
+                "phone_number": "+14155551234",
+                "target_system_prompt": "You help callers book appointments.",
+                "sip_outbound_from_number": "+14155559999",
+            },
+        )
+
+
+def test_phone_connect_only_does_not_launch_customer_source(tmp_path: Path) -> None:
+    job = _job(
+        connector="phone",
+        mode=ProviderExecutionMode.CONNECT_ONLY,
+        config={
+            "phone_number": "+14155551234",
+            "target_system_prompt": "You help callers book appointments.",
+        },
+    ).model_copy(
+        update={
+            "source": RepositorySource(
+                kind=SourceKind.PROVIDER, visibility=SourceVisibility.PUBLIC
+            )
+        }
+    )
+    plan = resolve_environment_plan(tmp_path, job)
+    assert plan.packaging == "provider_connect_only"
+    assert plan.control_service is None
+
+
+def test_phone_connect_only_requires_platform_sip_not_target_sip(tmp_path: Path) -> None:
+    _job_obj, context = _context(
+        tmp_path=tmp_path,
+        connector="phone",
+        mode=ProviderExecutionMode.CONNECT_ONLY,
+        config={
+            "phone_number": "+14155551234",
+            "target_system_prompt": "You help callers book appointments.",
+        },
+        secrets={
+            "SIP_OUTBOUND_TRUNK_ID": "customer-trunk",
+            "SIP_OUTBOUND_FROM_NUMBER": "+14155550000",
+        },
+    )
+    _write_scenario_doc(context.bundle_dir, scenario_key="phone-call")
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, environ={})
+    with pytest.raises(CallAborted, match="SIP_OUTBOUND_TRUNK_ID"):
+        _run(runner, _FakeScenario("phone-call"), _runtime())
 
 
 def test_provider_import_calls_runtime_clone_instead_of_source_target(
