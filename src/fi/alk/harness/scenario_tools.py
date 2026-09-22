@@ -323,7 +323,21 @@ MOST_OF_A_SUITE = 0.34
 FEWEST_FOR_A_SHARE = 8
 
 
-def _already_in_the_suite(args: dict[str, Any], kept: list[Scenario]) -> str:
+def _first_names_on_disk(destination: Path) -> set[str]:
+    """Caller first names already saved for this suite, so siblings do not reuse one."""
+    try:
+        return {
+            str(one.persona.name or "").strip().split(" ")[0].lower()
+            for one in load_scenarios(Path(destination))
+            if one.persona is not None and one.persona.name
+        } - {""}
+    except Exception:  # noqa: BLE001 - an unreadable suite must not block a submission
+        return set()
+
+
+def _already_in_the_suite(
+    args: dict[str, Any], kept: list[Scenario], elsewhere: set[str] | None = None
+) -> str:
     """Why this scenario is one the suite already has, or "" when it is new.
 
     Two scenarios on the same cell asserting the same sub-goals are one scenario with the names
@@ -343,6 +357,14 @@ def _already_in_the_suite(args: dict[str, Any], kept: list[Scenario]) -> str:
     }
     persona = args.get("persona") or {}
     first = str(persona.get("name") or "").strip().split(" ")[0].lower()
+    # A parallel writer starts empty by design, so `kept` is its own slice and a name a sibling
+    # already used is invisible in it. The saved suite is the only place both can see.
+    if first and first in (elsewhere or set()):
+        return (
+            f"another scenario in this suite already has a caller named {first.title()!r}. Two "
+            "results under one name cannot be told apart by anybody reading the report, so give "
+            "this caller a name the suite does not have"
+        )
     for one in kept:
         if one.name == name:
             continue
@@ -519,10 +541,14 @@ def _grid_off_the_framework(axes: dict[str, list[str]]) -> str:
 
 
 # How much of a suite may carry an attack. Real callers are overwhelmingly ordinary, and a suite
-# that is mostly adversarial measures the red team rather than the agent. Ten percent with a floor,
-# so a small suite still gets a few.
+# that is mostly adversarial measures the red team rather than the agent.
+#
+# The floor is one, not three. Every cap here counts only what THIS writer has kept, because a
+# parallel writer starts empty by design and the parent merges the lists afterwards. A floor of
+# three was therefore three per writer: four writers turned a ten percent target into forty, which
+# is what a suite of twenty came back as.
 def _MOST_ADVERSARIAL(wanted: int) -> int:
-    return max(3, round(wanted * float(os.environ.get("ALK_ADVERSARIAL_SHARE", "0.10"))))
+    return max(1, round(wanted * float(os.environ.get("ALK_ADVERSARIAL_SHARE", "0.10"))))
 
 
 def _over_its_share(
@@ -1481,7 +1507,7 @@ def scenario_tools(
         )
         if crowded_level:
             return _err(crowded_level)
-        twin = _already_in_the_suite(args, kept)
+        twin = _already_in_the_suite(args, kept, _first_names_on_disk(destination))
         if twin:
             return _err(twin)
         if wanted and target.get("people") != "alike":

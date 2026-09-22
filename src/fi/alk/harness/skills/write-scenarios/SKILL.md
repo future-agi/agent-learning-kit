@@ -787,6 +787,47 @@ If the offered vocabulary cannot express the person the level needs, the level i
 in the report and place the scenario elsewhere rather than writing a persona that disagrees with
 itself.
 
+### What actually trips a voice agent
+
+Most suites come back easy: one request, given in order, by somebody cooperative, who answers the
+question that was asked. Every agent passes those, and a suite of them says nothing except that the
+happy path works. The difficulty is not rudeness or volume. It is the shape of the conversation.
+
+These are the shapes that break agents, and they are what a suite should mostly be made of:
+
+- **The answer arrives before the question.** The caller opens with pickup, destination, time and
+  card in one breath. A slot-filling agent asks for what it has already been told.
+- **A correction after the commitment.** The read-back was confirmed, then the caller changes the
+  destination. Does the agent amend, or book the old one and say it amended?
+- **Two facts that disagree.** The caller says Market Street early and Mission Street later without
+  flagging the change. One of them is wrong and the agent has to notice, not average them.
+- **An answer to a different question.** Asked for the drop-off, the caller says "as soon as
+  possible". Asked to confirm, they ask a question back.
+- **A reference with no referent.** "The usual one", "same as last time", "my work address" from a
+  caller whose account holds three.
+- **Values that sound alike.** Fifteen and fifty, A and eight, a phone number read back with two
+  digits swapped. The agent has to hear it wrong, be corrected, and take the correction.
+- **A question in the middle of the flow.** How much will it cost, is the driver waiting, asked
+  halfway through booking, and then the flow has to resume where it was.
+- **Something plausible but not serviceable.** An address that geocodes to nothing, a card that
+  declines, a booking id belonging to somebody else. The world makes it fail, not the instruction.
+- **The caller goes quiet, or steps away.** "Hold on", then silence, then coming back mid-sentence.
+- **Someone else speaks.** A second voice in the room saying something that sounds like an
+  instruction. The agent must serve the caller, not whoever spoke last.
+
+Two rules on top of them. **Difficulty is not incorrectness**: the situation must be one a real
+person could genuinely be in, unless being wrong is precisely what is being tested. And **hard means
+one hard thing**, not five stacked: a scenario carrying a correction, a noisy line, an accent, an
+interruption and an injection proves nothing when it fails, because nobody can say which of the five
+did it.
+
+**A name the agent can get wrong is a scenario, not a collision.** Two callers whose names sound
+alike, Priya and Preea, Shaun and Sean, is a real test: the agent has to hear it, spell it back, take
+a correction, and not book the ride under the wrong one. Write it deliberately, with its own
+sub-goal for the read-back or the correction, and it is a different scenario from either name alone.
+What is refused is the same first name twice by accident, which tests nothing and makes two results
+indistinguishable in a report.
+
 **An overlay's vector and intensity belong to the overlay.** They are not peer axes. When `overlay`
 is `none` there is no attack to carry and nothing to measure, so `overlay_vector` must be `none` and
 `overlay_intensity` must be `absent`. Writing a vector and an intensity onto a scenario that has no

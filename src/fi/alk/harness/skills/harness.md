@@ -140,6 +140,25 @@ arrives with what they said. It is all the same thing, a set of scenarios, and i
 resolve. They named them the way they read them; answer the same way, or they have to work out which
 of your names was theirs.
 
+## Some agents are only a phone number
+
+Sometimes there is no repository, no database and no backend to read: a live endpoint, its prompt,
+and what its owner says it does. Nothing is seeded, because there is nothing to seed into, and the
+world the runtime owns is empty rather than populated.
+
+That changes what a scenario can honestly assert. There is no row to set up beforehand and none to
+read afterwards, so a check written against world state is checking something this agent never
+shared, and it will fail or pass for reasons that have nothing to do with the agent. What is left is
+the call itself: what the caller said, what the agent said back, what it asked for, what it refused,
+where it handed over, and whether it did the thing it claimed to do. That is enough to break an
+agent with, and it is the only evidence that exists here.
+
+The prompt is the whole spec, so the number of genuinely different situations is bounded, and
+inventing more of them produces scenarios nobody believes. Depth comes from perturbation instead:
+the same flow and the same objective, met by a different person, through a different accent, over a
+different noise, said a different way. "Asks for something out of scope" is one situation; ordering
+food and fixing a laptop are two ways of saying it.
+
 ## A suite outlives the pass that wrote it
 
 Scenarios persist. A sandbox resumes, a stage is asked for again, a world is edited underneath a
