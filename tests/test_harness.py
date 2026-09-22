@@ -4323,7 +4323,7 @@ def test_granting_a_tool_rebuilds_the_gate_not_just_the_list(tmp_path):
     permitted by the hooks of a session built afterwards."""
     import asyncio
 
-    from fi.alk.harness.backends import SessionSpec, ToolSpec, ToolServer
+    from fi.alk.harness.backends import SessionSpec, ToolServer, ToolSpec
     from fi.alk.harness.backends.claude import ClaudeBackend
     from fi.alk.harness.session import Stage
 
@@ -4335,20 +4335,81 @@ def test_granting_a_tool_rebuilds_the_gate_not_just_the_list(tmp_path):
 
     server = ToolServer(
         name="flow",
-        tools=[ToolSpec("hand_to_next_stage", "hand over", {"request": str}, hand)],
+        tools=[
+            ToolSpec("route_to_stage", "route", {"stage": str, "request": str}, hand)
+        ],
     )
-    stage.grant("flow", server, ["hand_to_next_stage"])
-    assert "mcp__flow__hand_to_next_stage" in spec.granted()
+    stage.grant("flow", server, ["route_to_stage"])
+    assert "mcp__flow__route_to_stage" in spec.granted()
 
     options = ClaudeBackend().create(spec)._options
-    assert "mcp__flow__hand_to_next_stage" in options.allowed_tools
+    assert "mcp__flow__route_to_stage" in options.allowed_tools
     refuse = options.hooks["PreToolUse"][0].hooks[0]
     granted = asyncio.run(
-        refuse({"tool_name": "mcp__flow__hand_to_next_stage"}, None, None)
+        refuse({"tool_name": "mcp__flow__route_to_stage"}, None, None)
     )
     assert granted == {}
     denied = asyncio.run(refuse({"tool_name": "Bash"}, None, None))
     assert denied != {}
+
+
+def test_hosted_claude_session_uses_durable_resume_and_restricted_tools(tmp_path):
+    from fi.alk.harness.backends import ConversationSession, SessionSpec
+    from fi.alk.harness.backends.claude import ClaudeBackend
+
+    transcript_store = object()
+    spec = SessionSpec(
+        system_prompt="hosted",
+        builtins=("Read", "AskUserQuestion"),
+        cwd=str(tmp_path),
+        model="claude-sonnet-4-6",
+        conversation=ConversationSession(
+            app_name="alk-harness",
+            user_id="conversation-user",
+            session_id="conversation-stage",
+            transcript_store=transcript_store,
+            resume_session_id="provider-session-id",
+            config_dir=str(tmp_path / ".claude"),
+            streaming=True,
+        ),
+    )
+
+    session = ClaudeBackend().create(spec)
+    options = session._options
+
+    assert options.tools == ["Read", "AskUserQuestion"]
+    assert options.strict_mcp_config is True
+    assert "AskUserQuestion" not in options.allowed_tools
+    assert options.setting_sources == []
+    assert options.include_partial_messages is True
+    assert options.resume == "provider-session-id"
+    assert options.session_store is transcript_store
+    assert options.session_store_flush == "eager"
+    assert options.env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] == "1"
+    assert options.env["CLAUDE_CODE_PROJECT_DIR_NAME"] == "conversation-stage"
+    assert options.env["CLAUDE_CONFIG_DIR"] == str(tmp_path / ".claude")
+
+
+def test_claude_backend_routes_gemini_through_agentcc(monkeypatch):
+    from fi.alk.harness.backends import SessionSpec
+    from fi.alk.harness.backends.claude import ClaudeBackend
+
+    monkeypatch.setenv("ALK_CLAUDE_GATEWAY_URL", "https://gateway.futureagi.test")
+    monkeypatch.setenv("ALK_CLAUDE_GATEWAY_API_KEY", "internal-key")
+    backend = ClaudeBackend()
+    model = "vertex_ai/gemini-3.7-flash"
+
+    assert backend.can_drive(model)
+    options = backend.create(
+        SessionSpec(system_prompt="hosted", model=model, max_turns=1)
+    )._options
+
+    assert options.model == model
+    assert options.env["CLAUDE_CODE_USE_VERTEX"] == ""
+    assert options.env["ANTHROPIC_BASE_URL"] == "https://gateway.futureagi.test"
+    assert options.env["ANTHROPIC_AUTH_TOKEN"] == "internal-key"
+    assert options.env["ANTHROPIC_MODEL"] == model
+    assert options.env["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"] == "1"
 
 
 def test_hosted_environment_turn_budget_is_bounded_without_changing_local(monkeypatch):
@@ -4376,12 +4437,13 @@ def test_hosted_environment_turn_budget_is_bounded_without_changing_local(monkey
     assert environment_turns_for(contract, requested=25, deferred_runtime=True) == 25
 
 
-def test_handoff_is_refused_until_the_stage_has_its_artifact(tmp_path):
-    """Moving on is decided by code, from the artifacts, never by the model wanting to."""
+def test_stage_route_is_refused_until_destination_is_reachable(tmp_path):
+    """Routing is decided by code from artifact prerequisites, not model preference."""
     import asyncio
 
-    from fi.alk.harness.chat import Conversation
     from mcp.types import CallToolRequestParams
+
+    from fi.alk.harness.chat import Conversation
 
     conversation = Conversation(source=None, out=tmp_path, workspace=tmp_path)
     conversation.stage_name = "understand"
@@ -4393,21 +4455,25 @@ def test_handoff_is_refused_until_the_stage_has_its_artifact(tmp_path):
         answer = await handler.handler(
             None,
             CallToolRequestParams(
-                name="hand_to_next_stage", arguments={"request": "create the world"}
+                name="route_to_stage",
+                arguments={"stage": "build", "request": "create the world"},
             ),
         )
         return answer.content[0].text
 
     said = asyncio.run(call())
-    assert "not produced its artifact" in said
+    assert "needs a contract first" in said
     assert not conversation._handoff
 
     (tmp_path / "contract.json").write_text(
         '{"agent": "a", "tools": [{"name": "t"}], "real_use_cases": ["u"]}'
     )
     said = asyncio.run(call())
-    assert "Handed over" in said
-    assert conversation._handoff["request"] == "create the world"
+    assert "Routed to build" in said
+    assert conversation._handoff == {
+        "stage": "build",
+        "request": "create the world",
+    }
 
 
 def test_every_problem_is_reported_at_once_with_what_to_do(tmp_path):
@@ -4551,7 +4617,7 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
         unknown = {
             name
             for name in mentioned - tools - ignore
-            if name not in {"hand_to_next_stage", "AskUserQuestion"}
+            if name not in {"route_to_stage", "AskUserQuestion"}
         }
         assert not unknown, (
             f"{stage}/SKILL.md names tools that do not exist: {sorted(unknown)}"

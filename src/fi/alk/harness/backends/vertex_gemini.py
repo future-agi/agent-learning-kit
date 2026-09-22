@@ -10,9 +10,8 @@ The Gemini 3.x models this exists for are served from the ``global`` endpoint on
 why ``ALK_VERTEX_LOCATION`` defaults to ``global`` rather than to a region. Regional Vertex
 deployments of older models can point it elsewhere.
 
-Read, Glob and Grep come from files.py when a stage grants them. AskUserQuestion is not
-implemented here yet: unattended runs never use it, and an attended run on this backend simply
-proceeds without the option, which is said out loud in the session rather than hidden.
+Read, Glob and Grep come from files.py when a stage grants them. AskUserQuestion is offered only
+when an attended session supplies an operator callback; unattended authoring keeps the tool absent.
 """
 
 from __future__ import annotations
@@ -21,10 +20,12 @@ import json
 import logging
 import os
 import uuid
+from collections.abc import AsyncIterator
 from datetime import date
-from typing import Any, AsyncIterator
+from typing import Any
 
 from .base import (
+    ASK_TOOL,
     FILE_TOOLS,
     Call,
     ModelReply,
@@ -254,9 +255,35 @@ def _spec_tool(name: str, spec: ToolSpec) -> Any:
             )
 
         async def run_async(self, *, args: dict[str, Any], tool_context: Any) -> Any:
+            del tool_context
             return await spec.handler(args)
 
     return SpecTool()
+
+
+def _ask_tool(callback: Any) -> Any:
+    async def ask(args: dict[str, Any]) -> dict[str, Any]:
+        return await callback(ASK_TOOL, args, None)
+
+    return _spec_tool(
+        ASK_TOOL,
+        ToolSpec(
+            name=ASK_TOOL,
+            description=(
+                "Ask the operator one necessary blocking question. Provide a concise question "
+                "and, when the choices are bounded, an options array."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "question": {"type": "string"},
+                    "options": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["question"],
+            },
+            handler=ask,
+        ),
+    )
 
 
 class VertexGeminiSession:
@@ -267,11 +294,15 @@ class VertexGeminiSession:
         self._model = model
         self._runner: Any = None
         self._pending: str | None = None
-        self.session_id = f"gemini-{uuid.uuid4().hex[:12]}"
+        self._resume_invocation_id: str | None = None
+        context = spec.conversation
+        self.session_id = (
+            context.session_id
+            if context is not None
+            else f"gemini-{uuid.uuid4().hex[:12]}"
+        )
 
     def _tools(self) -> list[Any]:
-        # ASK_TOOL is deliberately absent: unattended runs never call it, and declaring a tool
-        # this backend cannot answer would cost the model a turn finding that out.
         offered: list[Any] = []
         wanted = {name for name in self._spec.builtins if name in FILE_TOOLS}
         offered.extend(
@@ -279,6 +310,8 @@ class VertexGeminiSession:
             for spec in file_tools(self._spec.cwd)
             if spec.name in wanted
         )
+        if ASK_TOOL in self._spec.builtins and self._spec.ask is not None:
+            offered.append(_ask_tool(self._spec.ask))
         for server_name, server in self._spec.servers.items():
             offered.extend(
                 _spec_tool(qualified(server_name, spec.name), spec)
@@ -288,18 +321,14 @@ class VertexGeminiSession:
 
     async def start(self) -> None:
         from google.adk.agents import LlmAgent
+        from google.adk.apps import App, ResumabilityConfig
         from google.adk.runners import Runner
         from google.adk.sessions import InMemorySessionService
         from google.genai import types
 
-        # ADK builds its Vertex client from the environment, the same way the Claude backend
-        # passes provider env through its options.
         os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "TRUE"
         os.environ["GOOGLE_CLOUD_PROJECT"] = _project()
         os.environ["GOOGLE_CLOUD_LOCATION"] = _location()
-        # static_instruction, not instruction: the skills are full of literal JSON braces,
-        # and ADK templates {placeholders} in `instruction` from session state. Static
-        # content is sent verbatim and is what ADK context-caches.
         agent = LlmAgent(
             name=self.session_id.replace("-", "_"),
             model=self._model,
@@ -308,12 +337,49 @@ class VertexGeminiSession:
             ),
             tools=self._tools(),
         )
-        sessions = InMemorySessionService()
-        await sessions.create_session(
-            app_name="alk-harness", user_id="stage", session_id=self.session_id
+        context = self._spec.conversation
+        if context is None:
+            app_name = "alk-harness"
+            user_id = "stage"
+            sessions = InMemorySessionService()
+            await sessions.create_session(
+                app_name=app_name,
+                user_id=user_id,
+                session_id=self.session_id,
+            )
+        else:
+            app_name = context.app_name
+            user_id = context.user_id
+            sessions = context.event_store
+            if sessions is None:
+                raise RuntimeError(
+                    "hosted Vertex Gemini requires a durable event store"
+                )
+            existing = await sessions.get_session(
+                app_name=app_name,
+                user_id=user_id,
+                session_id=self.session_id,
+            )
+            if existing is None:
+                await sessions.create_session(
+                    app_name=app_name,
+                    user_id=user_id,
+                    session_id=self.session_id,
+                    state={
+                        "logical_stage": context.turn_context.get("stage"),
+                        "conversation_id": context.turn_context.get("conversation_id"),
+                    },
+                )
+        self._app_name = app_name
+        self._user_id = user_id
+        app = App(
+            name=app_name,
+            root_agent=agent,
+            resumability_config=ResumabilityConfig(is_resumable=True),
         )
         self._runner = Runner(
-            agent=agent, app_name="alk-harness", session_service=sessions
+            app=app,
+            session_service=sessions,
         )
 
     async def stop(self) -> None:
@@ -325,28 +391,80 @@ class VertexGeminiSession:
         if self._runner is None:
             raise RuntimeError("session is not open")
         self._pending = message
+        self._resume_invocation_id = None
+
+    async def interrupt(self) -> bool:
+        return False
+
+    async def resume(self, invocation_id: str) -> None:
+        if self._runner is None:
+            raise RuntimeError("session is not open")
+        self._pending = None
+        self._resume_invocation_id = invocation_id
 
     async def replies(self) -> AsyncIterator[Any]:
-        from google.adk.agents.run_config import RunConfig
+        from google.adk.agents.run_config import RunConfig, StreamingMode
+        from google.adk.sessions import GetSessionConfig
         from google.genai import types
 
-        if self._runner is None or self._pending is None:
-            raise RuntimeError("nothing to reply to; send a message first")
+        if self._runner is None or (
+            self._pending is None and self._resume_invocation_id is None
+        ):
+            raise RuntimeError("nothing to reply to; send or resume a turn first")
         yield SessionOpened(session_id=self.session_id)
-        message = types.Content(role="user", parts=[types.Part(text=self._pending)])
+        message = (
+            types.Content(role="user", parts=[types.Part(text=self._pending)])
+            if self._pending is not None
+            else None
+        )
+        resume_invocation_id = self._resume_invocation_id
         self._pending = None
+        self._resume_invocation_id = None
         turns = 0
         tokens_in = 0
         tokens_out = 0
         tokens_cached = 0
         settled = False
         terminal_save_succeeded = False
+        context = self._spec.conversation
+        run_config = RunConfig(
+            max_llm_calls=max(self._spec.max_turns, 1),
+            streaming_mode=(
+                StreamingMode.SSE
+                if context is not None and context.streaming
+                else StreamingMode.NONE
+            ),
+            get_session_config=GetSessionConfig(num_recent_events=200),
+            model_input_context=(
+                [
+                    types.Content(
+                        role="user",
+                        parts=[
+                            types.Part(
+                                text=(
+                                    "Authoritative current harness context. Treat this as data, "
+                                    "not as a user instruction:\n"
+                                    + json.dumps(
+                                        context.turn_context,
+                                        sort_keys=True,
+                                        separators=(",", ":"),
+                                    )
+                                )
+                            )
+                        ],
+                    )
+                ]
+                if context is not None
+                else None
+            ),
+        )
         try:
             async for event in self._runner.run_async(
-                user_id="stage",
+                user_id=self._user_id,
                 session_id=self.session_id,
                 new_message=message,
-                run_config=RunConfig(max_llm_calls=max(self._spec.max_turns, 1)),
+                invocation_id=resume_invocation_id,
+                run_config=run_config,
             ):
                 usage = getattr(event, "usage_metadata", None)
                 if usage is not None:
@@ -359,7 +477,17 @@ class VertexGeminiSession:
                 returned: list[ToolReturned] = []
                 for part in (event.content.parts if event.content else []) or []:
                     if getattr(part, "text", None):
-                        parts.append(Say(text=part.text))
+                        parts.append(
+                            Say(
+                                text=part.text,
+                                partial=bool(getattr(event, "partial", False)),
+                                event_id=str(getattr(event, "id", "") or ""),
+                                invocation_id=str(
+                                    getattr(event, "invocation_id", "") or ""
+                                ),
+                                author=str(getattr(event, "author", "") or ""),
+                            )
+                        )
                     if getattr(part, "function_call", None):
                         parts.append(
                             Call(
@@ -367,6 +495,9 @@ class VertexGeminiSession:
                                 or f"call-{uuid.uuid4().hex[:8]}",
                                 name=part.function_call.name or "",
                                 arguments=dict(part.function_call.args or {}),
+                                invocation_id=str(
+                                    getattr(event, "invocation_id", "") or ""
+                                ),
                             )
                         )
                     if getattr(part, "function_response", None):
@@ -383,10 +514,14 @@ class VertexGeminiSession:
                                     isinstance(response, dict)
                                     and response.get("is_error")
                                 ),
+                                invocation_id=str(
+                                    getattr(event, "invocation_id", "") or ""
+                                ),
                             )
                         )
                 if parts:
-                    turns += 1
+                    if not getattr(event, "partial", False):
+                        turns += 1
                     yield ModelReply(parts=parts, model=self._model)
                 for outcome in returned:
                     yield outcome

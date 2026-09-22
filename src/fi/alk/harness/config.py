@@ -56,11 +56,7 @@ def chosen_model(model: str | None = None) -> str:
     With nothing named anywhere, the selected backend's own default runs, so switching
     ``ALK_HARNESS`` never sends one vendor's model name to another vendor's loop.
     """
-    return (
-        model
-        or os.environ.get("ALK_HARNESS_MODEL")
-        or resolve().default_model
-    )
+    return model or os.environ.get("ALK_HARNESS_MODEL") or resolve().default_model
 
 
 def thinking_config() -> dict[str, Any]:
@@ -134,8 +130,6 @@ def provider_env(model: str | None = None) -> dict[str, str]:
             "CLAUDE_CODE_SUBAGENT_MODEL": chosen,
         }
     env = {
-        "CLAUDE_CODE_USE_VERTEX": "1",
-        "CLOUD_ML_REGION": os.environ.get("CLOUD_ML_REGION", "global"),
         "ANTHROPIC_MODEL": chosen,
         "ANTHROPIC_DEFAULT_SONNET_MODEL": chosen,
         "ANTHROPIC_DEFAULT_OPUS_MODEL": chosen,
@@ -143,6 +137,31 @@ def provider_env(model: str | None = None) -> dict[str, str]:
         "ANTHROPIC_SMALL_FAST_MODEL": chosen,
         "CLAUDE_CODE_SUBAGENT_MODEL": chosen,
     }
+    gateway_url = os.environ.get("ALK_CLAUDE_GATEWAY_URL", "").strip()
+    gateway_key = os.environ.get("ALK_CLAUDE_GATEWAY_API_KEY", "").strip()
+    if bool(gateway_url) != bool(gateway_key):
+        raise ValueError(
+            "ALK_CLAUDE_GATEWAY_URL and ALK_CLAUDE_GATEWAY_API_KEY "
+            "must be configured together"
+        )
+    if gateway_url:
+        env.update(
+            {
+                "CLAUDE_CODE_USE_VERTEX": "",
+                "CLAUDE_CODE_USE_BEDROCK": "",
+                "CLAUDE_CODE_USE_FOUNDRY": "",
+                "ANTHROPIC_API_KEY": "",
+                "ANTHROPIC_BASE_URL": gateway_url.rstrip("/"),
+                "ANTHROPIC_AUTH_TOKEN": gateway_key,
+                "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1",
+                "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING": "1",
+                "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
+            }
+        )
+        return env
+
+    env["CLAUDE_CODE_USE_VERTEX"] = "1"
+    env["CLOUD_ML_REGION"] = os.environ.get("CLOUD_ML_REGION", "us-east5")
     for passthrough in (
         "ANTHROPIC_VERTEX_PROJECT_ID",
         "GOOGLE_CLOUD_PROJECT",
@@ -305,7 +324,9 @@ def discovered_skills(**about: str) -> str:
     found: list[tuple[str, str]] = []
     for path in sorted(root.glob("*.md")):
         text = path.read_text(encoding="utf-8")
-        head = text.split("---")[1] if text.startswith("---") and "---" in text[3:] else ""
+        head = (
+            text.split("---")[1] if text.startswith("---") and "---" in text[3:] else ""
+        )
         applies = ""
         for line in head.splitlines():
             if line.strip().lower().startswith("applies_to:"):

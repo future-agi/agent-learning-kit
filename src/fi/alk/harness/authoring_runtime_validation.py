@@ -463,7 +463,11 @@ async def validate_once(
     from .hosted_scheduler import _classify_ready, _run_phase
     from .job import ProviderExecutionMode, SourceKind
     from .process_preflight import preflight_bundle
-    from .process_runtime import ProcessRuntimeProvider, default_user_resolver
+    from .process_runtime import (
+        ProcessRuntimeProvider,
+        default_user_resolver,
+        fixed_sandbox_user_resolver,
+    )
     from .scenario_source import load_scenarios
     from .source_data_invariants import author_invariants, check_invariants
     from .tool_certification import ToolAvailability, certify_tool_inventory
@@ -544,10 +548,11 @@ async def validate_once(
             secrets_path=secrets,
             secret_purpose_map=job_secret_purposes(job),
             # A local parity run shares the host/container process namespace and must resolve
-            # the same unprivileged identities installed in the sandbox image. Forcing every
-            # user to unresolved silently falls back to root, which PostgreSQL correctly rejects.
+            # the same unprivileged identities installed in the sandbox image. In the sandbox the
+            # svc-* users exist and have to be resolved by name, or every process falls back to
+            # root, which PostgreSQL correctly rejects.
             user_resolver=(
-                default_user_resolver if local_runtime else lambda _name: None
+                default_user_resolver if local_runtime else fixed_sandbox_user_resolver
             ),
             require_declared_user=False,
             public_url_resolver=(

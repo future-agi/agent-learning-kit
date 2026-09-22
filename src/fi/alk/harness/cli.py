@@ -33,7 +33,7 @@ from .run.targets import supported as target_kinds
 from .scenarios import load as load_written
 from .scenarios import open_stage as scenario_stage
 from .scenarios import opening as scenario_opening
-from .session import TEXT, Event
+from .session import ARTIFACT, DONE, RESULT, TEXT, TOOL, Event
 from .sessions import Session, new_id, save as save_session
 from .sources import resolve, supported
 from .understand import load, open_stage, opening
@@ -64,6 +64,78 @@ def _render(event: Event) -> None:
     else:
         print(f"\n{line}", flush=True)
 
+_AUTO_EVENT_SINK: Any = None
+
+
+def _render_observable(event: Event) -> None:
+    _render(event)
+    if _AUTO_EVENT_SINK is not None:
+        _AUTO_EVENT_SINK(event)
+_AUTHORING_CLIENT: Any = None
+
+
+async def _drain_authoring_commands(stage) -> None:
+    client = _AUTHORING_CLIENT
+    if os.environ.get("ALK_FOREGROUND_COORDINATOR") == "1":
+        return
+    if client is None:
+        return
+    try:
+        commands = await client.commands()
+    except Exception:
+        return
+    for command in commands:
+        sequence = int(command["sequence"])
+        if sequence <= client.command_watermark:
+            continue
+        content = str((command.get("payload") or {}).get("content") or "").strip()
+        if not content:
+            continue
+        message_id = str(uuid.uuid4())
+        try:
+            await client.emit(
+                "turn_started",
+                invocation_id=message_id,
+                payload={"command_message_id": command["message_id"]},
+            )
+            emitted: list[str] = []
+
+            def receive(event: Event) -> None:
+                if event.kind == TEXT and event.text:
+                    emitted.append(event.text)
+
+            await stage.say(content, on_event=receive)
+            text = "".join(emitted).strip() or "I’m still working on the active authoring stage."
+            await client.emit(
+                "assistant_message",
+                message_id=str(uuid.uuid4()),
+                stage="authoring",
+                invocation_id=message_id,
+                payload={"text": text},
+            )
+            await client.emit(
+                "turn_completed",
+                invocation_id=message_id,
+                payload={"command_message_id": command["message_id"], "outcome": "success"},
+                acknowledge_through=sequence,
+            )
+        except Exception as exc:  # noqa: BLE001 - report the active-stage failure to the UI.
+            await client.emit(
+                "assistant_message",
+                message_id=str(uuid.uuid4()),
+                stage="authoring",
+                invocation_id=message_id,
+                payload={
+                    "text": f"I couldn’t complete that turn: {type(exc).__name__}.",
+                    "error": type(exc).__name__,
+                },
+            )
+            await client.emit(
+                "turn_completed",
+                invocation_id=message_id,
+                payload={"command_message_id": command["message_id"], "outcome": "failed"},
+                acknowledge_through=sequence,
+            )
 
 async def _prompt(question: str) -> str:
     return (await asyncio.to_thread(input, question)).strip()
@@ -232,9 +304,10 @@ async def _converse(
     the stage costs everything it just did.
     """
     async with stage:
-        await stage.say(opening_message, on_event=_render)
+        await stage.say(opening_message, on_event=_render_observable)
         if not interactive and until is not None and nudge and not until():
-            await stage.say(nudge, on_event=_render)
+            await stage.say(nudge, on_event=_render_observable)
+        await _drain_authoring_commands(stage)
         while interactive:
             try:
                 said = await _prompt("\nyou  ")
@@ -242,7 +315,8 @@ async def _converse(
                 break
             if not said or said in {"q", "quit", "exit"}:
                 break
-            await stage.say(said, on_event=_render)
+            await stage.say(said, on_event=_render_observable)
+            await _drain_authoring_commands(stage)
 
 
 async def _build(args: argparse.Namespace) -> int:
@@ -790,6 +864,19 @@ async def _auto(args: argparse.Namespace) -> int:
     spend.journal_to(destination / "cost.json")
     events = BufferedEventSink(EventOutbox(destination.parent, destination.name))
     event_sequence = 0
+    global _AUTHORING_CLIENT
+    capabilities_path = Path(
+        str(getattr(args, "conversation_capabilities_path", "") or "")
+    )
+    if capabilities_path.is_file():
+        from .hosted_conversation import (
+            ConversationClient,
+            load_conversation_capabilities,
+        )
+
+        _AUTHORING_CLIENT = ConversationClient(
+            load_conversation_capabilities(capabilities_path)
+        )
 
     def emit(event_type: str, stage: str, **payload: Any) -> None:
         nonlocal event_sequence
@@ -805,6 +892,25 @@ async def _auto(args: argparse.Namespace) -> int:
             )
         )
         event_sequence += 1
+
+    def emit_model_event(event: Event) -> None:
+        detail = event.detail or {}
+        safe_detail = {
+            key: detail[key]
+            for key in ("target", "label", "call_id", "is_error", "path", "outcome", "cost_usd")
+            if key in detail
+        }
+        emit(
+            "harness.activity",
+            str(detail.get("stage") or "authoring"),
+            event_kind=event.kind,
+            tool=event.tool or None,
+            text=event.text[:2000] if event.text else None,
+            detail=safe_detail,
+        )
+
+    global _AUTO_EVENT_SINK
+    _AUTO_EVENT_SINK = emit_model_event
 
     now = time.time()
     save_session(
@@ -1179,7 +1285,7 @@ async def _chat(args: argparse.Namespace) -> int:
     print(credentials_hint())
     print("\nSay what you want. Enter on its own moves to the next stage; 'q' ends.\n")
 
-    await conversation.start(on_event=_render)
+    await conversation.start(on_event=_render_observable)
     while True:
         try:
             said = await _prompt(f"\nyou ({conversation.stage_name})  ")
@@ -1188,13 +1294,13 @@ async def _chat(args: argparse.Namespace) -> int:
         if said in {"q", "quit", "exit"}:
             break
         if not said:
-            entered = await conversation.advance(on_event=_render)
+            entered = await conversation.advance(on_event=_render_observable)
             if entered is None:
                 print(
                     "\n  [nothing to move on to yet; this stage has not produced its artifact]"
                 )
             continue
-        await conversation.say(said, on_event=_render)
+        await conversation.say(said, on_event=_render_observable)
     await conversation.close()
     print(f"\nspent: ${conversation.spent_usd:.4f}")
     return 0

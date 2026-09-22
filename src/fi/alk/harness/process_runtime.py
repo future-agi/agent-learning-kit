@@ -1076,6 +1076,16 @@ def default_user_resolver(username: str) -> "pwd.struct_passwd | None":
         return None
 
 
+def fixed_sandbox_user_resolver(_username: str) -> "pwd.struct_passwd":
+    """Resolve every declared process identity to the sandbox's fixed OS user.
+
+    E2B launches the guest as ``svc-control`` and does not grant setuid/chown capabilities.
+    Returning the current passwd entry makes that provider limitation explicit without falsely
+    reporting that image-owned ``svc-agent`` or ``svc-data`` accounts are missing.
+    """
+    return pwd.getpwuid(os.getuid())
+
+
 def _resolve_process_user(
     user: ProcessUser,
     *,
