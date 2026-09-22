@@ -532,8 +532,12 @@ def _condition_the_call_lacks(scenario: Scenario) -> str:
 # then plays along with a refusal that may never have happened. Only the shape that settles the
 # agent's decision counts, so a plain "once the agent has your number" stays legal. Measured on a
 # hosted 500: 11 of them, every one on a scenario testing whether a line is held.
+# `if` belongs here and was missing. Writers almost never write "when the agent refuses"; they write
+# "IF the agent explains that X cannot happen, accept the transfer", which is the same hand-over and
+# walked through this check untouched. Measured on a hosted 100: the check flagged 0 of them, and 13
+# once `if` was added, every one telling the caller the exact policy the scenario exists to measure.
 _SETTLED_BY_THE_AGENT = re.compile(
-    r"\b(?:when|once|after|as soon as)\s+(?:the\s+)?(?:agent|assistant)\s+([a-z]+)\b([^,.;]*)",
+    r"\b(?:when|once|after|as soon as|if)\s+(?:the\s+)?(?:agent|assistant)\s+([a-z]+)\b([^,.;]*)",
     re.IGNORECASE,
 )
 _DECIDED_VERBS = frozenset(
@@ -549,7 +553,8 @@ _REPORTING_VERBS = frozenset(
     {
         "explains", "explain", "informs", "inform", "states", "state", "confirms", "confirm",
         "tells", "tell", "advises", "advise", "clarifies", "clarify", "warns", "warn",
-        "indicates", "indicate", "reports", "report",
+        "indicates", "indicate", "reports", "report", "mentions", "mention", "quotes", "quote",
+        "presents", "present",
     }
 )
 _A_LIMIT = re.compile(
