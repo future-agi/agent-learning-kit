@@ -333,6 +333,27 @@ in each brief the one thing that makes that scenario hard - a correction after t
 facts that disagree, a reference with no referent, a value that sounds like another, something
 plausible the world refuses - and never deal the same one twice on the same task level.
 
+**A writer with several scenarios collides with ITSELF, and that one is unforgivable.** Every rule above
+is about two writers who cannot see each other. The commoner collision is inside one brief. At any real
+count the practical unit of dealing is a task level, so one writer gets four or six scenarios on the same
+task, and nothing told it how its own four differ - so two of them come back as the same test. Measured on
+a fresh hundred: one writer holding a payment task returned four scenarios that were two pairs. One pair
+was an expired saved card switched to a payment link, twice, same flow, same twelve tool calls, same
+keywords, same personality, same accent, differing in the last four digits of the card, the destination,
+and one letter of the caller's name: **Laura and Lauren.**
+
+A cross-writer collision is at least invisible from inside. This one is not: the writer holds both briefs
+and can read them side by side. So say it in the brief, for each writer that gets more than one: **what
+separates your own scenarios from each other**, one clause per scenario, in the same words as the
+difficulty rule above. Then the writer has no excuse and no need to guess.
+
+**Names have to be distinguishable when spoken, not merely different.** "No two people share a name" lets
+Laura and Lauren through, and over a phone line they are one name. Deal initial letters as above, and
+reject a pair that a listener would not separate: one differing letter, one differing syllable, or the
+same name with an ending changed. The exception is the scenario whose whole point is a name that sounds
+like another, which is a real test - it says so in its branch line and carries its own sub-goal for the
+read-back. An accidental near-collision has neither, and is just a duplicate nobody noticed.
+
 **Do the adversarial arithmetic before you deal a single overlay.** It is one line and it decides
 whether the suite can hit its target at all:
 
