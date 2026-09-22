@@ -68,9 +68,6 @@ WRITER_TOOLS = ("inspect_world", "try_calls", "add_sub_goal", "submit_scenario")
 # orchestrator holding the writing tools writes, which is what it did, and then pays for the
 # suite in its own context instead of in its writers'.
 WRITES_A_SCENARIO = ("try_calls", "submit_scenario")
-# The reviewer reads the suite whole, which is the one job that grows with the suite, so it gets
-# its own ceiling rather than the stage's: uncapped it can spend what the next round needs.
-REVIEWER_TURNS = int(os.environ.get("ALK_HARNESS_REVIEWER_TURNS", "200") or 200)
 
 
 def writers_for(wanted: int) -> int:
@@ -80,7 +77,7 @@ def writers_for(wanted: int) -> int:
 
 
 def turns_for(wanted: int) -> int:
-    """A turn budget that affords one writer per slice, plus the reviewer and the loop itself.
+    """A turn budget that affords one writer per slice, plus the loop itself.
 
     Derived rather than guessed, because the budget is what decides how many writers the loop may
     brief at once, and briefing fewer than the suite needs is what turns one round into several.
@@ -94,7 +91,7 @@ def turns_for(wanted: int) -> int:
     # Headroom, deliberately generous: a refused submission costs turns, there are several ways to
     # be refused, and a stage that runs out mid-suite loses everything the spent turns bought. The
     # ceiling exists to stop a runaway, not to ration the work.
-    return max(TURNS_FLOOR, (writers * WRITER_TURNS + REVIEWER_TURNS + own) * 3)
+    return max(TURNS_FLOOR, (writers * WRITER_TURNS + own) * 3)
 
 
 # Named with underscores because one backend sanitises a worker name into an identifier and the
@@ -213,65 +210,6 @@ def writer_worker(
     }
 
 
-REVIEWER = "suite_reviewer"
-
-# What a reviewer may touch. Reading the suite and the world is the whole job; a reviewer that
-# could submit would answer its own objection instead of reporting it, and one that could save
-# would rewrite the index underneath the writers still running.
-REVIEWER_TOOLS = ("inspect_world", "inspect_scenario", "suite_progress")
-
-
-def reviewer_worker(
-    contract: AgentContract, destination: Path, server: ToolServer, budget: int
-) -> dict[str, WorkerSpec]:
-    """A worker that reads a finished suite as a whole and says what is missing.
-
-    Nobody else looks at the suite whole. Each writer sees only what it was briefed with, so a
-    use case that came back one short, or an obvious branch every writer assumed somebody else
-    had, survives to the end unnoticed. Its report comes back as its final message, which is
-    what delegation returns anyway, so it needs no tool of its own to answer through.
-    """
-    return {
-        REVIEWER: WorkerSpec(
-            description=(
-                "Reads a finished suite as a whole and reports what it does not cover. Run it "
-                "once the writers are done and before saving. It reports; it never writes."
-            ),
-            instructions=(
-                "You are reviewing a suite of tests somebody else wrote for an AI agent, in "
-                "parallel, each writer blind to the others. Your only job is to say what is "
-                "missing.\n\n"
-                "Look for: a use case of this agent that nothing covers; a use case covered "
-                "only on its ordinary path, where the branch that cannot be completed or the "
-                "rule under pressure is the interesting one; two scenarios that are the same "
-                "test under different names, leaving the branch one of them claimed "
-                "uncovered.\n\n"
-                "Judge coverage of the agent, not of anyone's plan. Do not ask for more of what "
-                "is already well covered, and do not report a gap you cannot name a scenario "
-                "for. A suite of the right size that covers what matters is finished, and "
-                "saying so is the useful answer.\n\n"
-                "Start with suite_progress(names=true): it names every scenario written and the cell each "
-                "sits in, which is the only way to learn a name, and inspect_scenario needs one. "
-                "Read the scenarios whose names or cells look like the gap you suspect; you do "
-                "not need to read them all.\n\n"
-                "Report each gap as the use case, the scenario that is missing in one line, and "
-                "why it matters. Report nothing when there is nothing to report."
-                f"\n\n## This agent\n\n{contract.brief()}"
-            ),
-            servers={
-                SCENARIO_SERVER: ToolServer(
-                    name=server.name,
-                    version=server.version,
-                    tools=[
-                        spec for spec in server.tools if spec.name in REVIEWER_TOOLS
-                    ],
-                )
-            },
-            max_turns=min(REVIEWER_TURNS, budget),
-        )
-    }
-
-
 def open_stage(
     contract: AgentContract,
     *,
@@ -288,7 +226,7 @@ def open_stage(
     # Briefing fewer than this in one message costs a whole extra wave of writer-lifetimes, which is
     # the difference between a large suite taking one writer's time and taking several.
     # The two hard limits. How the suite is cut is the loop's to decide: it has read the grid.
-    affordable = max((budget - REVIEWER_TURNS) // WRITER_TURNS, 1)
+    affordable = max(budget // WRITER_TURNS, 1)
     at_once = max(min(affordable, MOST_WORKERS_AT_ONCE), 1)
     most_a_writer_can_write = max(WRITER_TURNS // TURNS_EACH, 1)
     loop_server = (
@@ -351,10 +289,10 @@ def open_stage(
                 f"\n\nYou have {budget} turns for this whole stage and every tool call spends one, "
                 f"including the calls your writers make: a writer reads the world in its own "
                 f"context, which is far cheaper than carrying it in yours, but its turns come out "
-                f"of this same budget. A writer may spend up to {WRITER_TURNS} and the reviewer up "
-                f"to {REVIEWER_TURNS}, so across all rounds together brief at most "
-                f"{max((budget - REVIEWER_TURNS) // WRITER_TURNS, 1)} writers and keep turns back "
-                f"for yourself. Running out mid-suite loses everything the spent turns bought."
+                f"of this same budget. A writer may spend up to {WRITER_TURNS}, so across all "
+                f"rounds together brief at most {max(budget // WRITER_TURNS, 1)} writers and keep "
+                f"turns back for yourself. Running out mid-suite loses everything the spent turns "
+                f"bought."
             )
             + (
                 f"\n\nWrite {wanted} scenarios."
@@ -369,10 +307,7 @@ def open_stage(
         # about this suite, so the skill argues it and the stage decides; a threshold in code here
         # decided it for every suite alike and was wrong at both ends.
         builtins=("AskUserQuestion", DELEGATE_TOOL),
-        workers={
-            **writer_worker(contract, destination, server, budget),
-            **reviewer_worker(contract, destination, server, budget),
-        },
+        workers=writer_worker(contract, destination, server, budget),
         cwd=str(destination.parent if destination.parent.exists() else Path.cwd()),
         max_turns=budget,
         model=chosen_model(),

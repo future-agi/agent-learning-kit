@@ -2352,17 +2352,14 @@ def test_a_writer_is_told_which_named_tools_are_not_its_job() -> None:
         assert f"`{missing}`" in said, f"the writer is never told it lacks {missing}"
 
 
-def test_a_reviewer_can_learn_the_names_it_needs_and_the_loop_is_not_charged_for_them() -> None:
-    """inspect_scenario takes a name, and nothing else hands one out: the reviewer was blind."""
+def test_the_loop_learns_what_is_left_without_reading_a_scenario_body() -> None:
+    """suite_progress names the cells still empty, which is how a round knows what to brief."""
     import asyncio
     import json
     from pathlib import Path as _P
 
     from fi.alk.harness.contract import AgentContract
     from fi.alk.harness.scenario_tools import scenario_tools
-    from fi.alk.harness.scenarios import REVIEWER_TOOLS
-
-    assert "suite_progress" in REVIEWER_TOOLS
 
     root = _P(__file__).parent.parent / "fixtures"
     if not (root / "contract.json").exists():
