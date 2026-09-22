@@ -2681,13 +2681,33 @@ def apply_postgres_sqlite_world(
                 "unknown_table": "unknown_table",
                 "unknown_column": "unknown_column",
             }.get(error.code, "value_shape_mismatch")
+            # Only structural types/reasons cross this boundary. Authored SQLite values must
+            # never enter diagnostics, but hiding the conversion reason also prevents the
+            # authoring loop from repairing an otherwise understandable schema mismatch.
+            safe_reason = (
+                error.code
+                if re.fullmatch(r"[a-z][a-z0-9_]*", error.code)
+                else "value_conversion_failed"
+            )
+            expected_type = (
+                error.logical_type.value if error.logical_type is not None else "unknown"
+            )
+            sqlite_type = (
+                error.sqlite_type
+                if error.sqlite_type in {"str", "int", "float", "bytes", "NoneType"}
+                else "unknown"
+            )
             raise GenericWorldSeedError(
                 (
                     HarnessDiagnostic.create(
                         stage=HarnessStage.VALIDATING_ENVIRONMENT,
                         component="world_import",
                         code=normalized_code,
-                        message=f"legacy world value could not be normalized: {error.code}",
+                        message=(
+                            "legacy world value could not be normalized: "
+                            f"reason={safe_reason},expected={expected_type},"
+                            f"sqlite_type={sqlite_type}"
+                        ),
                         location=DiagnosticLocation(
                             table=error.table, column=error.column
                         ),
@@ -2993,9 +3013,18 @@ def apply_seed_file(
                         )
                         if value
                     ]
-                    structural.append(
-                        diagnostic.code + (f" at {'.'.join(parts)}" if parts else "")
-                    )
+                    item = diagnostic.code + (f" at {'.'.join(parts)}" if parts else "")
+                    if diagnostic.component == "world_import":
+                        detail = diagnostic.message.removeprefix(
+                            "legacy world value could not be normalized: "
+                        )
+                        if re.fullmatch(
+                            r"reason=[a-z][a-z0-9_]*,expected=[a-z][a-z0-9_]*,"
+                            r"sqlite_type=[A-Za-z][A-Za-z0-9_]*",
+                            detail,
+                        ):
+                            item += f" ({detail})"
+                    structural.append(item)
                 summary = (
                     ": " + ", ".join(sorted(set(structural))) if structural else ""
                 )
