@@ -80,6 +80,7 @@ dependencies = [
     { name = "retell-sdk" },
     { name = "rich" },
     { name = "rouge-score" },
+    { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "typer" },
 ]
 
@@ -206,6 +207,7 @@ requires-dist = [
     { name = "rouge-score", specifier = ">=0.1.2" },
     { name = "sentence-transformers", marker = "extra == 'all'", specifier = ">=5.2.3,<6" },
     { name = "sentence-transformers", marker = "extra == 'embeddings'", specifier = ">=5.2.3,<6" },
+    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0,<3" },
     { name = "torch", marker = "extra == 'all'", specifier = ">=2.10.0,<3" },
     { name = "torch", marker = "extra == 'nli'", specifier = ">=2.10.0,<3" },
     { name = "transformers", marker = "extra == 'all'", specifier = ">=5.2.0,<6" },
@@ -6669,6 +6671,11 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/f2/e3/5aa06f167559f8c0bdae487e297d23ba548150ab016a3418265d617a4985/sqlalchemy-2.0.50-cp314-cp314t-win32.whl", hash = "sha256:1fbd55a969d7ac44a98e3dec75016074f809fa08f871585ace58dde110d1bf3e", size = 2150823, upload-time = "2026-05-24T20:08:58.644Z" },
     { url = "https://files.pythonhosted.org/packages/65/9b/112fb8f977582d7489d036e409e3723948bcf5320b3ac465f3c481bbe8f9/sqlalchemy-2.0.50-cp314-cp314t-win_amd64.whl", hash = "sha256:c5c3cdb753a9004183e1ccb634b41611654c989e61bc68617ce878e46d6f1e51", size = 2185794, upload-time = "2026-05-24T20:09:00.319Z" },
     { url = "https://files.pythonhosted.org/packages/d0/10/f7220e9b784d295d241c86ed99aeb537f92afcd469a64861f2717e9bb077/sqlalchemy-2.0.50-py3-none-any.whl", hash = "sha256:92064363517a3ff8212b5a93b8c62876579d8dfd1ca5b561335f30152d884fa9", size = 1943861, upload-time = "2026-05-24T19:59:01.119Z" },
+]
+
+[package.optional-dependencies]
+asyncio = [
+    { name = "greenlet" },
 ]
 
 [[package]]

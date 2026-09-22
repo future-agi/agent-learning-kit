@@ -372,6 +372,11 @@ class FakeTransport:
             existed = digest in self.artifacts
             self.artifacts[digest] = bytes(payload)
             return ob.TransportResponse(200 if existed else 201, {}, {})
+        if "/usage/" in url and method == "POST" and json_body is not None:
+            if json_body.get("operation") == "check":
+                return ob.TransportResponse(200, {"allowed": True}, {})
+            if json_body.get("operation") == "report":
+                return ob.TransportResponse(200, {"accepted": True}, {})
         if "/scenarios/" in url and method == "POST" and json_body is not None:
             # p13: Azain's real router mints exactly ONE url per attempt (a DRF detail `@action`,
             # no `url_path`) -- provision vs begin is a body-level `operation` field, never a URL
@@ -914,6 +919,8 @@ def test_load_simulator_secret_values_is_allowlisted_and_destructive(
                 "LIVEKIT_URL": "wss://platform-livekit.example",
                 "LIVEKIT_API_KEY": "platform-livekit-key",
                 "LIVEKIT_API_SECRET": "platform-livekit-secret",
+                "SIP_OUTBOUND_TRUNK_ID": "platform-trunk",
+                "SIP_OUTBOUND_FROM_NUMBER": "+14155550000",
                 "UNRELATED": "must-not-load",
             }
         ),
@@ -928,6 +935,8 @@ def test_load_simulator_secret_values_is_allowlisted_and_destructive(
         "LIVEKIT_URL": "wss://platform-livekit.example",
         "LIVEKIT_API_KEY": "platform-livekit-key",
         "LIVEKIT_API_SECRET": "platform-livekit-secret",
+        "SIP_OUTBOUND_TRUNK_ID": "platform-trunk",
+        "SIP_OUTBOUND_FROM_NUMBER": "+14155550000",
     }
     assert not path.exists()
 

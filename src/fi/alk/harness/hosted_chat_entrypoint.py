@@ -44,9 +44,7 @@ class CoordinatorConversation:
         self.stage_name = "reception"
         self.opened = False
 
-    async def say(
-        self, message: str, on_event: Any | None = None
-    ) -> Any:
+    async def say(self, message: str, on_event: Any | None = None) -> Any:
         if not self.opened:
             await self.stage.__aenter__()
             self.opened = True
@@ -133,12 +131,17 @@ class HostedChatRuntime:
                 user_id=identity.user_id,
                 session_id=f"{identity.app_name}-{self.client.capabilities.conversation_id}-coordinator",
                 transcript_store=self.transcript_store,
+                event_store=self.event_store,
+                resume_session_id=self._provider_sessions().get(
+                    f"{self.backend_name}:reception"
+                ),
                 config_dir=str(self.workspace / ".claude-coordinator"),
                 turn_context=dict(self.client.turn_context),
             ),
         )
         configured = apply_chat_policy(spec, stage="reception", policy=self.policy)
         return CoordinatorConversation(Stage(configured, name="coordinator"))
+
     def _control_only(self) -> bool:
         capabilities = self.client.turn_context.get("capabilities") or {}
         return bool(capabilities.get("control_only"))
@@ -302,8 +305,9 @@ class HostedChatRuntime:
             except TimeoutError:
                 continue
 
-
     async def run(self) -> None:
+        if self._control_only():
+            await self._restore_coordinator_state()
         activity_task = asyncio.create_task(self._pump_authoring_activity())
         try:
             while not self.stopping.is_set():
@@ -590,8 +594,7 @@ class HostedChatRuntime:
                     await turn
                 await self.conversation.close()
             self._turn_acknowledged_through = max(
-                self._turn_acknowledged_through,
-                int(interrupt["sequence"]),
+                self._turn_acknowledged_through, int(interrupt["sequence"])
             )
             return interrupt
 
@@ -741,7 +744,8 @@ class HostedChatRuntime:
             payload={"prompt": question, "options": options},
         )
         while not self.stopping.is_set():
-            for command in await self.client.commands():
+            commands = await self.client.commands()
+            for command in commands:
                 command_payload = command.get("payload") or {}
                 if str(command_payload.get("reply_to") or "") != message_id:
                     continue
@@ -751,10 +755,16 @@ class HostedChatRuntime:
                 except FileNotFoundError:
                     pass
                 await self._checkpoint()
-                self._turn_acknowledged_through = max(
-                    self._turn_acknowledged_through,
-                    int(command["sequence"]),
-                )
+                answer_sequence = int(command["sequence"])
+                if not any(
+                    self._turn_acknowledged_through
+                    < int(queued["sequence"])
+                    < answer_sequence
+                    for queued in commands
+                ):
+                    self._turn_acknowledged_through = max(
+                        self._turn_acknowledged_through, answer_sequence
+                    )
                 return {
                     "content": [{"type": "text", "text": answer}],
                     "is_error": not bool(answer),
@@ -768,8 +778,46 @@ class HostedChatRuntime:
     async def _checkpoint(self) -> dict[str, Any]:
         self._record_provider_session()
         if self._control_only():
-            return {"control_only": True, "stored": False}
+            files = {}
+            for name in (_PROVIDER_SESSIONS, _JOURNAL, _PENDING_QUESTION):
+                path = self.workspace / name
+                if path.is_file():
+                    files[name] = json.loads(path.read_text(encoding="utf-8"))
+            await self.client.append_session(
+                self._coordinator_state_key(),
+                [
+                    {
+                        "type": "coordinator_state",
+                        "uuid": str(uuid.uuid4()),
+                        "files": files,
+                    }
+                ],
+            )
+            return {"control_only": True, "stored": True}
         return await self.client.checkpoint(self.workspace)
+
+    def _coordinator_state_key(self) -> dict[str, str]:
+        return {
+            "project_key": "futureagi-coordinator-state",
+            "session_id": self.client.capabilities.conversation_id,
+            "subpath": "",
+        }
+
+    async def _restore_coordinator_state(self) -> None:
+        body = await self.client.load_session(self._coordinator_state_key())
+        entries = body.get("entries") or []
+        if not entries:
+            return
+        files = entries[-1]["files"]
+        for name in (_PROVIDER_SESSIONS, _JOURNAL, _PENDING_QUESTION):
+            path = self.workspace / name
+            if name in files:
+                temporary = path.with_suffix(".tmp")
+                temporary.write_text(json.dumps(files[name]), encoding="utf-8")
+                temporary.replace(path)
+            else:
+                path.unlink(missing_ok=True)
+        self.conversation = self._conversation()
 
     def _provider_sessions(self) -> dict[str, str]:
         path = self.workspace / _PROVIDER_SESSIONS

@@ -54,10 +54,18 @@ from .background_noise import scenario_source
 from .bundle_v2 import EvidenceSeam
 from .hosted_scheduler import CallAborted, CallOutcome
 from .hosted_scheduler import Scenario as HostedScenario
-from .job import ExecutionMode, HarnessJob, ProviderExecutionMode
+from .job import ExecutionMode, FailureDomain, HarnessJob, ProviderExecutionMode
 from .isolated_process import run_json_worker
 from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime, _allowlisted_ambient_env
+from .usage import (
+    UsageDenied,
+    UsageOutcome,
+    UsageReporter,
+    UsageUnavailable,
+    failure_domain_for_code,
+    simulator_funding,
+)
 from .scenario import DEFAULT_VOICEMAIL_STYLE, voicemail_enabled
 from .voicemail_audio import clip_for
 from .simulator_voice import (
@@ -92,6 +100,8 @@ OPENAI_API_KEY_ALIAS = "OPENAI_API_KEY"
 VAPI_API_KEY_ALIAS = "VAPI_API_KEY"
 VAPI_PUBLIC_API_KEY_ALIAS = "VAPI_PUBLIC_API_KEY"
 RETELL_API_KEY_ALIAS = "RETELL_API_KEY"
+SIP_OUTBOUND_TRUNK_ID_ALIAS = "SIP_OUTBOUND_TRUNK_ID"
+SIP_OUTBOUND_FROM_NUMBER_ALIAS = "SIP_OUTBOUND_FROM_NUMBER"
 SIMULATOR_LLM_PROVIDER_ALIAS = "SIMULATOR_LLM_PROVIDER"
 SIMULATOR_LLM_MODEL_ALIAS = "SIMULATOR_LLM_MODEL"
 SIMULATOR_STT_PROVIDER_ALIAS = "SIMULATOR_STT_PROVIDER"
@@ -238,6 +248,7 @@ class CallRunnerContext:
     attempt_number: int
     source_directory: Path | None = None
     simulator_provider_secret_values: Mapping[str, str] = field(default_factory=dict)
+    usage_reporter: UsageReporter | None = None
 
 
 # --- pre-dial validation -----------------------------------------------------------------------
@@ -323,6 +334,8 @@ def _check_config(
         required.append(VAPI_API_KEY_ALIAS)
     elif connector == "retell":
         required.append(RETELL_API_KEY_ALIAS)
+    elif connector == "phone":
+        required.extend((SIP_OUTBOUND_TRUNK_ID_ALIAS, SIP_OUTBOUND_FROM_NUMBER_ALIAS))
     if "deepgram" in {stt_provider, tts_provider}:
         if not simulator_value(DEEPGRAM_API_KEY_ALIAS):
             required.append(DEEPGRAM_API_KEY_ALIAS)
@@ -332,6 +345,8 @@ def _check_config(
             return livekit_values.get(alias)
         if alias in {VAPI_API_KEY_ALIAS, RETELL_API_KEY_ALIAS}:
             return target_provider_secret_values.get(alias)
+        if alias in {SIP_OUTBOUND_TRUNK_ID_ALIAS, SIP_OUTBOUND_FROM_NUMBER_ALIAS}:
+            return simulator_values.get(alias)
         return simulator_value(alias)
 
     missing_aliases = [alias for alias in required if not credential(alias)]
@@ -535,13 +550,29 @@ def _build_spec(
                 "call_id_source": "originator_response",
             },
         )
+    elif connector == "phone":
+        phone_number = str(simulator_config.get("phone_number") or "").strip()
+        if not phone_number:
+            raise ValueError("phone_target_number_unavailable")
+        provider_agent = simulate.AgentDefinition(
+            name="harness-phone-target",
+            system_prompt=str(simulator_config.get("target_system_prompt") or ""),
+            transport={
+                "kind": "sip_outbound",
+                # These come only from the platform simulator channel. A customer config must
+                # never choose the platform trunk or spoof its originating caller ID.
+                "sip_trunk_id": str(environ.get(SIP_OUTBOUND_TRUNK_ID_ALIAS) or ""),
+                "sip_number": str(environ.get(SIP_OUTBOUND_FROM_NUMBER_ALIAS) or ""),
+                "sip_call_to": phone_number,
+            },
+        )
     # A provider-hosted agent owns termination and can legitimately finish an agent-first call
     # after the fifth message: agent greeting, caller request, agent clarification, caller answer,
     # agent confirmation followed by the provider's end-call tool. Requiring the simulator's
     # sixth acknowledgement after Retell/Vapi has already disconnected misclassifies a complete
     # call as infrastructure failure and prevents the tool trace from being graded. Native
     # LiveKit keeps the stricter six-message floor because our simulator owns that hang-up path.
-    min_turn_messages = 5 if connector in {"vapi", "retell"} else 6
+    min_turn_messages = 5 if connector in {"vapi", "retell", "phone"} else 6
     return simulation_spec(
         run_id=run_id,
         room_name=room_name,
@@ -954,6 +985,8 @@ class CallRunnerImpl:
             SIMULATOR_STT_MODEL_ALIAS,
             SIMULATOR_TTS_PROVIDER_ALIAS,
             SIMULATOR_TTS_MODEL_ALIAS,
+            SIP_OUTBOUND_TRUNK_ID_ALIAS,
+            SIP_OUTBOUND_FROM_NUMBER_ALIAS,
             BACKGROUND_NOISE_ALIAS,
             BACKGROUND_NOISE_CATALOG_ALIAS,
             BACKGROUND_NOISE_VOLUME_ALIAS,
@@ -984,7 +1017,7 @@ class CallRunnerImpl:
             context.target_provider_secret_values,
             simulator_secret_values,
         )
-        self._scenario_attempt_counts: dict[str, int] = {}
+        self._scenario_room_counts: dict[str, int] = {}
         self._closed = False
 
     def _cleanup_credentials(self) -> None:
@@ -1040,6 +1073,19 @@ class CallRunnerImpl:
             # code is reserved by the contract for a world-level capability mismatch, not a
             # job-level voice config gap).
             raise CallAborted(self._missing_config.message())
+        if self._context.usage_reporter is not None:
+            try:
+                await asyncio.to_thread(
+                    self._context.usage_reporter.check, "voice_call"
+                )
+            except UsageDenied as exc:
+                raise CallAborted(
+                    f"voice_usage_check_denied: {exc}", code="usage_exhausted"
+                ) from exc
+            except UsageUnavailable as exc:
+                raise CallAborted(
+                    f"voice_usage_check_failed: {exc}", code="usage_check_failed"
+                ) from exc
 
         connector = _resolve_connector(
             self._context.job, self._context.target_provider_secret_values
@@ -1058,15 +1104,15 @@ class CallRunnerImpl:
         except _ScenarioDocumentUnavailable as exc:
             raise CallAborted(f"voice_scenario_document_unavailable: {exc}") from exc
 
-        scenario_attempt = (
-            self._scenario_attempt_counts.get(scenario.scenario_key, 0) + 1
+        room_count = (
+            self._scenario_room_counts.get(scenario.scenario_key, 0) + 1
         )
-        self._scenario_attempt_counts[scenario.scenario_key] = scenario_attempt
+        self._scenario_room_counts[scenario.scenario_key] = room_count
         room_name = _room_name(
             job_id=self._context.job.job_id,
             attempt_number=self._context.attempt_number,
             scenario_key=scenario.scenario_key,
-            scenario_attempt=scenario_attempt,
+            scenario_attempt=room_count,
         )
 
         raw_timeout = self._context.job.agent.config.get(CALL_TIMEOUT_CONFIG_KEY)
@@ -1409,6 +1455,24 @@ class CallRunnerImpl:
             )
             raise WorldUnavailable(f"target agent never joined the room: {reason}")
 
+        async def record_voice_usage(
+            *,
+            outcome: UsageOutcome = "completed",
+            failure_domain: FailureDomain | None = None,
+        ) -> None:
+            if self._context.usage_reporter is None:
+                return
+            await asyncio.to_thread(
+                self._context.usage_reporter.record,
+                action="voice_call",
+                scenario_key=scenario_key,
+                amount=base.duration_ms / 60_000,
+                funding=simulator_funding(self._environ),
+                occurred_at=case_started_at,
+                outcome=outcome,
+                failure_domain=failure_domain,
+            )
+
         # A genuinely silent agent-first call (agent joined, zero conversational turns) reaches
         # the real engine (engines/livekit.py::_conversation_outcome) as FAILED with code
         # "no_conversation" or "conversation_silence_timeout" and zero messages -- never as a
@@ -1451,22 +1515,42 @@ class CallRunnerImpl:
             attributed = _attributed_stall(case)
             if attributed is not None:
                 code, reason = attributed
+                await record_voice_usage(
+                    outcome="failed",
+                    failure_domain=failure_domain_for_code(code),
+                )
                 raise CallAborted(reason, partial=base, code=code)
             if (
                 case.failure is not None
                 and case.failure.code == "target_agent_tool_failed"
             ):
+                await record_voice_usage(
+                    outcome="failed",
+                    failure_domain=failure_domain_for_code("target_agent_tool_failed"),
+                )
                 raise CallAborted(
                     case.failure.message,
                     partial=base,
                     code="target_agent_tool_failed",
                 )
+            await record_voice_usage(
+                outcome="failed",
+                failure_domain=failure_domain_for_code("voice_call_not_completed"),
+            )
             raise CallAborted(
                 f"voice_call_not_completed: {case.status.value}: {reason}",
                 partial=base,
                 marker=marker,
             )
 
+        await record_voice_usage(
+            outcome="failed" if is_silent_agent else "completed",
+            failure_domain=(
+                failure_domain_for_code("simulator_stalled")
+                if is_silent_agent
+                else None
+            ),
+        )
         # Never fabricate calls for a call that produced no conversation -- the scheduler's own
         # coverage guarantee turns an empty `calls` tuple into evidence_missing/simulator
         # regardless of turns (hosted_scheduler.py's own unconditioned-on-turns rule).

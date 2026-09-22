@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
+import re
 from typing import Protocol
 
 from pydantic import BaseModel, Field, JsonValue, model_validator
@@ -19,6 +20,7 @@ from .github import parse_github_location
 
 HARNESS_JOB_SCHEMA_VERSION = "futureagi.harness-job.v1"
 MAX_HOSTED_SCENARIO_COUNT = 5000
+_E164_PHONE = re.compile(r"^\+[1-9]\d{1,14}$")
 
 
 class ExecutionMode(str, Enum):
@@ -126,13 +128,26 @@ class AgentConnection(BaseModel):
                 ):
                     raise ValueError(f"provider_import_{path_key}_invalid")
         elif self.mode is ProviderExecutionMode.CONNECT_ONLY:
+            if connector == "phone":
+                if any(
+                    str(name).lower().startswith(("sip_", "livekit_"))
+                    for name in self.config
+                ):
+                    raise ValueError("phone_dialer_config_is_platform_owned")
+                number = str(self.config.get("phone_number") or "").strip()
+                prompt = str(self.config.get("target_system_prompt") or "").strip()
+                if not _E164_PHONE.fullmatch(number):
+                    raise ValueError("phone_connect_only_requires_e164_phone_number")
+                if not prompt or len(prompt) > 65536:
+                    raise ValueError("phone_connect_only_requires_target_system_prompt")
+                return self
             target_key = {"vapi": "assistant_id", "retell": "agent_id"}.get(
                 provider_connector
             )
             if target_key and not str(self.config.get(target_key) or "").strip():
                 raise ValueError(f"connect_only_requires_{target_key}")
         elif self.mode is not None and provider_connector not in {"vapi", "retell"}:
-            raise ValueError("provider_mode_only_supported_for_vapi_or_retell")
+            raise ValueError("provider_mode_only_supported_for_vapi_retell_or_phone_connect_only")
         return self
 
 

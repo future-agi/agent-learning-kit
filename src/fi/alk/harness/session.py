@@ -120,6 +120,9 @@ class Turn:
     outcome: str = ""
     turns: int = 0
     cost_usd: float | None = None
+    tokens_in: int = 0
+    tokens_out: int = 0
+    tokens_cached: int = 0
     error: str = ""
 
 
@@ -401,6 +404,9 @@ class Stage:
             turn.outcome = "failed" if failed else received.outcome
             turn.turns = received.turns
             turn.cost_usd = received.cost_usd
+            turn.tokens_in = received.tokens_in
+            turn.tokens_out = received.tokens_out
+            turn.tokens_cached = received.tokens_cached
             # Every harness model call passes here, so the spend ledger is fed once rather than
             # per stage: a writer added later is counted without anybody remembering to.
             spend.record(
@@ -516,3 +522,11 @@ class Stage:
     @property
     def spent_usd(self) -> float:
         return sum(turn.cost_usd or 0.0 for turn in self.history)
+
+    @property
+    def simulator_tokens(self) -> tuple[int, int]:
+        """Provider-reported input/output tokens; never inferred from transcript text."""
+        return (
+            sum(turn.tokens_in for turn in self.history),
+            sum(turn.tokens_out for turn in self.history),
+        )

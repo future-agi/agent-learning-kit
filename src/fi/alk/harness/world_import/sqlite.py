@@ -57,11 +57,15 @@ class SQLiteWorldImportError(ValueError):
         table: str,
         column: str | None = None,
         row_identity: str | None = None,
+        logical_type: LogicalType | None = None,
+        sqlite_type: str | None = None,
     ) -> None:
         self.code = code
         self.table = table
         self.column = column
         self.row_identity = row_identity
+        self.logical_type = logical_type
+        self.sqlite_type = sqlite_type
         location = ".".join(
             item for item in (table, row_identity, column) if item is not None
         )
@@ -280,6 +284,8 @@ def import_sqlite_world(
                         table=table_name,
                         row_identity=identity,
                         column=column.name,
+                        logical_type=column.logical_type,
+                        sqlite_type=type(raw_value).__name__,
                     ) from None
                 values[column.name] = WorldValue.present(column.logical_type, converted)
                 if column.logical_type in {

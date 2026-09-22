@@ -71,6 +71,7 @@ from .scenario_source import (
     ScenarioDocumentInvalid,
     bundle_has_scenarios,
 )
+from .usage import UsageJournal, UsageReporter
 from .world.handle import HostedWorld
 from .world.stores.postgres import AttachedPostgresStore
 
@@ -208,6 +209,8 @@ _SIMULATOR_SECRET_ALIASES = frozenset(
         "LIVEKIT_URL",
         "LIVEKIT_API_KEY",
         "LIVEKIT_API_SECRET",
+        "SIP_OUTBOUND_TRUNK_ID",
+        "SIP_OUTBOUND_FROM_NUMBER",
         "OPENAI_API_KEY",
         "SIMULATOR_LLM_MODEL",
         "SIMULATOR_LLM_PROVIDER",
@@ -705,7 +708,7 @@ class NotWiredCallRunner:
         )
 
 
-_VOICE_CONNECTORS = {"livekit", "vapi", "retell"}
+_VOICE_CONNECTORS = {"livekit", "vapi", "retell", "phone"}
 
 
 def _bundle_contract_value(bundle_dir: Path, key: str) -> str | None:
@@ -2090,6 +2093,11 @@ async def run_job(
         capabilities, transport, channel_state
     )
     scenarios_client.configure_offline_control(events_spool.root / "control")
+    usage_reporter = UsageReporter(
+        capabilities,
+        transport,
+        UsageJournal(work_directory / "usage.json", attempt_id=capabilities.attempt_id),
+    )
 
     adapter = OutboundAdapter(
         capabilities,
@@ -2158,6 +2166,12 @@ async def run_job(
         `scheduler_result` is only ever passed by the three call sites reached AFTER
         `scheduler.run()` -- pre-run terminals (`_fail`, the boundary `_canceled()` checks) have
         no `RunResult` and pass nothing, so this stays a no-op there."""
+        if not await asyncio.to_thread(usage_reporter.report):
+            logger.error(
+                "Hosted usage report could not be delivered before terminalization "
+                "for attempt %s",
+                job.attempt_id,
+            )
         # Artifact bytes must be uploaded before the terminal-referenced complete manifest.  The
         # terminal event itself remains before receipts and the manifest on the outbound channel.
         await adapter.ensure_terminal_artifacts(
@@ -2618,6 +2632,7 @@ async def run_job(
             simulator_provider_secret_values=simulator_provider_secret_values,
             attempt_number=capabilities.attempt_number,
             source_directory=source,
+            usage_reporter=usage_reporter,
         )
         call_runner = deps.build_call_runner(adapter, call_runner_context)
         scheduler = HostedScheduler(

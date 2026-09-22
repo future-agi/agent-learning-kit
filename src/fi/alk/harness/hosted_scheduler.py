@@ -394,6 +394,8 @@ _CODE_DOMAIN: dict[str, FailureDomain] = {
     "target_agent_tool_failed": FailureDomain.AGENT,
     "simulator_stalled": FailureDomain.SIMULATOR,
     "driver_crashed": FailureDomain.SIMULATOR,
+    "usage_exhausted": FailureDomain.PLATFORM_SYNC,
+    "usage_check_failed": FailureDomain.PLATFORM_SYNC,
     "world_pool_exhausted": FailureDomain.INFRASTRUCTURE,
 }
 _RETRYABLE_CODES = frozenset(

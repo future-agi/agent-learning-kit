@@ -242,6 +242,49 @@ def test_connect_only_provider_source_needs_no_agent_process(tmp_path: Path) -> 
     )
 
 
+def test_phone_connect_only_uses_platform_telephony_without_target_secret(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "phone-target"
+    source.mkdir()
+    authoring = _authoring(tmp_path)
+    _write_voice_contract(authoring)
+    job = HarnessJob.model_validate(
+        {
+            "job_id": "phone-only-job",
+            "run_id": "phone-only-run",
+            "execution": "hosted",
+            "source": {"kind": "provider", "visibility": "public"},
+            "agent": {
+                "connector": "phone",
+                "mode": ProviderExecutionMode.CONNECT_ONLY.value,
+                "config": {
+                    "phone_number": "+14155551234",
+                    "target_system_prompt": "Answer questions about a ride booking.",
+                },
+                "secret_refs": {},
+            },
+            "scenario_count": 1,
+            "runtime": {
+                "isolation": "dedicated_vm",
+                "cpu_units": 2,
+                "memory_mb": 4096,
+                "parallelism": 1,
+            },
+        }
+    )
+
+    bundle = author_bundle_v2(
+        source=source,
+        job=job,
+        authoring=authoring,
+        output=tmp_path / "bundle",
+    )
+
+    assert bundle.metadata["provider_connect_only"] == {"connector": "phone"}
+    preflight_bundle(tmp_path / "bundle", bundle, parallelism=1, secret_refs={})
+
+
 def test_generic_connect_only_provider_uses_authored_world_schema(
     tmp_path: Path,
 ) -> None:
