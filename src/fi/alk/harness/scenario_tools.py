@@ -84,6 +84,51 @@ def _is_external_runtime(world_root: Path) -> bool:
         return False
 
 
+_REFUSAL_SUB_GOAL = re.compile(
+    r"(refus|reject|prevent|block|withh|deni|resist|declin|protect|guard|unauthor)", re.IGNORECASE
+)
+_CHECK_NAMES_A_TOOL = re.compile(r"""c(?:all)?\.name\s*==\s*["']([a-zA-Z_][\w-]*)["']""")
+
+
+def _shared_check_bound_to_one_task(
+    scenario: Scenario, catalogue: Catalogue, kept: list[Scenario]
+) -> list[str]:
+    """A refusal sub-goal shared across task levels whose check turns on one task's tool.
+
+    Sharing cuts both ways: one check has to hold for every scenario naming it. Measured on a
+    hosted 500, four shared checks hinged on a tool only some of their scenarios ever call, so the
+    same sub-goal was too loose for one task and impossible for another.
+    """
+    problems: list[str] = []
+    mine = str((scenario.coverage or {}).get("task") or "")
+    by_name = {one.name: one for one in catalogue.sub_goals}
+    for named in scenario.sub_goals or []:
+        goal = by_name.get(named)
+        if goal is None or not goal.check or not _REFUSAL_SUB_GOAL.search(named):
+            continue
+        tools = set(_CHECK_NAMES_A_TOOL.findall(goal.check))
+        if not tools:
+            continue
+        others = [
+            one
+            for one in kept
+            if named in (one.sub_goals or [])
+            and str((one.coverage or {}).get("task") or "") not in {"", mine}
+        ]
+        for other in others:
+            called = {str(getattr(step, "tool", "") or "") for step in (other.solution or [])}
+            missing = sorted(tools - called)
+            if missing:
+                problems.append(
+                    f"{named} is shared with {other.name}, which is a different task and never "
+                    f"calls {', '.join(missing)}. One check has to hold for every scenario naming "
+                    "it, so this one is impossible there and too loose here: name a sub-goal of "
+                    "your own, or check the outcome rather than the tool"
+                )
+                break
+    return problems
+
+
 def _is_spoken(contract: Any) -> bool:
     """Whether this agent is reached by talking, which is what a voice belongs to."""
     return str(getattr(contract, "modality", "") or "").strip().lower() != "chat"
@@ -703,6 +748,7 @@ def accept_scenario(
         # An overlay with nothing that can fail it is the defect every advisory has failed to
         # stop. Refused at the one moment a writer can still settle it.
         problems.extend(_overlay_asserts_nothing(scenario, catalogue))
+        problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
     finally:
         trial.close()
 
