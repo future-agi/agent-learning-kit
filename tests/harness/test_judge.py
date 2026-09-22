@@ -133,17 +133,23 @@ def test_the_judge_needs_no_environment_to_pick_a_priced_model(monkeypatch):
     The override must stay an override: a deployment that sets none of these has to work, or the
     judge would need a new env var to be usable at all.
     """
-    from fi.alk.harness.backends import vertex_gemini
+    from fi.alk.harness.backends import resolve, vertex_gemini
 
     for name in (judge_module.JUDGE_MODEL_ALIAS, "ALK_HARNESS_MODEL", "ALK_HARNESS"):
         monkeypatch.delenv(name, raising=False)
 
+    backend = resolve()
     model = judge_module.judge_model()
 
-    assert model == vertex_gemini.DEFAULT_MODEL
-    assert model in vertex_gemini.PRICES_PER_MILLION, (
-        f"the judge would run unpriced on {model}, so its spend would be missing from the ledger"
-    )
+    # Whichever backend is the default, the judge lands on that backend's own model rather than on
+    # a name belonging to another vendor's loop.
+    assert model == backend.default_model
+    # Only the ADK backend prices its own tokens; the Claude loop is told what a turn cost.
+    if backend.name == "vertex-gemini":
+        assert model in vertex_gemini.PRICES_PER_MILLION, (
+            f"the judge would run unpriced on {model}, so its spend would be missing "
+            "from the ledger"
+        )
 
 
 def test_a_long_cell_is_trimmed_rather_than_flooding_the_judge():
