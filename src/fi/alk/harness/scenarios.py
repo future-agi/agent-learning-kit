@@ -68,6 +68,11 @@ WRITER_TOOLS = ("inspect_world", "try_calls", "add_sub_goal", "submit_scenario")
 # orchestrator holding the writing tools writes, which is what it did, and then pays for the
 # suite in its own context instead of in its writers'.
 WRITES_A_SCENARIO = ("try_calls", "submit_scenario")
+# Above this, the loop hands the suite out instead of writing it. Leaving the choice to the model
+# read well and did not survive contact: offered the writing tools, it wrote twenty scenarios itself
+# in one lane, thirty-six minutes, zero sub-agents dispatched. A small suite is genuinely faster
+# written in place, so the rule is a size and not a ban.
+HANDS_OUT_ABOVE = int(os.environ.get("ALK_HARNESS_HANDS_OUT_ABOVE", "10") or 10)
 
 
 # How many scenarios one writer should be given. Affordability alone put 33 on a single writer,
@@ -241,12 +246,16 @@ def open_stage(
     affordable = max(budget // WRITER_TURNS, 1)
     at_once = max(min(affordable, MOST_WORKERS_AT_ONCE), 1)
     most_a_writer_can_write = max(WRITER_TURNS // TURNS_EACH, 1)
-    loop_server = (
-        ToolServer(
-            name=server.name,
-            version=server.version,
-            tools=list(server.tools),
-        )
+    hands_out = wanted > HANDS_OUT_ABOVE
+    loop_server = ToolServer(
+        name=server.name,
+        version=server.version,
+        # Withheld rather than discouraged: a loop that can write, writes.
+        tools=[
+            one
+            for one in server.tools
+            if not hands_out or one.name not in WRITES_A_SCENARIO
+        ],
     )
     spec = SessionSpec(
         # The agent and its world before the method: grounding evidence read before the
@@ -289,12 +298,21 @@ def open_stage(
             f"A writer runs only when you call it. Writing that writers have been dispatched, or "
             f"that you are standing by for them, calls nothing: the stage ends there with whatever "
             f"was already submitted. One hosted run announced three writers and saved 11 of 50.\n\n"
+            + (
+                "\n\nYou do not hold the scenario-writing tools on this suite. It is too large to "
+                "write in one context and writing it there is what makes a twenty take forty "
+                "minutes, so this stage is yours to plan, brief and check, and the scenarios are "
+                "your sub-agents' to write. Brief a whole round in ONE message.\n\n"
+                if wanted > HANDS_OUT_ABOVE
+                else ""
+            )
+            + (
             f"Every writer comes back with a report: what it wrote, and what of its brief it "
             f"could not cover. Read those, then call suite_progress, which names the cells still "
             f"empty without returning a scenario body. The next round goes out the same way, in "
             f"one message, for what is still missing. Repeat until suite_progress reports the "
             f"count. Never say work is running on the strength of a brief you did not see "
-            f"accepted, and check suite_progress before you believe your own count."
+            f"accepted, and check suite_progress before you believe your own count.")
             # The loop cannot ration what it cannot see. Without this it has no reason to believe
             # writing the suite alone will not fit, and it runs out mid-suite instead of delegating.
             + (
@@ -315,9 +333,9 @@ def open_stage(
             )
         ),
         servers={SCENARIO_SERVER: loop_server},
-        # Delegation is offered, never imposed. Whether a suite is worth splitting is a judgement
-        # about this suite, so the skill argues it and the stage decides; a threshold in code here
-        # decided it for every suite alike and was wrong at both ends.
+        # Delegation is imposed above HANDS_OUT_ABOVE by withholding the writing tools, and
+        # offered below it. How the suite is cut stays the loop's judgement; whether it is cut
+        # at all cannot be, because the answer was always no.
         builtins=("AskUserQuestion", DELEGATE_TOOL),
         workers=writer_worker(contract, destination, server, budget),
         cwd=str(destination.parent if destination.parent.exists() else Path.cwd()),

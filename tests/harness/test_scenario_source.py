@@ -2227,9 +2227,12 @@ def test_only_a_value_the_agent_looks_up_is_a_missing_credential() -> None:
         assert grounding_problems([looked_up], _P(tmp)) == []
 
 
-def test_the_loop_holds_both_methods_and_decides_for_itself(tmp_path, monkeypatch) -> None:
-    """There is no hand-out threshold. A constant deciding for every suite alike was wrong at both
-    ends, so the loop keeps its writing tools AND its workers and judges which to use."""
+def test_a_suite_too_large_to_write_in_one_context_is_handed_out(tmp_path, monkeypatch) -> None:
+    """Above the hand-out size the loop cannot write, so it must brief sub-agents.
+
+    Left to judge it, the loop wrote twenty scenarios itself in one lane and dispatched nobody.
+    A small suite is genuinely faster written in place, so the rule is a size, not a ban.
+    """
     from fi.alk.harness import scenarios as stage
     from fi.alk.harness.contract import AgentContract
 
@@ -2265,7 +2268,9 @@ def test_the_loop_holds_both_methods_and_decides_for_itself(tmp_path, monkeypatc
         t.name for t in spec.servers[stage.SCENARIO_SERVER].tools
     }
 
-    assert set(stage.WRITES_A_SCENARIO) <= offered(big.spec)
+    assert not (set(stage.WRITES_A_SCENARIO) & offered(big.spec)), (
+        "a loop that can write, writes"
+    )
     assert big.spec.workers, "the loop must still be able to hand work out"
     assert "aim_for" in offered(big.spec) and "suite_progress" in offered(big.spec)
     assert "save_scenarios" in offered(big.spec)

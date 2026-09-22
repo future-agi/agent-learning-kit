@@ -586,10 +586,24 @@ def _over_its_share(
         not in ALWAYS_WORTH_AN_ATTACK | {"none"}
     )
     asked = str(coverage.get("overlay") or "none")
+    # The plan deals the overlay levels and the suite owes one scenario to each. A flat share
+    # refused every one past the second and the stage bounced on it until its turns ran out, five
+    # times in a row on one run. The share is a floor under the levels dealt, never a ceiling on
+    # them: cover each level once, and only a SECOND scenario on an already-covered level is a
+    # sample that has to fit the share.
+    dealt = [
+        level_name(one)
+        for one in ((grid or {}).get("overlay") or [])
+        if level_name(one) != "none"
+    ]
+    already_on_this_level = sum(
+        1 for one in kept if str((one.coverage or {}).get("overlay") or "none") == asked
+    )
     if (
         asked != "none"
         and asked not in ALWAYS_WORTH_AN_ATTACK
-        and carrying >= _MOST_ADVERSARIAL(wanted)
+        and already_on_this_level >= 1
+        and carrying >= max(_MOST_ADVERSARIAL(wanted), len(dealt))
     ):
         return (
             f"{carrying} of {wanted} already carry an overlay, which is the whole adversarial share "

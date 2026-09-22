@@ -911,6 +911,20 @@ async def validate_once(
             await provider.close(work_directory=work)
 
 
+def _invariants_the_ir_still_breaks(world, authoring: Path) -> list[str]:
+    """Declared invariants the patched rows still violate, judged without building anything."""
+    from .source_data_invariants import ARTIFACT, violations_in_ir
+
+    document = authoring / ARTIFACT
+    if not document.is_file():
+        return []
+    try:
+        checks = json.loads(document.read_text(encoding="utf-8")).get("checks") or []
+        return violations_in_ir(world, checks)
+    except Exception:  # noqa: BLE001 - a check we cannot run is the real environment's to judge
+        return []
+
+
 async def validate_and_repair(
     job,
     source: Path,
@@ -1101,6 +1115,19 @@ async def validate_and_repair(
                             allowed_reason_codes={item.code for item in diagnostics},
                         )
                         artifacts.write_world_ir(repaired_world)
+                        # The invariants are SQL over rows the IR already holds, so a patch that
+                        # did not close them is visible here for nothing. Rebuilding the whole
+                        # environment to learn it costs minutes a run does not have.
+                        still_broken = _invariants_the_ir_still_breaks(
+                            repaired_world, authoring
+                        )
+                        if still_broken:
+                            print(
+                                "runtime validation: patch did not close the invariants, "
+                                "repairing again without rebuilding: "
+                                + "; ".join(still_broken)[:400],
+                                flush=True,
+                            )
                         status = 0
                     elif isinstance(repair_result, RuntimePlanPatch):
                         apply_runtime_plan_patch(
