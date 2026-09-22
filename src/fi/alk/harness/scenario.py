@@ -366,6 +366,34 @@ _CARRIED_BY_AUDIO = re.compile(
 )
 
 
+# An interface level is a claim about how the call sounds, and the persona plus the noise bed are
+# what deliver it. A scenario that says the line is noisy with the bed off, or the caller accented
+# with no accent set, reports a condition the call never had. Measured on a hosted 500: 130 of them.
+_ACCENTED_INTERFACE = frozenset(
+    {"accented", "accented_speech", "non_native", "non-native", "heavy_accent", "code_switching"}
+)
+_DISFLUENT_INTERFACE = frozenset({"disfluent", "disfluent_speech", "hesitant"})
+_NOISY_INTERFACE = frozenset({"noisy_line", "noisy", "in_car", "street_noise"})
+_ACCENT_NOT_SET = frozenset({"", "neutral", "none", "standard", "n/a"})
+_DISFLUENT_STYLE = re.compile(r"hesit|disflu|stammer|halting|repet", re.IGNORECASE)
+
+
+def _condition_the_call_lacks(scenario: Scenario) -> str:
+    """Why the interface coordinate is not delivered, or an empty string when it is."""
+    level = str((scenario.coverage or {}).get("interface") or "").strip().lower()
+    persona = scenario.persona
+    accent = str(getattr(persona, "accent", "") or "").strip().lower()
+    style = str(getattr(persona, "communication_style", "") or "")
+    noise = scenario.background_noise
+    if level in _ACCENTED_INTERFACE and accent in _ACCENT_NOT_SET:
+        return f"interface {level}, persona accent not set"
+    if level in _DISFLUENT_INTERFACE and not _DISFLUENT_STYLE.search(style):
+        return f"interface {level}, nothing hesitant in the communication style"
+    if level in _NOISY_INTERFACE and (noise is False or noise is None or noise == ""):
+        return f"interface {level}, background noise off"
+    return ""
+
+
 def validate_scenario(
     scenario: Scenario,
     catalogue: Catalogue,
@@ -406,6 +434,12 @@ def validate_scenario(
             "the coordinate says the attack arrived through the call audio, and the instruction has "
             "the caller say it themselves. Give the audio something to carry it, a recording, a "
             "television, another voice in the room, or put the vector on the speaker"
+        )
+    if lacking := _condition_the_call_lacks(scenario):
+        problems.append(
+            f"the coordinate claims a condition the call does not carry: {lacking}. The persona and "
+            "the noise bed are what deliver an interface level, so set them or place the scenario "
+            "on the level it actually has"
         )
     if not scenario.tests.strip():
         problems.append(
