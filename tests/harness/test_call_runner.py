@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -21,6 +21,7 @@ from typing import Any
 import pytest
 
 from fi.alk.harness import call_runner as cr
+from fi.alk.harness import chat_call_runner as chat
 from fi.alk.harness.bundle_v2 import EvidenceSeam
 from fi.alk.harness.hosted_scheduler import CallAborted, CallOutcome
 from fi.alk.harness.job import (
@@ -1559,6 +1560,77 @@ def _timed_out_runner(tmp_path: Path, turns: int):
         )
 
     return cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
+
+
+def test_completed_voice_call_reports_measured_duration(tmp_path: Path) -> None:
+    class Reporter:
+        def __init__(self) -> None:
+            self.checked: list[str] = []
+            self.recorded: list[dict[str, Any]] = []
+
+        def check(self, action: str) -> None:
+            self.checked.append(action)
+
+        def record(self, **facts: Any) -> None:
+            self.recorded.append(facts)
+
+    _job_obj, context = _context(tmp_path=tmp_path)
+    reporter = Reporter()
+    context = replace(context, usage_reporter=reporter)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+
+    async def place_call(spec):
+        return _report(run_id="measured-run")
+
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
+    _run(
+        runner,
+        _FakeScenario("k1"),
+        _runtime(metadata={"livekit_agent_name": "a-w0"}),
+    )
+
+    assert reporter.checked == ["voice_call"]
+    assert len(reporter.recorded) == 1
+    recorded = reporter.recorded[0]
+    assert isinstance(recorded["occurred_at"], datetime)
+    assert {key: value for key, value in recorded.items() if key != "occurred_at"} == {
+        "action": "voice_call",
+        "scenario_key": "k1",
+        "amount": 0.5,
+        "funding": "platform",
+        "outcome": "completed",
+        "failure_domain": None,
+    }
+
+
+def test_failed_text_call_reports_partial_tokens_and_failure_domain() -> None:
+    class Reporter:
+        def __init__(self) -> None:
+            self.recorded: list[dict[str, Any]] = []
+
+        def record(self, **facts: Any) -> None:
+            self.recorded.append(facts)
+
+    reporter = Reporter()
+    partial = chat.Transcript(simulator_input_tokens=11, simulator_output_tokens=7)
+    failure = CallAborted("simulator stalled", code="simulator_stalled")
+
+    async def record() -> None:
+        setattr(failure, "partial_transcript", partial)
+        await chat._record_text_usage(
+            reporter,
+            scenario_key="k1",
+            started=datetime.now(timezone.utc),
+            funding="platform",
+            transcript=None,
+            failure=failure,
+        )
+
+    asyncio.run(record())
+
+    assert reporter.recorded[0]["amount"] == 18
+    assert reporter.recorded[0]["outcome"] == "failed"
+    assert reporter.recorded[0]["failure_domain"] == "simulator"
 
 
 def test_a_timed_out_call_with_a_real_conversation_is_graded_not_aborted(
