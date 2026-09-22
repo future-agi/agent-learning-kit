@@ -6520,7 +6520,7 @@ def test_dropping_a_scenario_removes_it_from_disk(tmp_path):
     assert not (tmp_path / "scenarios" / "goner").exists()
 
 
-def test_a_target_refuses_a_model_it_cannot_drive():
+def test_a_target_refuses_a_model_it_cannot_drive(monkeypatch):
     """Handed a model it cannot speak to, this target does not fail: it produces a session that
     answers nothing, which arrives as a scenario with no turns, no calls and every check red.
 
@@ -6529,8 +6529,7 @@ def test_a_target_refuses_a_model_it_cannot_drive():
     """
     from fi.alk.harness.run.targets import _drivable
 
-    # What the default backend runs on. Gemini is the default, so a Claude model is the one
-    # this target has to refuse until ALK_HARNESS names the backend that serves it.
+    monkeypatch.setenv("ALK_HARNESS", "vertex-gemini")
     _drivable(None)
     _drivable("gemini-3.7-flash")
 
@@ -6538,7 +6537,6 @@ def test_a_target_refuses_a_model_it_cannot_drive():
         _drivable("claude-sonnet-4-6")
     assert "cannot run" in str(refused.value)
     # Naming the backend that does serve it is enough; the model does not have to change.
-    monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setenv("ALK_HARNESS", "claude")
     try:
         from fi.alk.harness import backends
@@ -6547,7 +6545,6 @@ def test_a_target_refuses_a_model_it_cannot_drive():
         _drivable("claude-sonnet-4-6")
         _drivable("anthropic/claude-opus-4-7")
     finally:
-        monkeypatch.undo()
         backends._LIVE.clear()
     # And it says where to go instead, rather than only saying no.
     assert "endpoint adapters" in str(refused.value)
