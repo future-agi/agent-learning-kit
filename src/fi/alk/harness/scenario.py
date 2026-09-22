@@ -384,7 +384,16 @@ def _condition_the_call_lacks(scenario: Scenario) -> str:
     persona = scenario.persona
     accent = str(getattr(persona, "accent", "") or "").strip().lower()
     style = str(getattr(persona, "communication_style", "") or "")
+    languages = [one for one in (getattr(persona, "languages", None) or []) if str(one).strip()]
     noise = scenario.background_noise
+    # The kind file maps each level to the fields that deliver it, and a second language is what
+    # makes a caller non-native or code-switching. Accent alone is the `accented` level.
+    if level in {"non_native", "non-native"} and len(languages) < 2:
+        return f"interface {level}, persona speaks only {len(languages) or 'no'} named language"
+    if level == "code_switching" and (
+        len(languages) < 2 or not getattr(persona, "multilingual", False)
+    ):
+        return "interface code_switching, persona is not multilingual in two named languages"
     if level in _ACCENTED_INTERFACE and accent in _ACCENT_NOT_SET:
         return f"interface {level}, persona accent not set"
     if level in _DISFLUENT_INTERFACE and not _DISFLUENT_STYLE.search(style):
