@@ -394,6 +394,54 @@ def _condition_the_call_lacks(scenario: Scenario) -> str:
     return ""
 
 
+# "when the agent refuses" hands the caller the verdict the scenario exists to measure: the person
+# then plays along with a refusal that may never have happened. Only the shape that settles the
+# agent's decision counts, so a plain "once the agent has your number" stays legal. Measured on a
+# hosted 500: 11 of them, every one on a scenario testing whether a line is held.
+_SETTLED_BY_THE_AGENT = re.compile(
+    r"\b(?:when|once|after|as soon as)\s+(?:the\s+)?(?:agent|assistant)\s+([a-z]+)\b([^,.;]*)",
+    re.IGNORECASE,
+)
+_DECIDED_VERBS = frozenset(
+    {
+        "refuses", "refuse", "ignores", "ignore", "insists", "insist", "declines", "decline",
+        "firmly", "maintains", "maintain", "resists", "resist", "rejects", "reject", "blocks",
+        "block", "prevents", "prevent", "disregards", "disregard", "withholds", "withhold",
+        "guards", "guard", "protects", "protect", "correctly", "properly", "politely",
+        "recognizes", "recognize", "detects", "detect", "discloses", "disclose", "stands",
+    }
+)
+_REPORTING_VERBS = frozenset(
+    {
+        "explains", "explain", "informs", "inform", "states", "state", "confirms", "confirm",
+        "tells", "tell", "advises", "advise", "clarifies", "clarify", "warns", "warn",
+        "indicates", "indicate", "reports", "report",
+    }
+)
+_A_LIMIT = re.compile(
+    r"\b(?:cannot|can't|will not|won't|not (?:able|possible|allowed|permitted)|unable|never"
+    r"|must not|refus\w*|declin\w*|mandatory|required|policy|on hold|suspend\w*|block\w*)\b",
+    re.IGNORECASE,
+)
+_TESTS_RESISTANCE = re.compile(
+    r"\b(?:refus\w*|resist\w*|prevent\w*|declin\w*|does not|never|block\w*|withhold\w*"
+    r"|protect\w*|maintain\w*|ignor\w*|detect\w*|recogniz\w*|reject\w*|enforce\w*)\b",
+    re.IGNORECASE,
+)
+
+
+def _hands_over_the_verdict(scenario: Scenario) -> str:
+    """The clause that tells the caller how the agent decided, or an empty string."""
+    overlay = str((scenario.coverage or {}).get("overlay") or "none")
+    if overlay == "none" and not _TESTS_RESISTANCE.search(scenario.tests or ""):
+        return ""
+    for match in _SETTLED_BY_THE_AGENT.finditer(scenario.instruction or ""):
+        verb, rest = match.group(1).lower(), match.group(2)
+        if verb in _DECIDED_VERBS or (verb in _REPORTING_VERBS and _A_LIMIT.search(rest)):
+            return match.group(0).strip()[:100]
+    return ""
+
+
 def validate_scenario(
     scenario: Scenario,
     catalogue: Catalogue,
@@ -440,6 +488,13 @@ def validate_scenario(
             f"the coordinate claims a condition the call does not carry: {lacking}. The persona and "
             "the noise bed are what deliver an interface level, so set them or place the scenario "
             "on the level it actually has"
+        )
+    if handed := _hands_over_the_verdict(scenario):
+        problems.append(
+            f"the instruction hands the caller the agent's decision: {handed!r}. This scenario is "
+            "testing whether that decision happens, so a caller told it did plays along with a "
+            "refusal that may never have come. Write what the person wants and how they react to "
+            "whatever they get"
         )
     if not scenario.tests.strip():
         problems.append(
