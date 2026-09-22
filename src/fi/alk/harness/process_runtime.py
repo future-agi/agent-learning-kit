@@ -2013,6 +2013,8 @@ def wait_for_dependency(
     than it declared). `credentials` (F9) lets a postgres probe run a real `SELECT 1` instead of
     a bare TCP connect; omitted, it degrades to the same TCP-only check as before.
     """
+    processes_by_name = {process.name: process for process in manifest.processes}
+    dependency = processes_by_name[dependency_name]
     probes = _readiness_probes_for_process(manifest, dependency_name)
     if probes:
         port = port_plan.port_for(dependency_name, world_index)
@@ -2035,9 +2037,30 @@ def wait_for_dependency(
                     return False
             return True
 
+        def probe_ready_or_exited() -> bool:
+            if probe_ready():
+                return True
+            if not spawned.handle.is_running():
+                # A dead process cannot become ready. Returning ``False`` here used to make
+                # validation wait the full (typically 180-second) probe deadline on every repair
+                # attempt, hiding an immediately actionable target-process crash.
+                raise ProcessRuntimeError(
+                    "depends_on",
+                    "spawn_failed",
+                    f"{dependency_name}: exited before readiness probe passed"
+                    f"{_output_tail(spawned.handle)}",
+                    process=dependency_name,
+                    domain=(
+                        FailureDomain.AGENT
+                        if isinstance(dependency, SourceProcess)
+                        else FailureDomain.INFRASTRUCTURE
+                    ),
+                )
+            return False
+
         combined_timeout = max(probe.timeout_seconds for probe in probes)
         _poll_until(
-            probe_ready,
+            probe_ready_or_exited,
             timeout=combined_timeout,
             interval=min(probe.interval_seconds for probe in probes),
             clock=clock,
@@ -2052,8 +2075,6 @@ def wait_for_dependency(
         )
         return
 
-    processes_by_name = {process.name: process for process in manifest.processes}
-    dependency = processes_by_name[dependency_name]
     started_check = (
         dependency.started_check if isinstance(dependency, SourceProcess) else None
     )

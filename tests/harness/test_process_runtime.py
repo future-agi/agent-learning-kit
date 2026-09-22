@@ -2065,6 +2065,31 @@ def test_depends_on_readiness_probe_timeout_is_a_typed_error() -> None:
     assert excinfo.value.code == "depends_on_timeout"
 
 
+def test_depends_on_readiness_fails_immediately_when_source_process_exits() -> None:
+    manifest = _manifest()
+    plan = pr.plan_ports(manifest, instances=1)
+    handle = FakeHandle("RuntimeError: prompt service rejected credentials\n")
+    handle.terminated = True
+    spawned = pr.SpawnedWorldProcess("tools-api", handle, 15001, 0)
+    sleeps: list[float] = []
+
+    with pytest.raises(pr.ProcessRuntimeError) as excinfo:
+        pr.wait_for_dependency(
+            manifest,
+            "tools-api",
+            world_index=0,
+            port_plan=plan,
+            spawned=spawned,
+            prober=lambda **kwargs: False,
+            sleep=sleeps.append,
+        )
+
+    assert excinfo.value.code == "spawn_failed"
+    assert excinfo.value.domain is pr.FailureDomain.AGENT
+    assert "prompt service rejected credentials" in str(excinfo.value)
+    assert sleeps == []
+
+
 def test_started_check_log_marker_variant_waits_for_the_marker() -> None:
     """T2, p5-round1-review: the marker now APPEARS after N polls (a mutating fake, same idiom as
     `test_depends_on_waits_for_the_capabilitys_readiness_probe`'s `calls['n'] >= 3`) rather than
