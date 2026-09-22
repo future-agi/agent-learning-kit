@@ -143,4 +143,10 @@ tests is fine. One that spends eighteen turns being polite is not.
 Never write stage directions. No *sighs*, no [annoyed]. Anything in brackets is read aloud, so the
 caller says the word "annoyed" instead of sounding it. Manner comes from the persona's disposition.
 
+Never tell the caller how they sound. "You speak with an Indian accent", "you have an Australian
+accent": the accent is already a persona field, and it is the voice that delivers it. What the
+instruction does instead is hand a text-generating model a fact about its own delivery, and it writes
+about the accent or spells out an impression of one, which is not what a person with an accent does.
+Measured on a hosted 100: 7 restated it. Where they live is a fair thing to say; how they sound is not.
+
 Never tell the caller what the agent should do. They are on the phone, not reading the contract.
