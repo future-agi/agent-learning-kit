@@ -46,6 +46,22 @@ _SILENT_ENVIRONMENTS = frozenset({"quiet", "silent", "silence", "none", "clear",
 _DEFAULT_BUILTIN = "OFFICE_AMBIENCE"
 
 
+def distinct_beds(environments) -> dict[str, list[str]]:
+    """The clips a set of place names actually produces, keyed by clip.
+
+    Nine names for one recording is one condition tested nine times. A coverage claim counts what
+    the agent heard, so it counts these rather than the names, and the places sharing a clip are
+    returned with it so a report can say which collapsed.
+    """
+    grouped: dict[str, list[str]] = {}
+    for environment in environments:
+        named = str(environment or "").strip().lower()
+        if not named or named in _SILENT_ENVIRONMENTS:
+            continue
+        grouped.setdefault(source_for(named), []).append(named)
+    return {clip: sorted(set(places)) for clip, places in grouped.items()}
+
+
 def enabled() -> bool:
     """Whether any scenario may be heard through background noise on this run.
 

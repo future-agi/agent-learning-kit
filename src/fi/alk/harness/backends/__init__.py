@@ -1,8 +1,8 @@
 """Harness backends, selected by name.
 
 ``ALK_HARNESS`` picks the backend the way ``ALK_HARNESS_MODEL`` already picks the model. With
-nothing set the choice is ``vertex-gemini``, so a machine holding only Google credentials runs
-without being told to; ``ALK_HARNESS=claude`` selects the Claude Code loop instead.
+nothing set the choice is ``claude``; ``ALK_HARNESS=vertex-gemini`` selects Google ADK against
+Vertex without changing the stages, tools, or hosted conversation protocol.
 
 Backends load lazily: choosing one never imports the other's SDK, so a deployment installs only
 the provider it uses. A new backend is a module implementing ``HarnessBackend`` plus one
@@ -12,13 +12,14 @@ the provider it uses. A new backend is a module implementing ``HarnessBackend`` 
 from __future__ import annotations
 
 import os
-from typing import Callable
+from collections.abc import Callable
 
 from .base import (
     ASK_TOOL,
     FILE_TOOLS,
     KNOWN_BUILTINS,
     Call,
+    ConversationSession,
     HarnessBackend,
     HarnessSession,
     ModelReply,
@@ -42,6 +43,7 @@ __all__ = [
     "FILE_TOOLS",
     "KNOWN_BUILTINS",
     "Call",
+    "ConversationSession",
     "HarnessBackend",
     "HarnessSession",
     "ModelReply",
@@ -55,15 +57,15 @@ __all__ = [
     "ToolServer",
     "WorkerSpec",
     "ToolSpec",
+    "backend_names",
     "qualified",
-    "tool",
-    "tool_server",
     "register",
     "resolve",
-    "backend_names",
+    "tool",
+    "tool_server",
 ]
 
-DEFAULT_BACKEND = "vertex-gemini"
+DEFAULT_BACKEND = "claude"
 
 _LOADERS: dict[str, Callable[[], HarnessBackend]] = {}
 _ALIASES = {

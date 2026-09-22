@@ -20,8 +20,9 @@ from __future__ import annotations
 import asyncio
 import os
 from collections import Counter
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Callable
+from typing import Any
 
 from . import spend
 from .live import Channel, carrying, folded_in
@@ -234,8 +235,18 @@ class Stage:
     def spec(self) -> SessionSpec:
         return self._spec
 
+    def configure(self, spec: SessionSpec) -> None:
+        """Replace the unopened session contract after hosted policy/context is applied."""
+        if self._session is not None:
+            raise RuntimeError("configure before the stage opens")
+        self._spec = spec
+
     def grant(
-        self, server_name: str, server: ToolServer, tool_names: list[str], ask: Any = None
+        self,
+        server_name: str,
+        server: ToolServer,
+        tool_names: list[str],
+        ask: Any = None,
     ) -> None:
         """Give this stage one more tool server, before it opens.
 
@@ -267,15 +278,30 @@ class Stage:
             self._session = None
 
     async def stream(self, message: str) -> AsyncIterator[Event]:
-        """Send a message and yield events as they arrive."""
+        """Send a new message and yield events as they arrive."""
         if self._session is None:
             raise RuntimeError("stage is not open; use it as an async context manager")
         said = self.channel.waiting() if self._overheard else []
         for one in said:
             self.channel.record("said", one, stage=self.name)
         await self._session.send(folded_in(message, said))
+        async for event in self._pending_events():
+            yield event
+
+    async def resume(self, invocation_id: str) -> AsyncIterator[Event]:
+        """Resume one interrupted provider invocation."""
+        if self._session is None:
+            raise RuntimeError("stage is not open; use it as an async context manager")
+        resume = getattr(self._session, "resume", None)
+        if resume is None:
+            raise RuntimeError("the selected backend cannot resume interrupted turns")
+        await resume(invocation_id)
+        async for event in self._pending_events():
+            yield event
+
+    async def _pending_events(self) -> AsyncIterator[Event]:
         turn = Turn()
-        replies = self._session.replies().__aiter__()
+        replies = self._session.replies().__aiter__()  # type: ignore[union-attr]
         # A stage may ask for a longer silence than the default, because for some stages silence
         # is the work: a session whose turn is one tool call that fans out to other sessions
         # emits nothing until that call returns, and killing it then throws away everything the
@@ -313,7 +339,18 @@ class Stage:
             for part in received.parts:
                 if isinstance(part, Say):
                     turn.text += part.text
-                    events.append(Event(TEXT, text=part.text))
+                    events.append(
+                        Event(
+                            TEXT,
+                            text=part.text,
+                            detail={
+                                "partial": part.partial,
+                                "event_id": part.event_id,
+                                "invocation_id": part.invocation_id,
+                                "author": part.author,
+                            },
+                        )
+                    )
                 elif isinstance(part, Call):
                     turn.tools_used.append(part.name)
                     # Keyed by who called it: a delegating stage has to be able to tell its own
@@ -328,6 +365,8 @@ class Stage:
                                 "target": _target(part.arguments),
                                 "arguments": part.arguments,
                                 "label": readable(part.name),
+                                "call_id": part.id,
+                                "invocation_id": part.invocation_id,
                             },
                         )
                     )
@@ -342,7 +381,11 @@ class Stage:
                 Event(
                     RESULT,
                     text=_shown(received.text),
-                    detail={"is_error": received.is_error},
+                    detail={
+                        "is_error": received.is_error,
+                        "call_id": received.id,
+                        "invocation_id": received.invocation_id,
+                    },
                 )
             ]
             path = _saved_path(received.text)
@@ -427,6 +470,25 @@ class Stage:
                 self._session = self._backend.create(self._spec)
                 await self._session.start()
         raise AssertionError("unreachable")
+
+    async def resume_turn(
+        self,
+        invocation_id: str,
+        *,
+        on_event: Callable[[Event], None] | None = None,
+    ) -> Turn:
+        """Resume an interrupted invocation and wait for the whole reply."""
+        async for event in self.resume(invocation_id):
+            if on_event:
+                on_event(event)
+        return self.history[-1]
+
+    async def interrupt_response(self) -> bool:
+        """Interrupt the active model response when the backend supports it."""
+        if self._session is None:
+            return False
+        interrupt = getattr(self._session, "interrupt", None)
+        return bool(await interrupt()) if interrupt is not None else False
 
     def unexpected_models(self) -> set[str]:
         """Models that were billed but not the one asked for."""

@@ -24,8 +24,9 @@ other's dependencies installed.
 from __future__ import annotations
 
 import os
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Awaitable, Callable, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 ToolHandler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 
@@ -144,6 +145,21 @@ class WorkerSpec:
 
 
 @dataclass
+class ConversationSession:
+    """Durable provider identity and fresh context for a hosted stage session."""
+
+    app_name: str
+    user_id: str
+    session_id: str
+    event_store: Any = None
+    transcript_store: Any = None
+    resume_session_id: str | None = None
+    config_dir: str | None = None
+    turn_context: dict[str, Any] = field(default_factory=dict)
+    streaming: bool = True
+
+
+@dataclass
 class SessionSpec:
     """Everything a stage asks of a session, with no vendor vocabulary in it.
 
@@ -179,6 +195,7 @@ class SessionSpec:
     # behaves exactly as it did before the capability existed. Declaring one is what makes
     # DELEGATE_TOOL mean something; whether to use it is the model's call, not a threshold.
     workers: dict[str, WorkerSpec] = field(default_factory=dict)
+    conversation: ConversationSession | None = None
 
     def granted(self) -> list[str]:
         """Every tool name this session may call, qualified the way the model calls it."""
@@ -218,6 +235,10 @@ class Say:
     """The model said something."""
 
     text: str
+    partial: bool = False
+    event_id: str = ""
+    invocation_id: str = ""
+    author: str = ""
 
 
 @dataclass
@@ -230,6 +251,7 @@ class Call:
     # Which agent made the call. Empty when the backend does not distinguish one. Without it a
     # stage that delegates cannot tell its own spending from its workers'.
     by: str = ""
+    invocation_id: str = ""
 
 
 @dataclass
@@ -247,6 +269,7 @@ class ToolReturned:
     id: str
     text: str
     is_error: bool = False
+    invocation_id: str = ""
 
 
 @dataclass
@@ -282,6 +305,9 @@ class HarnessSession(Protocol):
     async def stop(self) -> None: ...
 
     async def send(self, message: str) -> None: ...
+
+    async def interrupt(self) -> bool: ...
+    async def resume(self, invocation_id: str) -> None: ...
 
     def replies(self) -> AsyncIterator[Any]:
         """Everything the session emits for the message just sent, ending with StageDone."""

@@ -10,6 +10,7 @@ name rather than implemented here.
 """
 
 from __future__ import annotations
+import os
 
 import asyncio
 import dataclasses
@@ -24,6 +25,7 @@ from claude_agent_sdk import (
     ClaudeSDKClient,
     ResultMessage,
     SdkMcpTool,
+    StreamEvent,
     SystemMessage,
     TextBlock,
     ToolResultBlock,
@@ -32,6 +34,7 @@ from claude_agent_sdk import (
 )
 
 from .base import (
+    ASK_TOOL,
     DELEGATE_TOOL,
     MOST_WORKERS_AT_ONCE,
     Call,
@@ -47,7 +50,9 @@ from .base import (
     qualified,
 )
 
-DEFAULT_MODEL = "claude-sonnet-4-6"
+# The loop is Claude Code; what it spends on is not. This harness may only bill Gemini, so an
+# Anthropic id as the default is refused the moment anything resolves it.
+DEFAULT_MODEL = "gemini-3.7-flash"
 
 # What this SDK calls the tool that runs a worker. It reports itself under both names depending
 # on the version, and the gate matches on the reported name, so both are granted or delegation
@@ -198,11 +203,17 @@ class ClaudeSession:
     """One Claude Code session, translated to the neutral reply vocabulary."""
 
     def __init__(
-        self, options: ClaudeAgentOptions, *, reported_model: str | None = None
+        self,
+        options: ClaudeAgentOptions,
+        *,
+        reported_model: str | None = None,
+        streaming: bool = False,
     ) -> None:
         self._options = options
         self._reported_model = reported_model
+        self._streaming = streaming
         self._client: ClaudeSDKClient | None = None
+        self._mirror_errors: list[str] = []
         # None for every session that runs no workers, which is every session this backend built
         # before delegation existed.
 
@@ -220,6 +231,18 @@ class ClaudeSession:
             raise RuntimeError("session is not open")
         await self._client.query(message)
 
+    async def interrupt(self) -> bool:
+        if self._client is None:
+            return False
+        await self._client.interrupt()
+        return True
+
+    async def resume(self, invocation_id: str) -> None:
+        del invocation_id
+        raise RuntimeError(
+            "Claude Agent SDK resumes sessions, not interrupted invocations"
+        )
+
     async def replies(self) -> AsyncIterator[Any]:
         if self._client is None:
             raise RuntimeError("session is not open")
@@ -228,13 +251,40 @@ class ClaudeSession:
                 yield reply
 
     def _translate(self, received: Any) -> list[Any]:
+        if isinstance(received, StreamEvent):
+            event = received.event
+            delta = event.get("delta") if isinstance(event, dict) else None
+            if (
+                isinstance(event, dict)
+                and event.get("type") == "content_block_delta"
+                and isinstance(delta, dict)
+                and delta.get("type") == "text_delta"
+                and delta.get("text")
+            ):
+                return [
+                    ModelReply(
+                        parts=[
+                            Say(
+                                text=str(delta["text"]),
+                                partial=True,
+                                event_id=received.uuid,
+                            )
+                        ]
+                    )
+                ]
+            return []
+        if type(received).__name__ == "MirrorErrorMessage":
+            self._mirror_errors.append(
+                str(getattr(received, "error", "session transcript mirror failed"))
+            )
+            return []
         if isinstance(received, SystemMessage):
             data = received.data if isinstance(received.data, dict) else {}
             return [SessionOpened(session_id=data.get("session_id"))]
         if isinstance(received, AssistantMessage):
             parts: list[Any] = []
             for block in received.content:
-                if isinstance(block, TextBlock):
+                if isinstance(block, TextBlock) and not self._streaming:
                     parts.append(Say(text=block.text))
                 elif isinstance(block, ToolUseBlock):
                     parts.append(
@@ -252,6 +302,10 @@ class ClaudeSession:
             # subtype alone is not the outcome. A call that failed upstream still arrives with
             # subtype "success", so the error facts ride along and Stage decides what failed.
             counted = _tokens(getattr(received, "model_usage", None))
+            errors = [
+                *list(getattr(received, "errors", None) or []),
+                *self._mirror_errors,
+            ]
             return [
                 StageDone(
                     outcome=received.subtype,
@@ -268,9 +322,11 @@ class ClaudeSession:
                         if self._reported_model
                         else set(getattr(received, "model_usage", None) or {})
                     ),
-                    is_error=bool(getattr(received, "is_error", False)),
+                    is_error=bool(
+                        getattr(received, "is_error", False) or self._mirror_errors
+                    ),
                     api_error_status=getattr(received, "api_error_status", None),
-                    errors=list(getattr(received, "errors", None) or []),
+                    errors=errors,
                 )
             ]
         blocks = getattr(received, "content", None)
@@ -345,11 +401,18 @@ class ClaudeBackend:
 
     def can_drive(self, model: str) -> bool:
         # Agent CC's native Anthropic endpoint accepts the Claude Agent SDK wire format and
-        # translates it for the provider named by the model. Without the gateway, this backend
+        # translates it for the provider named by the model. Without a gateway, this backend
         # still only advertises models supported by Claude Code directly.
-        return "claude" in (model or "").lower() or bool(
-            os.environ.get("AGENTCC_API_KEY", "").strip()
+        named = (model or "").lower()
+        if "claude" in named:
+            return True
+        if os.environ.get("AGENTCC_API_KEY", "").strip():
+            return True
+        gateway_ready = bool(
+            os.environ.get("ALK_CLAUDE_GATEWAY_URL", "").strip()
+            and os.environ.get("ALK_CLAUDE_GATEWAY_API_KEY", "").strip()
         )
+        return gateway_ready and "gemini" in named
 
     def create(self, spec: SessionSpec) -> ClaudeSession:
         from ..config import gateway_wire_model
@@ -357,7 +420,12 @@ class ClaudeBackend:
         # An alias on the wire is not what was billed, so the session reports the model the run
         # chose. With the real id on the wire there is nothing to correct.
         reported = spec.model if gateway_wire_model(spec.model) != spec.model else None
-        return ClaudeSession(self._options(spec), reported_model=reported)
+        context = spec.conversation
+        return ClaudeSession(
+            self._options(spec),
+            reported_model=reported,
+            streaming=bool(context and context.streaming),
+        )
 
     def _options(self, spec: SessionSpec) -> ClaudeAgentOptions:
         """The SDK options for one session.
@@ -404,6 +472,12 @@ class ClaudeBackend:
                     tools=[*existing.tools, *(t for t in server.tools if t.name not in seen)],
                 )
         environment = dict(provider_env(spec.model))
+        context = spec.conversation
+        if context is not None:
+            environment["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
+            environment["CLAUDE_CODE_PROJECT_DIR_NAME"] = context.session_id
+            if context.config_dir:
+                environment["CLAUDE_CONFIG_DIR"] = context.config_dir
         if spec.workers:
             # How many sub-agents the CLI may run at once. This is the only fan-out ceiling now.
             environment["CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"] = str(MOST_WORKERS_AT_ONCE)
@@ -425,10 +499,15 @@ class ClaudeBackend:
                 }
                 or None
             ),
+            strict_mcp_config=True,
             setting_sources=[],
             max_turns=spec.max_turns,
             model=wire_model,
             env=environment,
+            include_partial_messages=bool(context and context.streaming),
+            resume=context.resume_session_id if context is not None else None,
+            session_store=context.transcript_store if context is not None else None,
+            session_store_flush="eager",
         )
         if spec.cwd is not None:
             options.cwd = spec.cwd
