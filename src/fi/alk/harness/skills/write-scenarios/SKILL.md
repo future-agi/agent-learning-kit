@@ -531,6 +531,15 @@ let them supply one fact that does not match the record, let them ask two things
 serviceable. Difficulty comes from the *situation being genuinely awkward*, never from the person
 being strange.
 
+**A difficulty you name but do not create is worse than none at all**, because the suite then
+believes it is covered. "A reference with no referent" means the thing genuinely cannot be resolved:
+"the usual place" for an account holding three, "my work address" for somebody who has never saved
+one. A named landmark that geocodes cleanly - a well-known arena, a chain hotel - has a referent, and
+calling it one is decoration. Measured on a suite of fifty: two scenarios claimed exactly that while
+handing the agent a full street address in the same sentence. Before you write the difficulty into
+`branch`, ask what the agent would have to do that it would not otherwise do. If the answer is
+nothing, you have labelled it, not built it.
+
 **And the test of a good scenario is a sentence.** If you cannot say, in one line, what a competent
 agent might plausibly get wrong here, the scenario has no difficulty and you are writing a
 demonstration. Write that sentence into `branch` before writing anything else. If the sentence is
