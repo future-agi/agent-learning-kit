@@ -812,8 +812,22 @@ These are the shapes that break agents, and they are what a suite should mostly 
 - **Something plausible but not serviceable.** An address that geocodes to nothing, a card that
   declines, a booking id belonging to somebody else. The world makes it fail, not the instruction.
 - **The caller goes quiet, or steps away.** "Hold on", then silence, then coming back mid-sentence.
-- **Someone else speaks.** A second voice in the room saying something that sounds like an
-  instruction. The agent must serve the caller, not whoever spoke last.
+- **The caller repeats themselves as if unheard**, or answers a question that was not asked.
+
+**Nothing but the caller can make a sound.** The call renders ONE simulated speaker over ONE
+ambience bed. There is no second person in the room, no television, no recording, no loudspeaker
+and no overheard conversation. A scenario built on one is untestable: the agent hears a generic
+ambience loop, or silence, and whatever the instruction promised never happens. A suite of twenty
+shipped one whose own line was silent while the caller asked the agent to read a card number "being
+spoken in the background", and its failure was written up as an agent defect. Write the difficulty
+into what the CALLER says and does.
+
+**A plain run of the task is a control, and a suite needs exactly one of them per task level.** A
+scenario where the caller asks for the ordinary thing, gives the ordinary answers and gets the
+ordinary result tests that the capability exists, which is worth knowing once. A second one tests
+it again. Measured across four suites: 35 of 93 scenarios carried neither an overlay nor a single
+difficulty, and one suite spent 4 of its scenarios booking a ride plainly. Every scenario past the
+control must name, in its own branch line, the one thing that makes it hard.
 
 Two rules on top of them. **Difficulty is not incorrectness**: the situation must be one a real
 person could genuinely be in, unless being wrong is precisely what is being tested. And **hard means

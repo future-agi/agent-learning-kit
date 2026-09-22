@@ -565,6 +565,58 @@ def _MOST_ADVERSARIAL(wanted: int) -> int:
     return max(1, round(wanted * float(os.environ.get("ALK_ADVERSARIAL_SHARE", "0.10"))))
 
 
+# What makes a scenario harder than the ordinary run of its task. A scenario that names none of
+# these and carries no overlay is a plain control: worth exactly one per task level, because it
+# proves the capability exists and proving it twice proves nothing new.
+_NAMES_A_DIFFICULTY = re.compile(
+    r"\b(refus|correct|contradict|mishear|misheard|disagree|withhold|changes? (their )?mind"
+    r"|interrupt|instead of|wrong|mistake|mismatch|does not match|insist|pushe?s? back"
+    r"|repeats?|unclear|ambigu|confus|silen|hesitat|goes quiet|steps away"
+    r"|declin|unavailable|fail|error|expired|invalid|denied|blocked|suspend"
+    r"|sounds? like|swapped|no referent|not serviceable|geocodes? to nothing)\b",
+    re.IGNORECASE,
+)
+
+
+def _a_second_plain_control(scenario: Scenario, kept: list[Scenario]) -> str:
+    """Why this scenario is the suite's second plain run of the same task, or "".
+
+    Measured across four suites: 35 of 93 scenarios carried neither an overlay nor any difficulty,
+    and one suite spent four of them booking a ride plainly. A control is worth one per task level.
+    """
+    coverage = scenario.coverage or {}
+    if str(coverage.get("overlay") or "none") != "none":
+        return ""
+    said = " ".join(
+        str(getattr(scenario, name, "") or "") for name in ("instruction", "branch", "tests")
+    )
+    if _NAMES_A_DIFFICULTY.search(said):
+        return ""
+    task = str(coverage.get("task") or "")
+    if not task:
+        return ""
+    for one in kept:
+        other = one.coverage or {}
+        if str(other.get("task") or "") != task:
+            continue
+        if str(other.get("overlay") or "none") != "none":
+            continue
+        theirs = " ".join(
+            str(getattr(one, name, "") or "") for name in ("instruction", "branch", "tests")
+        )
+        if _NAMES_A_DIFFICULTY.search(theirs):
+            continue
+        return (
+            f"{one.name} is already this suite's plain control for {task}: the caller asks for the "
+            "ordinary thing, gives the ordinary answers and gets the ordinary result. Proving the "
+            "capability twice proves nothing. Name the one thing that makes this one hard - a "
+            "correction after the agent has committed, two facts that disagree, a reference with "
+            "no referent, a value that sounds like another, something plausible the world refuses "
+            "- and say it in the branch line, or place this on a task level with no control yet"
+        )
+    return ""
+
+
 def _over_its_share(
     coverage: Any, grid: dict[str, list[str]] | None, kept: list[Scenario], wanted: int
 ) -> str:
@@ -1571,6 +1623,13 @@ def scenario_tools(
         )
         if crowded_level:
             return _err(crowded_level)
+        # A capability is worth proving once. Everything past the control has to be hard.
+        try:
+            second_control = _a_second_plain_control(Scenario.model_validate(args), kept)
+        except Exception:  # noqa: BLE001 - a malformed scenario is the validator's to report
+            second_control = ""
+        if second_control:
+            return _err(second_control)
         twin = _already_in_the_suite(args, kept, _first_names_on_disk(destination))
         if twin:
             return _err(twin)
