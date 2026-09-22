@@ -323,6 +323,55 @@ MOST_OF_A_SUITE = 0.34
 FEWEST_FOR_A_SHARE = 8
 
 
+def _already_in_the_suite(args: dict[str, Any], kept: list[Scenario]) -> str:
+    """Why this scenario is one the suite already has, or "" when it is new.
+
+    Two scenarios on the same cell asserting the same sub-goals are one scenario with the names
+    changed: the report shows two results and the agent was asked one question. The caller's first
+    name is the other half of the same problem, because a reader cannot tell two results apart when
+    the same person appears in both.
+    """
+    name = str(args.get("name") or "").strip()
+    coverage = {
+        str(axis): str(level)
+        for axis, level in (args.get("coverage") or {}).items()
+        if level
+    }
+    goals = {
+        str(one.get("name") if isinstance(one, dict) else one)
+        for one in (args.get("sub_goals") or [])
+    }
+    persona = args.get("persona") or {}
+    first = str(persona.get("name") or "").strip().split(" ")[0].lower()
+    for one in kept:
+        if one.name == name:
+            continue
+        if coverage and goals:
+            theirs = {
+                str(axis): str(level)
+                for axis, level in (one.coverage or {}).items()
+                if level
+            }
+            if theirs == coverage and {
+                goal.name if hasattr(goal, "name") else str(goal)
+                for goal in (one.sub_goals or [])
+            } == goals:
+                return (
+                    f"{one.name!r} already occupies this cell and asserts the same sub-goals, so "
+                    "this scenario proves nothing the suite does not already prove. Move it to a "
+                    "cell nothing holds, or give it a different thing to find out: the variation "
+                    "that counts is what the caller withholds, not their name or address"
+                )
+        if first and one.persona is not None:
+            if str(one.persona.name or "").strip().split(" ")[0].lower() == first:
+                return (
+                    f"{one.name!r} already has a caller named {first.title()!r}. Two results under "
+                    "one name cannot be told apart by anybody reading the report, so give this "
+                    "caller a name the suite does not have"
+                )
+    return ""
+
+
 def crowded_field(kept: list[Scenario], candidate: Any, wanted: int) -> str:
     """Which persona field this scenario would push past its share of the suite, if any.
 
@@ -1432,6 +1481,9 @@ def scenario_tools(
         )
         if crowded_level:
             return _err(crowded_level)
+        twin = _already_in_the_suite(args, kept)
+        if twin:
+            return _err(twin)
         if wanted and target.get("people") != "alike":
             crowded = crowded_field(
                 kept, Scenario.model_validate(args).persona, wanted

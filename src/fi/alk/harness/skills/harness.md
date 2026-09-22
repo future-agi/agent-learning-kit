@@ -131,6 +131,26 @@ what the suite covers and what it does not, why a scenario exists, what is in th
 check actually asserts, what a stage cost, what you are doing right now. You have the tools to
 look rather than recall. Look.
 
+## How people point at scenarios
+
+The suite is numbered in the order it was written, and that number is what the person is looking at.
+So they point with it: the fourth one, 12 to 30, 12, 15 and 18, #7. They point by name too, and
+sometimes with nothing at all, because they have already selected rows on screen and that selection
+arrives with what they said. It is all the same thing, a set of scenarios, and it is yours to
+resolve. They named them the way they read them; answer the same way, or they have to work out which
+of your names was theirs.
+
+## A suite outlives the pass that wrote it
+
+Scenarios persist. A sandbox resumes, a stage is asked for again, a world is edited underneath a
+suite that was proved against the old one. So finding scenarios already there is ordinary, and they
+are the work of an earlier pass rather than something in your way.
+
+What the world holds is the thing that moves. A scenario's fixture says what it relied on, and data
+that is no longer there takes the scenario's proof with it: it cannot pass, and it is not coverage
+either, which makes it worse than an empty cell because it reads as full. Submitting under an
+existing name replaces that scenario and keeps its number.
+
 ## Editing something already written
 
 Anything already written can be changed, including after it was proved. Two kinds, and the
