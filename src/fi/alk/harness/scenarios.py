@@ -70,10 +70,22 @@ WRITER_TOOLS = ("inspect_world", "try_calls", "add_sub_goal", "submit_scenario")
 WRITES_A_SCENARIO = ("try_calls", "submit_scenario")
 
 
+# How many scenarios one writer should be given. Affordability alone put 33 on a single writer,
+# so a suite of twenty ran entirely serially: one writer, twenty scenarios, every refusal a rewrite
+# in the same context, forty-four minutes for what five hundred did in ten. A slice is small enough
+# that writers finish together and a rewrite costs one slice, not the suite.
+SLICE = int(os.environ.get("ALK_HARNESS_SLICE", "6") or 6)
+
+
 def writers_for(wanted: int) -> int:
-    """How many writers a suite of this size needs, from what one writer can afford to write."""
+    """How many writers a suite of this size needs.
+
+    Bounded twice: a writer may not be given more than it can afford to write, and it is not given
+    more than a slice, so wall clock falls with the number of writers rather than staying flat.
+    """
     most_a_writer_can_write = max(WRITER_TURNS // TURNS_EACH, 1)
-    return max(-(-wanted // most_a_writer_can_write), 1)
+    each = max(1, min(SLICE, most_a_writer_can_write))
+    return max(min(-(-wanted // each), MOST_WORKERS_AT_ONCE), 1)
 
 
 def turns_for(wanted: int) -> int:
