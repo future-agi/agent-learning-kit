@@ -1208,6 +1208,13 @@ def scenario_tools(
         schema({"calls": list, "setup_code": str}, ["calls"]),
     )
     async def try_calls(args: dict[str, Any]) -> dict[str, Any]:
+        # A suite that already holds what was asked for has nothing left to explore.
+        if wanted and len(kept) >= wanted:
+            return _err(
+                f"The suite is complete: {len(kept)} of {wanted}. There is nothing left to work "
+                "out. Call save_scenarios and end the stage; probing now spends the run's "
+                "remaining time on a suite that is already written."
+            )
         if exploration["since_submit"] >= 4:
             return _err(
                 "Four throwaway probes have run since the last saved scenario. Submit and prove "

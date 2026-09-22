@@ -72,7 +72,8 @@ WRITES_A_SCENARIO = ("try_calls", "submit_scenario")
 # read well and did not survive contact: offered the writing tools, it wrote twenty scenarios itself
 # in one lane, thirty-six minutes, zero sub-agents dispatched. A small suite is genuinely faster
 # written in place, so the rule is a size and not a ban.
-HANDS_OUT_ABOVE = int(os.environ.get("ALK_HARNESS_HANDS_OUT_ABOVE", "10") or 10)
+# Zero: the loop always hands the suite out. Every judgement call about when to delegate was wrong.
+HANDS_OUT_ABOVE = int(os.environ.get("ALK_HARNESS_HANDS_OUT_ABOVE", "0") or 0)
 
 
 # How many scenarios one writer should be given. Affordability alone put 33 on a single writer,
