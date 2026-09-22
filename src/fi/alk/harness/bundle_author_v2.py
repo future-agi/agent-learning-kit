@@ -1168,7 +1168,14 @@ def _dockerfile_run(root: Path) -> list[str] | None:
         argv[0] in {"uvicorn", "gunicorn", "flask"}
         and (root / "requirements.txt").is_file()
     ):
-        argv[0] = f".venv/bin/{argv[0]}"
+        # A requirements.txt was read as proof that `.venv/bin/<server>` exists. Nothing builds a
+        # venv at the service root, so the process died on `.venv/bin/uvicorn: not found` and the
+        # readiness probe then spent three minutes timing out. Point at the venv only when it is
+        # really there; otherwise `uv run`, the same fallback the `python` branch above takes.
+        if (root / ".venv" / "bin" / argv[0]).is_file():
+            argv[0] = f".venv/bin/{argv[0]}"
+        else:
+            argv[0:1] = ["uv", "run", "--no-sync", argv[0]]
     return argv
 
 

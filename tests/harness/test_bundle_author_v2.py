@@ -2514,3 +2514,30 @@ def test_declared_http_runtime_uses_contract_command_port_and_health(
         item for item in plan.readiness if item.capability == "target_http"
     )
     assert readiness.path == "/docs"
+
+def test_a_server_command_never_points_at_a_venv_that_was_not_built(tmp_path: Path) -> None:
+    """A requirements.txt is not proof that `.venv/bin/uvicorn` exists.
+
+    Nothing builds a venv at the service root, so the rewrite produced a command that died on
+    `sh: 1: .venv/bin/uvicorn: not found`. The readiness probe then timed out for three minutes,
+    every tool the scenarios needed reported "no endpoint in this environment", and runtime
+    validation burned its repair budget on an environment that could never come up.
+    """
+    from fi.alk.harness.bundle_author_v2 import _dockerfile_run
+
+    service = tmp_path / "tools-api"
+    service.mkdir()
+    (service / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (service / "Dockerfile").write_text(
+        'FROM python:3.12-slim\nCMD ["uvicorn", "main:app", "--port", "8080"]\n',
+        encoding="utf-8",
+    )
+
+    without_venv = _dockerfile_run(service)
+    assert without_venv[:4] == ["uv", "run", "--no-sync", "uvicorn"]
+
+    binary = service / ".venv" / "bin" / "uvicorn"
+    binary.parent.mkdir(parents=True)
+    binary.write_text("#!/bin/sh\n", encoding="utf-8")
+    with_venv = _dockerfile_run(service)
+    assert with_venv[0] == ".venv/bin/uvicorn"
