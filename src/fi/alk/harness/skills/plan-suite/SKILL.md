@@ -284,6 +284,14 @@ scenarios across two suites of sixty did exactly that, and all but one seeded no
 brief prevents it: *the world already holds a confirmed booking for this customer; the scenario opens on
 the cancellation*.
 
+**Name the difficulty in the brief, and never deal the same one twice.** A list of difficulties is a
+menu, not a default: writers who are handed the menu and left to choose all reach for the same entry.
+Measured on a suite of fifty where every writer was told to make its scenario hard: seventeen pairs
+came back near-identical, and most of them had independently picked *a reference with no referent* -
+a landmark name to geocode. The cells were distinct, the difficulties were not. **The brief must say
+which one**: this scenario carries the correction after commitment, that one carries two facts that
+disagree, the next one the answer to a question nobody asked. Spread them the way you spread accents.
+
 **Deal each writer a distinct DIFFICULTY, not just a distinct cell.** A cell is a coordinate; two
 scenarios can sit on the same coordinate and still be the same test. Measured across four suites:
 `create_guest_rider_booking_pay_link` and `create_guest_rider_comfort_booking` share a task, an
