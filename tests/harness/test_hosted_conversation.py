@@ -174,8 +174,6 @@ def test_authoring_activity_pump_does_not_replay_existing_lines(tmp_path):
     assert runtime.client.events[0][0] == "authoring_activity"
 
 
-
-
 def test_chat_policy_gates_stages_without_redeclaring_stage_tools(tmp_path):
     policy_path = tmp_path / "policy.yaml"
     policy_path.write_text(
@@ -622,3 +620,142 @@ harness_chat:
     completed = client.events[-1]
     assert completed["kind"] == "turn_completed"
     assert completed["payload"]["outcome"] == "interrupted"
+
+
+def test_answer_does_not_acknowledge_queued_followup(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALK_HARNESS", "claude")
+    policy_path = tmp_path / "policy.yaml"
+    policy_path.write_text(
+        "schema_version: 1\nharness_chat:\n  enabled: true\n"
+        "  stages:\n    reception:\n      enabled: true\n"
+    )
+
+    class QueuedClient(QuestionClient):
+        async def commands(self):
+            answer = (await super().commands())[0]
+            answer["sequence"] = 4
+            return [
+                {
+                    "sequence": 2,
+                    "message_id": "followup",
+                    "kind": "user_message",
+                    "payload": {"content": "Explain the scenario"},
+                },
+                answer,
+            ]
+
+    client = QueuedClient()
+    runtime = HostedChatRuntime(
+        client=client,
+        policy=load_chat_policy(policy_path),
+        workspace=tmp_path,
+        source=tmp_path,
+        job={},
+    )
+    runtime._turn_acknowledged_through = 1
+    result = asyncio.run(
+        runtime._ask("AskUserQuestion", {"question": "Which file?"}, None)
+    )
+    assert result["content"][0]["text"] == "Use app/api.py"
+    assert runtime._turn_acknowledged_through == 1
+    asyncio.run(runtime._handle((asyncio.run(client.commands()))[-1]))
+    assert client.events[-1]["acknowledge_through"] == 4
+
+
+def test_vertex_coordinator_opens_durable_session(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALK_HARNESS", "vertex-gemini")
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project")
+    policy_path = tmp_path / "policy.yaml"
+    policy_path.write_text(
+        "schema_version: 1\nharness_chat:\n  enabled: true\n"
+        "  stages:\n    reception:\n      enabled: true\n"
+    )
+    client = QuestionClient()
+    client.turn_context = {
+        **client.turn_context,
+        "capabilities": {"control_only": True},
+    }
+    runtime = HostedChatRuntime(
+        client=client,
+        policy=load_chat_policy(policy_path),
+        workspace=tmp_path,
+        source=tmp_path,
+        job={},
+    )
+
+    async def exercise():
+        stage = runtime.conversation.stage
+        async with stage:
+            context = stage.spec.conversation
+            stored = await runtime.event_store.get_session(
+                app_name=context.app_name,
+                user_id=context.user_id,
+                session_id=context.session_id,
+            )
+            assert stored.id == context.session_id
+
+    asyncio.run(exercise())
+
+
+def test_control_coordinator_restores_identity_without_authoring_archive(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("ALK_HARNESS", "claude")
+    policy_path = tmp_path / "policy.yaml"
+    policy_path.write_text(
+        "schema_version: 1\nharness_chat:\n  enabled: true\n"
+        "  stages:\n    reception:\n      enabled: true\n"
+    )
+
+    class PersistentClient(QuestionClient):
+        def __init__(self):
+            super().__init__()
+            self.turn_context = {
+                **self.turn_context,
+                "capabilities": {"control_only": True},
+            }
+            self.entries = []
+
+        async def append_session(self, key, entries):
+            self.entries.extend(entries)
+
+        async def load_session(self, key):
+            return {"entries": self.entries}
+
+        async def checkpoint(self, workspace):
+            raise AssertionError(
+                "Control-only chat must not overwrite authoring archives"
+            )
+
+    client = PersistentClient()
+    warm = tmp_path / "warm"
+    cold = tmp_path / "cold"
+    warm.mkdir()
+    cold.mkdir()
+    (warm / ".futureagi-provider-sessions.json").write_text(
+        json.dumps({"claude:reception": "provider-session-123"})
+    )
+    (warm / "contract.json").write_text('{"authoring": "untouched"}')
+    runtime = HostedChatRuntime(
+        client=client,
+        policy=load_chat_policy(policy_path),
+        workspace=warm,
+        source=warm,
+        job={},
+    )
+    runtime._write_journal({"message-1": "completed"})
+    asyncio.run(runtime._checkpoint())
+    restored = HostedChatRuntime(
+        client=client,
+        policy=load_chat_policy(policy_path),
+        workspace=cold,
+        source=cold,
+        job={},
+    )
+    asyncio.run(restored._restore_coordinator_state())
+    assert (
+        restored.conversation.stage.spec.conversation.resume_session_id
+        == "provider-session-123"
+    )
+    assert restored._read_journal() == {"message-1": "completed"}
+    assert not (cold / "contract.json").exists()

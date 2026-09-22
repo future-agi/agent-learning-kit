@@ -38,6 +38,7 @@ dependencies = [
   "gepa>=0.0.17",
   # 2.8 imports newer otel semconv than the livekit-agents pin allows
   "google-adk>=2.7.1,<2.8",
+  "sqlalchemy[asyncio]>=2.0,<3",
   "httpx>=0.24.0",
   "jsonschema>=4.25.1,<5",
   "levenshtein>=0.25.0",
