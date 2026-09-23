@@ -95,6 +95,18 @@ wording nobody on the team would have chosen, is a real property of the agent an
 bought. That population is grown by **holding the flow and the objective fixed and varying only how
 the person arrives**, which is the opposite of inventing a situation.
 
+**A perturbation changes how the person ARRIVES. It never changes only the data.** This is the line the
+licence above gets read straight past, so it is worth being blunt: a different accent, a noisier line, a
+hesitant speaker, a caller who buries the request in three sentences - those are perturbations. A different
+street, a different city, a different product tier, a different amount - those are **the same test with the
+nouns swapped**, which is the thing the first rule in this skill already forbids. Measured on a hosted 100:
+nine scenarios on one task were all "surge pricing is active, the caller books, the fare is disclosed",
+differing in the route and the tier. Not one of them was a perturbation and not one was a new cell; they
+were one test written nine times.
+
+The check is whether a competent agent would have to do anything differently. A noisy line changes what it
+hears. A different destination does not change anything at all.
+
 Hold the two apart and both stay honest:
 
 - A repeat under a changed delivery condition is **never a new cell**. It does not appear in the
