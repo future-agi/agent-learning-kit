@@ -140,10 +140,25 @@ def violations_in_ir(world, checks: list[dict]) -> list[str]:
             continue
         if rows:
             failures.append(
-                f"{check['name']!r} failed ({len(rows)} violating rows). "
-                f"Query: {check['violations_sql']}"
+                f"{check['name']!r} failed ({len(rows)} violating rows"
+                f"{_first_rows(rows)}). Query: {check['violations_sql']}"
             )
     return failures
+
+
+def _first_rows(rows: list, *, most: int = 3, width: int = 60) -> str:
+    """The first violating rows, so a repair can see what to fix instead of guessing.
+
+    Only the columns the check's own query selected, a few rows, each value trimmed: enough to
+    name the offending values without copying records wholesale.
+    """
+    shown = []
+    for row in rows[:most]:
+        values = row.items() if isinstance(row, dict) else enumerate(row)
+        shown.append(
+            "{" + ", ".join(f"{key}: {str(value)[:width]}" for key, value in values) + "}"
+        )
+    return ": " + "; ".join(shown) if shown else ""
 
 
 async def check_invariants(
@@ -157,10 +172,9 @@ async def check_invariants(
             asyncio.to_thread(world.query, check["violations_sql"]), timeout=15
         )
         if rows:
-            # Data can include personal values; report the check and affected count, not rows.
             failures.append(
-                f"{check['name']!r} failed ({len(rows)} violating rows). "
-                f"Query: {check['violations_sql']}. Evidence: "
+                f"{check['name']!r} failed ({len(rows)} violating rows"
+                f"{_first_rows(rows)}). Query: {check['violations_sql']}. Evidence: "
                 + ", ".join(item["path"] for item in check["evidence"])
             )
     if failures:

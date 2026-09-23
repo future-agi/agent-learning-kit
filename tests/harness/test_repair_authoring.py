@@ -120,8 +120,9 @@ def test_world_repair_uses_fresh_evidence_pass_after_constrained_pass(
         )
     )
 
-    assert [spec.builtins for spec in specs] == [(), FILE_TOOLS]
-    assert [spec.model for spec in specs] == ["routed-model", "routed-model"]
+    # The first pass can already explore the source and the world, so it settles here.
+    assert [spec.builtins for spec in specs] == [FILE_TOOLS]
+    assert [spec.model for spec in specs] == ["routed-model"]
     assert patch.operations[0].op is RepairPatchOp.SET_VALUE
 
 
@@ -159,5 +160,44 @@ def test_world_repair_reports_both_exhausted_passes(
             )
         )
 
-    assert [spec.builtins for spec in specs] == [(), FILE_TOOLS]
+    assert [spec.builtins for spec in specs] == [FILE_TOOLS, FILE_TOOLS]
     assert [spec.model for spec in specs] == ["routed-model", "routed-model"]
+
+
+def test_world_repair_can_see_the_rows_a_diagnostic_is_about(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    source, world = _source_and_world()
+    seen: list[str] = []
+    monkeypatch.setattr(repair_authoring, "chosen_model", lambda: "routed-model")
+
+    class FakeStage:
+        def __init__(self, spec, *, name: str):  # noqa: ANN001
+            del name
+            self.spec = spec
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return None
+
+        async def say(self, _message: str):
+            tools = {tool.name: tool.handler for tool in self.spec.servers["repair"].tools}
+            listed = await tools["inspect_world"]({})
+            rows = await tools["query_world"]({"sql": "SELECT id FROM users"})
+            refused = await tools["query_world"]({"sql": "DELETE FROM users"})
+            seen.extend(
+                [listed["content"][0]["text"], rows["content"][0]["text"], str(refused)]
+            )
+
+    monkeypatch.setattr(repair_authoring, "Stage", FakeStage)
+    with pytest.raises(RuntimeError):
+        asyncio.run(
+            repair_authoring.request_world_ir_patch(
+                tmp_path, source, world, (_diagnostic(),)
+            )
+        )
+    assert '"users": 1' in seen[0]
+    assert '"old"' in seen[1]
+    assert "query failed" in seen[2]
