@@ -195,6 +195,16 @@ def _ok(text: str) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": text}]}
 
 
+_REFUSALS_BEFORE_MOVING_ON = 3
+
+
+def _count_refusal(refused: dict[tuple[str, int], int], name: str, said: str) -> int:
+    """How many times this scenario has come back with this same refusal, counting this one."""
+    key = (name, hash(said))
+    refused[key] = refused.get(key, 0) + 1
+    return refused[key]
+
+
 def _err(text: str) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": text}], "is_error": True}
 
@@ -1208,6 +1218,9 @@ def scenario_tools(
     simulator_prompt = load_simulator_prompt(destination)
     target = {"count": wanted}
     exploration = {"since_submit": 0}
+    # How many times one scenario has come back with the identical refusal. A gate the
+    # writer cannot satisfy would otherwise be resubmitted forever and the stage never ends.
+    refused: dict[tuple[str, int], int] = {}
     external_runtime_target = _is_external_runtime(world_root)
     tool_free_target = not bool(contract.tools) or external_runtime_target
 
@@ -1699,6 +1712,17 @@ def scenario_tools(
         )
         if not result.get("is_error"):
             exploration["since_submit"] = 0
+            refused.pop((str(args.get("name") or ""), 0), None)
+            return result
+        said = str((result.get("content") or [{}])[0].get("text") or "")
+        if said.startswith("Not kept"):
+            seen = _count_refusal(refused, str(args.get("name") or ""), said)
+            if seen >= _REFUSALS_BEFORE_MOVING_ON:
+                return _err(
+                    f"{said}\n\nThis is refusal {seen} of this scenario for the same reason, so "
+                    "submitting it again will not work. Drop it and write a different scenario for "
+                    "this cell, or place it on a level the call actually has."
+                )
         return result
 
     @tool(

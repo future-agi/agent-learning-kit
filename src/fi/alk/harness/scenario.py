@@ -332,7 +332,13 @@ class Scenario(BaseModel):
         if not self.scenario_key:
             self.scenario_key = _slug(self.name)
         if self.background_noise == "":
-            self.background_noise = _decided_by(self.name)
+            level = str((self.coverage or {}).get("interface") or "").strip().lower()
+            if level in _QUIET_INTERFACE:
+                self.background_noise = False
+            elif level in _NOISY_INTERFACE or level.startswith("noisy"):
+                self.background_noise = True
+            else:
+                self.background_noise = _decided_by(self.name)
         return self
 
     def slots(self) -> dict[str, str]:
@@ -627,7 +633,10 @@ def _condition_the_call_lacks(scenario: Scenario) -> str:
     # reports a clear line the call never had and every noisy scenario loses what it is measured
     # against. Measured on a hosted 100: 16 of the first 52.
     if level in _QUIET_INTERFACE and not (noise is False or noise is None or noise == ""):
-        return f"interface {level}, background noise on"
+        return (
+            f"interface {level}, background noise on. Set background_noise to false, "
+            "or place the scenario on a noisy level"
+        )
     return ""
 
 
