@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -37,6 +38,7 @@ def _originator(
         destination=destination,
         client=client,
     )
+    originator._call_marker = "test-originator"
     return originator, client
 
 
@@ -65,10 +67,12 @@ def test_retell_originator_posts_create_phone_call() -> None:
 
     assert captured["path"] == "/v2/create-phone-call"
     assert captured["authorization"] == "Bearer test-key"
-    assert captured["body"] == (
-        b'{"from_number":"+15550000001","to_number":"+15550000099",'
-        b'"override_agent_id":"agent_123"}'
-    )
+    assert json.loads(captured["body"]) == {
+        "from_number": "+15550000001",
+        "to_number": "+15550000099",
+        "override_agent_id": "agent_123",
+        "metadata": {"futureagi_call_id": "test-originator"},
+    }
 
 
 def test_retell_originator_rejects_missing_response_id() -> None:
@@ -79,6 +83,117 @@ def test_retell_originator_rejects_missing_response_id() -> None:
         await client.aclose()
 
     _run(run())
+
+
+def test_originator_does_not_redial_after_an_ambiguous_start():
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        raise httpx.ReadTimeout("response lost", request=request)
+
+    async def run():
+        originator, client = _originator(handler)
+        try:
+            with pytest.raises(retell.APIError):
+                await originator.start()
+            with pytest.raises(ValueError, match="retell_originator_already_started"):
+                await originator.start()
+        finally:
+            await client.aclose()
+
+    _run(run())
+    assert len(requests) == 1
+
+
+def test_parallel_ambiguous_starts_reconcile_only_their_owned_calls():
+    rows = [
+        {
+            "call_id": "unrelated_newer_call",
+            "from_number": "+15550000001",
+            "to_number": "+15550000099",
+            "start_timestamp": 1900,
+            "call_status": "ongoing",
+        }
+    ]
+    stopped = []
+
+    async def handler(request):
+        if request.url.path == "/v2/create-phone-call":
+            body = json.loads(request.content)
+            index = len(rows)
+            rows.append(
+                {
+                    "call_id": f"owned_{index}",
+                    "from_number": body["from_number"],
+                    "to_number": body["to_number"],
+                    "start_timestamp": 1000 + index * 100,
+                    "call_status": "ongoing",
+                    "metadata": body["metadata"],
+                }
+            )
+            await asyncio.sleep(0)
+            raise httpx.ReadTimeout("accepted but response lost", request=request)
+        if request.url.path == "/v3/list-calls":
+            return httpx.Response(200, json={"items": rows})
+        if request.url.path.startswith("/v2/stop-call/"):
+            stopped.append(request.url.path.rsplit("/", 1)[-1])
+            return httpx.Response(204)
+        raise AssertionError(request.url.path)
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            originators = [
+                RetellCallOriginator(
+                    api_key="test-key",
+                    agent_id="agent_123",
+                    from_number="+15550000001",
+                    destination="+15550000099",
+                    client=client,
+                )
+                for _ in range(2)
+            ]
+            errors = await asyncio.gather(
+                *(originator.start() for originator in originators),
+                return_exceptions=True,
+            )
+            assert all(isinstance(error, retell.APIError) for error in errors)
+            assert originators[0]._call_marker != originators[1]._call_marker
+            results = await asyncio.gather(
+                *(
+                    originator.reconcile_and_stop(
+                        started_after_ms=1000, ended_before_ms=2000
+                    )
+                    for originator in originators
+                )
+            )
+            assert results == [["owned_1"], ["owned_2"]]
+
+    _run(run())
+    assert sorted(stopped) == ["owned_1", "owned_2"]
+
+
+@pytest.mark.parametrize(
+    "metadata", [None, {}, True, [], {"futureagi_call_id": "other"}]
+)
+def test_reconciliation_never_stops_a_call_without_matching_ownership(metadata):
+    capture = {}
+    row = {**_VALID_TARGET_ROW, "metadata": metadata}
+
+    async def run():
+        originator, client = _originator(_list_calls_handler([row], capture))
+        try:
+            assert (
+                await originator.reconcile_and_stop(
+                    started_after_ms=1000, ended_before_ms=2000
+                )
+                == []
+            )
+        finally:
+            await client.aclose()
+
+    _run(run())
+    assert capture.get("stopped_ids", []) == []
 
 
 @pytest.mark.parametrize(
@@ -218,6 +333,7 @@ def test_reconcile_rejects_path_bearing_call_id_row(
             "from_number": "+15550000001",
             "start_timestamp": 1_700,
             "call_status": "registered",
+            "metadata": {"futureagi_call_id": "test-originator"},
         }
     ]
     capture: dict[str, Any] = {}
@@ -250,6 +366,7 @@ def test_reconcile_logs_target_without_id_when_call_id_missing(
             "from_number": "+15550000001",
             "start_timestamp": 1_700,
             "call_status": "registered",
+            "metadata": {"futureagi_call_id": "test-originator"},
         }
     ]
     capture: dict[str, Any] = {}
@@ -290,6 +407,7 @@ def test_reconcile_int_call_id_logs_target_without_id_and_does_not_raise(
             "from_number": "+15550000001",
             "start_timestamp": 1_700,
             "call_status": "registered",
+            "metadata": {"futureagi_call_id": "test-originator"},
         }
     ]
     capture: dict[str, Any] = {}
@@ -547,12 +665,14 @@ def test_reconcile_stops_only_exact_destination_in_window_row(
             "from_number": "+15550000001",
             "start_timestamp": 1_900,
             "call_status": "registered",
+            "metadata": {"futureagi_call_id": "test-originator"},
         },
         {
             "call_id": "no_destination_field",
             "from_number": "+15550000001",
             "start_timestamp": 1_600,
             "call_status": "registered",
+            "metadata": {"futureagi_call_id": "test-originator"},
         },
         {
             "call_id": "null_start_timestamp",
@@ -560,6 +680,7 @@ def test_reconcile_stops_only_exact_destination_in_window_row(
             "from_number": "+15550000001",
             "start_timestamp": None,
             "call_status": "registered",
+            "metadata": {"futureagi_call_id": "test-originator"},
         },
         {
             "call_id": "ours",
@@ -567,6 +688,7 @@ def test_reconcile_stops_only_exact_destination_in_window_row(
             "from_number": "+15550000001",
             "start_timestamp": 1_700,
             "call_status": "registered",
+            "metadata": {"futureagi_call_id": "test-originator"},
         },
     ]
     capture: dict[str, Any] = {}
@@ -602,6 +724,7 @@ def test_reconcile_never_stops_out_of_window_row(
             "from_number": "+15550000001",
             "start_timestamp": 1_700,
             "call_status": "registered",
+            "metadata": {"futureagi_call_id": "test-originator"},
         },
         # Newest row of all, our DID, and stoppable status — if the
         # client-side window recheck were ever removed, latest-wins would
@@ -612,6 +735,7 @@ def test_reconcile_never_stops_out_of_window_row(
             "from_number": "+15550000001",
             "start_timestamp": 999_999_999,
             "call_status": "ongoing",
+            "metadata": {"futureagi_call_id": "test-originator"},
         },
     ]
     capture: dict[str, Any] = {}
@@ -648,6 +772,7 @@ def test_reconcile_drops_from_number_mismatch_row(
             "from_number": "+19990000000",
             "start_timestamp": 1_700,
             "call_status": "ongoing",
+            "metadata": {"futureagi_call_id": "test-originator"},
         },
         {
             "call_id": "spaced_from_number",
@@ -655,6 +780,7 @@ def test_reconcile_drops_from_number_mismatch_row(
             "from_number": "+1 555 000 0001",
             "start_timestamp": 1_710,
             "call_status": "ongoing",
+            "metadata": {"futureagi_call_id": "test-originator"},
         },
         {
             "call_id": "no_plus_from_number",
@@ -662,6 +788,7 @@ def test_reconcile_drops_from_number_mismatch_row(
             "from_number": "15550000001",
             "start_timestamp": 1_720,
             "call_status": "ongoing",
+            "metadata": {"futureagi_call_id": "test-originator"},
         },
     ]
     capture: dict[str, Any] = {}
@@ -708,6 +835,7 @@ def test_reconcile_status_fence_only_registered_or_ongoing() -> None:
             "from_number": "+15550000001",
             "start_timestamp": 1_900,
             "call_status": "ended",
+            "metadata": {"futureagi_call_id": "test-originator"},
         },
         {
             "call_id": "ongoing_upper",
@@ -715,6 +843,7 @@ def test_reconcile_status_fence_only_registered_or_ongoing() -> None:
             "from_number": "+15550000001",
             "start_timestamp": 1_700,
             "call_status": "ONGOING",
+            "metadata": {"futureagi_call_id": "test-originator"},
         },
     ]
     capture: dict[str, Any] = {}
@@ -746,6 +875,7 @@ def test_reconcile_two_matching_rows_stops_nothing_and_logs_ambiguous(
             "from_number": "+15550000001",
             "start_timestamp": 1_500,
             "call_status": "ongoing",
+            "metadata": {"futureagi_call_id": "test-originator"},
         },
         {
             "call_id": "newer",
@@ -753,6 +883,7 @@ def test_reconcile_two_matching_rows_stops_nothing_and_logs_ambiguous(
             "from_number": "+15550000001",
             "start_timestamp": 1_800,
             "call_status": "registered",
+            "metadata": {"futureagi_call_id": "test-originator"},
         },
     ]
     capture: dict[str, Any] = {}
@@ -776,6 +907,7 @@ def test_reconcile_two_matching_rows_stops_nothing_and_logs_ambiguous(
     assert record.stoppable == 2
     # Neither in-window row's id may leave the process in this record, under
     # any attribute name — the log carries counts only.
+    assert not hasattr(record, "stopped_call_id")
     for value in vars(record).values():
         items = value if isinstance(value, (list, tuple, set)) else [value]
         for item in items:
@@ -791,12 +923,14 @@ def test_reconcile_no_destination_field_at_all_stops_nothing(
             "from_number": "+15550000001",
             "start_timestamp": 1_500,
             "call_status": "registered",
+            "metadata": {"futureagi_call_id": "test-originator"},
         },
         {
             "call_id": "b",
             "from_number": "+15550000001",
             "start_timestamp": 1_600,
             "call_status": "ongoing",
+            "metadata": {"futureagi_call_id": "test-originator"},
         },
     ]
     capture: dict[str, Any] = {}
@@ -828,6 +962,7 @@ def test_reconcile_destination_mismatch_logs_count_not_raw_numbers(
             "from_number": "+15550000001",
             "start_timestamp": 1_500,
             "call_status": "registered",
+            "metadata": {"futureagi_call_id": "test-originator"},
         },
         {
             "call_id": "b",
@@ -835,6 +970,7 @@ def test_reconcile_destination_mismatch_logs_count_not_raw_numbers(
             "from_number": "+15550000001",
             "start_timestamp": 1_600,
             "call_status": "ongoing",
+            "metadata": {"futureagi_call_id": "test-originator"},
         },
         # Non-scalar to_number values must never reach the set comprehension
         # used to count distinct values, and must never raise; they are
@@ -845,6 +981,7 @@ def test_reconcile_destination_mismatch_logs_count_not_raw_numbers(
             "from_number": "+15550000001",
             "start_timestamp": 1_620,
             "call_status": "ongoing",
+            "metadata": {"futureagi_call_id": "test-originator"},
         },
         {
             "call_id": "d",
@@ -852,6 +989,7 @@ def test_reconcile_destination_mismatch_logs_count_not_raw_numbers(
             "from_number": "+15550000001",
             "start_timestamp": 1_640,
             "call_status": "ongoing",
+            "metadata": {"futureagi_call_id": "test-originator"},
         },
         # A duplicate of row "a"'s destination: makes count (3) and
         # distinct_observed (2) diverge, so distinct_observed can't be
@@ -862,6 +1000,7 @@ def test_reconcile_destination_mismatch_logs_count_not_raw_numbers(
             "from_number": "+15550000001",
             "start_timestamp": 1_650,
             "call_status": "registered",
+            "metadata": {"futureagi_call_id": "test-originator"},
         },
     ]
     capture: dict[str, Any] = {}
@@ -927,6 +1066,7 @@ def test_reconcile_stops_target_row_legacy_bare_list() -> None:
             "from_number": "+15550000001",
             "start_timestamp": 1_500,
             "call_status": "registered",
+            "metadata": {"futureagi_call_id": "test-originator"},
         }
     ]
     capture: dict[str, Any] = {}
@@ -957,6 +1097,7 @@ def test_reconcile_stops_target_row_legacy_calls_key() -> None:
             "from_number": "+15550000001",
             "start_timestamp": 1_500,
             "call_status": "registered",
+            "metadata": {"futureagi_call_id": "test-originator"},
         }
     ]
     capture: dict[str, Any] = {}
@@ -1046,6 +1187,7 @@ _VALID_TARGET_ROW: dict[str, Any] = {
     "from_number": "+15550000001",
     "start_timestamp": 1_700,
     "call_status": "registered",
+    "metadata": {"futureagi_call_id": "test-originator"},
 }
 
 
@@ -1115,6 +1257,7 @@ def test_bare_list_row_keeps_to_number_after_model_dump() -> None:
         "from_number": "+15550000001",
         "start_timestamp": 1_500,
         "call_status": "registered",
+        "metadata": {"futureagi_call_id": "test-originator"},
         "future_unknown_field": "KEEPME",
     }
 
@@ -1246,6 +1389,7 @@ def test_reconcile_full_page_logs_page_full(caplog: pytest.LogCaptureFixture) ->
             "to_number": "+19990000000",
             "start_timestamp": 1_000 + i,
             "call_status": "ended",
+            "metadata": {"futureagi_call_id": "test-originator"},
         }
         for i in range(50)
     ]
@@ -1388,6 +1532,7 @@ def test_reconcile_uses_10s_per_request_timeout() -> None:
             "from_number": "+15550000001",
             "start_timestamp": 1_500,
             "call_status": "registered",
+            "metadata": {"futureagi_call_id": "test-originator"},
         }
     ]
     capture: dict[str, Any] = {}

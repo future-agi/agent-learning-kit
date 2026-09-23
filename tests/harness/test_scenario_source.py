@@ -470,7 +470,12 @@ def test_mutation_vacuous_empty_check_pass_is_caught(tmp_path: Path) -> None:
         ss.load_scenarios(tmp_path)
 
     def _always_allow_empty(
-        source: str, *, label: str, entry: str, allow_empty: bool = True
+        source: str,
+        *,
+        label: str,
+        entry: str,
+        allow_empty: bool = True,
+        defer_execution: bool = False,
     ):
         # The mutant: `allow_empty` is accepted but ignored -- `check` is treated exactly like
         # `setup`/`ready` again, as if the R1-2 fix's `allow_empty=False` call-site edit were
@@ -1133,9 +1138,7 @@ def test_real_write_folder_round_trip_matches_the_adapters_reading(
 # =================================================================================================
 
 
-def test_load_timeout_converts_a_hanging_module_level_scenario_into_a_typed_failure() -> (
-    None
-):
+def test_hosted_load_never_executes_module_level_scenario_code() -> None:
     async def scenario() -> None:
         tmp_path = Path(tempfile.mkdtemp(prefix="p12-load-timeout-"))
         root = tmp_path / ss.SCENARIOS_DIRNAME
@@ -1145,19 +1148,23 @@ def test_load_timeout_converts_a_hanging_module_level_scenario_into_a_typed_fail
             scenario_key="s1",
             # Module-level, not inside setup() -- runs during `_compile_entry`'s `exec`, i.e.
             # during the load itself, which is exactly what a real budget must bound.
-            setup_code="import time\ntime.sleep(1.5)\ndef setup(world):\n    pass\n",
+            setup_code="raise RuntimeError('module executed in loader')\ndef setup(world):\n    pass\n",
         )
         source = ss.BundleScenarioSource()
-        with mock.patch.object(ss, "_LOAD_TIMEOUT_SECONDS", 0.1):
-            with pytest.raises(ss.ScenarioDocumentInvalid, match="exceeded"):
-                await source.build(
-                    object(),
-                    object(),
-                    object(),
-                    pool=object(),
-                    world_factory=object(),
-                    bundle_dir=tmp_path,
-                )
+
+        async def passthrough(client, scenarios, **kwargs):
+            return scenarios
+
+        with mock.patch.object(ss, "register_with_platform", passthrough):
+            loaded = await source.build(
+                _FakeJob(run_id="job-1"),
+                object(),
+                object(),
+                pool=object(),
+                world_factory=object(),
+                bundle_dir=tmp_path,
+            )
+        assert [item.scenario_key for item in loaded] == ["s1"]
 
     asyncio.run(scenario())
 
@@ -1213,7 +1220,9 @@ def test_mutation_skip_compile_check_is_killed(tmp_path: Path) -> None:
 
     # Mutant: a "compiler" that never raises on a bad compile, returning a no-op instead --
     # simulates deleting the try/except around `compile()`/`exec()` in `_compile_entry`.
-    def _never_fails(source: str, *, label: str, entry: str):
+    def _never_fails(
+        source: str, *, label: str, entry: str, defer_execution: bool = False
+    ):
         del source, label, entry
         return lambda *args: None
 

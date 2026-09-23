@@ -515,6 +515,17 @@ async def validate_once(
         prefix="runtime-validation-", dir=temporary_parent
     ) as root:
         work = Path(root)
+        runtime = getattr(job, "runtime", None)
+        (work / "job.json").write_text(
+            json.dumps(
+                {
+                    "runtime": {
+                        "cpu_units": getattr(runtime, "cpu_units", 1),
+                        "memory_mb": getattr(runtime, "memory_mb", 512),
+                    }
+                }
+            )
+        )
         if local_runtime:
             # Child processes drop to svc-* identities. They need search permission on the
             # disposable workspace parent in order to reach their individually chowned trees;
