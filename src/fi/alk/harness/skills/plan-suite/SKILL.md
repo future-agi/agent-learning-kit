@@ -346,6 +346,28 @@ The test is one question per level: **if this level were different, would this s
 different?** If not, the level is decoration. Use the neutral value, or move the scenario to a cell where
 the state does the work.
 
+**A task level earns its share from how many DISTINCT difficulties it has, not from how many
+perturbations you can generate.** This is where the perturbation licence above gets abused, and it is
+invisible in every count the suite reports. Measured on a hosted 100: one task level took **26 scenarios**,
+every one of them with a single sub-goal, and reading all twenty-six branch lines they are **four tests**:
+
+- the caller mishears the fee and has to be corrected - five scenarios
+- the caller corrects their reason mid-call - six scenarios
+- the caller believes a different fee applies than the one on the booking - four scenarios
+- the caller has the wrong destination on the booking - two scenarios
+
+The remaining nine are the same four again under a different accent, bed or speaking style. That is fine as
+perturbation and it is **not twenty-six cells**, which is how the grid read it.
+
+So before dealing a task level more than a handful of scenarios, write down its distinct difficulties and
+count them. That number is how many cells it has. Everything past it is a perturbation and is reported as
+one. Two signs you are over the line, both cheap to check:
+
+- **every scenario on the level names the same single sub-goal.** One sub-goal means the scenario measures
+  one thing, and twenty of them measuring the same one thing is one test with twenty deliveries.
+- **you cannot say in a clause how scenario seventeen differs from scenario four** without mentioning the
+  accent, the noise or the wording.
+
 **Keep the spread you declared.** A plan that names eight task levels and then puts half the suite on two of
 them has not covered eight; it has covered two, with six thin rows that read as covered in the grid. Set a
 ceiling before dealing: **with five or more task levels, no single level takes more than about a fifth of the
