@@ -33,11 +33,12 @@ classifiers = [
   "Topic :: Software Development :: Testing",
 ]
 dependencies = [
-  "claude-agent-sdk>=0.2.139",
+  "claude-agent-sdk>=0.2.140,<0.3",
   "fi-instrumentation-otel>=0.1.16",
   "gepa>=0.0.17",
   # 2.8 imports newer otel semconv than the livekit-agents pin allows
   "google-adk>=2.7.1,<2.8",
+  "sqlalchemy[asyncio]>=2.0,<3",
   "httpx>=0.24.0",
   "jsonschema>=4.25.1,<5",
   "levenshtein>=0.25.0",
