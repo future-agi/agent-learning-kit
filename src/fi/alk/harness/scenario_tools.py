@@ -1433,7 +1433,11 @@ def scenario_tools(
         "  2. solvable  — the reference solution is played through that world and the checks of "
         "every sub-goal named must pass.\n"
         "  3. not vacuous — the same checks run again with nothing done at all, and must fail.\n\n"
-        "A scenario that clears all three is written out as its own folder of runnable files.",
+        "A scenario that clears all three is written out as its own folder of runnable files.\n\n"
+        "Two things no gate can see. The caller is one clean synthesised voice: never write that "
+        "their words break up, cut out or are garbled, or that the line drops; a caller who is hard "
+        "to follow is vague or stops mid-thought. And the caller is an ordinary person: never a "
+        "celebrity's or a fictional character's name, not even with a second surname added.",
         schema(
             {
                 "name": {
