@@ -7985,3 +7985,22 @@ def test_a_save_refused_for_the_suites_shape_is_accepted_on_the_third_try(tmp_pa
     assert first[0] and second[0] and "overwritten by the next save" in first[1]
     assert not third[0]
     assert "too many distinct keywords" in third[1] and "End the stage now" in third[1]
+
+
+def test_a_judged_claim_of_accuracy_or_unrenderable_audio_is_named_for_rewording():
+    from fi.alk.harness.catalogue import SubGoal, judged_wording_advisory
+
+    said = judged_wording_advisory(
+        SubGoal(name="answers", what="Answers inquiries accurately", judged="nothing records the answer")
+    )
+    assert "invented nothing" in said
+    said = judged_wording_advisory(
+        SubGoal(name="clarifies", what="Asks again when audio is unintelligible", judged="tone and wording only")
+    )
+    assert "half-finished question" in said
+    assert judged_wording_advisory(
+        SubGoal(name="answers", what="Answers the question asked", judged="nothing records the answer")
+    ) == ""
+    assert judged_wording_advisory(
+        SubGoal(name="right", what="books the correct pickup", check="def check(world, calls):\n    return None\n")
+    ) == ""

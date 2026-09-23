@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import ast
 import json
+import re
 import textwrap
 from collections.abc import Sequence
 from pathlib import Path
@@ -367,6 +368,30 @@ def weak_check_advisory(sub_goal: SubGoal) -> str:
         "that. Compare the value against what this scenario expected, or against the world row it "
         "should match"
     )
+
+
+_ACCURACY = re.compile(r"\baccura|\bcorrect(ly|ness)?\b", re.I)
+_UNRENDERABLE_AUDIO = re.compile(r"unintelligib|inaudib|garbl|cut off|cut-off|unclear audio", re.I)
+
+
+def judged_wording_advisory(sub_goal: SubGoal) -> str:
+    """What to say about a judged sub-goal that claims accuracy or needs audio no caller can make."""
+    if sub_goal.check.strip():
+        return ""
+    text = f"{sub_goal.what} {sub_goal.judged}"
+    said = []
+    if _ACCURACY.search(text):
+        said.append(
+            "it asks for an accurate or correct answer, and nothing a judge is given records the "
+            "right one. Say what can be seen instead: it answered the question actually asked, "
+            "stayed consistent and invented nothing"
+        )
+    if _UNRENDERABLE_AUDIO.search(text):
+        said.append(
+            "it depends on audio a synthesised caller never produces. Name what a caller can do: a "
+            "vague or half-finished question the agent has to clarify"
+        )
+    return f"{sub_goal.name}: " + "; and ".join(said) + ". Add it again reworded" if said else ""
 
 
 def _judged_problems(sub_goal: SubGoal) -> list[str]:

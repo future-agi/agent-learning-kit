@@ -34,6 +34,7 @@ from ..catalogue import (
     save_catalogue,
     compares_to_a_value,
     validate_sub_goal,
+    judged_wording_advisory,
     weak_check_advisory,
     without_delivery_overlay,
 )
@@ -1305,7 +1306,9 @@ def world_tools(
         save_catalogue(catalogue, destination)
         # Said on acceptance rather than as a refusal: a truthiness check is weak, not unusable,
         # and a gate the authoring loop cannot satisfy fails the run instead of improving it.
-        advisory = weak_check_advisory(sub_goal)
+        advisory = "; ".join(
+            one for one in (weak_check_advisory(sub_goal), judged_wording_advisory(sub_goal)) if one
+        )
         settled = sum(1 for one in catalogue.sub_goals if one.deterministic())
         return _ok(
             f"{sub_goal.name} added. The catalogue has {len(catalogue.sub_goals)}, "

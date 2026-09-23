@@ -29,6 +29,7 @@ from .catalogue import (
     SubGoal,
     load_catalogue,
     save_catalogue,
+    judged_wording_advisory,
     validate_sub_goal,
     without_delivery_overlay,
 )
@@ -1399,6 +1400,7 @@ def scenario_tools(
         # against one definition keeps its proof while quietly inheriting another, and the suite
         # ships graded by a check nothing ever ran against it. Three of sixty did exactly that.
         broken = _no_longer_hold(destination, catalogue, restated, world_root)
+        reword = judged_wording_advisory(sub_goal)
         return _ok(
             f"{sub_goal.name} added"
             + ("" if sub_goal.deterministic() else " (judged, not deterministic)")
@@ -1422,6 +1424,7 @@ def scenario_tools(
                 if broken
                 else ""
             )
+            + (f"\n\nWorth rewording: {reword}" if reword else "")
         )
 
     @tool(
