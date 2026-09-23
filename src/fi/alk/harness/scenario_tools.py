@@ -1621,11 +1621,9 @@ def scenario_tools(
     )
     async def submit_scenario(args: dict[str, Any]) -> dict[str, Any]:
         if external_runtime_target and args.get("solution"):
-            return _err(
-                "This is a connect-only external provider runtime. Reference tool calls cannot "
-                "be replayed against a local world and would be assumed rather than proved. "
-                "Use solution: [] and judged sub-goals; the live call supplies the evidence."
-            )
+            # Nothing local can replay reference calls against a connect-only agent, so they are
+            # dropped rather than refused: the live call and the judged sub-goals are the evidence.
+            args = {**args, "solution": []}
 
         def _refuse(said: str, as_given: dict[str, Any] | None = None) -> dict[str, Any]:
             seen = _count_refusal(refused, str(args.get("name") or ""), said)

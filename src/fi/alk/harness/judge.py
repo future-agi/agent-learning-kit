@@ -178,7 +178,13 @@ async def judge(
         f"What it means: {getattr(goal, 'what', '') or '(none written)'}\n"
         f"Why it needs judgement: {getattr(goal, 'judged', '')}\n\n"
         f"Actions the agent took:\n{_dump_calls(calls)}\n\n"
-        "Look as needed, then call decide."
+        + (
+            ""
+            if calls
+            else "No actions were recorded, so only the conversation is observable: decide a "
+            "claim about what the agent did from what it said, confirmed and did not contradict.\n\n"
+        )
+        + "Look as needed, then call decide."
     )
     retry = (
         f"{prompt}\n\nWhat was said:\n{_transcript(messages) if messages else '(nothing captured)'}\n\n"

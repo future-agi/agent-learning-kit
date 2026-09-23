@@ -188,6 +188,11 @@ an axis `payment_state` is the commonest way this goes wrong: the next suite for
 different state list, names its axes after that, and the two runs can no longer be compared. One axis,
 its levels drawn from whatever that agent's states turn out to be.
 
+**When the agent has no tools you can see** (reachable only by conversation), plan from its
+instructions instead: its policies, required questions, disclosures, refusals, escalation rules and
+limits become the task and disposition levels, and dispositions are what the caller wants, says or
+withholds, never a record's state. The tool-failure rule below does not apply.
+
 **At least one disposition level has to be a state where a tool the agent trusts does not work.** An
 agent is most brittle where it takes something the caller said, hands it to a tool and believes the
 answer, and a suite in which every tool call succeeds never goes near that seam. The states that do it

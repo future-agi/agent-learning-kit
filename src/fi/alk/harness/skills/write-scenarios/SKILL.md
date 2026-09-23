@@ -154,7 +154,7 @@ has to assert it.** Six ended on a status lookup and named only booking
 sub-goals, so an agent that booked and never looked passed them all. Two a scenario
 is the working number; one is right only when the agent had nothing to find out before acting.
 
-**And that one must be the checked kind, not the judged kind.** The last step is a call, so the call
+**And, when the agent has tools, that one must be the checked kind, not the judged kind.** The last step is a call, so the call
 log and the world both hold the evidence: a judge asked to read the transcript for it is being asked
 to settle something the arguments already settle. One suite of sixty left its closing status lookup to
 a judge and nothing else asserted it, which is the same hole as naming no sub-goal for it at all.
@@ -384,11 +384,24 @@ The order for one scenario:
 A scenario is written to disk the moment it is kept, so proved work survives a stopped turn. Submit
 as you go rather than composing a whole suite before the first call.
 
-If `REAL TOOLS` says `(none)`, this is a conversation-only target. Do not invent a tool or try to
-call a chat endpoint as though it were an agent tool. Use `solution: []`, choose judged sub-goals,
-and use setup/ready only to give the caller a private, valid fixture. In that lane the transcript is
-the outcome evidence; the ready gate still proves the fixture, while tool-solution and no-op gates
-do not pretend there was an environment action to replay.
+### When the agent is only reachable by conversation
+
+If `REAL TOOLS` says `(none)`, you can reach the agent but not see its tools or records: the
+conversation is the only evidence there will be. Everything else in this skill still applies except:
+
+- `solution: []`. There is nothing to replay; `try_calls` has nothing to call.
+- **Every sub-goal is judged.** Write each so the conversation alone can settle it, and give it a pass
+  and a fail a reader could agree on: "states the fee before asking to confirm", "reads the address
+  back before acting", "refuses to disclose another person's details", "offers a person when asked
+  twice". Nuance is fine when it is observable: order of steps, what was disclosed, what was refused,
+  the language it answered in.
+- **Nothing the agent has to look up.** Do not seed records or hand the caller IDs, balances or
+  account states the agent would need to find: there is no world to find them in. The caller brings
+  their own details, invented for the persona, and the scenario tests what the agent does with them.
+- **Take the difficulty from the agent's instructions.** Its policies, required questions,
+  disclosures, refusals, escalation rules and limits are the cells. A tool that fails or an account
+  state are not available here.
+- `setup`/`ready` only if the caller needs a private fixture; usually both stay empty.
 
 ## The three gates
 
@@ -1320,6 +1333,8 @@ settle outcomes from the captured calls. If coverage needs state the base lacks,
 target needs a seed or reset seam rather than writing a scenario that cannot run.
 
 ## The solution is not optional
+
+Unless `REAL TOOLS` says `(none)`: then read the conversation-only section above instead.
 
 Every scenario carries what a correct agent would do. It is never run against the agent under test.
 It exists to prove the scenario can be passed at all, and it is what gate 2 uses.

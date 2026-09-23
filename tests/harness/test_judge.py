@@ -222,3 +222,29 @@ def test_the_retry_carries_the_evidence_and_can_settle_the_claim(monkeypatch):
     assert "books a ride to the airport" in prompts[0]
     assert "step_29" in prompts[0]
     assert "shall I book it?" in prompts[1]
+
+
+def test_with_no_actions_the_judge_is_told_the_conversation_is_the_evidence(monkeypatch):
+    prompts: list[str] = []
+
+    class _Stage:
+        def __init__(self, spec, name="", overheard=True):
+            self.spec = spec
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return None
+
+        async def say(self, prompt):
+            prompts.append(prompt)
+            tools = {t.name: t for t in self.spec.servers["world"].tools}
+            await tools["decide"].handler({"passed": True, "explanation": "it read the fee first"})
+
+    monkeypatch.setattr(judge_module, "Stage", _Stage)
+    asyncio.run(judge_module.judge(_Goal(), _World(rows=[]), []))
+    assert "only the conversation is observable" in prompts[0]
+    call = type("C", (), {"name": "lookup", "arguments": {}, "result": None})()
+    asyncio.run(judge_module.judge(_Goal(), _World(), [call]))
+    assert "only the conversation is observable" not in prompts[1]
