@@ -26,3 +26,9 @@ def test_the_caller_may_not_claim_an_action_it_cannot_perform():
     assert "tapped a link" not in simulator_instructions(
         "outbound", "unaware", "voicemail"
     )
+
+
+def test_the_caller_asks_again_for_the_part_of_its_question_left_unanswered():
+    """A caller told only that missing country codes "can cause issues" said it had everything."""
+    assert "hold the answer against what you asked" in SIMULATOR_INSTRUCTIONS
+    assert "ask for that part once" in SIMULATOR_INSTRUCTIONS
