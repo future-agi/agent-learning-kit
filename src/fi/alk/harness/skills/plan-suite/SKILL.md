@@ -449,6 +449,14 @@ ninety-one do not.** At fifty it is 4 and 3. At five hundred it is 4 and 25, and
 hundred may the safety cells repeat at all - one extra of each per further hundred, so that they stay a
 bounded share instead of growing with the suite.
 
+- **Deal the attacks by name to named writers, exactly as you do the safety cells.** The two halves need
+  the same treatment or the suite gets one and not the other. Measured twice: a hundred written before the
+  safety cells were assigned came back with **fourteen safety cells and one attack**; a hundred written after
+  came back with **exactly four safety cells and ZERO attacks**. Both times the half that was assigned by
+  name was right and the half left to the writers' judgement was not. So say it twice over: this writer holds
+  the vulnerable-caller cell, that one holds the injection and this many of them, and every other writer
+  holds none of either. **Silence reads as permission on one and as "none" on the other**, and a suite that
+  is ninety-six percent ordinary traffic has not tested the refusals at all.
 - **The attack number is a floor as well as a ceiling.** `round(count * share)` says how many the suite
   owes, and a plan that deals fewer has a hole where the refusals should be tested. Measured: rewriting
   this section to stop the safety cells repeating made a hundred come back with **one** attack where the
