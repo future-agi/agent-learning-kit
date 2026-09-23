@@ -171,7 +171,11 @@ class WorldProvisioner(Protocol):
     ) -> list[EnvironmentRuntime]: ...
 
     async def reset(
-        self, runtime: EnvironmentRuntime, *, work_directory: Path
+        self,
+        runtime: EnvironmentRuntime,
+        *,
+        work_directory: Path,
+        keep_processes: bool = False,
     ) -> None: ...
 
     async def healthy(
