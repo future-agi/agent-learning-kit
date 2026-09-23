@@ -572,6 +572,14 @@ coordinate has been written backwards.
 every axis you vary and every level it may take. A scenario placed anywhere else is refused at
 `submit_scenario` before anything is proved, so the correction costs a label and never proved work.
 
+**And it is the difference between a suite and nothing at all.** The same vocabulary is applied again at
+the end, when the environment is validated, and there it is fatal: a single scenario on a level the plan
+never dealt fails the whole job. Measured on a five-hundred that authored cleanly in thirty minutes:
+**twenty-five scenarios carried three invented levels of one axis**, in two clusters that look like two
+writers each inventing their own, and the run died at `validating_environment` with every one of its five
+hundred scenarios already written. Declared before the first brief the same mistake costs one writer one
+turn; declared late, or not at all, it costs the entire run.
+
 This is the difference between a coverage report and a number. Measured on a 50-scenario run that
 left the grid undeclared: the writers produced a **`task` axis with 30 levels across 30 placed
 scenarios**, one per scenario, plus three axes a single writer had invented. Every pairwise share in
