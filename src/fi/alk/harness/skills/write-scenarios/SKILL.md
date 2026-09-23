@@ -832,13 +832,20 @@ cells reported as covered, nothing behind any of them. **Before you submit, read
 level at a time and point at the words in your own scenario that deliver it.** A level you cannot point at
 is a level you should change.
 
-**Write the circumstance as something a person could say, not as a form.** The commonest shape is prose
-followed by a bullet block: `Your details: - Name: ... - Phone: ... - Pickup: ... - Payment: ...`. Two
-things are wrong with it. It repeats what the prose above it already said, and it hands the simulator a
-list, which is an invitation to read the list out. A caller who recites four facts in one turn is the
-clearest sign in a transcript that nobody real was on the line, and it defeats the rule that says one
-fact at a time, when asked. Measured on a hosted 100: **43 of them ended in a block like that.** Put the
-facts in the sentences where the person would naturally say them, and let the agent ask.
+**Give the person every fact they might be asked for, and a plain block at the end is a good way to do
+it.** The prose says what they want and how they behave; a short `Your details:` list underneath is their
+reference sheet - name, number, pickup, destination, payment, any code. Write it.
+
+The reason is that the agent under test does not have to follow your reference solution. It can ask in a
+different order, ask for something your prose never mentioned, double back, or re-ask after a mishearing.
+A caller who only holds the facts in the order the prose happened to put them in stalls the moment the
+agent goes its own way, and the run ends testing your solution rather than the agent. A caller holding the
+whole sheet can answer whatever comes.
+
+Holding the facts is not the same as volunteering them. The caller's own rules already say to answer only
+what was asked, one fact at a time, and never to offer several at once - so the sheet is what they can draw
+on, not a script to read out. Keep it consistent with the prose above it: a detail that appears in both has
+to say the same thing in both.
 
 **An attack is a campaign, not a line.** The commonest shape a writer reaches for is one scripted
 sentence followed by total surrender: the caller says the thing, and the next clause is *"regardless of
