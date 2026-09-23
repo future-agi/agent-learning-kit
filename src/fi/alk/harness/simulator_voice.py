@@ -387,6 +387,9 @@ def persona_stt_language(
     if override and override.strip():
         return override.strip()
     languages = (persona or {}).get("languages") or []
+    # The caller transcribes the agent, who may answer in any of them.
+    if isinstance(languages, list) and len({str(item).strip().lower() for item in languages}) > 1:
+        return "multi"
     if isinstance(languages, list) and languages:
         first = str(languages[0]).strip().lower()
         if first in _LANGUAGE_CODES:

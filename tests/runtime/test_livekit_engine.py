@@ -1331,9 +1331,51 @@ def test_end_call_signals_runner_after_minimum_balanced_conversation() -> None:
     result = asyncio.run(agent.end_call(SimpleNamespace(speech_handle=speech_handle)))
     asyncio.run(agent.wait_for_end_speech())
 
-    assert result == "Conversation ended."
+    # No output means no further reply, so the caller does not say goodbye twice.
+    assert result is None
     assert agent.end_requested.is_set()
     assert speech_handle.waited is True
+
+
+def test_end_call_waits_while_the_other_side_is_still_speaking() -> None:
+    class FakeSession:
+        user_state = "speaking"
+        history = SimpleNamespace(items=[])
+
+    agent = livekit._TestRunnerAgent(
+        persona=_scenario().dataset[0],
+        instructions="Be a customer.",
+        min_turn_messages=0,
+    )
+    agent._session = FakeSession()
+    result = asyncio.run(agent.end_call(SimpleNamespace(speech_handle=None)))
+    assert result.startswith("Not yet: the other person is still talking")
+    assert not agent.end_requested.is_set()
+
+
+def test_the_caller_waits_out_a_two_part_opening_then_returns_to_normal_timing() -> None:
+    updates: list[dict] = []
+
+    class FakeSession:
+        options = SimpleNamespace(endpointing={"mode": "fixed", "min_delay": 0.9, "max_delay": 3.0})
+        history = SimpleNamespace(items=[])
+
+        def update_options(self, *, endpointing_opts):
+            updates.append(dict(endpointing_opts))
+
+    session = FakeSession()
+
+    async def scenario() -> None:
+        task = asyncio.create_task(livekit._patient_opening(session))
+        await asyncio.sleep(0.05)
+        assert updates[-1]["min_delay"] == livekit._OPENING_ENDPOINTING_SECONDS
+        session.history.items.append(
+            SimpleNamespace(type="message", role="assistant", text_content="Hi, I need help.")
+        )
+        await asyncio.wait_for(task, timeout=2)
+
+    asyncio.run(scenario())
+    assert updates[-1] == {"mode": "fixed", "min_delay": 0.9, "max_delay": 3.0}
 
 
 def test_minimum_messages_is_a_floor_not_a_stop_trigger() -> None:

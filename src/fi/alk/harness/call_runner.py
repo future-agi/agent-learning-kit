@@ -475,6 +475,17 @@ def _dials_the_person(
     return direction.strip().lower() == "outbound"
 
 
+def _target_speaks_first(
+    doc: Mapping[str, Any],
+    environ: Mapping[str, str],
+    simulator_config: Mapping[str, Any],
+) -> bool:
+    explicit = simulator_config.get("target_speaks_first")
+    if isinstance(explicit, bool):
+        return explicit
+    return not _dials_the_person(doc, environ)
+
+
 def _build_spec(
     *,
     run_id: str,
@@ -594,10 +605,11 @@ def _build_spec(
             tts_provider=simulator.tts.provider,
         ),
         simulator=simulator,
-        # An outbound agent dials; the person answers, so the caller opens.
-        direction="simulator_first"
-        if _dials_the_person(doc, environ)
-        else "agent_first",
+        # An outbound agent dials; the person answers, so the caller opens. Who the operator says
+        # speaks first overrides that.
+        direction="agent_first"
+        if _target_speaks_first(doc, environ, simulator_config)
+        else "simulator_first",
         max_seconds=call_timeout_seconds,
         min_turn_messages=min_turn_messages,
         # Hosted targets can legitimately spend tens of seconds in a provider call or a tool
