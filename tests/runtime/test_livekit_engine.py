@@ -1378,6 +1378,38 @@ def test_the_caller_waits_out_a_two_part_opening_then_returns_to_normal_timing()
     assert updates[-1] == {"mode": "fixed", "min_delay": 0.9, "max_delay": 3.0}
 
 
+def _drain_hold_filter(chunks: list) -> list:
+    async def stream():
+        for chunk in chunks:
+            yield chunk
+
+    async def collect() -> list:
+        return [chunk async for chunk in livekit._without_hold_marker(stream())]
+
+    return asyncio.run(collect())
+
+
+def _text_chunk(content: str) -> SimpleNamespace:
+    return SimpleNamespace(delta=SimpleNamespace(content=content, tool_calls=[]))
+
+
+def test_a_reply_that_is_only_the_hold_marker_is_never_spoken() -> None:
+    usage = SimpleNamespace(delta=None, usage={"tokens": 3})
+    assert _drain_hold_filter([_text_chunk("SIL"), _text_chunk("ENCE."), usage]) == [usage]
+    assert _drain_hold_filter(["silence"]) == []
+
+
+def test_an_ordinary_reply_passes_whole_and_in_order() -> None:
+    chunks = [_text_chunk("Si"), _text_chunk("lly question, but"), _text_chunk(" why?")]
+    assert _drain_hold_filter(chunks) == chunks
+    call = SimpleNamespace(delta=SimpleNamespace(content="", tool_calls=[object()]))
+    assert _drain_hold_filter([call]) == [call]
+    assert _drain_hold_filter(["Silence is not an answer."]) == ["Silence is not an answer."]
+    # A reply in another script is released on its first chunk, not held to the end.
+    for opening in ("नमस्ते, ", "你好", "مرحبا"):
+        assert not "silence".startswith(livekit._letters(opening))
+
+
 def test_minimum_messages_is_a_floor_not_a_stop_trigger() -> None:
     calls = []
     removed_listeners = []

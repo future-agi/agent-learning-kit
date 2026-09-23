@@ -76,3 +76,14 @@ def test_prompt_closes_by_naming_who_the_caller_is() -> None:
     assert "You are Priya" in tail
     assert "never address Priya" in tail
     assert tail.index("You are Priya") < tail.index("What you came for:")
+
+
+def test_the_caller_speaks_its_own_language_and_accent_and_holds_in_silence() -> None:
+    persona = _persona()
+    persona.persona.update({"language": ["Spanish", "English"], "accent": "Mexican"})
+    prompt = build_voice_simulator_prompt(persona, call_type="inbound")
+
+    assert "Speak Spanish from your first word" in prompt
+    assert "**Accent:** Mexican." in prompt
+    assert "say in your own language that you cannot understand" in prompt
+    assert "your whole reply is the single word SILENCE" in prompt

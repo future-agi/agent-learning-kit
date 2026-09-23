@@ -98,7 +98,11 @@ from fi.simulate.runtime import (
 from fi.simulate.simulation.engines.base import BaseEngine
 from fi.simulate.simulation.generator import ScenarioGenerator
 from fi.simulate.simulation.models import Persona, Scenario, TestCaseResult, TestReport
-from fi.simulate.simulation.voice_prompt import CallType, build_voice_simulator_prompt
+from fi.simulate.simulation.voice_prompt import (
+    HOLD_MARKER,
+    CallType,
+    build_voice_simulator_prompt,
+)
 
 logger = logging.getLogger(__name__)
 _SAFE_ROOM = re.compile(r"[^A-Za-z0-9_.-]+")
@@ -1026,7 +1030,9 @@ class _TestRunnerAgent(Agent):
             if self._mailbox_greeted or self._voicemail_greeting is not None:
                 return
             self._mailbox_greeted = True
-        async for chunk in super().llm_node(chat_ctx, tools, model_settings):
+        async for chunk in _without_hold_marker(
+            super().llm_node(chat_ctx, tools, model_settings)
+        ):
             yield chunk
 
     async def transcription_node(
@@ -1040,6 +1046,54 @@ class _TestRunnerAgent(Agent):
                 extra={"timed": isinstance(chunk, TimedString)},
             )
             yield chunk
+
+
+def _chunk_text(chunk: Any) -> str | None:
+    """The text a streamed chunk carries, or None when it carries anything else, a tool call included."""
+    if isinstance(chunk, str):
+        return chunk
+    delta = getattr(chunk, "delta", None)
+    if delta is None:
+        return ""
+    if getattr(delta, "tool_calls", None):
+        return None
+    return getattr(delta, "content", None) or ""
+
+
+def _letters(text: str) -> str:
+    return re.sub(r"[\W_]", "", text.lower())
+
+
+async def _without_hold_marker(stream: AsyncIterable[Any]) -> AsyncIterable[Any]:
+    """Pass the reply through unless all it says is the hold marker, which is dropped unspoken.
+
+    Chunks are held only while their text could still become the marker, so an ordinary reply is
+    released as soon as it differs and its first words are not delayed.
+    """
+    marker = _letters(HOLD_MARKER)
+    held: list[Any] = []
+    text = ""
+    holding = True
+    async for chunk in stream:
+        if not holding:
+            yield chunk
+            continue
+        piece = _chunk_text(chunk)
+        held.append(chunk)
+        if piece is not None:
+            text += piece
+            if marker.startswith(_letters(text)):
+                continue
+        holding = False
+        for item in held:
+            yield item
+        held = []
+    if holding:
+        silent = _letters(text) == marker
+        for item in held:
+            # Usage and flush chunks still pass when the marker is dropped; only its words go.
+            if not silent or (not isinstance(item, str) and getattr(item, "delta", None) is None):
+                yield item
 
 
 class LiveKitEngine(BaseEngine):
@@ -3306,7 +3360,7 @@ def _answered_by_voicemail() -> bool:
 
 # An agent often opens in two parts, a recording notice and then the greeting. A person waits for
 # the greeting, so the caller's first reply needs a longer pause than the rest of the call.
-_OPENING_ENDPOINTING_SECONDS = 2.5
+_OPENING_ENDPOINTING_SECONDS = 4.0
 _OPENING_PATIENCE_LIMIT_SECONDS = 60.0
 
 

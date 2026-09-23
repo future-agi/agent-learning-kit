@@ -8,6 +8,10 @@ from fi.simulate.simulation.models import Persona
 
 CallType = Literal["inbound", "outbound"]
 
+# The whole reply a caller gives when the agent has only put them on hold. The engine drops it
+# before speech, so the caller stays silent instead of filling the pause with "take your time".
+HOLD_MARKER = "SILENCE"
+
 logger = logging.getLogger(__name__)
 
 VOICE_PERSONALITY_GUIDES: dict[str, str] = {
@@ -233,14 +237,21 @@ def format_voice_persona(
             language_text = ", ".join(str(language) for language in languages)
             language_section += f"**Language(s):** {language_text}\n"
             language_section += (
-                "Use vocabulary, expressions, and language patterns natural to someone who speaks "
-                f"{language_text}.\n"
+                f"Speak {languages[0]} from your first word, with the vocabulary, expressions and "
+                "language patterns natural to someone who speaks it. Change language only where your "
+                "situation says so, or where the agent switches to another language you speak.\n"
             )
             if persona_data.get("multilingual"):
                 language_section += (
                     "You are multilingual. Switch languages naturally based on context while maintaining "
                     "your persona traits in all languages.\n"
                 )
+        if accent:
+            section_has_content = True
+            language_section += (
+                f"**Accent:** {accent}. Let it show in your word choice and phrasing, the way "
+                "someone with this accent really talks; the voice carries the sound.\n"
+            )
         if accent and accent.lower() == "indian" and language_data:
             languages = (
                 language_data if isinstance(language_data, list) else [language_data]
@@ -305,11 +316,12 @@ def format_voice_persona(
     rules_section += (
         "8. **Natural Conversation Flow:** Respond naturally like a real human.\n"
     )
-    rules_section += "9. **Handle Uncertainty Naturally:** If you don't understand something or need clarification, say so naturally.\n"
+    rules_section += "9. **Handle Uncertainty Naturally:** If you don't understand something or need clarification, say so naturally. If the agent speaks a language you do not speak, say in your own language that you cannot understand and ask it to repeat, as a person would; do not go silent and do not hang up over it.\n"
     rules_section += "10. **Never Break Character:** You are the PERSON described in 'Your Identity' with the situation in 'Your Current Situation.' You are NOT the person on the other end of the line. If you find yourself switching roles - taking on the other person's responsibilities, responding as if you have opposite information or authority, or reversing who called whom - STOP immediately. Stay in your role.\n"
     rules_section += "11. **Information Sharing:** Only share personal information when it's directly relevant to the conversation or when asked. Don't volunteer unnecessary details about yourself, your background, or your situation unless it naturally fits the context. Real people don't introduce themselves with their entire life story; be selective and purposeful with what you reveal.\n"
     rules_section += "12. **Live Your Situation, Don't Narrate It:** Let your situation shape your behavior, but do not explain it to the other person unless asked.\n"
     rules_section += "13. **Call Closing:** Always wait for the agent to finish speaking before ending the call. Do not cut them off abruptly. When the conversation has naturally concluded, you MUST call the endCall tool to hang up. IMPORTANT: Never say the words 'function', 'tool' or the name 'endCall' out loud. Never say that you are ending the call. Simply say your natural closing sentence once, then silently trigger the endCall tool to terminate the call. Do not leave the call open. CRITICAL: If the agent closes the call, you MUST respond with a brief, natural closing sentence and then call endCall. Do NOT keep exchanging goodbyes. If you find yourself repeating goodbye phrases, call endCall right away.\n"
+    rules_section += f"14. **Silent On Hold:** When the agent only says it is checking or asks you to wait, and asks you nothing, your whole reply is the single word {HOLD_MARKER}. Nobody hears it; it is how you stay quiet. Answer normally once the agent speaks again.\n"
     sections.append(rules_section)
     return "\n\n".join(sections)
 
