@@ -415,7 +415,8 @@ _ACCENTED_INTERFACE = frozenset(
 _DISFLUENT_INTERFACE = frozenset({"disfluent", "disfluent_speech", "hesitant"})
 _NOISY_INTERFACE = frozenset({"noisy_line", "noisy", "in_car", "street_noise"})
 # The interaction levels that mean the caller talks over the agent. Matched on the level's own name
-# because the axis vocabulary belongs to the planner.
+# because the axis vocabulary belongs to the planner, and applied only to spoken kinds: a chat suite's
+# `interrupted` level means a thread somebody abandoned and came back to, which a chat renders fine.
 _A_BARGE_IN = re.compile(r"barge|interrupt|talk[_ -]?over|cut[_ -]?in", re.I)
 
 
@@ -790,7 +791,7 @@ def validate_scenario(
     # cutting off OUR caller rather than the reverse. Nothing can make the caller emit audio while
     # the agent is mid-utterance, so a barge-in instruction arrives as an ordinary correction spoken
     # politely after the agent finishes, and the coverage report claims a level nothing tested.
-    if _A_BARGE_IN.search(str((scenario.coverage or {}).get("interaction") or "")):
+    if spoken and _A_BARGE_IN.search(str((scenario.coverage or {}).get("interaction") or "")):
         problems.append(
             "barge-in is not an interaction this runtime can render: the caller speaks only once it "
             "hears the agent stop, so talking over the agent never happens and the scenario arrives "
