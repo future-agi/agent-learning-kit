@@ -8,6 +8,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field
 
 from .backends import FILE_TOOLS, SessionSpec, tool, tool_server
+from .config import chosen_model
 from .diagnostics import HarnessDiagnostic
 from .repair_patch import (
     RepairPatchOperation,
@@ -94,32 +95,53 @@ that resolves the complete diagnostic set, call the tool, then stop."""
         + "\n\nCURRENT GENERATED WORLD IR\n"
         + world.model_dump_json(indent=2)[:32000]
     )
-    stage = Stage(
-        SessionSpec(
-            system_prompt=system_prompt,
-            servers={"repair": tool_server("repair", tools=[submit])},
-            builtins=FILE_TOOLS,
-            cwd=str(source_root.resolve()),
-            # Complex repositories can require several evidence reads before the model can
-            # construct a valid typed patch.  Keep repair bounded, but do not give it a
-            # smaller budget than an ordinary authoring stage.  The backend terminates as
-            # soon as submit_world_ir_patch succeeds, so this is a ceiling rather than a
-            # target.
-            max_turns=40,
-            gated=True,
-            thinking=True,
+    # Start with a deliberately narrow session. The complete typed source model, current World
+    # IR, diagnostics, and their evidence references are already in ``briefing``; giving a model
+    # repository exploration tools immediately can consume the entire turn budget reading a
+    # large tree without ever reaching the one required write. If the compact pass cannot decide,
+    # a fresh evidence-enabled session gets the original, larger budget. A fresh session matters:
+    # Claude Agent SDK's max-turn bound is cumulative within a session, so merely prompting a
+    # session that exhausted its first turn does not provide another repair opportunity.
+    passes = (
+        ((), 16, "Use the supplied typed evidence first; call submit_world_ir_patch."),
+        (
+            FILE_TOOLS,
+            40,
+            "The constrained repair pass did not submit an accepted patch. Inspect only the "
+            "source evidence needed to resolve the diagnostics, then call "
+            "submit_world_ir_patch.",
         ),
-        name="repair-world-ir",
     )
-    async with stage:
-        await stage.say(briefing)
-        if not captured:
-            await stage.say(
-                "No valid patch was submitted. Call submit_world_ir_patch now, or explicitly "
-                "state that the diagnostic cannot be repaired without changing submitted source."
-            )
+    for builtins, max_turns, instruction in passes:
+        stage = Stage(
+            SessionSpec(
+                system_prompt=system_prompt,
+                servers={"repair": tool_server("repair", tools=[submit])},
+                builtins=builtins,
+                cwd=str(source_root.resolve()),
+                # Repair is part of the same authoring run and must use the explicitly
+                # selected harness model. Leaving this unset falls back to the Claude SDK's
+                # native model name, bypassing an AgentCC model route such as Vertex Gemini.
+                model=chosen_model(),
+                max_turns=max_turns,
+                gated=True,
+                thinking=True,
+            ),
+            name="repair-world-ir",
+        )
+        async with stage:
+            await stage.say(f"{briefing}\n\n{instruction}")
+            if not captured:
+                await stage.say(
+                    "No valid patch was submitted. Call submit_world_ir_patch now. If a prior "
+                    "submission was rejected, correct its typed arguments using that rejection."
+                )
+        if captured:
+            break
     if not captured:
-        raise RuntimeError("typed_world_ir_patch_not_submitted")
+        raise RuntimeError(
+            "typed_world_ir_patch_not_submitted_after_constrained_and_evidence_passes"
+        )
     return captured[0]
 
 

@@ -77,6 +77,41 @@ def test_import_uses_source_types_for_legacy_json_strings() -> None:
     }
 
 
+def test_import_normalizes_legacy_python_structured_literals() -> None:
+    source = _source(
+        _column("id", LogicalType.STRING),
+        _column("items", LogicalType.ARRAY, element_type=LogicalType.STRING),
+        _column("payload", LogicalType.JSON),
+    )
+    connection = sqlite3.connect(":memory:")
+    connection.execute("CREATE TABLE users (id TEXT, items TEXT, payload TEXT)")
+    connection.execute(
+        "INSERT INTO users VALUES (?, ?, ?)",
+        ("row-1", "['room', 'tax']", "{'currency': 'USD', 'amount': 42}"),
+    )
+
+    result = import_sqlite_world(connection, source)
+
+    row = result.world.tables[0].rows[0]
+    assert row.values["items"].value == ["room", "tax"]
+    assert row.values["payload"].value == {"currency": "USD", "amount": 42}
+
+
+def test_import_still_rejects_non_literal_json_text() -> None:
+    source = _source(
+        _column("id", LogicalType.STRING),
+        _column("payload", LogicalType.JSON),
+    )
+    connection = sqlite3.connect(":memory:")
+    connection.execute("CREATE TABLE users (id TEXT, payload TEXT)")
+    connection.execute("INSERT INTO users VALUES ('row-1', 'not-json-or-a-literal')")
+
+    with pytest.raises(SQLiteWorldImportError) as raised:
+        import_sqlite_world(connection, source)
+
+    assert raised.value.code == "json_value_invalid"
+
+
 def test_import_keeps_legacy_null_as_absent_but_can_preserve_explicit_null() -> None:
     source = _source(
         _column("id", LogicalType.STRING),

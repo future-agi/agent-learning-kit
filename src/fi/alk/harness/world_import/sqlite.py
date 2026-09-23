@@ -7,6 +7,7 @@ an array, and a JSON string becomes JSON only when the source column is JSON.
 
 from __future__ import annotations
 
+import ast
 import base64
 import hashlib
 import json
@@ -121,13 +122,22 @@ def _json_value(value: Any) -> Any:
     return json.loads(_canonical_json(value))
 
 
-def _parse_structured(value: Any, *, expected: type, code: str) -> Any:
+def _parse_structured(
+    value: Any, *, expected: type | tuple[type, ...], code: str
+) -> Any:
     parsed = value
     if isinstance(value, str):
         try:
             parsed = json.loads(value)
-        except (TypeError, ValueError) as exc:
-            raise ValueError(code) from exc
+        except (TypeError, ValueError):
+            # Older/generated SQLite worlds sometimes persist Python's repr for
+            # a JSON-compatible list or mapping (single-quoted keys/values),
+            # while the authoritative source is PostgreSQL JSON/ARRAY. Parse
+            # literals only--never evaluate code--at this legacy boundary.
+            try:
+                parsed = ast.literal_eval(value)
+            except (SyntaxError, TypeError, ValueError) as exc:
+                raise ValueError(code) from exc
     if not isinstance(parsed, expected):
         raise ValueError(code)
     return parsed
@@ -194,12 +204,11 @@ def _convert(column: SourceColumn, value: Any) -> Any:
             _parse_structured(value, expected=list, code="array_value_invalid")
         )
     if logical is LogicalType.JSON:
-        parsed = value
-        if isinstance(value, str):
-            try:
-                parsed = json.loads(value)
-            except (TypeError, ValueError) as exc:
-                raise ValueError("json_value_invalid") from exc
+        parsed = _parse_structured(
+            value,
+            expected=(dict, list, str, int, float, bool, type(None)),
+            code="json_value_invalid",
+        )
         return _json_value(parsed)
     if logical is LogicalType.BINARY:
         if isinstance(value, bytes):
