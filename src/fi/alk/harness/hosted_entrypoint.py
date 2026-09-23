@@ -1890,7 +1890,7 @@ async def run_job(
             logger.error(
                 "Hosted usage report could not be delivered before terminalization "
                 "for attempt %s",
-                job.attempt_id,
+                capabilities.attempt_id,
             )
         # Artifact bytes must be uploaded before the terminal-referenced complete manifest.  The
         # terminal event itself remains before receipts and the manifest on the outbound channel.
@@ -2280,6 +2280,14 @@ async def run_job(
                 code=_SCENARIO_ENTRY_INVALID_CODE,
                 message=scenario_defect,
             )
+
+        # Authoring is a terminal preparation step. A later user-submitted Run
+        # carries the immutable execution manifest that selects scenarios and
+        # expands trials; only those jobs may enter the scheduler.
+        if isinstance(scenario_source, BundleScenarioSource) and not (
+            job.metadata or {}
+        ).get("execution_manifest"):
+            return await _finish(HarnessStage.COMPLETED, complete=True)
 
         # cancel/fence check at the post-pre-allocation stage boundary.
         if cancel_requested():
