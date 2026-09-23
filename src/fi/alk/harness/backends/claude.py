@@ -480,6 +480,9 @@ class ClaudeBackend:
         if spec.workers:
             # How many sub-agents the CLI may run at once. This is the only fan-out ceiling now.
             environment["CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"] = str(MOST_WORKERS_AT_ONCE)
+            # A worker sent to the background returns a handle, and the turn that sent it can end
+            # before the worker reports: a stage then closes with most of its suite unwritten.
+            environment["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
             allowed.extend(DELEGATION_TOOLS)
         _can_reach_its_workers(spec, allowed)
         options = ClaudeAgentOptions(

@@ -69,3 +69,12 @@ def test_a_worker_does_not_inherit_the_stages_delegation_tools() -> None:
     tools = _definition(spec.workers["scenario_writer"], spec).tools
     assert "Agent" not in tools and "Task" not in tools, tools
     assert f"mcp__{server}__submit_scenario" in tools, tools
+
+
+def test_a_stage_that_delegates_waits_for_its_writers() -> None:
+    """A writer sent to the background lets the stage end before the suite is written."""
+    from pathlib import Path
+
+    source = Path("src/fi/alk/harness/backends/claude.py").read_text(encoding="utf-8")
+    assert 'environment["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"' in source
+    assert "background=False" in source
