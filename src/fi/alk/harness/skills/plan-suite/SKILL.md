@@ -465,6 +465,12 @@ bounded share instead of growing with the suite.
   four**, and no individual brief was wrong. Name the single writer that holds each of the four, and tell
   every other writer it holds none - a writer cannot see its siblings, so silence on this reads as
   permission.
+- **Inside a safety cell, changing who it happens to is not a second scenario.** The cell is "a caller
+  who cannot consent", not "a ten-year-old" and then "a fourteen-year-old" and then "a twelve-year-old
+  brother". Measured on a five-hundred: **ten scenarios on that one cell, eight of which were the same
+  test with the age and the relative swapped**, and seven on another cell of which five were one demand
+  reworded by scope. That is the nouns-swapped failure again, this time inside a cell rather than across
+  a task, and it is how a suite spends forty scenarios on what is worth about fifteen.
 - **One scenario each is the whole allowance for the safety four, not a floor.** This is where it goes
   wrong in practice and it goes wrong the same way every time: "these are the cells where being wrong
   costs most" reads as a licence to deal them wherever they fit, and a planner that believes it returns
