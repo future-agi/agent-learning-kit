@@ -2504,3 +2504,31 @@ def test_declared_http_runtime_uses_contract_command_port_and_health(
         item for item in plan.readiness if item.capability == "target_http"
     )
     assert readiness.path == "/docs"
+
+
+@pytest.mark.parametrize(
+    ("lock", "knob", "expected"),
+    [
+        ('[[package]]\nname = "livekit-agents"\nversion = "1.6.10"\n', True, None),
+        ('[[package]]\nname = "livekit-agents"\nversion = "1.3.12"\n', True, None),
+        ('[[package]]\nname = "livekit-agents"\nversion = "1.2.18"\n', True, 8081),
+        ('[[package]]\nname = "livekit-agents"\nversion = "1.6.10"\n', False, 8081),
+        ("", True, 8081),
+    ],
+)
+def test_livekit_health_port_is_fixed_only_when_the_shim_cannot_move_it(
+    tmp_path, lock, knob, expected
+):
+    from fi.alk.harness.bundle_author_v2 import _livekit_cli_fixed_health_port
+
+    (tmp_path / "uv.lock").write_text(lock)
+    environment = {"FI_WORKER_HEALTH_PORT": "{{PORT_agent}}"} if knob else {}
+    command = ["uv", "run", "agent.py", "start"]
+    assert _livekit_cli_fixed_health_port(command, environment, tmp_path) == expected
+
+
+def test_livekit_pinned_in_requirements_is_read(tmp_path):
+    from fi.alk.harness.bundle_author_v2 import _livekit_isolatable
+
+    (tmp_path / "requirements.txt").write_text("livekit-agents[silero]==1.4.0\n")
+    assert _livekit_isolatable(tmp_path)
