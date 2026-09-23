@@ -480,9 +480,10 @@ def _target_speaks_first(
     environ: Mapping[str, str],
     simulator_config: Mapping[str, Any],
 ) -> bool:
-    explicit = simulator_config.get("target_speaks_first")
-    if isinstance(explicit, bool):
-        return explicit
+    # Only "the agent opens" overrides: a form that always sends the flag must not flip an agent
+    # whose direction already says who speaks first.
+    if simulator_config.get("target_speaks_first") is True:
+        return True
     return not _dials_the_person(doc, environ)
 
 

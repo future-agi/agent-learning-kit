@@ -150,13 +150,14 @@ def test_an_outbound_call_is_opened_by_the_person_who_answers(monkeypatch) -> No
     assert cr._dials_the_person({}) is False
 
 
-def test_the_operator_saying_who_speaks_first_overrides_the_direction_default() -> None:
+def test_the_operator_saying_the_agent_opens_overrides_the_direction_default() -> None:
     outbound = {"call_direction": "outbound"}
     assert cr._target_speaks_first(outbound, {}, {}) is False
     assert cr._target_speaks_first({}, {}, {}) is True
     assert cr._target_speaks_first(outbound, {}, {"target_speaks_first": True}) is True
-    assert cr._target_speaks_first({}, {}, {"target_speaks_first": False}) is False
-    assert cr._target_speaks_first({}, {}, {"target_speaks_first": "yes"}) is True
+    # An unticked box is not an instruction: the direction still decides.
+    assert cr._target_speaks_first({}, {}, {"target_speaks_first": False}) is True
+    assert cr._target_speaks_first(outbound, {}, {"target_speaks_first": False}) is False
 
 
 def test_a_caller_with_several_languages_is_transcribed_multilingually() -> None:
