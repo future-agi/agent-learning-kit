@@ -1626,6 +1626,17 @@ def scenario_tools(
                 "be replayed against a local world and would be assumed rather than proved. "
                 "Use solution: [] and judged sub-goals; the live call supplies the evidence."
             )
+
+        def _refuse(said: str, as_given: dict[str, Any] | None = None) -> dict[str, Any]:
+            seen = _count_refusal(refused, str(args.get("name") or ""), said)
+            if seen >= _REFUSALS_BEFORE_MOVING_ON:
+                return _err(
+                    f"{said}\n\nThis is refusal {seen} of this scenario for the same reason, so "
+                    "submitting it again will not work. Drop it and write a different scenario for "
+                    "this cell, or place it on a level the call actually has."
+                )
+            return as_given or _err(said)
+
         # The suite stops at the size it was asked for. This is the refusal that makes the number
         # asked for the number produced, so it applies to the stage and to every worker alike.
         # Replacing a scenario that already exists stays allowed, because fixing a refused one is
@@ -1634,30 +1645,30 @@ def scenario_tools(
         # coverage denominator nothing can fill.
         strayed = _off_the_grid(args.get("coverage"), target.get("axes"))
         if strayed:
-            return _err(strayed)
+            return _refuse(strayed)
         crowded_level = _over_its_share(
             args.get("coverage"), target.get("axes"), kept, wanted
         )
         if crowded_level:
-            return _err(crowded_level)
+            return _refuse(crowded_level)
         # A capability is worth proving once. Everything past the control has to be hard.
         try:
             second_control = _a_second_plain_control(Scenario.model_validate(args), kept)
         except Exception:  # noqa: BLE001 - a malformed scenario is the validator's to report
             second_control = ""
         if second_control:
-            return _err(second_control)
+            return _refuse(second_control)
         twin = _already_in_the_suite(
             args, kept, _first_names_on_disk(destination, str(args.get("name") or ""))
         )
         if twin:
-            return _err(twin)
+            return _refuse(twin)
         if wanted and target.get("people") != "alike":
             crowded = crowded_field(
                 kept, Scenario.model_validate(args).persona, wanted
             ) if args.get("persona") else ""
             if crowded:
-                return _err(crowded)
+                return _refuse(crowded)
         # The caller's own name is the cheapest thing to get wrong and the most visible: the agent
         # greets by the name on the account, so a persona the record does not know misreports who was
         # served in every line of the transcript. Refused here rather than remarked on at save,
@@ -1670,7 +1681,7 @@ def scenario_tools(
             except Exception:  # noqa: BLE001 - a malformed scenario is the validator's to report
                 stranger = []
             if stranger:
-                return _err(stranger[0])
+                return _refuse(stranger[0])
         if wanted:
             named = str(args.get("name") or "").strip()
             already = any(one.name == named for one in kept)
@@ -1702,13 +1713,7 @@ def scenario_tools(
             return result
         said = str((result.get("content") or [{}])[0].get("text") or "")
         if said.startswith("Not kept"):
-            seen = _count_refusal(refused, str(args.get("name") or ""), said)
-            if seen >= _REFUSALS_BEFORE_MOVING_ON:
-                return _err(
-                    f"{said}\n\nThis is refusal {seen} of this scenario for the same reason, so "
-                    "submitting it again will not work. Drop it and write a different scenario for "
-                    "this cell, or place it on a level the call actually has."
-                )
+            return _refuse(said, result)
         return result
 
     @tool(

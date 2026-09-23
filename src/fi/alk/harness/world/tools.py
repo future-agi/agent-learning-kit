@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 from pathlib import Path
 from typing import Any
@@ -97,6 +98,8 @@ WORLD_CHECK_HELP = (
     "reading the world passes forever, and it is rejected once the world is broken on purpose "
     "and it stays green."
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _shapes(world: Any) -> str:
@@ -377,6 +380,15 @@ def _world_columns(world: Any, table: str) -> dict[str, bool] | None:
         return None
 
 
+def _still_refusing(counts: dict[str, int], gate: str, problems: list[str]) -> bool:
+    key = f"{gate}:{sorted(problems)}"
+    counts[key] = counts.get(key, 0) + 1
+    if counts[key] < 3:
+        return True
+    logger.warning("save_world: %s refusal repeated, saving anyway: %s", gate, problems)
+    return False
+
+
 def _tables_the_source_lacks(
     state: dict, source_root: str, contract: Any, world: Any = None
 ) -> list[str]:
@@ -409,7 +421,7 @@ def _tables_the_source_lacks(
         # Comments first: a trailing `-- matched against caller_ani` is prose, not a column.
         sql = re.sub(r"--[^\n]*", "", path.read_text(encoding="utf-8"))
         for found in re.finditer(
-            r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"?([A-Za-z_]\w*)"?\s*\(',
+            r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:"?\w+"?\.)?"?([A-Za-z_]\w*)"?\s*\(',
             sql,
             re.IGNORECASE,
         ):
@@ -626,6 +638,8 @@ def world_tools(
     # How many times each tool has been attempted, so a binding that cannot be made to work
     # is told to stop rather than tried indefinitely.
     tried: dict[str, int] = {}
+    # The same heuristic refusal three times is advice the builder cannot act on, not a fault.
+    unmovable: dict[str, int] = {}
     sequences: list[dict[str, Any]] = (
         list(read_manifest(destination).get("sequences") or [])
         if existing
@@ -1482,10 +1496,10 @@ def world_tools(
             runtime_tools
         )
         strayed = _tables_the_source_lacks(world.state(), source_root, contract, world)
-        if strayed:
+        if strayed and _still_refusing(unmovable, "schema", strayed):
             return _err(
-                "Not saved. This world holds tables and columns the agent's own schema does not "
-                "declare: " + ", ".join(strayed) + ". The runtime seed is that schema followed by "
+                "Not saved. This world does not match the agent's own schema: "
+                + ", ".join(strayed) + ". The runtime seed is that schema followed by "
                 "rows from this world, so an insert naming any of these fails and the environment "
                 "never stands up. Use the agent's own names, or drop what it does not have. A "
                 "column it never declares is one its code never reads."
@@ -1513,9 +1527,10 @@ def world_tools(
                 "Not saved. Declare at least one sequence first: a world whose calls each work "
                 "alone can still forget what the previous one did."
             )
-        if data_problems := _base_data_problems(
+        data_problems = _base_data_problems(
             world.state(), source_state=contract.base_environment
-        ):
+        )
+        if data_problems and _still_refusing(unmovable, "seed", data_problems):
             return _err(
                 "Not saved. The shared seed would make every scenario look like demo data:\n  - "
                 + "\n  - ".join(data_problems)
