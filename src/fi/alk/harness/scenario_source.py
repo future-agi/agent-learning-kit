@@ -202,6 +202,7 @@ class _CompiledScenario:
     # same document and sent at pre-allocation, so a call can be read on the platform without the
     # scenario file beside it. Presentation only: nothing in the scheduler looks at it.
     presented: dict[str, Any] = field(default_factory=dict)
+    source_scenario_key: str | None = None
 
 
 def _read_text(path: Path, *, label: str) -> str:
@@ -653,6 +654,7 @@ def _scenarios_for_execution_manifest(
             replace(
                 by_key[source_key],
                 scenario_key=execution_key,
+                source_scenario_key=source_key,
                 scenario_id=scenario_id,
             )
         )

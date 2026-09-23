@@ -479,7 +479,10 @@ class HostedChatCallRunner:
                 "chat_capability_unavailable: target_http endpoint is absent"
             )
 
-        document = _scenario_document(self._context.bundle_dir, scenario.scenario_key)
+        document = _scenario_document(
+            self._context.bundle_dir,
+            getattr(scenario, "source_scenario_key", None) or scenario.scenario_key,
+        )
         conversation_scenario = _conversation_scenario(document)
         if not conversation_scenario.instruction.strip():
             raise CallAborted("chat_scenario_invalid: instruction is empty")

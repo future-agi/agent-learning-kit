@@ -1077,7 +1077,8 @@ class CallRunnerImpl:
 
         try:
             doc = _read_scenario_document(
-                self._context.bundle_dir, scenario.scenario_key
+                self._context.bundle_dir,
+                getattr(scenario, "source_scenario_key", None) or scenario.scenario_key,
             )
         except _ScenarioDocumentUnavailable as exc:
             raise CallAborted(f"voice_scenario_document_unavailable: {exc}") from exc
