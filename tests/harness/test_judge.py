@@ -254,3 +254,8 @@ def test_with_no_actions_the_judge_is_told_the_conversation_is_the_evidence(monk
 def test_a_situation_that_never_came_up_is_not_a_pass():
     assert "never came up" in judge_module._INSTRUCTIONS
     assert "decide false" in judge_module._INSTRUCTIONS
+
+
+def test_an_answer_with_nothing_to_check_it_against_is_never_called_accurate():
+    assert "never call what the agent said accurate" in judge_module._INSTRUCTIONS
+    assert "left a part unanswered" in judge_module._INSTRUCTIONS

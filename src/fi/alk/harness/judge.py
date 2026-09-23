@@ -48,6 +48,11 @@ and the records together are enough, so weigh them and commit. A claim about how
 a situation is not passed when that situation never came up: decide false and say plainly that it
 did not come up.
 
+Where nothing you were given records the right answer, never call what the agent said accurate or
+correct, and never assume it is. Judge what can be seen: whether it answered the question the
+customer actually asked, all of it and specifically, or left a part unanswered or answered with a
+general remark.
+
 `explanation` is shown to the agent's owner. Write one or two plain sentences about the agent's
 behaviour and its result, in the terms of their business: what the agent said or did, and what that
 changed. Never mention tables, rows, queries, tool names, records you could or could not read, this
