@@ -374,6 +374,12 @@ ninety-one do not.** At fifty it is 4 and 3. At five hundred it is 4 and 25, and
 hundred may the safety cells repeat at all - one extra of each per further hundred, so that they stay a
 bounded share instead of growing with the suite.
 
+- **The attack number is a floor as well as a ceiling.** `round(count * share)` says how many the suite
+  owes, and a plan that deals fewer has a hole where the refusals should be tested. Measured: rewriting
+  this section to stop the safety cells repeating made a hundred come back with **one** attack where the
+  arithmetic asks for five - the correction ran past its target. Deal the safety cells once each, then
+  deal the attacks until you reach the number, then stop. Both halves are counted and both are wrong if
+  they miss.
 - **Below about forty, the four safety cells ARE the whole overlay budget.** At twenty they are already a
   fifth of the suite, so deal them and deal NO attacks on top. A twenty is a smoke test: it proves the
   safety cells exist and the rest of it is ordinary traffic.
