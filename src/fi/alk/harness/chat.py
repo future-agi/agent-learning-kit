@@ -21,6 +21,7 @@ from . import build as build_stage
 from . import reception as reception_stage
 from . import scenarios as scenario_stage
 from . import understand as understand_stage
+from .backends import SessionSpec
 from .config import artifact_dir
 from .contract import AgentContract
 from .run import stage as run_stage
@@ -61,9 +62,10 @@ class Conversation:
     stage: Stage | None = None
     # Set by the flow tool when the open stage hands a request to the stage that owns it.
     _handoff: dict = field(default_factory=dict)
-    spent_usd: float = 0.0
-    history: list[str] = field(default_factory=list)
     _found: dict[str, Any] = field(default_factory=dict)
+    configure_stage: Callable[[str, SessionSpec], SessionSpec] | None = None
+    control_only: bool = False
+    spent_usd: float = 0.0
 
     def __post_init__(self) -> None:
         # Read off the artifacts rather than defaulting to the first stage. An agent whose world
@@ -131,7 +133,7 @@ class Conversation:
                 # that existing session rather than creating a second artifact directory.
                 source_dir=(self.out / "source") if self.out else None,
             )
-            self._grant_flow()
+            self._prepare_stage(stage_name)
             await self.stage.__aenter__()
             return reception_stage.opening()
 
@@ -152,7 +154,7 @@ class Conversation:
                 self.source, out=self.out, ask=self.ask
             )
             opening = understand_stage.opening(self.source)
-            self._grant_flow()
+            self._prepare_stage(stage_name)
             await self.stage.__aenter__()
             return opening
 
@@ -161,18 +163,18 @@ class Conversation:
             raise RuntimeError("cannot go further before there is a contract")
         if stage_name == BUILD:
             source_root = str(getattr(self.source, "root", "") or "")
-            build_stage.require_buildable(contract, source_root)
-            from .provision import provision_if_present
+            if not self.control_only:
+                build_stage.require_buildable(contract, source_root)
+                from .provision import provision_if_present
 
-            await asyncio.to_thread(
-                provision_if_present, source_root, self.out, contract
-            )
+                await asyncio.to_thread(
+                    provision_if_present, source_root, self.out, contract
+                )
             self.stage, _ = build_stage.open_stage(
                 contract,
                 out=self.out,
                 ask=self.ask,
-                # Where the agent's own code lives, so its tools can be bound to rather
-                # than rewritten. Empty for an agent given as a specification.
+                # Where the agent's own code lives, so its tools can be bound to rather than rewritten.
                 source_root=source_root,
             )
             opening = build_stage.opening(contract)
@@ -190,7 +192,7 @@ class Conversation:
                 contract, out=self.out, wanted=wanted, ask=self.ask
             )
             opening = scenario_stage.opening(contract, wanted, written)
-        self._grant_flow()
+        self._prepare_stage(stage_name)
         await self.stage.__aenter__()
         return opening
 
@@ -202,59 +204,61 @@ class Conversation:
         return None if following in (None, DONE) else following
 
     def _flow_server(self):
-        """One tool every stage gets: handing a request to the stage that owns it.
-
-        "Create the world", said while the understand stage is open, used to land in a session
-        with no build tools, which could only apologise. The stage is the one that knows the
-        request is not its job, so the handoff is a tool it calls; whether moving on is allowed
-        is still decided by code, from whether this stage's artifact exists.
-        """
+        """Route a request to any currently reachable harness stage."""
         from .backends import tool, tool_server
         from .tools import schema
 
         wanted = self._handoff
 
         @tool(
-            "hand_to_next_stage",
-            "The person asked for something that belongs to the NEXT stage of this harness — "
-            "building the environment when the contract is done, writing scenarios when the "
-            "environment is built, running them when they are written. Call this with their "
-            "request, word for word; the conversation moves forward and their request is "
-            "handled there. Never call it to escape work that is this stage's own.",
-            schema({"request": str}, []),
+            "route_to_stage",
+            "Route the person's request to the harness stage that owns it. Use reception to "
+            "select source, understand to inspect the agent contract, build for environment "
+            "work, scenarios for scenario generation/editing, and run for execution/results. "
+            "The destination must be reachable. Forward the request word for word.",
+            schema({"stage": str, "request": str}, ["stage", "request"]),
         )
-        async def hand_to_next_stage(args: dict[str, Any]) -> dict[str, Any]:
-            if not self._artifact_for(self.stage_name):
+        async def route_to_stage(args: dict[str, Any]) -> dict[str, Any]:
+            destination = str(args.get("stage") or "").strip()
+            request = str(args.get("request") or "").strip()
+            if destination == self.stage_name:
                 return {
                     "content": [
                         {
                             "type": "text",
-                            "text": "This stage has not produced its artifact yet, so there is "
-                            "nothing to move on from. Finish this stage's work first.",
+                            "text": "This request already belongs to the current stage. Handle it here.",
                         }
                     ],
                     "is_error": True,
                 }
-            if self.next_stage() is None:
+            blocked = self.reachable().get(destination)
+            if blocked is None:
                 return {
                     "content": [
-                        {"type": "text", "text": "there is no stage after this one"}
+                        {
+                            "type": "text",
+                            "text": f"There is no harness stage called {destination!r}.",
+                        }
                     ],
                     "is_error": True,
                 }
-            wanted["request"] = str(args.get("request") or "").strip() or "continue"
+            if blocked:
+                return {
+                    "content": [{"type": "text", "text": blocked}],
+                    "is_error": True,
+                }
+            wanted["stage"] = destination
+            wanted["request"] = request
             return {
                 "content": [
                     {
                         "type": "text",
-                        "text": "Handed over. Say one short line that you are moving on, and stop.",
+                        "text": f"Routed to {destination}. Say one short line that you are moving on, and stop.",
                     }
                 ]
             }
 
-        return tool_server(
-            name="flow", version="0.1.0", tools=[hand_to_next_stage]
-        )
+        return tool_server(name="flow", version="0.1.0", tools=[route_to_stage])
 
     # -- talking ---------------------------------------------------------------------
 
@@ -284,20 +288,21 @@ class Conversation:
             return SCENARIOS
         return RUN
 
-    def _grant_flow(self) -> None:
-        if self.stage is not None:
-            self.stage.grant(
-                "flow", self._flow_server(), ["hand_to_next_stage"], ask=self.ask
-            )
+    def _prepare_stage(self, stage_name: str) -> None:
+        if self.stage is None:
+            return
+        self.stage.grant("flow", self._flow_server(), ["route_to_stage"], ask=self.ask)
+        if self.configure_stage is not None:
+            self.stage.configure(self.configure_stage(stage_name, self.stage.spec))
 
     async def say(
         self, message: str, on_event: Callable[..., Any] | None = None
     ) -> None:
         """Send a message to whichever stage is open."""
-        self.history.append(message)
         if self.stage is None:
             await self.open_quietly()
         await self.stage.say(message, on_event=on_event)  # type: ignore[union-attr]
+
         # Before anything acts on this turn, take up what it established. A handoff in the same
         # turn opens the next stage, and every stage is built from ``self.source``; read it off
         # afterwards instead and that hop dies on an agent nobody has named, taking the turn with
@@ -308,9 +313,10 @@ class Conversation:
         # given the person's own words. Bounded, because each hop is a model turn.
         for _hop in range(3):
             request = self._handoff.pop("request", None)
+            destination = self._handoff.pop("stage", None)
             if not request:
                 break
-            following = self.next_stage()
+            following = destination or self.next_stage()
             if following is None:
                 break
             await self._open(following)
@@ -321,6 +327,25 @@ class Conversation:
             # somebody confirm what they already said. Unless a handoff already moved us, which
             # would make this a second hop over the same request.
             await self.advance(on_event=on_event)
+
+    async def resume(
+        self,
+        invocation_id: str,
+        on_event: Callable[..., Any] | None = None,
+    ) -> None:
+        """Resume one interrupted stage invocation from durable backend state."""
+        if self.stage is None:
+            await self.open_quietly()
+        await self.stage.resume_turn(  # type: ignore[union-attr]
+            invocation_id,
+            on_event=on_event,
+        )
+
+    async def interrupt_response(self) -> bool:
+        """Interrupt only the active assistant turn, never the domain operation."""
+        if self.stage is None:
+            return False
+        return await self.stage.interrupt_response()
 
     def _take_up(self) -> bool:
         """Take up whatever the turn just established. True if this turn named the agent.
@@ -402,12 +427,9 @@ def open_conversation(
     ask: Callable[..., Any] | None = None,
     wanted: int = 10,
     workspace: Path | None = None,
+    configure_stage: Callable[[str, SessionSpec], SessionSpec] | None = None,
+    control_only: bool = False,
 ) -> Conversation:
-    """Open the harness. With nothing, it starts by asking which agent you mean.
-
-    Naming the agent up front is a shortcut for coming back to one already in progress, not the
-    way in. Everything it needs can be said.
-    """
     source = resolve(kind, name=name, root=path) if name and path else None
     return Conversation(
         source=source,
@@ -415,6 +437,8 @@ def open_conversation(
         ask=ask,
         wanted=wanted,
         workspace=workspace,
+        configure_stage=configure_stage,
+        control_only=control_only,
     )
 
 
