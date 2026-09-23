@@ -679,10 +679,10 @@ async def validate_once(
 
             baseline_state_digest: str | None = None
 
-            # Off unless asked: a reset that keeps the agent's processes alive only reseals the
-            # store under them, which is what validation needs, but a process caching across
-            # scenarios would surface here as a ready failure.
-            in_place = os.environ.get("ALK_VALIDATION_RESET_IN_PLACE", "") == "1"
+            # A reset that keeps the agent's processes alive only reseals the store under them. A
+            # process caching across scenarios can fail that, so a failure is re-checked once
+            # against a full restart before it counts.
+            in_place = os.environ.get("ALK_VALIDATION_RESET_IN_PLACE", "1") != "0"
 
             async def check_setups(invariants):
                 # Dealt round-robin so every lane gets the same mix of cheap and expensive setups.
@@ -707,10 +707,18 @@ async def validate_once(
                     raise RuntimeValidationError(phase, "\n".join(sorted(failures)))
 
             async def check_setup(scenario, invariants, against=None):
+                try:
+                    await check_setup_once(scenario, invariants, against, in_place)
+                except Exception:
+                    if not in_place:
+                        raise
+                    await check_setup_once(scenario, invariants, against, False)
+
+            async def check_setup_once(scenario, invariants, against, keep_processes):
                 nonlocal baseline_state_digest
                 against = runtime if against is None else against
                 await provider.reset(
-                    against, work_directory=work, keep_processes=in_place
+                    against, work_directory=work, keep_processes=keep_processes
                 )
                 world = await factory.create(against, rng=random.Random(job.seed or 0))
                 if generic and not external_provider:

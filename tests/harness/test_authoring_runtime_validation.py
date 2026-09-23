@@ -698,11 +698,16 @@ def test_runtime_gate_resets_each_scenario_and_preserves_execution_secrets(
         assert "1: setup:" in str(error.value)
         # The invariant baseline is taken before the suite is walked, so its two resets come
         # first and the suite is then walked exactly once. Each scenario still gets its own
-        # reset immediately before its own setup, which is what this test exists to pin.
+        # reset immediately before its own setup, which is what this test exists to pin. A failed
+        # setup is re-checked once after a full reset before it counts.
         assert calls == [
             "provision",
             "reset",
             "reset",
+            "reset",
+            "setup",
+            "reset",
+            "setup",
             "reset",
             "setup",
             "reset",
