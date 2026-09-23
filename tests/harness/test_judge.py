@@ -169,7 +169,8 @@ def test_the_judge_is_given_what_was_said_not_only_what_was_done():
     said = [{"role": "user", "content": "one large fries"}] * 400
     said.append({"role": "assistant", "content": "your order is one large fries"})
     rendered = judge_module._transcript(said)
-    assert "user: one large fries" in rendered
+    assert "Customer: one large fries" in rendered
+    assert "Agent: your order is one large fries" in rendered
     assert "your order is one large fries" in rendered
     assert len(rendered) <= judge_module._TRANSCRIPT_LIMIT + 8
 

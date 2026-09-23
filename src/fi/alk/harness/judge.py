@@ -40,7 +40,7 @@ took and the state of its system afterwards.
 Look before you answer: read the actions you were given, read the conversation when the claim is
 about what was said, and inspect the system's records when the claim is about what changed. The
 records are PostgreSQL; use inspect_world to discover them rather than guessing names. Judge the
-claim against the situation the conversation actually set up: a step the caller declined, or one the
+claim against the situation the conversation actually set up: a step the customer declined, or one the
 situation never called for, is not a failure of the agent.
 
 Then call decide, once, with `passed` true or false. You must decide: the conversation, the actions
@@ -126,7 +126,7 @@ async def judge(
 
     @tool(
         "read_transcript",
-        "What was said, in order. `user` is the caller, `assistant` is the agent being judged.",
+        "What was said, in order: the Customer and the Agent being judged.",
         schema({}, []),
     )
     async def read_transcript(args: dict[str, Any]) -> dict[str, Any]:
@@ -207,10 +207,14 @@ async def judge(
     return None, ""
 
 
+_SPEAKERS = {"user": "Customer", "assistant": "Agent"}
+
+
 def _transcript(messages: Sequence[Any]) -> str:
     """The turns as spoken, oldest first. A long call keeps its tail, where a readback would be."""
     body = "\n".join(
-        f"{m.get('role') or 'unknown'}: {str(m.get('content') or '').strip()}"
+        f"{_SPEAKERS.get(str(m.get('role')), m.get('role') or 'unknown')}: "
+        f"{str(m.get('content') or '').strip()}"
         for m in messages
         if isinstance(m, dict)
     )
