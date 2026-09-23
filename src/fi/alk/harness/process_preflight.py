@@ -217,6 +217,9 @@ def preflight_bundle(
         _verify_depends_on(manifest)  # 5
         _verify_engine_catalog(manifest)  # 5
         _verify_fixed_port_not_reserved(manifest)  # 5 / §2b
+        _verify_fixed_port_duplicate(manifest)  # 5 / C1 §1
+        _verify_fixed_port_consumable_wiring(manifest)  # 5 / C1 §1
+        _verify_agent_name_world_unique(manifest, parallelism=parallelism)  # 5 / C3, C1 §4
         _verify_seed_missing(manifest)  # 5 / §2c
         _verify_reserved_names(bundle_dir, manifest)  # 5
         _verify_seed_files_on_disk_and_listed(bundle_dir, manifest, files)  # 5
@@ -499,9 +502,13 @@ def _verify_secret_purposes(
     provider_import_claims_target_provider = isinstance(
         manifest.metadata.get("provider_import"), dict
     )
-    connect_only_claims_target_provider = isinstance(
-        manifest.metadata.get("provider_connect_only"), dict
-    )
+    connect_only = manifest.metadata.get("provider_connect_only")
+    # Connect-only describes how the target is reached, not inherently who owns
+    # the credentials. Provider APIs need a customer target-provider key, while
+    # the phone connector dials with platform-owned telephony credentials.
+    connect_only_claims_target_provider = isinstance(connect_only, dict) and str(
+        connect_only.get("connector") or ""
+    ).lower() in {"vapi", "retell", "retell_chat"}
     guest_claims_target_provider = (
         process_claims_target_provider
         or lifecycle_claims_target_provider
@@ -628,6 +635,98 @@ def _verify_fixed_port_not_reserved(manifest: EnvironmentBundleV2) -> None:
             )
 
 
+def _verify_fixed_port_duplicate(manifest: EnvironmentBundleV2) -> None:
+    """C1 §1: two `SourceProcess`es declaring the same `fixed_port` value cannot both bind it in
+    the shared network namespace — a preflight reject, regardless of consumability (at plan-time
+    W=1 both would bind the same port; the declaration is a contradiction either way). Today
+    nothing checks this — the collision survives to a spawn-time bind death."""
+    seen: dict[int, str] = {}
+    for process in manifest.processes:
+        if not isinstance(process, SourceProcess) or process.fixed_port is None:
+            continue
+        prior = seen.get(process.fixed_port)
+        if prior is not None:
+            raise PreflightError(
+                "fixed_port_duplicate",
+                f"{prior} and {process.name} both declare fixed_port {process.fixed_port}; "
+                "two processes cannot bind the same port in the shared network namespace",
+            )
+        seen[process.fixed_port] = process.name
+
+
+# The ONLY valid consumability wiring (C1 §1, one clause): the `{{PORT_<self>}}` token appears in
+# the value of an `environment` key that the `run_command` references by `$KEY` / `${KEY}` inside
+# an `sh -c` argument. `run_command` is exec'd verbatim, never rendered or shell-expanded, so a
+# token parked directly in an argv, or in an env var the command never references, moves nothing.
+_SHELL_FORMS = {"sh", "bash", "/bin/sh", "/bin/bash", "/usr/bin/sh", "/usr/bin/bash"}
+_ENV_REFERENCE = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?")
+
+
+def _command_referenced_env_vars(run_command: list[str]) -> set[str]:
+    """The env-var names a `run_command` references by `$KEY` / `${KEY}` — ONLY when the command
+    is a shell form (`sh -c ...`); a bare argv is exec'd verbatim with no `$VAR` expansion, so it
+    references nothing (C1 §1)."""
+    if not run_command or run_command[0] not in _SHELL_FORMS or "-c" not in run_command:
+        return set()
+    referenced: set[str] = set()
+    for argument in run_command:
+        referenced.update(_ENV_REFERENCE.findall(argument))
+    return referenced
+
+
+def _verify_fixed_port_consumable_wiring(manifest: EnvironmentBundleV2) -> None:
+    """C1 §1: a process declaring `fixed_port_consumable: true` MUST wire its run command to
+    consume the rendered per-world port — the `{{PORT_<own-name>}}` token in an `environment`
+    value the command references by `$KEY` inside `sh -c`. Anything else (token in an argv, token
+    in an unreferenced env var, no token at all) is a preflight reject
+    `fixed_port_consumable_unwired`."""
+    for process in manifest.processes:
+        if not isinstance(process, SourceProcess) or not process.fixed_port_consumable:
+            continue
+        token = f"{{{{PORT_{process.name}}}}}"
+        env_keys_with_token = {
+            key for key, value in process.environment.items() if token in value
+        }
+        referenced = _command_referenced_env_vars(list(process.run_command))
+        if not (env_keys_with_token & referenced):
+            raise PreflightError(
+                "fixed_port_consumable_unwired",
+                f"{process.name} declares fixed_port_consumable but its run_command does not "
+                f"reference an environment value carrying {token} via $KEY inside sh -c (the "
+                "only wiring that consumes the per-world port; run_command is exec'd verbatim)",
+            )
+
+
+def _verify_agent_name_world_unique(
+    manifest: EnvironmentBundleV2, *, parallelism: int
+) -> None:
+    """C3 / C1 §4 cross-world guard: at W>1, a `LIVEKIT_AGENT_NAME` template lacking EITHER
+    `{{WORLD_INDEX}}` OR `{{JOB_ID}}` is rejected `agent_name_not_world_unique` — without both,
+    two worlds (or two concurrent jobs on the shared EU LiveKit) mint the same dispatch name and
+    cross-contaminate (the within-world runtime guard `_dispatch_metadata` is the behavioral
+    template; this is the preflight reject). The reject tells the user to request parallelism=1
+    if they intend to run serially."""
+    # W ≤ 1 needs no cross-world uniqueness; an out-of-RANGE W (above the cap) is item 7's
+    # `parallelism_out_of_range` reject — skip here so that more fundamental error surfaces
+    # rather than being masked by this item-5 guard.
+    if parallelism <= 1 or parallelism > _MAX_PARALLELISM:
+        return
+    for process in manifest.processes:
+        if not isinstance(process, SourceProcess):
+            continue
+        template = process.environment.get("LIVEKIT_AGENT_NAME")
+        if template is None:
+            continue
+        if "{{WORLD_INDEX}}" not in template or "{{JOB_ID}}" not in template:
+            raise PreflightError(
+                "agent_name_not_world_unique",
+                f"{process.name}: LIVEKIT_AGENT_NAME {template!r} must contain BOTH "
+                "{{WORLD_INDEX}} and {{JOB_ID}} at parallelism>1 (otherwise worlds and "
+                "concurrent jobs collide on the shared LiveKit dispatch namespace); request "
+                "parallelism=1 to run serially",
+            )
+
+
 def _verify_seed_missing(manifest: EnvironmentBundleV2) -> None:
     covered = {
         store.capability for store in (manifest.seed.stores if manifest.seed else [])
@@ -653,6 +752,10 @@ def _verify_reserved_names(bundle_dir: Path, manifest: EnvironmentBundleV2) -> N
             path = root / relative_path
             if not path.is_file():
                 continue  # reported by `_verify_seed_files_on_disk_and_listed`
+            if path.suffix.lower() != ".sql":
+                # Typed world artifacts are data, not executable SQL identifiers. Their schema
+                # is validated by the runtime importer after source migrations have run.
+                continue
             text = path.read_text(encoding="utf-8", errors="replace")
             # Strip `--`-to-EOL and `/* ... */` comments before scanning (F9, p4-round1-review) —
             # a generated seed file's own note about the reservation ("-- never create

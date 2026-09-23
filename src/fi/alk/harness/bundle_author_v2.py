@@ -14,12 +14,15 @@ import hashlib
 import json
 import logging
 import re
+import shlex
 import shutil
 import sqlite3
+import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import yaml
 
@@ -116,6 +119,99 @@ _COMPOSE_NAMES = (
     "docker-compose.yaml",
 )
 _IGNORED_ARTIFACT_PARTS = {".git", ".venv", "__pycache__", "node_modules"}
+_CERTIFIED_BUNDLE_DIRECTORY = "certified-bundle"
+
+
+def _reuse_certified_bundle(
+    *, source: Path, job: HarnessJob, authoring: Path, output: Path
+) -> EnvironmentBundleV2 | None:
+    """Publish the exact generic bundle that passed runtime validation.
+
+    The authoring and execution sandboxes are separate.  Recompiling between them creates a
+    time-of-check/time-of-use gap and can produce a different digest even when the submitted
+    source fingerprint is unchanged.  A frozen bundle is accepted only when its certificate,
+    source, contract, scenarios and canonical world still match the current job inputs.
+    """
+
+    artifact_root = authoring / "generic-harness"
+    frozen = artifact_root / _CERTIFIED_BUNDLE_DIRECTORY
+    certificate_path = authoring / "runtime-validation.json"
+    if not frozen.is_dir() or not certificate_path.is_file():
+        return None
+
+    from .authoring_runtime_validation import _artifact_digest
+    from .certification import (
+        CheckStatus,
+        GenericHarnessArtifactStore,
+        verify_runtime_certification,
+    )
+
+    manifest = load_bundle_v2(frozen)
+    source_digest = source_fingerprint(source)
+    certificate = verify_runtime_certification(
+        certificate_path,
+        bundle_digest=manifest.digest,
+        source_digest=source_digest,
+    )
+    store = GenericHarnessArtifactStore(artifact_root)
+    scenarios = authoring / "scenarios"
+    if not scenarios.is_dir():
+        scenarios = authoring / "scenario"
+    expected = {
+        "contract": _artifact_digest(authoring / "contract.json"),
+        "scenarios": _artifact_digest(scenarios),
+    }
+    actual = {
+        "contract": certificate.authoring.contract_hash,
+        "scenarios": certificate.authoring.scenario_set_hash,
+    }
+    # Hosted/black-box agents deliberately have no harness-owned source schema or world to
+    # compare. Runtime validation records those checks as not applicable and explains why in the
+    # certificate. Keep the tamper checks for every artifact that does exist, without comparing
+    # model-authored placeholder state to an intentionally synthetic external-state fingerprint.
+    if certificate.checks.source_invariants is not CheckStatus.NOT_APPLICABLE:
+        expected["world"] = store.read_world_ir().fingerprint
+        actual["world"] = certificate.authoring.world_ir_hash
+    if certificate.checks.schema_and_seed is not CheckStatus.NOT_APPLICABLE:
+        expected["source_schema"] = store.read_source_model().fingerprint
+        actual["source_schema"] = certificate.source.schema_hash
+    mismatched = sorted(name for name in expected if expected[name] != actual[name])
+    if mismatched:
+        raise BundleAuthorError(
+            "certified_bundle_inputs_changed: " + ", ".join(mismatched)
+        )
+    scenario_total = sum(
+        1 for path in (frozen / "scenarios").iterdir() if path.is_dir()
+    )
+    if scenario_total != job.scenario_count:
+        raise BundleAuthorError(
+            "certified_bundle_scenario_count_mismatch: "
+            f"expected {job.scenario_count}, found {scenario_total}"
+        )
+    preflight_bundle(
+        frozen,
+        manifest,
+        parallelism=job.runtime.parallelism,
+        secret_refs={
+            alias: reference.purpose
+            for alias, reference in job.agent.secret_refs.items()
+        },
+    )
+
+    temporary = Path(tempfile.mkdtemp(prefix=f".{output.name}.", dir=output.parent))
+    shutil.rmtree(temporary)
+    shutil.copytree(frozen, temporary)
+    if output.exists():
+        backup = output.with_name(output.name + ".previous")
+        if backup.exists():
+            shutil.rmtree(backup)
+        output.rename(backup)
+        temporary.rename(output)
+        shutil.rmtree(backup)
+    else:
+        temporary.rename(output)
+    shutil.copy2(certificate_path, output.parent / "runtime-validation.json")
+    return load_bundle_v2(output)
 
 
 def _sql_literal(value: Any) -> str:
@@ -306,6 +402,23 @@ def _contract_column_declarations(
 
 def _contract_sql_type(declaration: str) -> str | None:
     normalized = declaration.strip().upper()
+    tokens = set(re.findall(r"[A-Z][A-Z0-9_]*", normalized))
+    language_type = "|" in normalized or normalized.startswith(
+        ("UNION[", "OPTIONAL[", "LIST[", "DICT[", "MAPPING[", "TUPLE[", "SET[")
+    )
+    if language_type:
+        if tokens & {"FLOAT", "NUMBER", "DECIMAL", "DOUBLE"}:
+            return "double precision"
+        if tokens & {"INT", "INTEGER"}:
+            return "bigint"
+        if tokens & {"BOOL", "BOOLEAN"}:
+            return "boolean"
+        if tokens & {"DICT", "MAPPING", "OBJECT", "JSON", "ANY"}:
+            return "jsonb"
+        if tokens & {"LIST", "ARRAY", "TUPLE", "SET"}:
+            return "jsonb"
+        if tokens & {"STR", "STRING"}:
+            return "text"
     patterns = (
         (r"^BOOLEAN\b", "boolean"),
         (r"^(?:BIGINT|INTEGER|INT|SMALLINT)\b", "bigint"),
@@ -323,6 +436,23 @@ def _contract_sql_type(declaration: str) -> str | None:
     for pattern, sql_type in patterns:
         if re.match(pattern, normalized):
             return sql_type
+
+    # Application contracts often use language-level unions instead of SQL
+    # declarations. Interpret the whole declaration as a type set, with the wider
+    # compatible representation winning independently of token order.
+    if tokens & {"FLOAT", "NUMBER", "DECIMAL", "DOUBLE"}:
+        return "double precision"
+    if tokens & {"INT", "INTEGER"}:
+        return "bigint"
+    if tokens & {"BOOL", "BOOLEAN"}:
+        return "boolean"
+    if tokens & {"DICT", "MAPPING", "OBJECT", "JSON", "ANY"}:
+        return "jsonb"
+    if tokens & {"LIST", "ARRAY", "TUPLE", "SET"}:
+        # Without a proven homogeneous leaf type, JSONB preserves the value shape.
+        return "jsonb"
+    if tokens & {"STR", "STRING"}:
+        return "text"
     return None
 
 
@@ -365,6 +495,7 @@ def _sqlite_sql(
     *,
     contract_declarations: dict[tuple[str, str], str] | None = None,
     include_schema: bool = True,
+    include_rows: bool = True,
 ) -> str:
     statements: list[str] = []
     contract_declarations = contract_declarations or {}
@@ -453,7 +584,7 @@ def _sqlite_sql(
                     f"CREATE TABLE IF NOT EXISTS {_identifier(table)} "
                     f"({', '.join(definitions)});"
                 )
-            for record in selected:
+            for record in selected if include_rows else ():
                 # An authored SQLite world cannot retain the distinction between an
                 # omitted source column and an explicitly stored NULL: every row is
                 # read back with every column present.  When the real source schema is
@@ -685,6 +816,104 @@ def _adopted_seed_sql(
     return "", []
 
 
+def _generic_postgres_seed_artifacts(
+    authoring: Path,
+    staging: Path,
+    *,
+    source: Path,
+    contract: dict[str, Any],
+    prefix: str,
+    allow_harness_owned_schema: bool = False,
+) -> tuple[list[str], list[str], list[str]]:
+    """Package source schema and semantic rows separately for runtime catalogue inspection."""
+
+    source_schemas = _source_schema_paths(source, contract=contract)
+    canonical_world = authoring / "generic-harness" / "world-ir.json"
+    legacy_world = authoring / "world.sqlite"
+    data_store = contract.get("data_store")
+    data_store = data_store if isinstance(data_store, dict) else {}
+    store_kind = str(data_store.get("kind") or "").strip().lower()
+    normalized_store_kind = store_kind.replace("-", "_").replace(" ", "_")
+    embedded_store = any(
+        marker in normalized_store_kind
+        for marker in (
+            "none",
+            "in_process",
+            "in_memory",
+            "memory",
+            "sqlite",
+            "filesystem",
+            "file_store",
+            "local_state",
+        )
+    )
+    declared_tools = contract.get("tools")
+    explicitly_tool_free = isinstance(declared_tools, list) and not declared_tools
+    if (
+        not source_schemas
+        and not embedded_store
+        and not explicitly_tool_free
+        and not allow_harness_owned_schema
+    ):
+        raise BundleAuthorError(
+            "generic_pipeline_source_schema_required: no source-owned PostgreSQL schema found"
+        )
+    if not canonical_world.is_file() and not legacy_world.is_file():
+        raise BundleAuthorError(
+            "generic_pipeline_world_ir_required: expected generic-harness/world-ir.json "
+            "or compatibility world.sqlite"
+        )
+    seed = staging / "seed"
+    schema_path = seed / "source-schema.sql"
+    if source_schemas:
+        schema_sql = "\n".join(
+            path.read_text(encoding="utf-8") for path in source_schemas
+        )
+    else:
+        # A data-free/in-process source has no repository-owned database schema to adopt.
+        # During the compatibility window SQLite may carry that harness-owned schema. Canonical
+        # World IR deliberately contains logical values only and cannot invent native DDL.
+        if not legacy_world.is_file():
+            raise BundleAuthorError(
+                "generic_pipeline_source_schema_required: canonical World IR requires "
+                "source-owned schema metadata"
+            )
+        schema_sql = _sqlite_sql(
+            legacy_world,
+            contract_declarations=_contract_column_declarations(contract),
+            include_rows=False,
+        )
+    schema_path.write_text(prefix + schema_sql, encoding="utf-8")
+    if canonical_world.is_file():
+        world_path = seed / "world-ir.json"
+        shutil.copy2(canonical_world, world_path)
+        adopted_world = "generic-harness/world-ir.json"
+    else:
+        world_path = seed / "world.sqlite"
+        shutil.copy2(legacy_world, world_path)
+        adopted_world = "world.sqlite"
+    adopted_contracts: list[str] = []
+    # Runtime seed compilation must see the same code/action facts as validation.
+    # Keep them inside the hashed bundle: the execution sandbox has no authoring
+    # artifact-store dependency and PostgreSQL inspection only recovers state facts.
+    source_model = authoring / "generic-harness" / "source-model.json"
+    if source_model.is_file():
+        shutil.copy2(source_model, seed / "source-model.json")
+        adopted_contracts.append("generic-harness/source-model.json")
+    contracts = staging / "contracts"
+    for name in ("source-model.schema.json", "world-ir.schema.json"):
+        schema = authoring / "generic-harness" / name
+        if schema.is_file():
+            contracts.mkdir(exist_ok=True)
+            shutil.copy2(schema, contracts / name)
+            adopted_contracts.append(f"generic-harness/{name}")
+    adopted = [
+        f"source/{path.relative_to(source.resolve()).as_posix()}"
+        for path in source_schemas
+    ] + [adopted_world, *adopted_contracts]
+    return ["seed/source-schema.sql"], [f"seed/{world_path.name}"], adopted
+
+
 def _compose_path(source: Path) -> Path | None:
     matches = [source / name for name in _COMPOSE_NAMES if (source / name).is_file()]
     if len(matches) > 1:
@@ -911,6 +1140,18 @@ def _dockerfile_run(root: Path) -> list[str] | None:
 _LIVEKIT_WORKER_SUBCOMMANDS = frozenset({"start", "dev", "connect", "console"})
 
 
+def _livekit_cli_fixed_health_port(command: list[str]) -> int | None:
+    """Describe LiveKit's production CLI port so the runtime can avoid contention.
+
+    ``start`` binds its health server to 8081 and does not expose a ``--port``
+    CLI option. Declaring that fixed port makes the existing port planner
+    safely degrade a multi-world sandbox to one world. ``dev`` already asks the
+    OS for an ephemeral port and needs no declaration.
+    """
+
+    return 8081 if "start" in command else None
+
+
 def _hands_off_to_livekit_cli(root: Path, entry: str) -> bool:
     """Whether the entry delegates to LiveKit's CLI. An agent that runs its own worker must not."""
     path = root / entry
@@ -963,10 +1204,96 @@ def _callback_entrypoint(root: Path) -> str:
     return candidate
 
 
+def _langgraph_entrypoint(root: Path) -> str | None:
+    """Read a source-declared LangGraph graph without guessing an agent script."""
+
+    path = root / "langgraph.json"
+    if not path.is_file():
+        return None
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise BundleAuthorError(f"langgraph_config_invalid: {exc}") from exc
+    graphs = document.get("graphs") if isinstance(document, dict) else None
+    if not isinstance(graphs, dict) or len(graphs) != 1:
+        raise BundleAuthorError(
+            "langgraph_graph_ambiguous: expected exactly one declared graph"
+        )
+    declaration = next(iter(graphs.values()))
+    if not isinstance(declaration, str) or ":" not in declaration:
+        raise BundleAuthorError("langgraph_graph_invalid: expected path:attribute")
+    file_name, attribute = declaration.rsplit(":", 1)
+    graph_path = (root / file_name).resolve()
+    if (
+        not graph_path.is_relative_to(root)
+        or not graph_path.is_file()
+        or not graph_path.suffix == ".py"
+    ):
+        raise BundleAuthorError(
+            "langgraph_graph_invalid: graph source must be a Python file in the repository"
+        )
+    if not attribute.isidentifier():
+        raise BundleAuthorError("langgraph_graph_invalid: graph attribute is invalid")
+    return f"{graph_path.relative_to(root).as_posix()}:{attribute}"
+
+
 def _callback_adapter_source() -> str:
     return (
         Path(__file__).with_name("callback_http_adapter.py").read_text(encoding="utf-8")
     )
+
+
+def _langgraph_adapter_source() -> str:
+    return (
+        Path(__file__)
+        .with_name("langgraph_http_adapter.py")
+        .read_text(encoding="utf-8")
+    )
+
+
+def _subprocess_adapter_source() -> str:
+    """Return the generic command-to-HTTP bridge embedded in a Bundle V2 process."""
+
+    return (
+        Path(__file__)
+        .with_name("subprocess_http_adapter.py")
+        .read_text(encoding="utf-8")
+    )
+
+
+def _runtime_component(root: Path, configured_workdir: str) -> Path:
+    """Resolve a source-declared workdir to its nearest installable project root."""
+
+    configured = configured_workdir.strip()
+    component = (
+        (root / configured).resolve() if configured not in {"", ".", "/"} else root
+    )
+    if not component.is_relative_to(root) or not component.is_dir():
+        raise BundleAuthorError(f"runtime_workdir_invalid: {configured_workdir or '.'}")
+    for candidate in (component, *component.parents):
+        if not candidate.is_relative_to(root):
+            break
+        if any(
+            (candidate / name).is_file()
+            for name in ("pyproject.toml", "requirements.txt", "setup.py")
+        ):
+            return candidate
+    return component
+
+
+def _submitted_command(process: SourceProcess, command: list[str]) -> list[str]:
+    """Run a contract argv inside the dependency environment selected for the source."""
+
+    if not command:
+        return list(process.run_command)
+    normalized = [str(item) for item in command]
+    if normalized[0] in {"python", "python3", "python3.11", "python3.12", "python3.13"}:
+        if process.run_command[:3] == ["uv", "run", "--no-sync"]:
+            return [*process.run_command[:4], *normalized[1:]]
+        return [process.run_command[0], *normalized[1:]]
+    if process.run_command[:3] == ["uv", "run", "--no-sync"] and normalized[0] != "uv":
+        return ["uv", "run", "--no-sync", *normalized]
+    return normalized
 
 
 def _managed_world_db() -> ManagedProcess:
@@ -983,7 +1310,9 @@ def _tool_proxy_process() -> SourceProcess:
         name="tool-proxy",
         working_directory="generated/tool-proxy",
         source_origin="bundle",
-        run_command=["/opt/alk-venv/bin/python", "proxy.py"],
+        # The ALK interpreter carries the proxy's dependencies in both local and
+        # hosted runtimes; its path is not necessarily /opt/alk-venv.
+        run_command=[sys.executable, "proxy.py"],
         environment={
             "PORT": "{{PORT_tool-proxy}}",
             "UPSTREAM_URL": "{{TOOLS_UPSTREAM_URL}}",
@@ -995,12 +1324,159 @@ def _tool_proxy_process() -> SourceProcess:
     )
 
 
+# --- C1 (world-port-model v1.3) authoring seams ----------------------------------------------
+
+# The env var the rewritten tools-api command reads its per-world port from (C1 §1, checklist 2).
+_FI_TOOLS_PORT = "FI_TOOLS_PORT"
+
+# C1 §4 worker knob — the port livekit-agents 1.7.1 exposes ONLY as a WorkerOptions constructor
+# arg (no env/CLI override), so the harness delivers it as an env var and consumes it itself (see
+# `_worker_knob_env` below) rather than requiring the agent under test to read it.
+
+
+def _shell_port_command(argv: list[str], port: str, env_key: str) -> str | None:
+    """Render ``argv`` as a single ``sh -c`` string with the literal ``--port <port>`` replaced by
+    an unquoted ``$env_key`` reference, or ``None`` if the command declares no such port.
+
+    C1 §1: ``run_command`` is exec'd verbatim and never template-rendered, so a ``{{PORT_<self>}}``
+    token in argv would reach the process as literal bytes. The ONLY valid consumability wiring is
+    a ``{{PORT_<self>}}``-bearing environment value referenced by ``$KEY`` inside ``sh -c``. Every
+    other token is shell-quoted; only the ``$KEY`` reference is left unquoted so the shell expands
+    it. Returning ``None`` (no ``--port`` literal to rewrite) means the process cannot be wired
+    honestly and MUST NOT be flagged consumable (that is the ``fixed_port_consumable_unwired`` lie).
+    """
+    ref = f"${env_key}"
+    rendered: list[str] = []
+    replaced = False
+    index = 0
+    while index < len(argv):
+        token = argv[index]
+        if token == "--port" and index + 1 < len(argv) and argv[index + 1] == port:
+            rendered.append(shlex.quote(token))
+            rendered.append(ref)
+            index += 2
+            replaced = True
+            continue
+        if token == f"--port={port}":
+            rendered.append(f"--port={ref}")
+            index += 1
+            replaced = True
+            continue
+        rendered.append(shlex.quote(token))
+        index += 1
+    if not replaced:
+        return None
+    return " ".join(rendered)
+
+
+def _consumable_source_process(
+    process: SourceProcess, env_key: str, port_token: str
+) -> SourceProcess:
+    """Opt a fixed-port source process into env-consumable parallelism, or leave it code-fixed.
+
+    Rewrites ``run_command`` to the ``sh -c`` + ``$KEY`` form, adds ``env_key: port_token`` to the
+    environment, and sets ``fixed_port_consumable=True`` — but ONLY when the command carries a
+    rewritable ``--port <fixed_port>`` literal. When it does not, the process is returned unchanged
+    (code-fixed, honestly degrading at W>1) rather than flagged with a wiring that does not exist.
+    """
+    if process.fixed_port is None:
+        return process
+    shelled = _shell_port_command(
+        list(process.run_command), str(process.fixed_port), env_key
+    )
+    if shelled is None:
+        return process
+    environment = dict(process.environment)
+    environment[env_key] = port_token
+    return process.model_copy(
+        update={
+            "run_command": ["sh", "-c", shelled],
+            "environment": environment,
+            "fixed_port_consumable": True,
+        }
+    )
+
+
+def _worker_knob_env(process_name: str) -> dict[str, str]:
+    """C1 §4: the FI_* worker knob for one LiveKit-worker process, fed its OWN token.
+
+    ``FI_WORKER_HEALTH_PORT``'s presence IS the knob-bearing mark (both authoring and runtime key
+    on it). It is not read by the agent under test: the harness's own ``sitecustomize`` shim
+    (``livekit_tool_trace_bootstrap.py``) consumes it at worker start, flipping the worker into
+    livekit-agents' own side-by-side mode -- the agent under test is never modified. Absent, the
+    shim is a no-op and the worker stays on library defaults.
+
+    NOTE: ``FI_HOSTED_DISPATCH_ACK`` (D32 / C3 §4.5) is deliberately NOT authored here. The
+    dispatch-ack ladder in ``engines/livekit.py`` runs in the GUEST MAIN PROCESS (under
+    ``hosted_entrypoint`` -> ``call_runner``), not in this spawned agent-under-test child, so the
+    engine reads the flag from the guest main process's own ``os.environ`` -- ``hosted_entrypoint``
+    arms it there. Putting it on this worker env would leave the ladder dormant (wrong process).
+    """
+    return {
+        "FI_WORKER_HEALTH_PORT": f"{{{{PORT_{process_name}}}}}",
+    }
+
+
+def _rewrite_managed_dependency_environment(
+    environment: dict[str, str],
+    *,
+    managed_services: set[str],
+    capabilities: dict[str, CapabilityV2],
+) -> dict[str, str]:
+    """Translate Compose service URLs to runtime-owned capability addresses.
+
+    Source containers normally address dependencies through Compose DNS names. Hosted Bundle V2
+    processes share a sandbox host instead, with ports allocated per world. The translation is
+    derived only from declared service/capability metadata; it does not know an agent, framework,
+    environment-variable name, or repository layout.
+    """
+
+    by_service = {
+        service: [
+            (slug, capability)
+            for slug, capability in capabilities.items()
+            if capability.service == ("world-db" if service == "postgres" else service)
+            and capability.configuration_name
+        ]
+        for service in managed_services
+    }
+    rewritten: dict[str, str] = {}
+    for name, value in environment.items():
+        parsed = urlsplit(value)
+        service = parsed.hostname or ""
+        candidates = by_service.get(service, [])
+        if parsed.scheme and candidates:
+            if len(candidates) != 1:
+                raise BundleAuthorError(
+                    f"managed_dependency_capability_ambiguous: {service}: "
+                    + ", ".join(slug for slug, _ in candidates)
+                )
+            _, capability = candidates[0]
+            replacement = f"{{{{{capability.configuration_name}}}}}"
+            if capability.protocol is CapabilityProtocol.REDIS:
+                # Redis DB selectors and query options are source semantics and remain valid on
+                # the harness-owned endpoint. PostgreSQL database names do not: the runtime must
+                # select its isolated wN database, already encoded in the capability address.
+                if parsed.path and parsed.path != "/":
+                    replacement += parsed.path
+                if parsed.query:
+                    replacement += "?" + parsed.query
+            rewritten[name] = replacement
+            continue
+        if value in managed_services:
+            rewritten[name] = f"{{{{HOST_{value}}}}}"
+            continue
+        rewritten[name] = value
+    return rewritten
+
+
 def resolve_environment_plan(
     source: str | Path,
     job: HarnessJob,
     *,
     contract_modality: str | None = None,
     contract_interface_kind: str | None = None,
+    contract_runtime: dict[str, Any] | None = None,
 ) -> EnvironmentPlanV2:
     """Resolve packaging once.  Authoring and provisioning consume this same immutable plan."""
     root = Path(source).resolve()
@@ -1041,6 +1517,18 @@ def resolve_environment_plan(
     }
     readiness = [ReadinessProbeV2(capability="world_db", timeout_seconds=180)]
     declared_runtime_environment = _declared_runtime_environment(root)
+    contract_runtime = contract_runtime if isinstance(contract_runtime, dict) else {}
+    runtime_command = [str(item) for item in (contract_runtime.get("command") or [])]
+    runtime_workdir = str(contract_runtime.get("workdir") or "")
+    interface = contract_runtime.get("interface")
+    interface = interface if isinstance(interface, dict) else {}
+    # A generated contract may correctly identify the HTTP seam but omit its start command.
+    # The repository's exec-form Dockerfile CMD is an explicit source-owned declaration; use it
+    # before falling back to a guessed agent.py entrypoint. This works for any HTTP framework.
+    if not runtime_command and interface.get("kind") == "http" and not compose:
+        runtime_command = _dockerfile_run(root) or []
+    interface_port = interface.get("port")
+    interface_health_path = str(interface.get("health_path") or "/health")
 
     # A connect-only provider target is hosted by Vapi/Retell and is addressed by the
     # provider ID in the job.  When no repository was submitted there is deliberately no
@@ -1138,14 +1626,17 @@ def resolve_environment_plan(
                 if isinstance(service.get("depends_on"), dict)
                 else list(service.get("depends_on") or [])
             )
+            environment = _rewrite_managed_dependency_environment(
+                environment,
+                managed_services=managed_names,
+                capabilities=capabilities,
+            )
+            depends = ["world-db" if item == "postgres" else item for item in depends]
             if service_name == "tools-api" and "postgres" in managed_names:
                 # The target DB is intentionally a distinct per-world logical DB on the same
                 # harness-owned Postgres engine. This preserves reset/isolation without another
                 # daemon per call.
-                environment["DATABASE_URL"] = "{{WORLD_DATABASE_URL}}"
-                depends = [
-                    "world-db" if item == "postgres" else item for item in depends
-                ]
+                environment.setdefault("DATABASE_URL", "{{WORLD_DATABASE_URL}}")
             if service_name == control_name and "tools-api" in source_services:
                 environment["TOOLS_API_URL"] = "{{TOOLS_API_URL}}"
             if is_livekit and service_name == control_name:
@@ -1158,12 +1649,20 @@ def resolve_environment_plan(
                     "HARNESS_TOOL_TRACE",
                     "{{WORLD_DIR}}/agent-tool-calls.jsonl",
                 )
+                # C1 §4: author the worker knob UNCONDITIONALLY into the LiveKit worker,
+                # fed its own `{{PORT_<name>}}`. This IS what marks it knob-bearing.
+                environment.update(_worker_knob_env(service_name))
             entry = (
                 "agent/agent.py"
                 if (service_root / "agent" / "agent.py").is_file()
                 else "agent.py"
             )
-            port = 8080 if service_name in {"api", "tools-api"} else None
+            port = (
+                8080
+                if service_name in {"api", "tools-api"}
+                or (service_name == control_name and not is_livekit)
+                else None
+            )
             process = _plan_python(
                 root,
                 name=service_name,
@@ -1177,6 +1676,58 @@ def resolve_environment_plan(
                 livekit_download=is_livekit and service_name == control_name,
                 run_override=_dockerfile_run(service_root),
             )
+            if (
+                port
+                and service_name in {"api", "tools-api"}
+                and not (is_livekit and service_name == control_name)
+            ):
+                # C1 §1 / checklist 2: the tools-api/api server pins its port in a Dockerfile CMD
+                # copied verbatim into run_command. Rewrite it to consume its per-world allocated
+                # port through the one valid wiring ($FI_TOOLS_PORT in `sh -c`) so it parallelizes
+                # at W>1 instead of forcing a degrade to W=1.
+                #
+                # Track A′ D37 LIMITATION: a single process that is BOTH the knob-bearing LiveKit
+                # control worker AND a consumable HTTP server runs W=1 only. It is excluded here so
+                # it does NOT receive FI_TOOLS_PORT alongside FI_WORKER_HEALTH_PORT — both would
+                # carry the SAME `{{PORT_<name>}}` token, colliding the worker health server and the
+                # HTTP server on one port at any W. It stays a plain fixed_port (non-consumable) and
+                # degrades to W=1 honestly (at W=1 the default health port does not collide). The
+                # normal topology (control=agent + a separate tools-api) is unaffected.
+                process = _consumable_source_process(
+                    process, _FI_TOOLS_PORT, f"{{{{PORT_{service_name}}}}}"
+                )
+            # Compose commonly publishes a fixed host port for developer convenience while the
+            # application itself already accepts its listen port through an environment value.
+            # Keeping that published port as ``fixed_port`` unnecessarily collapses a generic
+            # runtime to one world and prevents the isolation canary from being exercised.  When
+            # the repository has an explicit, unambiguous port seam, bind each world to the
+            # provisioner's allocated port instead.  This is framework- and modality-neutral:
+            # services that truly hard-code their port retain the safe single-world fallback.
+            if port and not (is_livekit and service_name == control_name):
+                configurable_port_names = (
+                    "PORT",
+                    "HTTP_PORT",
+                    "SERVER_PORT",
+                    "UVICORN_PORT",
+                )
+                configured_port = next(
+                    (
+                        name
+                        for name in configurable_port_names
+                        if process.environment.get(name) == str(port)
+                    ),
+                    None,
+                )
+                if configured_port is not None:
+                    process = process.model_copy(
+                        update={
+                            "environment": {
+                                **process.environment,
+                                configured_port: f"{{{{PORT_{service_name}}}}}",
+                            },
+                            "fixed_port": None,
+                        }
+                    )
             if is_livekit and service_name == control_name:
                 # The LiveKit worker opens its HTTP health port before it has registered with
                 # the dispatch service.  Treating the port as readiness creates a race where a
@@ -1185,9 +1736,13 @@ def resolve_environment_plan(
                 # log is the first observable signal that it can actually accept the call.
                 process = process.model_copy(
                     update={
+                        "fixed_port": _livekit_cli_fixed_health_port(
+                            process.run_command
+                        )
+                        or process.fixed_port,
                         "started_check": StartedCheck(
                             log_marker="registered worker", timeout_seconds=180
-                        )
+                        ),
                     }
                 )
             processes.append(process)
@@ -1245,12 +1800,55 @@ def resolve_environment_plan(
         discovered_callback = (
             None if is_livekit else _discover_callback_entrypoint(root)
         )
-        is_callback = not is_livekit and (
-            contract_is_callback or discovered_callback is not None
+        graph_entrypoint = (
+            _langgraph_entrypoint(root)
+            if not is_livekit and contract_modality == "chat" and not runtime_command
+            else None
         )
+        is_graph = graph_entrypoint is not None and not discovered_callback
+        is_callback = (
+            not is_livekit
+            and not is_graph
+            and (contract_is_callback or discovered_callback is not None)
+        )
+        is_command_adapter = bool(
+            not is_livekit
+            and not is_callback
+            and contract_modality == "chat"
+            and runtime_command
+            and (contract_interface_kind or "") in {"", "command"}
+        )
+        is_http_runtime = bool(
+            not is_livekit
+            and not is_callback
+            and contract_modality == "chat"
+            and runtime_command
+            and contract_interface_kind == "http"
+        )
+        is_declared_runtime = is_command_adapter or is_http_runtime
         entry = "agent.py"
-        if not is_callback and not (root / entry).is_file():
-            candidates = sorted(root.glob("**/agent.py"))
+        if is_declared_runtime or is_graph:
+            component = _runtime_component(root, runtime_workdir)
+            entry = next(
+                (
+                    item
+                    for item in runtime_command
+                    if item.endswith(".py") and (component / item).is_file()
+                ),
+                "agent.py",
+            )
+        elif not is_callback and not (root / entry).is_file():
+            # A submitted checkout may contain a developer's virtualenv or dependency tree.
+            # Those files are not agent entrypoints and must not make source discovery
+            # ambiguous.  Apply the same generated-artifact exclusions used by staging.
+            candidates = sorted(
+                path
+                for path in root.glob("**/agent.py")
+                if not any(
+                    part in _IGNORED_ARTIFACT_PARTS
+                    for part in path.relative_to(root).parts[:-1]
+                )
+            )
             if len(candidates) != 1:
                 raise BundleAuthorError(
                     "component_ambiguous: expected exactly one agent.py"
@@ -1272,7 +1870,7 @@ def resolve_environment_plan(
         else:
             component = root
         control_name = "agent"
-        port = None if is_livekit else 8080
+        port = None if is_livekit else int(interface_port or 8080)
         environment = (
             {
                 **declared_runtime_environment,
@@ -1280,6 +1878,8 @@ def resolve_environment_plan(
                     root.name.replace("_", "-") + "-{{JOB_ID}}-w{{WORLD_INDEX}}"
                 ),
                 "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
+                # C1 §4: the single LiveKit worker carries the worker knob, fed its own token.
+                **_worker_knob_env(control_name),
             }
             if is_livekit
             else dict(declared_runtime_environment)
@@ -1287,6 +1887,13 @@ def resolve_environment_plan(
         callback_entrypoint = (
             discovered_callback or _callback_entrypoint(root) if is_callback else None
         )
+        if is_graph:
+            environment.update(
+                {
+                    "PORT": "{{PORT_agent}}",
+                    "ALK_LANGGRAPH_ENTRYPOINT": graph_entrypoint,
+                }
+            )
         if callback_entrypoint:
             environment.update(
                 {
@@ -1304,13 +1911,40 @@ def resolve_environment_plan(
             port=port,
             environment=environment,
             livekit_download=is_livekit,
-            run_override=(None if is_callback else _dockerfile_run(component)),
+            run_override=(
+                None
+                if is_callback or is_command_adapter or is_graph
+                else runtime_command or _dockerfile_run(component)
+            ),
         )
+        if is_graph:
+            python_command = process.run_command[:-1]
+            process = process.model_copy(
+                update={
+                    "run_command": python_command + ["-c", _langgraph_adapter_source()],
+                    "started_check": StartedCheck(port=True, timeout_seconds=180),
+                }
+            )
         if is_callback:
             python_command = process.run_command[:-1]
             process = process.model_copy(
                 update={
                     "run_command": python_command + ["-c", _callback_adapter_source()],
+                    "started_check": StartedCheck(port=True, timeout_seconds=180),
+                }
+            )
+        if is_command_adapter:
+            command = _submitted_command(process, runtime_command)
+            python_command = process.run_command[:-1]
+            process = process.model_copy(
+                update={
+                    "run_command": python_command
+                    + ["-c", _subprocess_adapter_source()],
+                    "environment": {
+                        **process.environment,
+                        "PORT": "{{PORT_agent}}",
+                        "ALK_SUBPROCESS_COMMAND": json.dumps(command),
+                    },
                     "started_check": StartedCheck(port=True, timeout_seconds=180),
                 }
             )
@@ -1326,6 +1960,8 @@ def resolve_environment_plan(
                 set(process.run_command) & _LIVEKIT_WORKER_SUBCOMMANDS
             ):
                 update["run_command"] = [*process.run_command, "start"]
+            final_run_command = update.get("run_command", process.run_command)
+            update["fixed_port"] = _livekit_cli_fixed_health_port(final_run_command)
             process = process.model_copy(update=update)
         processes.append(process)
         if port:
@@ -1337,7 +1973,13 @@ def resolve_environment_plan(
             )
             readiness.append(
                 ReadinessProbeV2(
-                    capability="target_http", path="/health", timeout_seconds=180
+                    capability="target_http",
+                    path=(
+                        "/health"
+                        if is_command_adapter or is_callback
+                        else interface_health_path
+                    ),
+                    timeout_seconds=180,
                 )
             )
         packaging = (
@@ -1450,7 +2092,12 @@ def _compile_source_tool_handlers(contract: dict[str, Any], staging: Path) -> li
                 f"contract_tool_entry_incomplete: {entry.tool}: "
                 f"{entry.mode} requires module and callable"
             )
-        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", entry.tool):
+        # Provider/framework tool names are display names, not Python identifiers (CrewAI,
+        # for example, permits spaces). The handler is loaded by exact filename, not imported
+        # as a module. Reject path/control characters while preserving that exact display name.
+        if not re.fullmatch(
+            r"[A-Za-z0-9_][A-Za-z0-9_. -]{0,127}", entry.tool
+        ) or entry.tool in {".", ".."}:
             raise BundleAuthorError(f"contract_tool_name_unsafe: {entry.tool!r}")
         handlers.mkdir(parents=True, exist_ok=True)
         destination = handlers / f"{entry.tool}.py"
@@ -1503,9 +2150,21 @@ def author_bundle_v2(
     source_root = Path(source).resolve()
     authoring_root = Path(authoring).resolve()
     output_root = Path(output).resolve()
+    output_root.parent.mkdir(parents=True, exist_ok=True)
+    if job.metadata.get("generic_harness_v1") is True:
+        certified = _reuse_certified_bundle(
+            source=source_root,
+            job=job,
+            authoring=authoring_root,
+            output=output_root,
+        )
+        if certified is not None:
+            return certified
     contract_modality: str | None = None
     contract_interface_kind: str | None = None
     contract_body: dict[str, Any] = {}
+    runtime: dict[str, Any] = {}
+    command_adapter_contract = False
     contract_path = authoring_root / "contract.json"
     if contract_path.is_file():
         try:
@@ -1518,6 +2177,7 @@ def author_bundle_v2(
             raise BundleAuthorError("contract_invalid: contract.json must be an object")
         contract_modality = str(contract_body.get("modality") or "").strip().lower()
         runtime = contract_body.get("runtime")
+        runtime = runtime if isinstance(runtime, dict) else {}
         interface = runtime.get("interface") if isinstance(runtime, dict) else None
         if isinstance(interface, dict):
             contract_interface_kind = str(interface.get("kind") or "").strip().lower()
@@ -1539,12 +2199,110 @@ def author_bundle_v2(
             }
             contract_body = {**contract_body, "runtime": runtime}
             contract_interface_kind = "callable"
+        elif (
+            contract_modality == "chat"
+            and not isinstance(interface, dict)
+            and not runtime.get("command")
+            and _langgraph_entrypoint(source_root) is not None
+        ):
+            runtime = dict(runtime)
+            runtime["interface"] = {
+                "kind": "callable",
+                "protocol": "fi.alk",
+                "path": "",
+                "health_path": "",
+                "include_tools": False,
+            }
+            contract_body = {**contract_body, "runtime": runtime}
+            contract_interface_kind = "callable"
+        elif (
+            contract_modality == "chat"
+            and not isinstance(interface, dict)
+            and runtime.get("command")
+        ):
+            # A runnable one-shot command is a real source-owned execution boundary even when it
+            # is not a server. Compile the generic stdin/environment subprocess bridge below and
+            # expose that bridge to the chat runner as the standard callable protocol.
+            runtime = dict(runtime)
+            runtime["interface"] = {
+                "kind": "command",
+                "protocol": "fi.alk",
+                "path": "",
+                "health_path": "",
+                "include_tools": False,
+            }
+            contract_body = {**contract_body, "runtime": runtime}
+            contract_interface_kind = "command"
+            command_adapter_contract = True
+        if (
+            contract_modality == "chat"
+            and contract_interface_kind == "callable"
+            and runtime.get("command")
+            and _discover_callback_entrypoint(source_root) is None
+        ):
+            # Authoring models sometimes infer ``callable`` from an in-process agent object even
+            # though the repository exports no harness callback.  The executable command is the
+            # stronger, source-verifiable boundary in that case.  Compile it through the generic
+            # command bridge instead of starting a one-shot script and waiting for an HTTP port it
+            # can never open.  This rule is framework-neutral and does not modify submitted code.
+            runtime = dict(runtime)
+            runtime["interface"] = {
+                "kind": "command",
+                "protocol": "fi.alk",
+                "path": "",
+                "health_path": "",
+                "include_tools": False,
+            }
+            contract_body = {**contract_body, "runtime": runtime}
+            contract_interface_kind = "command"
+            command_adapter_contract = True
     plan = resolve_environment_plan(
         source_root,
         job,
         contract_modality=contract_modality,
         contract_interface_kind=contract_interface_kind,
+        contract_runtime=(runtime if isinstance(runtime, dict) else None),
     )
+    # In-process framework tools do not cross the HTTP tool proxy. Trace only source-declared
+    # callable boundaries inside the target Python process; the trace is observational and
+    # never replays the tool. The same mechanism works for any Python framework with an
+    # importable callable recorded during source understanding.
+    trace_bindings = [
+        {"name": entry.tool, "module": entry.module, "callable": entry.callable}
+        for raw in contract_body.get("tool_entrypoints", [])
+        if isinstance(raw, dict)
+        for entry in [ToolEntry.model_validate(raw)]
+        if entry.mode in {"import", "construct"} and entry.module and entry.callable
+    ]
+    if contract_modality == "chat" and trace_bindings:
+        plan = replace(
+            plan,
+            processes=tuple(
+                process.model_copy(
+                    update={
+                        "environment": {
+                            **process.environment,
+                            "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
+                            "ALK_TOOL_TRACE_BINDINGS": json.dumps(trace_bindings),
+                        }
+                    }
+                )
+                if isinstance(process, SourceProcess)
+                and process.name == plan.control_service
+                else process
+                for process in plan.processes
+            ),
+        )
+    if command_adapter_contract:
+        sealed_runtime = dict(contract_body["runtime"])
+        sealed_runtime["interface"] = {
+            "kind": "callable",
+            "protocol": "fi.alk",
+            "path": "",
+            "health_path": "",
+            "include_tools": False,
+        }
+        contract_body = {**contract_body, "runtime": sealed_runtime}
     provided_environment = {
         str(name).upper()
         for name in (job.metadata.get("environment_value_names", []) or [])
@@ -1563,6 +2321,9 @@ def author_bundle_v2(
             for process in plan.processes
             if isinstance(process, SourceProcess)
         },
+        # Match preflight: a template documents possible integrations, not every
+        # credential needed by the selected generic-runtime path.
+        template_secrets_required=job.metadata.get("generic_harness_v1") is not True,
     )
     if not credential_manifest.ready:
         missing = sorted(
@@ -1603,7 +2364,6 @@ def author_bundle_v2(
             )
         seed_dir = temporary / "seed"
         seed_dir.mkdir()
-        seed_path = seed_dir / "world.sql"
         prefix = (
             "CREATE TABLE IF NOT EXISTS harness_seed_sentinel (id text PRIMARY KEY);\n"
             "INSERT INTO harness_seed_sentinel(id) VALUES ('ready') ON CONFLICT DO NOTHING;\n"
@@ -1611,23 +2371,44 @@ def author_bundle_v2(
             "id bigserial PRIMARY KEY, name text NOT NULL, arguments jsonb NOT NULL, "
             "result jsonb, ok boolean NOT NULL, error text, at double precision NOT NULL);\n"
         )
-        schema, adopted_seed = _adopted_seed_sql(
-            authoring_root,
-            source=source_root,
-            contract=contract_body,
-        )
-        seed_path.write_text(prefix + schema, encoding="utf-8")
-        migrations = ["seed/world.sql"]
+        generic_pipeline = job.metadata.get("generic_harness_v1") is True
+        if generic_pipeline:
+            migrations, seed_files, adopted_seed = _generic_postgres_seed_artifacts(
+                authoring_root,
+                temporary,
+                source=source_root,
+                contract=contract_body,
+                prefix=prefix,
+                allow_harness_owned_schema=(
+                    command_adapter_contract
+                    or job.agent.mode
+                    in {
+                        ProviderExecutionMode.CONNECT_ONLY,
+                        ProviderExecutionMode.ENVIRONMENT_BACKED,
+                        ProviderExecutionMode.PROVIDER_IMPORT,
+                    }
+                ),
+            )
+        else:
+            seed_path = seed_dir / "world.sql"
+            schema, adopted_seed = _adopted_seed_sql(
+                authoring_root,
+                source=source_root,
+                contract=contract_body,
+            )
+            seed_path.write_text(prefix + schema, encoding="utf-8")
+            migrations = ["seed/world.sql"]
+            seed_files = []
         store = StoreEntry(
             capability="world_db",
             migrations=migrations,
-            seed_files=[],
+            seed_files=seed_files,
             baseline=StoreBaseline(
                 strategy=BaselineStrategy.TEMPLATE_DATABASE,
                 inputs_digest=compute_inputs_digest(
                     temporary,
                     migrations,
-                    [],
+                    seed_files,
                     engine=ManagedEngine.POSTGRES,
                     version="16",
                 ),
@@ -1728,11 +2509,17 @@ def author_bundle_v2(
                 + adopted_catalogue
                 + adopted_seed
                 + adopted_chat_files,
-                generated_files=["manifest.json", "seed/world.sql"],
+                generated_files=["manifest.json"]
+                + (
+                    [*migrations, *seed_files]
+                    if generic_pipeline
+                    else ["seed/world.sql"]
+                ),
             ),
             metadata={
                 "packaging": plan.packaging,
                 "environment_plan_version": "2",
+                **({"generic_harness": "v1"} if generic_pipeline else {}),
                 **(
                     {
                         "provider_connect_only": {
@@ -1801,6 +2588,13 @@ def author_bundle_v2(
             shutil.rmtree(backup)
         else:
             temporary.rename(output_root)
+        # The certificate binds to the sealed bundle digest, so it must remain a control-plane
+        # sidecar rather than becoming a manifest-listed file (which would create a digest cycle).
+        # Production compilation receives this file in the frozen authoring archive and places it
+        # beside /work/bundle for the hosted entrypoint's mandatory pre-call gate.
+        certificate = authoring_root / "runtime-validation.json"
+        if generic_pipeline and certificate.is_file() and not certificate.is_symlink():
+            shutil.copy2(certificate, output_root.parent / "runtime-validation.json")
         return loaded
     except Exception:
         shutil.rmtree(temporary, ignore_errors=True)

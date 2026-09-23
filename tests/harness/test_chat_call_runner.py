@@ -7,8 +7,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from fi.alk.harness import chat_call_runner as chat
 from fi.alk.harness.call_runner import CallRunnerContext
+from fi.alk.harness.hosted_scheduler import CallAborted
 from fi.alk.harness.job import HarnessJob
 from fi.alk.harness.process_runtime import (
     EnvironmentRuntime,
@@ -72,6 +75,172 @@ def test_http_wrapper_encodes_tool_history_for_selected_protocol() -> None:
         endpoint="http://agent/v1/chat/completions", protocol="openai_chat"
     )._request_payload(request)
     assert openai_payload["messages"][1]["tool_calls"] == calls
+
+
+def test_http_wrapper_adapts_source_described_json_api() -> None:
+    request = AgentInput(
+        thread_id="user-1",
+        execution_id="session-1",
+        turn_index=2,
+        messages=[{"role": "user", "content": "Weather in Austin?"}],
+        new_message={"role": "user", "content": "Weather in Austin?"},
+    )
+    wrapper = HTTPAgentWrapper(
+        endpoint="http://agent/run",
+        protocol="json_template",
+        request_template={
+            "user_id": "{{thread_id}}",
+            "session_id": "{{created_session_id}}",
+            "new_message": {
+                "role": "user",
+                "parts": [{"text": "{{new_message_content}}"}],
+            },
+        },
+        response_path="-1.content.parts.0.text",
+        setup_requests=[
+            {
+                "method": "POST",
+                "path": "/users/{{thread_id}}/sessions/{{execution_id}}",
+                "body_template": {"turn": "{{turn_index}}"},
+                "accepted_statuses": [201],
+                "capture": {"created_session_id": "id"},
+            }
+        ],
+    )
+    requests: list[tuple[str, str, Any]] = []
+
+    def request_json(
+        endpoint: str, *, method: str, payload: Any, headers: Any
+    ) -> tuple[int, Any]:
+        del headers
+        requests.append((endpoint, method, payload))
+        if endpoint.endswith("/run"):
+            return 200, [{"content": {"parts": [{"text": "It is sunny in Austin."}]}}]
+        return 201, {"id": "source-session-42"}
+
+    wrapper._request_json = request_json  # type: ignore[method-assign]
+    response = asyncio.run(wrapper.call(request))
+
+    assert response.content == "It is sunny in Austin."
+    assert requests == [
+        (
+            "http://agent/users/user-1/sessions/session-1",
+            "POST",
+            {"turn": 2},
+        ),
+        (
+            "http://agent/run",
+            "POST",
+            {
+                "user_id": "user-1",
+                "session_id": "source-session-42",
+                "new_message": {
+                    "role": "user",
+                    "parts": [{"text": "Weather in Austin?"}],
+                },
+            },
+        ),
+    ]
+
+
+def test_http_wrapper_resolves_event_schema_path_across_top_level_sse_list() -> None:
+    """A source-described event path applies to the newest matching event envelope."""
+    wrapper = HTTPAgentWrapper(
+        endpoint="http://agent/run",
+        protocol="json_template",
+        request_template={"message": "{{new_message_content}}"},
+        response_path="content.parts.0.text",
+    )
+    wrapper._request_json = lambda *args, **kwargs: (  # type: ignore[method-assign]
+        200,
+        [
+            {"metadata": {"phase": "started"}},
+            {"content": {"parts": [{"text": "Earlier partial response"}]}},
+            {"metadata": {"phase": "tool-finished"}},
+            {"content": {"parts": [{"text": "Final response"}]}},
+        ],
+    )
+
+    response = asyncio.run(
+        wrapper.call(
+            AgentInput(
+                thread_id="thread-1",
+                messages=[{"role": "user", "content": "Hello"}],
+                new_message={"role": "user", "content": "Hello"},
+            )
+        )
+    )
+
+    assert response.content == "Final response"
+
+
+def test_http_wrapper_preserves_nested_tool_evidence_from_json_events() -> None:
+    wrapper = HTTPAgentWrapper(
+        endpoint="http://agent/run",
+        protocol="json_template",
+        request_template={"message": "{{new_message_content}}"},
+        response_path="-1.content.parts.1.text",
+    )
+    payload = [
+        {
+            "content": {
+                "parts": [
+                    {
+                        "functionCall": {
+                            "id": "weather-1",
+                            "name": "get_weather",
+                            "args": {"city": "Austin"},
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "content": {
+                "parts": [
+                    {
+                        "functionResponse": {
+                            "id": "weather-1",
+                            "name": "get_weather",
+                            "response": {"temperature": 27},
+                        }
+                    },
+                    {"text": "It is 27 degrees in Austin."},
+                ]
+            }
+        },
+    ]
+    wrapper._request_json = lambda *args, **kwargs: (200, payload)  # type: ignore[method-assign]
+
+    response = asyncio.run(
+        wrapper.call(
+            AgentInput(
+                thread_id="thread-1",
+                messages=[{"role": "user", "content": "Weather in Austin?"}],
+                new_message={"role": "user", "content": "Weather in Austin?"},
+            )
+        )
+    )
+
+    assert response.content == "It is 27 degrees in Austin."
+    assert response.tool_calls == [
+        {
+            "id": "weather-1",
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "arguments": '{"city": "Austin"}',
+            },
+        }
+    ]
+    assert response.tool_responses == [
+        {
+            "tool_call_id": "weather-1",
+            "name": "get_weather",
+            "result": {"temperature": 27},
+            "error": None,
+        }
+    ]
 
 
 async def _single_exchange(
@@ -349,6 +518,41 @@ def test_hosted_chat_target_timeout_is_configurable(
 def test_hosted_chat_target_timeout_rejects_invalid_values(monkeypatch: Any) -> None:
     monkeypatch.setenv("ALK_CHAT_TARGET_TIMEOUT_SECONDS", "not-a-duration")
     assert chat._chat_target_timeout_seconds() == 120.0
+
+
+def test_hosted_chat_attributes_target_runtime_failure_to_agent(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    context = _context(tmp_path)
+    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+
+    async def failed(*_args: Any, **_kwargs: Any) -> Transcript:
+        raise RuntimeError("provider rejected the target model")
+
+    monkeypatch.setattr(chat, "_drive_conversation", failed)
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1",
+        world_index=0,
+        bundle_digest="sha256:" + "a" * 64,
+        state=RuntimeState.READY,
+        endpoints={
+            "target_http": RuntimeEndpoint(
+                capability="target_http",
+                protocol="http",
+                address="http://localhost:18080",
+            )
+        },
+    )
+
+    with pytest.raises(CallAborted) as error:
+        asyncio.run(
+            chat.HostedChatCallRunner(_Adapter(), context).run(
+                SimpleNamespace(scenario_key="one", scenario_id="scenario-1"),
+                runtime,
+            )
+        )
+
+    assert error.value.code == "target_agent_failed"
     monkeypatch.setenv("ALK_CHAT_TARGET_TIMEOUT_SECONDS", "0")
     assert chat._chat_target_timeout_seconds() == 120.0
 
@@ -457,9 +661,10 @@ def test_hosted_chat_continues_when_agent_asks_customer_for_account_id(
     # The judge settles a claim about wording from `messages`, and the voice lane once returned an
     # outcome without them, so a judged sub-goal had nothing to read. `agent` is the side under
     # test, so it must arrive as `assistant`.
-    assert {"role": "assistant", "content": "Your account is active and the yield is 3.1%."} in (
-        outcome.messages
-    )
+    assert {
+        "role": "assistant",
+        "content": "Your account is active and the yield is 3.1%.",
+    } in (outcome.messages)
     assert {"role": "user", "content": "My account ID is CLI-04."} in outcome.messages
 
 

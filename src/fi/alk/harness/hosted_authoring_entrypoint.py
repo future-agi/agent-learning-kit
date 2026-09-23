@@ -20,7 +20,10 @@ _SECRETS_PATH = Path("/run/futureagi/secrets.json")
 _ADC_PATH = Path("/work/.authoring-credentials/google.json")
 _TARGET_SECRETS_PATH = Path("/run/futureagi/authoring-target-secrets.json")
 _SIMULATOR_SECRETS_PATH = Path("/run/futureagi/simulator-secrets.json")
+_TARGET_CREDENTIAL_NAMES = {"RETELL_API_KEY", "VAPI_API_KEY"}
 _PASSTHROUGH = {
+    "AGENTCC_API_KEY",
+    "AGENTCC_BASE_URL",
     # Not a credential: authoring writes the scenarios, so the switch has to reach it.
     "ALK_VOICEMAIL_SCENARIOS",
     "ALK_CLAUDE_GATEWAY_URL",
@@ -36,6 +39,8 @@ _PASSTHROUGH = {
     "GOOGLE_GENAI_USE_VERTEXAI",
     "OPENAI_API_KEY",
 }
+
+
 def _load_values(path: Path) -> dict[str, str]:
     body = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(body, dict):
@@ -132,15 +137,32 @@ def _authoring_job_context(forwarded: list[str]) -> tuple[str, str, dict]:
     return "", "", {}
 
 
-
 def main(argv: list[str] | None = None) -> int:
+    # This process authors the environment but never runs the submitted target. Do not let a
+    # launcher-provided parent environment accidentally bypass the target-secrets file boundary.
+    for name in _TARGET_CREDENTIAL_NAMES:
+        os.environ.pop(name, None)
     all_values = _load_values(_SECRETS_PATH)
     values = _platform_simulator_values(all_values)
+    # The launch-time fallback authoring command runs before hosted_entrypoint consumes this
+    # control-plane channel. Read only the two authoring gateway values and leave the file for
+    # hosted_entrypoint to consume and delete. Never copy customer target credentials here.
+    try:
+        gateway_values = _load_values(_SIMULATOR_SECRETS_PATH)
+    except (OSError, ValueError):
+        gateway_values = {}
+    values.update(
+        {
+            name: gateway_values[name]
+            for name in ("AGENTCC_API_KEY", "AGENTCC_BASE_URL")
+            if gateway_values.get(name)
+        }
+    )
     _configure_generation_environment(values)
     _configure_observability_environment(all_values)
     target_values = {
         name: all_values[name]
-        for name in ("RETELL_API_KEY", "VAPI_API_KEY")
+        for name in _TARGET_CREDENTIAL_NAMES
         if all_values.get(name)
     }
     forwarded = list(argv) if argv is not None else sys.argv[1:]

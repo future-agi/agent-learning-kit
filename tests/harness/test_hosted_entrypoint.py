@@ -15,6 +15,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable
 from unittest import mock
 
@@ -51,8 +52,10 @@ from fi.alk.harness.job import (
     SourceVisibility,
 )
 from fi.alk.harness.process_runtime import (
+    BuildOutput,
     EnvironmentRuntime,
     ProcessRuntimeError,
+    ProcessRuntimeProvider,
     RuntimeEndpoint,
     RuntimeState,
 )
@@ -916,6 +919,8 @@ def test_load_simulator_secret_values_is_allowlisted_and_destructive(
                 "LIVEKIT_URL": "wss://platform-livekit.example",
                 "LIVEKIT_API_KEY": "platform-livekit-key",
                 "LIVEKIT_API_SECRET": "platform-livekit-secret",
+                "SIP_OUTBOUND_TRUNK_ID": "platform-trunk",
+                "SIP_OUTBOUND_FROM_NUMBER": "+14155550000",
                 "UNRELATED": "must-not-load",
             }
         ),
@@ -930,6 +935,8 @@ def test_load_simulator_secret_values_is_allowlisted_and_destructive(
         "LIVEKIT_URL": "wss://platform-livekit.example",
         "LIVEKIT_API_KEY": "platform-livekit-key",
         "LIVEKIT_API_SECRET": "platform-livekit-secret",
+        "SIP_OUTBOUND_TRUNK_ID": "platform-trunk",
+        "SIP_OUTBOUND_FROM_NUMBER": "+14155550000",
     }
     assert not path.exists()
 
@@ -1249,6 +1256,77 @@ def test_scenarios_client_provision_and_begin_hit_the_same_single_url() -> None:
     )
     urls = [call["url"] for call in transport.calls]
     assert urls == [capabilities.endpoints.scenarios, capabilities.endpoints.scenarios]
+
+
+def test_scenarios_client_uses_sandbox_mailbox_when_callback_is_unreachable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class OfflineTransport:
+        def request(self, *args: Any, **kwargs: Any) -> ob.TransportResponse:
+            raise ob.TransportError("callback blocked")
+
+    request_id = "a" * 32
+    monkeypatch.setattr(he.uuid, "uuid4", lambda: SimpleNamespace(hex=request_id))
+    response = tmp_path / f"{request_id}.response.json"
+    response.write_text(
+        json.dumps(
+            {
+                "result": {
+                    "run_test_id": "run-test-1",
+                    "scenarios": [{"scenario_key": "a", "scenario_id": "platform-a"}],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    client = he.ScenariosClient(
+        _capabilities(),
+        OfflineTransport(),
+        retry_policy=ob.RetryPolicy(max_attempts=1),
+        sleep=lambda _: None,
+        offline_control_root=tmp_path,
+    )
+
+    result = client.provision(
+        {
+            "operation": "provision",
+            "name": "run-1",
+            "personas": [{"scenario_key": "a"}],
+        }
+    )
+
+    assert result["scenarios"][0]["scenario_id"] == "platform-a"
+    request = json.loads(
+        (tmp_path / f"{request_id}.request.json").read_text(encoding="utf-8")
+    )
+    assert request["payload"]["operation"] == "provision"
+    assert request["job_id"] == _capabilities().job_id
+
+
+def test_scenarios_client_mailbox_wait_spans_platform_poll_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class OfflineTransport:
+        def request(self, *args: Any, **kwargs: Any) -> ob.TransportResponse:
+            raise ob.TransportError("callback blocked")
+
+    ticks = iter((100.0, 100.0, 399.0, 401.0))
+    monkeypatch.setattr(he.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(he.time, "sleep", lambda _: None)
+    client = he.ScenariosClient(
+        _capabilities(),
+        OfflineTransport(),
+        retry_policy=ob.RetryPolicy(max_attempts=1),
+        sleep=lambda _: None,
+        offline_control_root=tmp_path,
+        offline_control_timeout_seconds=300.0,
+    )
+
+    with pytest.raises(he.ScenarioPreallocationError) as caught:
+        client.provision({"operation": "provision", "name": "run-1", "personas": []})
+
+    assert caught.value.error is not None
+    assert caught.value.error.code == "offline_control_timeout"
 
 
 def test_scenarios_client_fencing_latches_the_shared_channel_state() -> None:
@@ -1841,6 +1919,285 @@ def test_build_json_fixed_port_at_w1_does_not_crash() -> None:
     asyncio.run(scenario())
 
 
+# --- C4 v1.3 §2 forward degrade transport: build.json `degrade_events` ledger -> events -------
+# The pure ledger->(effective, reason) mapper enforces the two guest-side invariants
+# (§2/§8: effective strictly decreasing, <=1 entry per reason) plus the `1 <= effective <
+# requested` bound and the "reason must be a DegradeReason member" rule (D28), before any emit.
+
+
+def test_degrade_events_to_emit_maps_each_entry_to_effective_and_reason() -> None:
+    assert he.degrade_events_to_emit(
+        [
+            {"reason": "resource_limited", "from_w": 4, "to_w": 2},
+            {"reason": "world_start_failed", "from_w": 2, "to_w": 1},
+        ],
+        requested=4,
+    ) == [(2, "resource_limited"), (1, "world_start_failed")]
+
+
+def _degrade_ledger_is_rejected(degrade_events: list, *, requested: int) -> None:
+    """The file drives `test_*` directly (no pytest runner), so expected-exception cases use
+    the try/except/else idiom rather than `pytest.raises`."""
+    try:
+        he.degrade_events_to_emit(degrade_events, requested=requested)
+    except ValueError:
+        return
+    raise AssertionError(
+        f"expected ValueError for degrade_events={degrade_events!r} requested={requested}"
+    )
+
+
+def test_degrade_events_to_emit_requires_effective_strictly_decreasing() -> None:
+    _degrade_ledger_is_rejected(
+        [
+            {"reason": "resource_limited", "from_w": 4, "to_w": 2},
+            {"reason": "world_start_failed", "from_w": 2, "to_w": 2},
+        ],
+        requested=4,
+    )
+
+
+def test_degrade_events_to_emit_requires_at_most_one_event_per_reason() -> None:
+    _degrade_ledger_is_rejected(
+        [
+            {"reason": "resource_limited", "from_w": 4, "to_w": 3},
+            {"reason": "resource_limited", "from_w": 3, "to_w": 2},
+        ],
+        requested=4,
+    )
+
+
+def test_degrade_events_to_emit_rejects_effective_zero() -> None:
+    # W'=0 is unrepresentable (`1 <= effective`, C4 §2); world 0 failing at the first
+    # provision call is a JOB FAILURE, never a degrade event.
+    _degrade_ledger_is_rejected(
+        [{"reason": "world_start_failed", "from_w": 2, "to_w": 0}], requested=2
+    )
+
+
+def test_degrade_events_to_emit_rejects_effective_not_below_requested() -> None:
+    _degrade_ledger_is_rejected(
+        [{"reason": "resource_limited", "from_w": 4, "to_w": 4}], requested=4
+    )
+
+
+def test_degrade_events_to_emit_rejects_a_non_degrade_reason() -> None:
+    # D28: `port_not_consumable` (or any non-`DegradeReason` string) must never be
+    # mis-routed into the degrade channel -- the mapper rejects it before any emit.
+    _degrade_ledger_is_rejected(
+        [{"reason": "port_not_consumable", "from_w": 4, "to_w": 1}], requested=4
+    )
+
+
+def test_build_json_degrade_events_list_emits_one_event_per_entry_in_causal_order() -> (
+    None
+):
+    # C4 §2: the emitter turns each `degrade_events` entry into ONE parallelism_degraded
+    # event, in list order; `requested` is the ATTEMPT CONSTANT (never `from_w`), `effective`
+    # is the entry's `to_w`, `reason` is the entry's reason.
+    async def scenario() -> None:
+        build_output = {
+            "requested_parallelism": 4,
+            "effective_parallelism": 1,
+            "degrade_reason": "world_start_failed",
+            "degrade_events": [
+                {"reason": "resource_limited", "from_w": 4, "to_w": 2},
+                {"reason": "world_start_failed", "from_w": 2, "to_w": 1},
+            ],
+        }
+        harness = _build_harness(scenarios=[], instances=1, build_output=build_output)
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
+        assert code == he.EXIT_OK
+        degrade_events = [
+            record
+            for record in harness.transport.event_records
+            if record.get("type") == "parallelism_degraded"
+        ]
+        assert [event["payload"] for event in degrade_events] == [
+            {"requested": 4, "effective": 2, "reason": "resource_limited"},
+            {"requested": 4, "effective": 1, "reason": "world_start_failed"},
+        ]
+        # invariants ON THE EMITTED STREAM (§8 guest MUSTs): effective strictly decreasing,
+        # at most one event per reason.
+        effectives = [event["payload"]["effective"] for event in degrade_events]
+        assert effectives == [2, 1]
+        assert all(a > b for a, b in zip(effectives, effectives[1:]))
+        reasons = [event["payload"]["reason"] for event in degrade_events]
+        assert len(reasons) == len(set(reasons))
+
+    asyncio.run(scenario())
+
+
+def test_build_json_missing_degrade_events_list_falls_back_to_legacy_scalars() -> None:
+    # C4 §2 missing-list fallback: an older guest (Track B behind Track C') writes only the
+    # legacy scalar fields. The emitter MUST fall back to them and still emit today's
+    # fixed_port/conformance_gate_failed event under the `1 <= effective < requested` guard --
+    # never nothing.
+    async def scenario() -> None:
+        build_output = {
+            "requested_parallelism": 3,
+            "effective_parallelism": 1,
+            "degrade_reason": "fixed_port",
+        }
+        harness = _build_harness(scenarios=[], instances=1, build_output=build_output)
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
+        assert code == he.EXIT_OK
+        degrade_events = [
+            record
+            for record in harness.transport.event_records
+            if record.get("type") == "parallelism_degraded"
+        ]
+        assert len(degrade_events) == 1
+        assert degrade_events[0]["payload"] == {
+            "requested": 3,
+            "effective": 1,
+            "reason": "fixed_port",
+        }
+
+    asyncio.run(scenario())
+
+
+def test_build_json_empty_degrade_events_list_uses_the_legacy_fallback() -> None:
+    # An EMPTY list is the no-forward-degrade snapshot: fall back to the legacy scalars
+    # exactly as a missing list does (never silence when the scalars record a degrade).
+    async def scenario() -> None:
+        build_output = {
+            "requested_parallelism": 2,
+            "effective_parallelism": 1,
+            "degrade_reason": "conformance_gate_failed",
+            "degrade_events": [],
+        }
+        harness = _build_harness(scenarios=[], instances=1, build_output=build_output)
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
+        assert code == he.EXIT_OK
+        degrade_events = [
+            record
+            for record in harness.transport.event_records
+            if record.get("type") == "parallelism_degraded"
+        ]
+        assert len(degrade_events) == 1
+        assert degrade_events[0]["payload"] == {
+            "requested": 2,
+            "effective": 1,
+            "reason": "conformance_gate_failed",
+        }
+
+    asyncio.run(scenario())
+
+
+def test_build_json_port_not_consumable_in_ledger_is_not_emitted_as_a_degrade() -> None:
+    # D28 / §2 terminal block: `port_not_consumable` must never reach build.json's
+    # degrade_events (B-prov raises it as a TERMINAL job failure, out-of-band). If a
+    # malformed ledger carries it anyway, the emitter routes it to a `log` and emits NO
+    # parallelism_degraded event -- it is never swallowed silently nor mis-routed into the
+    # degrade channel, and the run does not crash.
+    async def scenario() -> None:
+        build_output = {
+            "requested_parallelism": 4,
+            "effective_parallelism": 1,
+            "degrade_reason": "world_start_failed",
+            "degrade_events": [
+                {"reason": "port_not_consumable", "from_w": 4, "to_w": 1},
+            ],
+        }
+        scenarios = [FakeScenario("s1", "platform-s1", [FakeSubGoal("holds", True)])]
+        harness = _build_harness(
+            scenarios=scenarios, instances=1, build_output=build_output
+        )
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
+        assert code == he.EXIT_OK
+        assert harness.provisioner.closed is True  # no crash, pool not orphaned.
+        degrade_events = [
+            record
+            for record in harness.transport.event_records
+            if record.get("type") == "parallelism_degraded"
+        ]
+        assert degrade_events == []
+        log_events = [
+            record
+            for record in harness.transport.event_records
+            if record.get("type") == "log"
+        ]
+        assert any(
+            "port_not_consumable" in record["payload"]["message"]
+            for record in log_events
+        )
+
+    asyncio.run(scenario())
+
+
+def test_bprov_written_ledger_round_trips_through_the_cprime_emitter() -> None:
+    # Cross-track seam (B-prov WRITER -> C′ READER): drive the actual writer
+    # (`ProcessRuntimeProvider._append_degrade` + `BuildOutput.to_json`) and feed the produced
+    # `degrade_events` dict list straight into the C′ mapper. This proves the two tracks agree on
+    # the REAL serialized shape (key `degrade_events`, fields `{reason, from_w, to_w}`), not a
+    # hand-built stand-in. `_append_degrade`'s dedup (a repeat reason lowers `to_w` in place,
+    # never a second entry) is exercised here too.
+    provider = ProcessRuntimeProvider()
+    provider._append_degrade("resource_limited", 4, 3)
+    provider._append_degrade("world_start_failed", 3, 2)
+    provider._append_degrade("world_start_failed", 3, 1)  # dedup: lowers this entry's to_w to 1.
+
+    build_output = BuildOutput(
+        bundle_digest="digest",
+        stores=[],
+        requested_parallelism=4,
+        effective_parallelism=1,
+        degrade_events=list(provider._degrade_ledger),
+    )
+    serialized = build_output.to_json()
+
+    # The writer emits exactly the `{reason, from_w, to_w}` shape under key `degrade_events`, one
+    # entry per reason in causal order (the repeat `world_start_failed` updated in place, not
+    # appended twice).
+    assert list(serialized.keys()).count("degrade_events") == 1
+    assert serialized["degrade_events"] == [
+        {"reason": "resource_limited", "from_w": 4, "to_w": 3},
+        {"reason": "world_start_failed", "from_w": 3, "to_w": 1},
+    ]
+
+    # The C′ reader consumes that verbatim: each entry -> one (effective=to_w, reason) pair.
+    assert he.degrade_events_to_emit(
+        serialized["degrade_events"], requested=serialized["requested_parallelism"]
+    ) == [(3, "resource_limited"), (1, "world_start_failed")]
+
+
+def test_bprov_reason_vocabulary_is_lockstep_with_the_cprime_enum() -> None:
+    # Seam 3: every reason string B-prov's writer appends is a member of C′'s FIVE-member
+    # DegradeReason enum, and `port_not_consumable` is NEVER among them (D28: terminal, not a
+    # degrade). Drive the writer with each degrade reason it uses in process_runtime and assert
+    # the produced reason set equals the closed enum vocabulary.
+    writer_reasons = {
+        "resource_limited",
+        "literal_local_endpoint",
+        "fixed_port",
+        "world_start_failed",
+        "conformance_gate_failed",
+    }
+    enum_values = {member.value for member in ob.DegradeReason}
+    assert writer_reasons == enum_values
+    assert "port_not_consumable" not in enum_values
+    assert "port_not_consumable" not in he._DEGRADE_REASON_VALUES
+
+    # The reasons actually round-trip through the reader as members (no non-member leaks). Each is
+    # emitted in its own single-entry ledger so the strictly-decreasing check never gates them.
+    for reason in writer_reasons:
+        provider = ProcessRuntimeProvider()
+        provider._append_degrade(reason, 4, 1)
+        pairs = he.degrade_events_to_emit(
+            list(provider._degrade_ledger), requested=4
+        )
+        assert pairs == [(1, reason)]
+
+
 def test_e2e_two_scenarios_one_pass_one_fail_reaches_completed_and_exits_0() -> None:
     async def scenario() -> None:
         scenarios = [
@@ -1988,6 +2345,77 @@ def test_process_runtime_error_uses_the_carried_domain_over_the_fallback_map() -
     # closed map is consulted as a fallback only.
     asyncio.run(run_case("build_failed", None, "agent"))
     asyncio.run(run_case("seed_failed", None, "environment"))
+
+
+def test_run_job_arms_dispatch_ack_on_the_guest_process_env() -> None:
+    # FINDING 1 (D32 / C3 §4.5): the engine's dispatch-ack gate runs IN THIS guest main process
+    # (`hosted_entrypoint` -> `call_runner` -> `engines/livekit.py`) and reads
+    # `FI_HOSTED_DISPATCH_ACK` from `os.environ`. `run_job` (the guest main body) must arm it on the
+    # process env before any scenario/engine runs -- otherwise the ladder is dormant on the hosted
+    # path (the seam bug this test guards: the flag used to be authored onto the WRONG process, the
+    # spawned agent-under-test child, which never runs the engine). The gate's own read of this same
+    # key is proved in `test_livekit_dispatch_ack.py`.
+    async def scenario() -> None:
+        harness = _build_harness(scenarios=[], instances=1)
+        result = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
+        assert result == he.EXIT_OK
+        assert os.environ["FI_HOSTED_DISPATCH_ACK"] == "1"
+
+    had = "FI_HOSTED_DISPATCH_ACK" in os.environ
+    prev = os.environ.get("FI_HOSTED_DISPATCH_ACK")
+    os.environ.pop("FI_HOSTED_DISPATCH_ACK", None)
+    try:
+        asyncio.run(scenario())
+    finally:
+        if had:
+            os.environ["FI_HOSTED_DISPATCH_ACK"] = prev  # type: ignore[assignment]
+        else:
+            os.environ.pop("FI_HOSTED_DISPATCH_ACK", None)
+
+
+def test_port_not_consumable_crosses_the_terminal_seam_with_its_code_preserved() -> None:
+    # FINDING 2 (D28): B-prov raises `ProcessRuntimeError(code="port_not_consumable", domain=AGENT)`
+    # as the actionable terminal. `_section_2f_code` clamps any code absent from `SECTION_2F_DOMAIN`
+    # to `spawn_failed`, so unless `port_not_consumable` is in that table the actionable terminal
+    # code is lost. This drives the code through the real entrypoint terminal seam and asserts it
+    # ships intact (NOT relabeled `spawn_failed`), carrying its AGENT domain.
+    async def scenario() -> None:
+        class RaisingProvisioner(FakeProvisioner):
+            async def provision(
+                self,
+                bundle: Any,
+                *,
+                source: Path,
+                bundle_dir: Path,
+                work_directory: Path,
+                contract: Any | None = None,
+                instances: int = 1,
+            ) -> list[EnvironmentRuntime]:
+                del bundle, source, bundle_dir, work_directory, contract, instances
+                raise ProcessRuntimeError(
+                    "provision",
+                    "port_not_consumable",
+                    "the agent did not honor its assigned port",
+                    domain=FailureDomain.AGENT,
+                )
+
+        harness = _build_harness(scenarios=[], instances=1)
+        harness.deps.build_provider = lambda _capabilities, _transport: RaisingProvisioner(instances=1)
+        result = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
+        assert result == he.EXIT_OK
+        terminals = harness.transport.terminal_events()
+        assert len(terminals) == 1
+        failure = terminals[0]["payload"]["failure"]
+        assert failure["code"] == "port_not_consumable"
+        assert failure["code"] != "spawn_failed"
+        assert failure["domain"] == "agent"
+        assert failure["stage"] == "building_environment"
+
+    asyncio.run(scenario())
 
 
 def test_scenario_entry_missing_scenario_key_fails_cleanly_never_an_attributeerror() -> (
@@ -2329,6 +2757,43 @@ def test_call_aborted_with_no_ended_at_still_produces_a_receipt() -> None:
 # Additional tests: artifact-level admission coverage, terminal-delivery/receipt-rejection/
 # message-capping edge cases, and mutation-survivor gaps around cancellation and the CANCELED manifest.
 # =================================================================================================
+
+
+def test_outbound_delivery_is_mirrored_for_control_plane_recovery() -> None:
+    async def scenario() -> None:
+        scenarios = [FakeScenario("s1", "platform-s1", [FakeSubGoal("holds", True)])]
+        harness = _build_harness(scenarios=scenarios, instances=1)
+
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
+
+        assert code == he.EXIT_OK
+        mirror = harness.work / he.EVENTS_SPOOL_DIR_NAME
+        manifest = json.loads((mirror / "manifest.json").read_text(encoding="utf-8"))
+        receipt_paths = list((mirror / "receipts").glob("*.json"))
+        artifact_metadata = list((mirror / "artifacts").glob("*.json"))
+        assert manifest["complete"] is True
+        assert len(receipt_paths) == 1
+        assert (
+            json.loads(receipt_paths[0].read_text(encoding="utf-8"))["scenario_key"]
+            == "s1"
+        )
+        assert {
+            json.loads(path.read_text(encoding="utf-8"))["kind"]
+            for path in artifact_metadata
+        } >= {
+            "build",
+            "result",
+            "log",
+        }
+        for metadata_path in artifact_metadata:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            assert (
+                mirror / "artifacts" / f"{metadata['digest']}.bin"
+            ).stat().st_size == metadata["size"]
+
+    asyncio.run(scenario())
 
 
 def test_metadata_only_artifact_level_refuses_transcript_upload_end_to_end() -> None:
@@ -3977,7 +4442,9 @@ def test_a_provider_with_no_speed_setting_is_left_alone(monkeypatch):
     assert "speed" not in captured
 
 
-def test_the_delivery_a_persona_was_rendered_with_is_recoverable_from_the_log(monkeypatch, caplog):
+def test_the_delivery_a_persona_was_rendered_with_is_recoverable_from_the_log(
+    monkeypatch, caplog
+):
     """The only record of what the simulator actually sounded like.
 
     call_metadata reports conversation_speed 1.0 and a constant voice name on every call whatever
@@ -4051,9 +4518,13 @@ def test_two_personalities_do_not_share_one_emotional_register():
     from fi.alk.harness.simulator_voice import persona_emotion
 
     assert persona_emotion({"personality": "Warm and chatty"}) == ["positivity:high"]
-    assert persona_emotion({"personality": "Professional and formal"}) == ["positivity:low"]
+    assert persona_emotion({"personality": "Professional and formal"}) == [
+        "positivity:low"
+    ]
     assert persona_emotion({"personality": "Impatient and abrupt"}) == ["anger:low"]
-    assert persona_emotion({"personality": "Curious and sceptical"}) == ["curiosity:high"]
+    assert persona_emotion({"personality": "Curious and sceptical"}) == [
+        "curiosity:high"
+    ]
 
 
 def test_the_persona_s_emotion_reaches_the_speech_provider(monkeypatch):
@@ -4064,14 +4535,20 @@ def test_the_persona_s_emotion_reaches_the_speech_provider(monkeypatch):
 
     captured = {}
     monkeypatch.setattr(
-        livekit_models, "_import_plugin",
+        livekit_models,
+        "_import_plugin",
         lambda name: SimpleNamespace(TTS=lambda **kw: captured.update(kw) or "tts"),
     )
     monkeypatch.setenv("CARTESIA_API_KEY", "not-a-real-key")
 
     livekit_models._cartesia_tts(
-        TTSConfig(provider="cartesia", model="sonic-3", voice="abc",
-                  speed=1.05, emotion=["anger:low"]),
+        TTSConfig(
+            provider="cartesia",
+            model="sonic-3",
+            voice="abc",
+            speed=1.05,
+            emotion=["anger:low"],
+        ),
         http_session=None,
     )
 
@@ -4088,7 +4565,8 @@ def test_a_persona_with_no_recognised_emotion_sends_no_emotion_key(monkeypatch):
 
     captured = {}
     monkeypatch.setattr(
-        livekit_models, "_import_plugin",
+        livekit_models,
+        "_import_plugin",
         lambda name: SimpleNamespace(TTS=lambda **kw: captured.update(kw) or "tts"),
     )
     monkeypatch.setenv("CARTESIA_API_KEY", "not-a-real-key")

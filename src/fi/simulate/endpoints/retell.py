@@ -134,8 +134,8 @@ class RetellCallOriginator:
     coroutine, not Retell's server-side dial — a slow response can leave a
     live, billed call with no id in hand. Because ``from_number`` is the
     customer's production Retell number, the guard is fenced hard: proven
-    filter vocabulary only, a client-side window and exact-destination
-    match, and at most one stop.
+    filter vocabulary only, a client-side window, exact destination and
+    per-originator metadata ownership, and at most one unambiguous stop.
     """
 
     _base_url = "https://api.retellai.com"
@@ -161,6 +161,8 @@ class RetellCallOriginator:
         self._agent_id = agent_id
         self._from_number = from_number
         self._destination = destination
+        self._call_marker = uuid.uuid4().hex
+        self._start_attempted = False
         # Track ownership of the raw httpx client ourselves rather than via
         # AsyncRetell.close() — that call closes whatever http_client it was
         # given, owned or not, which would close a caller-injected client.
@@ -208,12 +210,16 @@ class RetellCallOriginator:
         )
 
     async def start(self) -> RetellCall:
+        if self._start_attempted:
+            raise ValueError("retell_originator_already_started")
+        self._start_attempted = True
         # Non-2xx raises retell.APIStatusError (a subclass covers each HTTP
         # status); we let it propagate, same failure surface as before.
         response = await self._client.call.create_phone_call(
             from_number=self._from_number,
             to_number=self._destination,
             override_agent_id=self._agent_id,
+            metadata={"futureagi_call_id": self._call_marker},
         )
         # A 2xx without a JSON content-type is passed through by the SDK as
         # raw text (or NoneType for a 204), not the typed PhoneCallResponse
@@ -494,15 +500,25 @@ class RetellCallOriginator:
             )
             return []
 
-        stoppable = [
+        owned = [
             row
             for row in destination_matches
+            if isinstance(row.get("metadata"), dict)
+            and row["metadata"].get("futureagi_call_id") == self._call_marker
+        ]
+        if not owned:
+            logger.warning("retell_reconcile_no_owned_call")
+            return []
+
+        stoppable = [
+            row
+            for row in owned
             if str(row.get("call_status") or "").lower() in self._STOPPABLE_STATUSES
         ]
         if not stoppable:
             return []
 
-        if len(stoppable) > 1:
+        if len(stoppable) != 1:
             # More than one in-window stoppable row from our line to the leased
             # DID. Source number + destination + window does not single out our
             # own call — concurrent calls, a duplicate request, or a prior

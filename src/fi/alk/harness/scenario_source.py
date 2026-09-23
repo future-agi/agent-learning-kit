@@ -22,6 +22,7 @@ payloads and merges the platform-assigned `scenario_id`s back onto each scenario
 from __future__ import annotations
 
 import asyncio
+import ast
 import json
 import logging
 from dataclasses import dataclass, field, replace
@@ -123,7 +124,12 @@ def _judged_placeholder_check(world: Any, calls: Any) -> None:
 
 
 def _compile_entry(
-    source: str, *, label: str, entry: str, allow_empty: bool = True
+    source: str,
+    *,
+    label: str,
+    entry: str,
+    allow_empty: bool = True,
+    defer_execution: bool = False,
 ) -> Callable[..., object]:
     """One scenario code-text -> a bare callable that raises, compiled ONCE here rather than per
     call. Mirrors `folder.py`'s `_run` in exactly two respects: `compile(source, name, "exec")`
@@ -157,6 +163,24 @@ def _compile_entry(
         # SyntaxError is the common case; a NUL byte in the source raises ValueError on some
         # interpreter versions (R1-1) rather than SyntaxError -- both are the same content defect.
         raise ScenarioDocumentInvalid(f"{label} would not compile: {exc}") from exc
+    if defer_execution:
+        definitions = ast.parse(source).body
+        if not any(
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == entry
+            for node in definitions
+        ):
+            raise ScenarioDocumentInvalid(f"{label} defines no {entry}()")
+
+        def deferred(*args: object) -> object:
+            # Compatibility for injected worlds; hosted worlds execute the source in a worker.
+            namespace: dict[str, Any] = {}
+            exec(code, namespace)  # noqa: S102 - compatibility for injected local worlds
+            return namespace[entry](*args)
+
+        deferred._alk_source = source
+        deferred._alk_entry = entry
+        return deferred
     namespace: dict[str, Any] = {}
     try:
         exec(code, namespace)  # noqa: S102 - scenario code is meant to be exec'd; see CONTRACT QUESTIONS
@@ -170,6 +194,8 @@ def _compile_entry(
     function = namespace.get(entry)
     if not callable(function):
         raise ScenarioDocumentInvalid(f"{label} defines no {entry}()")
+    function._alk_source = source
+    function._alk_entry = entry
     return function
 
 
@@ -359,6 +385,7 @@ def _load_one(
     *,
     settled_in_code: set[str] | None = None,
     declared_tools: set[str] | None = None,
+    defer_execution: bool = False,
 ) -> _CompiledScenario:
     """One scenario folder -> a `Scenario`-protocol object. Mirrors `folder.py`'s documented
     layout (`scenario.json` + `setup.py` + `ready.py` + `checks/<goal>.py`) but reads
@@ -425,10 +452,16 @@ def _load_one(
     setup_code = _read_text(folder / _SETUP_PY, label=folder.name)
     ready_code = _read_text(folder / _READY_PY, label=folder.name)
     setup = _compile_entry(
-        setup_code, label=f"{folder.name}/{_SETUP_PY}", entry="setup"
+        setup_code,
+        label=f"{folder.name}/{_SETUP_PY}",
+        entry="setup",
+        defer_execution=defer_execution,
     )
     ready = _compile_entry(
-        ready_code, label=f"{folder.name}/{_READY_PY}", entry="ready"
+        ready_code,
+        label=f"{folder.name}/{_READY_PY}",
+        entry="ready",
+        defer_execution=defer_execution,
     )
 
     sub_goals: list[_CompiledSubGoal] = []
@@ -440,6 +473,7 @@ def _load_one(
                 check_code,
                 label=f"{folder.name}/{_CHECKS_DIRNAME}/{name}.py",
                 entry="check",
+                defer_execution=defer_execution,
                 allow_empty=False,  # R1-2: an existing-but-empty check file is invalid, never a
                 # vacuous pass -- absence of the file is what means "judged".
             )
@@ -502,7 +536,9 @@ def _with_claims(
     return replace(scenario, sub_goals=restored)
 
 
-def load_scenarios(bundle_dir: Path) -> list[_CompiledScenario]:
+def load_scenarios(
+    bundle_dir: Path, *, defer_execution: bool = False
+) -> list[_CompiledScenario]:
     """Every scenario document under `<bundle_dir>/scenarios/`, compiled and wrapped, in the same
     sorted-by-folder-name order `folder.py`'s `read_all` uses. Raises `ScenarioDocumentInvalid` on
     the FIRST unreadable or malformed folder -- unlike `read_all`, which skips one and continues;
@@ -534,6 +570,7 @@ def load_scenarios(bundle_dir: Path) -> list[_CompiledScenario]:
                     folder,
                     settled_in_code=settled_in_code,
                     declared_tools=declared_tools,
+                    defer_execution=defer_execution,
                 ),
                 claims,
             )
@@ -567,7 +604,7 @@ class BundleScenarioSource:
         # `preflight_bundle`, rather than stalling every other in-flight scenario behind it.
         try:
             scenarios = await asyncio.wait_for(
-                asyncio.to_thread(load_scenarios, bundle_dir),
+                asyncio.to_thread(load_scenarios, bundle_dir, defer_execution=True),
                 timeout=_LOAD_TIMEOUT_SECONDS,
             )
         except asyncio.TimeoutError as exc:

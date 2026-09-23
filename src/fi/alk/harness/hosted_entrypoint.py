@@ -78,6 +78,14 @@ from .world.stores.postgres import AttachedPostgresStore
 logger = logging.getLogger(__name__)
 
 
+# A filesystem control request is serviced by the platform's polling activity.  One poll may
+# legitimately spend up to five minutes creating the platform RunTest/TestExecution records and
+# can then be retried by Temporal after committing those idempotent records.  Keep the guest alive
+# across that retry boundary.  This is deliberately longer than one poll, but still bounded so a
+# genuinely abandoned mailbox produces a typed failure instead of hanging the sandbox forever.
+DEFAULT_OFFLINE_CONTROL_TIMEOUT_SECONDS = 15 * 60.0
+
+
 class _JobIdFilter(logging.Filter):
     """Stamp every log record with the job this runner is serving.
 
@@ -180,6 +188,8 @@ _SIMULATOR_SECRET_ALIASES = frozenset(
         "ALK_VOICEMAIL_SCENARIOS",
         "ALK_HARNESS_MODEL",
         "ALK_HARNESS_THINKING",
+        "AGENTCC_API_KEY",
+        "AGENTCC_BASE_URL",
         "ALK_VERTEX_LOCATION",
         "CARTESIA_API_KEY",
         "DEEPGRAM_API_KEY",
@@ -199,6 +209,8 @@ _SIMULATOR_SECRET_ALIASES = frozenset(
         "LIVEKIT_URL",
         "LIVEKIT_API_KEY",
         "LIVEKIT_API_SECRET",
+        "SIP_OUTBOUND_TRUNK_ID",
+        "SIP_OUTBOUND_FROM_NUMBER",
         "OPENAI_API_KEY",
         "SIMULATOR_LLM_MODEL",
         "SIMULATOR_LLM_PROVIDER",
@@ -413,6 +425,10 @@ _SECTION_2E_CODES = frozenset(
         "capability_slug_invalid",
         "process_name_invalid",
         "fixed_port_reserved",
+        "certification_missing",
+        "certification_invalid",
+        "certification_mismatch",
+        "certification_incomplete",
     }
 )
 
@@ -555,6 +571,79 @@ def load_build_output(work_directory: Path) -> dict[str, Any]:
         raise WorldFactoryError(f"build.json unreadable at {path}: {exc}") from exc
 
 
+# The closed set of degrade reason STRINGS the guest may emit -- C4 v1.3 §2's five members
+# (`outbound.DegradeReason`). `port_not_consumable` is deliberately absent (D28: a TERMINAL job
+# failure, never a degrade); membership here is what keeps it (and any non-member) out of the
+# `parallelism_degraded` channel at the mapper below, before any event is built.
+_DEGRADE_REASON_VALUES: frozenset[str] = frozenset(
+    member.value for member in ob.DegradeReason
+)
+
+
+def degrade_events_to_emit(
+    degrade_events: Sequence[Any], *, requested: int
+) -> list[tuple[int, str]]:
+    """C4 v1.3 §2 forward transport: map build.json's `degrade_events` ledger
+    (`[{reason, from_w, to_w}]`, appended in causal order by Track B's provisioner) to the
+    ordered `(effective, reason)` pairs the emitter turns into ONE `parallelism_degraded`
+    event each. `effective` is the entry's `to_w`; `requested` is the ATTEMPT CONSTANT the
+    caller supplies (never an entry's `from_w`).
+
+    Enforces the guest-side MUSTs (§2/§8) over the WHOLE list BEFORE any emit, so a violation
+    never leaves a partial event stream:
+
+    - every `reason` is a `DegradeReason` member -- `port_not_consumable` (D28) and any other
+      non-member are REJECTED here, never mis-routed into the degrade channel;
+    - AT MOST ONE entry per reason (B-prov's dedup guarantees this; we assert it holds);
+    - `effective` (`to_w`) STRICTLY DECREASING across entries in list order;
+    - `1 <= effective < requested` for every entry (no `effective: 0` -- W'=0 is a job
+      failure, not a degrade; no non-degrade `effective == requested`).
+
+    Raises `ValueError` on any violation or malformed entry; the emitter's guarded block routes
+    that to a `log` (never a crash, never a partial/mis-routed emit). An empty list yields an
+    empty result (the caller then applies the §2 missing-list legacy-scalar fallback)."""
+    seen_reasons: set[str] = set()
+    previous_effective: int | None = None
+    to_emit: list[tuple[int, str]] = []
+    for entry in degrade_events:
+        if not isinstance(entry, dict):
+            raise ValueError(f"degrade_events entry is not an object: {entry!r}")
+        reason = entry.get("reason")
+        if reason not in _DEGRADE_REASON_VALUES:
+            # covers `port_not_consumable` (D28) AND any unknown string -- the guest enum is in
+            # lockstep with Track B's writer (§8), so a non-member is a malformed ledger.
+            raise ValueError(
+                f"degrade_events entry carries a non-degrade reason {reason!r}; "
+                "the closed DegradeReason vocabulary does not list it "
+                "(port_not_consumable is a terminal job failure, not a degrade)"
+            )
+        reason = str(reason)
+        if reason in seen_reasons:
+            raise ValueError(
+                f"degrade_events lists reason {reason!r} more than once "
+                "(>1 event per reason per attempt violates the C4 §2 invariant)"
+            )
+        seen_reasons.add(reason)
+        to_w = entry.get("to_w")
+        if not isinstance(to_w, int) or isinstance(to_w, bool):
+            raise ValueError(
+                f"degrade_events entry {reason!r} has a non-int to_w: {to_w!r}"
+            )
+        if not (1 <= to_w < requested):
+            raise ValueError(
+                f"degrade_events entry {reason!r} has to_w={to_w} outside "
+                f"1 <= effective < requested={requested}"
+            )
+        if previous_effective is not None and not (to_w < previous_effective):
+            raise ValueError(
+                f"degrade_events effective not strictly decreasing: "
+                f"{previous_effective} -> {to_w} at reason {reason!r}"
+            )
+        previous_effective = to_w
+        to_emit.append((to_w, reason))
+    return to_emit
+
+
 def row_counts_for_capability(
     build_output: dict[str, Any], capability: str
 ) -> dict[str, int]:
@@ -614,7 +703,7 @@ class NotWiredCallRunner:
         )
 
 
-_VOICE_CONNECTORS = {"livekit", "vapi", "retell"}
+_VOICE_CONNECTORS = {"livekit", "vapi", "retell", "phone"}
 
 
 def _bundle_contract_value(bundle_dir: Path, key: str) -> str | None:
@@ -647,25 +736,26 @@ def _default_build_call_runner(
     connector = context.job.agent.connector.lower()
     modality = _bundle_contract_modality(context.bundle_dir)
     if connector == "retell_chat":
-        from .retell_chat_call_runner import RetellChatCallRunner
+        from .chat_worker import IsolatedChatCallRunner
 
-        return RetellChatCallRunner(adapter, context)
+        return IsolatedChatCallRunner(adapter, context)
     if connector in _VOICE_CONNECTORS or (connector == "auto" and modality == "voice"):
         # The understand stage read this off the agent's own instructions, so the contract is the
         # only source. Carried through the process environment because `CallRunnerImpl` is handed a
         # context and a scenario document, neither of which reaches the contract; this is an
         # internal hop, not a knob, and nothing outside sets it.
         declared = _bundle_contract_value(context.bundle_dir, "call_direction")
+        call_environ = dict(os.environ)
         if declared:
-            os.environ["ALK_CALL_DIRECTION"] = declared
-        return CallRunnerImpl(adapter, context)
+            call_environ["ALK_CALL_DIRECTION"] = declared
+        return CallRunnerImpl(adapter, context, environ=call_environ)
     # Repository-hosted text targets advertise their concrete HTTP interface in the frozen
     # contract adopted into Bundle V2. Connector-only Vapi/Retell remains on the existing
     # NotWired path and is deliberately not inferred as repository chat.
     if (context.bundle_dir / "contract.json").is_file():
-        from .chat_call_runner import HostedChatCallRunner
+        from .chat_worker import IsolatedChatCallRunner
 
-        return HostedChatCallRunner(adapter, context)
+        return IsolatedChatCallRunner(adapter, context)
     return NotWiredCallRunner()
 
 
@@ -713,6 +803,8 @@ class ScenariosClient:
         channel_state: ob.ChannelState | None = None,
         provision_path: str = "",
         begin_path: str = "",
+        offline_control_root: Path | None = None,
+        offline_control_timeout_seconds: float = DEFAULT_OFFLINE_CONTROL_TIMEOUT_SECONDS,
     ) -> None:
         self._capabilities = capabilities
         self._transport = transport or ob.RequestsTransport()
@@ -722,6 +814,95 @@ class ScenariosClient:
         self._channel_state = channel_state or ob.ChannelState()
         self._provision_path = provision_path
         self._begin_path = begin_path
+        self._offline_control_root = offline_control_root
+        if offline_control_timeout_seconds <= 0:
+            raise ValueError("offline_control_timeout_seconds must be positive")
+        self._offline_control_timeout_seconds = offline_control_timeout_seconds
+
+    def configure_offline_control(self, root: Path) -> None:
+        """Enable the sandbox mailbox used when the platform callback is unreachable."""
+
+        self._offline_control_root = root
+
+    def _post_offline(
+        self, payload: dict[str, Any], *, deadline: float | None
+    ) -> dict[str, Any]:
+        root = self._offline_control_root
+        if root is None:
+            raise ScenarioPreallocationError(
+                ob.ChannelError(
+                    ob.ChannelOutcome.RETRYABLE,
+                    FailureDomain.CONNECTIVITY,
+                    "network_error",
+                    "transport failure: no response received",
+                )
+            )
+        request_id = uuid.uuid4().hex
+        request_path = root / f"{request_id}.request.json"
+        response_path = root / f"{request_id}.response.json"
+        temporary = root / f".{request_id}.tmp"
+        root.mkdir(parents=True, exist_ok=True)
+        body = {
+            "job_id": self._capabilities.job_id,
+            "attempt_id": self._capabilities.attempt_id,
+            "attempt_number": self._capabilities.attempt_number,
+            "payload": payload,
+        }
+        temporary.write_text(
+            json.dumps(body, sort_keys=True, separators=(",", ":")), encoding="utf-8"
+        )
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, request_path)
+        expires = (
+            deadline
+            if deadline is not None
+            else time.monotonic() + self._offline_control_timeout_seconds
+        )
+        while time.monotonic() < expires:
+            if response_path.is_file():
+                try:
+                    response = json.loads(response_path.read_text(encoding="utf-8"))
+                except (OSError, ValueError) as exc:
+                    raise ScenarioPreallocationError(
+                        ob.ChannelError(
+                            ob.ChannelOutcome.PERMANENT_ITEM,
+                            FailureDomain.PLATFORM_SYNC,
+                            "offline_control_response_invalid",
+                            str(exc),
+                        )
+                    ) from exc
+                error = response.get("error") if isinstance(response, dict) else None
+                if isinstance(error, dict):
+                    raise ScenarioPreallocationError(
+                        ob.ChannelError(
+                            ob.ChannelOutcome.PERMANENT_ITEM,
+                            FailureDomain.PLATFORM_SYNC,
+                            str(error.get("code") or "offline_control_failed"),
+                            str(
+                                error.get("message") or "platform rejected the request"
+                            ),
+                        )
+                    )
+                result = response.get("result") if isinstance(response, dict) else None
+                if isinstance(result, dict):
+                    return result
+                raise ScenarioPreallocationError(
+                    ob.ChannelError(
+                        ob.ChannelOutcome.PERMANENT_ITEM,
+                        FailureDomain.PLATFORM_SYNC,
+                        "offline_control_response_invalid",
+                        "mailbox response has no result object",
+                    )
+                )
+            time.sleep(1.0)
+        raise ScenarioPreallocationError(
+            ob.ChannelError(
+                ob.ChannelOutcome.RETRYABLE,
+                FailureDomain.CONNECTIVITY,
+                "offline_control_timeout",
+                "platform did not process the sandbox control request before its deadline",
+            )
+        )
 
     def provision(
         self, payload: dict[str, Any], *, deadline: float | None = None
@@ -759,6 +940,8 @@ class ScenariosClient:
             self._channel_state.latch(exc)
             raise
         if error is not None or response is None:
+            if error is None or error.status_code is None:
+                return self._post_offline(payload, deadline=deadline)
             raise ScenarioPreallocationError(error)
         body = response.body if isinstance(response.body, dict) else {}
         result = body.get("result")
@@ -871,6 +1054,7 @@ class OutboundAdapter:
         self._stage_started = False
         self._current_stage = HarnessStage.QUEUED
         self._uploaded_digests: set[str] = set()
+        self._offline_artifact_digests: set[str] = set()
         self._manifest_entries: list[dict[str, Any]] = []
         self._terminal_emitted = False
         # §0.6 v1.14 (exit code 4): the terminal record's own spool sequence, and whether the
@@ -906,6 +1090,74 @@ class OutboundAdapter:
         # concurrent scenarios at W>1 racing the same remaining budget could otherwise both pass
         # the check against a snapshot neither has updated yet.
         self._artifact_budget_lock = asyncio.Lock()
+
+    def _persist_offline_json(self, relative_path: Path, value: object) -> None:
+        """Mirror outbound records for control-plane recovery when HTTPS is unavailable.
+
+        Daytona may permit the model/provider destinations while denying arbitrary callback
+        domains at the organization boundary.  The platform still owns the sandbox, so keeping a
+        durable, secret-redacted copy beside the event spool lets its poller replay the exact same
+        signed wire records without weakening the outbound contract.
+        """
+
+        path = self._spool.root / relative_path
+        temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            body = json.dumps(
+                value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+            ).encode("utf-8")
+            with temporary.open("wb") as stream:
+                stream.write(body)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.chmod(temporary, 0o600)
+            os.replace(temporary, path)
+        except OSError as exc:
+            logger.warning(
+                "offline outbound mirror failed for %s: %s", relative_path, exc
+            )
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    def _persist_offline_artifact(
+        self,
+        *,
+        digest: str,
+        data: bytes,
+        kind: ob.ArtifactKind,
+        scenario_key: str | None,
+    ) -> None:
+        root = self._spool.root / "artifacts"
+        body_path = root / f"{digest}.bin"
+        temporary = root / f".{digest}.{uuid.uuid4().hex}.tmp"
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+            if not body_path.exists():
+                with temporary.open("wb") as stream:
+                    stream.write(data)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.chmod(temporary, 0o600)
+                os.replace(temporary, body_path)
+            self._persist_offline_json(
+                Path("artifacts") / f"{digest}.json",
+                {
+                    "digest": digest,
+                    "kind": kind.value,
+                    "size": len(data),
+                    "content_type": ob._artifact_content_type(kind, data),
+                    "scenario_key": scenario_key,
+                },
+            )
+        except OSError as exc:
+            logger.warning("offline artifact mirror failed for %s: %s", digest, exc)
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     @property
     def is_fenced(self) -> bool:
@@ -1232,6 +1484,7 @@ class OutboundAdapter:
             failure=failure,
             extra_secret_values=self._extra_secret_values,
         )
+        self._persist_offline_json(Path("receipts") / f"{wire['digest']}.json", wire)
         push_result = await asyncio.to_thread(
             self._guarded, lambda: self._results.push(wire)
         )
@@ -1296,6 +1549,22 @@ class OutboundAdapter:
                 )
                 return None
             self._budget_tracker.record(kind, len(data), digest=digest)
+        self._persist_offline_artifact(
+            digest=digest,
+            data=data,
+            kind=kind,
+            scenario_key=scenario_key,
+        )
+        if digest not in self._offline_artifact_digests:
+            self._offline_artifact_digests.add(digest)
+            self._manifest_entries.append(
+                {
+                    "artifact_id": f"sha256:{digest}",
+                    "kind": kind.value,
+                    "size": len(data),
+                    "scenario_key": scenario_key,
+                }
+            )
         result = await asyncio.to_thread(
             self._guarded,
             lambda: self._artifacts.upload(
@@ -1313,14 +1582,6 @@ class OutboundAdapter:
             )
             return None
         self._uploaded_digests.add(digest)
-        self._manifest_entries.append(
-            {
-                "artifact_id": f"sha256:{digest}",
-                "kind": kind.value,
-                "size": len(data),
-                "scenario_key": scenario_key,
-            }
-        )
         return f"sha256:{digest}"
 
     async def push_manifest(
@@ -1335,6 +1596,7 @@ class OutboundAdapter:
             entries=list(self._manifest_entries),
             complete=complete,
         )
+        self._persist_offline_json(Path("manifest.json"), wire)
         result = await asyncio.to_thread(
             self._guarded,
             lambda: self._artifacts.push_manifest(wire, deadline=deadline),
@@ -1781,6 +2043,12 @@ async def run_job(
     simulator_secret_values = deps.load_simulator_secret_values()
     os.environ.update(simulator_secret_values)
 
+    # Arm the C3 dispatch-ack ladder (engines/livekit.py `_dispatch_ack_enabled`) on THIS guest
+    # main process, whose in-process `os.environ` the engine reads -- inherently hosted-only, since
+    # `hosted_entrypoint` IS the hosted guest main (the local lane never runs it, so its gate stays
+    # off). Must precede any scenario/engine run below.
+    os.environ.setdefault("FI_HOSTED_DISPATCH_ACK", "1")
+
     # 1. Boot -- capabilities. CapabilitiesError -> exit non-zero-and-NOT-3, no event (v1.3 table):
     # there is no channel yet to report a terminal event through.
     try:
@@ -1818,6 +2086,7 @@ async def run_job(
         transport,
         UsageJournal(work_directory / "usage.json", attempt_id=capabilities.attempt_id),
     )
+    scenarios_client.configure_offline_control(events_spool.root / "control")
 
     adapter = OutboundAdapter(
         capabilities,
@@ -1890,7 +2159,7 @@ async def run_job(
             logger.error(
                 "Hosted usage report could not be delivered before terminalization "
                 "for attempt %s",
-                job.attempt_id,
+                capabilities.attempt_id,
             )
         # Artifact bytes must be uploaded before the terminal-referenced complete manifest.  The
         # terminal event itself remains before receipts and the manifest on the outbound channel.
@@ -2058,6 +2327,39 @@ async def run_job(
                 message=exc.message,
             )
 
+        if (manifest.metadata or {}).get("generic_harness") == "v1":
+            from .certification import (
+                CertificationGateError,
+                verify_runtime_certification,
+            )
+
+            try:
+                certificate = await asyncio.to_thread(
+                    verify_runtime_certification,
+                    work_directory / "runtime-validation.json",
+                    bundle_digest=manifest.digest,
+                    source_digest=manifest.provenance.source_digest,
+                )
+            except CertificationGateError as exc:
+                return await _fail(
+                    domain=FailureDomain.ENVIRONMENT,
+                    fail_stage=HarnessStage.VALIDATING_ENVIRONMENT,
+                    code=exc.code,
+                    message=exc.message,
+                )
+            await adapter.log(
+                level="info",
+                message=(
+                    "generic harness certification accepted: "
+                    f"fingerprint={certificate.fingerprint}; "
+                    f"source={certificate.source.digest}; "
+                    f"bundle={certificate.compiler.bundle_digest}; "
+                    f"scenarios={certificate.checks.scenario_setup_ready}; "
+                    f"tools={certificate.checks.tool_contract}; "
+                    f"limitations={len(certificate.limitations)}"
+                ),
+            )
+
         # 2. Preflight -- BEFORE any provision (§2e). `parallelism` is the RAW requested value
         # (never clamped), so an out-of-1..8 W fails HERE with `parallelism_out_of_range`, per
         # §2e.7, rather than being silently laundered into a valid one.
@@ -2151,11 +2453,33 @@ async def run_job(
                         inputs_digest=str(store.get("inputs_digest", "")),
                         baseline_ref=str(store.get("baseline_reference", "")),
                     )
-            degrade_reason = build_output.get("degrade_reason")
-            if degrade_reason:
-                requested = int(
-                    build_output.get("requested_parallelism") or parallelism
-                )
+            requested = int(build_output.get("requested_parallelism") or parallelism)
+            degrade_events = build_output.get("degrade_events")
+            if isinstance(degrade_events, list) and degrade_events:
+                # C4 v1.3 §2 forward transport: emit ONE `parallelism_degraded` event per
+                # ledger entry, in causal (list) order -- `requested` the attempt constant,
+                # `effective` the entry's `to_w`, `reason` the entry's reason. Emission is
+                # ONE-SHOT (§2 / C2 §6 emission split): the ledger is read ONCE here at
+                # entrypoint emission; post-emission ledger updates are NOT re-emitted (they
+                # surface via the scheduler's sick-world path). The mapper enforces the two
+                # invariants (effective strictly decreasing, <=1 event per reason) and the
+                # `1 <= effective < requested` bound over the WHOLE list before any emit, and
+                # rejects `port_not_consumable`/any non-`DegradeReason` string (D28) -- a
+                # violation raises and is routed to a `log` below, never a partial/mis-routed
+                # emit.
+                for effective, reason in degrade_events_to_emit(
+                    degrade_events, requested=requested
+                ):
+                    adapter.parallelism_degraded(
+                        requested=requested, effective=effective, reason=reason
+                    )
+                    degrade_emitted = True
+            elif build_output.get("degrade_reason"):
+                # C4 §2 missing-list fallback: no `degrade_events` list (a snapshot where the
+                # v2 emitter is ahead of Track B's list writer, so only the legacy scalar
+                # fields are present) -- fall back to them and still emit today's
+                # `fixed_port`/`conformance_gate_failed` event, NEVER nothing.
+                degrade_reason = build_output["degrade_reason"]
                 effective = int(build_output.get("effective_parallelism") or 1)
                 # `ParallelismDegradedPayload` requires `1 <= effective < requested` --
                 # `fixed_port` is recorded at `instances == 1` too (provider-side gap), where
@@ -2407,6 +2731,7 @@ __all__ = [
     "ScenarioSourceNotWired",
     "ScenariosClient",
     "WorldFactoryError",
+    "degrade_events_to_emit",
     "install_sigterm_handler",
     "job_secret_purposes",
     "load_build_output",

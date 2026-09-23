@@ -3,11 +3,12 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.request
 from typing import Any, Mapping, Optional, Sequence
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 from fi.simulate.agent.wrapper import (
     AgentInput,
@@ -34,6 +35,9 @@ class HTTPAgentWrapper(AgentWrapper):
         include_tools: bool = True,
         system_prompt: Optional[str] = None,
         metadata: Optional[Mapping[str, Any]] = None,
+        request_template: Any = None,
+        response_path: str = "",
+        setup_requests: Optional[Sequence[Mapping[str, Any]]] = None,
     ) -> None:
         if not endpoint:
             raise ValueError("endpoint is required")
@@ -47,15 +51,21 @@ class HTTPAgentWrapper(AgentWrapper):
         self.include_tools = bool(include_tools)
         self.system_prompt = system_prompt
         self.metadata = dict(metadata or {})
+        self.request_template = request_template
+        self.response_path = str(response_path or "").strip()
+        self.setup_requests = [dict(item) for item in (setup_requests or [])]
+        self._setup_complete = False
+        self._setup_values: dict[str, Any] = {}
 
     async def call(self, input: AgentInput) -> AgentResponse:
         started = time.time()
-        request_payload = self._request_payload(input)
         headers = self._request_headers()
         status_code = 0
         response_payload: dict[str, Any] = {}
         error: Optional[str] = None
         try:
+            await asyncio.to_thread(self._ensure_setup, input, headers)
+            request_payload = self._request_payload(input)
             status_code, response_payload = await asyncio.to_thread(
                 self._post_json,
                 request_payload,
@@ -118,6 +128,14 @@ class HTTPAgentWrapper(AgentWrapper):
         return response
 
     def _request_payload(self, input: AgentInput) -> dict[str, Any]:
+        if self.protocol == "json_template":
+            rendered = _render_template(
+                self.request_template,
+                _template_context(input, extra=self._setup_values),
+            )
+            if not isinstance(rendered, Mapping):
+                raise ValueError("json_template request must render to a JSON object")
+            return dict(rendered)
         messages = _messages_for_protocol(input.messages, self.protocol)
         if self.system_prompt:
             messages = [{"role": "system", "content": self.system_prompt}, *messages]
@@ -151,6 +169,47 @@ class HTTPAgentWrapper(AgentWrapper):
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
 
+    def _ensure_setup(
+        self,
+        input: AgentInput,
+        headers: Mapping[str, str],
+    ) -> None:
+        if self._setup_complete or not self.setup_requests:
+            return
+        context = _template_context(input, extra=self._setup_values)
+        parsed = urlparse(self.endpoint)
+        origin = f"{parsed.scheme}://{parsed.netloc}/"
+        for item in self.setup_requests:
+            path = _render_template(str(item.get("path") or ""), context)
+            method = str(item.get("method") or "POST").upper()
+            body = _render_template(item.get("body_template", {}), context)
+            accepted = {
+                int(value)
+                for value in item.get("accepted_statuses", [200, 201, 204, 409])
+            }
+            status, payload = self._request_json(
+                urljoin(origin, str(path).lstrip("/")),
+                method=method,
+                payload=body,
+                headers=headers,
+            )
+            if status not in accepted:
+                detail = _response_error_text(payload)
+                raise RuntimeError(
+                    f"HTTP setup request returned status {status}"
+                    + (f": {detail}" if detail else "")
+                )
+            captures = item.get("capture") or {}
+            if not isinstance(captures, Mapping):
+                raise ValueError("HTTP setup capture must be an object")
+            for raw_name, raw_path in captures.items():
+                name = str(raw_name)
+                self._setup_values[name] = _select_response_value(
+                    payload, str(raw_path)
+                )
+                context[name] = self._setup_values[name]
+        self._setup_complete = True
+
     def _resolved_api_key(self) -> str:
         if self.api_key not in (None, ""):
             return str(self.api_key)
@@ -162,13 +221,32 @@ class HTTPAgentWrapper(AgentWrapper):
         self,
         payload: Mapping[str, Any],
         headers: Mapping[str, str],
-    ) -> tuple[int, dict[str, Any]]:
-        body = json.dumps(payload, default=str).encode("utf-8")
-        request = urllib.request.Request(
+    ) -> tuple[int, Any]:
+        return self._request_json(
             self.endpoint,
+            method="POST",
+            payload=payload,
+            headers=headers,
+        )
+
+    def _request_json(
+        self,
+        endpoint: str,
+        *,
+        method: str,
+        payload: Any,
+        headers: Mapping[str, str],
+    ) -> tuple[int, Any]:
+        body = (
+            None
+            if method == "GET"
+            else json.dumps(payload, default=str).encode("utf-8")
+        )
+        request = urllib.request.Request(
+            endpoint,
             data=body,
             headers=dict(headers),
-            method="POST",
+            method=method,
         )
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
@@ -179,15 +257,19 @@ class HTTPAgentWrapper(AgentWrapper):
             text = exc.read().decode("utf-8")
         if not text:
             return status, {}
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"HTTP target returned non-JSON response: {exc}") from exc
-        if not isinstance(parsed, dict):
-            raise ValueError("HTTP target response must be a JSON object")
-        return status, parsed
+        return status, _decode_json_or_sse(text)
 
-    def _agent_response_from_payload(self, payload: Mapping[str, Any]) -> AgentResponse:
+    def _agent_response_from_payload(self, payload: Any) -> AgentResponse:
+        if self.protocol == "json_template":
+            selected = _select_response_value(payload, self.response_path)
+            tool_calls, tool_responses = _nested_tool_evidence(payload)
+            return AgentResponse(
+                content=_content_text(selected),
+                tool_calls=tool_calls,
+                tool_responses=tool_responses,
+            )
+        if not isinstance(payload, Mapping):
+            raise ValueError("HTTP target response must be a JSON object")
         if self.protocol == "openai_chat":
             message = _openai_message(payload)
             return AgentResponse(
@@ -220,9 +302,193 @@ def _normalize_protocol(value: str) -> str:
         "http": "fi.alk",
     }
     protocol = aliases.get(protocol, protocol)
-    if protocol not in {"fi.alk", "openai_chat"}:
-        raise ValueError("protocol must be one of: fi.alk, openai_chat")
+    if protocol not in {"fi.alk", "openai_chat", "json_template"}:
+        raise ValueError("protocol must be one of: fi.alk, openai_chat, json_template")
     return protocol
+
+
+_WHOLE_PLACEHOLDER = re.compile(r"^\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}$")
+_PLACEHOLDER = re.compile(r"\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}")
+
+
+def _template_context(
+    input: AgentInput, *, extra: Optional[Mapping[str, Any]] = None
+) -> dict[str, Any]:
+    context = {
+        "thread_id": input.thread_id,
+        "execution_id": input.execution_id,
+        "turn_index": input.turn_index,
+        "scenario_name": input.scenario_name,
+        "persona": input.persona,
+        "situation": input.situation,
+        "expected_outcome": input.expected_outcome,
+        "messages": [dict(message) for message in input.messages],
+        "new_message": dict(input.new_message),
+        "new_message_content": str(input.new_message.get("content") or ""),
+        "tools": list(input.tools),
+        "metadata": dict(input.metadata),
+    }
+    context.update(dict(extra or {}))
+    return context
+
+
+def _render_template(value: Any, context: Mapping[str, Any]) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            str(key): _render_template(item, context) for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_render_template(item, context) for item in value]
+    if not isinstance(value, str):
+        return value
+    whole = _WHOLE_PLACEHOLDER.fullmatch(value)
+    if whole:
+        return context.get(whole.group(1), "")
+
+    def replacement(match: re.Match[str]) -> str:
+        item = context.get(match.group(1), "")
+        if isinstance(item, (Mapping, list)):
+            return json.dumps(item, separators=(",", ":"), default=str)
+        return str(item)
+
+    return _PLACEHOLDER.sub(replacement, value)
+
+
+def _decode_json_or_sse(text: str) -> Any:
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        events: list[Any] = []
+        for line in text.splitlines():
+            if not line.startswith("data:"):
+                continue
+            data = line[5:].strip()
+            if not data or data == "[DONE]":
+                continue
+            try:
+                events.append(json.loads(data))
+            except json.JSONDecodeError:
+                events.append(data)
+        if events:
+            return events
+        raise ValueError(
+            "HTTP target returned neither JSON nor JSON server-sent events"
+        )
+
+
+def _select_response_value(payload: Any, path: str) -> Any:
+    if not path:
+        return payload
+    segments = [raw for raw in path.removeprefix("$").strip(".").split(".") if raw]
+
+    def select(current: Any, offset: int) -> Any:
+        if offset >= len(segments):
+            return current
+        raw = segments[offset]
+        if isinstance(current, Mapping):
+            if raw not in current:
+                raise ValueError(f"response_path segment not found: {raw}")
+            return select(current[raw], offset + 1)
+        if isinstance(current, Sequence) and not isinstance(current, (str, bytes)):
+            try:
+                index = int(raw)
+            except ValueError:
+                # JSON/SSE APIs often return a top-level event list while their documented
+                # response schema describes one event.  A path such as ``content.parts.0.text``
+                # is therefore still meaningful: select the latest event matching that shape.
+                # This is envelope-driven rather than framework-specific and leaves explicit
+                # numeric paths (including negative indexes) unchanged.
+                last_error: ValueError | None = None
+                for item in reversed(current):
+                    try:
+                        return select(item, offset)
+                    except ValueError as exc:
+                        last_error = exc
+                raise ValueError(
+                    f"response_path segment not found in list elements: {raw}"
+                ) from last_error
+            try:
+                return select(current[index], offset + 1)
+            except IndexError as exc:
+                raise ValueError(f"response_path list index invalid: {raw}") from exc
+        raise ValueError(f"response_path cannot traverse segment: {raw}")
+
+    return select(payload, 0)
+
+
+def _nested_named_values(value: Any, names: set[str]) -> list[Any]:
+    """Find semantic values in an arbitrary JSON/SSE envelope.
+
+    Source-owned agent servers commonly expose model events rather than an OpenAI response.  The
+    surrounding envelope varies by framework, but function-call and function-response objects use
+    stable semantic field names.  Walking the returned data keeps ``json_template`` framework
+    neutral while preserving tool evidence that would otherwise be thrown away.
+    """
+
+    found: list[Any] = []
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            if str(key) in names:
+                found.append(item)
+            found.extend(_nested_named_values(item, names))
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        for item in value:
+            found.extend(_nested_named_values(item, names))
+    return found
+
+
+def _mapping_items(values: Sequence[Any]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for value in values:
+        if isinstance(value, Mapping):
+            items.append(dict(value))
+        elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+            items.extend(dict(item) for item in value if isinstance(item, Mapping))
+    return items
+
+
+def _nested_tool_evidence(
+    payload: Any,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    raw_calls = _mapping_items(
+        _nested_named_values(payload, {"function_call", "functionCall", "tool_calls"})
+    )
+    calls = _openai_tool_calls(raw_calls)
+
+    raw_responses = _mapping_items(
+        _nested_named_values(
+            payload, {"function_response", "functionResponse", "tool_responses"}
+        )
+    )
+    responses: list[dict[str, Any]] = []
+    for index, response in enumerate(raw_responses, start=1):
+        responses.append(
+            {
+                "tool_call_id": str(
+                    response.get("tool_call_id")
+                    or response.get("id")
+                    or f"call_{index}"
+                ),
+                "name": str(response.get("name") or response.get("tool") or ""),
+                "result": response.get(
+                    "result", response.get("response", response.get("content"))
+                ),
+                "error": response.get("error"),
+            }
+        )
+    return _deduplicate_tool_records(calls), _deduplicate_tool_records(responses)
+
+
+def _deduplicate_tool_records(values: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    unique: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for value in values:
+        marker = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        unique.append(value)
+    return unique
 
 
 def _messages_for_protocol(
@@ -385,7 +651,9 @@ def _content_text(value: Any) -> str:
     return "" if value is None else str(value)
 
 
-def _response_error_text(payload: Mapping[str, Any]) -> str:
+def _response_error_text(payload: Any) -> str:
+    if not isinstance(payload, Mapping):
+        return _content_text(payload)
     error = payload.get("error")
     if isinstance(error, Mapping):
         return _content_text(error.get("message") or error.get("detail") or error)

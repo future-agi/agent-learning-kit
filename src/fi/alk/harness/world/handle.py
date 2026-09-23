@@ -60,6 +60,8 @@ class HostedWorld:
         world_index: int,
         rng: random.Random,
         baseline_row_counts: Mapping[str, int],
+        *,
+        _validate_baseline: bool = True,
     ) -> None:
         """Wrap `store` as the `World` surface for one scenario.
 
@@ -76,9 +78,19 @@ class HostedWorld:
         # re-measured: a live count would make the cap depend on what a scenario already wrote,
         # and the whole point is that it is decided before any scenario runs.
         self._baseline_row_counts = dict(baseline_row_counts)
-        self._require_baseline_coverage(self._visible_tables())
+        if _validate_baseline:
+            self._require_baseline_coverage(self._visible_tables())
 
     # -- reading ------------------------------------------------------------------------------
+
+    def _execution_state(self) -> dict[str, Any]:
+        return {
+            "dsn": self._store.dsn(),
+            "world_index": self.world_index,
+            "rng": self.rng.getstate(),
+            "baseline": self._baseline_row_counts,
+            "read_only": False,
+        }
 
     def state(self, table: str | None = None) -> dict[str, list[dict[str, Any]]]:
         """A snapshot of the public schema, or of one table in it.
@@ -150,7 +162,9 @@ class HostedWorld:
 
     # -- writing ------------------------------------------------------------------------------
 
-    def put(self, collection: str, record: Mapping[str, Any], *, key: str = "") -> dict[str, Any]:
+    def put(
+        self, collection: str, record: Mapping[str, Any], *, key: str = ""
+    ) -> dict[str, Any]:
         """Insert one record; return exactly what the table stored, generated key included.
 
         `key` exists only to keep this signature a superset of `GeneratedWorld.put`; a hosted
@@ -243,6 +257,22 @@ class HostedWorld:
         """
         return ReadOnlyWorld(self)
 
+    def checkpoint(self) -> Any:
+        """Capture the complete mutable database state for disposable probes.
+
+        Runtime action certification uses the same checkpoint/reset contract for generated
+        and source-hosted worlds.  The PostgreSQL store already implements an exact snapshot
+        including sequence counters; exposing it here keeps that contract framework-neutral
+        instead of special-casing hosted agents in the validator.
+        """
+
+        return self._store.freeze()
+
+    def revert(self, checkpoint: Any) -> None:
+        """Restore a checkpoint captured before a probe or smoke action."""
+
+        self._store.restore(checkpoint)
+
     # -- internal -----------------------------------------------------------------------------
 
     def _reject_reserved(self, collection: str | None) -> None:
@@ -295,7 +325,9 @@ class HostedWorld:
         rows = self._store.query(
             "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename"
         )
-        return [row["tablename"] for row in rows if row["tablename"] != CONFORMANCE_TABLE]
+        return [
+            row["tablename"] for row in rows if row["tablename"] != CONFORMANCE_TABLE
+        ]
 
     def _table_columns(self, table: str) -> set[str]:
         rows = self._store.query(
@@ -356,10 +388,15 @@ class ReadOnlyWorld:
     def state(self, table: str | None = None) -> dict[str, list[dict[str, Any]]]:
         return self.__world.state(table)
 
+    def _execution_state(self) -> dict[str, Any]:
+        return {**self.__world._execution_state(), "read_only": True}
+
     def query(self, sql: str, params: Sequence[Any] = ()) -> list[dict[str, Any]]:
         return self.__world.query(sql, params)
 
-    def put(self, collection: str, record: Mapping[str, Any], *, key: str = "") -> dict[str, Any]:
+    def put(
+        self, collection: str, record: Mapping[str, Any], *, key: str = ""
+    ) -> dict[str, Any]:
         raise WorldReadOnly(
             f"put({collection!r}, ...) reached a read-only handle; ready() and check() only "
             "ever observe a run."
@@ -476,7 +513,9 @@ def _blank(sql: str, quote_chars: str) -> str:
                     i += 2
                     continue
                 if sql[i] == char:
-                    if sql[i : i + 2] == char * 2:  # an escaped quote inside the literal
+                    if (
+                        sql[i : i + 2] == char * 2
+                    ):  # an escaped quote inside the literal
                         i += 2
                         continue
                     i += 1
@@ -519,7 +558,9 @@ def _reject_unless_read(sql: str) -> None:
         raise WorldQueryRejected("query() was given nothing to run.")
     unterminated = body[:-1].strip() if body.endswith(";") else body
     if ";" in unterminated:
-        raise WorldQueryRejected("query() runs one statement; this text holds more than one.")
+        raise WorldQueryRejected(
+            "query() runs one statement; this text holds more than one."
+        )
     leading = re.match(r"[A-Za-z_]+", unterminated)
     word = leading.group(0).lower() if leading else ""
     if word not in _READ_KEYWORDS:

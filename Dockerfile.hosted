@@ -94,7 +94,7 @@ WORKDIR /opt/alk
 # Daytona's direct-image builder can reuse an image when only build-context
 # files change.  Bump this source revision whenever guest code changes so a
 # hosted test cannot silently execute an older installed ALK.
-ARG ALK_HOSTED_SOURCE_REVISION=20260915-th7959-authoring-only
+ARG ALK_HOSTED_SOURCE_REVISION=20260923-parallel-world-slots-self-repair
 LABEL io.futureagi.alk-source-revision="${ALK_HOSTED_SOURCE_REVISION}"
 COPY pyproject.toml README.md ./
 COPY src ./src
@@ -111,7 +111,6 @@ ENV PIP_DEFAULT_TIMEOUT=300 \
 # broken instrumentor is skipped at runtime, so a failure here costs tracing, never a run.
 RUN --mount=type=cache,target=/root/.cache/pip \
     /opt/alk-venv/bin/pip install '.[livekit,harness-ui,harness-stores]' \
-    && /opt/alk-venv/bin/pip install --no-deps 'traceai-google-adk>=0.1.5' \
     && chmod -R a-w /opt/alk /opt/alk-venv
 
 ENV PATH="/opt/alk-venv/bin:/usr/lib/postgresql/16/bin:/opt/erlang/bin:/opt/rabbitmq/sbin:/opt/node22/bin:${PATH}" \

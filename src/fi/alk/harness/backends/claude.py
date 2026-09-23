@@ -10,7 +10,6 @@ name rather than implemented here.
 """
 
 from __future__ import annotations
-import os
 
 import asyncio
 import dataclasses
@@ -409,10 +408,15 @@ class ClaudeBackend:
         if os.environ.get("AGENTCC_API_KEY", "").strip():
             return True
         gateway_ready = bool(
-            os.environ.get("ALK_CLAUDE_GATEWAY_URL", "").strip()
-            and os.environ.get("ALK_CLAUDE_GATEWAY_API_KEY", "").strip()
+            (
+                os.environ.get("ALK_CLAUDE_GATEWAY_URL", "").strip()
+                and os.environ.get("ALK_CLAUDE_GATEWAY_API_KEY", "").strip()
+            )
+            or os.environ.get("AGENTCC_API_KEY", "").strip()
         )
-        return gateway_ready and "gemini" in named
+        # Agent CC's native Anthropic endpoint accepts the Claude Agent SDK wire format and
+        # translates it for any provider configured behind the virtual key.
+        return gateway_ready and bool(named)
 
     def create(self, spec: SessionSpec) -> ClaudeSession:
         from ..config import gateway_wire_model

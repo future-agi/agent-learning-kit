@@ -20,6 +20,25 @@ def _requirements(manifest):
     return {item.environment_name: item for item in manifest.requirements}
 
 
+def test_generic_discovery_defers_template_only_secrets_but_keeps_strict_reads(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / ".env.example").write_text(
+        "OPENAI_API_KEY=\nTAVILY_API_KEY=\n", encoding="utf-8"
+    )
+    (tmp_path / "agent.py").write_text(
+        "import os\nTOKEN = os.environ['REQUIRED_RUNTIME_TOKEN']\n", encoding="utf-8"
+    )
+
+    requirements = _requirements(
+        discover_credentials(tmp_path, template_secrets_required=False)
+    )
+
+    assert requirements["OPENAI_API_KEY"].required is False
+    assert requirements["TAVILY_API_KEY"].required is False
+    assert requirements["REQUIRED_RUNTIME_TOKEN"].required is True
+
+
 def test_discovers_python_livekit_agent_without_executing_it(tmp_path: Path) -> None:
     _write(
         tmp_path,
@@ -206,6 +225,26 @@ def test_plain_compose_substitution_is_optional_but_error_operator_is_required(
     requirements = _requirements(discover_credentials(tmp_path))
 
     assert requirements["OPTIONAL_REGION"].status is RequirementStatus.OPTIONAL
+    assert requirements["REQUIRED_TOKEN"].status is RequirementStatus.MISSING
+
+
+def test_compose_literal_environment_satisfies_runtime_read(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "compose.yml",
+        """services:
+  agent:
+    build: .
+    environment:
+      CACHE_URL: redis://cache:6379/2
+      REQUIRED_TOKEN: ${REQUIRED_TOKEN:?required}
+""",
+    )
+    _write(tmp_path, "agent.py", "import os\nurl = os.environ['CACHE_URL']\n")
+
+    requirements = _requirements(discover_credentials(tmp_path))
+
+    assert requirements["CACHE_URL"].status is RequirementStatus.CONFIGURED
     assert requirements["REQUIRED_TOKEN"].status is RequirementStatus.MISSING
 
 

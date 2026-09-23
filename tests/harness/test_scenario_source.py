@@ -1137,6 +1137,35 @@ def test_real_write_folder_round_trip_matches_the_adapters_reading(
 # =================================================================================================
 
 
+def test_hosted_load_never_executes_module_level_scenario_code() -> None:
+    async def scenario() -> None:
+        tmp_path = Path(tempfile.mkdtemp(prefix="p12-load-timeout-"))
+        root = tmp_path / ss.SCENARIOS_DIRNAME
+        _write_scenario(
+            root,
+            "s1",
+            scenario_key="s1",
+            # Module-level, not inside setup() -- runs during `_compile_entry`'s `exec`, i.e.
+            # during the load itself, which is exactly what a real budget must bound.
+            setup_code="raise RuntimeError('module executed in loader')\ndef setup(world):\n    pass\n",
+        )
+        source = ss.BundleScenarioSource()
+
+        async def passthrough(client, scenarios, **kwargs):
+            return scenarios
+
+        with mock.patch.object(ss, "register_with_platform", passthrough):
+            loaded = await source.build(
+                _FakeJob(run_id="job-1"),
+                object(),
+                object(),
+                pool=object(),
+                world_factory=object(),
+                bundle_dir=tmp_path,
+            )
+        assert [item.scenario_key for item in loaded] == ["s1"]
+
+    asyncio.run(scenario())
 
 
 def test_load_without_a_hang_is_unaffected_by_the_budget(tmp_path: Path) -> None:
