@@ -345,6 +345,17 @@ in each brief the one thing that makes that scenario hard - a correction after t
 facts that disagree, a reference with no referent, a value that sounds like another, something
 plausible the world refuses - and never deal the same one twice on the same task level.
 
+**The coordinate is read as a conjunction, so no two levels on it may contradict each other.** Every
+level has to be simultaneously true of the same person in the same call. A caller the system already
+recognises is not also an unidentified one; somebody with nothing on file does not also have something
+saved; an account that cannot transact does not also complete the transaction. Measured on a live run: one
+scenario in twenty-six declared a known caller and an unidentified one at once, and its own solution called
+a tool the contract reserves for known callers - so the scenario was coherent and the coordinate was not.
+
+This is not the same fault as a level that does nothing. That one is inert; this one is false, and it puts
+the scenario in a cell that cannot exist. Read the levels together before you deal them, as one sentence
+about one person, and if the sentence cannot be true, one of the levels is wrong.
+
 **Every level you deal has to be load-bearing for the scenario you deal it to.** The axis a suite quietly
 ruins is the caller's state, because unlike the interface levels nothing checks it. A state that is true
 and simply does not matter is as bad as one that is false: the grid counts that cell as covered, and
