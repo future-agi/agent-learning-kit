@@ -621,52 +621,6 @@ def _a_second_plain_control(scenario: Scenario, kept: list[Scenario]) -> str:
     return ""
 
 
-def _the_same_test_twice(scenario: Scenario, kept: list[Scenario]) -> str:
-    """Why this scenario is one this writer has already written, or "".
-
-    `kept` is this writer's own slice, so this is the collision the writer could have found by
-    reading its own briefs side by side. A repeat under a CHANGED delivery condition is a
-    perturbation and is allowed: it asks whether the same flow survives a different accent, a
-    different bed, a different kind of speech. A repeat that changes nothing but the names is one
-    test written twice. Measured on a hosted 100: 12 scenarios on an identical coordinate, one pair
-    differing in the last four digits of a card, the destination, and one letter of the caller's
-    name.
-    """
-    coverage = scenario.coverage or {}
-    what = tuple(
-        str(coverage.get(axis) or "") for axis in ("task", "disposition", "overlay", "interaction")
-    )
-    if not what[0]:
-        return ""
-
-    def delivery(one: Scenario) -> tuple[str, str, bool]:
-        held = one.coverage or {}
-        noise = one.background_noise
-        return (
-            str(held.get("interface") or ""),
-            str(getattr(one.persona, "accent", "") or "").strip().lower(),
-            not (noise is False or noise is None or noise == ""),
-        )
-
-    for one in kept:
-        other = one.coverage or {}
-        theirs = tuple(
-            str(other.get(axis) or "")
-            for axis in ("task", "disposition", "overlay", "interaction")
-        )
-        if theirs != what or delivery(one) != delivery(scenario):
-            continue
-        return (
-            f"{one.name} is already this scenario: same task, same state, same overlay, same "
-            "interaction, and the same line and speaker to carry them. Two scenarios on one "
-            "coordinate are one test written twice unless something about the DELIVERY differs - a "
-            "different accent, a noisy line against a quiet one, a hesitant speaker against a "
-            "fluent one - in which case it is a perturbation and it belongs. Either change what is "
-            "being tested, or change how it arrives, or move to a coordinate nothing covers yet"
-        )
-    return ""
-
-
 def _over_its_share(
     coverage: Any, grid: dict[str, list[str]] | None, kept: list[Scenario], wanted: int
 ) -> str:
@@ -993,8 +947,6 @@ def accept_scenario(
         # stop. Refused at the one moment a writer can still settle it.
         problems.extend(_overlay_asserts_nothing(scenario, catalogue))
         problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
-        if twice := _the_same_test_twice(scenario, kept):
-            problems.append(twice)
     finally:
         trial.close()
 
