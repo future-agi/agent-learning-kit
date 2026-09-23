@@ -31,7 +31,13 @@ def test_a_scenario_still_passes_on_its_checkpoints():
 
 def test_a_sub_goal_missing_from_the_catalogue_is_reported():
     catalogue = Catalogue(
-        sub_goals=[SubGoal(name="fee_removed", what="the fee is gone", check="def check(world, calls):\n    return None")]
+        sub_goals=[
+            SubGoal(
+                name="fee_removed",
+                what="the fee is gone",
+                check="def check(world, calls):\n    return None",
+            )
+        ]
     )
     assert ungraded_sub_goals(_scenario(), catalogue) == ["order_checked"]
 
@@ -39,8 +45,16 @@ def test_a_sub_goal_missing_from_the_catalogue_is_reported():
 def test_nothing_is_reported_when_the_catalogue_holds_them_all():
     catalogue = Catalogue(
         sub_goals=[
-            SubGoal(name="fee_removed", what="the fee is gone", check="def check(world, calls):\n    return None"),
-            SubGoal(name="order_checked", what="the order was read", judged="did it read the order"),
+            SubGoal(
+                name="fee_removed",
+                what="the fee is gone",
+                check="def check(world, calls):\n    return None",
+            ),
+            SubGoal(
+                name="order_checked",
+                what="the order was read",
+                judged="did it read the order",
+            ),
         ]
     )
     assert ungraded_sub_goals(_scenario(), catalogue) == []
@@ -76,7 +90,9 @@ def test_a_setup_that_only_adjusts_borrowed_records_is_refused():
     # The documented no-seam case: nothing to change, so nothing is claimed.
     assert (
         self_sufficiency_problems(
-            Scenario(name="reads_only", instruction="Ask for the status.", sub_goals=["x"])
+            Scenario(
+                name="reads_only", instruction="Ask for the status.", sub_goals=["x"]
+            )
         )
         == []
     )
@@ -93,7 +109,10 @@ def test_a_writer_that_dies_after_proving_still_leaves_its_work(tmp_path):
     )
     journal_scenario(one, tmp_path)
     # A retried slice journals the same name again, and the later line wins rather than duplicating.
-    journal_scenario(one.model_copy(update={"instruction": "Cancel it, and ask what it costs."}), tmp_path)
+    journal_scenario(
+        one.model_copy(update={"instruction": "Cancel it, and ask what it costs."}),
+        tmp_path,
+    )
     back = journalled(tmp_path)
     assert [x.name for x in back] == ["cancel_after_fee_quoted"]
     assert back[0].instruction.startswith("Cancel it")
@@ -113,9 +132,16 @@ def test_a_declared_check_that_never_reached_the_folder_is_not_read_as_judged(tm
         json.dumps(
             {
                 "sub_goals": [
-                    {"name": "fee_removed", "what": "the fee is gone",
-                     "check": "def check(world, calls):\n    return None\n"},
-                    {"name": "explained_kindly", "what": "tone", "judged": "read the transcript"},
+                    {
+                        "name": "fee_removed",
+                        "what": "the fee is gone",
+                        "check": "def check(world, calls):\n    return None\n",
+                    },
+                    {
+                        "name": "explained_kindly",
+                        "what": "tone",
+                        "judged": "read the transcript",
+                    },
                 ]
             }
         )
@@ -123,9 +149,15 @@ def test_a_declared_check_that_never_reached_the_folder_is_not_read_as_judged(tm
     folder = bundle / "scenarios" / "refund_after_shipping"
     folder.mkdir(parents=True)
     (folder / "scenario.json").write_text(
-        json.dumps({"scenario_key": "refund", "scenario_id": "",
-                    "sub_goals": ["fee_removed", "explained_kindly"],
-                    "name": "refund_after_shipping", "instruction": "Get the fee taken off."})
+        json.dumps(
+            {
+                "scenario_key": "refund",
+                "scenario_id": "",
+                "sub_goals": ["fee_removed", "explained_kindly"],
+                "name": "refund_after_shipping",
+                "instruction": "Get the fee taken off.",
+            }
+        )
     )
     (folder / "setup.py").write_text("def setup(world):\n    return None\n")
     (folder / "ready.py").write_text("def ready(world):\n    return None\n")
@@ -137,7 +169,9 @@ def test_a_declared_check_that_never_reached_the_folder_is_not_read_as_judged(tm
     # With the check materialised, the judged one beside it is still judged.
     checks = folder / "checks"
     checks.mkdir()
-    (checks / "fee_removed.py").write_text("def check(world, calls):\n    return None\n")
+    (checks / "fee_removed.py").write_text(
+        "def check(world, calls):\n    return None\n"
+    )
     loaded = load_scenarios(bundle)
     assert [one.scenario_key for one in loaded] == ["refund"]
     assert loaded[0].presented["situation"] == "Get the fee taken off."
@@ -151,7 +185,9 @@ def test_a_slice_writer_stops_at_the_size_it_was_given(tmp_path):
     from fi.alk.harness.scenario_tools import scenario_tools
 
     contract = AgentContract(agent="cart", real_use_cases=["add an item"])
-    server, kept = scenario_tools(contract, tmp_path, tmp_path, wanted=1, can_save=False)
+    server, kept = scenario_tools(
+        contract, tmp_path, tmp_path, wanted=1, can_save=False
+    )
     submit = next(spec for spec in server.tools if spec.name == "submit_scenario")
     kept.append(Scenario(name="already_here", instruction="one", sub_goals=["x"]))
 
@@ -164,7 +200,9 @@ def test_a_slice_writer_stops_at_the_size_it_was_given(tmp_path):
     import pytest
 
     with pytest.raises(FileNotFoundError):
-        asyncio.run(submit.handler({"name": "already_here", "instruction": "one, fixed"}))
+        asyncio.run(
+            submit.handler({"name": "already_here", "instruction": "one, fixed"})
+        )
 
 
 def test_a_second_fan_out_pass_only_writes_what_is_missing(tmp_path, monkeypatch):
@@ -174,7 +212,9 @@ def test_a_second_fan_out_pass_only_writes_what_is_missing(tmp_path, monkeypatch
     from fi.alk.harness import scenario_tools as st
     from fi.alk.harness.contract import AgentContract
 
-    contract = AgentContract(agent="cart", real_use_cases=["add an item", "remove an item"])
+    contract = AgentContract(
+        agent="cart", real_use_cases=["add an item", "remove an item"]
+    )
     # Above FEWEST_WORTH_DELEGATING, or the fan-out tool is not published at all.
     server, _kept = st.scenario_tools(contract, tmp_path, tmp_path, wanted=20)
     suite = next(spec for spec in server.tools if spec.name == "generate_suite")
@@ -192,7 +232,11 @@ def test_a_second_fan_out_pass_only_writes_what_is_missing(tmp_path, monkeypatch
 
     # Fourteen already written, and the model asks for twenty again: six are outstanding.
     monkeypatch.setattr(
-        st, "load_scenarios", lambda _d: [Scenario(name=f"s{i}", instruction="i", sub_goals=["x"]) for i in range(14)]
+        st,
+        "load_scenarios",
+        lambda _d: [
+            Scenario(name=f"s{i}", instruction="i", sub_goals=["x"]) for i in range(14)
+        ],
     )
     monkeypatch.setattr(st, "journalled", lambda _d: [])
     asyncio.run(suite.handler({"count": 20}))
@@ -202,7 +246,11 @@ def test_a_second_fan_out_pass_only_writes_what_is_missing(tmp_path, monkeypatch
     # from the folders: a journal that outlives its folders means a retried attempt, where refusing to
     # write is how a run saves 14 of 200 and fails.
     monkeypatch.setattr(
-        st, "load_scenarios", lambda _d: [Scenario(name=f"s{i}", instruction="i", sub_goals=["x"]) for i in range(20)]
+        st,
+        "load_scenarios",
+        lambda _d: [
+            Scenario(name=f"s{i}", instruction="i", sub_goals=["x"]) for i in range(20)
+        ],
     )
     said = asyncio.run(suite.handler({"count": 20}))
     assert "already holds the 20" in said["content"][0]["text"]
@@ -229,7 +277,9 @@ def test_the_whole_suite_is_registered_and_only_a_sample_is_run():
     source = inspect.getsource(BundleScenarioSource.build)
     registered = source.index("register_with_platform")
     sampled = source.index("sampled_for_calling")
-    assert registered < sampled, "the suite must be registered before the sample is taken"
+    assert registered < sampled, (
+        "the suite must be registered before the sample is taken"
+    )
 
     # And every scenario is called: registering the suite and calling it are the same set.
     assert len(sampled_for_calling(list(range(30)))) == 30
@@ -277,7 +327,6 @@ def test_a_world_with_state_still_demands_a_check_in_code(tmp_path):
     from fi.alk.harness.catalogue import Catalogue, SubGoal
     from fi.alk.harness.prove import prove
 
-    root, _contract, catalogue = None, None, None
     from fi.alk.harness.world import GeneratedWorld
     from fi.alk.harness.world.snapshot import save
 
@@ -293,9 +342,29 @@ def test_a_world_with_state_still_demands_a_check_in_code(tmp_path):
     save(world, tmp_path, notes="test", sequences=[])
     world.close()
 
-    judged_only = Catalogue(sub_goals=[SubGoal(name="polite", what="tone", judged="read it")])
-    one = Scenario(name="asks_politely", instruction="Ask for it.", sub_goals=["polite"])
+    judged_only = Catalogue(
+        sub_goals=[SubGoal(name="polite", what="tone", judged="read it")]
+    )
+    one = Scenario(
+        name="asks_politely", instruction="Ask for it.", sub_goals=["polite"]
+    )
     proof = prove(one, judged_only, tmp_path)
     assert proof.holds is False
     assert "settle what happened by reading it" in proof.broken[0]
     assert proof.judged_only is False
+
+
+def test_world_snapshot_accepts_scalar_source_owned_state(tmp_path):
+    """Flags and counters are observable collections too; saving them must not call len()."""
+    import json
+
+    from fi.alk.harness.world import GeneratedWorld
+    from fi.alk.harness.world.snapshot import MANIFEST, save
+
+    world = GeneratedWorld(":memory:")
+    world.state_object = {"enabled": True, "attempts": 3, "note": "ready"}
+    save(world, tmp_path, notes="scalar state", sequences=[])
+    world.close()
+
+    tables = json.loads((tmp_path / MANIFEST).read_text())["tables"]
+    assert tables == {"attempts": 1, "enabled": 1, "note": 5}

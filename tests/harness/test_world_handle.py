@@ -74,6 +74,7 @@ class FakeStore:
         # without needing a seed row just to make a by= resolve, the way it would against a
         # real, empty Postgres table.
         self.columns = columns or {}
+        self.restored = None
 
     def _ordered(self, name: str) -> list[dict[str, Any]]:
         rows = self.tables.get(name, [])
@@ -112,7 +113,18 @@ class FakeStore:
         self.tables[collection].append(stored)
         return stored
 
-    def amend(self, collection: str, key: str, changes: dict[str, Any], *, by: str = "") -> int:
+    def freeze(self) -> Snapshot:
+        return Snapshot(rows=self.state(), counters={})
+
+    def restore(self, snapshot: Snapshot) -> None:
+        self.restored = snapshot
+        self.tables = {
+            name: [dict(row) for row in rows] for name, rows in snapshot.rows.items()
+        }
+
+    def amend(
+        self, collection: str, key: str, changes: dict[str, Any], *, by: str = ""
+    ) -> int:
         changed = 0
         for row in self.tables.get(collection, []):
             if str(row.get(by)) == str(key):
@@ -139,7 +151,9 @@ def _world(
     primary_keys: dict[str, list[str]] | None = None,
     columns: dict[str, set[str]] | None = None,
 ) -> HostedWorld:
-    visible = {name: len(rows) for name, rows in tables.items() if name != CONFORMANCE_TABLE}
+    visible = {
+        name: len(rows) for name, rows in tables.items() if name != CONFORMANCE_TABLE
+    }
     store = FakeStore(tables, primary_keys, columns)
     return HostedWorld(
         store,
@@ -152,10 +166,28 @@ def _world(
 def test_world_index_and_rng_are_carried_through_unchanged() -> None:
     rng = random.Random(11)
     world = HostedWorld(
-        FakeStore({"orders": []}), world_index=4, rng=rng, baseline_row_counts={"orders": 0}
+        FakeStore({"orders": []}),
+        world_index=4,
+        rng=rng,
+        baseline_row_counts={"orders": 0},
     )
     assert world.world_index == 4
     assert world.rng is rng
+
+
+def test_checkpoint_and_revert_delegate_complete_state_to_hosted_store() -> None:
+    world = _world(
+        {"orders": [{"id": 1, "item": "before"}]},
+        primary_keys={"orders": ["id"]},
+    )
+
+    checkpoint = world.checkpoint()
+    world.change("orders", "1", {"item": "after"})
+    assert world.state("orders")["orders"][0]["item"] == "after"
+
+    world.revert(checkpoint)
+
+    assert world.state("orders") == {"orders": [{"id": 1, "item": "before"}]}
 
 
 # --- state() -----------------------------------------------------------------------------
@@ -189,7 +221,9 @@ def test_state_selector_reflects_the_fakestores_own_ordering() -> None:
     assert [row["id"] for row in world.state("orders")["orders"]] == [1, 2]
 
 
-def test_state_selector_passes_through_the_fakes_row_order_when_it_has_no_primary_key() -> None:
+def test_state_selector_passes_through_the_fakes_row_order_when_it_has_no_primary_key() -> (
+    None
+):
     """Same caveat as above: this is `FakeStore`'s own behaviour when it has no key to sort by,
     not a guarantee `HostedWorld` makes about row order."""
     given = [{"item": "b"}, {"item": "a"}]
@@ -289,7 +323,9 @@ def test_a_table_missing_from_the_baseline_dict_is_unavailable_not_under_cap() -
         _world({"orders": [{"id": 1}]}, baseline={})
 
 
-def test_a_table_appearing_after_construction_is_unavailable_on_the_selector_path() -> None:
+def test_a_table_appearing_after_construction_is_unavailable_on_the_selector_path() -> (
+    None
+):
     """`_require_baseline_coverage` only sees the tables visible when the handle was built; a
     table that shows up afterward is still absent from `_baseline_row_counts`. Naming it
     explicitly must reach the typed `WorldUnavailable` naming the table, not a bare `KeyError`
@@ -302,7 +338,9 @@ def test_a_table_appearing_after_construction_is_unavailable_on_the_selector_pat
     assert "late_table" in str(raised.value)
 
 
-def test_a_table_appearing_after_construction_is_excluded_from_the_bare_snapshot() -> None:
+def test_a_table_appearing_after_construction_is_excluded_from_the_bare_snapshot() -> (
+    None
+):
     """Nothing the agent under test does during a call may decide whether bare `state()` raises
     — a table it creates since construction is the only way an unmeasured table can exist, so the
     bare path excludes it the same way it excludes an over-cap table rather than going
@@ -363,9 +401,7 @@ def test_put_accepts_redundant_single_primary_key_value_hint() -> None:
         primary_keys={"customers": ["customer_id"]},
         columns={"customers": {"customer_id", "name"}},
     )
-    stored = world.put(
-        "customers", {"customer_id": "c1", "name": "ana"}, key="c1"
-    )
+    stored = world.put("customers", {"customer_id": "c1", "name": "ana"}, key="c1")
     assert stored["customer_id"] == "c1"
     assert stored["name"] == "ana"
 
@@ -402,7 +438,9 @@ def test_change_with_by_updates_and_reports_the_count() -> None:
 
 
 def test_change_without_by_resolves_a_single_column_primary_key() -> None:
-    world = _world({"orders": [{"id": 1, "item": "a"}]}, primary_keys={"orders": ["id"]})
+    world = _world(
+        {"orders": [{"id": 1, "item": "a"}]}, primary_keys={"orders": ["id"]}
+    )
     assert world.change("orders", "1", {"item": "b"}) == 1
 
 
@@ -424,7 +462,9 @@ def test_change_with_a_by_that_is_not_a_column_is_a_usage_error() -> None:
         world.change("orders", "1", {"item": "b"}, by="nope")
 
 
-def test_change_by_a_column_works_on_an_empty_table_when_the_fake_declares_its_columns() -> None:
+def test_change_by_a_column_works_on_an_empty_table_when_the_fake_declares_its_columns() -> (
+    None
+):
     """Proves the columns map on `FakeStore` actually does something: without it an empty
     table's columns default to empty and this would raise `WorldUsageError` in the fake even
     though a real, empty Postgres table would resolve `by="id"` just fine."""
@@ -516,7 +556,9 @@ def test_query_accepts_a_semicolon_inside_a_dollar_quoted_literal() -> None:
     assert isinstance(world.query("SELECT $$contains a semicolon: ;$$ AS note"), list)
 
 
-def test_query_rejects_a_second_statement_hidden_behind_a_dollar_quoted_apostrophe() -> None:
+def test_query_rejects_a_second_statement_hidden_behind_a_dollar_quoted_apostrophe() -> (
+    None
+):
     """Before `_blank` knew dollar-quoting, the `'` inside `$$it's fine$$` opened a bogus quote
     span that swallowed everything after it, including the real statement separator, so a
     second statement rode through unrejected. Recognising the dollar-quoted span as one unit is
@@ -555,7 +597,10 @@ def test_query_rejects_naming_the_conformance_table(sql) -> None:
 def test_read_only_carries_world_index_and_rng() -> None:
     rng = random.Random(5)
     world = HostedWorld(
-        FakeStore({"orders": []}), world_index=2, rng=rng, baseline_row_counts={"orders": 0}
+        FakeStore({"orders": []}),
+        world_index=2,
+        rng=rng,
+        baseline_row_counts={"orders": 0},
     )
     view = world.read_only()
     assert view.world_index == 2
@@ -585,7 +630,9 @@ def test_read_only_refuses_every_write_verb(act) -> None:
         act(view)
 
 
-def test_read_only_hides_unknown_capability_probes_behind_a_plain_attribute_error() -> None:
+def test_read_only_hides_unknown_capability_probes_behind_a_plain_attribute_error() -> (
+    None
+):
     """`prove.py`/`probe.py`/`run/voice.py` all reach for capability attributes on world objects
     through `hasattr`/`getattr(..., default)`; only a plain `AttributeError` makes that pattern
     work, so an unknown name here must read as one instead of as a write refusal."""
@@ -712,7 +759,9 @@ def test_hosted_world_query_refuses_a_data_modifying_cte(seeded) -> None:
 
 
 @pg
-def test_hosted_world_query_refuses_a_result_with_duplicate_column_labels(seeded) -> None:
+def test_hosted_world_query_refuses_a_result_with_duplicate_column_labels(
+    seeded,
+) -> None:
     """`o.*, c.*` on a join gives both tables' `id` the same label; silently keeping only the
     last one under `dict(zip(...))` would let a check read the wrong table's key with no error
     anywhere - refusing beats a check that is quietly wrong."""
@@ -723,7 +772,9 @@ def test_hosted_world_query_refuses_a_result_with_duplicate_column_labels(seeded
         baseline_row_counts={"customers": 2, "orders": 1},
     )
     with pytest.raises(WorldQueryRejected):
-        world.query("SELECT o.*, c.* FROM orders o JOIN customers c ON c.id = o.customer_id")
+        world.query(
+            "SELECT o.*, c.* FROM orders o JOIN customers c ON c.id = o.customer_id"
+        )
 
 
 @pg
@@ -771,7 +822,9 @@ def test_hosted_world_cap_uses_the_baseline_not_a_live_count(seeded) -> None:
     with pytest.raises(WorldStateTooLarge):
         world.state("customers")
     # A table the baseline did not flag reads normally in the same call.
-    assert world.state("orders") == {"orders": [{"id": 1, "customer_id": 1, "item": "turkey"}]}
+    assert world.state("orders") == {
+        "orders": [{"id": 1, "customer_id": 1, "item": "turkey"}]
+    }
 
 
 @pg
@@ -779,7 +832,9 @@ def test_hosted_world_on_an_empty_schema_is_unavailable() -> None:
     empty = PostgresStore(version="16")
     empty.start()
     try:
-        world = HostedWorld(empty, world_index=0, rng=random.Random(1), baseline_row_counts={})
+        world = HostedWorld(
+            empty, world_index=0, rng=random.Random(1), baseline_row_counts={}
+        )
         with pytest.raises(WorldUnavailable):
             world.state()
     finally:

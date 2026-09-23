@@ -51,6 +51,10 @@ _TERMINAL_SAVE_TOOLS = frozenset(
         # was declared.  Letting ADK take another turn after that success can burn the entire
         # call budget and turn a completed review into a spurious validation failure.
         "mcp__source_data__finish_review",
+        # A validated repair patch is itself the complete output of the repair stage.  Stop
+        # immediately after accepting it instead of spending the remaining agent budget on
+        # another model turn that can only restate or replace an already-valid patch.
+        "mcp__repair__submit_world_ir_patch",
     }
 )
 
