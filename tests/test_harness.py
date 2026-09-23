@@ -7943,3 +7943,45 @@ def test_the_duplicate_claim_remark_does_not_depend_on_what_the_loop_variable_is
     assert _tools_selected("if call.tool == \"book_ride\":\n    return None\n") == set()
     # Unparseable text says nothing rather than guessing.
     assert _tools_selected("def (:\n") == set()
+
+
+def test_an_overlay_that_names_no_attack_is_cleared_rather_than_claimed():
+    """Intensity levels and "none" became sub-goals of their own, attached to hundreds of scenarios."""
+    from fi.alk.harness.catalogue import SubGoal, without_delivery_overlay
+
+    for level in ("absent", "Subtle", "overt", "none"):
+        cleared, said = without_delivery_overlay(
+            SubGoal(name="refuses_overt_violation", what="refuses overt demands", overlay=level)
+        )
+        assert cleared.overlay == "" and repr(level) in said
+
+    kept, said = without_delivery_overlay(
+        SubGoal(name="instruction_ignored", what="did not act on it", overlay="prompt_injection")
+    )
+    assert kept.overlay == "prompt_injection" and said == ""
+
+
+def test_a_save_refused_for_the_suites_shape_is_accepted_on_the_third_try(tmp_path, monkeypatch):
+    """A five-hundred looped for a quarter of an hour on a keyword count it could not fix."""
+    import asyncio
+
+    from mcp.types import CallToolRequestParams
+
+    from fi.alk.harness import scenario_tools as module
+
+    root, contract, _catalogue = _built_environment(tmp_path)
+    monkeypatch.setattr(module, "keyword_problems", lambda kept: ["too many distinct keywords"])
+    server, _kept = module.scenario_tools(contract, root, root, wanted=1)
+    instance = _instance(server)
+
+    async def save():
+        handler = _request_handler(instance, "tools/call")
+        answer = await handler.handler(
+            None, CallToolRequestParams(name="save_scenarios", arguments={})
+        )
+        return answer.isError, answer.content[0].text
+
+    first, second, third = (asyncio.run(save()) for _ in range(3))
+    assert first[0] and second[0] and "overwritten by the next save" in first[1]
+    assert not third[0]
+    assert "too many distinct keywords" in third[1] and "End the stage now" in third[1]
