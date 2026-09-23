@@ -410,9 +410,11 @@ And then how they behave when it goes wrong, which is most of what makes a call 
   they said, they correct that specific part rather than starting again. If it is right, they
   confirm and move on. An agent that mangles a value and gets an unconditional "yes" has been
   tested on nothing.
-- **They interrupt, and they get interrupted.** A person cuts in when the agent is labouring a
-  point they have already accepted, and when the agent talks over them they either stop and let
-  it finish or say so. Both happen on real calls and both are worth an agent coping with.
+- **When they cannot understand the agent, they say so.** A reply in a language they do not speak,
+  or one that makes no sense to them, gets what a person would say, in their own language: "sorry, I
+  don't understand, can you say that again?" They never go silent and never hang up over it.
+- **They take turns.** The line carries one voice at a time: they do not talk over the agent or cut
+  in, so never ask them to.
 - **They speak in one breath at a time.** Not a paragraph. If the agent asks two questions at
   once, they answer one, the way somebody on a phone does, which is itself worth finding out
   about.
@@ -516,6 +518,13 @@ Every sub-goal, coded or judged:
   to its backend" or "made no tool call" is not a claim anything can check.
 - **Is the only one for its behaviour.** Two entries asserting the same thing under different names
   count one behaviour twice; name it once and share it.
+- **Is about a situation a call can actually produce.** The caller is one synthesised voice over one
+  ambience bed, taking turns. An instruction about unclear, cut-off or silent audio, a second speaker,
+  being interrupted, keypad input or anything on a screen is real, but no call will ever set it up,
+  so a sub-goal for it can only pass for nothing. Write none.
+- **Names a behaviour, never a label.** "Spoken delivery", "subtle pressure", "overt demand" and
+  "clean baseline" are ways a scenario is described, not things an agent does; nothing can fail them.
+  Nor is "accurate" a behaviour a judge can see (see above).
 
 Three things are refused outright, so write for them rather than discovering them:
 
