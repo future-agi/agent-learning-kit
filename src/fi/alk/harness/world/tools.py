@@ -355,7 +355,31 @@ def _err(text: str) -> dict[str, Any]:
 _NOT_A_COLUMN = {"CONSTRAINT", "PRIMARY", "FOREIGN", "UNIQUE", "CHECK", "EXCLUDE", ")"}
 
 
-def _tables_the_source_lacks(state: dict, source_root: str, contract: Any) -> list[str]:
+def _world_columns(world: Any, table: str) -> dict[str, bool] | None:
+    """Each column the world models for a table, and whether it refuses NULL."""
+    store = getattr(world, "store", None)
+    if store is None:
+        return None
+    try:
+        rows = store.query(f'PRAGMA table_info("{table}")')
+        if rows:
+            return {str(r["name"]).lower(): bool(r["notnull"]) for r in rows}
+    except Exception:  # noqa: BLE001 - not sqlite
+        pass
+    try:
+        rows = store.query(
+            "SELECT column_name, is_nullable FROM information_schema.columns "
+            "WHERE table_name = %s",
+            (table,),
+        )
+        return {str(r["column_name"]).lower(): r["is_nullable"] == "NO" for r in rows} or None
+    except Exception:  # noqa: BLE001 - an engine that cannot say is not refused for it
+        return None
+
+
+def _tables_the_source_lacks(
+    state: dict, source_root: str, contract: Any, world: Any = None
+) -> list[str]:
     """Tables and columns the agent's own schema never declares.
 
     The runtime seed is that schema followed by rows generated from this world, so a table the
@@ -443,6 +467,21 @@ def _tables_the_source_lacks(state: dict, source_root: str, contract: Any) -> li
             if absent:
                 problems.append(
                     f"{name} rows leave out {', '.join(absent)}, which the schema requires"
+                )
+        # Rows or none, the table is what scenario setups insert into later. A column the schema
+        # requires but the world omits or leaves nullable passes every proof here and fails the
+        # real database, where no repair can reach it.
+        modelled = _world_columns(world, name) if world is not None else None
+        if modelled is not None:
+            loose = sorted(
+                column
+                for column in required.get(name.lower(), set())
+                if not modelled.get(column, False)
+            )
+            if loose:
+                problems.append(
+                    f"{name} models {', '.join(loose)} as missing or nullable, but the schema "
+                    "requires it: declare it NOT NULL as the schema does"
                 )
     # Foreign keys last, once every table's rows are in hand: a reference is only danglng
     # relative to what the rest of the world holds.
@@ -1442,7 +1481,7 @@ def world_tools(
         runtime_only = bool(contract.tools) and set(contract.tool_names()).issubset(
             runtime_tools
         )
-        strayed = _tables_the_source_lacks(world.state(), source_root, contract)
+        strayed = _tables_the_source_lacks(world.state(), source_root, contract, world)
         if strayed:
             return _err(
                 "Not saved. This world holds tables and columns the agent's own schema does not "
