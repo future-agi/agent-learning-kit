@@ -15,6 +15,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable
 from unittest import mock
 
@@ -916,6 +917,8 @@ def test_load_simulator_secret_values_is_allowlisted_and_destructive(
                 "LIVEKIT_URL": "wss://platform-livekit.example",
                 "LIVEKIT_API_KEY": "platform-livekit-key",
                 "LIVEKIT_API_SECRET": "platform-livekit-secret",
+                "SIP_OUTBOUND_TRUNK_ID": "platform-trunk",
+                "SIP_OUTBOUND_FROM_NUMBER": "+14155550000",
                 "UNRELATED": "must-not-load",
             }
         ),
@@ -930,6 +933,8 @@ def test_load_simulator_secret_values_is_allowlisted_and_destructive(
         "LIVEKIT_URL": "wss://platform-livekit.example",
         "LIVEKIT_API_KEY": "platform-livekit-key",
         "LIVEKIT_API_SECRET": "platform-livekit-secret",
+        "SIP_OUTBOUND_TRUNK_ID": "platform-trunk",
+        "SIP_OUTBOUND_FROM_NUMBER": "+14155550000",
     }
     assert not path.exists()
 
@@ -1249,6 +1254,77 @@ def test_scenarios_client_provision_and_begin_hit_the_same_single_url() -> None:
     )
     urls = [call["url"] for call in transport.calls]
     assert urls == [capabilities.endpoints.scenarios, capabilities.endpoints.scenarios]
+
+
+def test_scenarios_client_uses_sandbox_mailbox_when_callback_is_unreachable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class OfflineTransport:
+        def request(self, *args: Any, **kwargs: Any) -> ob.TransportResponse:
+            raise ob.TransportError("callback blocked")
+
+    request_id = "a" * 32
+    monkeypatch.setattr(he.uuid, "uuid4", lambda: SimpleNamespace(hex=request_id))
+    response = tmp_path / f"{request_id}.response.json"
+    response.write_text(
+        json.dumps(
+            {
+                "result": {
+                    "run_test_id": "run-test-1",
+                    "scenarios": [{"scenario_key": "a", "scenario_id": "platform-a"}],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    client = he.ScenariosClient(
+        _capabilities(),
+        OfflineTransport(),
+        retry_policy=ob.RetryPolicy(max_attempts=1),
+        sleep=lambda _: None,
+        offline_control_root=tmp_path,
+    )
+
+    result = client.provision(
+        {
+            "operation": "provision",
+            "name": "run-1",
+            "personas": [{"scenario_key": "a"}],
+        }
+    )
+
+    assert result["scenarios"][0]["scenario_id"] == "platform-a"
+    request = json.loads(
+        (tmp_path / f"{request_id}.request.json").read_text(encoding="utf-8")
+    )
+    assert request["payload"]["operation"] == "provision"
+    assert request["job_id"] == _capabilities().job_id
+
+
+def test_scenarios_client_mailbox_wait_spans_platform_poll_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class OfflineTransport:
+        def request(self, *args: Any, **kwargs: Any) -> ob.TransportResponse:
+            raise ob.TransportError("callback blocked")
+
+    ticks = iter((100.0, 100.0, 399.0, 401.0))
+    monkeypatch.setattr(he.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(he.time, "sleep", lambda _: None)
+    client = he.ScenariosClient(
+        _capabilities(),
+        OfflineTransport(),
+        retry_policy=ob.RetryPolicy(max_attempts=1),
+        sleep=lambda _: None,
+        offline_control_root=tmp_path,
+        offline_control_timeout_seconds=300.0,
+    )
+
+    with pytest.raises(he.ScenarioPreallocationError) as caught:
+        client.provision({"operation": "provision", "name": "run-1", "personas": []})
+
+    assert caught.value.error is not None
+    assert caught.value.error.code == "offline_control_timeout"
 
 
 def test_scenarios_client_fencing_latches_the_shared_channel_state() -> None:
@@ -2329,6 +2405,43 @@ def test_call_aborted_with_no_ended_at_still_produces_a_receipt() -> None:
 # Additional tests: artifact-level admission coverage, terminal-delivery/receipt-rejection/
 # message-capping edge cases, and mutation-survivor gaps around cancellation and the CANCELED manifest.
 # =================================================================================================
+
+
+def test_outbound_delivery_is_mirrored_for_control_plane_recovery() -> None:
+    async def scenario() -> None:
+        scenarios = [FakeScenario("s1", "platform-s1", [FakeSubGoal("holds", True)])]
+        harness = _build_harness(scenarios=scenarios, instances=1)
+
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
+
+        assert code == he.EXIT_OK
+        mirror = harness.work / he.EVENTS_SPOOL_DIR_NAME
+        manifest = json.loads((mirror / "manifest.json").read_text(encoding="utf-8"))
+        receipt_paths = list((mirror / "receipts").glob("*.json"))
+        artifact_metadata = list((mirror / "artifacts").glob("*.json"))
+        assert manifest["complete"] is True
+        assert len(receipt_paths) == 1
+        assert (
+            json.loads(receipt_paths[0].read_text(encoding="utf-8"))["scenario_key"]
+            == "s1"
+        )
+        assert {
+            json.loads(path.read_text(encoding="utf-8"))["kind"]
+            for path in artifact_metadata
+        } >= {
+            "build",
+            "result",
+            "log",
+        }
+        for metadata_path in artifact_metadata:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            assert (
+                mirror / "artifacts" / f"{metadata['digest']}.bin"
+            ).stat().st_size == metadata["size"]
+
+    asyncio.run(scenario())
 
 
 def test_metadata_only_artifact_level_refuses_transcript_upload_end_to_end() -> None:
@@ -3977,7 +4090,9 @@ def test_a_provider_with_no_speed_setting_is_left_alone(monkeypatch):
     assert "speed" not in captured
 
 
-def test_the_delivery_a_persona_was_rendered_with_is_recoverable_from_the_log(monkeypatch, caplog):
+def test_the_delivery_a_persona_was_rendered_with_is_recoverable_from_the_log(
+    monkeypatch, caplog
+):
     """The only record of what the simulator actually sounded like.
 
     call_metadata reports conversation_speed 1.0 and a constant voice name on every call whatever
@@ -4051,9 +4166,13 @@ def test_two_personalities_do_not_share_one_emotional_register():
     from fi.alk.harness.simulator_voice import persona_emotion
 
     assert persona_emotion({"personality": "Warm and chatty"}) == ["positivity:high"]
-    assert persona_emotion({"personality": "Professional and formal"}) == ["positivity:low"]
+    assert persona_emotion({"personality": "Professional and formal"}) == [
+        "positivity:low"
+    ]
     assert persona_emotion({"personality": "Impatient and abrupt"}) == ["anger:low"]
-    assert persona_emotion({"personality": "Curious and sceptical"}) == ["curiosity:high"]
+    assert persona_emotion({"personality": "Curious and sceptical"}) == [
+        "curiosity:high"
+    ]
 
 
 def test_the_persona_s_emotion_reaches_the_speech_provider(monkeypatch):
@@ -4064,14 +4183,20 @@ def test_the_persona_s_emotion_reaches_the_speech_provider(monkeypatch):
 
     captured = {}
     monkeypatch.setattr(
-        livekit_models, "_import_plugin",
+        livekit_models,
+        "_import_plugin",
         lambda name: SimpleNamespace(TTS=lambda **kw: captured.update(kw) or "tts"),
     )
     monkeypatch.setenv("CARTESIA_API_KEY", "not-a-real-key")
 
     livekit_models._cartesia_tts(
-        TTSConfig(provider="cartesia", model="sonic-3", voice="abc",
-                  speed=1.05, emotion=["anger:low"]),
+        TTSConfig(
+            provider="cartesia",
+            model="sonic-3",
+            voice="abc",
+            speed=1.05,
+            emotion=["anger:low"],
+        ),
         http_session=None,
     )
 
@@ -4088,7 +4213,8 @@ def test_a_persona_with_no_recognised_emotion_sends_no_emotion_key(monkeypatch):
 
     captured = {}
     monkeypatch.setattr(
-        livekit_models, "_import_plugin",
+        livekit_models,
+        "_import_plugin",
         lambda name: SimpleNamespace(TTS=lambda **kw: captured.update(kw) or "tts"),
     )
     monkeypatch.setenv("CARTESIA_API_KEY", "not-a-real-key")

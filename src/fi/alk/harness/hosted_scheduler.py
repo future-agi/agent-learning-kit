@@ -377,6 +377,7 @@ _CODE_DOMAIN: dict[str, FailureDomain] = {
     "world_unavailable": FailureDomain.ENVIRONMENT,
     "state_too_large": FailureDomain.SIMULATOR,
     "call_failed": FailureDomain.INFRASTRUCTURE,
+    "target_agent_failed": FailureDomain.AGENT,
     "target_agent_stalled": FailureDomain.AGENT,
     "target_agent_tool_failed": FailureDomain.AGENT,
     "simulator_stalled": FailureDomain.SIMULATOR,

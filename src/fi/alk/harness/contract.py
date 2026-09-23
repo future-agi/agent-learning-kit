@@ -12,6 +12,7 @@ rather than a bad contract reaching disk.
 from __future__ import annotations
 
 import json
+import re
 import shlex
 from typing import Any
 
@@ -20,6 +21,42 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 # How a person reaches an agent. This decides how it is later run — voice goes out as a live
 # call, everything else runs locally — so it is defined once and referenced, never retyped.
 MODALITIES = ("voice", "chat", "browser")
+_RUNTIME_TEMPLATE_INPUTS = frozenset(
+    {
+        "thread_id",
+        "execution_id",
+        "turn_index",
+        "scenario_name",
+        "persona",
+        "situation",
+        "expected_outcome",
+        "messages",
+        "new_message",
+        "new_message_content",
+        "tools",
+        "metadata",
+    }
+)
+
+
+def _runtime_template_names(value: Any) -> set[str]:
+    if isinstance(value, dict):
+        return (
+            set().union(*(_runtime_template_names(item) for item in value.values()))
+            if value
+            else set()
+        )
+    if isinstance(value, list):
+        return (
+            set().union(*(_runtime_template_names(item) for item in value))
+            if value
+            else set()
+        )
+    if isinstance(value, str):
+        return set(re.findall(r"\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}", value))
+    return set()
+
+
 # Voice only, and only two: either the agent placed the call or it answered one.
 CALL_DIRECTIONS = ("inbound", "outbound")
 
@@ -222,6 +259,62 @@ class Reached(BaseModel):
         )
 
 
+class RuntimeHttpSetupRequest(BaseModel):
+    """One source-evidenced request required before conversational turns begin."""
+
+    method: str = "POST"
+    path: str
+    body_template: Any = Field(default_factory=dict)
+    accepted_statuses: list[int] = Field(default_factory=lambda: [200, 201, 204, 409])
+    # Captured response values become placeholders for later setup requests and turns. This
+    # models generic create-then-use APIs without teaching the harness about a framework.
+    capture: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("method")
+    @classmethod
+    def _safe_method(cls, value: str) -> str:
+        method = str(value or "POST").strip().upper()
+        if method not in {"GET", "POST", "PUT", "PATCH"}:
+            raise ValueError("runtime_http_setup_method_unsupported")
+        return method
+
+    @field_validator("path")
+    @classmethod
+    def _absolute_path(cls, value: str) -> str:
+        path = str(value or "").strip()
+        if not path:
+            raise ValueError("runtime_http_setup_path_required")
+        return path if path.startswith("/") else "/" + path
+
+    @field_validator("accepted_statuses")
+    @classmethod
+    def _bounded_statuses(cls, values: list[int]) -> list[int]:
+        normalized = list(dict.fromkeys(int(value) for value in values))
+        if (
+            not normalized
+            or len(normalized) > 16
+            or any(value < 100 or value > 599 for value in normalized)
+        ):
+            raise ValueError("runtime_http_setup_statuses_invalid")
+        return normalized
+
+    @field_validator("capture")
+    @classmethod
+    def _safe_captures(cls, values: dict[str, str]) -> dict[str, str]:
+        if len(values) > 16:
+            raise ValueError("runtime_http_setup_captures_too_many")
+        normalized: dict[str, str] = {}
+        for raw_name, raw_path in values.items():
+            name = str(raw_name or "").strip()
+            path = str(raw_path or "").strip()
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+                raise ValueError("runtime_http_setup_capture_name_invalid")
+            if not path:
+                raise ValueError("runtime_http_setup_capture_path_required")
+            normalized[name] = path
+        return normalized
+
+
 class RuntimeInterface(BaseModel):
     """The submitted runtime's existing conversational ingress.
 
@@ -236,6 +329,15 @@ class RuntimeInterface(BaseModel):
     path: str = ""
     health_path: str = ""
     include_tools: bool = True
+    # ``json_template`` is the generic boundary for a source-owned HTTP API that is neither the
+    # ALK nor OpenAI envelope. Templates are data, not executable code. A value consisting solely
+    # of ``{{name}}`` preserves the canonical value's JSON type; embedded placeholders render as
+    # strings. Dotted/list response paths select the assistant content from arbitrary JSON/SSE.
+    request_template: Any = None
+    response_path: str = ""
+    setup_requests: list[RuntimeHttpSetupRequest] = Field(
+        default_factory=list, max_length=8
+    )
 
     @field_validator("kind")
     @classmethod
@@ -272,10 +374,38 @@ class RuntimeInterface(BaseModel):
             if not self.path:
                 raise ValueError(f"runtime_{self.kind}_interface_requires_path")
         if self.kind == "http":
-            if self.protocol not in {"fi.alk", "openai_chat"}:
+            if self.protocol not in {"fi.alk", "openai_chat", "json_template"}:
                 raise ValueError(
-                    "runtime_http_protocol_unsupported: expected fi.alk or openai_chat"
+                    "runtime_http_protocol_unsupported: expected fi.alk, openai_chat, or "
+                    "json_template"
                 )
+            if self.protocol == "json_template" and self.request_template is None:
+                raise ValueError("runtime_json_template_requires_request_template")
+            if self.protocol == "json_template":
+                available = set(_RUNTIME_TEMPLATE_INPUTS)
+                for setup in self.setup_requests:
+                    unknown = (
+                        _runtime_template_names(setup.path)
+                        | _runtime_template_names(setup.body_template)
+                    ) - available
+                    if unknown:
+                        raise ValueError(
+                            "runtime_http_setup_unknown_placeholders: "
+                            + ", ".join(sorted(unknown))
+                        )
+                    duplicate = set(setup.capture) & available
+                    if duplicate:
+                        raise ValueError(
+                            "runtime_http_setup_capture_shadows_input: "
+                            + ", ".join(sorted(duplicate))
+                        )
+                    available.update(setup.capture)
+                unknown = _runtime_template_names(self.request_template) - available
+                if unknown:
+                    raise ValueError(
+                        "runtime_http_request_unknown_placeholders: "
+                        + ", ".join(sorted(unknown))
+                    )
         if self.kind == "websocket" and self.protocol != "fi.alk":
             raise ValueError("runtime_websocket_protocol_unsupported: expected fi.alk")
         return self

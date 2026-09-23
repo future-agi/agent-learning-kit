@@ -14,6 +14,9 @@ def test_successful_authoring_save_is_terminal() -> None:
     assert _successful_terminal_save(
         "mcp__source_data__finish_review", {"content": "Saved 12 invariants."}
     )
+    assert _successful_terminal_save(
+        "mcp__repair__submit_world_ir_patch", {"content": "Patch accepted."}
+    )
 
 
 def test_rejected_save_and_non_save_tools_are_not_terminal() -> None:

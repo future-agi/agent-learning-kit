@@ -49,6 +49,19 @@ logger = logging.getLogger(__name__)
 SCENARIO_SERVER = "scenarios"
 
 
+def _is_external_runtime(world_root: Path) -> bool:
+    """Treat pre-snapshot/test worlds as ordinary local runtimes.
+
+    Older callers can construct the scenario-writing surface before a world manifest has been
+    persisted. Provider-backed worlds always have a manifest by this point, so absence must not
+    turn otherwise valid local authoring into a ``FileNotFoundError``.
+    """
+    try:
+        return bool(read_manifest(world_root).get("external_runtime", False))
+    except FileNotFoundError:
+        return False
+
+
 def _mailbox_fields() -> dict[str, Any]:
     """The mailbox-only fields, withheld entirely when the switch is off: a field is an invitation."""
     if not voicemail_enabled():
@@ -391,9 +404,7 @@ def scenario_tools(
     simulator_prompt = load_simulator_prompt(destination)
     target = {"count": wanted}
     exploration = {"since_submit": 0}
-    external_runtime_target = bool(
-        read_manifest(world_root).get("external_runtime", False)
-    )
+    external_runtime_target = _is_external_runtime(world_root)
     tool_free_target = not bool(contract.tools) or external_runtime_target
 
     # ``branch`` is required because coverage is counted on the use case and branch pair, and the
@@ -1130,7 +1141,7 @@ def world_summary(world_root: Path) -> str:
                 "\nSUB-GOALS already defined (reuse these, do not restate them):"
             )
             lines += [f"  {one.name}: {one.what}" for one in catalogue.sub_goals]
-        external = bool(read_manifest(world_root).get("external_runtime", False))
+        external = _is_external_runtime(world_root)
         prefix = "THE BUILT WORLD (restored fresh for every scenario):\n"
         if external:
             prefix += (

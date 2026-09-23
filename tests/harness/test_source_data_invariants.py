@@ -94,6 +94,30 @@ def test_data_free_review_is_explicit_and_bound_to_source_and_contract(tmp_path)
         asyncio.run(subject.author_invariants(source, out, world))
 
 
+def test_in_process_graph_state_does_not_require_sql_invariants(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "graph.py").write_text("graph = object()\n")
+    out = tmp_path / "authoring"
+    out.mkdir()
+    (out / "contract.json").write_text(
+        json.dumps(
+            {
+                "agent": "graph",
+                "tools": [{"name": "research"}],
+                "data_store": {"kind": "in_process"},
+                "data_schema": {"AgentState": {"messages": "list"}},
+            }
+        )
+    )
+    world = SimpleNamespace(state=lambda: {"harness_seed_sentinel": []})
+
+    assert asyncio.run(subject.author_invariants(source, out, world)) == []
+    review = json.loads((out / subject.ARTIFACT).read_text())
+    assert review["status"] == "not_applicable"
+    assert "in-process" in review["reason"].lower()
+
+
 @pytest.mark.parametrize(
     "contract_patch,tables",
     [
