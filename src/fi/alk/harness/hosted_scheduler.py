@@ -2179,12 +2179,21 @@ class HostedScheduler:
         if judged_pending:
             # Judged sub-goals only read, so they are independent of each other and of the coded
             # checks: one round trip for all of them rather than one each.
+            try:
+                context = (
+                    {"scenario": scenario}
+                    if "scenario" in inspect.signature(self._judge).parameters
+                    else {}
+                )
+            except (TypeError, ValueError):
+                context = {}
+
             async def _settle(goal: Any) -> Any:
                 # Awaited, not called inline: calling an injected judge whose signature does not
                 # match raises while the coroutines are still being built, which is outside
                 # `gather`'s net and errors the scenario. Inside a coroutine it is just a fault.
                 return await self._judge(
-                    goal, check_handle, calls, messages=call_outcome.messages
+                    goal, check_handle, calls, messages=call_outcome.messages, **context
                 )
 
             verdicts = await asyncio.gather(
@@ -2192,8 +2201,10 @@ class HostedScheduler:
                 return_exceptions=True,
             )
             for (slot, goal), outcome in zip(judged_pending, verdicts):
+                # What went wrong with judging is logged; the reason is shown to the agent's owner.
                 if isinstance(outcome, BaseException):
-                    held, why = None, f"the judge could not run: {outcome!r}"
+                    logger.warning("judge could not run for %s: %r", goal.name, outcome)
+                    held, why = None, ""
                 else:
                     try:
                         held, why = outcome
@@ -2201,10 +2212,8 @@ class HostedScheduler:
                         # An injected judge that answers in some other shape is unreadable, not
                         # authoritative. Unpacking it here would raise inside `_grade` and error
                         # the whole scenario, which is the one thing a verdict must never do.
-                        held, why = (
-                            None,
-                            f"the judge returned no usable verdict: {outcome!r}",
-                        )
+                        logger.warning("judge gave an unusable verdict for %s: %r", goal.name, outcome)
+                        held, why = None, ""
                 sub_goal_results[slot] = SubGoalResult(
                     name=goal.name, held=held, reason=why, judged=True
                 )
@@ -2219,13 +2228,21 @@ class HostedScheduler:
                 call=self._call_summary(call_outcome),
             )
 
-        # A sub-goal the judge did not settle is reported unsettled on the sub-goal itself and
-        # never decides the scenario: the call ran, its evidence stands, and a model that could
-        # not answer is a fault of neither the agent nor the run. Only a settled `False` fails a
-        # scenario. `errored` stays reachable for a call or infrastructure fault, which is raised
-        # elsewhere; nothing about a verdict produces one.
+        # A settled `False` fails the scenario. A sub-goal the judge still could not settle, after
+        # its retry with the evidence inlined, must never read as a pass, so the scenario is
+        # reported as not decided rather than passed.
         if any(result.held is False for result in sub_goal_results):
             status = "failed"
+        elif any(result.held is None for result in sub_goal_results):
+            return self._fault(
+                scenario,
+                world_index,
+                attempt,
+                _failure("judge_undecided", "a judged sub-goal was not decided"),
+                sub_goals=tuple(sub_goal_results),
+                call=self._call_summary(call_outcome),
+                retry=False,
+            )
         else:
             status = "passed"
         failure = None

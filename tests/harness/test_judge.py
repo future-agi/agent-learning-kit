@@ -99,26 +99,31 @@ def test_bad_model_sql_is_returned_as_recoverable_tool_feedback(monkeypatch):
     assert world.queried == ["select 1"]
 
 
-def test_an_undecided_judge_reports_unjudged_not_failed(monkeypatch):
-    """A judge that cannot tell is not evidence against the agent; the platform skips held None."""
+def test_a_judge_that_will_not_commit_is_unjudged_and_says_nothing_internal(monkeypatch):
+    """No verdict after the retry is neither a pass nor a fail, and no judging detail is published."""
     (held, why), _ = _drive(
         monkeypatch, {"undecided": True, "explanation": "no table records intent"}
     )
     assert held is None
-    assert "intent" in why
+    assert why == ""
+
+
+def test_a_verdict_given_as_text_is_not_read_as_a_pass(monkeypatch):
+    (held, _), _ = _drive(monkeypatch, {"passed": "false", "explanation": "the agent refused"})
+    assert held is None
 
 
 def test_a_verdict_with_no_explanation_is_refused(monkeypatch):
     """An explanation-free verdict is the placeholder again, so decide() refuses it."""
     (held, why), _ = _drive(monkeypatch, {"passed": True, "explanation": "  "})
     assert held is None
-    assert "without a verdict" in why
+    assert why == ""
 
 
 def test_a_judge_that_raises_never_fails_the_agent(monkeypatch):
     (held, why), _ = _drive(monkeypatch, {"passed": True, "explanation": "x"}, raises=True)
     assert held is None
-    assert "could not run" in why
+    assert why == ""
 
 
 def test_the_judge_model_is_changeable(monkeypatch):
@@ -180,3 +185,40 @@ def test_a_judging_stage_is_not_overheard_in_the_chat() -> None:
     # The mirror into the chat is conditional, both for what the stage says and what it hears.
     assert "if self._overheard:" in session
     assert "self.channel.waiting() if self._overheard else []" in session
+
+
+def test_the_retry_carries_the_evidence_and_can_settle_the_claim(monkeypatch):
+    prompts: list[str] = []
+
+    class _Stage:
+        def __init__(self, spec, name="", overheard=True):
+            self.spec = spec
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return None
+
+        async def say(self, prompt):
+            prompts.append(prompt)
+            if len(prompts) == 2:
+                tools = {t.name: t for t in self.spec.servers["world"].tools}
+                await tools["decide"].handler(
+                    {"passed": True, "explanation": "the agent confirmed the booking"}
+                )
+
+    class _Scenario:
+        instruction = "the caller books a ride to the airport"
+        tests = "the agent confirms before booking"
+
+    monkeypatch.setattr(judge_module, "Stage", _Stage)
+    said = [{"role": "assistant", "content": "shall I book it?"}]
+    calls = [type("C", (), {"name": f"step_{i}", "arguments": {}, "result": None})() for i in range(30)]
+    held, why = asyncio.run(
+        judge_module.judge(_Goal(), _World(), calls, messages=said, scenario=_Scenario())
+    )
+    assert (held, why) == (True, "the agent confirmed the booking")
+    assert "books a ride to the airport" in prompts[0]
+    assert "step_29" in prompts[0]
+    assert "shall I book it?" in prompts[1]

@@ -9,13 +9,16 @@ Nothing here is modality-specific. It reasons over the world's tables, the actio
 took and what was said, which a voice call, a typed conversation and a browser the agent drives all
 leave behind in the same shape, so the wording stays neutral rather than naming a call.
 
-A judge that cannot decide returns held None: the unjudged path the platform already skips, because
-a judge that failed to run is not evidence against the agent.
+The explanation is read by the agent's owner, so it speaks only about what the agent did. Anything
+about the judging itself (a failed query, a missing transcript, a crash) goes to the log, never into
+the verdict. A judge that still cannot decide after a retry with the evidence inlined returns held
+None, which the scheduler never reports as a pass.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import os
 from typing import Any, Sequence
 
@@ -24,24 +27,30 @@ from .config import chosen_model
 from .session import Stage
 from .tools import schema
 
+logger = logging.getLogger(__name__)
+
 JUDGE_MODEL_ALIAS = "ALK_JUDGE_MODEL"
 _LIMIT = 600
 _TRANSCRIPT_LIMIT = 24000
 
 _INSTRUCTIONS = """
-You decide one claim about a session that already happened, against the world it left behind.
+You decide one claim about a conversation an agent already had, using what it said, the actions it
+took and the state of its system afterwards.
 
-Look before you answer: read the actions you were given, inspect the tables the claim touches, query
-for a specific row when the claim is about one, and read the transcript when the claim is about what
-was said. The world is the run's final state. Its SQL dialect is PostgreSQL, not SQLite. Use
-inspect_world to discover tables; do not query sqlite_master or make up a schema. A claim about
-wording or about what the agent told the caller is settled by read_transcript: do not call it
-undecided before reading it.
+Look before you answer: read the actions you were given, read the conversation when the claim is
+about what was said, and inspect the system's records when the claim is about what changed. The
+records are PostgreSQL; use inspect_world to discover them rather than guessing names. Judge the
+claim against the situation the conversation actually set up: a step the caller declined, or one the
+situation never called for, is not a failure of the agent.
 
-Then call decide, once. `passed` true when the claim holds, false when it does not, and an
-explanation citing what you saw: a value, a row, an action and its arguments. An explanation that
-only restates the claim is not a verdict. If you genuinely cannot tell, pass undecided true rather
-than guess. Judge only the claim you were given.
+Then call decide, once, with `passed` true or false. You must decide: the conversation, the actions
+and the records together are enough, so weigh them and commit.
+
+`explanation` is shown to the agent's owner. Write one or two plain sentences about the agent's
+behaviour and its result, in the terms of their business: what the agent said or did, and what that
+changed. Never mention tables, rows, queries, tool names, records you could or could not read, this
+review, a test, a scenario, a simulation or any error. Put anything about how you checked into
+`evidence`, which only the reviewers of this process see.
 """.strip()
 
 
@@ -64,8 +73,18 @@ def _dump(value: object) -> str:
     return json.dumps(_short(value), default=str, indent=1)
 
 
+def _dump_calls(calls: Sequence[Any]) -> str:
+    """Every action, however long the conversation: only each field is trimmed, never the list."""
+    return json.dumps([_short(_call(c)) for c in calls], default=str, indent=1)
+
+
 async def judge(
-    goal: Any, world: Any, calls: Sequence[Any], *, messages: Sequence[Any] = ()
+    goal: Any,
+    world: Any,
+    calls: Sequence[Any],
+    *,
+    messages: Sequence[Any] = (),
+    scenario: Any = None,
 ) -> tuple[bool | None, str]:
     """Decide one judged sub-goal: (passed, explanation). Never raises."""
     verdict: dict[str, tuple[bool | None, str]] = {}
@@ -111,23 +130,29 @@ async def judge(
     async def read_transcript(args: dict[str, Any]) -> dict[str, Any]:
         if not messages:
             return _say(
-                "no transcript was recorded for this session, so nothing here can settle a claim "
-                "about what was said",
-                error=True,
+                "Nothing was captured of what was said. Decide from the actions and the records."
             )
         return _say(_transcript(messages))
 
     @tool(
         "decide",
         "Commit to the verdict, once, after looking.",
-        schema({"passed": bool, "explanation": str, "undecided": bool}, ["explanation"]),
+        schema(
+            {"passed": bool, "explanation": str, "evidence": str},
+            ["passed", "explanation"],
+        ),
     )
     async def decide(args: dict[str, Any]) -> dict[str, Any]:
+        passed = args.get("passed")
         explanation = str(args.get("explanation") or "").strip()
+        if not isinstance(passed, bool):
+            return _say("passed must be true or false", error=True)
         if not explanation:
-            return _say("a verdict needs an explanation naming what you saw", error=True)
-        held = None if bool(args.get("undecided")) else bool(args.get("passed"))
-        verdict["it"] = (held, explanation)
+            return _say("a verdict needs an explanation of what the agent did", error=True)
+        evidence = str(args.get("evidence") or "").strip()
+        if evidence:
+            logger.info("judge evidence for %s: %s", getattr(goal, "name", ""), evidence)
+        verdict["it"] = (passed, explanation)
         return _say("recorded")
 
     spec = SessionSpec(
@@ -141,19 +166,37 @@ async def judge(
         max_turns=12,
         model=judge_model(),
     )
+    situation = ""
+    if scenario is not None:
+        situation = (
+            f"The situation the conversation set up: {getattr(scenario, 'instruction', '') or '(not given)'}\n"
+            f"What it was meant to show: {getattr(scenario, 'tests', '') or '(not given)'}\n\n"
+        )
     prompt = (
+        f"{situation}"
         f"Claim {getattr(goal, 'name', '')!r}.\n"
         f"What it means: {getattr(goal, 'what', '') or '(none written)'}\n"
-        f"Why a model must decide it: {getattr(goal, 'judged', '')}\n\n"
-        f"Actions the agent took:\n{_dump([_call(c) for c in calls])}\n\n"
-        "Inspect the world and the transcript as needed, then call decide."
+        f"Why it needs judgement: {getattr(goal, 'judged', '')}\n\n"
+        f"Actions the agent took:\n{_dump_calls(calls)}\n\n"
+        "Look as needed, then call decide."
     )
-    try:
-        async with Stage(spec, name="judge-sub-goals", overheard=False) as stage:
-            await stage.say(prompt)
-    except Exception as exc:  # noqa: BLE001 - a judge that could not run is not a failed agent
-        return None, f"the judge could not run: {type(exc).__name__}: {exc}"
-    return verdict.get("it", (None, "the judge finished without a verdict"))
+    retry = (
+        f"{prompt}\n\nWhat was said:\n{_transcript(messages) if messages else '(nothing captured)'}\n\n"
+        "Everything needed is above. Call decide now with passed true or false."
+    )
+    for attempt, text in enumerate((prompt, retry), start=1):
+        try:
+            async with Stage(spec, name="judge-sub-goals", overheard=False) as stage:
+                await stage.say(text)
+        except Exception as exc:  # noqa: BLE001 - a judge that could not run is not a failed agent
+            logger.warning(
+                "judge attempt %d for %s could not run: %s: %s",
+                attempt, getattr(goal, "name", ""), type(exc).__name__, exc,
+            )
+        if "it" in verdict:
+            return verdict["it"]
+    logger.warning("judge gave no verdict for %s", getattr(goal, "name", ""))
+    return None, ""
 
 
 def _transcript(messages: Sequence[Any]) -> str:
