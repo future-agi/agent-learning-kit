@@ -779,7 +779,7 @@ class HostedChatRuntime:
         self._record_provider_session()
         if self._control_only():
             files = {}
-            for name in (_PROVIDER_SESSIONS, _JOURNAL, _PENDING_QUESTION):
+            for name in (_JOURNAL, _PENDING_QUESTION):
                 path = self.workspace / name
                 if path.is_file():
                     files[name] = json.loads(path.read_text(encoding="utf-8"))
@@ -809,7 +809,7 @@ class HostedChatRuntime:
         if not entries:
             return
         files = entries[-1]["files"]
-        for name in (_PROVIDER_SESSIONS, _JOURNAL, _PENDING_QUESTION):
+        for name in (_JOURNAL, _PENDING_QUESTION):
             path = self.workspace / name
             if name in files:
                 temporary = path.with_suffix(".tmp")
