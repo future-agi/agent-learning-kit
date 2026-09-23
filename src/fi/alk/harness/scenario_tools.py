@@ -1868,6 +1868,23 @@ def scenario_tools(
                 + ", ".join(f"{axis} ({len(levels)})" for axis, levels in grid.items())
                 + "; a scenario placed anywhere else is refused before it is proved"
             )
+            # Scenarios kept BEFORE the first grid was declared were never checked against one,
+            # because the gate is silent while no grid exists. The same vocabulary is applied again
+            # when the environment is validated, and there a single stray level fails the whole
+            # job: one five-hundred authored every scenario and then died at that gate over 25 of
+            # them. Named here, they cost a relabel each; found there, they cost the run.
+            already_off = sorted(
+                one.name for one in kept if _off_the_grid(one.coverage, grid)
+            )
+            if already_off:
+                said += (
+                    f". {len(already_off)} already written sit off it and were kept before it "
+                    "existed: "
+                    + ", ".join(already_off[:12])
+                    + ("" if len(already_off) <= 12 else f", and {len(already_off) - 12} more")
+                    + ". Relabel them onto the grid now. The environment validation applies the "
+                    "same vocabulary at the end of the run and one stray level fails the whole job"
+                )
         # The levels of an overlay-shaped axis are the ones that need a sub-goal each, and this is
         # the moment the harness can see both lists. Said here it costs one line; found at save
         # time the suite is already written, which is how 31 of 52 overlay scenarios in a
