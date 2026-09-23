@@ -842,6 +842,18 @@ A caller who only holds the facts in the order the prose happened to put them in
 agent goes its own way, and the run ends testing your solution rather than the agent. A caller holding the
 whole sheet can answer whatever comes.
 
+**And the sheet is a device, not a guarantee. What matters is that nothing is missing.** Measured on a
+hosted 100 where 43 scenarios ended in a details block: **three of them called for a verification code the
+instruction never contained**, six reached a payment step naming no card or balance anywhere, and four
+created a guest profile without giving the person a name. The block was present and the fact was not. On a
+second hundred written mostly without blocks there were none of any kind, because the facts were in the
+prose. Either shape works; only completeness counts.
+
+So check it directly, from the reference solution backwards: **for every step in your solution, ask where
+the caller got the value it needed.** A code read back has to exist somewhere in the instruction. A card
+chosen has to have been named. A guest profile created has to have a name to create it with. If the solution
+needs it and the caller was never given it, the run stalls at that step and the failure is ours.
+
 Holding the facts is not the same as volunteering them. The caller's own rules already say to answer only
 what was asked, one fact at a time, and never to offer several at once - so the sheet is what they can draw
 on, not a script to read out. Keep it consistent with the prose above it: a detail that appears in both has
