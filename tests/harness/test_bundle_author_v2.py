@@ -1987,6 +1987,255 @@ def test_bundle_rejects_missing_declared_source_schema(tmp_path: Path) -> None:
         )
 
 
+# --- C1 (world-port-model v1.3): authoring the parallelism seams (Track A′) ------------------
+
+
+def _livekit_compose_with_command_fixed_tools(source: Path) -> None:
+    """A voice bundle whose tools-api pins its port in a Dockerfile exec-form CMD — the
+    command-fixed shape C1 §1 names as the concrete `tools-api` rewrite target."""
+    source.mkdir()
+    agent = source / "agent"
+    agent.mkdir()
+    (agent / "agent.py").write_text("print('agent')\n", encoding="utf-8")
+    (source / "pyproject.toml").write_text(
+        "[project]\nname='agent'\nversion='1'\n", encoding="utf-8"
+    )
+    tools = source / "tools-api"
+    tools.mkdir()
+    (tools / "main.py").write_text("print('tools')\n", encoding="utf-8")
+    (tools / "pyproject.toml").write_text(
+        "[project]\nname='tools'\nversion='1'\n", encoding="utf-8"
+    )
+    (tools / "Dockerfile").write_text(
+        'FROM python:3.12\nCMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]\n',
+        encoding="utf-8",
+    )
+    (source / "compose.yml").write_text(
+        """services:
+  postgres:
+    image: postgres:16
+  tools-api:
+    build: ./tools-api
+    depends_on: {postgres: {condition: service_healthy}}
+  agent:
+    build: .
+    depends_on: {tools-api: {condition: service_healthy}}
+""",
+        encoding="utf-8",
+    )
+
+
+def test_command_fixed_tools_api_is_rewritten_consumable(tmp_path: Path) -> None:
+    # C1 §1 / checklist 2: mark tools-api consumable AND rewrite its verbatim-exec'd run_command
+    # into the ONE valid wiring — `$FI_TOOLS_PORT` inside `sh -c`, fed by an env value carrying
+    # `{{PORT_tools-api}}`. A bare token in argv would not work (run_command is never rendered).
+    source = tmp_path / "voice-compose"
+    _livekit_compose_with_command_fixed_tools(source)
+    plan = resolve_environment_plan(
+        source, _job(connector="livekit", with_secrets=True)
+    )
+
+    tools = next(p for p in plan.processes if p.name == "tools-api")
+    assert tools.fixed_port == 8080
+    assert tools.fixed_port_consumable is True
+    assert tools.run_command == [
+        "sh",
+        "-c",
+        "uvicorn main:app --host 0.0.0.0 --port $FI_TOOLS_PORT",
+    ]
+    assert tools.environment["FI_TOOLS_PORT"] == "{{PORT_tools-api}}"
+
+
+def test_command_fixed_tools_api_stays_preflight_clean_and_round_trips(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "voice-compose"
+    _livekit_compose_with_command_fixed_tools(source)
+    job = _job(connector="livekit", with_secrets=True)
+    output = tmp_path / "bundle"
+    first = author_bundle_v2(
+        source=source, job=job, authoring=_authoring(tmp_path), output=output
+    )
+    loaded = load_bundle_v2(output)
+    assert loaded.digest == first.digest
+    tools = next(p for p in loaded.processes if p.name == "tools-api")
+    assert tools.fixed_port_consumable is True
+    preflight_bundle(
+        output,
+        loaded,
+        parallelism=1,
+        secret_refs={
+            alias: ref.purpose for alias, ref in job.agent.secret_refs.items()
+        },
+    )
+
+
+def test_tools_api_without_a_port_command_stays_non_consumable(tmp_path: Path) -> None:
+    # Honest wiring (C1 §1): a tools-api whose command carries no `--port` literal cannot be
+    # wired to `$FI_TOOLS_PORT`, so authoring MUST NOT flag it consumable (that would be the
+    # exact `fixed_port_consumable_unwired` lie). It stays code-fixed and degrades at W>1.
+    source = tmp_path / "uber-compose"
+    source.mkdir()
+    (source / "agent" / "agent.py").parent.mkdir()
+    (source / "agent" / "agent.py").write_text("print('agent')\n", encoding="utf-8")
+    (source / "pyproject.toml").write_text(
+        "[project]\nname='agent'\nversion='1'\n", encoding="utf-8"
+    )
+    tools = source / "tools-api"
+    tools.mkdir()
+    (tools / "agent.py").write_text("print('tools')\n", encoding="utf-8")
+    (tools / "requirements.txt").write_text("\n", encoding="utf-8")
+    (source / "compose.yml").write_text(
+        """services:
+  postgres:
+    image: postgres:16
+  tools-api:
+    build: ./tools-api
+    depends_on: {postgres: {condition: service_healthy}}
+  agent:
+    build: .
+    depends_on: {tools-api: {condition: service_healthy}}
+""",
+        encoding="utf-8",
+    )
+    plan = resolve_environment_plan(
+        source, _job(connector="livekit", with_secrets=True)
+    )
+    tools_proc = next(p for p in plan.processes if p.name == "tools-api")
+    assert tools_proc.fixed_port == 8080
+    assert tools_proc.fixed_port_consumable is False
+    assert "FI_TOOLS_PORT" not in tools_proc.environment
+
+
+def _livekit_compose_single_api_worker(source: Path) -> None:
+    """A voice bundle whose ONLY source service is `api` (no separate agent): the LiveKit control
+    worker is ALSO a command-fixed HTTP server. Track A′ D37: this ONE process would receive both
+    FI_WORKER_HEALTH_PORT and FI_TOOLS_PORT bound to the SAME `{{PORT_api}}` token."""
+    source.mkdir()
+    api = source / "api"
+    api.mkdir()
+    (api / "agent.py").write_text("print('api')\n", encoding="utf-8")
+    (api / "pyproject.toml").write_text(
+        "[project]\nname='api'\nversion='1'\n", encoding="utf-8"
+    )
+    (api / "Dockerfile").write_text(
+        'FROM python:3.12\nCMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]\n',
+        encoding="utf-8",
+    )
+    (source / "compose.yml").write_text(
+        """services:
+  postgres:
+    image: postgres:16
+  api:
+    build: ./api
+    depends_on: {postgres: {condition: service_healthy}}
+""",
+        encoding="utf-8",
+    )
+
+
+def test_conflated_worker_and_http_server_stays_non_consumable(tmp_path: Path) -> None:
+    # Track A′ D37: a single process that is BOTH the knob-bearing LiveKit control worker AND a
+    # consumable HTTP server would get FI_WORKER_HEALTH_PORT and FI_TOOLS_PORT bound to the SAME
+    # `{{PORT_api}}` token -> the worker health server and the HTTP server collide on one port at
+    # ANY W. Such a conflated process MUST NOT be flagged consumable; it stays code-fixed and
+    # degrades to W=1 honestly (at W=1 the default health port does not collide).
+    source = tmp_path / "conflated-voice"
+    _livekit_compose_single_api_worker(source)
+    plan = resolve_environment_plan(
+        source, _job(connector="livekit", with_secrets=True)
+    )
+
+    api = next(p for p in plan.processes if p.name == "api")
+    # It IS the knob-bearing control worker...
+    assert api.environment["FI_WORKER_HEALTH_PORT"] == "{{PORT_api}}"
+    # ...so it is NOT flagged consumable and carries NO FI_TOOLS_PORT rewrite (no port collision).
+    assert api.fixed_port == 8080
+    assert api.fixed_port_consumable is False
+    assert "FI_TOOLS_PORT" not in api.environment
+
+
+def test_normal_separate_tools_api_is_still_consumable(tmp_path: Path) -> None:
+    # Track A′ D37 anti-regression: the NORMAL topology (control=agent + a SEPARATE tools-api) is
+    # unaffected — the separate tools-api still gets the consumable rewrite (it is not the
+    # knob-bearing worker), and the agent control worker is not an HTTP server at all.
+    source = tmp_path / "voice-compose"
+    _livekit_compose_with_command_fixed_tools(source)
+    plan = resolve_environment_plan(
+        source, _job(connector="livekit", with_secrets=True)
+    )
+
+    tools = next(p for p in plan.processes if p.name == "tools-api")
+    assert tools.fixed_port_consumable is True
+    assert tools.environment["FI_TOOLS_PORT"] == "{{PORT_tools-api}}"
+    assert "FI_WORKER_HEALTH_PORT" not in tools.environment
+    control = next(p for p in plan.processes if p.name == "agent")
+    assert control.environment["FI_WORKER_HEALTH_PORT"] == "{{PORT_agent}}"
+    assert "FI_TOOLS_PORT" not in control.environment
+
+
+def test_livekit_worker_carries_the_worker_knob_env(tmp_path: Path) -> None:
+    # C1 §4: FI_WORKER_HEALTH_PORT is authored UNCONDITIONALLY into every LiveKit-worker process,
+    # each fed its OWN `{{PORT_<name>}}`. Its presence IS the knob-bearing mark; it is the only
+    # worker knob authored -- FI_LOAD_THRESHOLD / FI_NUM_IDLE_PROCESSES are hardcoded by the
+    # harness's own sitecustomize shim at worker start instead, so there is nothing to author.
+    source = tmp_path / "voice-compose"
+    _livekit_compose_with_command_fixed_tools(source)
+    plan = resolve_environment_plan(
+        source, _job(connector="livekit", with_secrets=True)
+    )
+
+    control = next(p for p in plan.processes if p.name == "agent")
+    assert control.environment["FI_WORKER_HEALTH_PORT"] == "{{PORT_agent}}"
+    assert "FI_LOAD_THRESHOLD" not in control.environment
+    assert "FI_NUM_IDLE_PROCESSES" not in control.environment
+    # D32 / C3 §4.5: the dispatch-ack opt-in does NOT belong on the agent-under-test child. The
+    # engine reads it from the GUEST MAIN PROCESS env (armed by `hosted_entrypoint`), not from the
+    # spawned worker's environment, so the worker-knob authoring must not carry it.
+    assert "FI_HOSTED_DISPATCH_ACK" not in control.environment
+    # LIVEKIT_AGENT_NAME carries BOTH the job-id and world-index (C1 item 4 / §3).
+    dispatch = control.environment["LIVEKIT_AGENT_NAME"]
+    assert "{{JOB_ID}}" in dispatch and "{{WORLD_INDEX}}" in dispatch
+    # The non-worker tools-api process must NOT be marked knob-bearing.
+    tools = next(p for p in plan.processes if p.name == "tools-api")
+    assert "FI_WORKER_HEALTH_PORT" not in tools.environment
+    assert "FI_HOSTED_DISPATCH_ACK" not in tools.environment
+
+
+def test_generated_python_livekit_worker_carries_the_worker_knob_env(
+    tmp_path: Path,
+) -> None:
+    # The non-compose (generated_python) lane authors the same knobs onto its single worker.
+    source = tmp_path / "voice-agent"
+    source.mkdir()
+    (source / "agent.py").write_text("print('agent')\n", encoding="utf-8")
+    plan = resolve_environment_plan(
+        source, _job(connector="livekit", with_secrets=True)
+    )
+
+    control = next(p for p in plan.processes if p.name == "agent")
+    assert control.environment["FI_WORKER_HEALTH_PORT"] == "{{PORT_agent}}"
+    assert "FI_LOAD_THRESHOLD" not in control.environment
+    assert "FI_NUM_IDLE_PROCESSES" not in control.environment
+    # D32 / C3 §4.5: the flag is guest-main-only, never authored onto the agent-under-test child.
+    assert "FI_HOSTED_DISPATCH_ACK" not in control.environment
+    dispatch = control.environment["LIVEKIT_AGENT_NAME"]
+    assert "{{JOB_ID}}" in dispatch and "{{WORLD_INDEX}}" in dispatch
+
+
+def test_non_livekit_control_has_no_worker_knob_env(tmp_path: Path) -> None:
+    # The knobs are LiveKit-worker-only; a plain HTTP agent is not knob-bearing.
+    source = tmp_path / "chat-agent"
+    source.mkdir()
+    (source / "agent.py").write_text("print('agent')\n", encoding="utf-8")
+    plan = resolve_environment_plan(source, _job(connector="http"))
+
+    control = next(p for p in plan.processes if p.name == "agent")
+    assert "FI_WORKER_HEALTH_PORT" not in control.environment
+    assert "FI_LOAD_THRESHOLD" not in control.environment
+    assert "FI_HOSTED_DISPATCH_ACK" not in control.environment
+
+
 def test_chat_command_runtime_compiles_generic_subprocess_bridge(
     tmp_path: Path,
 ) -> None:

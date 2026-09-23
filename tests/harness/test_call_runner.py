@@ -1488,11 +1488,22 @@ def test_construction_exports_target_provider_secrets_to_environ_once(
 ) -> None:
     fake_environ: dict[str, str] = {}
     _job_obj, context = _context(tmp_path=tmp_path)
-    cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
-    assert fake_environ[LIVEKIT_API_KEY] == "lk-key"
-    assert fake_environ[LIVEKIT_API_SECRET] == "lk-secret"
-    assert fake_environ[DEEPGRAM_API_KEY] == "dg-key"
-    assert fake_environ[GEMINI_API_KEY] == "gm-key"
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
+    assert runner._environ[LIVEKIT_API_KEY] == "lk-key"
+    assert runner._environ[LIVEKIT_API_SECRET] == "lk-secret"
+    assert runner._environ[DEEPGRAM_API_KEY] == "dg-key"
+    assert runner._environ[GEMINI_API_KEY] == "gm-key"
+
+
+def test_vapi_control_key_is_only_exported_to_private_call_environment(tmp_path):
+    _job_obj, context = _context(
+        tmp_path=tmp_path,
+        secrets={**_ALL_SECRETS, "VAPI_PUBLIC_API_KEY": "public-control-key"},
+    )
+    parent_environment = {}
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, environ=parent_environment)
+    assert runner._environ["VAPI_PUBLIC_API_KEY"] == "public-control-key"
+    assert "VAPI_PUBLIC_API_KEY" not in parent_environment
 
 
 def test_construction_never_exports_secrets_outside_the_target_provider_map(
@@ -1502,8 +1513,8 @@ def test_construction_never_exports_secrets_outside_the_target_provider_map(
     secrets = dict(_ALL_SECRETS)
     secrets["UNRELATED_ALIAS"] = "should-not-export"
     _job_obj, context = _context(tmp_path=tmp_path, secrets=secrets)
-    cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
-    assert "UNRELATED_ALIAS" not in fake_environ
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
+    assert "UNRELATED_ALIAS" not in runner._environ
 
 
 def test_construction_uses_platform_simulator_key_without_exposing_agent_model_key(
@@ -1524,10 +1535,10 @@ def test_construction_uses_platform_simulator_key_without_exposing_agent_model_k
         secrets=target,
         simulator_secrets=simulator,
     )
-    cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
-    assert fake_environ[DEEPGRAM_API_KEY] == "platform-deepgram-key"
-    assert fake_environ[GEMINI_API_KEY] == "platform-gemini-key"
-    assert "ANTHROPIC_API_KEY" not in fake_environ
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
+    assert runner._environ[DEEPGRAM_API_KEY] == "platform-deepgram-key"
+    assert runner._environ[GEMINI_API_KEY] == "platform-gemini-key"
+    assert "ANTHROPIC_API_KEY" not in runner._environ
 
 
 def test_hosted_run_never_falls_back_to_customer_simulator_keys(tmp_path: Path) -> None:
@@ -1539,8 +1550,8 @@ def test_hosted_run_never_falls_back_to_customer_simulator_keys(tmp_path: Path) 
         simulator_secrets={},
     )
     runner = cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
-    assert DEEPGRAM_API_KEY not in fake_environ
-    assert GEMINI_API_KEY not in fake_environ
+    assert DEEPGRAM_API_KEY not in runner._environ
+    assert GEMINI_API_KEY not in runner._environ
     assert runner._missing_config is not None
 
 
@@ -1551,9 +1562,9 @@ def test_local_sdk_remains_byok_for_simulator_credentials(tmp_path: Path) -> Non
         execution=ExecutionMode.LOCAL,
         simulator_secrets={},
     )
-    cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
-    assert fake_environ[DEEPGRAM_API_KEY] == "dg-key"
-    assert fake_environ[GEMINI_API_KEY] == "gm-key"
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
+    assert runner._environ[DEEPGRAM_API_KEY] == "dg-key"
+    assert runner._environ[GEMINI_API_KEY] == "gm-key"
 
 
 def test_platform_simulator_credentials_win_without_replacing_target_livekit(
@@ -1569,12 +1580,12 @@ def test_platform_simulator_credentials_win_without_replacing_target_livekit(
 
     runner = cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
 
-    assert fake_environ[LIVEKIT_API_KEY] == "lk-key"
-    assert fake_environ[LIVEKIT_API_SECRET] == "lk-secret"
-    assert fake_environ[DEEPGRAM_API_KEY] == "platform-deepgram"
-    assert fake_environ[GEMINI_API_KEY] == "platform-gemini"
+    assert runner._environ[LIVEKIT_API_KEY] == "lk-key"
+    assert runner._environ[LIVEKIT_API_SECRET] == "lk-secret"
+    assert runner._environ[DEEPGRAM_API_KEY] == "platform-deepgram"
+    assert runner._environ[GEMINI_API_KEY] == "platform-gemini"
     assert (
-        fake_environ["GOOGLE_APPLICATION_CREDENTIALS"]
+        runner._environ["GOOGLE_APPLICATION_CREDENTIALS"]
         == "/run/futureagi/platform-vertex.json"
     )
     assert runner._missing_config is None
@@ -1626,9 +1637,9 @@ def test_provider_voice_uses_platform_livekit_without_exposing_customer_livekit(
 
     runner = cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
 
-    assert fake_environ[LIVEKIT_API_KEY] == "platform-livekit-key"
-    assert fake_environ[LIVEKIT_API_SECRET] == "platform-livekit-secret"
-    assert fake_environ[RETELL_API_KEY] == "customer-retell-key"
+    assert runner._environ[LIVEKIT_API_KEY] == "platform-livekit-key"
+    assert runner._environ[LIVEKIT_API_SECRET] == "platform-livekit-secret"
+    assert runner._environ[RETELL_API_KEY] == "customer-retell-key"
     assert runner._livekit_url == "wss://platform-livekit.example"
     assert runner._missing_config is None
 

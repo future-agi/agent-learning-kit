@@ -31,6 +31,17 @@ CONNECT_TIMEOUT_SECONDS = 60.0
 READINESS_TIMEOUT_SECONDS = 120.0
 CLEANUP_TIMEOUT_SECONDS = 30.0
 
+# Supported endpoint overrides used by the simulator model adapter.
+SIMULATOR_MODEL_ENV = frozenset(
+    {
+        "SIMULATOR_LLM_API_KEY",
+        "SIMULATOR_LLM_BASE_URL",
+        "SIMULATOR_LLM_API_KEY_HEADER",
+        "SIMULATOR_LLM_THINKING",
+        "OPENAI_BASE_URL",
+    }
+)
+
 _TARGET_NAME = "harness-livekit-target"
 _BEHAVIOR_POLICY = {
     "disclosure_policy": 0.72,
@@ -223,8 +234,11 @@ def simulator_instructions(
     return (
         SIMULATOR_INSTRUCTIONS
         + _OUTBOUND_FRAMING
-        + _OUTBOUND_AWARENESS.get(chosen, _OUTBOUND_AWARENESS[_DEFAULT_OUTBOUND_AWARENESS])
+        + _OUTBOUND_AWARENESS.get(
+            chosen, _OUTBOUND_AWARENESS[_DEFAULT_OUTBOUND_AWARENESS]
+        )
     )
+
 
 _LANGUAGE_CODES: dict[str, str] = {
     "ar": "ar",

@@ -60,6 +60,8 @@ class HostedWorld:
         world_index: int,
         rng: random.Random,
         baseline_row_counts: Mapping[str, int],
+        *,
+        _validate_baseline: bool = True,
     ) -> None:
         """Wrap `store` as the `World` surface for one scenario.
 
@@ -76,9 +78,19 @@ class HostedWorld:
         # re-measured: a live count would make the cap depend on what a scenario already wrote,
         # and the whole point is that it is decided before any scenario runs.
         self._baseline_row_counts = dict(baseline_row_counts)
-        self._require_baseline_coverage(self._visible_tables())
+        if _validate_baseline:
+            self._require_baseline_coverage(self._visible_tables())
 
     # -- reading ------------------------------------------------------------------------------
+
+    def _execution_state(self) -> dict[str, Any]:
+        return {
+            "dsn": self._store.dsn(),
+            "world_index": self.world_index,
+            "rng": self.rng.getstate(),
+            "baseline": self._baseline_row_counts,
+            "read_only": False,
+        }
 
     def state(self, table: str | None = None) -> dict[str, list[dict[str, Any]]]:
         """A snapshot of the public schema, or of one table in it.
@@ -375,6 +387,9 @@ class ReadOnlyWorld:
 
     def state(self, table: str | None = None) -> dict[str, list[dict[str, Any]]]:
         return self.__world.state(table)
+
+    def _execution_state(self) -> dict[str, Any]:
+        return {**self.__world._execution_state(), "read_only": True}
 
     def query(self, sql: str, params: Sequence[Any] = ()) -> list[dict[str, Any]]:
         return self.__world.query(sql, params)

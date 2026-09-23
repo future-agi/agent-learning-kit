@@ -631,6 +631,10 @@ def test_runtime_gate_resets_each_scenario_and_preserves_execution_secrets(
             assert kwargs["secrets_path"].read_bytes() == original.read_bytes()
 
         async def provision(self, *args, **kwargs):
+            actual_provider = provider_type(
+                cpu_observer=lambda: None, mem_observer=lambda: None
+            )
+            assert actual_provider._run_admission(1, kwargs["work_directory"]) == 1
             calls.append("provision")
             return [SimpleNamespace(endpoints={})]
 
@@ -656,6 +660,7 @@ def test_runtime_gate_resets_each_scenario_and_preserves_execution_secrets(
         if bad_setup:
             raise ValueError("bad target-secret-value")
 
+    provider_type = process_runtime.ProcessRuntimeProvider
     monkeypatch.setattr(process_runtime, "ProcessRuntimeProvider", Provider)
     monkeypatch.setattr(hosted_entrypoint, "ProcessWorldFactory", Factory)
     monkeypatch.setattr(bundle_author_v2, "author_bundle_v2", lambda **kwargs: object())
@@ -680,7 +685,10 @@ def test_runtime_gate_resets_each_scenario_and_preserves_execution_secrets(
         ],
     )
     job = SimpleNamespace(
-        agent=SimpleNamespace(secret_refs={}), scenario_count=2, seed=0
+        agent=SimpleNamespace(secret_refs={}),
+        scenario_count=2,
+        seed=0,
+        runtime=SimpleNamespace(cpu_units=4, memory_mb=8192),
     )
     if bad_setup:
         with pytest.raises(RuntimeValidationError) as error:

@@ -6,6 +6,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from test_call_runner import (
     FakeAdapter,
@@ -36,7 +37,7 @@ def _doc(bundle_dir: Path, **extra: Any) -> None:
 
 
 def _drive(tmp_path: Path, **doc_fields: Any) -> dict[str, str]:
-    """Run one call to completion and hand back the environment it left behind."""
+    """Return the private environment used to build this call's specification."""
     _job_obj, context = _context(tmp_path=tmp_path)
     _doc(context.bundle_dir, **doc_fields)
     started = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -53,8 +54,14 @@ def _drive(tmp_path: Path, **doc_fields: Any) -> dict[str, str]:
     runner = cr.CallRunnerImpl(
         FakeAdapter(), context, place_call=place_call, environ=environ
     )
-    _run(runner, _FakeScenario("k1"), _runtime(metadata={"livekit_agent_name": "a-w0"}))
-    return environ
+    with patch.object(cr, "_build_spec", wraps=cr._build_spec) as build:
+        _run(
+            runner,
+            _FakeScenario("k1"),
+            _runtime(metadata={"livekit_agent_name": "a-w0"}),
+        )
+    assert environ == {}
+    return dict(build.call_args.kwargs["environ"])
 
 
 def test_a_voicemail_scenario_marks_its_own_call(tmp_path: Path) -> None:
@@ -91,10 +98,17 @@ def test_an_inbound_scenario_clears_every_outbound_marking(tmp_path: Path) -> No
     runner = cr.CallRunnerImpl(
         FakeAdapter(), context, place_call=place_call, environ=environ
     )
-    _run(runner, _FakeScenario("k1"), _runtime(metadata={"livekit_agent_name": "a-w0"}))
-    assert "HARNESS_CALL_DIRECTION" not in environ
-    assert "HARNESS_CALLER_AWARENESS" not in environ
-    assert "HARNESS_ANSWERED_BY" not in environ
+    with patch.object(cr, "_build_spec", wraps=cr._build_spec) as build:
+        _run(
+            runner,
+            _FakeScenario("k1"),
+            _runtime(metadata={"livekit_agent_name": "a-w0"}),
+        )
+    actual = build.call_args.kwargs["environ"]
+    assert "HARNESS_CALL_DIRECTION" not in actual
+    assert "HARNESS_CALLER_AWARENESS" not in actual
+    assert "HARNESS_ANSWERED_BY" not in actual
+    assert environ["HARNESS_CALL_DIRECTION"] == "outbound"
 
 
 def test_the_switch_stops_a_mailbox_reaching_the_call(
