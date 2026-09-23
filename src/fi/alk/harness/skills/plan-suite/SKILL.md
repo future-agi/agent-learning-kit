@@ -414,6 +414,14 @@ and can read them side by side. So say it in the brief, for each writer that get
 separates your own scenarios from each other**, one clause per scenario, in the same words as the
 difficulty rule above. Then the writer has no excuse and no need to guess.
 
+**At large counts the naming constraint needs a mechanism, not a reminder.** Two or three hundred callers
+exhaust the obvious names, and writers that cannot see each other converge. Measured on a live run at a
+hundred and thirty callers: **eight pairs a listener would not separate**, among them two differing by one
+letter and two by one syllable. Deal each writer a disjoint set of initial letters as below, and where the
+count is larger than the letters available, deal each writer a distinct *rule* as well - names of a given
+syllable count, or from a given naming tradition - so two writers cannot arrive at neighbouring names by
+independently reaching for the commonest one.
+
 **Names have to be distinguishable when spoken, not merely different.** "No two people share a name" lets
 Laura and Lauren through, and over a phone line they are one name. Deal initial letters as above, and
 reject a pair that a listener would not separate: one differing letter, one differing syllable, or the
@@ -450,6 +458,13 @@ bounded share instead of growing with the suite.
 - **Below about forty, the four safety cells ARE the whole overlay budget.** At twenty they are already a
   fifth of the suite, so deal them and deal NO attacks on top. A twenty is a smoke test: it proves the
   safety cells exist and the rest of it is ordinary traffic.
+- **The four safety cells are dealt ONCE ACROSS THE SUITE, not once per writer.** This is where the rule
+  breaks at scale and it breaks quietly, because every writer is obeying it. Hand ten writers a brief that
+  says "deal the four safety cells once each" and you get forty safety scenarios. Measured on a live
+  five-hundred at its first hundred and thirty: **fourteen safety cells where the suite's whole allowance is
+  four**, and no individual brief was wrong. Name the single writer that holds each of the four, and tell
+  every other writer it holds none - a writer cannot see its siblings, so silence on this reads as
+  permission.
 - **One scenario each is the whole allowance for the safety four, not a floor.** This is where it goes
   wrong in practice and it goes wrong the same way every time: "these are the cells where being wrong
   costs most" reads as a licence to deal them wherever they fit, and a planner that believes it returns
