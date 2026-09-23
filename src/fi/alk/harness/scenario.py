@@ -567,6 +567,35 @@ def _overlay_properties_without_an_overlay(scenario: Scenario) -> str:
     return " and ".join(said)
 
 
+def _rendered_and_heard_differently(scenario: Scenario) -> str:
+    """Why the voice and the transcriber are set to different languages, or "" when they agree.
+
+    The two are chosen from different fields: the voice from the persona's accent, the transcriber
+    from its first named language. Nothing made them agree, so a caller written as Spanish-speaking
+    but left on the default accent is spoken by a Hindi voice and transcribed by a Spanish model.
+    The agent then hears nonsense and the run blames the agent for it.
+
+    Accented English is the exception and the entire point: a non-English voice reading English, with
+    an English transcriber, is exactly the robustness this axis exists to test.
+    """
+    persona = scenario.persona
+    if persona is None:
+        return ""
+    try:
+        from .simulator_voice import _cartesia_lang_key, persona_stt_language
+    except Exception:  # noqa: BLE001 - the voice layer is optional for text kinds
+        return ""
+    said = persona.model_dump() if hasattr(persona, "model_dump") else dict(persona)
+    spoken = _cartesia_lang_key(said)
+    heard = str(persona_stt_language(said) or "").lower().split("-")[0]
+    if not heard or heard == "multi" or heard == spoken or heard == "en":
+        return ""
+    return (
+        f"accent {persona.accent!r} gives the caller a {spoken!r} voice while their first language "
+        f"{heard!r} sets the transcriber"
+    )
+
+
 def _condition_the_call_lacks(scenario: Scenario) -> str:
     """Why the interface coordinate is not delivered, or an empty string when it is."""
     level = str((scenario.coverage or {}).get("interface") or "").strip().lower()
@@ -679,6 +708,13 @@ def scenario_edit_problems(scenario: Scenario) -> list[str]:
         problems.append(f"the coordinate has no overlay and still declares {dangling}")
     if lacking := _condition_the_call_lacks(scenario):
         problems.append(f"the coordinate claims a condition the call does not carry: {lacking}")
+    if mismatched := _rendered_and_heard_differently(scenario):
+        problems.append(
+            f"the call is spoken in one language and transcribed in another: {mismatched}. The agent "
+            "hears a transcript of the wrong language and fails for a reason that is ours. Set the "
+            "accent to match the language the caller actually speaks, or make English their first "
+            "language and let the accent carry the difficulty"
+        )
     if handed := _hands_over_the_verdict(scenario):
         problems.append(f"the instruction hands the caller the agent's decision: {handed!r}")
     if named := _NARRATES_THE_ATTACK.search(scenario.instruction or ""):
