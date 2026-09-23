@@ -169,7 +169,7 @@ def provider_env(model: str | None = None) -> dict[str, str]:
     # SDK validates a model name locally before it makes a request, so the wire carries a
     # Claude-shaped alias the gateway maps back to `chosen`; the alias is never what is billed.
     agentcc_key = os.environ.get("AGENTCC_API_KEY", "").strip()
-    if agentcc_key:
+    if agentcc_key and not os.environ.get("ALK_CLAUDE_GATEWAY_URL", "").strip():
         base_url = (
             os.environ.get("AGENTCC_BASE_URL", "https://gateway.futureagi.com")
             .strip()
