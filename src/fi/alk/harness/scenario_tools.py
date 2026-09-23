@@ -56,6 +56,7 @@ from .scenario import (
     level_name,
     _pinned_identity,
     unpinned_callers,
+    crowded_cells,
     suite_diversity_problems,
     tidy_keywords,
     uncovered_cells,
@@ -2101,6 +2102,7 @@ def scenario_tools(
             lambda: persona_off_the_record(kept, world_root),
             lambda: redteam_problems(kept),
             lambda: unpinned_callers(kept, set(world_summary_tables(world_root))),
+            lambda: crowded_cells(kept),
         ):
             try:
                 noted = noted + remark()
