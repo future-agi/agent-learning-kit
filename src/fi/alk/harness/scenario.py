@@ -433,11 +433,27 @@ _MACHINE_DIRECTIVE = re.compile(
 )
 
 
+# Ages get written as words as often as digits, and "a twelve-year-old" was the whole point of the
+# scenario it appeared in: a minor-safety test whose persona band was 18-25, so the call would have
+# rendered an adult voice claiming to be twelve and the policy it tests was never really triggered.
+_AGE_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
+    "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
+    "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20,
+}
 _STATED_AGE = re.compile(
-    r"\b(?:i(?:'m| am)|you are|aged|age)\s+(\d{1,2})\b"
-    r"|\b(\d{1,2})[\s-]?year[\s-]?old\b",
+    r"\b(?:i(?:'m| am)|you are|aged|age)\s+(\d{1,2}|" + "|".join(_AGE_WORDS) + r")\b"
+    r"|\b(\d{1,2}|" + "|".join(_AGE_WORDS) + r")[\s-]?year[\s-]?old\b",
     re.IGNORECASE,
 )
+
+
+def _as_age(said: str) -> int | None:
+    """An age from either spelling, or None when this is not one."""
+    text = str(said or "").strip().lower()
+    if text.isdigit():
+        return int(text)
+    return _AGE_WORDS.get(text)
 _UNDER_AGE_WORDS = re.compile(
     r"\b(?:minor|underage|under[\s-]age|high[\s-]school|schoolgirl|schoolboy|teenager)\b",
     re.IGNORECASE,
@@ -456,6 +472,26 @@ def _age_band(value: str) -> tuple[int, int] | None:
     return None
 
 
+# Handing the conversation to a person ends it. A reference solution with a call after the handoff
+# describes something that cannot happen, and the trailing call is usually filler: one scenario
+# demanded a fleet-wide cancellation, transferred, and then geocoded an address the caller never
+# mentioned.
+_A_HANDOFF = re.compile(
+    r"(?:transfer|handoff|hand_off|escalate|route)\w*_?(?:to_)?"
+    r"(?:human|agent|support|operator|person|representative)",
+    re.IGNORECASE,
+)
+
+
+def _acts_after_the_handoff(scenario: Scenario) -> str:
+    """The call a reference solution makes after the conversation has already been handed over."""
+    steps = [str(getattr(step, "tool", "") or "") for step in scenario.solution or []]
+    for index, tool in enumerate(steps):
+        if _A_HANDOFF.search(tool) and index < len(steps) - 1:
+            return f"{tool} then {', '.join(steps[index + 1:])}"
+    return ""
+
+
 def _persona_the_instruction_contradicts(scenario: Scenario) -> str:
     """The persona is what the caller is rendered as, so the words cannot describe somebody else."""
     persona = scenario.persona
@@ -468,7 +504,14 @@ def _persona_the_instruction_contradicts(scenario: Scenario) -> str:
         match = _STATED_AGE.search(instruction) or _STATED_AGE.search(
             persona.initial_message or ""
         )
-        stated = next((int(g) for g in (match.groups() if match else ()) if g), None)
+        stated = next(
+            (
+                age
+                for g in (match.groups() if match else ())
+                if g and (age := _as_age(g)) is not None
+            ),
+            None,
+        )
         if stated is not None and not band[0] <= stated <= band[1]:
             said.append(f"an age of {stated} against age_group {persona.age_group!r}")
         elif stated is None and band[0] >= 18 and _UNDER_AGE_WORDS.search(instruction):
@@ -683,6 +726,12 @@ def validate_scenario(
             "the instruction has something other than the caller speak: a recording, a television "
             "or another person in the room. The call renders one speaker over one ambience bed, so "
             "the agent never hears it, and the scenario tests nothing. Have the caller say it"
+        )
+    if trailing := _acts_after_the_handoff(scenario):
+        problems.append(
+            f"the reference solution acts after the conversation was handed to a person: {trailing}. "
+            "A handoff ends the call, so nothing after it can happen and the trailing call is either "
+            "filler or belongs before the handoff. End the solution at the handoff"
         )
     if contradicted := _persona_the_instruction_contradicts(scenario):
         problems.append(
