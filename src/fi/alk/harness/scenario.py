@@ -1479,7 +1479,8 @@ def _against_plan(
     levels = planned.get(axis)
     if not levels:
         return {}
-    unused = [one for one in levels if one not in counts]
+    used = {level_name(one) for one in counts}
+    unused = [one for one in levels if level_name(one) not in used]
     return {
         "planned": len(levels),
         "unused": unused,

@@ -2813,3 +2813,17 @@ def test_a_suite_without_overlays_is_not_refused_by_the_intensity_share() -> Non
     assert "task is already at" in _over_its_share(
         {"overlay": "none", "overlay_intensity": "absent", "task": "book"}, grid, kept, 50
     )
+
+
+def test_coverage_counts_a_planned_level_however_its_separators_are_spelled():
+    from collections import Counter
+
+    from fi.alk.harness.scenario import _against_plan
+
+    report = _against_plan(
+        "task",
+        Counter({"explain_billing_policy": 2}),
+        {"task": ["explain-billing_policy", "cancel-order"]},
+    )
+    assert report["unused"] == ["cancel-order"]
+    assert report["share"] == 0.5
