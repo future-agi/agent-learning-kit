@@ -690,6 +690,8 @@ class ScenarioRetriedPayload(BaseModel):
     scenario_key: str = Field(min_length=1)
     from_world: int = Field(ge=0)
     to_world: int = Field(ge=0)
+    # Why the first try is being replayed. Without it a retry reads as an unexplained repeat.
+    cause: str = Field(default="", max_length=200)
 
 
 class LogPayload(BaseModel):

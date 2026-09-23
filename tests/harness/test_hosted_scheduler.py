@@ -255,7 +255,7 @@ class FakeOutbound:
         )
 
     async def scenario_retried(
-        self, *, scenario_key: str, from_world: int, to_world: int
+        self, *, scenario_key: str, from_world: int, to_world: int, cause: str = ""
     ) -> None:
         self.events.append(
             (
@@ -264,6 +264,7 @@ class FakeOutbound:
                     "scenario_key": scenario_key,
                     "from_world": from_world,
                     "to_world": to_world,
+                    "cause": cause,
                 },
             )
         )
@@ -2819,7 +2820,12 @@ def test_call_aborted_retries_on_reset_same_world_when_pool_size_is_one() -> Non
         retry_events = [
             kwargs for event, kwargs in outbound.events if event == "scenario_retried"
         ]
-        assert retry_events == [{"scenario_key": "s1", "from_world": 0, "to_world": 0}]
+        assert len(retry_events) == 1
+        replayed = retry_events[0]
+        assert replayed["scenario_key"] == "s1"
+        assert (replayed["from_world"], replayed["to_world"]) == (0, 0)
+        # A retry that does not say why it happened reads as an unexplained repeat.
+        assert replayed["cause"].startswith("call_failed:")
         await pool.close()
 
     asyncio.run(scenario())
