@@ -1438,8 +1438,9 @@ def scenario_tools(
         "their words break up, cut out or are garbled, or that the line drops; a caller who is hard "
         "to follow is vague or stops mid-thought. And the caller is an ordinary person: never a "
         "celebrity's or a fictional character's name, not even with a second surname added. A "
-        "difficulty lands after the agent has answered or acted: a correction or change of mind "
-        "packed into the opening sentence is heard as the final request alone and tests nothing.",
+        "difficulty lands after the agent has answered or acted: a correction, change of mind or "
+        "change of topic packed into the opening sentence is heard as the final request alone and "
+        "tests nothing.",
         schema(
             {
                 "name": {

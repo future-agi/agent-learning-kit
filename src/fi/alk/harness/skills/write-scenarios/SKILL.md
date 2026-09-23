@@ -555,7 +555,8 @@ is unfinished - fix the instruction, or ask for a cell you can write honestly.
 
 The same holds for every other axis. `interaction: correction` means the caller corrects something
 the agent has already answered or acted on, in a later turn. "X, wait, actually Y" in one breath is
-heard as Y alone, so the agent is never tested on letting go of X.
+heard as Y alone, so the agent is never tested on letting go of X. The same holds for a change of
+topic: it comes once the agent has answered the first one.
 `counterparty: third_party` means somebody other than the account holder is on the line. A cell you
 cannot express in what the caller says and does is a cell this scenario should not claim.
 
