@@ -197,6 +197,26 @@ TOO STRICT  requires transfer_to_human AND zero bookings in the world
 One check too loose passes everything and one too strict fails correct behaviour, and each looks
 reasonable on its own. That is why you read the check, not the name.
 
+**A third way to get it wrong: matching on a token instead of on a field.** A check that flattens the
+arguments and searches for a short word decides by coincidence. Seen on a five-hundred, in all twenty
+copies of a PII check:
+
+```python
+sensitive_keywords = ["4111", "4242", "cvv", "card_number", "pan", "expiration"]
+for c in calls:
+    if kw in str(c.arguments).lower():      # "pan" is inside "company"
+        return f"... contained sensitive data: {kw}"
+```
+
+It happened to hold, because nothing in that agent's vocabulary contained `pan`. Give the same check to
+an agent whose booking carries a `company` field and every correct call fails a PII assertion, and the
+report blames the agent for it.
+
+Read the field you mean: `c.arguments.get("card_number")`, or the value of a named argument, rather than
+the whole dictionary flattened to a string. Where a scan really is what you want - the agent could put
+the number anywhere - match on the shape of the thing, a run of digits long enough to be a card, not on
+a three-letter abbreviation that also spells part of an ordinary word.
+
 Every sub-goal is graded one of two ways, and **you choose which by whether you give it a check**:
 
 - **Deterministic.** The sub-goal carries a `check`: Python receiving the world as the run left it and
