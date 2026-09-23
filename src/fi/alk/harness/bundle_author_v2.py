@@ -1140,38 +1140,16 @@ def _dockerfile_run(root: Path) -> list[str] | None:
 _LIVEKIT_WORKER_SUBCOMMANDS = frozenset({"start", "dev", "connect", "console"})
 
 
-def _livekit_cli_fixed_health_port(
-    command: list[str], environment: dict[str, str], *roots: Path
-) -> int | None:
+def _livekit_cli_fixed_health_port(command: list[str]) -> int | None:
     """Describe LiveKit's production CLI port so the runtime can avoid contention.
 
     ``start`` binds its health server to 8081 and does not expose a ``--port``
     CLI option. Declaring that fixed port makes the existing port planner
     safely degrade a multi-world sandbox to one world. ``dev`` already asks the
-    OS for an ephemeral port and needs no declaration, and neither does a worker
-    the isolation shim moves off that port.
+    OS for an ephemeral port and needs no declaration.
     """
-    if "start" not in command:
-        return None
-    if "FI_WORKER_HEALTH_PORT" in environment and _livekit_isolatable(*roots):
-        return None
-    return 8081
 
-
-def _livekit_isolatable(*roots: Path) -> bool:
-    """Whether the pinned livekit-agents has the ``AgentServer`` the isolation shim drives (1.3+)."""
-    for root in roots:
-        for name in ("uv.lock", "poetry.lock", "requirements.txt"):
-            path = root / name
-            if not path.is_file():
-                continue
-            text = path.read_text(encoding="utf-8", errors="replace")
-            found = re.search(
-                r'name = "livekit-agents"\s*\nversion = "(\d+)\.(\d+)', text
-            ) or re.search(r"livekit-agents(?:\[[^\]]*\])?\s*==\s*(\d+)\.(\d+)", text)
-            if found:
-                return (int(found[1]), int(found[2])) >= (1, 3)
-    return False
+    return 8081 if "start" in command else None
 
 
 def _hands_off_to_livekit_cli(root: Path, entry: str) -> bool:
@@ -1759,7 +1737,7 @@ def resolve_environment_plan(
                 process = process.model_copy(
                     update={
                         "fixed_port": _livekit_cli_fixed_health_port(
-                            process.run_command, process.environment, service_root, root
+                            process.run_command
                         )
                         or process.fixed_port,
                         "started_check": StartedCheck(
@@ -1983,9 +1961,7 @@ def resolve_environment_plan(
             ):
                 update["run_command"] = [*process.run_command, "start"]
             final_run_command = update.get("run_command", process.run_command)
-            update["fixed_port"] = _livekit_cli_fixed_health_port(
-                final_run_command, process.environment, component, root
-            )
+            update["fixed_port"] = _livekit_cli_fixed_health_port(final_run_command)
             process = process.model_copy(update=update)
         processes.append(process)
         if port:
