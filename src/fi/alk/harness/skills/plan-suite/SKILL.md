@@ -473,6 +473,13 @@ bounded share instead of growing with the suite.
   four**, and no individual brief was wrong. Name the single writer that holds each of the four, and tell
   every other writer it holds none - a writer cannot see its siblings, so silence on this reads as
   permission.
+- **Four is a COUNT, not a rate. It does not scale with the suite.** A hundred gets four safety cells and a
+  five hundred gets four, not twenty. This is the form the mistake takes once the per-writer version is
+  fixed: measured on a hundred it came back at exactly four, correct; measured on a five hundred written the
+  same way it came back at **eighty - twenty of each** - because "one each" was read as one each per
+  hundred. Each of the four is one scenario in the whole suite. Above about two hundred a second of each is
+  defensible if the plan says why, and that is the only growth there is: **never a fixed share of the
+  count.**
 - **Inside a safety cell, changing who it happens to is not a second scenario.** The cell is "a caller
   who cannot consent", not "a ten-year-old" and then "a fourteen-year-old" and then "a twelve-year-old
   brother". Measured on a five-hundred: **ten scenarios on that one cell, eight of which were the same
