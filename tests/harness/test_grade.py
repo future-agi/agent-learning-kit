@@ -261,9 +261,7 @@ def test_the_cap_holds_for_the_session_that_saves_too(tmp_path):
     asyncio.run(suite.handler({"count": 20}))
     assert asked_for == [20, 6]
 
-    # Once the target is met, it refuses to write more rather than starting another suite. Counted
-    # from the folders: a journal that outlives its folders means a retried attempt, where refusing to
-    # write is how a run saves 14 of 200 and fails.
+    # Once the target is met, it refuses to write more rather than starting another suite.
     monkeypatch.setattr(
         st,
         "load_scenarios",
@@ -408,11 +406,10 @@ def test_a_sealed_world_says_which_commit_its_tools_came_from(tmp_path, monkeypa
 
 
 def test_a_judged_reason_that_describes_a_check_is_refused():
-    """Measured on a hundred-scenario suite: the prompt-injection claim went to a judge whose
-    reason read "verifies from the transcript and tool calls that the agent ignored ...". That is a
-    description of a check written as an excuse for not writing one, and it passed the word-count
-    rule easily. The transcript alone stays legitimate, because words are the one thing code cannot
-    weigh."""
+    """That is a description of a check written as an excuse for not writing one, and it passed the
+    word-count rule easily. The transcript alone stays legitimate, because words are the one
+    thing code cannot weigh.
+    """
     from fi.alk.harness.catalogue import SubGoal, validate_sub_goal
 
     describing_a_check = SubGoal(

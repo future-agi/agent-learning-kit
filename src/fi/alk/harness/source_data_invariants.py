@@ -519,10 +519,8 @@ async def author_invariants(
                 "Review is incomplete. Declare source-evidenced checks and call finish_review."
             )
     if not saved and checks:
-        # The review declared nine executable checks on one run and never called finish_review, so
-        # the whole stage failed and nine good invariants were discarded, then retried from scratch
-        # with another model call and another provisioned runtime. The declared checks are the
-        # artefact; the call is the ceremony. Kept, and said out loud so the omission is visible.
+        # The declared checks are the artefact; the call is the ceremony. Kept, and said out loud
+        # so the omission is visible.
         logger.warning(
             "source data review declared %d checks without calling finish_review; "
             "keeping them rather than discarding the review",

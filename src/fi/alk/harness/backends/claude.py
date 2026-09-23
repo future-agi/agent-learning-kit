@@ -347,10 +347,9 @@ class ClaudeSession:
 def _cost(model_usage: Any, counted: dict[str, int], reported: float | None) -> float | None:
     """What the run cost, priced here rather than taken from the loop that ran it.
 
-    The CLI prices every call from its own table, which holds Claude models. Given a Gemini id it
-    does not recognise, it still returns a number, and that number was 14x the truth on the first
-    run measured. Where the harness has a price for the model it is the one that stands; where it
-    has none, the CLI's figure is passed through rather than replaced by silence.
+    The CLI prices every call from its own table, which holds Claude models. Where the harness
+    has a price for the model it is the one that stands; where it has none, the CLI's figure is
+    passed through rather than replaced by silence.
     """
     from .vertex_gemini import priced
 
@@ -456,13 +455,9 @@ class ClaudeBackend:
         # inside this session, so building the gate from the parent's tools alone would deny a
         # worker the very tools it was given.
         allowed = [name for name in spec.granted_anywhere() if name != DELEGATE_TOOL]
-        # Union the tools per server name rather than letting the last worker win. The parent, the
-        # writer and the reviewer all publish under the same server name with different subsets, so
-        # `update` handed every sub-agent whichever subset was merged last: on one run that was the
-        # reviewer's read-only set, and the writers could not submit a single scenario. What each
-        # agent may actually call is already restricted by its own `tools` allowlist in
-        # `_definition`, so registering the union here is safe and is what makes that allowlist mean
-        # anything.
+        # Union the tools per server name rather than letting the last worker win. What each agent
+        # may actually call is already restricted by its own `tools` allowlist in `_definition`,
+        # so registering the union here is safe and is what makes that allowlist mean anything.
         servers: dict[str, ToolServer] = {}
         for source in (spec.servers, *(worker.servers for worker in spec.workers.values())):
             for server_name, server in (source or {}).items():
@@ -531,10 +526,8 @@ class ClaudeBackend:
 
 
 # The SDK puts a string system prompt straight onto the CLI's argv, and a stage's prompt is the
-# agent's contract, its world summary and a skill or three. One conversation opened against a live
-# run crashed the guest with "[Errno 7] Argument list too long" and cost the job an attempt, because
-# argv is capped and a prompt is not. The SDK already accepts a file instead, so anything large goes
-# through a file and small prompts keep the exact shape they had.
+# agent's contract, its world summary and a skill or three. The SDK already accepts a file
+# instead, so anything large goes through a file and small prompts keep the exact shape they had.
 _PROMPT_ON_ARGV = 16_000
 
 

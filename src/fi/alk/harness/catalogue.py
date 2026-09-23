@@ -118,11 +118,10 @@ def validate_suite_eval(suite_eval: SuiteEval) -> list[str]:
     return []
 
 
-# Words that make a sub-goal a refusal: it holds when the agent did NOT do the thing.
-# Stems, not inflections. Written as "resisted"/"resists" this list missed every sub-goal actually
-# named `resist_...`, which is how writers name them, so the gate below never ran on the checks it
-# exists for. Measured on a hosted 100: two of the four deterministic resistance checks could not
-# fail when the thing they named happened, and neither was flagged.
+# Words that make a sub-goal a refusal: it holds when the agent did NOT do the thing. Stems, not
+# inflections. Written as "resisted"/"resists" this list missed every sub-goal actually named
+# `resist_...`, which is how writers name them, so the gate below never ran on the checks it
+# exists for.
 _REFUSAL_WORDS = (
     "refus",
     "prevent",
@@ -138,9 +137,7 @@ _REFUSAL_WORDS = (
     "guard",
     "decline",
     # A claim can be named for the rule being kept rather than the attack being turned away, and
-    # those escape a list of refusal words entirely. One check in a hosted 500 was named for a fee
-    # being "enforced" and asserted only that the cancellation happened, so an agent that waived the
-    # fee to zero and then cancelled passed it.
+    # those escape a list of refusal words entirely.
     "enforc",
     "uphold",
     "upheld",
@@ -188,9 +185,7 @@ def _detects_obedience(check: str) -> bool:
         if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
             continue
         # `len(rows) < 1` and `len(rows) == 0` read like comparisons and mean absence: they fail
-        # because the legitimate thing is missing, which is what this gate exists to reject. One
-        # resistance check on a hosted 100 asserted only that the users and places tables were not
-        # empty, so an agent that cancelled every booking in the world passed it.
+        # because the legitimate thing is missing, which is what this gate exists to reject.
         if _tests_emptiness(test):
             continue
         returns_problem = any(
@@ -305,8 +300,7 @@ def compares_to_a_value(source: str) -> bool:
 
     This is the difference between "a reason was given" and "the reason was the right one". An
     agent that mishears a name and proceeds confidently against the wrong record passes every
-    truthiness test: the argument is present, is a string, and is non-empty. Measured on a real
-    authored catalogue, five of six coded checks tested only truthiness.
+    truthiness test: the argument is present, is a string, and is non-empty.
 
     Advisory rather than a refusal: hardening this would have refused five of those six, and an
     authoring loop that cannot satisfy a gate fails the run instead of improving the check.
@@ -347,8 +341,6 @@ def weak_check_advisory(sub_goal: SubGoal) -> str:
 def _judged_problems(sub_goal: SubGoal) -> list[str]:
     """Hold a judged sub-goal to the reason it is judged.
 
-    The catalogue guidance already says a judge is the fallback, and nothing enforced it, so the
-    fallback became the default: one run reported six sub-goals judged rather than settled by code.
     A judged sub-goal has to say what a model must decide and why nothing observable settles it,
     because that sentence is the thing a reviewer can disagree with.
     """
@@ -366,10 +358,8 @@ def _judged_problems(sub_goal: SubGoal) -> list[str]:
             "write a check"
         ]
     # A reason that names the tool calls or the world as what the evaluator inspects has said code
-    # can settle it. Measured: a hundred-scenario suite sent its prompt-injection claim to a judge
-    # whose reason read "verifies from the transcript and tool calls that the agent ignored ...",
-    # which is a description of a check, written as an excuse for not writing one. The transcript
-    # on its own stays a legitimate reason, because words are the one thing code cannot weigh.
+    # can settle it. The transcript on its own stays a legitimate reason, because words are the
+    # one thing code cannot weigh.
     cited = [
         phrase
         for phrase in ("tool call", "tool_call", "world state", "the database", "state left")

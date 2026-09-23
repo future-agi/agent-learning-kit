@@ -6646,8 +6646,7 @@ def test_a_target_refuses_a_model_it_cannot_drive(monkeypatch):
 
 
 def test_a_run_is_a_folder_that_can_be_read_back(tmp_path):
-    """A session accumulates runs. One simulation over a suite is one run, kept whole, so runs can
-    be compared instead of the next one overwriting the last."""
+    """A session accumulates runs."""
     from fi.alk.harness.run.grade import Result
     from fi.alk.harness.run.simulation import _write_case, every_run, read_run, run_root
 
@@ -6678,8 +6677,7 @@ def test_voice_task_completion_metric_is_diagnostic_not_an_extra_checkpoint():
     """The upstream voice metric judges the final utterance, not the whole multi-turn call.
 
     A correctly booked ride ending in "goodbye" used to receive a false zero and override all
-    deterministic state/tool checks.  We retain the metric under ``measured`` for diagnosis, but
-    voice checkpoint construction must stay grounded in the scenario's actual checks.
+    deterministic state/tool checks.
     """
     from fi.alk.harness.run import simulation
 
@@ -7742,9 +7740,8 @@ def test_the_system_prompt_stays_within_budget():
         contract.brief(with_data=True, sample_rows=3) + load_skill("write-scenarios") + kinds
     )
     main_loop = sub_agent + load_skill("plan-suite", preamble=False)
-    # Measured, not guessed: the writing skill is about 19k tokens and the plan another 10k. A
-    # writer pays its prompt once per session and the provider caches the prefix for the rest, so
-    # a suite of 500 written by thirty sub-agents pays it thirty times, not five hundred. The
+    # A writer pays its prompt once per session and the provider caches the prefix for the rest,
+    # so a suite of 500 written by thirty sub-agents pays it thirty times, not five hundred. The
     # budget is here to make growth a decision rather than a drift; the lever that actually
     # decides cost is turns per scenario.
     assert len(sub_agent) <= 90_000, f"sub-agent prompt is {len(sub_agent)} chars"
@@ -7819,11 +7816,9 @@ def test_a_save_says_which_scenarios_name_a_check_that_never_reached_the_folder(
 
 
 def test_an_overlay_scenario_that_asserts_nothing_is_refused(tmp_path):
-    """Measured on a real 50-scenario suite: twelve scenarios carried prompt_injection,
-    social_engineering or privacy_pii, every one named only the ordinary booking sub-goals, and the
-    catalogue held no overlay-shaped sub-goal at all. An agent that books the ride and also obeys
-    the injection passed all twelve. Advisories did not stop it, so this is refused at the one
-    moment a writer can still settle it."""
+    """An agent that books the ride and also obeys the injection passed all twelve. Advisories did
+    not stop it, so this is refused at the one moment a writer can still settle it.
+    """
     from fi.alk.harness.catalogue import SubGoal
     from fi.alk.harness.scenario_tools import accept_scenario
 
@@ -7881,9 +7876,7 @@ def test_an_overlay_scenario_that_asserts_nothing_is_refused(tmp_path):
 
 
 def test_a_scenario_placed_nowhere_is_refused_once_a_grid_is_dealt(tmp_path):
-    """Measured on a hundred-scenario run: 50 of 100 set no coordinate at all, so the coverage
-    report counted them in the denominator and nothing in the numerator. A label is cheap to
-    correct and proving is not, so this is refused before the gates."""
+    """A label is cheap to correct and proving is not, so this is refused before the gates."""
     from fi.alk.harness.scenario_tools import _off_the_grid
 
     grid = {"task": ["book_ride", "cancel_ride"], "overlay": ["none", "prompt_injection"]}

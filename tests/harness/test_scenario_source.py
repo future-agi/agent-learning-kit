@@ -1756,11 +1756,10 @@ def test_a_bundle_without_a_readable_contract_costs_the_run_nothing(tmp_path) ->
 def test_the_provision_payload_carries_the_modality_so_evals_bind_to_the_right_input(
     tmp_path,
 ) -> None:
-    """Provisioning defaults to text, and a voice run that stays quiet has its evals judge a transcript.
+    """Provisioning defaults to text, and a voice run that stays quiet has its evals judge a
+    transcript.
 
-    Measured on run 0734ab2e: four eval configs were created with `conversation -> transcript` on a
-    voice run, because the guest never sent `modality` and `_resolve_scenario_modality` fell back to
-    text. For a spoken call the conversation is the recording.
+    For a spoken call the conversation is the recording.
     """
     (tmp_path / "contract.json").write_text(
         json.dumps(
@@ -1861,10 +1860,8 @@ def test_the_index_carries_each_scenario_in_full(tmp_path: Path) -> None:
 
 
 def test_keyword_problems_catches_what_a_hundred_scenario_suite_did(tmp_path: Path) -> None:
-    """The three ways a keyword row stops being usable, measured on a real suite of 100.
-
-    143 distinct keywords, 108 of them on exactly one scenario, and `weather` on 91 of 100. Each is
-    a separate failure and each has to be named, because the fix for one is not the fix for another.
+    """Each is a separate failure and each has to be named, because the fix for one is not the fix
+    for another.
     """
     from fi.alk.harness.scenario import Persona, Scenario, keyword_problems
 
@@ -1950,11 +1947,7 @@ def test_coverage_report_answers_how_much_of_the_space_was_tested(tmp_path: Path
 
 
 def test_coverage_report_tells_a_gap_from_a_cell_that_was_never_legal(tmp_path: Path) -> None:
-    """Without the plan a narrow suite reports full coverage, which is the number QA would act on.
-
-    Measured on the four scenarios below: covering two tasks and two counterparties reads as 4 of 4
-    pairs, 100%. The plan dealt three of each and masked one combination, so the truth is 4 of 8.
-    """
+    """Without the plan a narrow suite reports full coverage, which is the number QA would act on."""
     from fi.alk.harness.scenario import Persona, Scenario, coverage_report
 
     suite = [

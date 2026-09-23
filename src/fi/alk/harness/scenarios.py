@@ -412,11 +412,10 @@ def load(destination: Path) -> list[Scenario]:
 QUIET_WHILE_DELEGATING_SECONDS = 5400.0
 
 
-# A session refused by the provider is retried rather than abandoned: its work is still worth doing and
-# a slice keeps what it already proved. The quota is measured over a minute, so each wait clears a
-# minute; a shorter one asks inside the same window and is refused again for the same reason. What is
-# bounded is the total, not the number of tries: five minutes of waiting is worth a slice, and a run
-# that waits longer than that is not going to be rescued by waiting more.
+# A session refused by the provider is retried rather than abandoned: its work is still worth
+# doing and a slice keeps what it already proved. What is bounded is the total, not the number of
+# tries: five minutes of waiting is worth a slice, and a run that waits longer than that is not
+# going to be rescued by waiting more.
 RATE_LIMIT_BACKOFF_SECONDS = 60
 RATE_LIMIT_JITTER_SECONDS = 30
 RATE_LIMIT_TOTAL_WAIT_SECONDS = 300
@@ -638,12 +637,11 @@ _LETTER_BLOCK = "abc"
 def _slot(of: str, index: int) -> int:
     """A stable number for one slice, so its share of the value space does not move between passes.
 
-    Using the position in the current batch looked right and was not: a second `generate_suite` pass
-    numbers its slices from zero again, so its first writer is handed the same letters and the same
-    leading digits as the first writer of the pass before it, and their codes collide. Measured on a
-    377-scenario run: two verification codes shared, both between passes. Derived from the slice's own
-    name instead, which does not change when the batch does, and deterministically so two runs of the
-    same plan partition the same way.
+    Using the position in the current batch looked right and was not: a second `generate_suite`
+    pass numbers its slices from zero again, so its first writer is handed the same letters and
+    the same leading digits as the first writer of the pass before it, and their codes collide.
+    Derived from the slice's own name instead, which does not change when the batch does, and
+    deterministically so two runs of the same plan partition the same way.
     """
     if not of:
         return index
@@ -653,10 +651,7 @@ def _slot(of: str, index: int) -> int:
 def callers_for(index: int, wanted: int, slice_name: str = "") -> str:
     """Which callers this slice should write, so the suite varies across slices as well as within.
 
-    Instruction alone cannot do this. Each writer is blind to the others, so each independently
-    picks the safest value and the suite converges on it: measured across three suites, more
-    than half the callers came out "Professional and formal" and over three quarters American,
-    with nobody doing anything wrong. Worse, a slice writing a single scenario has nothing to
+    Instruction alone cannot do this. Worse, a slice writing a single scenario has nothing to
     vary at all.
 
     So the spread is dealt out here, the same way the work is. Each slice is handed a different
@@ -681,9 +676,6 @@ def callers_for(index: int, wanted: int, slice_name: str = "") -> str:
     # a collision impossible: each writer owns some initial letters and one leading digit, so no
     # shared list of names or codes has to exist for the values to stay distinct.
     slot = _slot(slice_name, index)
-    # More letters where the slice is larger: a writer inventing twelve people from three initials
-    # reuses a name, which is most of why distinctness measured 73 percent rather than the 90 the
-    # suite rule wants.
     block = max(len(_LETTER_BLOCK), min(8, (max(1, wanted) + 2) // 3))
     letters = "".join(
         _NAME_LETTERS[(slot * block + step) % len(_NAME_LETTERS)]

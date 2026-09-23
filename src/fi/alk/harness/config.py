@@ -521,10 +521,9 @@ def load_skill(name: str, *, preamble: bool = True) -> str:
 def writer_model() -> str:
     """The model a scenario writer runs on, from ALK_HARNESS_WRITER_MODEL.
 
-    Empty by default, which inherits the parent's model and is what has always happened. A writer is
-    handed its brief, the contract, the world and the skill, so it is doing constrained work rather
-    than deciding what the suite should be, and a cheaper model may be enough for it. Whether it is
-    enough is a question for a measured run: a writer that fails the admission gates more often
-    spends the saving on retries, and the gates are what protect scenario quality.
+    Empty by default, which inherits the parent's model and is what has always happened. A
+    writer is handed its brief, the contract, the world and the skill, so it is doing
+    constrained work rather than deciding what the suite should be, and a cheaper model may be
+    enough for it.
     """
     return os.environ.get("ALK_HARNESS_WRITER_MODEL", "").strip()

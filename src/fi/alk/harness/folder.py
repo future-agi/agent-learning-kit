@@ -324,10 +324,8 @@ def _tools_selected(body: str) -> set[str]:
 def unchecked_sub_goals(folder: Path, catalogue: Catalogue) -> list[str]:
     """Scenarios naming a sub-goal the catalogue settles in code with no check file to settle it.
 
-    The bundle reader refuses exactly this, an hour later and on a machine nobody is watching:
-    absence of the file is what marks a sub-goal judged, so a check that never reached the folder
-    reads as assessed and is measured by nothing. Read here off the same two sources the reader
-    compares, so the answer cannot differ from its.
+    Read here off the same two sources the reader compares, so the answer cannot differ from
+    its.
     """
     settled = {one.name for one in catalogue.sub_goals if one.deterministic()}
     if not settled:
@@ -381,12 +379,10 @@ def unasserted_behaviour(scenarios: list[Scenario], folder: Path) -> list[str]:
         asserted = ""
         for check in sorted(checks.glob("*.py")):
             asserted += check.read_text(encoding="utf-8", errors="replace").split("if __name__")[0]
-        # The last call, unasserted, and **claimed**. Two earlier versions cried wolf: flagging any
-        # unasserted tool reported 53 of 60, and flagging every unasserted last call reported 13 of
-        # 30, because a solution that ends `view_cart` to confirm what it just did is not a
-        # scenario about viewing the cart. What separates the real fault is the scenario saying it
-        # tests that thing: six ended on a status lookup, said so in their tests line, and asserted
-        # only the booking. So the claim is the discriminator, not the tool.
+        # The last call, unasserted, and **claimed**. What separates the real fault is the
+        # scenario saying it tests that thing: six ended on a status lookup, said so in their
+        # tests line, and asserted only the booking. So the claim is the discriminator, not the
+        # tool.
         outcome = used[-1]
         claimed = f"{scenario.name} {scenario.tests or ''}".lower()
         spoken = [word for word in re.split(r"[^a-z]+", outcome.lower()) if len(word) > 3]
@@ -409,20 +405,17 @@ def check_problems(folder: Path) -> list[str]:
 
     Two shapes, both read off the files that actually run rather than the intention behind them.
 
-    **Plumbing only.** A check that touches neither ``world`` nor the call's ``arguments`` asserts
-    that a tool was reached and nothing else, so every agent that reaches it passes and an agent that
-    did the right thing another way fails.
+    **Plumbing only.** A check that touches neither ``world`` nor the call's ``arguments``
+    asserts that a tool was reached and nothing else, so every agent that reaches it passes and
+    an agent that did the right thing another way fails.
 
-    **The same tool twice.** Two checks on one scenario narrowing to the same tool, neither reading
-    ``world``, are two readings of one call. A real hundred-scenario suite shipped
+    **The same tool twice.** Two checks on one scenario narrowing to the same tool, neither
+    reading ``world``, are two readings of one call. A real hundred-scenario suite shipped
     `lookup_weather_executed` and `weather_lookup_succeeded` together on seventy scenarios: one
-    asserted a successful call carrying a location, the other a successful call carrying a non-empty
-    location, and neither said what the caller was told.
+    asserted a successful call carrying a location, the other a successful call carrying a non-
+    empty location, and neither said what the caller was told.
 
-    Deliberately narrow. An earlier version called any check without a literal comparison thin and
-    flagged 19 of 19 on a suite whose checks assert `caller_explicitly_confirmed is not True` and
-    `kind in ("pickup", "dropoff")`, because it only understood single quotes. A check that cries
-    wolf is worse than no check. Advisory either way.
+    Deliberately narrow. A check that cries wolf is worse than no check. Advisory either way.
     """
     problems: list[str] = []
     plumbing = 0

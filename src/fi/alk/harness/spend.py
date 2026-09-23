@@ -47,8 +47,6 @@ def record(
     tokens_in: int = 0,
     tokens_out: int = 0,
     tokens_cached: int = 0,
-    tools: dict[str, int] | None = None,
-    refusals: dict[str, int] | None = None,
 ) -> None:
     """Add one session's reported spend. A backend that cannot price a call reports None.
 
@@ -69,8 +67,6 @@ def record(
             "tokens_in": 0,
             "tokens_out": 0,
             "tokens_cached": 0,
-            "tools": {},
-            "refusals": {},
         },
     )
     if usd is None:
@@ -82,13 +78,6 @@ def record(
     entry["tokens_in"] += int(tokens_in or 0)
     entry["tokens_out"] += int(tokens_out or 0)
     entry["tokens_cached"] += int(tokens_cached or 0)
-    for field, counted in (("tools", tools), ("refusals", refusals)):
-        for name, times in (counted or {}).items():
-            entry[field][name] = entry[field].get(name, 0) + int(times or 0)
-    for model in sorted(models or set()):
-        if model not in entry["models"]:
-            entry["models"].append(model)
-    _flush()
 
 
 def total_usd() -> float:
@@ -119,8 +108,6 @@ def snapshot() -> dict[str, Any]:
                         "tokens_in",
                         "tokens_out",
                         "tokens_cached",
-                        "tools",
-                        "refusals",
                     )
                 },
             }
