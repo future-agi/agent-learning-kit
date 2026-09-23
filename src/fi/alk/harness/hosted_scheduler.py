@@ -237,6 +237,7 @@ class CallAborted(RuntimeError):
     `marker` carries an OPTIONAL structured failure marker the engine surfaced (C3 §4.5 —
     e.g. `voice_dispatch_unacknowledged`), read from a structured field, NEVER string-matched from
     the message. The scheduler's `except CallAborted` catch selects the receipt code from it."""
+
     def __init__(
         self,
         message: str,
@@ -389,6 +390,7 @@ _CODE_DOMAIN: dict[str, FailureDomain] = {
     # give a retry genuine success probability); classified scenario-errored, never world
     # retirement (C3 §7 decision 2).
     "voice_dispatch_unacknowledged": FailureDomain.INFRASTRUCTURE,
+    "target_agent_failed": FailureDomain.AGENT,
     "target_agent_stalled": FailureDomain.AGENT,
     "target_agent_tool_failed": FailureDomain.AGENT,
     "simulator_stalled": FailureDomain.SIMULATOR,
@@ -1525,6 +1527,7 @@ def _record_scenario(span: Any, receipt: Any, context: Any) -> None:
         world_index=getattr(context, "world_index", None),
         attempt=getattr(context, "attempt", None),
     )
+
 
 class HostedScheduler:
     """Drains a job's scenario list across a `WorldPool`, one asyncio task per scenario — lease()

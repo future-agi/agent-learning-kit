@@ -257,6 +257,22 @@ class HostedWorld:
         """
         return ReadOnlyWorld(self)
 
+    def checkpoint(self) -> Any:
+        """Capture the complete mutable database state for disposable probes.
+
+        Runtime action certification uses the same checkpoint/reset contract for generated
+        and source-hosted worlds.  The PostgreSQL store already implements an exact snapshot
+        including sequence counters; exposing it here keeps that contract framework-neutral
+        instead of special-casing hosted agents in the validator.
+        """
+
+        return self._store.freeze()
+
+    def revert(self, checkpoint: Any) -> None:
+        """Restore a checkpoint captured before a probe or smoke action."""
+
+        self._store.restore(checkpoint)
+
     # -- internal -----------------------------------------------------------------------------
 
     def _reject_reserved(self, collection: str | None) -> None:

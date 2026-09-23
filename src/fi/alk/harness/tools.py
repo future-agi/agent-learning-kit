@@ -654,9 +654,10 @@ def contract_tools(
                                 },
                                 "protocol": {
                                     "type": "string",
-                                    "enum": ["fi.alk", "openai_chat"],
+                                    "enum": ["fi.alk", "openai_chat", "json_template"],
                                     "description": "The submitted endpoint's request/response "
-                                    "envelope. openai_chat means Chat Completions-compatible.",
+                                    "envelope. Use json_template for any other source-owned JSON "
+                                    "API and describe its exact envelope below.",
                                 },
                                 "port": {
                                     "type": "integer",
@@ -675,6 +676,59 @@ def contract_tools(
                                     "type": "boolean",
                                     "description": "Whether the endpoint accepts tool schemas "
                                     "with each request.",
+                                },
+                                "request_template": {
+                                    "description": "For json_template only: the exact JSON body "
+                                    "accepted by one turn. Supported placeholders include "
+                                    "{{thread_id}}, {{execution_id}}, {{turn_index}}, "
+                                    "{{scenario_name}}, {{messages}}, {{new_message}}, "
+                                    "{{new_message_content}}, {{tools}}, and {{metadata}}. A "
+                                    "whole-value placeholder preserves arrays/objects; embedded "
+                                    "placeholders become strings. The source's user_id field can "
+                                    "use {{thread_id}}; {{user_id}} is not a provided placeholder. "
+                                    "Unknown placeholders are rejected.",
+                                },
+                                "response_path": {
+                                    "type": "string",
+                                    "description": "For json_template only: optional dotted path "
+                                    "to assistant text in the JSON response, including numeric "
+                                    "list indexes such as '-1.content.parts.0.text'.",
+                                },
+                                "setup_requests": {
+                                    "type": "array",
+                                    "maxItems": 8,
+                                    "description": "Source-evidenced HTTP requests that must run "
+                                    "once before the first turn, such as creating a session. Paths "
+                                    "and JSON bodies accept the same placeholders. If a response "
+                                    "creates an identifier, capture it by dotted response path and "
+                                    "use the capture name as {{name}} in later templates.",
+                                    "items": {
+                                        "type": "object",
+                                        "required": ["path"],
+                                        "properties": {
+                                            "method": {
+                                                "type": "string",
+                                                "enum": ["GET", "POST", "PUT", "PATCH"],
+                                            },
+                                            "path": {"type": "string"},
+                                            "body_template": {},
+                                            "accepted_statuses": {
+                                                "type": "array",
+                                                "items": {"type": "integer"},
+                                                "maxItems": 16,
+                                            },
+                                            "capture": {
+                                                "type": "object",
+                                                "description": "Map safe placeholder names to "
+                                                "dotted/list paths in this setup response, for "
+                                                'example {"session_id": "id"}.',
+                                                "additionalProperties": {
+                                                    "type": "string"
+                                                },
+                                                "maxProperties": 16,
+                                            },
+                                        },
+                                    },
                                 },
                             },
                         },

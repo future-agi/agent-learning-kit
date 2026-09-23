@@ -278,5 +278,5 @@ async def converse(
     (
         transcript.simulator_input_tokens,
         transcript.simulator_output_tokens,
-    ) = customer.simulator_tokens
+    ) = getattr(customer, "simulator_tokens", (0, 0))
     return transcript

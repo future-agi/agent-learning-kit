@@ -78,6 +78,14 @@ from .world.stores.postgres import AttachedPostgresStore
 logger = logging.getLogger(__name__)
 
 
+# A filesystem control request is serviced by the platform's polling activity.  One poll may
+# legitimately spend up to five minutes creating the platform RunTest/TestExecution records and
+# can then be retried by Temporal after committing those idempotent records.  Keep the guest alive
+# across that retry boundary.  This is deliberately longer than one poll, but still bounded so a
+# genuinely abandoned mailbox produces a typed failure instead of hanging the sandbox forever.
+DEFAULT_OFFLINE_CONTROL_TIMEOUT_SECONDS = 15 * 60.0
+
+
 class _JobIdFilter(logging.Filter):
     """Stamp every log record with the job this runner is serving.
 
@@ -180,6 +188,8 @@ _SIMULATOR_SECRET_ALIASES = frozenset(
         "ALK_VOICEMAIL_SCENARIOS",
         "ALK_HARNESS_MODEL",
         "ALK_HARNESS_THINKING",
+        "AGENTCC_API_KEY",
+        "AGENTCC_BASE_URL",
         "ALK_VERTEX_LOCATION",
         "CARTESIA_API_KEY",
         "DEEPGRAM_API_KEY",
@@ -199,6 +209,8 @@ _SIMULATOR_SECRET_ALIASES = frozenset(
         "LIVEKIT_URL",
         "LIVEKIT_API_KEY",
         "LIVEKIT_API_SECRET",
+        "SIP_OUTBOUND_TRUNK_ID",
+        "SIP_OUTBOUND_FROM_NUMBER",
         "OPENAI_API_KEY",
         "SIMULATOR_LLM_MODEL",
         "SIMULATOR_LLM_PROVIDER",
@@ -413,6 +425,10 @@ _SECTION_2E_CODES = frozenset(
         "capability_slug_invalid",
         "process_name_invalid",
         "fixed_port_reserved",
+        "certification_missing",
+        "certification_invalid",
+        "certification_mismatch",
+        "certification_incomplete",
     }
 )
 
@@ -687,7 +703,7 @@ class NotWiredCallRunner:
         )
 
 
-_VOICE_CONNECTORS = {"livekit", "vapi", "retell"}
+_VOICE_CONNECTORS = {"livekit", "vapi", "retell", "phone"}
 
 
 def _bundle_contract_value(bundle_dir: Path, key: str) -> str | None:
@@ -787,6 +803,8 @@ class ScenariosClient:
         channel_state: ob.ChannelState | None = None,
         provision_path: str = "",
         begin_path: str = "",
+        offline_control_root: Path | None = None,
+        offline_control_timeout_seconds: float = DEFAULT_OFFLINE_CONTROL_TIMEOUT_SECONDS,
     ) -> None:
         self._capabilities = capabilities
         self._transport = transport or ob.RequestsTransport()
@@ -796,6 +814,95 @@ class ScenariosClient:
         self._channel_state = channel_state or ob.ChannelState()
         self._provision_path = provision_path
         self._begin_path = begin_path
+        self._offline_control_root = offline_control_root
+        if offline_control_timeout_seconds <= 0:
+            raise ValueError("offline_control_timeout_seconds must be positive")
+        self._offline_control_timeout_seconds = offline_control_timeout_seconds
+
+    def configure_offline_control(self, root: Path) -> None:
+        """Enable the sandbox mailbox used when the platform callback is unreachable."""
+
+        self._offline_control_root = root
+
+    def _post_offline(
+        self, payload: dict[str, Any], *, deadline: float | None
+    ) -> dict[str, Any]:
+        root = self._offline_control_root
+        if root is None:
+            raise ScenarioPreallocationError(
+                ob.ChannelError(
+                    ob.ChannelOutcome.RETRYABLE,
+                    FailureDomain.CONNECTIVITY,
+                    "network_error",
+                    "transport failure: no response received",
+                )
+            )
+        request_id = uuid.uuid4().hex
+        request_path = root / f"{request_id}.request.json"
+        response_path = root / f"{request_id}.response.json"
+        temporary = root / f".{request_id}.tmp"
+        root.mkdir(parents=True, exist_ok=True)
+        body = {
+            "job_id": self._capabilities.job_id,
+            "attempt_id": self._capabilities.attempt_id,
+            "attempt_number": self._capabilities.attempt_number,
+            "payload": payload,
+        }
+        temporary.write_text(
+            json.dumps(body, sort_keys=True, separators=(",", ":")), encoding="utf-8"
+        )
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, request_path)
+        expires = (
+            deadline
+            if deadline is not None
+            else time.monotonic() + self._offline_control_timeout_seconds
+        )
+        while time.monotonic() < expires:
+            if response_path.is_file():
+                try:
+                    response = json.loads(response_path.read_text(encoding="utf-8"))
+                except (OSError, ValueError) as exc:
+                    raise ScenarioPreallocationError(
+                        ob.ChannelError(
+                            ob.ChannelOutcome.PERMANENT_ITEM,
+                            FailureDomain.PLATFORM_SYNC,
+                            "offline_control_response_invalid",
+                            str(exc),
+                        )
+                    ) from exc
+                error = response.get("error") if isinstance(response, dict) else None
+                if isinstance(error, dict):
+                    raise ScenarioPreallocationError(
+                        ob.ChannelError(
+                            ob.ChannelOutcome.PERMANENT_ITEM,
+                            FailureDomain.PLATFORM_SYNC,
+                            str(error.get("code") or "offline_control_failed"),
+                            str(
+                                error.get("message") or "platform rejected the request"
+                            ),
+                        )
+                    )
+                result = response.get("result") if isinstance(response, dict) else None
+                if isinstance(result, dict):
+                    return result
+                raise ScenarioPreallocationError(
+                    ob.ChannelError(
+                        ob.ChannelOutcome.PERMANENT_ITEM,
+                        FailureDomain.PLATFORM_SYNC,
+                        "offline_control_response_invalid",
+                        "mailbox response has no result object",
+                    )
+                )
+            time.sleep(1.0)
+        raise ScenarioPreallocationError(
+            ob.ChannelError(
+                ob.ChannelOutcome.RETRYABLE,
+                FailureDomain.CONNECTIVITY,
+                "offline_control_timeout",
+                "platform did not process the sandbox control request before its deadline",
+            )
+        )
 
     def provision(
         self, payload: dict[str, Any], *, deadline: float | None = None
@@ -833,6 +940,8 @@ class ScenariosClient:
             self._channel_state.latch(exc)
             raise
         if error is not None or response is None:
+            if error is None or error.status_code is None:
+                return self._post_offline(payload, deadline=deadline)
             raise ScenarioPreallocationError(error)
         body = response.body if isinstance(response.body, dict) else {}
         result = body.get("result")
@@ -945,6 +1054,7 @@ class OutboundAdapter:
         self._stage_started = False
         self._current_stage = HarnessStage.QUEUED
         self._uploaded_digests: set[str] = set()
+        self._offline_artifact_digests: set[str] = set()
         self._manifest_entries: list[dict[str, Any]] = []
         self._terminal_emitted = False
         # §0.6 v1.14 (exit code 4): the terminal record's own spool sequence, and whether the
@@ -980,6 +1090,74 @@ class OutboundAdapter:
         # concurrent scenarios at W>1 racing the same remaining budget could otherwise both pass
         # the check against a snapshot neither has updated yet.
         self._artifact_budget_lock = asyncio.Lock()
+
+    def _persist_offline_json(self, relative_path: Path, value: object) -> None:
+        """Mirror outbound records for control-plane recovery when HTTPS is unavailable.
+
+        Daytona may permit the model/provider destinations while denying arbitrary callback
+        domains at the organization boundary.  The platform still owns the sandbox, so keeping a
+        durable, secret-redacted copy beside the event spool lets its poller replay the exact same
+        signed wire records without weakening the outbound contract.
+        """
+
+        path = self._spool.root / relative_path
+        temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            body = json.dumps(
+                value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+            ).encode("utf-8")
+            with temporary.open("wb") as stream:
+                stream.write(body)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.chmod(temporary, 0o600)
+            os.replace(temporary, path)
+        except OSError as exc:
+            logger.warning(
+                "offline outbound mirror failed for %s: %s", relative_path, exc
+            )
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    def _persist_offline_artifact(
+        self,
+        *,
+        digest: str,
+        data: bytes,
+        kind: ob.ArtifactKind,
+        scenario_key: str | None,
+    ) -> None:
+        root = self._spool.root / "artifacts"
+        body_path = root / f"{digest}.bin"
+        temporary = root / f".{digest}.{uuid.uuid4().hex}.tmp"
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+            if not body_path.exists():
+                with temporary.open("wb") as stream:
+                    stream.write(data)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.chmod(temporary, 0o600)
+                os.replace(temporary, body_path)
+            self._persist_offline_json(
+                Path("artifacts") / f"{digest}.json",
+                {
+                    "digest": digest,
+                    "kind": kind.value,
+                    "size": len(data),
+                    "content_type": ob._artifact_content_type(kind, data),
+                    "scenario_key": scenario_key,
+                },
+            )
+        except OSError as exc:
+            logger.warning("offline artifact mirror failed for %s: %s", digest, exc)
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     @property
     def is_fenced(self) -> bool:
@@ -1306,6 +1484,7 @@ class OutboundAdapter:
             failure=failure,
             extra_secret_values=self._extra_secret_values,
         )
+        self._persist_offline_json(Path("receipts") / f"{wire['digest']}.json", wire)
         push_result = await asyncio.to_thread(
             self._guarded, lambda: self._results.push(wire)
         )
@@ -1370,6 +1549,22 @@ class OutboundAdapter:
                 )
                 return None
             self._budget_tracker.record(kind, len(data), digest=digest)
+        self._persist_offline_artifact(
+            digest=digest,
+            data=data,
+            kind=kind,
+            scenario_key=scenario_key,
+        )
+        if digest not in self._offline_artifact_digests:
+            self._offline_artifact_digests.add(digest)
+            self._manifest_entries.append(
+                {
+                    "artifact_id": f"sha256:{digest}",
+                    "kind": kind.value,
+                    "size": len(data),
+                    "scenario_key": scenario_key,
+                }
+            )
         result = await asyncio.to_thread(
             self._guarded,
             lambda: self._artifacts.upload(
@@ -1387,14 +1582,6 @@ class OutboundAdapter:
             )
             return None
         self._uploaded_digests.add(digest)
-        self._manifest_entries.append(
-            {
-                "artifact_id": f"sha256:{digest}",
-                "kind": kind.value,
-                "size": len(data),
-                "scenario_key": scenario_key,
-            }
-        )
         return f"sha256:{digest}"
 
     async def push_manifest(
@@ -1409,6 +1596,7 @@ class OutboundAdapter:
             entries=list(self._manifest_entries),
             complete=complete,
         )
+        self._persist_offline_json(Path("manifest.json"), wire)
         result = await asyncio.to_thread(
             self._guarded,
             lambda: self._artifacts.push_manifest(wire, deadline=deadline),
@@ -1898,6 +2086,7 @@ async def run_job(
         transport,
         UsageJournal(work_directory / "usage.json", attempt_id=capabilities.attempt_id),
     )
+    scenarios_client.configure_offline_control(events_spool.root / "control")
 
     adapter = OutboundAdapter(
         capabilities,
@@ -2136,6 +2325,39 @@ async def run_job(
                 fail_stage=HarnessStage.VALIDATING_ENVIRONMENT,
                 code=exc.code,
                 message=exc.message,
+            )
+
+        if (manifest.metadata or {}).get("generic_harness") == "v1":
+            from .certification import (
+                CertificationGateError,
+                verify_runtime_certification,
+            )
+
+            try:
+                certificate = await asyncio.to_thread(
+                    verify_runtime_certification,
+                    work_directory / "runtime-validation.json",
+                    bundle_digest=manifest.digest,
+                    source_digest=manifest.provenance.source_digest,
+                )
+            except CertificationGateError as exc:
+                return await _fail(
+                    domain=FailureDomain.ENVIRONMENT,
+                    fail_stage=HarnessStage.VALIDATING_ENVIRONMENT,
+                    code=exc.code,
+                    message=exc.message,
+                )
+            await adapter.log(
+                level="info",
+                message=(
+                    "generic harness certification accepted: "
+                    f"fingerprint={certificate.fingerprint}; "
+                    f"source={certificate.source.digest}; "
+                    f"bundle={certificate.compiler.bundle_digest}; "
+                    f"scenarios={certificate.checks.scenario_setup_ready}; "
+                    f"tools={certificate.checks.tool_contract}; "
+                    f"limitations={len(certificate.limitations)}"
+                ),
             )
 
         # 2. Preflight -- BEFORE any provision (§2e). `parallelism` is the RAW requested value

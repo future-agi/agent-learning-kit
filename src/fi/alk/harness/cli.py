@@ -255,6 +255,25 @@ async def _understand(args: argparse.Namespace) -> int:
     if contract is None:
         print("\nNo contract was submitted.", file=sys.stderr)
         return 1
+    generic = bool(
+        job is not None
+        and isinstance(getattr(job, "metadata", None), dict)
+        and job.metadata.get("generic_harness_v1") is True
+    )
+    if generic:
+        from .certification import GenericHarnessArtifactStore
+        from .provision import source_fingerprint
+        from .source_discovery import discover_code_source_model
+
+        digest = source_fingerprint(Path(args.path).resolve())
+        if not digest.startswith("sha256:"):
+            digest = f"sha256:{digest}"
+        source_model = discover_code_source_model(
+            Path(args.path), contract, source_digest=digest
+        )
+        GenericHarnessArtifactStore(destination / "generic-harness").write_source_model(
+            source_model
+        )
     print(
         f"\ncontract: {len(contract.tools)} tools, "
         f"{len(contract.hard_constraints)} rules, "
@@ -732,6 +751,32 @@ def _load_connection_env(source: Path) -> list[str]:
     return loaded
 
 
+def _declared_connection_env_names(source: Path) -> list[str]:
+    """Preserve local source configuration *names* across a sealed-bundle rerun.
+
+    The bundle intentionally excludes dotenv values.  Without their names, the local
+    provisioner cannot pass even operator-supplied credentials to the submitted runtime.
+    Hosted jobs already carry these names in their run-scoped secret references.
+    """
+    names: set[str] = set()
+    for candidate in (source / ".env.local", source / ".env"):
+        if not candidate.is_file():
+            continue
+        for raw in candidate.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            name = line.split("=", 1)[0].removeprefix("export ").strip()
+            if (
+                name
+                and name[0].isalpha()
+                and name.replace("_", "").isalnum()
+                and not name.startswith("ALK_")
+            ):
+                names.add(name)
+    return sorted(names)
+
+
 def _new_adjustments(
     path: Path | None, cursor: int
 ) -> tuple[list[dict[str, Any]], int]:
@@ -806,7 +851,11 @@ async def _auto(args: argparse.Namespace) -> int:
         ),
         agent=AgentConnection(connector="auto"),
         scenario_count=args.count,
-        metadata={"agent_name": name, "source_kind": args.kind},
+        metadata={
+            "agent_name": name,
+            "source_kind": args.kind,
+            "environment_value_names": _declared_connection_env_names(source),
+        },
     )
     (destination / "job.json").write_text(
         job.model_dump_json(indent=2) + "\n", encoding="utf-8"

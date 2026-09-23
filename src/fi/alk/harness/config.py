@@ -34,6 +34,11 @@ def credentials_hint() -> str:
     which is a legitimate setup and an easy accident. The accident produces a provider auth
     error several layers down, so it is worth saying out loud which one is in play.
     """
+    if (
+        os.environ.get("ALK_CLAUDE_GATEWAY_API_KEY", "").strip()
+        or os.environ.get("AGENTCC_API_KEY", "").strip()
+    ):
+        return "credentials: Agent Command Center virtual key"
     named = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
     if named:
         return f"credentials: {Path(named).name}"
@@ -93,7 +98,17 @@ def provisioning(enabled: bool | None = None) -> bool:
 
 
 def provider_env(model: str | None = None) -> dict[str, str]:
-    """Build the isolated Claude Code provider environment."""
+    """The provider block passed to the session.
+
+    Hosted runs receive the explicit ``ALK_CLAUDE_GATEWAY_*`` pair. Local and legacy callers
+    may use ``AGENTCC_*`` instead. In either case Claude Code speaks the Anthropic Messages
+    protocol to Agent Command Center, which routes it to the configured provider. Without a
+    gateway, Claude Code talks to Anthropic on Vertex directly.
+    """
+    # Every model a session can reach is pinned to the same one. Naming only the main model
+    # leaves the sub-agent and fast-path settings to the CLI's own preference, and a suite written
+    # by twenty writers then runs on whatever that preference happens to be rather than on the
+    # model the run asked for.
     chosen = chosen_model(model)
     env = {
         "ANTHROPIC_MODEL": chosen,
@@ -122,6 +137,24 @@ def provider_env(model: str | None = None) -> dict[str, str]:
                 "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1",
                 "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING": "1",
                 "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
+            }
+        )
+        return env
+
+    agentcc_key = os.environ.get("AGENTCC_API_KEY", "").strip()
+    if agentcc_key:
+        base_url = (
+            os.environ.get("AGENTCC_BASE_URL", "https://gateway.futureagi.com")
+            .strip()
+            .rstrip("/")
+        )
+        env.update(
+            {
+                # AUTH_TOKEN is sent as a Bearer token, which is how AgentCC virtual keys
+                # authenticate. API_KEY would instead use Anthropic's x-api-key header.
+                "ANTHROPIC_AUTH_TOKEN": agentcc_key,
+                "ANTHROPIC_BASE_URL": base_url,
+                "CLAUDE_CODE_USE_VERTEX": "0",
             }
         )
         return env

@@ -1218,8 +1218,12 @@ def world_tools(
         schema({"name": str, "code": str, "what": str}, ["name", "code"]),
     )
     async def add_world_check(args: dict[str, Any]) -> dict[str, Any]:
+        runtime_tools = set(getattr(world, "runtime_tools", set()))
+        runtime_only = bool(contract.tools) and set(contract.tool_names()).issubset(
+            runtime_tools
+        )
         if (
-            (is_data_free_conversation(contract) or external_runtime)
+            (is_data_free_conversation(contract) or external_runtime or runtime_only)
             and not world.state()
             and not world.handlers
         ):
@@ -1301,8 +1305,12 @@ def world_tools(
         schema({"notes": str}, []),
     )
     async def save_world(args: dict[str, Any]) -> dict[str, Any]:
+        runtime_tools = set(getattr(world, "runtime_tools", set()))
+        runtime_only = bool(contract.tools) and set(contract.tool_names()).issubset(
+            runtime_tools
+        )
         data_free = (
-            (is_data_free_conversation(contract) or external_runtime)
+            (is_data_free_conversation(contract) or external_runtime or runtime_only)
             and not world.state()
             and not world.handlers
         )
@@ -1312,10 +1320,6 @@ def world_tools(
                 f"Not saved, the world does not hold up yet.\n{report.summary()}\n"
                 f"score {report.score:.2f}, needs {ACCEPTABLE:.2f}"
             )
-        runtime_tools = set(getattr(world, "runtime_tools", set()))
-        runtime_only = bool(contract.tools) and set(contract.tool_names()).issubset(
-            runtime_tools
-        )
         # Sequences prove that a stateful tool surface remains coherent across multiple calls.
         # A conversational agent with no executable tools has no legal sequence to declare: an
         # empty sequence proves nothing, and every named call is necessarily fabricated.  Such

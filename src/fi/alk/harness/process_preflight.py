@@ -502,9 +502,13 @@ def _verify_secret_purposes(
     provider_import_claims_target_provider = isinstance(
         manifest.metadata.get("provider_import"), dict
     )
-    connect_only_claims_target_provider = isinstance(
-        manifest.metadata.get("provider_connect_only"), dict
-    )
+    connect_only = manifest.metadata.get("provider_connect_only")
+    # Connect-only describes how the target is reached, not inherently who owns
+    # the credentials. Provider APIs need a customer target-provider key, while
+    # the phone connector dials with platform-owned telephony credentials.
+    connect_only_claims_target_provider = isinstance(connect_only, dict) and str(
+        connect_only.get("connector") or ""
+    ).lower() in {"vapi", "retell", "retell_chat"}
     guest_claims_target_provider = (
         process_claims_target_provider
         or lifecycle_claims_target_provider
@@ -748,6 +752,10 @@ def _verify_reserved_names(bundle_dir: Path, manifest: EnvironmentBundleV2) -> N
             path = root / relative_path
             if not path.is_file():
                 continue  # reported by `_verify_seed_files_on_disk_and_listed`
+            if path.suffix.lower() != ".sql":
+                # Typed world artifacts are data, not executable SQL identifiers. Their schema
+                # is validated by the runtime importer after source migrations have run.
+                continue
             text = path.read_text(encoding="utf-8", errors="replace")
             # Strip `--`-to-EOL and `/* ... */` comments before scanning (F9, p4-round1-review) —
             # a generated seed file's own note about the reservation ("-- never create

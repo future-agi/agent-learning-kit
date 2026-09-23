@@ -131,7 +131,17 @@ def save(
                 # Written because restore reads it. Without it a restored world publishes no
                 # tool descriptions at all, and every later stage has to reconstruct them.
                 "tool_specs": list(world.tools),
-                "tables": {name: len(rows) for name, rows in state.items()},
+                # Source-owned in-memory collections are not necessarily tabular. A flag,
+                # counter, or singleton object is still valid observable state and must not
+                # crash authoring merely because it has no ``len``.
+                "tables": {
+                    name: (
+                        len(rows)
+                        if isinstance(rows, (dict, list, tuple, set, str, bytes))
+                        else int(rows is not None)
+                    )
+                    for name, rows in state.items()
+                },
                 # Kept because they are judgement about this agent, not something a schema
                 # implies. A world picked up again can be re-verified without redeclaring them.
                 "sequences": list(sequences or []),

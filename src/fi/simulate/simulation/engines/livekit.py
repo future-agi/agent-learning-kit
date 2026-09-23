@@ -3912,6 +3912,17 @@ def _has_natural_terminal_exchange(messages: list[dict[str, str]]) -> bool:
         "have a great day",
         "have a good day",
         "have a nice day",
+        # Natural customer-side completion language.  Provider agents commonly end
+        # the room immediately after the caller declines anything further, without
+        # producing a separate assistant farewell.  That is a completed transport
+        # whose business correctness belongs to evaluation, not an infrastructure
+        # failure caused solely by the generated minimum-turn floor.
+        "that's everything",
+        "that is everything",
+        "that's all",
+        "that is all",
+        "nothing else",
+        "cheers",
     )
     if any(marker in text for _role, text in tail for marker in farewell_markers):
         return True

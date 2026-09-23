@@ -10,8 +10,8 @@ name rather than implemented here.
 """
 
 from __future__ import annotations
-import os
 
+import os
 from typing import Any, AsyncIterator
 
 from claude_agent_sdk import (
@@ -44,7 +44,31 @@ from .base import (
 DEFAULT_MODEL = "claude-sonnet-4-6"
 
 
-def _sdk_server(server: ToolServer) -> Any:
+def _gateway_compatible_schema(value: Any) -> Any:
+    """Translate JSON-Schema nullable unions to the scalar form Gemini accepts.
+
+    Claude accepts ``type: [string, null]``. Vertex function declarations use a scalar enum for
+    ``type`` and reject that otherwise-valid JSON Schema before the model can run. Optional
+    properties remain optional because their names are absent from ``required``; only explicit
+    null loses validation support on this provider path.
+    """
+    if isinstance(value, list):
+        return [_gateway_compatible_schema(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    result = {key: _gateway_compatible_schema(item) for key, item in value.items()}
+    kind = result.get("type")
+    if isinstance(kind, list):
+        concrete = [item for item in kind if item != "null"]
+        if len(concrete) == 1:
+            result["type"] = concrete[0]
+    enum = result.get("enum")
+    if isinstance(enum, list) and None in enum:
+        result["enum"] = [item for item in enum if item is not None]
+    return result
+
+
+def _sdk_server(server: ToolServer, *, gateway_compatible: bool = False) -> Any:
     """A ToolServer as the in-process MCP server the SDK routes calls to."""
     return create_sdk_mcp_server(
         name=server.name,
@@ -53,7 +77,11 @@ def _sdk_server(server: ToolServer) -> Any:
             SdkMcpTool(
                 name=spec.name,
                 description=spec.description,
-                input_schema=spec.input_schema,
+                input_schema=(
+                    _gateway_compatible_schema(spec.input_schema)
+                    if gateway_compatible
+                    else spec.input_schema
+                ),
                 handler=spec.handler,
             )
             for spec in server.tools
@@ -78,9 +106,11 @@ class ClaudeSession:
         options: ClaudeAgentOptions,
         *,
         streaming: bool = False,
+        reported_model: str | None = None,
     ) -> None:
         self._options = options
         self._streaming = streaming
+        self._reported_model = reported_model
         self._client: ClaudeSDKClient | None = None
         self._mirror_errors: list[str] = []
 
@@ -157,7 +187,12 @@ class ClaudeSession:
                     parts.append(
                         Call(id=block.id, name=block.name, arguments=block.input)
                     )
-            return [ModelReply(parts=parts, model=getattr(received, "model", "") or "")]
+            return [
+                ModelReply(
+                    parts=parts,
+                    model=self._reported_model or getattr(received, "model", "") or "",
+                )
+            ]
         if isinstance(received, ResultMessage):
             # subtype alone is not the outcome. A call that failed upstream still arrives with
             # subtype "success", so the error facts ride along and Stage decides what failed.
@@ -172,7 +207,11 @@ class ClaudeSession:
                     cost_usd=received.total_cost_usd,
                     **_tokens(getattr(received, "model_usage", None)),
                     session_id=received.session_id,
-                    models=set(getattr(received, "model_usage", None) or {}),
+                    models=(
+                        {self._reported_model}
+                        if self._reported_model
+                        else set(getattr(received, "model_usage", None) or {})
+                    ),
                     is_error=bool(
                         getattr(received, "is_error", False) or self._mirror_errors
                     ),
@@ -222,10 +261,15 @@ class ClaudeBackend:
         if "claude" in named:
             return True
         gateway_ready = bool(
-            os.environ.get("ALK_CLAUDE_GATEWAY_URL", "").strip()
-            and os.environ.get("ALK_CLAUDE_GATEWAY_API_KEY", "").strip()
+            (
+                os.environ.get("ALK_CLAUDE_GATEWAY_URL", "").strip()
+                and os.environ.get("ALK_CLAUDE_GATEWAY_API_KEY", "").strip()
+            )
+            or os.environ.get("AGENTCC_API_KEY", "").strip()
         )
-        return gateway_ready and "gemini" in named
+        # Agent CC's native Anthropic endpoint accepts the Claude Agent SDK wire format and
+        # translates it for any provider configured behind the virtual key.
+        return gateway_ready and bool(named)
 
     def create(self, spec: SessionSpec) -> ClaudeSession:
         from ..config import (
@@ -245,7 +289,23 @@ class ClaudeBackend:
             ),
         ]
         context = spec.conversation
-        env = provider_env(spec.model)
+        explicit_gateway = bool(
+            os.environ.get("ALK_CLAUDE_GATEWAY_URL", "").strip()
+            and os.environ.get("ALK_CLAUDE_GATEWAY_API_KEY", "").strip()
+        )
+        legacy_agentcc = bool(os.environ.get("AGENTCC_API_KEY", "").strip())
+        gateway_compatible = bool(
+            (explicit_gateway or legacy_agentcc) and "claude" not in spec.model.lower()
+        )
+        wire_model = spec.model
+        if gateway_compatible and not explicit_gateway:
+            # Older/local AgentCC deployments require a Claude-shaped alias because Claude Code
+            # validates model names before making the request. The hosted gateway accepts the
+            # requested provider model directly and therefore keeps the real model on the wire.
+            wire_model = os.environ.get(
+                "AGENTCC_CLAUDE_MODEL_ALIAS", "claude-sonnet-4-6"
+            ).strip()
+        env = provider_env(wire_model)
         if context is not None:
             env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
             env["CLAUDE_CODE_PROJECT_DIR_NAME"] = context.session_id
@@ -256,13 +316,13 @@ class ClaudeBackend:
             system_prompt=spec.system_prompt,
             allowed_tools=allowed,
             mcp_servers={
-                server_name: _sdk_server(server)
+                server_name: _sdk_server(server, gateway_compatible=gateway_compatible)
                 for server_name, server in spec.servers.items()
             },
             strict_mcp_config=True,
             setting_sources=[],
             max_turns=spec.max_turns,
-            model=spec.model,
+            model=wire_model,
             env=env,
             include_partial_messages=bool(context and context.streaming),
             resume=context.resume_session_id if context is not None else None,
@@ -286,4 +346,5 @@ class ClaudeBackend:
         return ClaudeSession(
             options,
             streaming=bool(context and context.streaming),
+            reported_model=spec.model if gateway_compatible else None,
         )
