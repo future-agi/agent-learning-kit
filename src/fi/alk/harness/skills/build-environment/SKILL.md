@@ -423,6 +423,13 @@ Nothing adds any of this for you. What you write is the whole of what the simula
 given, so a prompt that leaves one of these out is a suite that finds out about it the expensive
 way: a run of real calls that all stop in the same place for a reason no transcript shows.
 
+**Before you save it, read it once as the caller would, line by line, and take out three things.**
+A default that gives way ("otherwise accept it", "accept the limitation gracefully"): every scenario
+that never says the word for pressing then folds at the first no. A scripted closing or a thank-you
+("say 'thank you for your help, goodbye'"): every call then ends on the same courtesy, and a real
+person who was refused does not thank anyone. And any bullet above that you meant to cover and did
+not: a prompt a third the length of this list has left most of it out.
+
 ### What a usable one looks like
 
 Thin, and it will produce one exchange and tell you nothing:
