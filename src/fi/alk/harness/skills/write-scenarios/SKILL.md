@@ -152,7 +152,7 @@ settles what the world must still hold; a completed task settles the call and th
 **Whatever your reference solution does last is the outcome the scenario exists for, and a sub-goal
 has to assert it.** Six ended on a status lookup and named only booking
 sub-goals, so an agent that booked and never looked passed them all. Two a scenario
-is the working number; one is right only when one is all that is true.
+is the working number; one is right only when the agent had nothing to find out before acting.
 
 **And that one must be the checked kind, not the judged kind.** The last step is a call, so the call
 log and the world both hold the evidence: a judge asked to read the transcript for it is being asked
@@ -449,7 +449,9 @@ Four of these are enforced by validation. Four are your judgement, and no check 
 - **Every concrete value is real**, taken from the contract or the world. *(enforced: values handed to
   the person must exist)* An invented identifier makes the test worthless whatever else it does.
 - **Check the path, not only the outcome.** *(enforced: a one-step solution is refused)* Where the
-  right answer depends on something the agent must find out first, the sub-goals cover that too.
+  right answer depends on something the agent must find out first, one sub-goal asserts it found that
+  out and another asserts the outcome. Name the fact, not the tool: the path sub-goal holds when any
+  call the agent made returned that fact, so an agent that took another legitimate route to it passes.
 - **The scenario seeds what it needs.** *(enforced: a fixture claiming data must create it)* Every
   record whose state decides the outcome is created by this scenario's `setup_code`.
 - **The name says what is tested.** *(enforced: the person's name may not appear in it)*
@@ -479,7 +481,8 @@ BAD    solution   [transfer_to_human(reason="Account suspended")]
 GOOD   solution   [find_account(identifier=...), get_account(account_id=...),
                    transfer_to_human(reason="Account suspended")]
        sub_goals  [account_identified, account_state_checked, transferred_to_human]
-       (the handoff now has to be reached by discovering the reason for it)
+       (the handoff now has to be reached by discovering the reason for it, and
+        account_state_checked holds on any lookup whose result carried the status)
 ```
 
 ## The coordinate is a promise. The instruction has to keep it.
