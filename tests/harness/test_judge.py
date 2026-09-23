@@ -248,3 +248,8 @@ def test_with_no_actions_the_judge_is_told_the_conversation_is_the_evidence(monk
     call = type("C", (), {"name": "lookup", "arguments": {}, "result": None})()
     asyncio.run(judge_module.judge(_Goal(), _World(), [call]))
     assert "only the conversation is observable" not in prompts[1]
+
+
+def test_a_situation_that_never_came_up_is_not_a_pass():
+    assert "never came up" in judge_module._INSTRUCTIONS
+    assert "decide false" in judge_module._INSTRUCTIONS

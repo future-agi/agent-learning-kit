@@ -389,7 +389,9 @@ as you go rather than composing a whole suite before the first call.
 If `REAL TOOLS` says `(none)`, you can reach the agent but not see its tools or records: the
 conversation is the only evidence there will be. Everything else in this skill still applies except:
 
-- `solution: []`. There is nothing to replay; `try_calls` has nothing to call.
+- `solution: []`. There is nothing to replay; `try_calls` has nothing to call, so do not call it.
+- **The `tests` line says only what the conversation shows.** Not what the agent passed to a tool or
+  whether it called one: nobody can hear that.
 - **Every sub-goal is judged.** Write each so the conversation alone can settle it, and give it a pass
   and a fail a reader could agree on: "states the fee before asking to confirm", "reads the address
   back before acting", "refuses to disclose another person's details", "offers a person when asked
@@ -454,7 +456,7 @@ fix what they name.
 
 ## The bar every scenario has to clear
 
-Four of these are enforced by validation. Four are your judgement, and no check can make them for you.
+Four of these are enforced by validation. Five are your judgement, and no check can make them for you.
 
 - **A competent agent could plausibly fail it.** *(judgement)* If any correct implementation passes
   for free, it teaches nothing. Do not write it.
@@ -468,6 +470,9 @@ Four of these are enforced by validation. Four are your judgement, and no check 
 - **The scenario seeds what it needs.** *(enforced: a fixture claiming data must create it)* Every
   record whose state decides the outcome is created by this scenario's `setup_code`.
 - **The name says what is tested.** *(enforced: the person's name may not appear in it)*
+- **The situation can actually be produced on the call.** *(judgement)* The caller is one synthesised
+  voice over one background bed. It cannot sound cut off, garbled or unintelligible, and it cannot
+  bring a second voice; a scenario that depends on one tests something that never happens.
 - **The outcome can happen inside the conversation.** *(judgement)* Everything the result depends on
   is something the agent can do or see with its own tools, or something the world already holds. The
   person cannot tap a link, pay on a website, open an email or visit a branch while you test, and the

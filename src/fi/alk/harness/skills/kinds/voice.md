@@ -102,7 +102,9 @@ second speaker under another name, and there is no second speaker. If the situat
 know something the room told them, have the caller say it. Refused at submit.
 
 **The caller's own voice is synthesised clean, every line.** The engine has a rate, an accent and an
-emotion; it has no impairment. Slurred, garbled, mumbled or unintelligible speech is not produced, so an
+emotion; it has no impairment and the line never degrades. Slurred, garbled, mumbled, muffled or
+unintelligible speech, a line that cuts off or drops out, and silence where speech was expected are not
+produced, so an
 instruction that asks for it describes a call nobody can hear: the agent is handed fluent words, and
 whatever the impairment was meant to make hard never reaches it. The scenario then grades as if the
 difficulty were there.

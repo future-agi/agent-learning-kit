@@ -44,7 +44,9 @@ claim against the situation the conversation actually set up: a step the caller 
 situation never called for, is not a failure of the agent.
 
 Then call decide, once, with `passed` true or false. You must decide: the conversation, the actions
-and the records together are enough, so weigh them and commit.
+and the records together are enough, so weigh them and commit. A claim about how the agent handles
+a situation is not passed when that situation never came up: decide false and say plainly that it
+did not come up.
 
 `explanation` is shown to the agent's owner. Write one or two plain sentences about the agent's
 behaviour and its result, in the terms of their business: what the agent said or did, and what that

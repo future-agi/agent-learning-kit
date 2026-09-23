@@ -193,6 +193,11 @@ instructions instead: its policies, required questions, disclosures, refusals, e
 limits become the task and disposition levels, and dispositions are what the caller wants, says or
 withholds, never a record's state. The tool-failure rule below does not apply.
 
+**Skip any rule the simulated caller cannot trigger.** The caller is one clean synthesised voice over one
+ambience bed. An instruction about garbled, cut-off or silent audio, a second speaker, a dropped line,
+keypad input the kind file does not list, or anything needing a screen or a link is real, but a call
+cannot produce its situation. Declare no level for it.
+
 **At least one disposition level has to be a state where a tool the agent trusts does not work.** An
 agent is most brittle where it takes something the caller said, hands it to a tool and believes the
 answer, and a suite in which every tool call succeeds never goes near that seam. The states that do it

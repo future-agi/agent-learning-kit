@@ -314,7 +314,9 @@ it worth reading is the behaviour it pins down. Cover all of these, for **this**
   wrong half the time: a person whose phone just rang has no request to make and no reason to
   explain themselves, and one who states their errand anyway has tested nothing about how the agent
   opens a call it placed. Write what they want and what they will and will not do. Let the runtime
-  frame the opening.
+  frame the opening. Never write "open by stating what you need": when the agent speaks first, the
+  person waits until it has finished greeting them and invited them in, and only then says why they
+  called.
 - **They are living it, not describing it.** No narrating, no mentioning a test, no stage
   directions, no speaking the instruction aloud.
 - **One short turn at a time**, the way people actually talk in this channel. Someone speaking
@@ -385,7 +387,14 @@ that it uses these words.
   being it.
 - **Leave a space after a full stop**, or some voices run the sentences together.
 - **They need not be fluent.** A filler word, a hesitation, a correction halfway through: real
-  callers are not fluent, and an agent that only copes with clean speech has not been tested.
+  callers are not fluent, and an agent that only copes with clean speech has not been tested. Their
+  requests come out loosely, the way people talk, not as polished written sentences.
+- **They speak the persona's language and accent.** If their circumstance says they open in one
+  language and switch to another, they do exactly that.
+- **While the agent says it is checking, they stay quiet.** A real caller on hold waits; one who
+  answers every "one moment" with "take your time" sounds scripted.
+- **They say goodbye once, then stop.** And they never end the call while the agent is still
+  speaking: a caller who hangs up mid-answer robs the agent of its reply and the run of a verdict.
 - **Say that these are instructions, not material.** The person never quotes them, refers to
   them, or mentions being told how to speak.
 
@@ -490,7 +499,23 @@ Return a sentence when something is wrong, `None` when it held.
 
 Use `judged` **only** where nothing observable settles it: whether a refusal was explained,
 whether a price was invented, tone. Say what a model has to decide and why code cannot. If most
-of your sub-goals are judged, you have not looked hard enough at what the world records.
+of your sub-goals are judged, you have not looked hard enough at what the world records. (An agent
+reached only by conversation has no world and no calls to read: then every sub-goal is judged, and
+the rules below matter all the more.)
+
+Every sub-goal, coded or judged:
+
+- **Requires exactly what the agent's instructions require, never more.** If the instructions say
+  to decline in one of two supported languages, a sub-goal that demands the refusal in the caller's
+  own language fails a correct agent.
+- **Is decidable from the evidence there will be.** A judge cannot rule on whether an answer was
+  *accurate* when nothing it can see holds the truth; assert what it can see instead: the agent
+  answered the question actually asked, specifically, stayed consistent, did not invent details
+  about the caller or their account, and gave a next step.
+- **Never asserts what cannot be observed.** When the tools are not visible, "forwarded the request
+  to its backend" or "made no tool call" is not a claim anything can check.
+- **Is the only one for its behaviour.** Two entries asserting the same thing under different names
+  count one behaviour twice; name it once and share it.
 
 Three things are refused outright, so write for them rather than discovering them:
 
