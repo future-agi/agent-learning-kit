@@ -103,6 +103,21 @@ produced: a station announcement, an alarm, a crowd that argues, a voice behind 
 second speaker under another name, and there is no second speaker. If the situation needs the caller to
 know something the room told them, have the caller say it. Refused at submit.
 
+**The caller's own voice is synthesised clean, every line.** The engine has a rate, an accent and an
+emotion; it has no impairment. Slurred, garbled, mumbled or unintelligible speech is not produced, so an
+instruction that asks for it describes a call nobody can hear: the agent is handed fluent words, and
+whatever the impairment was meant to make hard never reaches it. The scenario then grades as if the
+difficulty were there.
+
+The symptom is not the problem - a caller reporting one is ordinary and often the point. Asking for it as
+a DELIVERY is. A caller having a stroke can say their face has gone numb and their arm will not move, and
+that tests the escalation exactly as intended. "Your speech is heavily slurred" tests nothing, because the
+sentence arrives perfectly articulated.
+
+The same holds anywhere the difficulty is carried by how a line sounds rather than by what it says: if
+you cannot point to the setting that produces it - `speech_rate`, the accent, the emotion, the noise bed -
+the call will not deliver it. Put the difficulty in the words. Refused at submit.
+
 **An interruption is a matter of TIMING, not of content.** The caller speaks before the agent has
 finished: over a read-back, across a question, on top of a summary. A caller who changes their mind, or
 corrects an address, or switches product halfway through has done something interesting and has not

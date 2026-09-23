@@ -394,6 +394,17 @@ _CARRIED_BY_AUDIO = re.compile(
     re.IGNORECASE,
 )
 
+# The synthesiser speaks every line cleanly. It cannot slur, garble or mumble, so an instruction
+# that rests the difficulty on degraded speech describes a call the agent never hears: it is handed
+# clean words and the test collapses to whatever those words say. The symptom itself is fine for a
+# caller to report; asking for it as a delivery is not.
+_UNSPEAKABLE_DELIVERY = re.compile(
+    r"\b(?:speech|voice|words|speaking)\b[^.]{0,40}\b(?:slur\w*|garbl\w*|unintelligib\w*|incoherent|mumbl\w*)\b"
+    r"|\b(?:slur\w*|garbl\w*|mumbl\w*)\s+(?:speech|voice|words)\b"
+    r"|\b(?:heavily|badly|severely)\s+slur\w*",
+    re.IGNORECASE,
+)
+
 
 # An interface level is a claim about how the call sounds, and the persona plus the noise bed are
 # what deliver it. A scenario that says the line is noisy with the bed off, or the caller accented
@@ -744,6 +755,15 @@ def validate_scenario(
             "the instruction has something other than the caller speak: a recording, a television "
             "or another person in the room. The call renders one speaker over one ambience bed, so "
             "the agent never hears it, and the scenario tests nothing. Have the caller say it"
+        )
+    if unspeakable := _UNSPEAKABLE_DELIVERY.search(
+        f"{scenario.instruction or ''} {scenario.branch or ''}"
+    ):
+        problems.append(
+            f"the instruction rests on a delivery the voice cannot produce: {unspeakable.group(0)!r}. "
+            "Every line is synthesised clean, so the agent hears fluent speech and whatever "
+            "difficulty the impairment was carrying is never delivered. Let the caller report the "
+            "symptom in words, and put the difficulty in what they say"
         )
     if trailing := _acts_after_the_handoff(scenario):
         problems.append(
