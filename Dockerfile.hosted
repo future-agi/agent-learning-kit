@@ -49,13 +49,16 @@ RUN python3.12 -m venv /opt/alk-venv \
     && ln -s /opt/erlang/bin/erl /usr/local/bin/erl \
     && ln -s /opt/erlang/bin/epmd /usr/local/bin/epmd \
     && ln -s /opt/erlang/bin/escript /usr/local/bin/escript \
-    && printf '#!/bin/sh\nexec /opt/rabbitmq/sbin/rabbitmq-diagnostics "$@"\n' > /usr/local/bin/rabbitmq-diagnostics \
-    && printf '#!/bin/sh\nexec /opt/rabbitmq/sbin/rabbitmq-plugins "$@"\n' > /usr/local/bin/rabbitmq-plugins \
-    && printf '#!/bin/sh\nexec /opt/rabbitmq/sbin/rabbitmq-server "$@"\n' > /usr/local/bin/rabbitmq-server \
-    && printf '#!/bin/sh\nexec /opt/rabbitmq/sbin/rabbitmqctl "$@"\n' > /usr/local/bin/rabbitmqctl \
-    && chmod 0755 /usr/local/bin/npm20 /usr/local/bin/npm22 \
+    && printf '#!/bin/sh\nexport PATH=/opt/erlang/bin:/opt/rabbitmq/sbin:/usr/local/bin:/usr/bin:/bin\nexec /opt/rabbitmq/sbin/rabbitmq-diagnostics "$@"\n' > /usr/local/bin/rabbitmq-diagnostics \
+    && printf '#!/bin/sh\nexport PATH=/opt/erlang/bin:/opt/rabbitmq/sbin:/usr/local/bin:/usr/bin:/bin\nexec /opt/rabbitmq/sbin/rabbitmq-plugins "$@"\n' > /usr/local/bin/rabbitmq-plugins \
+    && printf '#!/bin/sh\nexport PATH=/opt/erlang/bin:/opt/rabbitmq/sbin:/usr/local/bin:/usr/bin:/bin\nexec /opt/rabbitmq/sbin/rabbitmq-server "$@"\n' > /usr/local/bin/rabbitmq-server \
+    && printf '#!/bin/sh\nexport PATH=/opt/erlang/bin:/opt/rabbitmq/sbin:/usr/local/bin:/usr/bin:/bin\nexec /opt/rabbitmq/sbin/rabbitmqctl "$@"\n' > /usr/local/bin/rabbitmqctl \
+    && chmod 0755 /usr/local/bin/uv /usr/local/bin/uvx \
+      /usr/local/bin/npm20 /usr/local/bin/npm22 \
       /usr/local/bin/rabbitmq-diagnostics /usr/local/bin/rabbitmq-plugins \
-      /usr/local/bin/rabbitmq-server /usr/local/bin/rabbitmqctl
+      /usr/local/bin/rabbitmq-server /usr/local/bin/rabbitmqctl \
+    && uv --version \
+    && uvx --version
 
 # Catalog entries are executable promises. Fail the snapshot build if either alternate Python
 # cannot create and execute a writable project-local venv.
@@ -91,7 +94,7 @@ WORKDIR /opt/alk
 # Daytona's direct-image builder can reuse an image when only build-context
 # files change.  Bump this source revision whenever guest code changes so a
 # hosted test cannot silently execute an older installed ALK.
-ARG ALK_HOSTED_SOURCE_REVISION=20260916-parallel-world-slots-local-r1
+ARG ALK_HOSTED_SOURCE_REVISION=20260923-parallel-world-slots-v2
 LABEL io.futureagi.alk-source-revision="${ALK_HOSTED_SOURCE_REVISION}"
 COPY pyproject.toml README.md ./
 COPY src ./src
@@ -99,7 +102,9 @@ COPY hosted-snapshot/catalog.json /opt/alk/hosted-snapshot-catalog.json
 
 ENV PIP_DEFAULT_TIMEOUT=300 \
     PIP_RETRIES=10 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    PIP_CERT=/etc/ssl/certs/ca-certificates.crt
 # The ADK instrumentor is installed without its declared dependencies: it still pins
 # google-genai<2 while google-adk 2.7 needs >=2.12, and it works against 2.12. Resolving it
 # normally would either fail the build or hold the image back a major version. An absent or
