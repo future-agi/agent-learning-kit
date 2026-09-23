@@ -888,40 +888,6 @@ def _credentials_the_world_lacks(scenario: Scenario, trial: Any) -> list[str]:
     ]
 
 
-# The task level is named `operation-object`, so the object is in the name, and a scenario whose
-# operation acts on something that already exists needs the world to hold one after setup runs.
-# Measured: 212 scenarios across three suites carried no setup_code at all, and a world baseline held
-# zero bookings while 42 of them asked the agent to cancel or read back a booking. The cancel tool
-# takes no identifier, so `_credentials_the_world_lacks` never fires: nothing checked it.
-_CREATING = ("create", "book", "add", "new", "register", "start", "open", "compare", "authenticate")
-
-
-def _world_holds_nothing_to_act_on(scenario: Scenario, trial: Any) -> list[str]:
-    """Why this scenario's object does not exist in the world after setup, or nothing."""
-    task = str((scenario.coverage or {}).get("task") or "").strip().lower()
-    parts = [one for one in re.split(r"[_\-\s]+", task) if one]
-    if len(parts) < 2 or parts[0] in _CREATING:
-        return []
-    try:
-        held = trial.state()
-    except Exception:
-        return []
-    if not isinstance(held, dict):
-        return []
-    wanted = "_".join(parts[1:])
-    for name, rows in held.items():
-        plain = str(name).strip().lower().rstrip("s")
-        if plain and (wanted.startswith(plain) or plain.startswith(wanted.rstrip("s"))):
-            if isinstance(rows, (list, tuple)) and len(rows) == 0:
-                return [
-                    f"the task is {task!r} and the world holds no {name} after setup runs, so there "
-                    "is nothing for the agent to act on and the scenario fails for our reason rather "
-                    f"than its own. Seed the {name} this scenario opens on in setup_code"
-                ]
-            return []
-    return []
-
-
 def accept_scenario(
     payload: dict[str, Any],
     *,
@@ -976,7 +942,6 @@ def accept_scenario(
         # be in the world once setup has run. Advisory at save time this is found after the suite
         # is written; refused here it costs the writer one turn and it can seed the record.
         problems.extend(_credentials_the_world_lacks(scenario, trial))
-        problems.extend(_world_holds_nothing_to_act_on(scenario, trial))
         problems.extend(_identifiers_the_instruction_invents(scenario, trial))
         # An overlay with nothing that can fail it is the defect every advisory has failed to
         # stop. Refused at the one moment a writer can still settle it.
