@@ -344,13 +344,13 @@ MOST_OF_A_SUITE = 0.34
 FEWEST_FOR_A_SHARE = 8
 
 
-def _first_names_on_disk(destination: Path) -> set[str]:
+def _first_names_on_disk(destination: Path, excluding: str = "") -> set[str]:
     """Caller first names already saved for this suite, so siblings do not reuse one."""
     try:
         return {
             str(one.persona.name or "").strip().split(" ")[0].lower()
             for one in load_scenarios(Path(destination))
-            if one.persona is not None and one.persona.name
+            if one.persona is not None and one.persona.name and one.name != excluding
         } - {""}
     except Exception:  # noqa: BLE001 - an unreadable suite must not block a submission
         return set()
@@ -617,6 +617,8 @@ def _a_second_plain_control(scenario: Scenario, kept: list[Scenario]) -> str:
     if not task:
         return ""
     for one in kept:
+        if one.name == scenario.name:
+            continue
         other = one.coverage or {}
         if str(other.get("task") or "") != task:
             continue
@@ -1645,7 +1647,9 @@ def scenario_tools(
             second_control = ""
         if second_control:
             return _err(second_control)
-        twin = _already_in_the_suite(args, kept, _first_names_on_disk(destination))
+        twin = _already_in_the_suite(
+            args, kept, _first_names_on_disk(destination, str(args.get("name") or ""))
+        )
         if twin:
             return _err(twin)
         if wanted and target.get("people") != "alike":
