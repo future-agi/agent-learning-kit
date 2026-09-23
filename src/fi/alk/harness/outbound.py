@@ -269,12 +269,6 @@ def _mask_userinfo(match: re.Match[str]) -> str:
     return f"{scheme}{user}:***@" if password is not None else f"{scheme}***@"
 
 
-# A declared value shorter than this is configuration, not a credential, and substring-replacing it
-# destroys ordinary prose: a value of "on" turned every "confirms" into "c***firms" in the graded
-# receipts of a real hosted run.
-_SHORTEST_REDACTABLE_SECRET = 8
-
-
 def redact_outbound_text(value: str, extra_secret_values: tuple[str, ...] = ()) -> str:
     """Scrubs a single free-text field before it can leave the sandbox on any of the three
     channels (outbound-channels.md v1.3 "Redaction (enforced before emit)"; hosted-execution-
@@ -297,7 +291,7 @@ def redact_outbound_text(value: str, extra_secret_values: tuple[str, ...] = ()) 
     """
     redacted = _USERINFO_PATTERN.sub(_mask_userinfo, value)
     for secret in extra_secret_values:
-        if len(secret) >= _SHORTEST_REDACTABLE_SECRET:
+        if secret:
             redacted = redacted.replace(secret, "***")
     return redacted
 
@@ -588,16 +582,8 @@ def load_capabilities(
 
 
 class DegradeReason(str, Enum):
-    # C4 v1.3 §2 (FROZEN) -- the `parallelism_degraded` reason vocabulary, closed at EXACTLY
-    # these FIVE members, unconditionally. `port_not_consumable` was the former sixth member;
-    # C1 v1.3 §4 decision 2 / D28 reclassifies it OUT of the degrade enum to a TERMINAL job
-    # failure (raised out-of-band, surfaced via the job-failure path), so it is deliberately
-    # absent here and can never be constructed into a `parallelism_degraded` payload.
-    RESOURCE_LIMITED = "resource_limited"
-    LITERAL_LOCAL_ENDPOINT = "literal_local_endpoint"
-    WORLD_START_FAILED = "world_start_failed"
-    FIXED_PORT = "fixed_port"
     CONFORMANCE_GATE_FAILED = "conformance_gate_failed"
+    FIXED_PORT = "fixed_port"
 
 
 class LogLevel(str, Enum):
@@ -690,8 +676,6 @@ class ScenarioRetriedPayload(BaseModel):
     scenario_key: str = Field(min_length=1)
     from_world: int = Field(ge=0)
     to_world: int = Field(ge=0)
-    # Why the first try is being replayed. Without it a retry reads as an unexplained repeat.
-    cause: str = Field(default="", max_length=200)
 
 
 class LogPayload(BaseModel):

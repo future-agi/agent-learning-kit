@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-import re
 from typing import Protocol
 
 from pydantic import BaseModel, Field, JsonValue, model_validator
@@ -19,8 +18,7 @@ from fi.simulate.runtime.spec import RuntimeIsolation, RuntimeRequirements, Secr
 from .github import parse_github_location
 
 HARNESS_JOB_SCHEMA_VERSION = "futureagi.harness-job.v1"
-MAX_HOSTED_SCENARIO_COUNT = 5000
-_E164_PHONE = re.compile(r"^\+[1-9]\d{1,14}$")
+MAX_HOSTED_SCENARIO_COUNT = 200
 
 
 class ExecutionMode(str, Enum):
@@ -128,26 +126,13 @@ class AgentConnection(BaseModel):
                 ):
                     raise ValueError(f"provider_import_{path_key}_invalid")
         elif self.mode is ProviderExecutionMode.CONNECT_ONLY:
-            if connector == "phone":
-                if any(
-                    str(name).lower().startswith(("sip_", "livekit_"))
-                    for name in self.config
-                ):
-                    raise ValueError("phone_dialer_config_is_platform_owned")
-                number = str(self.config.get("phone_number") or "").strip()
-                prompt = str(self.config.get("target_system_prompt") or "").strip()
-                if not _E164_PHONE.fullmatch(number):
-                    raise ValueError("phone_connect_only_requires_e164_phone_number")
-                if not prompt or len(prompt) > 65536:
-                    raise ValueError("phone_connect_only_requires_target_system_prompt")
-                return self
             target_key = {"vapi": "assistant_id", "retell": "agent_id"}.get(
                 provider_connector
             )
             if target_key and not str(self.config.get(target_key) or "").strip():
                 raise ValueError(f"connect_only_requires_{target_key}")
         elif self.mode is not None and provider_connector not in {"vapi", "retell"}:
-            raise ValueError("provider_mode_only_supported_for_vapi_retell_or_phone_connect_only")
+            raise ValueError("provider_mode_only_supported_for_vapi_or_retell")
         return self
 
 
@@ -216,7 +201,7 @@ class HarnessJob(BaseModel):
     execution: ExecutionMode
     source: RepositorySource
     agent: AgentConnection
-    scenario_count: int = Field(default=10, ge=1, le=MAX_HOSTED_SCENARIO_COUNT)
+    scenario_count: int = Field(default=10, ge=1, le=1000)
     seed: int | None = None
     runtime: RuntimeRequirements = Field(default_factory=RuntimeRequirements)
     security: SandboxSecurityPolicy = Field(default_factory=SandboxSecurityPolicy)
@@ -254,10 +239,6 @@ class HarnessJob(BaseModel):
                 raise ValueError("hosted_scenario_count_out_of_range")
             if self.runtime.isolation is not RuntimeIsolation.DEDICATED_VM:
                 raise ValueError("hosted_isolation_must_be_dedicated_vm")
-            # C2 §2 (KEPT, universal, unchanged): the guest gate rejects W > DECLARED cpu_units
-            # for every hosted job, before any admission stage runs. Runtime-observed admission
-            # (process_runtime._provision_sync) then clamps on observed resources, so effective W
-            # binds on MIN(observed, declared) — neither side can admit past the other.
             if self.runtime.parallelism > self.runtime.cpu_units:
                 raise ValueError("hosted_parallelism_exceeds_cpu")
             if self.artifacts.level is ArtifactLevel.LOCAL_ONLY:

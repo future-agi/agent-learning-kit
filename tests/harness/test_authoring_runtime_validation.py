@@ -183,19 +183,7 @@ def test_runtime_gate_resets_each_scenario_and_preserves_execution_secrets(
         assert "target-secret-value" not in str(error.value)
         assert "0: setup:" in str(error.value)
         assert "1: setup:" in str(error.value)
-        # The invariant baseline is taken before the suite is walked, so its two resets come
-        # first and the suite is then walked exactly once. Each scenario still gets its own
-        # reset immediately before its own setup, which is what this test exists to pin.
-        assert calls == [
-            "provision",
-            "reset",
-            "reset",
-            "reset",
-            "setup",
-            "reset",
-            "setup",
-            "close",
-        ]
+        assert calls == ["provision", "reset", "setup", "reset", "setup", "close"]
     else:
         assert (
             asyncio.run(validate_once(job, tmp_path, authoring, secrets_path=original))
@@ -204,11 +192,11 @@ def test_runtime_gate_resets_each_scenario_and_preserves_execution_secrets(
         assert calls == [
             "provision",
             "reset",
-            "reset",
-            "reset",
             "setup",
             "reset",
             "setup",
+            "reset",
+            "reset",
             "close",
         ]
     assert original.exists()
