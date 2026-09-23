@@ -57,6 +57,8 @@ from .scenario import (
     _pinned_identity,
     unpinned_callers,
     crowded_cells,
+    duplicated_branches,
+    safety_allowance_problems,
     suite_diversity_problems,
     tidy_keywords,
     uncovered_cells,
@@ -2108,7 +2110,12 @@ def scenario_tools(
                 noted = noted + remark()
             except Exception as unreadable:  # noqa: BLE001 - advisory only, never fatal
                 logger.warning("suite remark skipped: %s", unreadable)
-        diversity = suite_diversity_problems(kept) + keyword_problems(kept)
+        diversity = (
+            suite_diversity_problems(kept)
+            + keyword_problems(kept)
+            + safety_allowance_problems(kept)
+            + duplicated_branches(kept)
+        )
         if settled:
             noted.append(
                 f"{settled} scenarios had a keyword rewritten: one spelling per word across the "
