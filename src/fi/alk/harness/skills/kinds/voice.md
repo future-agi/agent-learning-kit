@@ -103,6 +103,20 @@ produced: a station announcement, an alarm, a crowd that argues, a voice behind 
 second speaker under another name, and there is no second speaker. If the situation needs the caller to
 know something the room told them, have the caller say it. Refused at submit.
 
+**An interruption is a matter of TIMING, not of content.** The caller speaks before the agent has
+finished: over a read-back, across a question, on top of a summary. A caller who changes their mind, or
+corrects an address, or switches product halfway through has done something interesting and has not
+interrupted anybody - that is the correction level, and it already exists.
+
+The two get merged constantly because both happen "mid-call". Measured on a five-hundred: **fourteen of the
+thirty-three scenarios on the interruption level never interrupt anything** - one was a luggage-capacity
+cancellation, one a plain booking with a landmark, one a change of tier "before the payment link" whose own
+name ended in `bargein`. The coverage report then claims thirty-three barge-in scenarios where nineteen are
+real, and barge-in is usually a thing somebody asked for by name.
+
+Write the moment: what the agent is mid-way through saying, and the words the caller puts on top of it. If
+you cannot name what is being spoken over, the level is a correction and should say so.
+
 **`quiet_line` means the bed is OFF, and it is the only level that means that.** Sixteen scenarios in
 fifty-two carried `quiet_line` with the noise bed switched on. The coordinate then reports that the agent
 managed on a clear line when it never had one, and every noisy scenario in the suite loses the control it
