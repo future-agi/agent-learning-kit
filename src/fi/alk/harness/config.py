@@ -34,6 +34,8 @@ def credentials_hint() -> str:
     which is a legitimate setup and an easy accident. The accident produces a provider auth
     error several layers down, so it is worth saying out loud which one is in play.
     """
+    if os.environ.get("AGENTCC_API_KEY", "").strip():
+        return "credentials: Agent Command Center virtual key"
     named = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
     if named:
         return f"credentials: {Path(named).name}"
@@ -92,9 +94,116 @@ def provisioning(enabled: bool | None = None) -> bool:
     }
 
 
+# Models this harness is allowed to spend on. Karthik's constraint, and it is a hard one: the
+# Gemini credits are what we have, Claude models are what we cannot afford. `CLAUDE_CODE_USE_VERTEX`
+# is the specific trap, because it means Anthropic's own models hosted on Vertex rather than
+# Google's, so a single stray flag spends on exactly what is forbidden.
+BILLABLE = ("gemini",)
+FORBIDDEN = ("claude", "sonnet", "opus", "haiku")
+
+
+def refuse_a_model_we_cannot_afford(model: str) -> None:
+    """Raise unless this is a model we are allowed to spend on.
+
+    Called wherever a model is resolved rather than once at the edge, because the ways a Claude id
+    can arrive are many: a default, an env var, a worker override, a gateway that silently
+    substitutes. One check at the boundary would miss most of them.
+    """
+    named = (model or "").strip().lower()
+    if not named:
+        raise ValueError("no model was chosen; refusing to let the provider pick one")
+    if any(word in named for word in FORBIDDEN):
+        raise ValueError(
+            f"refusing to run on {model!r}: this harness may only spend on "
+            f"{', '.join(BILLABLE)} models. Set ALK_HARNESS_MODEL to a Gemini model."
+        )
+    if not any(word in named for word in BILLABLE):
+        raise ValueError(
+            f"refusing to run on {model!r}: it is not recognisably a "
+            f"{'/'.join(BILLABLE)} model, and an unrecognised id is how a Claude model gets "
+            "billed by accident."
+        )
+
+
+def behind_gateway(model: str) -> bool:
+    """Whether this model is reached through Agent Command Center rather than the CLI's own route."""
+    return bool(os.environ.get("AGENTCC_API_KEY", "").strip()) and "claude" not in (
+        model or ""
+    ).lower()
+
+
+def gateway_wire_model(model: str) -> str:
+    """The name the SDK puts on the wire for `model`.
+
+    The real id by default: the gateway routes by model name, so naming the model honestly is what
+    lets a job choose its own and keeps the mapping out of gateway config. The SDK checks a model
+    name locally before it makes any request, which is why the run also turns that check off.
+
+    A gateway that admits only Claude-shaped names is served by setting
+    ``AGENTCC_CLAUDE_MODEL_ALIAS`` to the alias it publishes. That is an explicit choice, not the
+    default, because an alias decides the model in gateway config rather than in the job.
+    """
+    if not behind_gateway(model):
+        return model
+    return os.environ.get("AGENTCC_CLAUDE_MODEL_ALIAS", "").strip() or model
+
+
 def provider_env(model: str | None = None) -> dict[str, str]:
-    """Build the isolated Claude Code provider environment."""
+    """The provider block passed to the session.
+
+    With ``AGENTCC_API_KEY`` set, Claude Code speaks the Anthropic Messages protocol to Agent
+    Command Center.  The gateway translates that request to the provider selected by the model
+    name.  Otherwise Claude Code talks to Anthropic on Vertex directly and resolves the GCP
+    project from ``GOOGLE_CLOUD_PROJECT``, the credential file, or active gcloud configuration.
+    """
+    # Every model a session can reach is pinned to the same one. Naming only the main model
+    # leaves the sub-agent and fast-path settings to the CLI's own preference, and a suite written
+    # by twenty writers then runs on whatever that preference happens to be rather than on the
+    # model the run asked for.
     chosen = chosen_model(model)
+    refuse_a_model_we_cannot_afford(chosen)
+    # Agent Command Center speaks Anthropic Messages in front of the model this run chose. The
+    # SDK validates a model name locally before it makes a request, so the wire carries a
+    # Claude-shaped alias the gateway maps back to `chosen`; the alias is never what is billed.
+    agentcc_key = os.environ.get("AGENTCC_API_KEY", "").strip()
+    if agentcc_key:
+        base_url = (
+            os.environ.get("AGENTCC_BASE_URL", "https://gateway.futureagi.com")
+            .strip()
+            .rstrip("/")
+        )
+        wire = gateway_wire_model(chosen)
+        return {
+            # AUTH_TOKEN is sent as a Bearer token, which is how a virtual key authenticates.
+            # API_KEY would instead use Anthropic's x-api-key header.
+            "ANTHROPIC_AUTH_TOKEN": agentcc_key,
+            "ANTHROPIC_BASE_URL": base_url,
+            # Turn off the direct Vertex transport in case the parent process has it on:
+            # ClaudeAgentOptions.env is merged over the parent environment, and Vertex here
+            # would mean Anthropic's own models hosted on Vertex, which is not this.
+            "CLAUDE_CODE_USE_VERTEX": "0",
+            # The SDK refuses a call on a model whose context window it cannot look up, then
+            # compacts against a window it guessed. Both are wrong for a model it does not know,
+            # so the window is declared rather than inferred.
+            **(
+                {}
+                if "claude" in wire.lower()
+                else {
+                    "CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT": "1",
+                    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": os.environ.get(
+                        "ALK_HARNESS_MAX_CONTEXT_TOKENS", "1000000"
+                    ),
+                }
+            ),
+            "ANTHROPIC_MODEL": wire,
+            "ANTHROPIC_DEFAULT_SONNET_MODEL": wire,
+            "ANTHROPIC_DEFAULT_OPUS_MODEL": wire,
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL": wire,
+            "ANTHROPIC_SMALL_FAST_MODEL": wire,
+            # Sub-agents run on the same alias, so a suite written by twenty of them cannot
+            # land on whatever the CLI would otherwise prefer.
+            "CLAUDE_CODE_SUBAGENT_MODEL": wire,
+        }
     env = {
         "ANTHROPIC_MODEL": chosen,
         "ANTHROPIC_DEFAULT_SONNET_MODEL": chosen,
@@ -263,10 +372,44 @@ def artifact_dir(agent: str, root: str | Path | None = None) -> Path:
 HARNESS = SKILLS_ROOT / "harness.md"
 
 
+def declared_modalities() -> tuple[str, ...]:
+    """Every modality a kind file under ``skills/kinds/`` says it is for.
+
+    The point of the kind directory is that supporting a new sort of agent is adding a file. That
+    only holds if the contract will *accept* the new modality, and until this existed the accepted
+    list was a tuple in code, so a browser or computer-use agent needed an edit in two more places
+    before its file could ever be read.
+
+    Read from ``applies_to`` rather than from the file name, because that is the declaration the
+    matcher already trusts.
+    """
+    root = SKILLS_ROOT / "kinds"
+    found: set[str] = set()
+    if not root.is_dir():
+        return ()
+    for path in sorted(root.glob("*.md")):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        head = text.split("---")[1] if text.startswith("---") and "---" in text[3:] else ""
+        for line in head.splitlines():
+            if not line.strip().lower().startswith("applies_to:"):
+                continue
+            for clause in line.split(":", 1)[1].split(","):
+                key, _, value = clause.strip().lower().partition("=")
+                if key.strip() == "modality" and value.strip():
+                    found.add(value.strip())
+    return tuple(sorted(found))
+
+
 def discovered_skills(**about: str) -> str:
     """Every extra skill that says it applies to this agent, found by looking rather than by name.
 
-    A skill is a markdown file under ``skills/kinds/`` whose first lines declare what it is for::
+    Two directories are read. ``skills/kinds/`` is what kind of agent this is: voice, chat,
+    browser, and whatever a customer turns up with next. ``skills/modules/`` is everything that
+    cuts across kinds: the people an agent talks to apply to voice and chat alike and to no
+    agent that talks to nobody. Both use the same declaration, so where a file lives says what
+    sort of thing it is and nothing else.
+
+    A skill is a markdown file under either whose first lines declare what it is for::
 
         ---
         name: voice
@@ -279,16 +422,19 @@ def discovered_skills(**about: str) -> str:
 
     Naming each kind in code would mean editing code to add one, and there will be many: voice, chat,
     browser, and whatever a customer turns up with next. **Adding support for a kind of agent is
-    adding a file here.**
+    adding a file to ``kinds/``, and adding something that cuts across them is adding one to
+    ``modules/``.** Deleting either file removes what it taught, which is how the people block
+    stops existing for an agent that talks to nobody.
     """
-    root = SKILLS_ROOT / "kinds"
-    if not root.is_dir():
-        return ""
+    roots = [SKILLS_ROOT / "kinds", SKILLS_ROOT / "modules"]
     wanted = {
         key.lower(): str(value).strip().lower() for key, value in about.items() if value
     }
     found: list[tuple[str, str]] = []
-    for path in sorted(root.glob("*.md")):
+    for path in sorted(
+        (one for root in roots if root.is_dir() for one in root.glob("*.md")),
+        key=lambda one: one.stem,
+    ):
         text = path.read_text(encoding="utf-8")
         head = (
             text.split("---")[1] if text.startswith("---") and "---" in text[3:] else ""
@@ -316,7 +462,7 @@ def discovered_skills(**about: str) -> str:
     return "\n\n---\n\n" + "\n\n---\n\n".join(text for _name, text in found)
 
 
-def load_skill(name: str) -> str:
+def load_skill(name: str, *, preamble: bool = True) -> str:
     """One stage's instructions, behind what the harness as a whole is for.
 
     Every stage gets the same opening: what this harness produces, why the division between what
@@ -341,7 +487,7 @@ def load_skill(name: str) -> str:
             f"\n\n---\n\n# references/{reference.name}\n\n"
             f"{reference.read_text(encoding='utf-8')}"
         )
-    if not HARNESS.exists():
+    if not preamble or not HARNESS.exists():
         return stage
     return (
         f"{HARNESS.read_text(encoding='utf-8')}\n\n"
@@ -349,3 +495,15 @@ def load_skill(name: str) -> str:
         "# The stage you are in now\n\n"
         f"{stage}"
     )
+
+
+def writer_model() -> str:
+    """The model a scenario writer runs on, from ALK_HARNESS_WRITER_MODEL.
+
+    Empty by default, which inherits the parent's model and is what has always happened. A writer is
+    handed its brief, the contract, the world and the skill, so it is doing constrained work rather
+    than deciding what the suite should be, and a cheaper model may be enough for it. Whether it is
+    enough is a question for a measured run: a writer that fails the admission gates more often
+    spends the saving on retries, and the gates are what protect scenario quality.
+    """
+    return os.environ.get("ALK_HARNESS_WRITER_MODEL", "").strip()

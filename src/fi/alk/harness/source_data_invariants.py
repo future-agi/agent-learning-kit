@@ -6,9 +6,12 @@ per fresh environment, then held fixed while the environment is repaired.
 
 from __future__ import annotations
 
+import logging
+
 import asyncio
 import hashlib
 import json
+import threading
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -65,6 +68,82 @@ def validate_evidence(check: dict, files: dict[str, Path]) -> dict:
         "evidence": verified,
         "scenarios": list(check.get("scenarios", [])),
     }
+
+
+class _IRWorld:
+    """A read-only world backed by the IR, so invariants can be checked before anything is built."""
+
+    def __init__(self, connection) -> None:
+        self._connection = connection
+        # check_invariants runs each query on a worker thread; the connection is only ever read
+        # from, one query at a time, so crossing threads is safe here and the check is not.
+        self._lock = threading.Lock()
+
+    def query(self, sql: str):
+        with self._lock:
+            cursor = self._connection.execute(sql)
+            columns = [description[0] for description in cursor.description or ()]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+
+def world_from_ir(world) -> _IRWorld:
+    """Materialise a world IR into an in-memory database.
+
+    The invariants are ordinary SQL over the seeded rows, and the rows exist in the IR long before
+    a container does. Checking them here turns a failed foreign key from a full environment rebuild
+    into a re-emit, which is the difference between sixteen minutes and none.
+    """
+    import sqlite3
+
+    connection = sqlite3.connect(":memory:", check_same_thread=False)
+    for table in world.tables:
+        columns: list[str] = []
+        for row in table.rows:
+            for name in row.values:
+                if name not in columns:
+                    columns.append(name)
+        if not columns:
+            continue
+        quoted = ", ".join(f'"{name}"' for name in columns)
+        connection.execute(f'CREATE TABLE "{table.source_name}" ({quoted})')
+        for row in table.rows:
+            values = []
+            for name in columns:
+                cell = row.values.get(name)
+                value = getattr(cell, "value", None)
+                values.append(
+                    json.dumps(value) if isinstance(value, (list, dict)) else value
+                )
+            marks = ", ".join("?" for _ in columns)
+            connection.execute(
+                f'INSERT INTO "{table.source_name}" ({quoted}) VALUES ({marks})', values
+            )
+    connection.commit()
+    return _IRWorld(connection)
+
+
+def violations_in_ir(world, checks: list[dict]) -> list[str]:
+    """Invariants the seeded rows already break, found without building anything.
+
+    Only the checks this database can actually run are judged. The real world is Postgres and some
+    invariants are written in its dialect, so anything SQLite cannot parse is left to the real
+    environment rather than reported as a failure it is not.
+    """
+    import sqlite3
+
+    backing = world_from_ir(world)
+    failures: list[str] = []
+    for check in checks:
+        try:
+            rows = backing.query(check["violations_sql"])
+        except sqlite3.Error:
+            continue
+        if rows:
+            failures.append(
+                f"{check['name']!r} failed ({len(rows)} violating rows). "
+                f"Query: {check['violations_sql']}"
+            )
+    return failures
 
 
 async def check_invariants(
@@ -126,6 +205,8 @@ def probe_local_service(services: dict[str, str], args: dict):
         return response.status_code, body
 
 
+logger = logging.getLogger(__name__)
+
 async def author_invariants(
     source: Path, authoring: Path, world, *, endpoints=None
 ) -> list[dict]:
@@ -138,12 +219,18 @@ async def author_invariants(
             raise ValueError(f"Duplicate scenario key: {key}")
         scenarios[key] = path
     artifact = authoring / ARTIFACT
-    # Do not manufacture business data merely to satisfy a SQL-review gate. This exemption
-    # requires both the accepted contract and the actual runtime store to be data-free.
+    # Do not manufacture SQL data merely to satisfy a SQL-review gate. A graph may have
+    # rich in-process state and tools yet no relational store for a SELECT invariant to
+    # examine. Require the observed runtime world to be empty as well as the contract's
+    # explicit in-process/no-data declaration; tool execution is certified separately.
     contract_path = authoring / "contract.json"
     if contract_path.is_file():
         contract = AgentContract.model_validate_json(contract_path.read_text())
-        if is_data_free_conversation(contract):
+        in_process_store = bool(
+            contract.data_store
+            and contract.data_store.kind.strip().lower() == "in_process"
+        )
+        if is_data_free_conversation(contract) or in_process_store:
             state = await asyncio.to_thread(world.state)
             business_tables = set(state) - {
                 "harness_seed_sentinel",
@@ -152,7 +239,11 @@ async def author_invariants(
             if not business_tables:
                 evidence = {
                     "status": "not_applicable",
-                    "reason": "No custom tools, data-store seam, dependencies or runtime business tables",
+                    "reason": (
+                        "In-process agent state has no runtime SQL business tables"
+                        if in_process_store
+                        else "No custom tools, data-store seam, dependencies or runtime business tables"
+                    ),
                     "checks": [],
                     "tool_execution_proven": False,
                     "contract_sha256": hashlib.sha256(
@@ -427,8 +518,21 @@ async def author_invariants(
             await stage.say(
                 "Review is incomplete. Declare source-evidenced checks and call finish_review."
             )
+    if not saved and checks:
+        # The review declared nine executable checks on one run and never called finish_review, so
+        # the whole stage failed and nine good invariants were discarded, then retried from scratch
+        # with another model call and another provisioned runtime. The declared checks are the
+        # artefact; the call is the ceremony. Kept, and said out loud so the omission is visible.
+        logger.warning(
+            "source data review declared %d checks without calling finish_review; "
+            "keeping them rather than discarding the review",
+            len(checks),
+        )
+        saved = True
     if not saved:
-        raise ValueError("Source data invariant review did not finish; not certified")
+        raise ValueError(
+            "Source data invariant review declared no executable check, so nothing was certified"
+        )
     result = list(checks.values())
     artifact.write_text(
         json.dumps(

@@ -21,12 +21,16 @@ something you can argue with.
 
 from __future__ import annotations
 
+import ast
 import json
+import re
+import textwrap
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .catalogue import Catalogue
+from .catalogue import Catalogue, SubGoal
 from .scenario import Scenario
 from .world.runtime import GeneratedWorld
 
@@ -135,16 +139,25 @@ def folder_for(destination: Path, name: str) -> Path:
     return Path(destination) / SCENARIOS / name
 
 
+def document_for(scenario: Scenario) -> dict:
+    """One scenario as JSON: everything about it except the code, which lives in its own files.
+
+    The single answer to "what is this scenario", so the folder and the index cannot disagree about
+    it. Keeping a second copy of the code here would let the two drift and leave nobody able to say
+    which one ran.
+    """
+    body = scenario.model_dump()
+    body.pop("setup_code", None)
+    body.pop("ready_code", None)
+    return body
+
+
 def write_folder(scenario: Scenario, catalogue: Catalogue, destination: Path) -> Path:
     """Write one scenario out as its own folder of files."""
     root = folder_for(destination, scenario.name)
     (root / "checks").mkdir(parents=True, exist_ok=True)
 
-    body = scenario.model_dump()
-    # The code lives in its own files; keeping a second copy in the JSON would let the two drift
-    # and leave nobody able to say which one ran.
-    body.pop("setup_code", None)
-    body.pop("ready_code", None)
+    body = document_for(scenario)
     (root / "scenario.json").write_text(
         json.dumps(body, indent=2, ensure_ascii=False), encoding="utf-8"
     )
@@ -167,7 +180,52 @@ def write_folder(scenario: Scenario, catalogue: Catalogue, destination: Path) ->
         (root / "checks" / f"{name}.py").write_text(
             sub_goal.check.rstrip() + "\n" + _RUNNABLE, encoding="utf-8"
         )
+
+    # A rewrite can drop a sub-goal, and a check left behind from the previous shape reads like a
+    # check this scenario still makes. Keyed on sub_goals rather than on what this pass wrote: a
+    # catalogue that cannot supply a body is a reason to leave the file alone, not to delete it.
+    wanted = {f"{name}.py" for name in scenario.sub_goals}
+    for stale in (root / "checks").glob("*.py"):
+        if stale.name not in wanted:
+            stale.unlink()
     return root
+
+
+def refresh_check(destination: Path, sub_goal: SubGoal) -> list[str]:
+    """Bring every folder that names this sub-goal into step with its new definition.
+
+    A sub-goal can be defined after the scenarios that name it are already on disk, and defining
+    it is what decides whether it is settled in code or by a judge. Without this, a sub-goal that
+    gains a check leaves those folders with no `checks/<name>.py`, which the bundle reader refuses
+    an hour later, and one that loses its check leaves a file nothing in the catalogue backs.
+    Returns the scenarios it touched.
+    """
+    root = Path(destination) / SCENARIOS
+    if not root.is_dir():
+        return []
+    touched: list[str] = []
+    for folder in sorted(one for one in root.iterdir() if one.is_dir()):
+        body = folder / "scenario.json"
+        if not body.is_file():
+            continue
+        try:
+            named = json.loads(body.read_text(encoding="utf-8")).get("sub_goals") or []
+        except (OSError, ValueError):
+            continue
+        if sub_goal.name not in named:
+            continue
+        path = folder / "checks" / f"{sub_goal.name}.py"
+        if sub_goal.deterministic():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                sub_goal.check.rstrip() + "\n" + _RUNNABLE, encoding="utf-8"
+            )
+        elif path.is_file():
+            path.unlink()
+        else:
+            continue
+        touched.append(folder.name)
+    return touched
 
 
 def read_folder(destination: Path, name: str) -> Scenario | None:
@@ -184,10 +242,16 @@ def read_folder(destination: Path, name: str) -> Scenario | None:
 
 
 def write_index(scenarios: list[Scenario], destination: Path) -> Path:
-    """The whole suite at a glance, over the folders.
+    """The whole suite, over the folders.
 
     Regenerated from the folders rather than maintained alongside them, so it can never disagree
     with what is actually on disk.
+
+    It carries each scenario in full rather than a summary of it. This file is the only view of the
+    suite anything outside the sandbox gets: the platform reads it straight into the stage output
+    the Scenarios tab renders. A summary here meant the caller, the branch, the seeded data and the
+    known-good solution never reached the tab at all, and a scenario that had all of them showed as
+    a row of blanks.
     """
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
@@ -196,11 +260,7 @@ def write_index(scenarios: list[Scenario], destination: Path) -> Path:
         json.dumps(
             [
                 {
-                    "name": one.name,
-                    "use_case": one.use_case,
-                    "tests": one.tests,
-                    "instruction": one.instruction,
-                    "sub_goals": one.sub_goals,
+                    **document_for(one),
                     "steps": len(one.solution),
                     "folder": f"{SCENARIOS}/{one.name}",
                 }
@@ -232,3 +292,161 @@ def read_all(destination: Path) -> list[Scenario]:
         if scenario is not None:
             found.append(scenario)
     return found
+
+
+def _tools_selected(body: str) -> set[str]:
+    """Every tool name this check narrows the calls to.
+
+    Parsed rather than matched on a variable name. The regex this replaces required the loop
+    variable to be called ``c``, so a real suite writing ``call.name == "book_ride"`` was invisible
+    to it and the duplicate-claim remark never fired once across a hundred scenarios.
+    """
+    try:
+        tree = ast.parse(textwrap.dedent(body))
+    except SyntaxError:
+        return set()
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Compare) or not node.ops:
+            continue
+        if not isinstance(node.ops[0], ast.Eq):
+            continue
+        left, right = node.left, node.comparators[0]
+        if isinstance(right, ast.Attribute) and right.attr == "name":
+            left, right = right, left
+        if not (isinstance(left, ast.Attribute) and left.attr == "name"):
+            continue
+        if isinstance(right, ast.Constant) and isinstance(right.value, str):
+            found.add(right.value)
+    return found
+
+
+def unchecked_sub_goals(folder: Path, catalogue: Catalogue) -> list[str]:
+    """Scenarios naming a sub-goal the catalogue settles in code with no check file to settle it.
+
+    The bundle reader refuses exactly this, an hour later and on a machine nobody is watching:
+    absence of the file is what marks a sub-goal judged, so a check that never reached the folder
+    reads as assessed and is measured by nothing. Read here off the same two sources the reader
+    compares, so the answer cannot differ from its.
+    """
+    settled = {one.name for one in catalogue.sub_goals if one.deterministic()}
+    if not settled:
+        return []
+    problems: list[str] = []
+    for scenario_dir in sorted(
+        one for one in (Path(folder) / SCENARIOS).glob("*") if one.is_dir()
+    ):
+        body = scenario_dir / "scenario.json"
+        if not body.is_file():
+            continue
+        try:
+            named = json.loads(body.read_text(encoding="utf-8")).get("sub_goals") or []
+        except (OSError, ValueError):
+            continue
+        missing = [
+            name
+            for name in named
+            if name in settled
+            and not (scenario_dir / "checks" / f"{name}.py").is_file()
+        ]
+        if missing:
+            problems.append(
+                f"{scenario_dir.name}: {', '.join(sorted(missing))} settled in code by the "
+                "catalogue but no check file was written, so nothing would measure it. Define "
+                "it again with add_sub_goal and save"
+            )
+    return problems
+
+
+def unasserted_behaviour(scenarios: list[Scenario], folder: Path) -> list[str]:
+    """Tools the reference solution calls that no check for that scenario ever reads.
+
+    A scenario's solution is what a correct agent does. A tool it calls that nothing asserts is a
+    step the agent may simply skip and still pass, and it is usually the step the scenario is named
+    for. Six of sixty on a real suite called `get_booking_status` last, said in their `tests` line
+    that they checked the booking status, and named only booking sub-goals: an agent that booked the
+    ride and never looked it up passed all six.
+
+    Advisory, and narrow on purpose. It reports a tool no check mentions at all, not one checked
+    loosely, because plenty of solution steps are setup that nothing should assert.
+    """
+    problems: list[str] = []
+    for scenario in scenarios:
+        used = [step.tool for step in (scenario.solution or []) if step.tool]
+        if not used:
+            continue
+        checks = folder_for(folder, scenario.name) / "checks"
+        if not checks.is_dir():
+            continue
+        asserted = ""
+        for check in sorted(checks.glob("*.py")):
+            asserted += check.read_text(encoding="utf-8", errors="replace").split("if __name__")[0]
+        # The last call, unasserted, and **claimed**. Two earlier versions cried wolf: flagging any
+        # unasserted tool reported 53 of 60, and flagging every unasserted last call reported 13 of
+        # 30, because a solution that ends `view_cart` to confirm what it just did is not a
+        # scenario about viewing the cart. What separates the real fault is the scenario saying it
+        # tests that thing: six ended on a status lookup, said so in their tests line, and asserted
+        # only the booking. So the claim is the discriminator, not the tool.
+        outcome = used[-1]
+        claimed = f"{scenario.name} {scenario.tests or ''}".lower()
+        spoken = [word for word in re.split(r"[^a-z]+", outcome.lower()) if len(word) > 3]
+        # The words together, not scattered. Requiring each one separately flagged a scenario
+        # whose tests line said "sends payment link SMS ... upon explicit confirmation", because
+        # `send` and `confirmation` both appeared while neither referred to send_confirmation_sms,
+        # and its payment-link SMS was asserted. Adjacent is the strictest reading and the only one
+        # that has not cried wolf; it misses a paraphrase, which is the right way to be wrong.
+        together = re.search(r"\W+".join(spoken), claimed) if spoken else None
+        if outcome not in asserted and together:
+            problems.append(
+                f"{scenario.name}: it says it tests {outcome}, its reference solution ends there, "
+                "and no check mentions it, so an agent that stops short of it passes anyway"
+            )
+    return problems
+
+
+def check_problems(folder: Path) -> list[str]:
+    """Checks that cannot fail for the reason their scenario exists.
+
+    Two shapes, both read off the files that actually run rather than the intention behind them.
+
+    **Plumbing only.** A check that touches neither ``world`` nor the call's ``arguments`` asserts
+    that a tool was reached and nothing else, so every agent that reaches it passes and an agent that
+    did the right thing another way fails.
+
+    **The same tool twice.** Two checks on one scenario narrowing to the same tool, neither reading
+    ``world``, are two readings of one call. A real hundred-scenario suite shipped
+    `lookup_weather_executed` and `weather_lookup_succeeded` together on seventy scenarios: one
+    asserted a successful call carrying a location, the other a successful call carrying a non-empty
+    location, and neither said what the caller was told.
+
+    Deliberately narrow. An earlier version called any check without a literal comparison thin and
+    flagged 19 of 19 on a suite whose checks assert `caller_explicitly_confirmed is not True` and
+    `kind in ("pickup", "dropoff")`, because it only understood single quotes. A check that cries
+    wolf is worse than no check. Advisory either way.
+    """
+    problems: list[str] = []
+    plumbing = 0
+    for scenario_dir in sorted(one for one in (folder / SCENARIOS).glob("*") if one.is_dir()):
+        by_tool: dict[str, list[str]] = defaultdict(list)
+        for check in sorted(scenario_dir.glob("checks/*.py")):
+            body = check.read_text(encoding="utf-8").split("if __name__")[0]
+            inside = body.replace("def check(world, calls):", "")
+            reads_world = "world" in inside
+            reads_arguments = "arguments" in inside
+            if not reads_world and not reads_arguments:
+                plumbing += 1
+            if not reads_world:
+                for tool in _tools_selected(inside):
+                    by_tool[tool].append(check.stem)
+        for tool, names in sorted(by_tool.items()):
+            if len(names) > 1:
+                problems.append(
+                    f"{scenario_dir.name}: {', '.join(sorted(names))} all read the same {tool} call "
+                    "and none of them reads the world, so they are one claim written more than once"
+                )
+    if plumbing:
+        problems.append(
+            f"{plumbing} checks assert only that a tool was called, touching neither its arguments "
+            "nor the world. Every agent that reaches the tool passes them."
+        )
+    return problems

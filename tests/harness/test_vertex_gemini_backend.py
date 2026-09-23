@@ -1,4 +1,10 @@
-from fi.alk.harness.backends.vertex_gemini import _successful_terminal_save
+from typing import Any
+
+from fi.alk.harness.backends.vertex_gemini import (
+    _flattened,
+    _forget_old_reads,
+    _successful_terminal_save,
+)
 
 
 def test_successful_authoring_save_is_terminal() -> None:
@@ -14,6 +20,9 @@ def test_successful_authoring_save_is_terminal() -> None:
     assert _successful_terminal_save(
         "mcp__source_data__finish_review", {"content": "Saved 12 invariants."}
     )
+    assert _successful_terminal_save(
+        "mcp__repair__submit_world_ir_patch", {"content": "Patch accepted."}
+    )
 
 
 def test_rejected_save_and_non_save_tools_are_not_terminal() -> None:
@@ -24,3 +33,167 @@ def test_rejected_save_and_non_save_tools_are_not_terminal() -> None:
         "mcp__world__check_world", {"content": "All checks pass."}
     )
     assert not _successful_terminal_save("mcp__world__save_world", "Saved")
+
+
+def _read(call_id: str, name: str, text: str) -> Any:
+    from google.genai import types
+
+    return types.Content(
+        role="user",
+        parts=[
+            types.Part(
+                function_response=types.FunctionResponse(
+                    id=call_id, name=name, response={"content": text}
+                )
+            )
+        ],
+    )
+
+
+def _said(part: Any) -> str:
+    return _flattened(part.parts[0].function_response.response)
+
+
+def test_small_sessions_keep_every_read() -> None:
+    contents = [
+        _read(f"c{n}", "mcp__scenarios__inspect_world", "x" * 100) for n in range(10)
+    ]
+    _forget_old_reads(contents)
+    assert all(_said(one) == "x" * 100 for one in contents)
+
+
+def test_a_long_session_forgets_all_but_the_newest_reads() -> None:
+    contents = [
+        _read(f"c{n}", "mcp__scenarios__inspect_world", "x" * 10_000) for n in range(10)
+    ]
+    _forget_old_reads(contents)
+    kept = [one for one in contents if _said(one) == "x" * 10_000]
+    assert len(kept) == 2
+    assert kept == contents[-2:]
+    assert "inspect_world" in _said(contents[0])
+
+
+def test_forgetting_is_per_tool_and_leaves_writes_alone() -> None:
+    contents = [
+        _read("c0", "mcp__scenarios__inspect_world", "w" * 30_000),
+        _read("c1", "mcp__scenarios__inspect_world", "w" * 30_000),
+        _read("c2", "mcp__scenarios__inspect_world", "w" * 30_000),
+        _read("c3", "mcp__scenarios__inspect_scenario", "s" * 100),
+        _read("c4", "mcp__scenarios__submit_scenario", "gate said no" * 500),
+    ]
+    _forget_old_reads(contents)
+    assert _said(contents[0]).startswith("[dropped")
+    assert _said(contents[1]) == "w" * 30_000
+    assert _said(contents[3]) == "s" * 100
+    assert _said(contents[4]) == "gate said no" * 500
+
+
+def test_forgetting_twice_changes_nothing_more() -> None:
+    contents = [
+        _read(f"c{n}", "mcp__scenarios__inspect_world", "x" * 10_000) for n in range(10)
+    ]
+    _forget_old_reads(contents)
+    once = [_said(one) for one in contents]
+    _forget_old_reads(contents)
+    assert [_said(one) for one in contents] == once
+
+
+def test_forgetting_leaves_the_session_event_alone() -> None:
+    """ADK shallow-copies a Part into the request, so an in-place edit would rewrite history."""
+    from google.genai import types
+
+    session = [
+        _read(f"c{n}", "mcp__scenarios__inspect_world", "x" * 10_000) for n in range(10)
+    ]
+    request = [
+        types.Content(role=one.role, parts=[part.model_copy() for part in one.parts])
+        for one in session
+    ]
+    _forget_old_reads(request)
+    assert _said(request[0]).startswith("[dropped")
+    assert all(_said(one) == "x" * 10_000 for one in session)
+
+
+def test_compaction_is_configured_and_can_be_switched_off(monkeypatch) -> None:
+    """ADK only compacts when an App carries the config; a bare agent runs unbounded."""
+    from fi.alk.harness.backends import vertex_gemini
+
+    monkeypatch.setattr(vertex_gemini, "COMPACT_ABOVE_TOKENS", 90_000)
+    monkeypatch.setattr(vertex_gemini, "EVENTS_KEPT_RAW", 12)
+    config = vertex_gemini._compaction()
+    assert config.token_threshold == 90_000
+    assert config.event_retention_size == 12
+
+    monkeypatch.setattr(vertex_gemini, "COMPACT_ABOVE_TOKENS", 0)
+    assert vertex_gemini._compaction() is None
+
+
+def test_a_tool_call_carries_the_agent_that_made_it() -> None:
+    """A delegating stage cannot tell its own spending from its workers' without this."""
+    from fi.alk.harness.backends import Call
+
+    assert Call(id="c1", name="x").by == ""
+    assert Call(id="c1", name="x", by="scenario_writer").by == "scenario_writer"
+
+
+def test_a_cache_read_is_not_charged_at_the_full_input_rate() -> None:
+    """Most of an authoring stage's input is cache reads; full-rate billing overstates it ~4x."""
+    from fi.alk.harness.backends.vertex_gemini import CACHE_READ_SHARE, priced
+
+    full = priced("gemini-3.7-flash", 1_000_000, 0, 0)
+    all_cached = priced("gemini-3.7-flash", 1_000_000, 0, 1_000_000)
+    assert full == 0.75
+    assert all_cached == round(0.75 * CACHE_READ_SHARE, 6) or abs(all_cached - 0.075) < 1e-9
+    # A cached count larger than the input it came from cannot make the bill negative.
+    assert priced("gemini-3.7-flash", 1_000, 0, 999_999) >= 0
+
+
+def test_the_claude_sdk_drives_gemini_only_behind_the_gateway(monkeypatch):
+    """Which provider gets billed is the whole question. The SDK backend advertises a Gemini id
+    only when a gateway key is present, because without one the CLI reaches Anthropic directly."""
+    from fi.alk.harness.backends import resolve
+
+    backend = resolve("claude-gemini")
+    # One backend now: the gateway is a route it takes, not a backend of its own.
+    assert backend.name == "claude"
+
+    monkeypatch.delenv("AGENTCC_API_KEY", raising=False)
+    assert not backend.can_drive("gemini-3.7-flash")
+    assert not backend.can_drive("vertex_ai/gemini-3.7-flash")
+
+    monkeypatch.setenv("AGENTCC_API_KEY", "not-a-real-key")
+    assert backend.can_drive("vertex_ai/gemini-3.7-flash")
+
+
+def test_the_gateway_route_never_carries_the_vertex_claude_flag(monkeypatch):
+    """CLAUDE_CODE_USE_VERTEX means Anthropic's own models hosted on Vertex. On the gateway route
+    it must be off, and the service account must not travel with it either: credentials belong to
+    whoever talks to the provider, and behind a gateway that is the gateway."""
+    from fi.alk.harness.config import provider_env
+
+    monkeypatch.setenv("AGENTCC_API_KEY", "not-a-real-key")
+    monkeypatch.setenv("AGENTCC_BASE_URL", "https://gateway.example.test/")
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/tmp/creds.json")
+    env = provider_env("vertex_ai/gemini-3.7-flash")
+    assert env["CLAUDE_CODE_USE_VERTEX"] == "0"
+    assert "GOOGLE_APPLICATION_CREDENTIALS" not in env
+    assert env["ANTHROPIC_BASE_URL"] == "https://gateway.example.test"
+    # The wire carries the real id, so the job chooses its model rather than gateway config, and
+    # every model the session can reach is pinned to it: a suite written by forty sub-agents
+    # cannot land on the CLI's own preference.
+    for pinned in ("ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL"):
+        assert env[pinned] == "vertex_ai/gemini-3.7-flash"
+    # A model the SDK does not know has no window to look up, so the run declares one.
+    assert env["CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT"] == "1"
+
+    # A gateway that publishes only Claude-shaped names is served by naming its alias.
+    monkeypatch.setenv("AGENTCC_CLAUDE_MODEL_ALIAS", "claude-sonnet-4-6")
+    aliased = provider_env("vertex_ai/gemini-3.7-flash")
+    assert aliased["ANTHROPIC_MODEL"] == "claude-sonnet-4-6"
+    assert "CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT" not in aliased
+    monkeypatch.delenv("AGENTCC_CLAUDE_MODEL_ALIAS")
+
+    monkeypatch.delenv("AGENTCC_API_KEY")
+    straight = provider_env("gemini-3.7-flash")
+    assert straight["CLAUDE_CODE_USE_VERTEX"] == "1"
+    assert "ANTHROPIC_BASE_URL" not in straight

@@ -11,6 +11,7 @@ import asyncio
 import json
 import random
 import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -101,6 +102,8 @@ async def validate_once(
             )
             factory = ProcessWorldFactory(work)
             runtime = runtimes[0]
+            # The provider hands back fewer than asked when ports or memory do not allow it.
+            lanes = len(runtimes) or 1
             phase = "scenarios"
             scenarios = await asyncio.to_thread(load_scenarios, bundle)
             if len(scenarios) != job.scenario_count:
@@ -151,9 +154,17 @@ async def validate_once(
                                 f"{scenario.scenario_key}: ready precondition did not hold",
                             )
 
-            # Collect all executable setup errors before spending a model review or
-            # a repair attempt. Each scenario still gets an independent clean world.
-            await check_setups([])
+            print(
+                f"runtime validation: {len(scenarios)} scenarios across {lanes} lane"
+                f"{'s' if lanes != 1 else ''}, environment ready in "
+                f"{time.monotonic() - started:.0f}s",
+                flush=True,
+            )
+            # Invariants are authored before the suite is walked, so the suite is walked once. A
+            # walk reseals a world per scenario, so walking twice cost 2N resets where N would do:
+            # at 500 scenarios that is 500 wasted. The price is a model review paid even when a
+            # setup is broken, which is one call against N resets.
+            invariants: list = []
             if external_provider:
                 # A connect-only provider owns its state and executes its tools outside
                 # this sandbox. There is no harness-owned source database to probe or
@@ -168,7 +179,7 @@ async def validate_once(
             await provider.reset(runtime, work_directory=work)
             baseline = await factory.create(runtime, rng=random.Random(job.seed or 0))
             print("runtime validation: reviewing source data invariants", flush=True)
-            invariants = await author_invariants(
+            invariants[:] = await author_invariants(
                 source, authoring, baseline.read_only(), endpoints=runtime.endpoints
             )
             # Review probes may have effects; none belongs in the test baseline.
@@ -199,6 +210,20 @@ async def validate_once(
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
             await provider.close(work_directory=work)
+
+
+def _invariants_the_ir_still_breaks(world, authoring: Path) -> list[str]:
+    """Declared invariants the patched rows still violate, judged without building anything."""
+    from .source_data_invariants import ARTIFACT, violations_in_ir
+
+    document = authoring / ARTIFACT
+    if not document.is_file():
+        return []
+    try:
+        checks = json.loads(document.read_text(encoding="utf-8")).get("checks") or []
+        return violations_in_ir(world, checks)
+    except Exception:  # noqa: BLE001 - a check we cannot run is the real environment's to judge
+        return []
 
 
 async def validate_and_repair(

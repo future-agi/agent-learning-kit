@@ -340,7 +340,7 @@ class OutboundPort(Protocol):
     ) -> None: ...
 
     async def scenario_retried(
-        self, *, scenario_key: str, from_world: int, to_world: int
+        self, *, scenario_key: str, from_world: int, to_world: int, cause: str
     ) -> None: ...
 
     async def world_unhealthy(self, *, world_index: int, cause: str) -> None: ...
@@ -1707,11 +1707,13 @@ class HostedScheduler:
                 # event and the pending-retry receipt (both exits above) are mutually exclusive
                 # by construction — outbound-channels.md Channel 2: "the failed first try is
                 # recorded by scenario_retried/world_unhealthy events, never by a receipt."
+                failed = pending_retry.outcome.failure
                 await self._emit(
                     self._outbound.scenario_retried(
                         scenario_key=scenario.scenario_key,
                         from_world=pending_retry.world_index,
                         to_world=world_index,
+                        cause=f"{failed.code}: {failed.message}",
                     ),
                     what="scenario_retried",
                 )

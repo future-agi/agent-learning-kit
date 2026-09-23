@@ -255,7 +255,7 @@ class FakeOutbound:
         )
 
     async def scenario_retried(
-        self, *, scenario_key: str, from_world: int, to_world: int
+        self, *, scenario_key: str, from_world: int, to_world: int, cause: str = ""
     ) -> None:
         self.events.append(
             (
@@ -264,6 +264,7 @@ class FakeOutbound:
                     "scenario_key": scenario_key,
                     "from_world": from_world,
                     "to_world": to_world,
+                    "cause": cause,
                 },
             )
         )
@@ -1001,6 +1002,9 @@ def test_start_rejects_a_genuinely_malformed_provision_result() -> None:
     # R2: the degrade allowance is not a blanket exemption — zero worlds and a non-contiguous
     # index set are still rejected as malformed.
     class ZeroWorldsProvisioner:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
         async def provision(
             self,
             bundle,
@@ -1020,9 +1024,12 @@ def test_start_rejects_a_genuinely_malformed_provision_result() -> None:
             return True
 
         async def close(self, *, work_directory):
-            pass
+            self.close_calls += 1
 
     class GapProvisioner:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
         async def provision(
             self,
             bundle,
@@ -1042,25 +1049,33 @@ def test_start_rejects_a_genuinely_malformed_provision_result() -> None:
             return True
 
         async def close(self, *, work_directory):
-            pass
+            self.close_calls += 1
 
     async def zero_worlds() -> None:
-        pool, _ = _pool(2, provisioner=ZeroWorldsProvisioner())
+        provisioner = ZeroWorldsProvisioner()
+        pool, _ = _pool(2, provisioner=provisioner)
         try:
             await pool.start()
         except RuntimeError:
             pass
         else:
             raise AssertionError("expected RuntimeError for zero worlds")
+        assert provisioner.close_calls == 1
+        await pool.close()
+        assert provisioner.close_calls == 1
 
     async def gap() -> None:
-        pool, _ = _pool(3, provisioner=GapProvisioner())
+        provisioner = GapProvisioner()
+        pool, _ = _pool(3, provisioner=provisioner)
         try:
             await pool.start()
         except RuntimeError:
             pass
         else:
             raise AssertionError("expected RuntimeError for a non-contiguous index set")
+        assert provisioner.close_calls == 1
+        await pool.close()
+        assert provisioner.close_calls == 1
 
     asyncio.run(zero_worlds())
     asyncio.run(gap())
@@ -2805,7 +2820,12 @@ def test_call_aborted_retries_on_reset_same_world_when_pool_size_is_one() -> Non
         retry_events = [
             kwargs for event, kwargs in outbound.events if event == "scenario_retried"
         ]
-        assert retry_events == [{"scenario_key": "s1", "from_world": 0, "to_world": 0}]
+        assert len(retry_events) == 1
+        replayed = retry_events[0]
+        assert replayed["scenario_key"] == "s1"
+        assert (replayed["from_world"], replayed["to_world"]) == (0, 0)
+        # A retry that does not say why it happened reads as an unexplained repeat.
+        assert replayed["cause"].startswith("call_failed:")
         await pool.close()
 
     asyncio.run(scenario())

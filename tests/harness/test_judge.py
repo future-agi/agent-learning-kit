@@ -38,8 +38,9 @@ def _drive(monkeypatch, decision: dict, *, world=None, raises: bool = False):
     world = world or _World()
 
     class _Stage:
-        def __init__(self, spec, name=""):
-            self.spec, self.name = spec, name
+        def __init__(self, spec, name="", overheard=True):
+            # Mirrors the real signature: a judging stage is never overheard in the chat.
+            self.spec, self.name, self.overheard = spec, name, overheard
 
         async def __aenter__(self):
             return self
@@ -133,17 +134,23 @@ def test_the_judge_needs_no_environment_to_pick_a_priced_model(monkeypatch):
     The override must stay an override: a deployment that sets none of these has to work, or the
     judge would need a new env var to be usable at all.
     """
-    from fi.alk.harness.backends import vertex_gemini
+    from fi.alk.harness.backends import resolve, vertex_gemini
 
     for name in (judge_module.JUDGE_MODEL_ALIAS, "ALK_HARNESS_MODEL", "ALK_HARNESS"):
         monkeypatch.delenv(name, raising=False)
 
+    backend = resolve()
     model = judge_module.judge_model()
 
-    assert model == vertex_gemini.DEFAULT_MODEL
-    assert model in vertex_gemini.PRICES_PER_MILLION, (
-        f"the judge would run unpriced on {model}, so its spend would be missing from the ledger"
-    )
+    # Whichever backend is the default, the judge lands on that backend's own model rather than on
+    # a name belonging to another vendor's loop.
+    assert model == backend.default_model
+    # Only the ADK backend prices its own tokens; the Claude loop is told what a turn cost.
+    if backend.name == "vertex-gemini":
+        assert model in vertex_gemini.PRICES_PER_MILLION, (
+            f"the judge would run unpriced on {model}, so its spend would be missing "
+            "from the ledger"
+        )
 
 
 def test_a_long_cell_is_trimmed_rather_than_flooding_the_judge():
@@ -160,3 +167,16 @@ def test_the_judge_is_given_what_was_said_not_only_what_was_done():
     assert "user: one large fries" in rendered
     assert "your order is one large fries" in rendered
     assert len(rendered) <= judge_module._TRANSCRIPT_LIMIT + 8
+
+
+def test_a_judging_stage_is_not_overheard_in_the_chat() -> None:
+    """A verdict about the agent appeared in the run's conversation, which is backend work."""
+    from pathlib import Path as _P
+
+    source = _P("src/fi/alk/harness/judge.py").read_text(encoding="utf-8")
+    assert 'name="judge-sub-goals", overheard=False' in source
+
+    session = _P("src/fi/alk/harness/session.py").read_text(encoding="utf-8")
+    # The mirror into the chat is conditional, both for what the stage says and what it hears.
+    assert "if self._overheard:" in session
+    assert "self.channel.waiting() if self._overheard else []" in session
