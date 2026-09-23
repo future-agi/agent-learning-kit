@@ -24,8 +24,6 @@ it there rather than deciding it here.
   second value is the real one.
 - **A value has to be read back and heard.** Codes, prices, times. A digit misheard is a real
   failure, and it only exists out loud.
-- **Interruption.** The caller talks over the agent's confirmation. What the agent believes was
-  confirmed is now a question.
 - **Silence.** The caller goes quiet, or the line is noisy and they ask for something again.
 
 A suite of voice scenarios that could all have been typed has not tested the modality.
@@ -67,12 +65,12 @@ here.
 | how clean is the input | quiet line · background noise (vehicle, street, crowd, retail) · accent · non-native speech · code-switching |
 | what channel it arrives on | inbound call · outbound call, and whoever picks up |
 | how reliable and timely it is | fluent speech · disfluency and self-correction · long pauses |
-| what competing signal exists | a second voice nearby · background media · a caller talking over the agent |
+| what competing signal exists | the ambience bed behind the caller, and nothing else the call can render |
 | how state is exposed | audio only: nothing can be shown, every value has to be said and heard back |
 
-**Interaction, this modality's tempo.** Single request or multi-turn; fresh, resumed or interrupted;
-and the two that are specific to a call, barge-in while the agent is speaking, and a long silence the
-agent has to handle without abandoning the caller.
+**Interaction, this modality's tempo.** Single request or multi-turn; fresh or resumed; a correction
+after the agent has committed; and the one that is specific to a call, a long silence the agent has to
+handle without abandoning the caller.
 
 **Overlay vector, where adversarial content arrives on a call.** Spoken by the caller, or carried in
 background audio someone else is producing. Not pasted text, not a hidden element: those belong to
@@ -118,19 +116,19 @@ The same holds anywhere the difficulty is carried by how a line sounds rather th
 you cannot point to the setting that produces it - `speech_rate`, the accent, the emotion, the noise bed -
 the call will not deliver it. Put the difficulty in the words. Refused at submit.
 
-**An interruption is a matter of TIMING, not of content.** The caller speaks before the agent has
-finished: over a read-back, across a question, on top of a summary. A caller who changes their mind, or
-corrects an address, or switches product halfway through has done something interesting and has not
-interrupted anybody - that is the correction level, and it already exists.
+**Barge-in is not something this runtime can do, so do not write it.** The caller is a voice session
+whose turn-taking waits for silence: it speaks once it has heard the agent stop, and the only interruption
+setting in play governs the agent cutting off the CALLER, not the reverse. Nothing can make the caller emit
+audio while the agent is mid-sentence.
 
-The two get merged constantly because both happen "mid-call". Measured on a five-hundred: **fourteen of the
-thirty-three scenarios on the interruption level never interrupt anything** - one was a luggage-capacity
-cancellation, one a plain booking with a landmark, one a change of tier "before the payment link" whose own
-name ended in `bargein`. The coverage report then claims thirty-three barge-in scenarios where nineteen are
-real, and barge-in is usually a thing somebody asked for by name.
+So an instruction to talk over a read-back arrives at the agent as an ordinary remark made politely after
+the read-back finished. The scenario still runs, still passes, and the coverage report claims a barge-in
+that never happened - which is worse than an empty cell, because an empty cell is visible. Measured on a
+five-hundred: **thirty-nine scenarios on the interruption level, none of which could interrupt anything.**
 
-Write the moment: what the agent is mid-way through saying, and the words the caller puts on top of it. If
-you cannot name what is being spoken over, the level is a correction and should say so.
+What you almost certainly mean is the correction level, and it already exists: the caller changes their
+mind, corrects an address, switches product after the quote. That is genuinely hard for an agent and the
+call delivers it in full. Refused at submit.
 
 **`quiet_line` means the bed is OFF, and it is the only level that means that.** Sixteen scenarios in
 fifty-two carried `quiet_line` with the noise bed switched on. The coordinate then reports that the agent

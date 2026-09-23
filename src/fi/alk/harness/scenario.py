@@ -414,6 +414,11 @@ _ACCENTED_INTERFACE = frozenset(
 )
 _DISFLUENT_INTERFACE = frozenset({"disfluent", "disfluent_speech", "hesitant"})
 _NOISY_INTERFACE = frozenset({"noisy_line", "noisy", "in_car", "street_noise"})
+# The interaction levels that mean the caller talks over the agent. Matched on the level's own name
+# because the axis vocabulary belongs to the planner.
+_A_BARGE_IN = re.compile(r"barge|interrupt|talk[_ -]?over|cut[_ -]?in", re.I)
+
+
 _QUIET_INTERFACE = frozenset({"quiet_line", "quiet", "clear_line"})
 _ACCENT_NOT_SET = frozenset({"", "neutral", "none", "standard", "n/a"})
 _DISFLUENT_STYLE = re.compile(r"hesit|disflu|stammer|halting|repet", re.IGNORECASE)
@@ -743,6 +748,20 @@ def validate_scenario(
     # aloud or announce anything. A scenario built on one is untestable, and worse, it fails for a
     # reason that is ours: a suite of twenty shipped one whose own line was silent, and its failure
     # was written up as an agent defect. Refused at the coordinate and at the wording.
+    # Barge-in is the other level the planner deals that the call cannot honour. The simulator is a
+    # voice session whose turn-taking is endpointing-driven: it speaks after it detects silence, and
+    # the one interruption setting the harness sets, ``allow_interruptions``, governs the target
+    # cutting off OUR caller rather than the reverse. Nothing can make the caller emit audio while
+    # the agent is mid-utterance, so a barge-in instruction arrives as an ordinary correction spoken
+    # politely after the agent finishes, and the coverage report claims a level nothing tested.
+    if _A_BARGE_IN.search(str((scenario.coverage or {}).get("interaction") or "")):
+        problems.append(
+            "barge-in is not an interaction this runtime can render: the caller speaks only once it "
+            "hears the agent stop, so talking over the agent never happens and the scenario arrives "
+            "as a plain correction made after the agent finished. Put the difficulty somewhere the "
+            "call can deliver it: a correction after the agent has committed, a fact that disagrees "
+            "with one already given, a reference with no referent"
+        )
     if (scenario.coverage or {}).get("overlay_vector") == "background_audio":
         problems.append(
             "background_audio is not a vector this runtime can render: the call carries one "

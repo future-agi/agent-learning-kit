@@ -188,6 +188,20 @@ an axis `payment_state` is the commonest way this goes wrong: the next suite for
 different state list, names its axes after that, and the two runs can no longer be compared. One axis,
 its levels drawn from whatever that agent's states turn out to be.
 
+**At least one disposition level has to be a state where a tool the agent trusts does not work.** An
+agent is most brittle where it takes something the caller said, hands it to a tool and believes the
+answer, and a suite in which every tool call succeeds never goes near that seam. The states that do it
+are ordinary: a card the processor declines, an address that geocodes to nothing, a number the code
+send bounces on, a market the product is not offered in, a booking id belonging to someone else.
+
+This level keeps quietly disappearing, because nothing about a plan looks wrong when it is missing.
+Measured across three suites: one five-hundred dealt `card_expired` and got 18 scenarios; a hundred got
+3; **the next five-hundred dropped the level and got none at all**, so the whole suite ran on tools that
+always worked. Deal at least one, and say in the plan which tool it breaks.
+
+The failure is a property of the world, seeded in `setup_code`, never a sentence in the instruction -
+the caller does not know the tool is about to fail, and writing it there tells the agent what is coming.
+
 The same applies to who is calling. `counterparty` is the axis; `first_time`, `suspended`, `guest`,
 `on_behalf_of_another` are its levels.
 
@@ -233,8 +247,9 @@ from the file you were given, and never set a level belonging to another modalit
 condition nothing in this one can produce.
 
 Interaction is the shape of the exchange, and the kind file gives its tempo: single request or
-multi-turn, fresh or resumed or interrupted, and what the modality does to timing, barge-in and long
-pauses on a call, bursts and send-before-finish in a chat.
+multi-turn, fresh or resumed, a correction after the agent has committed, and what the modality does to
+timing - long pauses on a call, bursts and send-before-finish in a chat. Barge-in is not among them: the
+caller cannot talk over the agent, and the kind file says why.
 
 ### Overlay carries three things, and they are three axes
 
