@@ -115,6 +115,23 @@ catalogue maps to the same voices as the default are not audible: the coordinate
 sounds exactly like the control, and the level tested nothing. Before dealing `accented`, check which
 values in the persona vocabulary reach a different voice, and deal only those. If none does, the level is
 not available in this deployment and the honest thing is to leave it out of the plan and say so.
+
+**How to check it, in one step, rather than assuming.** The persona vocabulary offers a list of accents;
+the voice catalogue configured for the run maps each to a speaker. Put a persona of each accent through the
+voice selection the runtime uses and look at what comes back. Two accents that return the same speaker are
+one accent as far as the call is concerned, whatever the coordinate says.
+
+Measured on a live run whose only configured provider had no speaker for one of the vocabulary's accents:
+**a caller declared with that accent got the same speaker as every default-accent male caller in the
+suite.** The scenario said the line was accented, the grid counted an accented cell, and the audio was
+indistinguishable from the control. Meanwhile a second non-default accent in the same vocabulary *did*
+reach its own speaker, so the axis was neither fully working nor fully broken - which is exactly the state
+that survives unnoticed.
+
+Two consequences for the plan. Deal the accents that are real and **report the number you dealt, not the
+number the vocabulary lists** - a lever is covered as many times as it was actually produced. And where an
+accent is wanted that the configured voices cannot produce, that is a provisioning question to raise, not
+a coordinate to write anyway.
 | `outbound_partial` | `call_direction` outbound, `caller_awareness` "partial" |
 | `outbound_unaware` | `call_direction` outbound, `caller_awareness` "unaware" |
 
