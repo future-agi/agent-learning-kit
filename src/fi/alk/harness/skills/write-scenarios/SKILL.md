@@ -759,6 +759,31 @@ judgement, only of reflex.
 These words belong in the coordinate and never in the instruction: overt, overtly, subtle, injection,
 prompt injection, social engineering, adversarial, jailbreak, out of scope, overlay, red team.
 
+**A difficulty is a GAP in what the caller says, not a word in the branch line.** The commonest way a
+named difficulty turns out not to exist is that the instruction quietly supplies the thing the difficulty
+was supposed to withhold. Two from a hosted 100, both with impeccable branch lines:
+
+```
+BAD    branch: a reference with no referent, the caller hesitates over the hotel name
+       instruction: "You hesitate trying to remember the hotel name before confirming the
+                     address is 333 O'Farrell Street."
+       (the caller gives the address. There is no reference and no referent to resolve;
+        there is a pause, which is a different difficulty and a much smaller one)
+
+BAD    branch: the spoken destination is ambiguous between two cities
+       instruction: "If asked to clarify between San Francisco and Los Angeles, specify
+                     San Francisco."
+       (the caller has been handed both candidates and the answer. The agent's job was to
+        notice the ambiguity and ask; the caller now resolves it whether or not it did)
+
+GOOD   instruction: "Your destination is Main Street. You do not say which city unless you
+                     are asked which one, and if you are, it is the one you are standing in."
+       (the gap is real, the caller holds the answer, and the agent has to find the question)
+```
+
+Read your instruction back and find the sentence where the difficulty *bites*. If every fact the agent
+needs is already in there, what you have written is a plain scenario with a difficulty named on top of it.
+
 **Count the turns your own scenario needs, and set the budget above it.** `max_turns` defaults to 10 and
 the default is what almost everybody ships. Work out instead how many times this person has to speak
 before the outcome is reached: one turn to say what they want, one for each thing the agent has to confirm
