@@ -664,6 +664,7 @@ class _TestRunnerAgent(Agent):
         self._session: AgentSession | None = None
         self._end_requested = asyncio.Event()
         self._end_speech_handle: Any | None = None
+        self._hold_check: asyncio.Task | None = None
         self._usage_collector = metrics.ModelUsageCollector()
 
     @function_tool(
@@ -1031,9 +1032,25 @@ class _TestRunnerAgent(Agent):
                 return
             self._mailbox_greeted = True
         async for chunk in _without_hold_marker(
-            super().llm_node(chat_ctx, tools, model_settings)
+            super().llm_node(chat_ctx, tools, model_settings), on_hold=self._on_hold
         ):
             yield chunk
+
+    def _on_hold(self) -> None:
+        if self._session is None:
+            return
+        heard = len(_session_messages(self._session))
+        self._hold_check = asyncio.get_running_loop().create_task(self._still_there(heard))
+
+    async def _still_there(self, heard: int) -> None:
+        """A person left waiting in silence speaks up once, before the silence ends the call."""
+        await asyncio.sleep(_HOLD_PATIENCE_SECONDS)
+        session = self._session
+        if session is None or self._end_requested.is_set():
+            return
+        if len(_session_messages(session)) != heard or _either_side_busy(session):
+            return
+        session.generate_reply(instructions=_HOLD_CHECK_IN)
 
     async def transcription_node(
         self,
@@ -1064,7 +1081,18 @@ def _letters(text: str) -> str:
     return re.sub(r"[\W_]", "", text.lower())
 
 
-async def _without_hold_marker(stream: AsyncIterable[Any]) -> AsyncIterable[Any]:
+# Under the settled-silence floor, so the caller checks in before a quiet line is taken for the end.
+_HOLD_PATIENCE_SECONDS = 10.0
+_HOLD_CHECK_IN = (
+    "The agent asked you to wait and has said nothing since. Say once, briefly and in your own "
+    "words, that you are still on the line. If it had said it was transferring you or ending the "
+    "call, close the call instead."
+)
+
+
+async def _without_hold_marker(
+    stream: AsyncIterable[Any], on_hold: Callable[[], None] | None = None
+) -> AsyncIterable[Any]:
     """Pass the reply through unless all it says is the hold marker, which is dropped unspoken.
 
     Chunks are held only while their text could still become the marker, so an ordinary reply is
@@ -1094,6 +1122,8 @@ async def _without_hold_marker(stream: AsyncIterable[Any]) -> AsyncIterable[Any]
             # Usage and flush chunks still pass when the marker is dropped; only its words go.
             if not silent or (not isinstance(item, str) and getattr(item, "delta", None) is None):
                 yield item
+        if silent and on_hold is not None:
+            on_hold()
 
 
 class LiveKitEngine(BaseEngine):

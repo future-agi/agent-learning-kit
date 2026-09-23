@@ -1399,6 +1399,62 @@ def test_a_reply_that_is_only_the_hold_marker_is_never_spoken() -> None:
     assert _drain_hold_filter(["silence"]) == []
 
 
+def test_a_dropped_marker_reports_the_hold_and_an_ordinary_reply_does_not() -> None:
+    held: list[bool] = []
+
+    async def run(chunks):
+        async def stream():
+            for chunk in chunks:
+                yield chunk
+
+        return [c async for c in livekit._without_hold_marker(stream(), on_hold=lambda: held.append(True))]
+
+    asyncio.run(run(["SILENCE"]))
+    assert held == [True]
+    asyncio.run(run(["Sure, go ahead."]))
+    assert held == [True]
+
+
+def test_a_caller_left_on_hold_checks_in_once_when_nothing_follows(monkeypatch) -> None:
+    replies: list[str] = []
+
+    class FakeSession:
+        history = SimpleNamespace(
+            items=[SimpleNamespace(type="message", role="user", text_content="One moment please.")]
+        )
+        agent_state = "listening"
+        user_state = "listening"
+
+        def generate_reply(self, *, instructions):
+            replies.append(instructions)
+
+    monkeypatch.setattr(livekit, "_HOLD_PATIENCE_SECONDS", 0.01)
+    agent = livekit._TestRunnerAgent(
+        persona=_scenario().dataset[0], instructions="Be a customer.", min_turn_messages=0
+    )
+    agent._session = FakeSession()
+
+    async def scenario():
+        agent._on_hold()
+        await agent._hold_check
+
+    asyncio.run(scenario())
+    assert len(replies) == 1 and "still on the line" in replies[0]
+
+    # The agent came back in time: nothing is said.
+    replies.clear()
+
+    async def answered():
+        agent._on_hold()
+        agent._session.history.items.append(
+            SimpleNamespace(type="message", role="user", text_content="Thanks for waiting.")
+        )
+        await agent._hold_check
+
+    asyncio.run(answered())
+    assert replies == []
+
+
 def test_an_ordinary_reply_passes_whole_and_in_order() -> None:
     chunks = [_text_chunk("Si"), _text_chunk("lly question, but"), _text_chunk(" why?")]
     assert _drain_hold_filter(chunks) == chunks
