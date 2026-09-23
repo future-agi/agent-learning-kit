@@ -1170,6 +1170,23 @@ _IGNORED_GENERATED_SOURCE_DIRECTORIES = frozenset(
 )
 
 
+# What a build step produced and a world only reads. Copying these per world would cost the whole
+# environment again for every call, and the ignore list above drops them from the copy anyway.
+_SHARED_BUILD_OUTPUTS = frozenset({".venv", "venv", "node_modules"})
+
+
+def _link_shared_build_outputs(build_dir: Path, runtime_dir: Path) -> None:
+    for dirpath, dirnames, _ in os.walk(build_dir):
+        for name in list(dirnames):
+            if name in _SHARED_BUILD_OUTPUTS:
+                target = Path(dirpath) / name
+                link = runtime_dir / target.relative_to(build_dir)
+                if link.parent.is_dir() and not link.exists() and not link.is_symlink():
+                    link.symlink_to(target, target_is_directory=True)
+            if name in _IGNORED_GENERATED_SOURCE_DIRECTORIES:
+                dirnames.remove(name)
+
+
 def _reject_escaping_symlinks(
     tree_root: Path, allowed_root: Path, *, process_name: str
 ) -> None:
@@ -2205,6 +2222,7 @@ def spawn_source_process(
                     gid=resolved_user.pw_gid,
                     chown=chown,
                 )
+            _link_shared_build_outputs(build_dir, runtime_dir)
         except OSError as exc:
             raise ProcessRuntimeError(
                 "spawn",

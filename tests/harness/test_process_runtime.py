@@ -8780,3 +8780,43 @@ def test_provision_failed_rebuild_preserves_carried_ceiling_and_ledger(
     assert build["degrade_events"] == [
         {"reason": "resource_limited", "from_w": 4, "to_w": 2}
     ]
+
+
+def test_every_world_can_run_the_environment_its_build_created(tmp_path: Path) -> None:
+    source = tmp_path / "source" / "svc"
+    source.mkdir(parents=True)
+    (source / "main.py").write_text("print('ok')\n")
+    process = _source_process(working_directory="svc", build_commands=[["make-venv"]])
+
+    def build_run(step, *, cwd, env, **kwargs):
+        launcher = Path(cwd, ".venv", "bin", "serve")
+        launcher.parent.mkdir(parents=True)
+        launcher.write_text("#!/bin/sh\n")
+        return subprocess.CompletedProcess(step, 0)
+
+    build = pr.build_process_tree(
+        process, source_root=tmp_path / "source", build_root=tmp_path / "build", run=build_run
+    )
+    cwds: list[Path] = []
+
+    def runner(argv, *, cwd, **kwargs):
+        cwds.append(Path(cwd))
+        return FakeHandle()
+
+    plan = dc_replace(_solo_port_plan("svc"), effective_instances=2)
+    for index in (0, 1):
+        pr.spawn_source_process(
+            process,
+            build_dir=build,
+            world_dir=tmp_path / f"world-{index}",
+            world_index=index,
+            port_plan=plan,
+            configuration_addresses={},
+            secret_values={},
+            secret_purposes={},
+            runner=runner,
+        )
+    assert cwds[0] != cwds[1]
+    for cwd in cwds:
+        assert (cwd / ".venv" / "bin" / "serve").is_file()
+        assert (cwd / "main.py").is_file()
