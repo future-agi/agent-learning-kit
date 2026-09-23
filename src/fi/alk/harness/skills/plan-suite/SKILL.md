@@ -333,6 +333,28 @@ in each brief the one thing that makes that scenario hard - a correction after t
 facts that disagree, a reference with no referent, a value that sounds like another, something
 plausible the world refuses - and never deal the same one twice on the same task level.
 
+**Every level you deal has to be load-bearing for the scenario you deal it to.** The axis a suite quietly
+ruins is the caller's state, because unlike the interface levels nothing checks it. A state that is true
+and simply does not matter is as bad as one that is false: the grid counts that cell as covered, and
+nothing in the scenario ever put it in play. Measured on a hosted 100: **38 scenarios carried a
+payment-shaped state - a valid card, an expired card, a pending link - whose reference solution makes no
+payment call at all.** Twenty-six of them were cancellations, where what is on file is irrelevant to what
+is being tested. The grid then reports payment states exercised across a third of the suite when almost
+none of them were.
+
+The test is one question per level: **if this level were different, would this scenario test something
+different?** If not, the level is decoration. Use the neutral value, or move the scenario to a cell where
+the state does the work.
+
+**Keep the spread you declared.** A plan that names eight task levels and then puts half the suite on two of
+them has not covered eight; it has covered two, with six thin rows that read as covered in the grid. Set a
+ceiling before dealing: **with five or more task levels, no single level takes more than about a fifth of the
+count**, and every level declared gets a real share rather than two scenarios. Measured across two hundreds
+of the same size: one spread its top two levels over 41 percent of the suite and the other over 55 percent,
+and the second had lost a whole task level on the way. The same applies to the levels a kind file offers on
+every other axis: dealing four interface levels where seven exist does not make the suite cleaner, it makes
+the grid smaller and hides the gap.
+
 **A writer with several scenarios collides with ITSELF, and that one is unforgivable.** Every rule above
 is about two writers who cannot see each other. The commoner collision is inside one brief. At any real
 count the practical unit of dealing is a task level, so one writer gets four or six scenarios on the same
