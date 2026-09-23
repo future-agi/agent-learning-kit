@@ -8192,7 +8192,7 @@ def test_provision_world_zero_failure_on_first_build_is_a_job_failure(
 # --- integration: port_not_consumable terminal vs world_start_failed (item 5) ----------------
 
 
-def test_provision_gate_branch_declared_port_bind_by_consumable_is_terminal(
+def test_provision_gate_branch_declared_port_bind_by_consumable_heals_onto_one_world(
     tmp_path: Path,
 ) -> None:
     manifest = _consumable_manifest(fixed_port=8080)
@@ -8204,22 +8204,19 @@ def test_provision_gate_branch_declared_port_bind_by_consumable_is_terminal(
         process="tools-api",
         log="[Errno 48] Address already in use: 127.0.0.1:8080",
     )
-    with pytest.raises(pr.ProcessRuntimeError) as excinfo:
-        asyncio.run(
-            provider.provision(
-                manifest,
-                source=source,
-                bundle_dir=bundle_dir,
-                work_directory=tmp_path,
-                instances=2,
-                require_declared_user=False,
-            )
+    asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=2,
+            require_declared_user=False,
         )
-    assert excinfo.value.code == "port_not_consumable"
+    )
     build = json.loads((tmp_path / "artifacts" / "build.json").read_text())
-    # NO degrade event, no synthetic conformance=False (terminal, not a degrade).
-    assert build["degrade_events"] == []
-    assert build["conformance"] is None
+    assert build["effective_parallelism"] == 1
+    assert [event["reason"] for event in build["degrade_events"]] == ["world_start_failed"]
 
 
 def test_provision_gate_branch_formula_squat_is_graceful_world_start_failed(
@@ -8252,7 +8249,7 @@ def test_provision_gate_branch_formula_squat_is_graceful_world_start_failed(
     ]
 
 
-def test_provision_gate_listener_check_finds_declared_listener_terminal(
+def test_provision_gate_listener_check_finds_declared_listener_heals_onto_one_world(
     tmp_path: Path,
 ) -> None:
     manifest = _consumable_manifest(fixed_port=8080)
@@ -8263,18 +8260,19 @@ def test_provision_gate_listener_check_finds_declared_listener_terminal(
         mem_observer=lambda: 64.0,
         listener_probe=lambda port: port == 8080,  # a lying consumable left 8080 bound.
     )
-    with pytest.raises(pr.ProcessRuntimeError) as excinfo:
-        asyncio.run(
-            provider.provision(
-                manifest,
-                source=source,
-                bundle_dir=bundle_dir,
-                work_directory=tmp_path,
-                instances=2,
-                require_declared_user=False,
-            )
+    asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=2,
+            require_declared_user=False,
         )
-    assert excinfo.value.code == "port_not_consumable"
+    )
+    build = json.loads((tmp_path / "artifacts" / "build.json").read_text())
+    assert build["effective_parallelism"] == 1
+    assert [event["reason"] for event in build["degrade_events"]] == ["world_start_failed"]
 
 
 def test_port_not_consumable_is_in_the_section_2f_table_with_agent_domain() -> None:

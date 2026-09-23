@@ -5909,8 +5909,13 @@ class ProcessRuntimeProvider:
             knob_bearing=knob,
         )
         if reason == "port_not_consumable":
-            self._raise_port_not_consumable(process_name, knob_bearing=knob)
-        # Graceful degrade to 1.
+            # World 0 is healthy, so the job heals onto it rather than failing: the cause is logged
+            # for us and the ledger says why parallelism dropped.
+            logger.warning(
+                "world %d could not bind its own port (%s); continuing on one world",
+                world_index, process_name,
+            )
+            reason = "world_start_failed"
         self._append_degrade(reason, from_ceiling, 1)
 
     def _raise_port_not_consumable(
@@ -6214,10 +6219,15 @@ class ProcessRuntimeProvider:
                     self._append_degrade("conformance_gate_failed", effective, 1)
                     effective = 1
                 else:
-                    # Gate declared-port LISTENER check (C1 §4) — a DISTINCT provision step that
-                    # raises a TERMINAL `port_not_consumable` out-of-band; it never touches the
-                    # conformance flag or the gate-return vocabulary.
-                    self._check_no_declared_port_listener(bundle)
+                    # Gate declared-port LISTENER check (C1 §4). A listener on a declared port
+                    # means the worlds would collide, so the job continues on world 0 alone.
+                    try:
+                        self._check_no_declared_port_listener(bundle)
+                    except ProcessRuntimeError as exc:
+                        logger.warning("%s; continuing on one world", exc)
+                        self._teardown_world(1)
+                        self._append_degrade("world_start_failed", effective, 1)
+                        effective = 1
         elif self._conformance_checked and build_output.conformance is False:
             # A degrade decided by an EARLIER call must keep holding on every later reconcile call
             # too — the latched ceiling already reflects it, but `conformance is False` predates
@@ -6241,8 +6251,6 @@ class ProcessRuntimeProvider:
                 try:
                     self._ensure_world(world_index)
                 except (ProcessRuntimeError, OSError, shutil.Error) as exc:
-                    if getattr(exc, "code", None) == "port_not_consumable":
-                        raise
                     # Rule 2: continue on the contiguous 0..k−1 prefix — NO renumbering. Tear
                     # down whatever this world published, drop the ceiling to k, ledger
                     # `world_start_failed`, re-write build.json.
