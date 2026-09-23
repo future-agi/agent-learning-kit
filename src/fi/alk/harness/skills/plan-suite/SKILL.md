@@ -817,7 +817,11 @@ suite has to be dealt out in the briefs, one share each.
 
 The people are the thing to deal. Give each writer its own share of the levels above: two or three
 per sub-dimension, and no level to two writers where you can help it. A writer told only "vary the
-people" will not.
+people" will not. **Name them in the brief**, not the dimension: the accents (`Neutral` is not one),
+the languages, the noise beds, the temperaments. Across the suite the callers should sound like the
+people who really ring this agent: every language it supports and at least one it must turn away,
+several accents, several beds, several ages and temperaments. A suite where most callers share one
+accent, one language and a quiet line has tested one caller many times.
 
 **Deal out the initial letters of their names in the same breath.** Narrowing a writer to one
 language without also narrowing its names makes collisions worse, not better: two writers both given

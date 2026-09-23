@@ -456,7 +456,7 @@ fix what they name.
 
 ## The bar every scenario has to clear
 
-Four of these are enforced by validation. Five are your judgement, and no check can make them for you.
+Four of these are enforced by validation. Seven are your judgement, and no check can make them for you.
 
 - **A competent agent could plausibly fail it.** *(judgement)* If any correct implementation passes
   for free, it teaches nothing. Do not write it.
@@ -473,6 +473,13 @@ Four of these are enforced by validation. Five are your judgement, and no check 
 - **The situation can actually be produced on the call.** *(judgement)* The caller is one synthesised
   voice over one background bed. It cannot sound cut off, garbled or unintelligible, and it cannot
   bring a second voice; a scenario that depends on one tests something that never happens.
+- **The scenario's own claim is asserted.** *(judgement)* Sub-goals that fit every call (tone, how
+  numbers are spoken, brevity) are fine to share, but they are not what this scenario is for. At least
+  one sub-goal must fail when the agent gets *this* scenario's difficulty wrong: the thing its `tests`
+  line names. A scenario checked only by suite-wide style can pass whatever the agent does.
+- **The people and places are real-sounding and unremarkable.** *(judgement)* Ordinary names, ordinary
+  companies, ordinary streets. Never a fictional character, a celebrity, a famous address from film or
+  television, or an obvious placeholder: a reviewer who spots one stops trusting the suite.
 - **The outcome can happen inside the conversation.** *(judgement)* Everything the result depends on
   is something the agent can do or see with its own tools, or something the world already holds. The
   person cannot tap a link, pay on a website, open an email or visit a branch while you test, and the
@@ -488,7 +495,10 @@ Four of these are enforced by validation. Five are your judgement, and no check 
 it ends. Nothing was withheld, nothing contradicted, no rule was pressed, no state had to carry, and
 any working agent passes. That is a demonstration. It costs a real run and real money and returns no
 information about the agent. One scenario covers the ordinary path for a whole suite; everything else
-has to earn its place by being able to fail.
+has to earn its place by being able to fail. A detailed question asked plainly and answered is the same
+thing, however specialised the question: give the caller a wrong assumption, a missing fact, a
+correction, a constraint that conflicts with the rules, or a reason to push, and the question becomes
+a test.
 
 ```
 BAD    solution   [transfer_to_human(reason="Account suspended")]
