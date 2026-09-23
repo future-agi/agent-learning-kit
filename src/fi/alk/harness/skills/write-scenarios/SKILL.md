@@ -441,7 +441,7 @@ fix what they name.
 
 ## The bar every scenario has to clear
 
-Four of these are enforced by validation. Two are your judgement, and no check can make them for you.
+Four of these are enforced by validation. Four are your judgement, and no check can make them for you.
 
 - **A competent agent could plausibly fail it.** *(judgement)* If any correct implementation passes
   for free, it teaches nothing. Do not write it.
@@ -453,6 +453,16 @@ Four of these are enforced by validation. Two are your judgement, and no check c
 - **The scenario seeds what it needs.** *(enforced: a fixture claiming data must create it)* Every
   record whose state decides the outcome is created by this scenario's `setup_code`.
 - **The name says what is tested.** *(enforced: the person's name may not appear in it)*
+- **The outcome can happen inside the conversation.** *(judgement)* Everything the result depends on
+  is something the agent can do or see with its own tools, or something the world already holds. The
+  person cannot tap a link, pay on a website, open an email or visit a branch while you test, and the
+  world does not change when they say they did. In that situation test what the agent controls: it
+  sends the link, says what happens next, offers a route it can finish itself. Never a completion that
+  waits on an action outside the conversation.
+- **The person is who the agent will find.** *(judgement)* The agent looks the person up from what
+  reaches it: the calling number, an email, an account reference. A guest or first-time contact must
+  match no record; a known customer must match exactly one, under the name the persona uses. A persona
+  called Liam whose number belongs to Dana tests nothing the scenario claims.
 
 **What is not a scenario.** A person asks for the ordinary thing, the agent does it, both are polite,
 it ends. Nothing was withheld, nothing contradicted, no rule was pressed, no state had to carry, and

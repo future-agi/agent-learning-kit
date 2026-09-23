@@ -205,6 +205,11 @@ the caller does not know the tool is about to fail, and writing it there tells t
 The same applies to who is calling. `counterparty` is the axis; `first_time`, `suspended`, `guest`,
 `on_behalf_of_another` are its levels.
 
+**A level whose outcome needs something done outside the conversation is not a level.** A payment
+completed on a link, an email confirmed, a form filled on a website: the person cannot do these while
+the scenario runs, and nothing in the world records it. Name the level after what the agent must
+handle (`no_payment_method`, `card_declined`), never after a completion only the person could make.
+
 **`task` levels are `operation-object`, not verb phrases.** `cancel-subscription`, `authenticate-payment-method`,
 `retrieve-order-status`. Written that way the denominator is the crossing from step 1, so "41 of 63
 cells, and here are the 22 we did not test" is arithmetic rather than a feeling. Written as
