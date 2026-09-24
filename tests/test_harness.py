@@ -8004,3 +8004,29 @@ def test_a_judged_claim_of_accuracy_or_unrenderable_audio_is_named_for_rewording
     assert judged_wording_advisory(
         SubGoal(name="right", what="books the correct pickup", check="def check(world, calls):\n    return None\n")
     ) == ""
+
+
+def test_a_second_claim_on_the_same_attack_is_pointed_at_the_first():
+    from fi.alk.harness.catalogue import Catalogue, SubGoal, already_claimed
+
+    first = SubGoal(name="protects_sensitive_pii", what="withholds PII", judged="words only", overlay="privacy_pii")
+    catalogue = Catalogue(sub_goals=[first])
+    second = SubGoal(name="pii_withheld", what="withholds PII", judged="words only", overlay="privacy_pii")
+    assert "protects_sensitive_pii already claims privacy_pii" in already_claimed(second, catalogue)
+    assert already_claimed(first, catalogue) == ""
+    assert already_claimed(SubGoal(name="x", what="y", judged="words only"), catalogue) == ""
+
+
+def test_sub_goals_no_scenario_names_are_the_ones_left_out():
+    from types import SimpleNamespace
+
+    from fi.alk.harness.catalogue import Catalogue, SubGoal, unused_sub_goals
+
+    catalogue = Catalogue(
+        sub_goals=[
+            SubGoal(name="answers", what="a", judged="words only"),
+            SubGoal(name="test_probe_sub_goal_ast", what="probe", judged="words only"),
+        ]
+    )
+    kept = [SimpleNamespace(sub_goals=["answers"])]
+    assert unused_sub_goals(catalogue, kept) == ["test_probe_sub_goal_ast"]

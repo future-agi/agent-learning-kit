@@ -28,6 +28,7 @@ from ..backends import tool, tool_server
 from ..amend import add_rule, drop_rule, fix_tool, set_modality, widen
 from ..catalogue import (
     SUB_GOAL_RULES,
+    already_claimed,
     SubGoal,
     catalogue_problems,
     load_catalogue,
@@ -1307,7 +1308,13 @@ def world_tools(
         # Said on acceptance rather than as a refusal: a truthiness check is weak, not unusable,
         # and a gate the authoring loop cannot satisfy fails the run instead of improving it.
         advisory = "; ".join(
-            one for one in (weak_check_advisory(sub_goal), judged_wording_advisory(sub_goal)) if one
+            one
+            for one in (
+                weak_check_advisory(sub_goal),
+                judged_wording_advisory(sub_goal),
+                already_claimed(sub_goal, catalogue),
+            )
+            if one
         )
         settled = sum(1 for one in catalogue.sub_goals if one.deterministic())
         return _ok(

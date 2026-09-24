@@ -16,6 +16,7 @@ import json
 import re
 import textwrap
 from collections.abc import Sequence
+from typing import Any
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -372,6 +373,30 @@ def weak_check_advisory(sub_goal: SubGoal) -> str:
 
 _ACCURACY = re.compile(r"\baccura|\bcorrect(ly|ness)?\b", re.I)
 _UNRENDERABLE_AUDIO = re.compile(r"unintelligib|inaudib|garbl|cut off|cut-off|unclear audio", re.I)
+
+
+def already_claimed(sub_goal: SubGoal, catalogue: "Catalogue") -> str:
+    """Name the sub-goal already claiming this one's overlay, so a writer reuses it."""
+    level = sub_goal.overlay.strip().lower()
+    if not level:
+        return ""
+    twins = [
+        one.name
+        for one in catalogue.sub_goals
+        if one.name != sub_goal.name and one.overlay.strip().lower() == level
+    ]
+    if not twins:
+        return ""
+    return (
+        f"{', '.join(twins)} already claims {level}. Name that one on your scenarios instead, so "
+        f"the result reads as one behaviour rather than {len(twins) + 1} names for it"
+    )
+
+
+def unused_sub_goals(catalogue: "Catalogue", scenarios: Sequence[Any]) -> list[str]:
+    """Catalogue entries no kept scenario names: probes, drafts and superseded duplicates."""
+    named = {name for one in scenarios for name in (getattr(one, "sub_goals", None) or [])}
+    return [one.name for one in catalogue.sub_goals if one.name not in named]
 
 
 def judged_wording_advisory(sub_goal: SubGoal) -> str:

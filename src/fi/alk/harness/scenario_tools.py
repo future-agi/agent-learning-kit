@@ -25,6 +25,8 @@ from .amend import add_rule, drop_rule, fix_tool, widen
 from .catalogue import (
     NO_OVERLAY,
     SUB_GOAL_RULES,
+    already_claimed,
+    unused_sub_goals,
     Catalogue,
     SubGoal,
     load_catalogue,
@@ -1400,7 +1402,9 @@ def scenario_tools(
         # against one definition keeps its proof while quietly inheriting another, and the suite
         # ships graded by a check nothing ever ran against it. Three of sixty did exactly that.
         broken = _no_longer_hold(destination, catalogue, restated, world_root)
-        reword = judged_wording_advisory(sub_goal)
+        reword = "; ".join(
+            one for one in (judged_wording_advisory(sub_goal), already_claimed(sub_goal, catalogue)) if one
+        )
         return _ok(
             f"{sub_goal.name} added"
             + ("" if sub_goal.deterministic() else " (judged, not deterministic)")
@@ -2129,6 +2133,16 @@ def scenario_tools(
             design["axes"] = {**target["axes"], **(design.get("axes") or {})}
         settled, invented = tidy_keywords(kept, vocabulary_from(design))
         path = write_scenarios(kept, destination, catalogue)
+        # A catalogue entry no scenario names is a probe, a draft or a superseded duplicate. Only
+        # what the suite actually uses ships, so the report never lists a check nothing ran.
+        dropped = unused_sub_goals(catalogue, kept)
+        if dropped:
+            catalogue.sub_goals = [one for one in catalogue.sub_goals if one.name not in set(dropped)]
+            save_catalogue(catalogue, destination)
+            noted.append(
+                f"{len(dropped)} sub-goals no scenario names were left out of the catalogue: "
+                + ", ".join(dropped[:12])
+            )
         # Read back after writing, because it is the check files on disk that get run, not the
         # intention behind them. Advisory: a thin check is still a check and still saves.
         #
