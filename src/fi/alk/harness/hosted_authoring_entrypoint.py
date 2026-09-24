@@ -26,6 +26,8 @@ _PASSTHROUGH = {
     "AGENTCC_BASE_URL",
     # Not a credential: authoring writes the scenarios, so the switch has to reach it.
     "ALK_VOICEMAIL_SCENARIOS",
+    "ALK_BACKGROUND_NOISE",
+    "ALK_BACKGROUND_NOISE_CATALOG",
     "ALK_CLAUDE_GATEWAY_URL",
     "ALK_CLAUDE_GATEWAY_API_KEY",
     "ANTHROPIC_API_KEY",
@@ -154,7 +156,12 @@ def main(argv: list[str] | None = None) -> int:
     values.update(
         {
             name: gateway_values[name]
-            for name in ("AGENTCC_API_KEY", "AGENTCC_BASE_URL")
+            for name in (
+                "AGENTCC_API_KEY",
+                "AGENTCC_BASE_URL",
+                "ALK_BACKGROUND_NOISE",
+                "ALK_BACKGROUND_NOISE_CATALOG",
+            )
             if gateway_values.get(name)
         }
     )

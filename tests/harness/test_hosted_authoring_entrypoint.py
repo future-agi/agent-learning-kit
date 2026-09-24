@@ -55,6 +55,28 @@ def test_fallback_authoring_reads_gateway_key_without_deleting_control_channel(
     assert "RETELL_API_KEY" not in entrypoint.os.environ
 
 
+def test_authoring_hears_the_platform_noise_catalogue(tmp_path, monkeypatch) -> None:
+    secrets = tmp_path / "secrets.json"
+    gateway = tmp_path / "simulator-secrets.json"
+    secrets.write_text("{}", encoding="utf-8")
+    catalogue = json.dumps([{"environment": "street", "url": "https://clips.example.test/a.wav"}])
+    gateway.write_text(
+        json.dumps({"ALK_BACKGROUND_NOISE": "1", "ALK_BACKGROUND_NOISE_CATALOG": catalogue}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(entrypoint, "_SECRETS_PATH", secrets)
+    monkeypatch.setattr(entrypoint, "_SIMULATOR_SECRETS_PATH", gateway)
+    monkeypatch.setattr(entrypoint, "_ADC_PATH", tmp_path / "adc.json")
+    monkeypatch.delenv("ALK_BACKGROUND_NOISE_CATALOG", raising=False)
+    monkeypatch.setattr(
+        entrypoint, "authoring_main", lambda argv, *, validate_runtime: 0
+    )
+
+    assert entrypoint.main([]) == 0
+    assert entrypoint.os.environ["ALK_BACKGROUND_NOISE_CATALOG"] == catalogue
+    assert gateway.is_file()
+
+
 def test_vertex_generation_region_is_not_copied_from_google_location(
     tmp_path, monkeypatch
 ) -> None:
