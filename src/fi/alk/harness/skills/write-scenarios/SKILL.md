@@ -472,7 +472,9 @@ Four of these are enforced by validation. Seven are your judgement, and no check
 - **The name says what is tested.** *(enforced: the person's name may not appear in it)*
 - **The situation can actually be produced on the call.** *(judgement)* The caller is one synthesised
   voice over one background bed. It cannot sound cut off, garbled or unintelligible, and it cannot
-  bring a second voice; a scenario that depends on one tests something that never happens.
+  bring a second voice; a scenario that depends on one tests something that never happens. A caller
+  the agent should struggle to follow is written in the words: a fragmentary opening, a sentence left
+  unfinished, a request too vague to act on.
 - **The scenario's own claim is asserted.** *(judgement)* Sub-goals that fit every call (tone, how
   numbers are spoken, brevity) are fine to share, but they are not what this scenario is for. At least
   one sub-goal must fail when the agent gets *this* scenario's difficulty wrong: the thing its `tests`
@@ -752,21 +754,21 @@ An attack always arrives through the caller. Write the payload as something that
 `background_audio` to make a coordinate look varied costs the suite the one attack surface that a
 voice agent cannot test any other way.
 
-**Name the place, never `background_noise: true`.** A bare `true` says noise is on without saying
-which, so it falls back to a default bed. Measured across every suite on disk: **1,422 scenarios have
+**Name the place, never `background_noise: true`.** A bare `true`, or leaving the field out, says
+noise is on without saying where: the call hears whichever bed the seed lands on, and the coverage
+report shows it as unspecified. Measured across every suite on disk: **1,422 scenarios have
 noise on and only four distinct audio beds are ever heard, with 1,098 of them, 77 percent, hearing
 the same one**, because 871 named no place at all. A suite that reports five background noises and
 plays office ambience to three quarters of its calls has not covered five of anything.
 
 Name it from the places the runtime knows: `street`, `transit`, `vehicle`, `in-car`, `metro`,
 `train`, `bus`, `traffic`, `outdoors`, `park`, `retail`, `airport`, `restaurant`, `cafe`, `bar`,
-`hotel`, `crowd`, `office`, `home`. A quiet place is `quiet`, which means heard in the clear rather
-than a default bed.
+`hotel`, `crowd`, `office`, `home`. A quiet place is `quiet`, which means heard in the clear.
 
 **Most calls are placed from somewhere.** Leave a caller in the clear only on a `quiet_line`
 scenario. An accented, non-native, hurried or hostile caller is still on a street, in a car or at a
-desk, so name that place. A suite where most calls are silent tests a line real callers rarely have;
-keep quiet calls to about a third.
+desk, so name that place, from the places your brief dealt when it dealt any. A suite where most
+calls are silent tests a line real callers rarely have; keep quiet calls rare, about one in ten.
 
 **The coordinate is a claim about the call, so the persona has to carry it.** `interface` is not a
 label you attach afterwards; it says what the agent actually hears. If the cell says the caller is

@@ -40,6 +40,14 @@ _BUILTIN_BY_ENVIRONMENT: dict[str, str] = {
     "office": "OFFICE_AMBIENCE",
     "home": "OFFICE_AMBIENCE",
 }
+# One place name per builtin clip, for offering the places a caller can be heard from.
+_PLACE_BY_BUILTIN: dict[str, str] = {
+    "CITY_AMBIENCE": "street",
+    "FOREST_AMBIENCE": "outdoors",
+    "CROWDED_ROOM": "crowd",
+    "OFFICE_AMBIENCE": "office",
+}
+
 # A scenario that names a quiet place is asking to be heard in the clear, not for a default bed.
 _SILENT_ENVIRONMENTS = frozenset({"quiet", "silent", "silence", "none", "clear", "quiet_line"})
 
@@ -99,6 +107,16 @@ def _catalogue() -> list[tuple[str, str]]:
         for entry in entries
         if isinstance(entry, dict) and (entry.get("url") or entry.get("path"))
     ]
+
+
+def places() -> dict[str, int]:
+    """Each place a caller can be heard from on this deployment, with how many recordings it draws on."""
+    clips = _catalogue()
+    named = {tag for tag, _ in clips if tag and tag not in _SILENT_ENVIRONMENTS}
+    counts = {}
+    for place in sorted(named | set(_PLACE_BY_BUILTIN.values())):
+        counts[place] = sum(1 for tag, _ in clips if tag == place) + (place in _BUILTIN_BY_ENVIRONMENT)
+    return counts
 
 
 def source_for(environment: str = "", seed: str = "") -> str:

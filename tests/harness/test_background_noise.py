@@ -88,3 +88,24 @@ def test_an_unreadable_bed_keeps_its_volume(tmp_path):
     broken = tmp_path / "broken.wav"
     broken.write_bytes(b"not audio")
     assert asyncio.run(_bed_gain(str(broken))) == 1.0
+
+
+def test_places_come_from_the_catalogue_and_the_builtins(catalogue):
+    from fi.alk.harness.background_noise import places
+
+    assert places() == {"crowd": 1, "office": 1, "outdoors": 1, "street": 2, "transit": 3, "vehicle": 2}
+
+
+def test_without_a_catalogue_places_are_the_builtin_beds(monkeypatch):
+    from fi.alk.harness.background_noise import places
+
+    monkeypatch.delenv("ALK_BACKGROUND_NOISE_CATALOG", raising=False)
+    assert set(places()) == {"crowd", "office", "outdoors", "street"}
+
+
+def test_a_writer_brief_deals_the_places_it_can_play(catalogue):
+    from fi.alk.harness.scenarios import callers_for
+
+    brief = callers_for(0, 6)
+    assert "transit (3)" in brief and "vehicle (2)" in brief
+    assert "believable person" in brief and "celebrity" in brief

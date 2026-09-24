@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import asyncio
+import hashlib
 import logging
 import os
 import random
@@ -581,6 +582,7 @@ def callers_for(index: int, wanted: int, slice_name: str = "") -> str:
     suggestion rather than a rule, because the caller still has to suit the scenario: a stolen
     phone is not a cheerful call whatever this hands out.
     """
+    from .background_noise import places
     from .persona_guides import offered
 
     people = offered("personality")
@@ -604,7 +606,8 @@ def callers_for(index: int, wanted: int, slice_name: str = "") -> str:
         for step in range(block)
     )
     said += (
-        f"\n\nEvery person you invent must have a given name beginning with one of {letters}, and "
+        f"\n\nEvery person you invent must have a name beginning with one of {letters}, given name "
+        "or, where no name that fits the caller has that letter, family name, and "
         "every number you invent that the agent will look up, a code or a reference or an account "
         f"number, must begin with {slot % 1000:03d}. Other writers own the other letters and "
         "prefixes, so this is what keeps two scenarios from sharing a name or a code. Within your own "
@@ -624,7 +627,21 @@ def callers_for(index: int, wanted: int, slice_name: str = "") -> str:
             " Give your callers varied accents from the offered set, a different one per caller "
             f"where it fits rather than defaulting everyone to the same accent: {', '.join(spread)}. "
             "A suite where every caller sounds the same is a missed test of the agent's speech "
-            "handling, so do not make them all American unless a scenario truly requires it."
+            "handling, so do not make them all American unless a scenario truly requires it. "
+            "Each caller is one ordinary, believable person, never a celebrity's or a fictional "
+            "character's name: choose the accent, languages, home and name together, so an Indian "
+            "accent comes with a name and background that make it plausible."
+        )
+    beds = places()
+    if beds:
+        order = list(beds)
+        dealt = [order[(index + step) % len(order)] for step in range(min(len(order), max(3, wanted)))]
+        said += (
+            " Most callers ring from somewhere, and a quiet line is rare, about one call in ten: name "
+            "the place in background_noise on every scenario not on a quiet_line level, starting "
+            "from these, "
+            f"{', '.join(dealt)}. The places this deployment can play, with how many recordings "
+            f"each draws on: {', '.join(f'{place} ({count})' for place, count in beds.items())}."
         )
     return said
 

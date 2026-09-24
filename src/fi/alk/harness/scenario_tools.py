@@ -22,6 +22,7 @@ from typing import Any
 from .backends import tool, tool_server
 
 from .amend import add_rule, drop_rule, fix_tool, widen
+from .background_noise import places
 from .catalogue import (
     NO_OVERLAY,
     SUB_GOAL_RULES,
@@ -1337,10 +1338,11 @@ def scenario_tools(
                 },
                 "background_noise": {
                     "type": "string",
-                    "description": "Where the caller is phoning from: street, transit, vehicle, "
-                    "outdoors, retail, office or home. Name it whenever the instruction implies "
-                    "somewhere, a caller leaving a hotel or standing on a street is not in a "
-                    "quiet room. Left out, noise is on unless the interface level is quiet.",
+                    "description": "Where the caller is phoning from: "
+                    f"{', '.join(places())}. Name it on every scenario not on a quiet_line level; "
+                    "a caller leaving a hotel or standing on a street is not in a quiet room. "
+                    "Left out, noise is on unless the interface level is quiet, and the report "
+                    "shows it as unspecified.",
                 },
                 "call_direction": {
                     "type": "string",
