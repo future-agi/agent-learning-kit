@@ -491,7 +491,8 @@ Four of these are enforced by validation. Seven are your judgement, and no check
   line names. A scenario checked only by suite-wide style can pass whatever the agent does, and a
   sub-goal that fits any scenario (answered the request, resolved the call) is not this scenario's
   claim either. When the catalogue has no sub-goal for this scenario's difficulty, add one with
-  `add_sub_goal` rather than falling back on a general one.
+  `add_sub_goal` rather than falling back on a general one. Read the catalogue first: if an entry
+  already checks that behaviour under another name, use it rather than adding a second.
 - **The people and places are real-sounding and unremarkable.** *(judgement)* Ordinary names, ordinary
   companies, ordinary streets. Never a fictional character, a celebrity, a famous address from film or
   television, or an obvious placeholder: a reviewer who spots one stops trusting the suite.

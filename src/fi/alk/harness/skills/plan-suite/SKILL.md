@@ -451,16 +451,14 @@ and can read them side by side. So say it in the brief, for each writer that get
 separates your own scenarios from each other**, one clause per scenario, in the same words as the
 difficulty rule above. Then the writer has no excuse and no need to guess.
 
-**At large counts the naming constraint needs a mechanism, not a reminder.** Two or three hundred callers
-exhaust the obvious names, and writers that cannot see each other converge. Measured on a live run at a
-hundred and thirty callers: **eight pairs a listener would not separate**, among them two differing by one
-letter and two by one syllable. Deal each writer a disjoint set of initial letters as below, and where the
-count is larger than the letters available, deal each writer a distinct *rule* as well - a family name
-of a given syllable count, always a real name within the naming tradition of the profile it was dealt -
-so two writers cannot arrive at neighbouring names by independently reaching for the commonest one.
+**At large counts names converge unless the people differ.** Two or three hundred callers exhaust
+the obvious names, and writers that cannot see each other reach for the same ones. The save refuses a
+caller whose name the suite already has, so uniqueness is enforced for you; what keeps the names
+varied and believable is dealing varied people. Deal profiles, never letters: a writer handed initial
+letters invents names nobody from that caller's background is called.
 
 **Names have to be distinguishable when spoken, not merely different.** "No two people share a name" lets
-Laura and Lauren through, and over a phone line they are one name. Deal initial letters as above, and
+Laura and Lauren through, and over a phone line they are one name. Tell each writer to
 reject a pair that a listener would not separate: one differing letter, one differing syllable, or the
 same name with an ending changed. The exception is the scenario whose whole point is a name that sounds
 like another, which is a real test - it says so in its branch line and carries its own sub-goal for the
@@ -845,17 +843,10 @@ one call in ten: real callers are rarely in a silent room. Size the `quiet_line`
 Spread the places across writers the way you spread profiles, so the suite hears several of them
 rather than one bed everywhere.
 
-**Deal out the initial letters of their family names in the same breath.** Narrowing a writer to one
-language without also narrowing its names makes collisions worse, not better: two writers both given
-non-native callers both reached for the same name. Three letters each, no letter to two writers, and
-no two people in the suite share a name. Choose each writer's letters to suit the profiles it was
-dealt: letters that common family names from those backgrounds actually begin with, never letters
-picked in alphabetical order regardless of who the callers are. Write them into the brief as a
-preference, never as "must". The letters bind the family name only, so the given name
-stays free to be a real, common name for that person's background. Letters dealt on given names
-force names nobody is actually called. The letters are a preference that keeps writers apart, never
-a reason for a name that does not fit: where no common family name from the person's background
-starts with one of them, the writer uses one that fits.
+**Never deal name letters or name rules.** Every name comes from the person: a given name and a
+family name that are both common among people of that profile's background, the names you would
+expect to meet, never rare, antique or invented ones. The save refuses a name the suite already has,
+and the writer then picks another name from the same background.
 
 Two signs the sizing is wrong: every slice holds one or two scenarios, which means you listed
 scenarios instead of grouping them and every writer will re-read the world for almost nothing; or
