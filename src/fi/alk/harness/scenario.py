@@ -191,11 +191,6 @@ def _slug(name: str) -> str:
     return cleaned or "scenario-" + hashlib.sha256(name.encode()).hexdigest()[:12]
 
 
-def _decided_by(name: str) -> bool:
-    """Whether this scenario is noisy, decided by its name so a rerun decides the same."""
-    return hashlib.sha256((name or "").encode()).digest()[0] % 2 == 0
-
-
 class Scenario(BaseModel):
     """One test: what changes, what is asked, what a correct agent does, what must hold."""
 
@@ -304,12 +299,8 @@ class Scenario(BaseModel):
             self.scenario_key = _slug(self.name)
         if self.background_noise == "":
             level = str((self.coverage or {}).get("interface") or "").strip().lower()
-            if level in _QUIET_INTERFACE:
-                self.background_noise = False
-            elif level in _NOISY_INTERFACE or level.startswith("noisy"):
-                self.background_noise = True
-            else:
-                self.background_noise = _decided_by(self.name)
+            # A real caller is somewhere; only a quiet level is heard in the clear.
+            self.background_noise = level not in _QUIET_INTERFACE
         return self
 
     def slots(self) -> dict[str, str]:

@@ -1340,7 +1340,7 @@ def scenario_tools(
                     "description": "Where the caller is phoning from: street, transit, vehicle, "
                     "outdoors, retail, office or home. Name it whenever the instruction implies "
                     "somewhere, a caller leaving a hotel or standing on a street is not in a "
-                    "quiet room. Left out, it is decided from the scenario name.",
+                    "quiet room. Left out, noise is on unless the interface level is quiet.",
                 },
                 "call_direction": {
                     "type": "string",

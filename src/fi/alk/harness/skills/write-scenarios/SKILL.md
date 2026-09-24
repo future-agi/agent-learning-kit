@@ -763,6 +763,11 @@ Name it from the places the runtime knows: `street`, `transit`, `vehicle`, `in-c
 `hotel`, `crowd`, `office`, `home`. A quiet place is `quiet`, which means heard in the clear rather
 than a default bed.
 
+**Most calls are placed from somewhere.** Leave a caller in the clear only on a `quiet_line`
+scenario. An accented, non-native, hurried or hostile caller is still on a street, in a car or at a
+desk, so name that place. A suite where most calls are silent tests a line real callers rarely have;
+keep quiet calls to about a third.
+
 **The coordinate is a claim about the call, so the persona has to carry it.** `interface` is not a
 label you attach afterwards; it says what the agent actually hears. If the cell says the caller is
 accented, the persona's accent field has to name one, and `Neutral` is not one. If it says disfluent,
