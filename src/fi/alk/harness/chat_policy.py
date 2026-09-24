@@ -106,6 +106,7 @@ def apply_chat_policy(
             permission_override=spec.permission_override,
             idle_timeout_seconds=spec.idle_timeout_seconds,
             conversation=spec.conversation,
+            workers=dict(spec.workers),
         )
     builtins = tuple(
         name
@@ -125,4 +126,5 @@ def apply_chat_policy(
         permission_override=spec.permission_override,
         idle_timeout_seconds=spec.idle_timeout_seconds,
         conversation=spec.conversation,
+        workers=dict(spec.workers),
     )
