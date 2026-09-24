@@ -1016,10 +1016,6 @@ class _TestRunnerAgent(Agent):
             # A recording has already greeted, and a mailbox does not greet twice: a spoken line on
             # top of the clip is one mailbox answering in two voices.
             return
-        initial_message = self._persona.persona.get("initial_message")
-        if isinstance(initial_message, str) and initial_message.strip():
-            self._session.say(initial_message.strip())
-            return
         self._session.generate_reply()
 
     _mailbox_greeted: bool = False
@@ -1087,16 +1083,17 @@ def _chunk_text(chunk: Any) -> str | None:
     return getattr(delta, "content", None) or ""
 
 
-# Where the agent greets first, the caller's first reply is written by the model rather than read.
+# The caller's first turn is written by the model like any other, so it sounds spoken, not read.
 _OPENING_TURN = (
-    "This is your first turn. Say your opening line, in these words: \"{opening}\" If the agent's "
-    "greeting asked you something the line does not answer, answer that briefly first. Say nothing "
-    "else yet: everything else in your situation waits for its moment."
+    "This is your first turn. Open the way this person naturally would, with just your first "
+    "request, which is: {opening} Put it in your own words. If the agent has already spoken and "
+    "asked you something, answer that briefly first. Everything else in your situation waits for "
+    "its moment."
 )
 
 
 def _with_opening_line(chat_ctx: Any, opening: Any) -> Any:
-    """The context for the caller's reply, told to open with its scripted line if it has not spoken yet."""
+    """The context for the caller's reply, told what its first request is if it has not spoken yet."""
     if not isinstance(opening, str) or not opening.strip():
         return chat_ctx
     if any(message.role == "assistant" for message in chat_ctx.messages()):

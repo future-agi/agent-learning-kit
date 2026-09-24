@@ -1418,7 +1418,7 @@ def test_a_stage_direction_inside_a_reply_is_not_spoken() -> None:
     assert asyncio.run(run(["Plain words only."])) == "Plain words only."
 
 
-def test_a_caller_greeted_first_is_told_to_open_with_its_scripted_line() -> None:
+def test_a_caller_is_told_its_first_request_until_it_has_spoken() -> None:
     from livekit.agents.llm import ChatContext
 
     greeted = ChatContext()
