@@ -1035,9 +1035,34 @@ class _TestRunnerAgent(Agent):
             return
         chat_ctx = _with_opening_line(chat_ctx, self._persona.persona.get("initial_message"))
         async for chunk in _without_hold_marker(
-            super().llm_node(chat_ctx, tools, model_settings), on_hold=self._on_hold
+            super().llm_node(chat_ctx, tools, model_settings),
+            on_hold=self._on_hold,
+            on_unspoken=self._on_unspoken,
         ):
             yield chunk
+
+    _answered_again_at: int = -1
+
+    def _on_unspoken(self, text: str) -> None:
+        """A reply with no words in it is dropped; the caller answers once instead of going quiet."""
+        logger.warning("simulator reply not spoken: %r", text[:160])
+        session = self._session
+        if session is None or self._end_requested.is_set():
+            return
+        heard = len(_session_messages(session))
+        if self._answered_again_at == heard:
+            return
+        self._answered_again_at = heard
+        self._answer_again = asyncio.get_running_loop().create_task(self._answer_aloud(heard))
+
+    async def _answer_aloud(self, heard: int) -> None:
+        await asyncio.sleep(0.5)
+        session = self._session
+        if session is None or self._end_requested.is_set():
+            return
+        if len(_session_messages(session)) != heard or _either_side_busy(session):
+            return
+        session.generate_reply(instructions=_ANSWER_ALOUD)
 
     def _on_hold(self) -> None:
         if self._session is None:
@@ -1082,6 +1107,11 @@ def _chunk_text(chunk: Any) -> str | None:
         return None
     return getattr(delta, "content", None) or ""
 
+
+_ANSWER_ALOUD = (
+    "Your last reply had no words a person would say. Reply now, out loud and briefly, to what the "
+    "agent just said."
+)
 
 # The caller's first turn is written by the model like any other, so it sounds spoken, not read.
 _OPENING_TURN = (
@@ -1158,7 +1188,9 @@ _HOLD_CHECK_IN = (
 
 
 async def _without_hold_marker(
-    stream: AsyncIterable[Any], on_hold: Callable[[], None] | None = None
+    stream: AsyncIterable[Any],
+    on_hold: Callable[[], None] | None = None,
+    on_unspoken: Callable[[str], None] | None = None,
 ) -> AsyncIterable[Any]:
     """Pass the reply through unless all it says is the hold marker, which is dropped unspoken."""
     marker = _letters(HOLD_MARKER)
@@ -1187,6 +1219,8 @@ async def _without_hold_marker(
                 yield item
         if on_hold_now and on_hold is not None:
             on_hold()
+        elif silent and on_unspoken is not None:
+            on_unspoken(text)
 
 
 class LiveKitEngine(BaseEngine):

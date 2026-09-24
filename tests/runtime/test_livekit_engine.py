@@ -1432,6 +1432,30 @@ def test_a_caller_is_told_its_first_request_until_it_has_spoken() -> None:
     assert livekit._with_opening_line(ChatContext(), "") is not None
 
 
+def test_a_reply_with_no_words_is_reported_so_the_caller_can_answer_aloud() -> None:
+    dropped: list[str] = []
+    held: list[bool] = []
+
+    async def run(chunks):
+        async def stream():
+            for chunk in chunks:
+                yield chunk
+
+        return [
+            c
+            async for c in livekit._without_hold_marker(
+                stream(), on_hold=lambda: held.append(True), on_unspoken=dropped.append
+            )
+        ]
+
+    assert asyncio.run(run(["None"])) == []
+    assert dropped == ["None"] and held == []
+    asyncio.run(run(["SILENCE"]))
+    assert dropped == ["None"] and held == [True]
+    asyncio.run(run(["Okay, bye."]))
+    assert dropped == ["None"]
+
+
 def test_a_dropped_marker_reports_the_hold_and_an_ordinary_reply_does_not() -> None:
     held: list[bool] = []
 
