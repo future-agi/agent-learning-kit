@@ -1157,6 +1157,14 @@ If the offered vocabulary cannot express the person the level needs, the level i
 in the report and place the scenario elsewhere rather than writing a persona that disagrees with
 itself.
 
+**One person, not a set of fields.** Choose who is calling first and let every field follow from
+them: the name, the languages and the accent are one fact about one person. An Indian accent belongs
+to a caller whose name, location and languages make it plausible; a Spanish speaker named Diego Ramos
+is not given an Indian accent to fill a spread. Real people do cross those lines, a second-generation
+caller or a married name, so a mismatch is allowed when it is deliberate: say so in the instruction,
+and keep it to one or two in a suite. When a spread limit refuses a field, change the person, not
+only that field.
+
 ### What actually trips a voice agent
 
 Most suites come back easy: one request, given in order, by somebody cooperative, who answers the

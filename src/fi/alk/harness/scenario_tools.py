@@ -427,7 +427,8 @@ def crowded_field(kept: list[Scenario], candidate: Any, wanted: int) -> str:
             return (
                 f"{held} of the {len(kept)} scenarios written so far already use "
                 f"{field}={value!r}, and a suite of {wanted} may not put more than {ceiling} on "
-                f"one. Give this person a different {field}; the rest of the scenario can stay."
+                f"one. Choose a different person, whose name, languages and accent agree with a new {field}; "
+                "the situation can stay."
             )
     return ""
 
