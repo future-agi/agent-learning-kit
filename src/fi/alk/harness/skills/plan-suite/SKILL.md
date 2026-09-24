@@ -795,7 +795,7 @@ The worker is called `scenario_writer`. A brief carries: which cells to cover, *
 those cells means and what the agent must do about it**, the sub-goal that claim is named by, how
 many scenarios it is worth, and what makes them different from what the other writers were given.
 It never carries scenario names or a naming pattern: each writer names each scenario after what it
-tests, and a numbered range such as "billing_041" to "billing_060" names nothing.
+tests, and a numbered range such as "scenario_041" to "scenario_060" names nothing.
 
 A writer sees the cell you deal it and nothing else: not your grid, not the overlay table above, not
 what you meant by `fraud_policy_abuse`. Deal it the meaning in a line, in your own words, with the
