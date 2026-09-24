@@ -122,7 +122,13 @@ def _fixture_invariants(fixture: dict) -> str:
     credentials = fixture.get("credentials")
     if isinstance(credentials, dict):
         otp = str(credentials.get("otp_code") or credentials.get("otp") or "").strip()
-    otp = otp or str(fixture.get("otp_code") or fixture.get("otp") or "").strip()
+    otp = otp or str(
+        fixture.get("otp_code")
+        or fixture.get("otp")
+        or fixture.get("guest_pin")
+        or fixture.get("pin")
+        or ""
+    ).strip()
     if otp:
         rules.append(
             f"The only verification code you may say is {otp}; never alter its digits."
@@ -226,6 +232,8 @@ def _derived_scripted_caller(fixture: dict, instruction: str, outcome: str) -> d
         or credentials.get("otp")
         or fixture.get("otp_code")
         or fixture.get("otp")
+        or fixture.get("guest_pin")
+        or fixture.get("pin")
         or ""
     )
     if otp:
@@ -336,9 +344,19 @@ def recover_scripted_reply(heard: str, policy: dict, fallback) -> tuple[str, boo
         return "Thanks, goodbye.", True
     asks_otp = any(
         cue in text
-        for cue in ("one-time code", "verification code", "read the code", "six digits")
+        for cue in (
+            "one-time code",
+            "verification code",
+            "read the code",
+            "six digits",
+            "pin",
+            "four digits",
+            "four-digit",
+        )
     )
-    if asks_otp and not policy.get("otp") and policy.get("payment"):
+    if asks_otp and policy.get("otp"):
+        reply = (str(policy["otp"]), False)
+    elif asks_otp and policy.get("payment"):
         reply = (str(policy["payment"]), False)
     elif asks_name and policy.get("name"):
         reply = (str(policy["name"]), False)
