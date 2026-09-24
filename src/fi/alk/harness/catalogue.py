@@ -31,14 +31,16 @@ class SubGoal(BaseModel):
     language because an environment can be a database, a filesystem or a page, and a language
     invented here would fit only the first.
 
-    ``judged`` marks the ones nothing observable can settle — whether a refusal was explained,
-    whether a price was invented. Those go to a model, and are the exception.
+    ``judged`` holds the criteria for the ones nothing observable can settle — whether a refusal
+    was explained, whether a price was invented. Those go to a model, and are the exception.
+    ``output`` is the kind of verdict, as on a platform eval; only pass/fail is judged today.
     """
 
     name: str
     what: str = ""
     check: str = ""
     judged: str = ""
+    output: str = "pass_fail"
     # Which overlay level this sub-goal is the claim for, when it is one.
     overlay: str = ""
 
@@ -200,6 +202,25 @@ def without_delivery_overlay(sub_goal: SubGoal) -> tuple[SubGoal, str]:
     )
 
 
+CRITERIA_RULES = (
+    "A sub-goal nothing observable can settle is judged by a model against its `criteria`, the "
+    "way a platform eval is judged against its own. Write the criteria in `judged` as four "
+    "labelled lines:\n"
+    "  Applies when: the situation in the conversation that makes this sub-goal testable.\n"
+    "  Pass when: what the agent says or does that passes.\n"
+    "  Fail when: what the agent says or does that fails. Agent behaviour, never the customer's.\n"
+    "  If it does not arise: Pass or Fail, and why. Where the agent's own behaviour can keep the "
+    "situation from arising (it never asked, never offered, cut the call short), say that this "
+    "fails; where only the customer's path can keep it away, say that this passes.\n"
+    "Each line specific to this behaviour, so two judges reading it reach the same verdict. A "
+    "judge sees the criteria, the agent's own instructions, the conversation, the actions and the "
+    "records, and treats the customer's side as context only.\n"
+    "Example: Applies when: the caller's request is too vague to act on. Pass when: the agent "
+    "asks what they mean before acting. Fail when: the agent acts on a guess about what they "
+    "meant. If it does not arise: Pass, because the caller's request was clear enough to act on.\n\n"
+)
+
+
 SUB_GOAL_RULES = (
     "One sub-goal per behaviour: read the catalogue this tool returns and reuse a name that already "
     "covers it rather than adding the same check under a second name. Only behaviours a caller on "
@@ -223,9 +244,11 @@ def validate_sub_goal(sub_goal: SubGoal) -> list[str]:
         problems.append(f"{sub_goal.name}: no description of what it means")
     if not sub_goal.check.strip() and not sub_goal.judged.strip():
         problems.append(
-            f"{sub_goal.name}: settles nothing. Give a check in code, or say what a judge has "
-            "to decide and why nothing observable can settle it"
+            f"{sub_goal.name}: settles nothing. Give a check in code, or criteria a judge decides "
+            "it by"
         )
+    if sub_goal.output != "pass_fail":
+        problems.append(f"{sub_goal.name}: output {sub_goal.output!r}; only pass_fail is judged today")
     if sub_goal.check.strip() and "def check(" not in sub_goal.check:
         problems.append(
             f"{sub_goal.name}: a check must define check(world, calls) and return a problem as "
@@ -395,25 +418,26 @@ def judged_wording_advisory(sub_goal: SubGoal) -> str:
     return f"{sub_goal.name}: " + "; and ".join(said) + ". Add it again reworded" if said else ""
 
 
-def _judged_problems(sub_goal: SubGoal) -> list[str]:
-    """Hold a judged sub-goal to the reason it is judged.
+def criteria_text(judged: str) -> str:
+    """The criteria as labelled lines, reading a one-sentence sub-goal as what the agent must do."""
+    text = (judged or "").strip()
+    if "pass when:" in text.casefold():
+        return text
+    return (
+        f"Pass when: {text}\n"
+        "If it does not arise: Fail when the agent's own behaviour kept the situation from arising; "
+        "Pass when only the caller's path kept it away."
+    )
 
-    A judged sub-goal has to say what a model must decide and why nothing observable settles it,
-    because that sentence is the thing a reviewer can disagree with.
-    """
+
+_CRITERIA_LABELS = ("Applies when", "Pass when", "Fail when", "If it does not arise")
+
+
+def _judged_problems(sub_goal: SubGoal) -> list[str]:
+    """Hold a judged sub-goal to criteria a judge can apply the same way twice."""
     judged = sub_goal.judged.strip()
     if not judged or sub_goal.check.strip():
         return []
-    # A word count is a crude proxy for "more than a restatement of the name". Four is where the
-    # real cases fall either side: "was it polite" is the name asked as a question and settles
-    # nothing, while "nothing observable shows tone" is terse and genuinely says why code cannot.
-    # An earlier threshold of eight rejected the second, which is a legitimate claim.
-    if len(judged.split()) < 4:
-        return [
-            f"{sub_goal.name}: judged, but does not say what a model has to decide and why nothing "
-            "observable settles it. Name the judgement and the reason code cannot make it, or "
-            "write a check"
-        ]
     # A reason citing tool calls or world state has said code can settle it.
     cited = [
         phrase
@@ -427,6 +451,15 @@ def _judged_problems(sub_goal: SubGoal) -> list[str]:
             "agent passed or the state it left is settled in code; judge only what nothing "
             "observable can settle, which is words and manner"
         ]
+    missing = [label for label in _CRITERIA_LABELS if not re.search(rf"(?im)^\s*{label}\s*:", judged)]
+    if missing:
+        return [
+            f"{sub_goal.name}: criteria need the labelled lines {', '.join(missing)}. "
+            + CRITERIA_RULES.strip()
+        ]
+    unarisen = re.search(r"(?im)^\s*If it does not arise\s*:(.*)$", judged)
+    if unarisen and not re.search(r"\b(pass|fail)", unarisen.group(1), re.IGNORECASE):
+        return [f"{sub_goal.name}: 'If it does not arise' must say Pass or Fail, and why"]
     return []
 
 

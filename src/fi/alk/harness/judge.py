@@ -21,6 +21,7 @@ import os
 from typing import Any, Sequence
 
 from .backends import SessionSpec, tool, tool_server
+from .catalogue import criteria_text
 from .config import chosen_model
 from .session import Stage
 from .tools import schema
@@ -32,30 +33,45 @@ _LIMIT = 600
 _TRANSCRIPT_LIMIT = 24000
 
 _INSTRUCTIONS = """
-You decide one claim about a conversation an agent already had, using what it said, the actions it
-took and the state of its system afterwards.
+You are a judge. You evaluate one sub-goal of a conversation an agent has already had, and you
+always deliver a verdict.
 
-Look before you answer: read the actions you were given, read the conversation when the claim is
-about what was said, and inspect the system's records when the claim is about what changed. The
-records are PostgreSQL; use inspect_world to discover them rather than guessing names. Judge the
-claim against the situation the conversation actually set up: a step the customer declined, or one the
-situation never called for, is not a failure of the agent.
+What you are given:
+- The sub-goal's criteria. They are the only standard you judge against: when the sub-goal applies,
+  what passes, what fails, and what the verdict is when its situation does not arise.
+- The agent's own instructions: what the agent is meant to do. Never hold the agent to more than
+  they require.
+- The customer's side: what the customer set out to do and how they were meant to behave. It is
+  context for reading the conversation, nothing more. The customer is not being evaluated: never
+  pass or fail the agent for something the customer did or did not do, and never comment on the
+  customer.
+- The evidence: what was said, the actions the agent took, and the records of its system
+  afterwards.
 
-Then call decide, once, with `passed` true or false. You must decide: the conversation, the actions
-and the records together are enough, so weigh them and commit. A claim about how the agent handles
-a situation is not passed when that situation never came up: decide false and say plainly that it
-did not come up.
+How to decide:
+1. Read the criteria.
+2. Read the evidence. Read the conversation for what was said, the actions for what the agent did,
+   and inspect the records when the criteria are about what changed. The records are PostgreSQL;
+   use inspect_world to discover them rather than guessing names.
+3. Establish whether the sub-goal's situation arose. If it did not, work out why from the evidence:
+   the criteria say what that means, and whether the agent's own behaviour kept it from arising
+   matters.
+4. Apply the criteria exactly as written. Do not add requirements they do not state, and do not
+   excuse what they state.
+5. Where nothing you were given records the right answer, never call what the agent said accurate
+   or correct, and never assume it is.
+6. What was said reached you through speech recognition and can contain its errors. A garbled
+   phrase, or a word that sounds like one the context calls for, is a mishearing, not something the
+   agent said: judge what the agent evidently said.
 
-Where nothing you were given records the right answer, never call what the agent said accurate or
-correct, and never assume it is. Judge what can be seen: whether it answered the question the
-customer actually asked, all of it and specifically, or left a part unanswered or answered with a
-general remark.
+Always decide. The evidence you were given is what there is; never answer that you cannot tell.
+Call decide once, with `passed` true or false.
 
-`explanation` is shown to the agent's owner. Write one or two plain sentences about the agent's
-behaviour and its result, in the terms of their business: what the agent said or did, and what that
-changed. Never mention tables, rows, queries, tool names, records you could or could not read, this
-review, a test, a scenario, a simulation or any error. Put anything about how you checked into
-`evidence`, which only the reviewers of this process see.
+`explanation` is shown to the agent's owner. Write one or two plain sentences about what the agent
+said or did and what followed from it, in the terms of their business, citing what actually
+happened. Never mention tables, rows, queries, tool names, records you could or could not read,
+criteria, this review, a test, a scenario, a simulation, the customer's instructions or any error.
+Put anything about how you checked into `evidence`, which only the reviewers of this process see.
 """.strip()
 
 
@@ -90,6 +106,7 @@ async def judge(
     *,
     messages: Sequence[Any] = (),
     scenario: Any = None,
+    agent_instructions: str = "",
 ) -> tuple[bool | None, str]:
     """Decide one judged sub-goal: (passed, explanation). Never raises."""
     verdict: dict[str, tuple[bool | None, str]] = {}
@@ -171,23 +188,17 @@ async def judge(
         max_turns=12,
         model=judge_model(),
     )
-    situation = ""
-    if scenario is not None:
-        situation = (
-            f"The situation the conversation set up: {getattr(scenario, 'instruction', '') or '(not given)'}\n"
-            f"What it was meant to show: {getattr(scenario, 'tests', '') or '(not given)'}\n\n"
-        )
     prompt = (
-        f"{situation}"
-        f"Claim {getattr(goal, 'name', '')!r}.\n"
-        f"What it means: {getattr(goal, 'what', '') or '(none written)'}\n"
-        f"Why it needs judgement: {getattr(goal, 'judged', '')}\n\n"
+        f"Sub-goal {getattr(goal, 'name', '')!r}: {getattr(goal, 'what', '') or '(no summary)'}\n\n"
+        f"Criteria:\n{criteria_text(getattr(goal, 'judged', ''))}\n\n"
+        f"The agent's own instructions:\n{agent_instructions.strip() or '(not given)'}\n\n"
+        f"{_customer_side(scenario)}"
         f"Actions the agent took:\n{_dump_calls(calls)}\n\n"
         + (
             ""
             if calls
-            else "No actions were recorded, so only the conversation is observable: decide a "
-            "claim about what the agent did from what it said, confirmed and did not contradict.\n\n"
+            else "No actions were recorded, so only the conversation is observable: judge what the "
+            "agent did from what it said, confirmed and did not contradict.\n\n"
         )
         + "Look as needed, then call decide."
     )
@@ -208,6 +219,22 @@ async def judge(
             return verdict["it"]
     logger.warning("judge gave no verdict for %s", getattr(goal, "name", ""))
     return None, ""
+
+
+def _customer_side(scenario: Any) -> str:
+    """What the customer set out to do, as context only; nothing here is judged."""
+    if scenario is None:
+        return ""
+    presented = getattr(scenario, "presented", None) or {}
+    situation = getattr(scenario, "instruction", "") or presented.get("situation", "")
+    purpose = getattr(scenario, "tests", "") or presented.get("outcome", "")
+    if not situation and not purpose:
+        return ""
+    return (
+        "The customer's side, for context only (not evaluated):\n"
+        f"What they set out to do: {situation or '(not given)'}\n"
+        f"What the conversation was meant to show about the agent: {purpose or '(not given)'}\n\n"
+    )
 
 
 _SPEAKERS = {"user": "Customer", "assistant": "Agent"}

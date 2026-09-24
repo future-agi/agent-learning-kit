@@ -672,7 +672,7 @@ class _TestRunnerAgent(Agent):
         # Nothing quotable and nothing English-specific: wording here comes back out as speech.
         description=(
             "Ends the call. Nothing else ends it and no one else ends it for you. "
-            "Use it once you have nothing further."
+            "Use it in the same turn as your goodbye."
         ),
     )
     async def end_call(self, ctx: RunContext) -> str | None:
@@ -709,6 +709,7 @@ class _TestRunnerAgent(Agent):
         # the outer runner so it cannot snapshot history in the brief interval
         # before TTS starts and ``session.current_speech`` becomes non-None.
         self._end_speech_handle = ctx.speech_handle
+        self._goodbye_said = bool(_letters(_STAGE_DIRECTION.sub("", self._saying)))
         self._end_requested.set()
         return None
 
@@ -821,6 +822,8 @@ class _TestRunnerAgent(Agent):
                 if not clip_source:
                     return
                 self._background_noise_file = clip_source
+            elif source and Path(source).is_file():
+                clip_source = source
             elif source:
                 clip_source = getattr(BuiltinAudioClip, source, None)
                 if clip_source is None:
@@ -828,6 +831,8 @@ class _TestRunnerAgent(Agent):
                         "background audio clip %r is not one LiveKit ships", source
                     )
                     return
+            if clip_source is not None:
+                volume *= await _bed_gain(clip_source, source)
             # A player is created even with no ambience clip, because a mailbox tone needs a
             # published track whether or not this scenario also asked for a room.
             player = (
@@ -1012,10 +1017,6 @@ class _TestRunnerAgent(Agent):
             # A recording has already greeted, and a mailbox does not greet twice: a spoken line on
             # top of the clip is one mailbox answering in two voices.
             return
-        initial_message = self._persona.persona.get("initial_message")
-        if isinstance(initial_message, str) and initial_message.strip():
-            self._session.say(initial_message.strip())
-            return
         self._session.generate_reply()
 
     _mailbox_greeted: bool = False
@@ -1030,15 +1031,56 @@ class _TestRunnerAgent(Agent):
             if self._mailbox_greeted or self._voicemail_greeting is not None:
                 return
             self._mailbox_greeted = True
+        # Once a goodbye was said, anything after it narrates the hang-up; a silent hang-up gets one goodbye.
+        if self._end_requested.is_set():
+            if self._goodbye_said:
+                return
+            self._goodbye_said = True
+        chat_ctx = _with_opening_line(chat_ctx, self._persona.persona.get("initial_message"))
+        self._saying = ""
         async for chunk in _without_hold_marker(
-            super().llm_node(chat_ctx, tools, model_settings), on_hold=self._on_hold
+            super().llm_node(chat_ctx, tools, model_settings),
+            on_hold=self._on_hold,
+            on_unspoken=self._on_unspoken,
         ):
+            self._saying += _chunk_text(chunk) or ""
             yield chunk
+
+    _goodbye_said: bool = False
+    _saying: str = ""
+
+    _answered_again_at: int = -1
+
+    def _on_unspoken(self, text: str) -> None:
+        """A reply with no words in it is dropped; the caller answers once instead of going quiet."""
+        logger.warning("simulator reply not spoken: %r", text[:160])
+        session = self._session
+        if session is None or self._end_requested.is_set():
+            return
+        heard = len(_session_messages(session))
+        if self._answered_again_at == heard:
+            return
+        self._answered_again_at = heard
+        self._answer_again = asyncio.get_running_loop().create_task(self._answer_aloud(heard))
+
+    async def _answer_aloud(self, heard: int) -> None:
+        await asyncio.sleep(0.5)
+        session = self._session
+        if session is None or self._end_requested.is_set():
+            return
+        if len(_session_messages(session)) != heard or _either_side_busy(session):
+            return
+        session.generate_reply(instructions=_ANSWER_ALOUD)
 
     def _on_hold(self) -> None:
         if self._session is None:
             return
-        heard = len(_session_messages(self._session))
+        messages = _session_messages(self._session)
+        # Asked something, the caller is not on hold: silence here is a question left unanswered.
+        if _was_asked(messages):
+            self._on_unspoken("(silent after a question)")
+            return
+        heard = len(messages)
         self._hold_check = asyncio.get_running_loop().create_task(self._still_there(heard))
 
     async def _still_there(self, heard: int) -> None:
@@ -1051,12 +1093,15 @@ class _TestRunnerAgent(Agent):
             return
         session.generate_reply(instructions=_HOLD_CHECK_IN)
 
+    def tts_node(self, text: AsyncIterable[str], model_settings: ModelSettings):
+        return Agent.default.tts_node(self, _spoken_words(text), model_settings)
+
     async def transcription_node(
         self,
         text: AsyncIterable[str | TimedString],
         model_settings: ModelSettings,
     ):
-        async for chunk in text:
+        async for chunk in _spoken_words(text):
             logger.debug(
                 "Simulator transcription chunk",
                 extra={"timed": isinstance(chunk, TimedString)},
@@ -1076,8 +1121,86 @@ def _chunk_text(chunk: Any) -> str | None:
     return getattr(delta, "content", None) or ""
 
 
+_ANSWER_ALOUD = (
+    "Your last reply had no words a person would say. Reply now, out loud and briefly, to what the "
+    "agent just said."
+)
+
+# The caller's first turn is written by the model like any other, so it sounds spoken, not read.
+_OPENING_TURN = (
+    "This is your first turn. Open the way this person naturally would, with just your first "
+    "request, which is: {opening} Say it in your own words, in one or two short sentences, keeping "
+    "its manner: if it is halting, vague or unfinished, say it that way, and keep any exact words "
+    "or values it contains. If the agent has already spoken and asked you something, answer that "
+    "briefly first. Everything else in your situation waits for its moment."
+)
+
+
+def _with_opening_line(chat_ctx: Any, opening: Any) -> Any:
+    """The context for the caller's reply, told what its first request is if it has not spoken yet."""
+    if not isinstance(opening, str) or not opening.strip():
+        return chat_ctx
+    if any(message.role == "assistant" for message in chat_ctx.messages()):
+        return chat_ctx
+    briefed = chat_ctx.copy()
+    briefed.add_message(role="system", content=_OPENING_TURN.format(opening=opening.strip()))
+    return briefed
+
+
+def _was_asked(messages: list[dict[str, Any]]) -> bool:
+    """Whether the agent's latest turn, heard by the caller as the other speaker, ends on a question."""
+    for message in reversed(messages):
+        if message.get("role") == "user":
+            return str(message.get("content") or "").rstrip().endswith("?")
+        if message.get("role") == "assistant":
+            return False
+    return False
+
+
 def _letters(text: str) -> str:
     return re.sub(r"[\W_]", "", text.lower())
+
+
+# A reply that is only a stage direction or an echoed empty result, never words a person says.
+_NOT_SPEECH = re.compile(r"\s*(?:\[[^\]]*\]|\*[^*]*\*|\([^)]*\)|none|null|n/?a)\s*[.!]?\s*", re.IGNORECASE)
+
+
+def _not_speech(text: str) -> bool:
+    return bool(text.strip()) and _NOT_SPEECH.fullmatch(text) is not None
+
+
+def _may_not_be_speech(text: str) -> bool:
+    """Whether the reply so far could still turn out to be only a stage direction or an empty result."""
+    opened = text.lstrip()[:1]
+    closer = {"[": "]", "*": "*", "(": ")"}.get(opened)
+    if closer and closer not in text.lstrip()[1:]:
+        return True
+    letters = _letters(text)
+    return _not_speech(text) or any(word.startswith(letters) for word in ("none", "null", "na") if letters)
+
+
+# The one bracketed cue the voice renders is kept; see CARTESIA_DELIVERY_CUES.
+_STAGE_DIRECTION = re.compile(r"\[(?!laughter\])[^\]]*\]|\*[^*]*\*", re.IGNORECASE)
+
+
+async def _spoken_words(text: AsyncIterable[Any]) -> AsyncIterable[Any]:
+    """The text with any bracketed or starred stage direction removed, however it is chunked."""
+    pending = ""
+    async for chunk in text:
+        if not isinstance(chunk, str) or (not pending and "[" not in chunk and "*" not in chunk):
+            yield chunk
+            continue
+        pending += chunk
+        open_at = max(pending.rfind("["), -1) if pending.count("[") > pending.count("]") else -1
+        if open_at < 0 and pending.count("*") % 2:
+            open_at = pending.rfind("*")
+        ready, pending = (pending, "") if open_at < 0 else (pending[:open_at], pending[open_at:])
+        cleaned = _STAGE_DIRECTION.sub("", ready)
+        if cleaned:
+            yield cleaned
+    cleaned = _STAGE_DIRECTION.sub("", pending)
+    if cleaned and not cleaned.lstrip().startswith(("[", "*")):
+        yield cleaned
 
 
 # Under the settled-silence floor, so the caller checks in before a quiet line is taken for the end.
@@ -1090,7 +1213,9 @@ _HOLD_CHECK_IN = (
 
 
 async def _without_hold_marker(
-    stream: AsyncIterable[Any], on_hold: Callable[[], None] | None = None
+    stream: AsyncIterable[Any],
+    on_hold: Callable[[], None] | None = None,
+    on_unspoken: Callable[[str], None] | None = None,
 ) -> AsyncIterable[Any]:
     """Pass the reply through unless all it says is the hold marker, which is dropped unspoken."""
     marker = _letters(HOLD_MARKER)
@@ -1105,19 +1230,22 @@ async def _without_hold_marker(
         held.append(chunk)
         if piece is not None:
             text += piece
-            if marker.startswith(_letters(text)):
+            if marker.startswith(_letters(text)) or _may_not_be_speech(text):
                 continue
         holding = False
         for item in held:
             yield item
         held = []
     if holding:
-        silent = _letters(text) == marker
+        on_hold_now = _letters(text) == marker
+        silent = on_hold_now or _not_speech(text)
         for item in held:
             if not silent or (not isinstance(item, str) and getattr(item, "delta", None) is None):
                 yield item
-        if silent and on_hold is not None:
+        if on_hold_now and on_hold is not None:
             on_hold()
+        elif silent and on_unspoken is not None:
+            on_unspoken(text)
 
 
 class LiveKitEngine(BaseEngine):
@@ -3314,6 +3442,46 @@ def _voicemail_tone_style() -> str:
         or _DEFAULT_VOICEMAIL_STYLE
     )
     return style if style in _VOICEMAIL_TONE_BY_STYLE else ""
+
+
+# Clips are recorded at wildly different levels; each is scaled to the office clip's loudness,
+# the level the volume above was tuned against.
+_BED_RMS: dict[str, float] = {}
+
+
+def _rms(pcm: bytes) -> float:
+    samples = array.array("h", pcm)
+    return math.sqrt(sum(sample * sample for sample in samples) / len(samples)) if samples else 0.0
+
+
+async def _bed_rms(path: str, key: str = "") -> float:
+    """Root-mean-square level of up to twenty seconds of a clip, as the mixer will receive it."""
+    key = key or path
+    if key not in _BED_RMS:
+        chunks, count = [], 0
+        frames = audio_frames_from_file(path)
+        try:
+            async for frame in frames:
+                chunks.append(bytes(frame.data))
+                count += frame.samples_per_channel
+                if count >= _BACKGROUND_MIXER_RATE * 20:
+                    break
+        finally:
+            await frames.aclose()
+        _BED_RMS[key] = await asyncio.to_thread(_rms, b"".join(chunks))
+    return _BED_RMS[key]
+
+
+async def _bed_gain(clip: Any, source: str = "") -> float:
+    """The factor that brings a clip to the office clip's loudness, or 1.0 when either is unreadable."""
+    try:
+        path = clip.path() if isinstance(clip, BuiltinAudioClip) else str(clip)
+        reference = await _bed_rms(BuiltinAudioClip.OFFICE_AMBIENCE.path(), "OFFICE_AMBIENCE")
+        level = await _bed_rms(path, source)
+    except Exception:
+        logger.warning("background clip level not measured", exc_info=True)
+        return 1.0
+    return reference / level if reference and level else 1.0
 
 
 def _downloaded_audio(source: str) -> str | None:

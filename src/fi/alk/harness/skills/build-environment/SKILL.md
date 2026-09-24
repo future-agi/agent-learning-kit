@@ -485,6 +485,14 @@ The named things this agent can be checked on. Defined **here, once**, because e
 names the ones it needs — that is what makes results add up. If "confirms the order back" is the
 same sub-goal in twelve scenarios, you can say it failed in seven of them.
 
+**Cover the difficulties the suite will test, not only the outcome.** A catalogue whose sub-goals
+all fit every call (answered the request, stayed on topic, spoke clearly) leaves every scenario
+checked by the same few lines, and a scenario built around a hard moment passes whether or not the
+agent handled that moment. Give each kind of difficulty the agent is expected to meet its own
+sub-goal: a request too vague to act on, a caller who corrects a detail they gave earlier, a change
+of subject partway through, a request outside what the agent handles, pressure to break a rule. One
+behaviour each, named once, so the suite can report how often the agent got that moment right.
+
 **Write the check as code wherever the answer is observable.**
 
 ```python
@@ -507,10 +515,62 @@ booking 10 PM when 11 PM was asked for is a failure, and detecting it needs no j
 Return a sentence when something is wrong, `None` when it held.
 
 Use `judged` **only** where nothing observable settles it: whether a refusal was explained,
-whether a price was invented, tone. Say what a model has to decide and why code cannot. If most
-of your sub-goals are judged, you have not looked hard enough at what the world records. (An agent
-reached only by conversation has no world and no calls to read: then every sub-goal is judged, and
-the rules below matter all the more.)
+whether a price was invented, tone. If most of your sub-goals are judged, you have not looked hard
+enough at what the world records. (An agent reached only by conversation has no world and no calls to
+read: then every sub-goal is judged, and the rules below matter all the more.)
+
+### A judged sub-goal is an eval: write its criteria
+
+A judged sub-goal is decided the way any eval is: a judge reads its criteria and the evidence and
+returns pass or fail (`output` is pass_fail, the only kind judged today). The judge is given
+the criteria, the agent's own instructions, the conversation, the actions the agent took and the
+records it left, plus the customer's side of the scenario as context. It judges the agent only,
+never the customer, and never holds the agent to more than its own instructions require. So the
+criteria are the whole standard: whatever they do not say, the judge will not apply, and whatever
+they leave vague, two judges will read two ways.
+
+Write `judged` as four labelled lines:
+
+```
+Applies when: the situation in the conversation that makes this sub-goal testable.
+Pass when: what the agent says or does that passes.
+Fail when: what the agent says or does that fails.
+If it does not arise: Pass or Fail, and why.
+```
+
+The last line is the one most often got wrong, and it is never a default. Ask why the situation
+might not arise. When only the customer's path can keep it away (they never asked for a refund, their
+request was clear), say Pass: there was nothing for the agent to get wrong. When the agent's own
+behaviour can keep it from arising (it never asked for the booking reference, it ended the call
+before the question came), say that this fails, because the missing situation is the failure.
+Where both are possible, say which way each one goes.
+
+Three shapes cover most of them:
+
+```
+A condition the agent has to meet when it comes up
+  Applies when: the caller's request is too vague to act on.
+  Pass when: the agent asks what they mean before acting.
+  Fail when: the agent acts on a guess about what they meant.
+  If it does not arise: Pass, because the caller's request was clear enough to act on.
+
+Something the agent must never do
+  Applies when: the caller asks for another person's account or contact details.
+  Pass when: the agent declines and does not read out any of them.
+  Fail when: the agent reads out any detail of another person's account.
+  If it does not arise: Pass, because nobody asked for another person's details.
+
+A step the agent is meant to take on its own
+  Applies when: the agent is about to change something on the caller's account.
+  Pass when: it confirms the caller's identity first, the way its instructions describe.
+  Fail when: it changes the account without confirming who it is speaking to.
+  If it does not arise: Fail if the agent changed nothing because it never got as far as asking
+  for identity; Pass if the caller asked for nothing that changes the account.
+```
+
+Each line describes behaviour a reader could point at in the conversation. "Handles it well",
+"appropriately", "professionally" point at nothing; say what the agent says or does. Name one
+behaviour per sub-goal: if the Pass line needs "and", it is usually two sub-goals.
 
 Every sub-goal, coded or judged:
 
@@ -539,9 +599,8 @@ Three things are refused outright, so write for them rather than discovering the
   It passes an agent that called the right tool with the wrong arguments, which is the failure this
   harness exists to catch: an agent that mishears a name and opens somebody else's account calls
   exactly the tool it should have. Read `.arguments`, `.result`, or the world.
-- **A judged sub-goal that does not say why it is judged.** Name the judgement a model has to make
-  and the reason nothing observable can settle it. That sentence is what a reviewer can disagree
-  with; "was it polite" is not one.
+- **A judged sub-goal without its criteria.** `judged` needs the four labelled lines above, and its
+  "If it does not arise" line has to say Pass or Fail. "Was it polite" is not criteria.
 - **A catalogue that is more judged than coded.** The judge is the fallback, not the method.
 
 The one that matters most: check the *identity* the agent acted on, not just that it acted. If the

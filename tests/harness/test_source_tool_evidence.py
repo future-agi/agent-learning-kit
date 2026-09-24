@@ -333,15 +333,17 @@ def test_a_judged_sub_goal_must_say_why_it_is_judged():
     from fi.alk.harness.catalogue import validate_sub_goal
 
     thin = validate_sub_goal(_goal("polite", judged="was it polite"))
-    assert thin and "does not say what a model has to decide" in thin[0]
+    assert thin and "criteria need the labelled lines" in thin[0]
 
     assert (
         validate_sub_goal(
             _goal(
                 "refusal_explained",
                 judged=(
-                    "Whether the agent explained why it refused, which the world records nothing "
-                    "about because a refusal leaves no row behind"
+            "Applies when: the agent declines a request.\n"
+            "Pass when: it tells the caller why it cannot help.\n"
+            "Fail when: it declines without giving any reason.\n"
+            "If it does not arise: Pass, because nothing was declined."
                 ),
             )
         )
@@ -577,11 +579,16 @@ def test_a_terse_but_real_judged_claim_is_accepted():
     """Caught by the full suite, not by the ones I was watching."""
     from fi.alk.harness.catalogue import validate_sub_goal
 
-    assert validate_sub_goal(_goal("polite", judged="nothing observable shows tone")) == []
+    assert validate_sub_goal(_goal("polite", judged=(
+        "Applies when: the agent declines a request.\n"
+            "Pass when: it tells the caller why it cannot help.\n"
+            "Fail when: it declines without giving any reason.\n"
+            "If it does not arise: Pass, because nothing was declined."
+    ))) == []
 
     # Still refused: the name asked back as a question, which settles nothing.
     problems = validate_sub_goal(_goal("polite", judged="was it polite"))
-    assert problems and "does not say what a model has to decide" in problems[0]
+    assert problems and "criteria need the labelled lines" in problems[0]
 def test_empty_runtime_owned_tool_world_does_not_invent_world_checks(tmp_path):
     """The real runtime, not an authored shadow world, proves stateless in-process tools."""
     import asyncio

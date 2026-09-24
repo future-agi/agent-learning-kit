@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import asyncio
+import hashlib
 import logging
 import os
 import random
@@ -39,6 +40,7 @@ from .scenario import Scenario, voicemail_enabled
 from .scenario_tools import (
     SCENARIO_SERVER,
     TOOL_NAMES,
+    _is_spoken,
     load_scenarios,
     scenario_tools,
     world_summary,
@@ -552,14 +554,7 @@ def planned(wanted: int, use_cases: list[str], given: list[dict] | None) -> list
     return slices
 
 
-# Initial letters dealt out so parallel writers cannot invent the same people. Three per writer, which
-# is enough choice to suit a scenario and keeps seven writers disjoint before the letters wrap; beyond
-# that two writers share initials but still choose different names. Numbers are partitioned by a
-# three-digit prefix instead: a hundred slots collided twice on a run with twenty slices, which is
-# what the birthday arithmetic predicts, and a thousand makes it rare. A repeated verification code is
-# a real collision; a repeated initial is not.
-_NAME_LETTERS = "ABCDEFGHIJKLMNOPRSTVWY"
-_LETTER_BLOCK = "abc"
+# Numbers a writer invents carry a three-digit prefix per slice, so parallel writers never share a code.
 
 
 def _slot(of: str, index: int) -> int:
@@ -570,7 +565,7 @@ def _slot(of: str, index: int) -> int:
     return int(hashlib.sha256(of.encode("utf-8")).hexdigest()[:8], 16)
 
 
-def callers_for(index: int, wanted: int, slice_name: str = "") -> str:
+def callers_for(index: int, wanted: int, slice_name: str = "", spoken: bool = True) -> str:
     """Which callers this slice should write, so the suite varies across slices as well as within.
 
     Instruction alone cannot do this. Worse, a slice writing a single scenario has nothing to
@@ -581,6 +576,7 @@ def callers_for(index: int, wanted: int, slice_name: str = "") -> str:
     suggestion rather than a rule, because the caller still has to suit the scenario: a stolen
     phone is not a cheerful call whatever this hands out.
     """
+    from .background_noise import places
     from .persona_guides import offered
 
     people = offered("personality")
@@ -592,27 +588,15 @@ def callers_for(index: int, wanted: int, slice_name: str = "") -> str:
         "\n\nStart from these callers, and move off them only where the scenario calls for "
         f"somebody else: {', '.join(picks)}."
     )
-    # Writers cannot see each other, so left to themselves they invent the same handful of people and
-    # the same round numbers, and the suite comes back with one name on a dozen scenarios and one
-    # verification code shared between them. Partitioning the space of values costs nothing and makes
-    # a collision impossible: each writer owns some initial letters and one leading digit, so no
-    # shared list of names or codes has to exist for the values to stay distinct.
     slot = _slot(slice_name, index)
-    block = max(len(_LETTER_BLOCK), min(8, (max(1, wanted) + 2) // 3))
-    letters = "".join(
-        _NAME_LETTERS[(slot * block + step) % len(_NAME_LETTERS)]
-        for step in range(block)
-    )
     said += (
-        f"\n\nEvery person you invent must have a given name beginning with one of {letters}, and "
-        "every number you invent that the agent will look up, a code or a reference or an account "
-        f"number, must begin with {slot % 1000:03d}. Other writers own the other letters and "
-        "prefixes, so this is what keeps two scenarios from sharing a name or a code. Within your own "
-        "slice, no two people may share a given name and no two scenarios may share a code or a "
-        "reference: the prefix keeps you clear of other writers, it does not keep you clear of "
-        "yourself."
+        "\n\nEvery person you invent is one believable person: a given name and a family name that are "
+        "both common among people of that caller's background and home. Every number you invent "
+        "that the agent will look up, a code or a reference or an account "
+        f"number, must begin with {slot % 1000:03d}. No two people in your slice share a name, and "
+        "no two scenarios share a code or a reference."
     )
-    if accents:
+    if accents and spoken:
         # Spread several offered accents across this writer's callers rather than naming just one,
         # so the suite does not collapse to a single default accent and the agent's speech handling
         # is genuinely varied.
@@ -624,7 +608,27 @@ def callers_for(index: int, wanted: int, slice_name: str = "") -> str:
             " Give your callers varied accents from the offered set, a different one per caller "
             f"where it fits rather than defaulting everyone to the same accent: {', '.join(spread)}. "
             "A suite where every caller sounds the same is a missed test of the agent's speech "
-            "handling, so do not make them all American unless a scenario truly requires it."
+            "handling, so do not give them all the same accent unless a scenario truly requires it. "
+            "Each caller is one ordinary, believable person, never a celebrity's or a fictional "
+            "character's name: choose the accent, languages, home and name together, so the accent "
+            "comes with a name and background that make it plausible. A caller whose language has "
+            "no offered accent is Neutral."
+        )
+    elif not spoken:
+        said += (
+            " Each person is one ordinary, believable person, never a celebrity's or a fictional "
+            "character's name: choose their language, home and name together."
+        )
+    beds = places() if spoken else {}
+    if beds:
+        order = list(beds)
+        dealt = [order[(index + step) % len(order)] for step in range(min(len(order), max(3, wanted)))]
+        said += (
+            " Most callers ring from somewhere, and a quiet line is rare, about one call in ten: name "
+            "the place in background_noise on every scenario not on a quiet_line level. Use these "
+            f"places first, {', '.join(dealt)}, and any other listed place where the situation "
+            "calls for it. The places this deployment can play, with how many recordings "
+            f"each draws on: {', '.join(f'{place} ({count})' for place, count in beds.items())}."
         )
     return said
 
@@ -754,7 +758,10 @@ async def _write_slice(
         stage = Stage(sliced, name=f"{SKILL}:{mine.named()[:40]}")
         async with stage:
             return await stage.say(
-                brief_for(contract, mine, siblings, callers_for(index, mine.count)),
+                brief_for(
+                    contract, mine, siblings,
+                    callers_for(index, mine.count, spoken=_is_spoken(contract)),
+                ),
                 on_event=watch,
             )
 

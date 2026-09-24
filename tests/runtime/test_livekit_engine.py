@@ -1398,6 +1398,73 @@ def test_a_reply_that_is_only_the_hold_marker_is_never_spoken() -> None:
     assert _drain_hold_filter(["silence"]) == []
 
 
+def test_a_reply_that_is_only_a_stage_direction_or_an_empty_result_is_never_spoken() -> None:
+    for said in (["[Call", " Ended]"], ["None"], ["*hangs up*"], ["N/A."]):
+        assert _drain_hold_filter([_text_chunk(one) for one in said]) == []
+    for said in (["No, that is wrong."], ["Nope."], ["Okay, bye."]):
+        assert [c.delta.content for c in _drain_hold_filter([_text_chunk(one) for one in said])] == said
+
+
+def test_a_stage_direction_inside_a_reply_is_not_spoken() -> None:
+    async def run(chunks):
+        async def stream():
+            for chunk in chunks:
+                yield chunk
+
+        return "".join([c async for c in livekit._spoken_words(stream())])
+
+    assert asyncio.run(run(["Okay, thanks. Bye. [Call", " Ended]"])).strip() == "Okay, thanks. Bye."
+    assert asyncio.run(run(["Sure, *pauses* go ahead."])) == "Sure,  go ahead."
+    assert asyncio.run(run(["Plain words only."])) == "Plain words only."
+    assert asyncio.run(run(["No, [laugh", "ter] you're kidding."])) == "No, [laughter] you're kidding."
+
+
+def test_a_caller_is_told_its_first_request_until_it_has_spoken() -> None:
+    from livekit.agents.llm import ChatContext
+
+    greeted = ChatContext()
+    greeted.add_message(role="user", content="This call is recorded. How can I help?")
+    briefed = livekit._with_opening_line(greeted, "I need to download our August invoice.")
+    assert "I need to download our August invoice." in briefed.messages()[-1].text_content
+    assert len(greeted.messages()) == 1
+
+    greeted.add_message(role="assistant", content="Hi, I need our August invoice.")
+    assert livekit._with_opening_line(greeted, "I need to download our August invoice.") is greeted
+    assert livekit._with_opening_line(ChatContext(), "") is not None
+
+
+def test_a_reply_with_no_words_is_reported_so_the_caller_can_answer_aloud() -> None:
+    dropped: list[str] = []
+    held: list[bool] = []
+
+    async def run(chunks):
+        async def stream():
+            for chunk in chunks:
+                yield chunk
+
+        return [
+            c
+            async for c in livekit._without_hold_marker(
+                stream(), on_hold=lambda: held.append(True), on_unspoken=dropped.append
+            )
+        ]
+
+    assert asyncio.run(run(["None"])) == []
+    assert dropped == ["None"] and held == []
+    asyncio.run(run(["SILENCE"]))
+    assert dropped == ["None"] and held == [True]
+    asyncio.run(run(["Okay, bye."]))
+    assert dropped == ["None"]
+
+
+def test_a_question_from_the_agent_is_not_a_hold() -> None:
+    asked = [{"role": "assistant", "content": "Hi."}, {"role": "user", "content": "Does that help?"}]
+    told = [{"role": "user", "content": "Let me check that for you."}]
+    assert livekit._was_asked(asked)
+    assert not livekit._was_asked(told)
+    assert not livekit._was_asked([{"role": "assistant", "content": "Is it?"}])
+
+
 def test_a_dropped_marker_reports_the_hold_and_an_ordinary_reply_does_not() -> None:
     held: list[bool] = []
 

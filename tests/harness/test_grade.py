@@ -414,7 +414,12 @@ def test_a_judged_reason_that_describes_a_check_is_refused():
     about_words = SubGoal(
         name="refusal_explained",
         what="the agent said why it could not do it",
-        judged="Nothing in the world records whether the reason given was intelligible to the caller.",
+        judged=(
+            "Applies when: the agent declines a request.\n"
+            "Pass when: it tells the caller why it cannot help.\n"
+            "Fail when: it declines without giving any reason.\n"
+            "If it does not arise: Pass, because nothing was declined."
+        ),
     )
     assert validate_sub_goal(about_words) == []
 

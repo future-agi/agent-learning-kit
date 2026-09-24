@@ -78,7 +78,6 @@ tested nothing.
 | `self_correction` | "order 4471, sorry, 4417", the second value being the real one | `instruction`, and both values seeded so the wrong one is plausible |
 | `terse` / `formal` / `anxious` | how this person types | `persona.communication_style` |
 | `typo_heavy` | typos, autocorrect and slang the agent has to read through | `persona.communication_style`, and the misspellings written into `instruction` |
-| `code_switching` | two languages in one thread | `persona.languages` and `persona.multilingual` |
 | `returns_after_silence` | they stop replying and come back mid-thread expecting the context held | `instruction`, and `max_turns` wide enough to hold the gap |
 | `prompt_injection` | the pasted block carries instructions addressed to the agent, or markdown and code fences dressed to look like system text | `instruction`, with the refusal named as a sub-goal |
 | `emoji_sarcasm` | "great 🙄", where the words and the meaning disagree and only the text carries it | `instruction` |

@@ -198,6 +198,13 @@ ambience bed. An instruction about garbled, cut-off or silent audio, a second sp
 keypad input the kind file does not list, or anything needing a screen or a link is real, but a call
 cannot produce its situation. Declare no level for it.
 
+**When the agent must handle a caller it cannot make out, test the part a call can produce.** A rule
+like "ask the caller to repeat when the audio is unclear" is real, and the words can carry it: a
+fragmentary, half-finished opening, a caller who trails off mid-sentence, a request too vague to act
+on, all over a noisy bed. Name the level after that, `fragmentary_opening` or `vague_request`, never
+`unclear_audio`: a level named for degraded audio gets written as degraded audio, and the call then
+delivers clean speech.
+
 **At least one disposition level has to be a state where a tool the agent trusts does not work.** An
 agent is most brittle where it takes something the caller said, hands it to a tool and believes the
 answer, and a suite in which every tool call succeeds never goes near that seam. The states that do it
@@ -235,7 +242,7 @@ one scenario written twice.
 |---|---|
 | life stage | child · young adult · adult · senior |
 | literacy, technical and domain | novice · average · expert |
-| language | native · regional accent · non-native · code-switching · prefers another language |
+| language | native · regional accent · non-native · prefers another language |
 | expression | clear · mild difference · strong difference |
 | role | self · on behalf of another · professional third party · privileged or admin |
 | identity | anonymous · identified but unverified · authenticated · elevated |
@@ -444,16 +451,8 @@ and can read them side by side. So say it in the brief, for each writer that get
 separates your own scenarios from each other**, one clause per scenario, in the same words as the
 difficulty rule above. Then the writer has no excuse and no need to guess.
 
-**At large counts the naming constraint needs a mechanism, not a reminder.** Two or three hundred callers
-exhaust the obvious names, and writers that cannot see each other converge. Measured on a live run at a
-hundred and thirty callers: **eight pairs a listener would not separate**, among them two differing by one
-letter and two by one syllable. Deal each writer a disjoint set of initial letters as below, and where the
-count is larger than the letters available, deal each writer a distinct *rule* as well - names of a given
-syllable count, or from a given naming tradition - so two writers cannot arrive at neighbouring names by
-independently reaching for the commonest one.
-
 **Names have to be distinguishable when spoken, not merely different.** "No two people share a name" lets
-Laura and Lauren through, and over a phone line they are one name. Deal initial letters as above, and
+Laura and Lauren through, and over a phone line they are one name. Tell each writer to
 reject a pair that a listener would not separate: one differing letter, one differing syllable, or the
 same name with an ending changed. The exception is the scenario whose whole point is a name that sounds
 like another, which is a real test - it says so in its branch line and carries its own sub-goal for the
@@ -606,7 +605,8 @@ scenario itself**, in `coverage`, one value per axis you actually varied:
 "coverage": {"task": "create_booking", "counterparty": "first_time", "overlay": "topic_switch"}
 ```
 
-Use your own axis names and your own level names; nothing downstream requires a fixed vocabulary. Use
+Use your own axis names and your own level names; nothing downstream requires a fixed vocabulary. A
+level names the condition it tests, never a particular language, product or agent. Use
 the axes you genuinely dealt out, not all six for the sake of it: an axis you held constant across the
 suite tells a reader nothing and makes the report claim breadth that is not there.
 
@@ -707,7 +707,7 @@ to derive and why it cannot drift:
 | what the agent must do | T, operation and object | `disambiguation`, `unit_conversion`, `multi_intent`, `call_termination`, `handoff`, `tool_failure_recovery` |
 | what it touches | T's object, from the contract's tools | `weather_lookup`, `order_status`, `transfer_endpoint` |
 | what is being done to it | O, the overlay | `topic_switch`, `prompt_injection`, `social_engineering`, `refusal_bait` |
-| the conditions | X, whatever this agent's kind file says can be varied | `noisy_line`, `code_switching`, `outbound_call` on a call; `pasted_blob`, `split_message`, `self_correction` in a chat |
+| the conditions | X, whatever this agent's kind file says can be varied | `noisy_line`, `non_native`, `outbound_call` on a call; `pasted_blob`, `split_message`, `self_correction` in a chat |
 
 Take the X levels from the kind file you were given, not from this table: it knows which conditions
 its modality can actually apply, and a kind added later carries its own.
@@ -787,6 +787,8 @@ empty, and two writers would cover the same cell.
 The worker is called `scenario_writer`. A brief carries: which cells to cover, **what each overlay in
 those cells means and what the agent must do about it**, the sub-goal that claim is named by, how
 many scenarios it is worth, and what makes them different from what the other writers were given.
+It never carries scenario names or a naming pattern: each writer names each scenario after what it
+tests, and a numbered range such as "scenario_041" to "scenario_060" names nothing.
 
 A writer sees the cell you deal it and nothing else: not your grid, not the overlay table above, not
 what you meant by `fraud_policy_abuse`. Deal it the meaning in a line, in your own words, with the
@@ -815,18 +817,24 @@ Do not hand one writer every scenario in a single cell. A writer given a whole c
 all of that cell's variety by itself, which is the situation planning exists to prevent. **A writer cannot see the others' briefs**, so anything that has to stay spread across the
 suite has to be dealt out in the briefs, one share each.
 
-The people are the thing to deal. Give each writer its own share of the levels above: two or three
-per sub-dimension, and no level to two writers where you can help it. A writer told only "vary the
-people" will not. **Name them in the brief**, not the dimension: the accents (`Neutral` is not one),
-the languages, the noise beds, the temperaments. Across the suite the callers should sound like the
-people who really ring this agent: every language it supports and at least one it must turn away,
-several accents, several beds, several ages and temperaments. A suite where most callers share one
-accent, one language and a quiet line has tested one caller many times.
+The people are the thing to deal, and **deal them as whole people, not as separate fields.** Give
+each writer two or three caller profiles, and no profile to two writers where you can help it. A
+profile is one believable person-type: an accent, the one language they speak on the call, where
+they live, and the names people of that background carry. A few deliberate crossings, a
+second-generation caller or a married name, are real people too; deal them as their own profile.
 
-**Deal out the initial letters of their names in the same breath.** Narrowing a writer to one
-language without also narrowing its names makes collisions worse, not better: two writers both given
-non-native callers both reached for the same name. Three letters each, no letter to two writers, and
-no two people in the suite share a name.
+Across the suite the callers should sound like the people who really ring this agent: every language
+it supports and at least one it must turn away, several accents, several ages and temperaments. A
+suite where most callers share one accent and one language has tested one caller many times.
+
+**Deal the places they call from in the same brief.** Every scenario not on the `quiet_line` level
+names where the caller is, accented and non-native ones included, and quiet lines stay rare, about
+one call in ten: real callers are rarely in a silent room. Size the `quiet_line` level to match.
+Spread the places across writers the way you spread profiles, so the suite hears several of them
+rather than one bed everywhere.
+
+**Every name comes from its person:** a given name and a family name both common among people of
+that profile's background. No two people in the suite share a name.
 
 Two signs the sizing is wrong: every slice holds one or two scenarios, which means you listed
 scenarios instead of grouping them and every writer will re-read the world for almost nothing; or

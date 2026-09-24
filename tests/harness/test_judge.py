@@ -244,11 +244,56 @@ def test_with_no_actions_the_judge_is_told_the_conversation_is_the_evidence(monk
     assert "only the conversation is observable" not in prompts[1]
 
 
-def test_a_situation_that_never_came_up_is_not_a_pass():
-    assert "never came up" in judge_module._INSTRUCTIONS
-    assert "decide false" in judge_module._INSTRUCTIONS
+def test_the_criteria_decide_a_situation_that_did_not_arise():
+    text = judge_module._INSTRUCTIONS
+    assert "what the verdict is when its situation does not arise" in text
+    assert "whether the agent's own behaviour kept it from arising" in text
+    assert "never come up" not in text and "decide false" not in text
+
+
+def test_the_customer_is_context_and_never_judged():
+    text = judge_module._INSTRUCTIONS
+    assert "The customer is not being evaluated" in text
+    assert "Never hold the agent to more than" in text
 
 
 def test_an_answer_with_nothing_to_check_it_against_is_never_called_accurate():
     assert "never call what the agent said accurate" in judge_module._INSTRUCTIONS
-    assert "left a part unanswered" in judge_module._INSTRUCTIONS
+
+
+def test_the_judge_is_shown_the_customer_side_and_the_agent_instructions():
+    from types import SimpleNamespace
+
+    scenario = SimpleNamespace(presented={"situation": "Asks for a refund.", "outcome": "Refund policy."})
+    side = judge_module._customer_side(scenario)
+    assert "for context only" in side and "Asks for a refund." in side
+    assert judge_module._customer_side(None) == ""
+
+
+def test_a_one_sentence_sub_goal_is_read_as_what_the_agent_must_do() -> None:
+    from fi.alk.harness.catalogue import criteria_text
+
+    labelled = "Applies when: x.\nPass when: y.\nFail when: z.\nIf it does not arise: Pass."
+    assert criteria_text(labelled) == labelled
+    read = criteria_text("Confirms the address back")
+    assert read.startswith("Pass when: Confirms the address back") and "If it does not arise:" in read
+
+
+def test_a_caller_outside_the_accented_language_meets_an_accented_level_without_an_accent() -> None:
+    from fi.alk.harness.scenario import Persona, Scenario, _condition_the_call_lacks
+
+    persona = Persona(name="A B", languages=["French"], accent="British")
+    assert persona.accent == "Neutral"
+    scenario = Scenario(name="s", use_case="u", persona=persona, coverage={"interface": "non_native"})
+    assert _condition_the_call_lacks(scenario) == ""
+    english = Scenario(
+        name="t", use_case="u", persona=Persona(name="C D", languages=["English"]), coverage={"interface": "accented"}
+    )
+    assert "accent not set" in _condition_the_call_lacks(english)
+
+
+def test_a_language_outside_the_multilingual_transcriber_is_transcribed_in_its_own() -> None:
+    from fi.alk.harness.simulator_voice import persona_stt_language
+
+    assert persona_stt_language({"languages": ["French"]}) == "multi"
+    assert persona_stt_language({"languages": ["ko"]}) == "ko"

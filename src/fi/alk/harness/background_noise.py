@@ -4,17 +4,19 @@ A scenario that sets ``background_noise`` wants the agent to handle a caller pho
 real: a car, a street, an office. The clip is chosen here and handed to the voice engine, which
 mixes it under the simulated caller's audio.
 
-Two sources, in order. A run may point ``ALK_BACKGROUND_NOISE_CATALOG`` at a JSON file of clips
-(each with an ``environment`` tag and a ``url`` or ``path``); the catalog stays a local file so its
-asset locations are never committed here. When no catalog matches, a LiveKit builtin clip is used,
-which needs no external asset and always works.
+Two sources, pooled. ``ALK_BACKGROUND_NOISE_CATALOG`` may carry a JSON list of clips, inline or as a
+file path, each with an ``environment`` tag and a ``url`` or ``path``; the platform supplies its own.
+LiveKit's builtin clips join the same pool, and need no external asset.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import os
 from pathlib import Path
+from typing import Any
 
 # LiveKit ships these; they are the reliable default when no custom catalog is configured.
 _BUILTIN_BY_ENVIRONMENT: dict[str, str] = {
@@ -41,9 +43,16 @@ _BUILTIN_BY_ENVIRONMENT: dict[str, str] = {
     "office": "OFFICE_AMBIENCE",
     "home": "OFFICE_AMBIENCE",
 }
+# One place name per builtin clip, for offering the places a caller can be heard from.
+_PLACE_BY_BUILTIN: dict[str, str] = {
+    "CITY_AMBIENCE": "street",
+    "FOREST_AMBIENCE": "outdoors",
+    "CROWDED_ROOM": "crowd",
+    "OFFICE_AMBIENCE": "office",
+}
+
 # A scenario that names a quiet place is asking to be heard in the clear, not for a default bed.
 _SILENT_ENVIRONMENTS = frozenset({"quiet", "silent", "silence", "none", "clear", "quiet_line"})
-_DEFAULT_BUILTIN = "OFFICE_AMBIENCE"
 
 
 def distinct_beds(environments) -> dict[str, list[str]]:
@@ -80,33 +89,108 @@ def enabled() -> bool:
     )
 
 
+def _catalogue() -> list[tuple[str, str]]:
+    """``(environment, location)`` for each clip in ``ALK_BACKGROUND_NOISE_CATALOG``, inline JSON or a path."""
+    raw = os.environ.get("ALK_BACKGROUND_NOISE_CATALOG", "").strip()
+    if not raw:
+        return []
+    try:
+        if raw.startswith("["):
+            entries = json.loads(raw)
+        elif Path(raw).is_file():
+            entries = json.loads(Path(raw).read_text(encoding="utf-8"))
+        else:
+            return []
+    except (OSError, ValueError):
+        return []
+    if not isinstance(entries, list):
+        return []
+    return [
+        (str(entry.get("environment", "")).strip().lower(), str(entry.get("url") or entry.get("path")).strip())
+        for entry in entries
+        if isinstance(entry, dict) and (entry.get("url") or entry.get("path"))
+    ]
+
+
+def places() -> dict[str, int]:
+    """Each place a caller can be heard from on this deployment, with how many recordings it draws on."""
+    clips = _catalogue()
+    named = {tag for tag, _ in clips if tag and tag not in _SILENT_ENVIRONMENTS}
+    counts = {}
+    for place in sorted(named | set(_PLACE_BY_BUILTIN.values())):
+        counts[place] = sum(1 for tag, _ in clips if tag == place) + (place in _BUILTIN_BY_ENVIRONMENT)
+    return counts
+
+
 def source_for(environment: str = "", seed: str = "") -> str:
     """A background-noise source for a scenario.
 
-    Returns a ``url``/``path`` from the configured catalog when one matches the environment, else the
-    name of a LiveKit builtin clip. The choice is deterministic in ``seed`` so the same scenario
-    hears the same place across runs.
+    Returns a ``url``/``path`` from the configured catalog or the name of a LiveKit builtin clip,
+    drawn from every bed that matches the environment, or from all of them when none does. The
+    choice is deterministic in ``seed`` so the same scenario hears the same place across runs.
     """
     env = (environment or "").strip().lower()
     if env in _SILENT_ENVIRONMENTS:
         return ""
-    catalog = os.environ.get("ALK_BACKGROUND_NOISE_CATALOG", "").strip()
-    if catalog and Path(catalog).is_file():
-        try:
-            entries = json.loads(Path(catalog).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            entries = []
-        if isinstance(entries, list) and entries:
-            pool = [
-                entry
-                for entry in entries
-                if str(entry.get("environment", "")).strip().lower() == env
-            ] or entries
-            chosen = pool[sum(ord(character) for character in (seed or env or "x")) % len(pool)]
-            located = str(chosen.get("url") or chosen.get("path") or "").strip()
-            if located:
-                return located
-    return _BUILTIN_BY_ENVIRONMENT.get(env, _DEFAULT_BUILTIN)
+    clips = _catalogue()
+    pool = [location for tag, location in clips if tag == env]
+    if env in _BUILTIN_BY_ENVIRONMENT:
+        pool.append(_BUILTIN_BY_ENVIRONMENT[env])
+    if not pool and env:
+        nearest = _place_in(env.replace("_", " ").replace("-", " "), places())
+        if nearest:
+            return source_for(nearest, seed)
+    if not pool:
+        pool = [location for _, location in clips] + sorted(set(_BUILTIN_BY_ENVIRONMENT.values()))
+    return pool[_pick(seed or env or "x", len(pool))]
+
+
+def _pick(seed: str, size: int) -> int:
+    return int(hashlib.sha256(seed.encode("utf-8")).hexdigest()[:8], 16) % size
+
+
+# Words in a situation that say where the caller is, for the places a deployment can play.
+_SETTING_WORDS: dict[str, str] = {
+    "airport": r"\bairports?\b|\bboarding\b|\bdeparture gate\b|\bbaggage claim\b|\blayover\b",
+    "transit": r"\btrain\b|\brailway\b|\bstation\b|\bmetro\b|\bsubway\b|\bbus stop\b|\bon the bus\b",
+    "vehicle": r"\bin (?:the|my|a) car\b|\bdriving\b|\bin (?:a|the) (?:taxi|cab)\b|\bin traffic\b|\bbehind the wheel\b",
+    "retail": r"\bstores?\b|\bshops?\b|\bshopping\b|\bmall\b|\bgrocery\b|\bsupermarket\b",
+    "crowd": r"\bcaf[eé]s?\b|\brestaurants?\b|\bcoffee shop\b|\bcanteen\b|\bcafeteria\b|\bcrowd(?:ed)?\b",
+    "outdoors": r"\bparks?\b|\boutdoors\b|\bgardens?\b|\bhiking\b|\bbeach\b",
+    "street": r"\bstreets?\b|\bsidewalk\b|\bpavement\b|\bwalking\b|\bcrosswalk\b",
+    "office": r"\boffices?\b|\bdesk\b|\bworkplace\b|\bcubicle\b|\bmeeting room\b",
+}
+
+
+# Where a deployment has no recording of a place, the one that sounds most like it.
+_NEAREST = {"airport": "transit"}
+
+
+def place_for(name: str, fixture: Any = None, situation: str = "") -> str:
+    """Where a caller with noise on and no place named is heard from.
+
+    The fixture's place first, then a place the situation itself describes, and only then one
+    picked by the scenario's name, so the sound never contradicts what the scenario says.
+    """
+    if isinstance(fixture, dict):
+        named = str(fixture.get("environment") or "").strip().lower()
+        if named:
+            return named
+    options = list(places())
+    text = (situation or "").lower()
+    return _place_in(text, options) or (options[_pick(name or "x", len(options))] if options else "")
+
+
+def _place_in(text: str, options) -> str:
+    """The playable place a piece of text describes, or "" when it describes none."""
+    for place, words in _SETTING_WORDS.items():
+        if not re.search(words, text):
+            continue
+        if place in options:
+            return place
+        if _NEAREST.get(place) in options:
+            return _NEAREST[place]
+    return ""
 
 
 def scenario_source(

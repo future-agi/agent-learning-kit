@@ -73,6 +73,10 @@ class Step(BaseModel):
     environment_arguments: dict[str, Any] = Field(default_factory=dict)
 
 
+# The language every accent in the platform's accent vocabulary is a way of speaking.
+_ACCENTED_LANGUAGE = "english"
+
+
 class Persona(BaseModel):
     """The simulated caller, in the same shape used by existing voice scenarios.
 
@@ -98,6 +102,17 @@ class Persona(BaseModel):
     # caller facts realistic and varied while avoiding LLM role drift during a
     # long tool-heavy phone flow.
     scripted_caller: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def _one_language_and_its_accent(self) -> "Persona":
+        # One language per caller, the one spoken on the call, so which one they speak is never ambiguous.
+        spoken = [str(one).strip() for one in self.languages if str(one).strip()]
+        self.languages = spoken[:1]
+        self.multilingual = False
+        # An offered accent describes how the vocabulary's own language is spoken and picks the voice.
+        if self.languages and _ACCENTED_LANGUAGE not in self.languages[0].casefold():
+            self.accent = "Neutral"
+        return self
 
     def described(self) -> bool:
         return bool(
@@ -189,11 +204,6 @@ def _slug(name: str) -> str:
     """
     cleaned = re.sub(r"[^a-z0-9]+", "-", (name or "").strip().lower()).strip("-")
     return cleaned or "scenario-" + hashlib.sha256(name.encode()).hexdigest()[:12]
-
-
-def _decided_by(name: str) -> bool:
-    """Whether this scenario is noisy, decided by its name so a rerun decides the same."""
-    return hashlib.sha256((name or "").encode()).digest()[0] % 2 == 0
 
 
 class Scenario(BaseModel):
@@ -304,12 +314,8 @@ class Scenario(BaseModel):
             self.scenario_key = _slug(self.name)
         if self.background_noise == "":
             level = str((self.coverage or {}).get("interface") or "").strip().lower()
-            if level in _QUIET_INTERFACE:
-                self.background_noise = False
-            elif level in _NOISY_INTERFACE or level.startswith("noisy"):
-                self.background_noise = True
-            else:
-                self.background_noise = _decided_by(self.name)
+            # A real caller is somewhere; only a quiet level is heard in the clear.
+            self.background_noise = level not in _QUIET_INTERFACE
         return self
 
     def slots(self) -> dict[str, str]:
@@ -526,13 +532,9 @@ def _condition_the_call_lacks(scenario: Scenario) -> str:
     style = str(getattr(persona, "communication_style", "") or "")
     languages = [one for one in (getattr(persona, "languages", None) or []) if str(one).strip()]
     noise = scenario.background_noise
-    if level in {"non_native", "non-native"} and len(languages) < 2:
-        return f"interface {level}, persona speaks only {len(languages) or 'no'} named language"
-    if level == "code_switching" and (
-        len(languages) < 2 or not getattr(persona, "multilingual", False)
-    ):
-        return "interface code_switching, persona is not multilingual in two named languages"
-    if level in _ACCENTED_INTERFACE and accent in _ACCENT_NOT_SET:
+    # An offered accent only applies to its own language; in any other the voice carries no accent to set.
+    accentable = not languages or _ACCENTED_LANGUAGE in str(languages[0]).casefold()
+    if level in _ACCENTED_INTERFACE and accentable and accent in _ACCENT_NOT_SET:
         return f"interface {level}, persona accent not set"
     if level in _DISFLUENT_INTERFACE and not _DISFLUENT_STYLE.search(style):
         return f"interface {level}, nothing hesitant in the communication style"
