@@ -831,7 +831,7 @@ class _TestRunnerAgent(Agent):
                     )
                     return
             if clip_source is not None:
-                volume *= await _bed_gain(clip_source)
+                volume *= await _bed_gain(clip_source, source)
             # A player is created even with no ambience clip, because a mailbox tone needs a
             # published track whether or not this scenario also asked for a room.
             player = (
@@ -3325,30 +3325,35 @@ def _voicemail_tone_style() -> str:
 _BED_RMS: dict[str, float] = {}
 
 
-async def _bed_rms(path: str) -> float:
+def _rms(pcm: bytes) -> float:
+    samples = array.array("h", pcm)
+    return math.sqrt(sum(sample * sample for sample in samples) / len(samples)) if samples else 0.0
+
+
+async def _bed_rms(path: str, key: str = "") -> float:
     """Root-mean-square level of up to twenty seconds of a clip, as the mixer will receive it."""
-    if path not in _BED_RMS:
-        total, count = 0, 0
+    key = key or path
+    if key not in _BED_RMS:
+        chunks, count = [], 0
         frames = audio_frames_from_file(path)
         try:
             async for frame in frames:
-                samples = array.array("h", bytes(frame.data))
-                total += sum(sample * sample for sample in samples)
-                count += len(samples)
+                chunks.append(bytes(frame.data))
+                count += frame.samples_per_channel
                 if count >= _BACKGROUND_MIXER_RATE * 20:
                     break
         finally:
             await frames.aclose()
-        _BED_RMS[path] = math.sqrt(total / count) if count else 0.0
-    return _BED_RMS[path]
+        _BED_RMS[key] = await asyncio.to_thread(_rms, b"".join(chunks))
+    return _BED_RMS[key]
 
 
-async def _bed_gain(clip: Any) -> float:
+async def _bed_gain(clip: Any, source: str = "") -> float:
     """The factor that brings a clip to the office clip's loudness, or 1.0 when either is unreadable."""
     try:
         path = clip.path() if isinstance(clip, BuiltinAudioClip) else str(clip)
-        reference = await _bed_rms(BuiltinAudioClip.OFFICE_AMBIENCE.path())
-        level = await _bed_rms(path)
+        reference = await _bed_rms(BuiltinAudioClip.OFFICE_AMBIENCE.path(), "OFFICE_AMBIENCE")
+        level = await _bed_rms(path, source)
     except Exception:
         logger.warning("background clip level not measured", exc_info=True)
         return 1.0
