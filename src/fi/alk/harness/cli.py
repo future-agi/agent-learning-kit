@@ -1027,8 +1027,7 @@ async def _auto(args: argparse.Namespace) -> int:
                 repair_attempt = 0
                 wanted = int(stage_args.count)
                 written_count = len(load_written(destination))
-                # What is missing decides how many more rounds are worth asking for: one per
-                # writer's worth of scenarios, within reason.
+                # One round per writer's worth of missing scenarios, capped.
                 from .scenarios import writers_for
 
                 rounds = min(max(2, writers_for(max(wanted - written_count, 1))), 6)

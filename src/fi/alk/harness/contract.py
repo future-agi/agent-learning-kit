@@ -22,15 +22,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 # call, everything else runs locally — so it is defined once and referenced, never retyped.
 MODALITIES = ("voice", "chat", "browser")
 def known_modalities() -> tuple[str, ...]:
-    """The modalities a contract may declare: these, plus whatever a kind file adds.
-
-    A union rather than a replacement. Deriving the list purely from the kind directory would
-    drop `browser` the moment nobody had written `kinds/browser.md`, and a modality vanishing
-    because a file is missing is a worse failure than a modality listed with no file behind it.
-
-    The built-in order is kept and new ones are appended, because this list is shown to the model
-    before its first call: it teaches as well as validates, and alphabetical is not what it means.
-    """
+    """The modalities a contract may declare: these, plus whatever a kind file adds."""
     from .config import declared_modalities
 
     known = list(MODALITIES)

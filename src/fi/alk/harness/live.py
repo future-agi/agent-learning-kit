@@ -1,27 +1,4 @@
-"""The live channel between a running harness and whoever is watching it.
-
-A stage is already a conversation: it holds a session open, takes a message, and emits typed
-events. What it has never had is a way for that conversation to reach anybody while it is
-running on somebody else's machine. The hosted path could only hand it corrections between
-stages, and a stage lasts twenty minutes, so a correction sent during one arrived after it.
-
-Two files under one directory, both append-only JSONL:
-
-``inbox.jsonl``
-    What the person said. Written by whoever is driving from outside, read here.
-
-``outbox.jsonl``
-    Every event the stage emitted, in the order it emitted them. Written here, tailed by
-    whoever is driving from outside.
-
-Files rather than a socket because that is the channel a sandbox actually has: the provider
-refuses public ingress, and uploading a file to a running sandbox is already how corrections and
-cancellation travel. Nothing in this module knows what is on the other end.
-
-**Inert unless ``ALK_HARNESS_CHAT_DIR`` is set.** An unattended run sets nothing and behaves
-exactly as it did before, which is the only acceptable price for putting this on the path every
-stage takes.
-"""
+"""The live channel between a running harness and whoever is watching it."""
 
 from __future__ import annotations
 
@@ -30,7 +7,6 @@ import json
 import os
 import time
 import uuid
-import uuid
 from pathlib import Path
 from typing import Any
 
@@ -38,20 +14,10 @@ DIRECTORY = "ALK_HARNESS_CHAT_DIR"
 INBOX = "inbox.jsonl"
 OUTBOX = "outbox.jsonl"
 
-# A message is handed over on the back of whatever the harness does next. Said plainly, because
-# it arrives out of nowhere and the alternative is that the model treats it as its own idea.
-# How many tool results a message rides in on before it is let go. Enough to survive a burst of
-# calls, few enough that a stage which never speaks is not nagged into a loop.
+# How many tool results a message rides in on before it is let go.
 HANDOVERS = 4
 
-# How long a question waits for its answer before the run carries on without one, and how often it
-# looks. A person who closed the tab must not hold a sandbox open to its TTL.
-ANSWER_TIMEOUT_SECONDS = float(os.environ.get("ALK_HARNESS_ANSWER_TIMEOUT", "900") or 900)
-ANSWER_POLL_SECONDS = 1.0
-
-# How long a question waits for its answer before the run carries on without one. A person who
-# closed the tab must not hold a sandbox open to its TTL, and an unanswered question is recoverable
-# where a stuck job is not.
+# How long a question waits for its answer before the run carries on without one.
 ANSWER_TIMEOUT_SECONDS = float(os.environ.get("ALK_HARNESS_ANSWER_TIMEOUT", "900") or 900)
 ANSWER_POLL_SECONDS = 1.0
 
@@ -70,10 +36,7 @@ class Channel:
         raw = directory if directory is not None else os.environ.get(DIRECTORY, "")
         self.root = Path(raw) if raw else None
         self._read = 0
-        # What has been handed over but not yet answered. A message rides in on a tool result,
-        # and a model part way through a burst of calls reads one result and keeps going, so
-        # handing it over once is handing it over to nobody. Repeated until the stage actually
-        # says something, and bounded so a stage that never speaks is not nagged for ever.
+        # Repeated on each tool result until the stage speaks, bounded by HANDOVERS.
         self._pending: list[str] = []
         self._handed = 0
 
@@ -85,11 +48,7 @@ class Channel:
         return self.root / name if self.root is not None else None
 
     def waiting(self) -> list[str]:
-        """Everything said since the last read, and nothing twice.
-
-        A malformed line is skipped rather than raised on: the writer is another process, and a
-        half-flushed line must not take the stage down with it.
-        """
+        """Everything said since the last read, and nothing twice; malformed lines are skipped."""
         path = self._path(INBOX)
         if path is None or not path.is_file():
             return []
@@ -120,16 +79,7 @@ class Channel:
         self._handed += 1
 
     def ask(self, question: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
-        """Put a question to whoever is watching and wait for their answer.
-
-        Blocking on purpose: the model asked because it cannot sensibly go on, and going on anyway
-        with a guess is the behaviour this exists to replace. Bounded on purpose too, because a
-        sandbox held open by somebody who closed the tab is a worse failure than a question nobody
-        answered.
-
-        Returns the answer, or ``answered: False``. What an unanswered question means is the
-        caller's to decide; this reports the fact and nothing else.
-        """
+        """Put a question to whoever is watching and wait, bounded, for their answer."""
         if not self.live:
             return {"answered": False, "reason": "no one is watching this run"}
         asked = str(uuid.uuid4())
@@ -145,11 +95,7 @@ class Channel:
         return {"answered": False, "reason": f"nobody answered within {limit:g}s"}
 
     def _answers(self) -> list[dict[str, Any]]:
-        """Every answer sitting in the inbox, read whole each time.
-
-        Answers are not consumed the way messages are. A question asked just after its answer was
-        written must still find it, and the inbox is small enough that re-reading costs nothing.
-        """
+        """Every answer sitting in the inbox, read whole each time."""
         path = self._path(INBOX)
         if path is None or not path.is_file():
             return []
@@ -194,17 +140,7 @@ def folded_in(message: str, said: list[str]) -> str:
 
 
 def carrying(channel: "Channel", servers: dict[str, Any]) -> dict[str, Any]:
-    """The same tool servers, each result carrying anything the person has said since.
-
-    A stage is one long turn: the model is sent an opening message and then runs for twenty
-    minutes driving tools, so there is no second message for an inbox check to ride in on. Tool
-    results are the thing it reads constantly, every few seconds, whichever backend is running
-    it. Putting the handover there is what makes this a conversation rather than a queue, and it
-    needs nothing from the provider's protocol.
-
-    Only the stage's own servers, never a worker's. A writer told to stop and answer a question
-    addressed to the stage that briefed it would answer for everybody.
-    """
+    """The stage's own tool servers, each result carrying anything the person has said since."""
     if not channel.live:
         return servers
 

@@ -974,14 +974,11 @@ def test_hosted_job_accepts_the_ceiling_and_rejects_one_more() -> None:
         "runtime": {"isolation": "dedicated_vm"},
     }
 
-    # The bound is whatever MAX_HOSTED_SCENARIO_COUNT says, not a literal repeated in a test, and
-    # it has to match the platform's own ceiling or a job the API accepts dies in the guest.
     assert (
         HarnessJob(**common, scenario_count=MAX_HOSTED_SCENARIO_COUNT).scenario_count
         == MAX_HOSTED_SCENARIO_COUNT
     )
-    # Above the ceiling the field bound fires before the hosted-only validator, so either message
-    # is a correct refusal. What must hold is that it is refused at all.
+    # Either validator's message is a correct refusal above the ceiling.
     with pytest.raises(
         ValueError, match="hosted_scenario_count_out_of_range|less_than_equal"
     ):

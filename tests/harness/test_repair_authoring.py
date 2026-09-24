@@ -120,7 +120,6 @@ def test_world_repair_uses_fresh_evidence_pass_after_constrained_pass(
         )
     )
 
-    # The first pass can already explore the source and the world, so it settles here.
     assert [spec.builtins for spec in specs] == [FILE_TOOLS]
     assert [spec.model for spec in specs] == ["routed-model"]
     assert patch.operations[0].op is RepairPatchOp.SET_VALUE

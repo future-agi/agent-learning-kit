@@ -135,9 +135,7 @@ def test_both_backends_report_the_same_units():
     ) == {"tokens_in": 12, "tokens_out": 14, "tokens_cached": 0}
     assert _tokens(None) == {"tokens_in": 0, "tokens_out": 0, "tokens_cached": 0}
     assert _tokens({"m": object()}) == {"tokens_in": 0, "tokens_out": 0, "tokens_cached": 0}
-    # Cache reads arrive beside fresh input, the way the Messages API reports them, while the
-    # ledger reads tokens_cached as a part of tokens_in. A turn served almost entirely from cache
-    # otherwise looks like a turn that barely sent anything.
+    # Cache reads arrive beside fresh input, the way the Messages API reports them.
     assert _tokens(
         {"m": {"inputTokens": 40, "outputTokens": 10, "cacheReadInputTokens": 9_000}}
     ) == {"tokens_in": 9_040, "tokens_out": 10, "tokens_cached": 9_000}
@@ -222,9 +220,6 @@ def test_the_price_table_agrees_with_the_platform_model_table():
 
 
 def test_a_gateway_route_in_front_of_the_model_does_not_lose_its_price():
-    """Behind a gateway the same model is named "vertex_ai/gemini-3.7-flash". The price belongs to
-    the model, not the road it arrived by, and an unpriced model falls back to whatever the loop
-    claimed it cost, which on this route is the CLI's Claude table."""
     from fi.alk.harness.backends import vertex_gemini
 
     bare = vertex_gemini.priced("gemini-3.7-flash", 1_000_000, 1_000_000)

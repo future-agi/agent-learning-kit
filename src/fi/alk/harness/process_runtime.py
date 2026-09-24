@@ -1170,8 +1170,7 @@ _IGNORED_GENERATED_SOURCE_DIRECTORIES = frozenset(
 )
 
 
-# What a build step produced and a world only reads. Copying these per world would cost the whole
-# environment again for every call, and the ignore list above drops them from the copy anyway.
+# Build outputs a world only reads, symlinked rather than copied per world.
 _SHARED_BUILD_OUTPUTS = frozenset({".venv", "venv", "node_modules"})
 
 
@@ -3659,9 +3658,7 @@ def apply_seed_file(
             domain=FailureDomain.ENVIRONMENT,
         )
     if result.returncode != 0:
-        # Both streams, tail first. psql prints its NOTICEs to stderr before the ERROR that stopped
-        # it, and where the script echoes statements the ERROR itself lands on stdout, so reporting
-        # the head of stderr alone says "table does not exist, skipping" and never says why.
+        # Tails of both streams: psql's ERROR can land on either.
         said = "\n".join(
             part
             for part in (
@@ -4914,12 +4911,7 @@ def _reset_template_database(
 
 
 def _stores_reset_in_place(manifest: EnvironmentBundleV2) -> bool:
-    """Whether every managed store can be driven back to baseline without respawning anything.
-
-    True only for `template_database`, where the engine is job-shared and already running and the
-    reset is a drop and recreate of the world's own logical database. Any other strategy reseals a
-    data directory, which means the engine owning it has to be down first.
-    """
+    """Whether every managed store resets without respawning (only `template_database`)."""
     if manifest.seed is None:
         return False
     strategies = {store.baseline.strategy for store in manifest.seed.stores}
@@ -4948,8 +4940,6 @@ def _clone_or_reset_world(
     # world's own postgres while its `tools-api`/`agent` may still hold connections, guaranteeing
     # the full escalation wait every reset. A dict preserves insertion order, so `reversed()` here
     # IS reverse-topological order without recomputing it.
-    # Keeping them alive is only coherent when nothing needs a data directory resealed underneath
-    # it, and when there is something to keep: a first clone has no handles yet.
     in_place = keep_processes and bool(existing_handles) and _stores_reset_in_place(manifest)
     for name, handle in reversed(list(existing_handles.items())):
         if not in_place and name not in job_shared_handles:
@@ -5000,10 +4990,6 @@ def _clone_or_reset_world(
     # `spawn_world` sets its own (more complete — it starts from `new_handles` and accumulates
     # further) `partial_handles` on a raise, so no extra wrapping is needed here for that case.
     if in_place:
-        # The world's own processes were never stopped, so there is nothing to spawn and their
-        # endpoints are the ones they already hold. The logical database they talk to has been
-        # dropped and recreated from the template, and the drop terminated their connections, so a
-        # pooled client reconnects on its next statement.
         return WorldSpawnResult(
             handles=dict(existing_handles),
             endpoints=build_endpoints(
@@ -5909,8 +5895,6 @@ class ProcessRuntimeProvider:
             knob_bearing=knob,
         )
         if reason == "port_not_consumable":
-            # World 0 is healthy, so the job heals onto it rather than failing: the cause is logged
-            # for us and the ledger says why parallelism dropped.
             logger.warning(
                 "world %d could not bind its own port (%s); continuing on one world",
                 world_index, process_name,

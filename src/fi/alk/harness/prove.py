@@ -86,7 +86,6 @@ class Proof:
 
     def why(self) -> str:
         """What to fix, in the order worth fixing it."""
-        # Before the gates, because a broken proof names itself and never reached them.
         if self.broken and not self.why_not_ready:
             return "these checks are broken, not failing:\n  - " + "\n  - ".join(self.broken)
         if not self.ready:

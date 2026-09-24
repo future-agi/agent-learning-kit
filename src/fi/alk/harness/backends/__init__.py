@@ -73,7 +73,7 @@ _ALIASES = {
     "vertex_gemini": "vertex-gemini",
     "vertexai-gemini": "vertex-gemini",
     "claude-code": "claude",
-    # One Claude Agent SDK backend. The gateway is a route it takes, not a backend of its own.
+    # Gateway routes resolve to the Claude backend.
     "claude_gemini": "claude",
     "claude-gemini": "claude",
     "claude-sdk": "claude",

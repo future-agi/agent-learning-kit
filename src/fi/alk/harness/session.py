@@ -210,19 +210,12 @@ class Stage:
     ) -> None:
         self._spec = spec
         self._backend = backend
-        # Whether a person watching the run should see this stage's turns. True for the stages that
-        # build something, because the conversation is how somebody follows the run. False for a
-        # stage that grades: a judge reading a transcript and recording a verdict is backend work,
-        # its result belongs in the receipt, and echoing its tool calls into the chat made a
-        # verdict about the agent look like part of the conversation.
+        # Whether this stage's turns are echoed to the run's conversation channel.
         self._overheard = overheard
         self._session: HarnessSession | None = None
         self.name = name
         self.session_id: str | None = None
         self.history: list[Turn] = []
-        # Which tools this stage spent its turns on, and which of those calls came back refused.
-        # A stage that runs long is answering one of two different questions, and only the split
-        # says which: too many probes, or the same work submitted again after a gate said no.
         self.tool_calls: Counter[str] = Counter()
         self.tool_refusals: Counter[str] = Counter()
         self._awaiting: dict[str, str] = {}
@@ -230,8 +223,6 @@ class Stage:
         # same as getting one: a request that quietly does not take shows up only on the
         # invoice, weeks later, as a number nobody can explain.
         self.models_used: set[str] = set()
-        # Inert unless this run was given somewhere to talk. Read before each turn rather than
-        # between stages, because a stage is twenty minutes and a conversation is not.
         self.channel = Channel()
 
     @property
@@ -356,8 +347,6 @@ class Stage:
                     )
                 elif isinstance(part, Call):
                     turn.tools_used.append(part.name)
-                    # Keyed by who called it: a delegating stage has to be able to tell its own
-                    # spending from its workers', and the name alone cannot.
                     self.tool_calls[f"{part.by or 'loop'}:{part.name}"] += 1
                     self._awaiting[part.id] = f"{part.by or 'loop'}:{part.name}"
                     events.append(
@@ -425,8 +414,6 @@ class Stage:
             self.models_used |= received.models
             billed_what_we_cannot_afford = self.forbidden_models()
             if billed_what_we_cannot_afford:
-                # Loud and immediate. A run that has started spending on these is worth killing
-                # now rather than discovering on an invoice.
                 logger.error(
                     "STOPPING: the provider billed %s, which this harness may not spend on. "
                     "Asked for %r.",
@@ -504,13 +491,7 @@ class Stage:
         return {used for used in self.models_used if asked.split("-2")[0] not in used}
 
     def forbidden_models(self) -> set[str]:
-        """Models that were actually billed and that this harness may not spend on.
-
-        Asking for a Gemini model is not the same as being served one: a gateway can substitute,
-        a CLI can fall back to its own default, an env var can route to Anthropic's models hosted
-        on Vertex. This reads what the provider said it billed, which is the only account that
-        matters.
-        """
+        """Models the provider actually billed that this harness may not spend on."""
         from .config import FORBIDDEN
 
         return {

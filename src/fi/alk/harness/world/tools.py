@@ -396,13 +396,7 @@ def _still_refusing(counts: dict[str, int], gate: str, problems: list[str]) -> b
 def _tables_the_source_lacks(
     state: dict, source_root: str, contract: Any, world: Any = None
 ) -> list[str]:
-    """Tables and columns the agent's own schema never declares.
-
-    The runtime seed is that schema followed by rows generated from this world, so a table the
-    schema does not declare is one whose inserts cannot match it. The seed then fails at run time
-    with only a NOTICE in the report, which points at the wrong line and reads like a missing
-    table. Cheaper to refuse here, where the names can still be changed.
-    """
+    """Tables and columns the agent's own schema never declares."""
     if not source_root:
         return []
     from pathlib import Path as _Path
@@ -429,8 +423,7 @@ def _tables_the_source_lacks(
             sql,
             re.IGNORECASE,
         ):
-            # Count parentheses rather than matching to the first close: a column is routinely
-            # `VARCHAR(20)` or `CHECK (status IN ('a','b'))`, and either ends the match early.
+            # Count parentheses: `VARCHAR(20)` or `CHECK (...)` would end a first-close match early.
             depth, at = 1, found.end()
             while at < len(sql) and depth:
                 depth += (sql[at] == "(") - (sql[at] == ")")
@@ -443,14 +436,10 @@ def _tables_the_source_lacks(
                     continue
                 columns.add(word.lower())
                 said = part.upper()
-                # A column the schema insists on and supplies no default for has to come from
-                # the rows, or the insert puts NULL in it and postgres refuses the whole seed.
                 # PRIMARY KEY counts: it is NOT NULL without saying so.
                 insists = "NOT NULL" in said or "PRIMARY KEY" in said
                 if insists and "DEFAULT" not in said:
                     must.add(word.lower())
-                # `rider_id TEXT REFERENCES users(rider_id)`: the row it points at has to exist,
-                # or the insert trips the foreign key and takes the whole seed with it.
                 cite = re.search(
                     r'REFERENCES\s+"?([A-Za-z_]\w*)"?\s*\(\s*"?([A-Za-z_]\w*)"?',
                     part,
@@ -469,8 +458,6 @@ def _tables_the_source_lacks(
         if name.lower() not in declared:
             problems.append(f"{name} (the whole table)")
             continue
-        # The seed inserts exactly the keys these rows carry, so those are the columns that have
-        # to exist. A column the schema never declares fails the insert, not the create.
         used: set[str] = set()
         for row in rows if isinstance(rows, list) else list(rows.values()):
             if isinstance(row, dict):
@@ -484,9 +471,7 @@ def _tables_the_source_lacks(
                 problems.append(
                     f"{name} rows leave out {', '.join(absent)}, which the schema requires"
                 )
-        # Rows or none, the table is what scenario setups insert into later. A column the schema
-        # requires but the world omits or leaves nullable passes every proof here and fails the
-        # real database, where no repair can reach it.
+        # Rows or none: scenario setups insert into this table later.
         modelled = _world_columns(world, name) if world is not None else None
         if modelled is not None:
             loose = sorted(
@@ -499,8 +484,7 @@ def _tables_the_source_lacks(
                     f"{name} models {', '.join(loose)} as missing or nullable, but the schema "
                     "requires it: declare it NOT NULL as the schema does"
                 )
-    # Foreign keys last, once every table's rows are in hand: a reference is only danglng
-    # relative to what the rest of the world holds.
+    # Foreign keys last, once every table's rows are in hand.
     held: dict[str, set[str]] = {}
     for name, rows in state.items():
         for row in rows if isinstance(rows, list) else list(rows.values()):
@@ -509,8 +493,7 @@ def _tables_the_source_lacks(
                     held.setdefault(f"{name.lower()}.{str(key).lower()}", set()).add(str(value))
     for name, rows in state.items():
         for column, (target, target_column) in cites.get(name.lower(), {}).items():
-            # An empty target is not a reason to skip: a reference into a table with no rows is
-            # exactly the dangling case, and skipping it is how the seed failure gets through.
+            # An empty target table is still checked: that is exactly the dangling case.
             if target not in {name.lower() for name in state}:
                 continue
             there = held.get(f"{target}.{target_column}", set())

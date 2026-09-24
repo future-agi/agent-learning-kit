@@ -97,21 +97,13 @@ def provisioning(enabled: bool | None = None) -> bool:
     }
 
 
-# Models this harness is allowed to spend on. Karthik's constraint, and it is a hard one: the
-# Gemini credits are what we have, Claude models are what we cannot afford. `CLAUDE_CODE_USE_VERTEX`
-# is the specific trap, because it means Anthropic's own models hosted on Vertex rather than
-# Google's, so a single stray flag spends on exactly what is forbidden.
+# Models this harness is allowed to spend on.
 BILLABLE = ("gemini",)
 FORBIDDEN = ("claude", "sonnet", "opus", "haiku")
 
 
 def refuse_a_model_we_cannot_afford(model: str) -> None:
-    """Raise unless this is a model we are allowed to spend on.
-
-    Called wherever a model is resolved rather than once at the edge, because the ways a Claude id
-    can arrive are many: a default, an env var, a worker override, a gateway that silently
-    substitutes. One check at the boundary would miss most of them.
-    """
+    """Raise unless this is a model we are allowed to spend on; called wherever a model resolves."""
     named = (model or "").strip().lower()
     if not named:
         raise ValueError("no model was chosen; refusing to let the provider pick one")
@@ -136,16 +128,7 @@ def behind_gateway(model: str) -> bool:
 
 
 def gateway_wire_model(model: str) -> str:
-    """The name the SDK puts on the wire for `model`.
-
-    The real id by default: the gateway routes by model name, so naming the model honestly is what
-    lets a job choose its own and keeps the mapping out of gateway config. The SDK checks a model
-    name locally before it makes any request, which is why the run also turns that check off.
-
-    A gateway that admits only Claude-shaped names is served by setting
-    ``AGENTCC_CLAUDE_MODEL_ALIAS`` to the alias it publishes. That is an explicit choice, not the
-    default, because an alias decides the model in gateway config rather than in the job.
-    """
+    """The name the SDK puts on the wire for `model`: the real id unless an alias is configured."""
     if not behind_gateway(model):
         return model
     return os.environ.get("AGENTCC_CLAUDE_MODEL_ALIAS", "").strip() or model
@@ -165,9 +148,7 @@ def provider_env(model: str | None = None) -> dict[str, str]:
     # model the run asked for.
     chosen = chosen_model(model)
     refuse_a_model_we_cannot_afford(chosen)
-    # Agent Command Center speaks Anthropic Messages in front of the model this run chose. The
-    # SDK validates a model name locally before it makes a request, so the wire carries a
-    # Claude-shaped alias the gateway maps back to `chosen`; the alias is never what is billed.
+    # Agent Command Center speaks Anthropic Messages in front of the model this run chose.
     agentcc_key = os.environ.get("AGENTCC_API_KEY", "").strip()
     if agentcc_key and not os.environ.get("ALK_CLAUDE_GATEWAY_URL", "").strip():
         base_url = (
@@ -177,17 +158,12 @@ def provider_env(model: str | None = None) -> dict[str, str]:
         )
         wire = gateway_wire_model(chosen)
         return {
-            # AUTH_TOKEN is sent as a Bearer token, which is how a virtual key authenticates.
-            # API_KEY would instead use Anthropic's x-api-key header.
+            # Bearer token, which is how a virtual key authenticates (API_KEY would use x-api-key).
             "ANTHROPIC_AUTH_TOKEN": agentcc_key,
             "ANTHROPIC_BASE_URL": base_url,
-            # Turn off the direct Vertex transport in case the parent process has it on:
-            # ClaudeAgentOptions.env is merged over the parent environment, and Vertex here
-            # would mean Anthropic's own models hosted on Vertex, which is not this.
+            # ClaudeAgentOptions.env is merged over the parent's, so a parent's Vertex flag must be undone.
             "CLAUDE_CODE_USE_VERTEX": "0",
-            # The SDK refuses a call on a model whose context window it cannot look up, then
-            # compacts against a window it guessed. Both are wrong for a model it does not know,
-            # so the window is declared rather than inferred.
+            # The SDK cannot look up a non-Claude context window, so it is declared.
             **(
                 {}
                 if "claude" in wire.lower()
@@ -203,8 +179,6 @@ def provider_env(model: str | None = None) -> dict[str, str]:
             "ANTHROPIC_DEFAULT_OPUS_MODEL": wire,
             "ANTHROPIC_DEFAULT_HAIKU_MODEL": wire,
             "ANTHROPIC_SMALL_FAST_MODEL": wire,
-            # Sub-agents run on the same alias, so a suite written by twenty of them cannot
-            # land on whatever the CLI would otherwise prefer.
             "CLAUDE_CODE_SUBAGENT_MODEL": wire,
         }
     env = {
@@ -394,16 +368,7 @@ HARNESS = SKILLS_ROOT / "harness.md"
 
 
 def declared_modalities() -> tuple[str, ...]:
-    """Every modality a kind file under ``skills/kinds/`` says it is for.
-
-    The point of the kind directory is that supporting a new sort of agent is adding a file. That
-    only holds if the contract will *accept* the new modality, and until this existed the accepted
-    list was a tuple in code, so a browser or computer-use agent needed an edit in two more places
-    before its file could ever be read.
-
-    Read from ``applies_to`` rather than from the file name, because that is the declaration the
-    matcher already trusts.
-    """
+    """Every modality a kind file under ``skills/kinds/`` declares in its ``applies_to``."""
     root = SKILLS_ROOT / "kinds"
     found: set[str] = set()
     if not root.is_dir():
@@ -423,12 +388,6 @@ def declared_modalities() -> tuple[str, ...]:
 
 def discovered_skills(**about: str) -> str:
     """Every extra skill that says it applies to this agent, found by looking rather than by name.
-
-    Two directories are read. ``skills/kinds/`` is what kind of agent this is: voice, chat,
-    browser, and whatever a customer turns up with next. ``skills/modules/`` is everything that
-    cuts across kinds: the people an agent talks to apply to voice and chat alike and to no
-    agent that talks to nobody. Both use the same declaration, so where a file lives says what
-    sort of thing it is and nothing else.
 
     A skill is a markdown file under either whose first lines declare what it is for::
 
@@ -519,11 +478,5 @@ def load_skill(name: str, *, preamble: bool = True) -> str:
 
 
 def writer_model() -> str:
-    """The model a scenario writer runs on, from ALK_HARNESS_WRITER_MODEL.
-
-    Empty by default, which inherits the parent's model and is what has always happened. A
-    writer is handed its brief, the contract, the world and the skill, so it is doing
-    constrained work rather than deciding what the suite should be, and a cheaper model may be
-    enough for it.
-    """
+    """The model a scenario writer runs on, from ALK_HARNESS_WRITER_MODEL; empty inherits."""
     return os.environ.get("ALK_HARNESS_WRITER_MODEL", "").strip()

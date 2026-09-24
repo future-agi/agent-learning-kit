@@ -39,7 +39,6 @@ def _drive(monkeypatch, decision: dict, *, world=None, raises: bool = False):
 
     class _Stage:
         def __init__(self, spec, name="", overheard=True):
-            # Mirrors the real signature: a judging stage is never overheard in the chat.
             self.spec, self.name, self.overheard = spec, name, overheard
 
         async def __aenter__(self):
@@ -100,7 +99,6 @@ def test_bad_model_sql_is_returned_as_recoverable_tool_feedback(monkeypatch):
 
 
 def test_a_judge_that_will_not_commit_is_unjudged_and_says_nothing_internal(monkeypatch):
-    """No verdict after the retry is neither a pass nor a fail, and no judging detail is published."""
     (held, why), _ = _drive(
         monkeypatch, {"undecided": True, "explanation": "no table records intent"}
     )
@@ -147,10 +145,7 @@ def test_the_judge_needs_no_environment_to_pick_a_priced_model(monkeypatch):
     backend = resolve()
     model = judge_module.judge_model()
 
-    # Whichever backend is the default, the judge lands on that backend's own model rather than on
-    # a name belonging to another vendor's loop.
     assert model == backend.default_model
-    # Only the ADK backend prices its own tokens; the Claude loop is told what a turn cost.
     if backend.name == "vertex-gemini":
         assert model in vertex_gemini.PRICES_PER_MILLION, (
             f"the judge would run unpriced on {model}, so its spend would be missing "
@@ -176,14 +171,12 @@ def test_the_judge_is_given_what_was_said_not_only_what_was_done():
 
 
 def test_a_judging_stage_is_not_overheard_in_the_chat() -> None:
-    """A verdict about the agent appeared in the run's conversation, which is backend work."""
     from pathlib import Path as _P
 
     source = _P("src/fi/alk/harness/judge.py").read_text(encoding="utf-8")
     assert 'name="judge-sub-goals", overheard=False' in source
 
     session = _P("src/fi/alk/harness/session.py").read_text(encoding="utf-8")
-    # The mirror into the chat is conditional, both for what the stage says and what it hears.
     assert "if self._overheard:" in session
     assert "self.channel.waiting() if self._overheard else []" in session
 

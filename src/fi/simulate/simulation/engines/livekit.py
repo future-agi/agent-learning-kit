@@ -710,7 +710,6 @@ class _TestRunnerAgent(Agent):
         # before TTS starts and ``session.current_speech`` becomes non-None.
         self._end_speech_handle = ctx.speech_handle
         self._end_requested.set()
-        # No output, so no further reply: a string here made the caller say goodbye a second time.
         return None
 
     async def wait_for_end_speech(self) -> None:
@@ -1066,7 +1065,7 @@ class _TestRunnerAgent(Agent):
 
 
 def _chunk_text(chunk: Any) -> str | None:
-    """The text a streamed chunk carries, or None when it carries anything else, a tool call included."""
+    """The text a streamed chunk carries, or None for a tool call."""
     if isinstance(chunk, str):
         return chunk
     delta = getattr(chunk, "delta", None)
@@ -1093,11 +1092,7 @@ _HOLD_CHECK_IN = (
 async def _without_hold_marker(
     stream: AsyncIterable[Any], on_hold: Callable[[], None] | None = None
 ) -> AsyncIterable[Any]:
-    """Pass the reply through unless all it says is the hold marker, which is dropped unspoken.
-
-    Chunks are held only while their text could still become the marker, so an ordinary reply is
-    released as soon as it differs and its first words are not delayed.
-    """
+    """Pass the reply through unless all it says is the hold marker, which is dropped unspoken."""
     marker = _letters(HOLD_MARKER)
     held: list[Any] = []
     text = ""
@@ -1119,7 +1114,6 @@ async def _without_hold_marker(
     if holding:
         silent = _letters(text) == marker
         for item in held:
-            # Usage and flush chunks still pass when the marker is dropped; only its words go.
             if not silent or (not isinstance(item, str) and getattr(item, "delta", None) is None):
                 yield item
         if silent and on_hold is not None:
@@ -3388,8 +3382,7 @@ def _answered_by_voicemail() -> bool:
     return os.environ.get("HARNESS_ANSWERED_BY", "").strip().lower() == "voicemail"
 
 
-# An agent often opens in two parts, a recording notice and then the greeting. A person waits for
-# the greeting, so the caller's first reply needs a longer pause than the rest of the call.
+# The caller's first reply waits longer, so a two-part agent opening is not interrupted.
 _OPENING_ENDPOINTING_SECONDS = 4.0
 _OPENING_PATIENCE_LIMIT_SECONDS = 60.0
 

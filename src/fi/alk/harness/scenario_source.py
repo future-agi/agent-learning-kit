@@ -97,12 +97,7 @@ def _is_docstring(node: ast.stmt) -> bool:
 
 
 def does_nothing(function: Callable[..., object]) -> bool:
-    """Whether scenario code is, on its face, a function that only returns None.
-
-    Read from the source, never run: the module holds that one undecorated definition with no
-    defaults, and its body is a docstring, ``pass`` or a bare ``return``. Anything else, however
-    harmless it looks, counts as doing something.
-    """
+    """Whether scenario source is a single function whose body only returns None."""
     source = getattr(function, "_alk_source", None)
     entry = getattr(function, "_alk_entry", None)
     if not isinstance(source, str) or not entry:

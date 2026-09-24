@@ -52,10 +52,7 @@ def record(
 ) -> None:
     """Add one session's reported spend. A backend that cannot price a call reports None.
 
-    ``tokens_cached`` is the part of ``tokens_in`` the provider served from its own cache. The
-    backend prices it at the provider's published cache rate before it arrives here, so ``usd`` is
-    the bill rather than a ceiling; the count is carried alongside so the discount can be checked
-    against an invoice.
+    ``tokens_cached`` is the cached part of ``tokens_in``, already priced at the cache rate in ``usd``.
     """
     name = (stage or "stage").strip() or "stage"
     entry = _stages.setdefault(

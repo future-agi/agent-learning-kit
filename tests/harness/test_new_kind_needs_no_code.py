@@ -1,9 +1,4 @@
-"""Adding support for a new kind of agent must be adding one file, not editing code.
-
-Browser and computer-use agents are next, and the claim that they plug in has been made in prose
-several times without anything asserting it. These tests hold the seam: a kind file dropped into
-`skills/kinds/` reaches the writer, and nothing about it is named in Python.
-"""
+"""Adding support for a new kind of agent must be adding one file, not editing code."""
 
 from __future__ import annotations
 
@@ -36,8 +31,6 @@ def test_a_kind_nobody_has_written_yet_reaches_the_writer(tmp_path, monkeypatch)
 
 
 def test_a_kind_can_be_gated_on_a_second_condition_the_way_voicemail_is(tmp_path, monkeypatch):
-    """`applies_to` takes several clauses, so a capability a run may not have stays out of the
-    prompt entirely rather than being offered and then refused."""
     from fi.alk.harness import config
 
     monkeypatch.setattr(config, "SKILLS_ROOT", tmp_path)
@@ -54,9 +47,6 @@ def test_a_kind_can_be_gated_on_a_second_condition_the_way_voicemail_is(tmp_path
 
 
 def test_a_new_kind_file_is_enough_for_the_contract_to_accept_it(tmp_path, monkeypatch):
-    """The gap this closes: the kind directory was extensible but the accepted-modality list was a
-    tuple in code, enforced in the contract tool's enum and again on amendment. So a computer-use
-    agent could have its kind file read only after two unrelated edits."""
     from fi.alk.harness import config
     from fi.alk.harness.contract import known_modalities
 
@@ -65,14 +55,11 @@ def test_a_new_kind_file_is_enough_for_the_contract_to_accept_it(tmp_path, monke
 
     accepted = known_modalities()
     assert "computer_use" in accepted, "a kind file did not widen what a contract may declare"
-    # The built-ins survive a kinds directory that happens not to mention them.
     for built_in in ("voice", "chat", "browser"):
         assert built_in in accepted
 
 
 def test_the_built_ins_survive_an_empty_kinds_directory(tmp_path, monkeypatch):
-    """Deriving the list purely from files would drop `browser` the moment nobody had written
-    `kinds/browser.md`, which is a worse failure than listing one with no file behind it."""
     from fi.alk.harness import config
     from fi.alk.harness.contract import MODALITIES, known_modalities
 

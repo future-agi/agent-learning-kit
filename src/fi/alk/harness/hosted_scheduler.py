@@ -2203,7 +2203,6 @@ class HostedScheduler:
                 return_exceptions=True,
             )
             for (slot, goal), outcome in zip(judged_pending, verdicts):
-                # What went wrong with judging is logged; the reason is shown to the agent's owner.
                 if isinstance(outcome, BaseException):
                     logger.warning("judge could not run for %s: %r", goal.name, outcome)
                     held, why = None, ""
@@ -2230,9 +2229,7 @@ class HostedScheduler:
                 call=self._call_summary(call_outcome),
             )
 
-        # A settled `False` fails the scenario. A sub-goal the judge still could not settle, after
-        # its retry with the evidence inlined, must never read as a pass, so the scenario is
-        # reported as not decided rather than passed.
+        # A settled `False` fails the scenario; an unsettled sub-goal makes it not decided.
         if any(result.held is False for result in sub_goal_results):
             status = "failed"
         elif any(result.held is None for result in sub_goal_results):

@@ -62,8 +62,7 @@ _TERMINAL_SAVE_TOOLS = frozenset(
 # Vertex list pricing per 1M tokens: (input, output, the day this pair was last checked against
 # the platform's litellm model table). An unknown or stale model reports no cost rather than a
 # wrong one, and shows up in `unpriced_turns`.
-# What Vertex charges for a cache read, as a share of the input rate. Google's published figure
-# for context caching; implicit caching carries no storage fee on top.
+# What Vertex charges for a cache read, as a share of the input rate.
 CACHE_READ_SHARE = 0.10
 
 PRICES_PER_MILLION = {
@@ -238,9 +237,7 @@ def _successful_terminal_save(name: str, response: Any) -> bool:
     )
 
 
-# Tools whose result the model can fetch again. ADK re-sends the whole conversation on every call,
-# so anything left in it is paid for once per remaining turn; only these may be dropped, because
-# only these can be recovered by spending one.
+# Tools whose result the model can fetch again, so only these may be dropped from history.
 _REREADABLE = frozenset(
     {
         "inspect_world",
@@ -269,12 +266,7 @@ def _bare(name: str) -> str:
 
 
 def _forget_old_reads(contents: list[Any]) -> None:
-    """Collapse superseded reads, keeping the newest few of each tool whole.
-
-    The replacement names the call that brings one back, so a turn recovers anything this costs.
-    ADK shallow-copies a Part into the request, so the whole ``function_response`` is replaced
-    rather than its ``response`` edited: editing in place would rewrite the stored session event.
-    """
+    """Collapse superseded reads; the whole Part is replaced because ADK shallow-copies it."""
     from google.genai import types
 
     arguments: dict[str, str] = {}
@@ -334,19 +326,13 @@ def _stopped(said: str) -> Any:
     )
 
 
-# When a stage's prompt passes this many tokens, everything but the newest events is replaced by a
-# model written summary. Both halves are one setting: ADK refuses a threshold without a retention.
+# ADK refuses a compaction threshold without a retention, so both must be set.
 COMPACT_ABOVE_TOKENS = int(os.environ.get("ALK_HARNESS_COMPACT_ABOVE", "100000") or 0)
 EVENTS_KEPT_RAW = int(os.environ.get("ALK_HARNESS_EVENTS_KEPT_RAW", "20") or 0)
 
 
 def _compaction() -> Any:
-    """Auto-compaction for a stage that runs for hundreds of turns, or None when it is switched off.
-
-    Forgetting re-readable results costs nothing but can only drop what a later call can fetch
-    again. A summary is the backstop for everything else, and ADK runs it before each model call
-    rather than only between user turns, which is what makes it reach a long authoring stage.
-    """
+    """Auto-compaction for a long stage, or None when it is switched off."""
     if COMPACT_ABOVE_TOKENS <= 0 or EVENTS_KEPT_RAW <= 0:
         return None
     try:
@@ -420,8 +406,7 @@ class VertexGeminiSession:
         self._model = model
         self._runner: Any = None
         self._pending: str | None = None
-        # Calls each worker run has taken, keyed by the scope ADK gives that run. A worker is a
-        # smaller agent with a smaller goal; without this its only ceiling is the whole stage's.
+        # Calls each worker run has taken, keyed by the scope ADK gives that run.
         self._worker_calls: dict[str, int] = {}
         self._resume_invocation_id: str | None = None
         context = spec.conversation
@@ -436,8 +421,7 @@ class VertexGeminiSession:
         builtins: tuple[str, ...] | None = None,
         servers: dict[str, Any] | None = None,
     ) -> list[Any]:
-        # DELEGATE_TOOL is absent for the same reason it is not a tool here at all: ADK exposes
-        # a sub-agent as a tool itself, so asking for one by name would declare it twice.
+        # DELEGATE_TOOL is absent: ADK already exposes each sub-agent as a tool.
         builtins = self._spec.builtins if builtins is None else builtins
         servers = self._spec.servers if servers is None else servers
         offered: list[Any] = []
@@ -457,14 +441,7 @@ class VertexGeminiSession:
         return offered
 
     def _workers(self) -> list[Any]:
-        """Every declared worker as a sub-agent this loop may run.
-
-        ``mode="single_turn"`` is ADK's own answer to the same need the other backend meets with
-        a sub-agent definition: the parent exposes the sub-agent as a tool and runs it inline,
-        so the delegating turn receives the worker's report rather than handing the conversation
-        over. A worker with no tools of its own inherits the parent's, which is what a worker
-        doing part of the parent's job should have.
-        """
+        """Every declared worker as a sub-agent this loop may run."""
         from google.adk.agents import LlmAgent
         from google.genai import types
 
@@ -570,9 +547,7 @@ class VertexGeminiSession:
             resumability_config=ResumabilityConfig(is_resumable=True),
             events_compaction_config=_compaction(),
         )
-        # An App rather than a bare agent, because the compaction config hangs off the App and
-        # nothing else turns it on. Its request processor runs before every model call, so a long
-        # authoring stage compacts mid-flight rather than only between user turns.
+        # An App rather than a bare agent: the compaction config only takes effect on the App.
         self._runner = Runner(
             app=app,
             session_service=sessions,
@@ -776,18 +751,10 @@ logger = logging.getLogger(__name__)
 def priced(
     model: str, tokens_in: int, tokens_out: int, tokens_cached: int = 0
 ) -> float | None:
-    """What these tokens cost, or None where no price can be stood behind.
-
-    A cache read is charged at a tenth of the input rate, which is Google's published figure for
-    Vertex context caching rather than an estimate. It matters more than it sounds: an authoring
-    stage re-sends its whole prompt every turn, so most of its input is cache reads, and charging
-    those at the full rate overstates the bill several times over.
-    """
+    """What these tokens cost, or None where no price can be stood behind."""
     prices = PRICES_PER_MILLION.get(model)
     if prices is None and "/" in model:
-        # A gateway names the same model with the route in front of it, "vertex_ai/gemini-2.5-
-        # flash". The price belongs to the model, not the road it arrived by, and an unpriced
-        # model falls back to whatever the loop claimed it cost.
+        # A gateway prefixes the route, e.g. "vertex_ai/<model>"; the price belongs to the model.
         prices = PRICES_PER_MILLION.get(model.rsplit("/", 1)[-1])
     if prices is None:
         return None

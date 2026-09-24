@@ -29,11 +29,9 @@ def test_the_caller_may_not_claim_an_action_it_cannot_perform():
 
 
 def test_the_caller_asks_again_for_the_part_of_its_question_left_unanswered():
-    """A caller told only that missing country codes "can cause issues" said it had everything."""
     assert "hold the answer against what you asked" in SIMULATOR_INSTRUCTIONS
     assert "ask for that part once" in SIMULATOR_INSTRUCTIONS
 
 
 def test_the_closing_turn_answers_the_agents_last_question():
-    """"Would you like me to text you the details?" met with a goodbye failed the SMS check twice."""
     assert "the answer goes in that closing turn too" in SIMULATOR_INSTRUCTIONS

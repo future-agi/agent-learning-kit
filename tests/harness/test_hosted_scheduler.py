@@ -2824,7 +2824,6 @@ def test_call_aborted_retries_on_reset_same_world_when_pool_size_is_one() -> Non
         replayed = retry_events[0]
         assert replayed["scenario_key"] == "s1"
         assert (replayed["from_world"], replayed["to_world"]) == (0, 0)
-        # A retry that does not say why it happened reads as an unexplained repeat.
         assert replayed["cause"].startswith("call_failed:")
         await pool.close()
 

@@ -75,8 +75,6 @@ class _IRWorld:
 
     def __init__(self, connection) -> None:
         self._connection = connection
-        # check_invariants runs each query on a worker thread; the connection is only ever read
-        # from, one query at a time, so crossing threads is safe here and the check is not.
         self._lock = threading.Lock()
 
     def query(self, sql: str):
@@ -87,12 +85,7 @@ class _IRWorld:
 
 
 def world_from_ir(world) -> _IRWorld:
-    """Materialise a world IR into an in-memory database.
-
-    The invariants are ordinary SQL over the seeded rows, and the rows exist in the IR long before
-    a container does. Checking them here turns a failed foreign key from a full environment rebuild
-    into a re-emit, which is the difference between sixteen minutes and none.
-    """
+    """Materialise a world IR into an in-memory database."""
     import sqlite3
 
     connection = sqlite3.connect(":memory:", check_same_thread=False)
@@ -123,12 +116,7 @@ def world_from_ir(world) -> _IRWorld:
 
 
 def violations_in_ir(world, checks: list[dict]) -> list[str]:
-    """Invariants the seeded rows already break, found without building anything.
-
-    Only the checks this database can actually run are judged. The real world is Postgres and some
-    invariants are written in its dialect, so anything SQLite cannot parse is left to the real
-    environment rather than reported as a failure it is not.
-    """
+    """Invariants the seeded rows already break; checks SQLite cannot parse are skipped."""
     import sqlite3
 
     backing = world_from_ir(world)
@@ -147,11 +135,7 @@ def violations_in_ir(world, checks: list[dict]) -> list[str]:
 
 
 def _first_rows(rows: list, *, most: int = 3, width: int = 60) -> str:
-    """The first violating rows, so a repair can see what to fix instead of guessing.
-
-    Only the columns the check's own query selected, a few rows, each value trimmed: enough to
-    name the offending values without copying records wholesale.
-    """
+    """A few violating rows, each value trimmed."""
     shown = []
     for row in rows[:most]:
         values = row.items() if isinstance(row, dict) else enumerate(row)
@@ -533,8 +517,6 @@ async def author_invariants(
                 "Review is incomplete. Declare source-evidenced checks and call finish_review."
             )
     if not saved and checks:
-        # The declared checks are the artefact; the call is the ceremony. Kept, and said out loud
-        # so the omission is visible.
         logger.warning(
             "source data review declared %d checks without calling finish_review; "
             "keeping them rather than discarding the review",

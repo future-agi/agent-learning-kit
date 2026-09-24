@@ -269,9 +269,7 @@ def _mask_userinfo(match: re.Match[str]) -> str:
     return f"{scheme}{user}:***@" if password is not None else f"{scheme}***@"
 
 
-# A declared value shorter than this is configuration, not a credential, and substring-replacing it
-# destroys ordinary prose: a value of "on" turned every "confirms" into "c***firms" in the graded
-# receipts of a real hosted run.
+# Shorter declared values are configuration, not credentials; redacting them mangles prose.
 _SHORTEST_REDACTABLE_SECRET = 8
 
 
@@ -690,7 +688,7 @@ class ScenarioRetriedPayload(BaseModel):
     scenario_key: str = Field(min_length=1)
     from_world: int = Field(ge=0)
     to_world: int = Field(ge=0)
-    # Why the first try is being replayed. Without it a retry reads as an unexplained repeat.
+    # Why the first try is being replayed.
     cause: str = Field(default="", max_length=200)
 
 

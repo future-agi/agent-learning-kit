@@ -868,10 +868,6 @@ def test_livekit_worker_isolation_wheel_shape(monkeypatch: pytest.MonkeyPatch) -
     server = AgentServer()
     assert asyncio.iscoroutinefunction(AgentServer.run)
 
-    # The wheel decides which arm the shim lands on, and both isolate the worker: `simulation`
-    # disables the health server outright, `port` moves it to the harness-assigned one. Asserting
-    # a private attribute exists made a wheel bump look like a harness regression; what the
-    # per-world port depends on is that the shim does not fall through to `unsupported`.
     result = module._apply_worker_isolation(server, dict(os.environ))
     assert result in {"simulation", "port_override"}
     if result == "simulation":

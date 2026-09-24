@@ -8,8 +8,7 @@ from fi.simulate.simulation.models import Persona
 
 CallType = Literal["inbound", "outbound"]
 
-# The whole reply a caller gives when the agent has only put them on hold. The engine drops it
-# before speech, so the caller stays silent instead of filling the pause with "take your time".
+# The caller's whole reply while on hold; the engine drops it before speech.
 HOLD_MARKER = "SILENCE"
 
 logger = logging.getLogger(__name__)

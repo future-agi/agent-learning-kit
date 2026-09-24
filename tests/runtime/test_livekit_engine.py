@@ -1331,7 +1331,6 @@ def test_end_call_signals_runner_after_minimum_balanced_conversation() -> None:
     result = asyncio.run(agent.end_call(SimpleNamespace(speech_handle=speech_handle)))
     asyncio.run(agent.wait_for_end_speech())
 
-    # No output means no further reply, so the caller does not say goodbye twice.
     assert result is None
     assert agent.end_requested.is_set()
     assert speech_handle.waited is True
@@ -1441,7 +1440,6 @@ def test_a_caller_left_on_hold_checks_in_once_when_nothing_follows(monkeypatch) 
     asyncio.run(scenario())
     assert len(replies) == 1 and "still on the line" in replies[0]
 
-    # The agent came back in time: nothing is said.
     replies.clear()
 
     async def answered():
@@ -1461,7 +1459,6 @@ def test_an_ordinary_reply_passes_whole_and_in_order() -> None:
     call = SimpleNamespace(delta=SimpleNamespace(content="", tool_calls=[object()]))
     assert _drain_hold_filter([call]) == [call]
     assert _drain_hold_filter(["Silence is not an answer."]) == ["Silence is not an answer."]
-    # A reply in another script is released on its first chunk, not held to the end.
     for opening in ("नमस्ते, ", "你好", "مرحبا"):
         assert not "silence".startswith(livekit._letters(opening))
 

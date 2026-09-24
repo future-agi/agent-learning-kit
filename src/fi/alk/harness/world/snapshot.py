@@ -26,12 +26,7 @@ STATE = "state.json"
 
 
 def _provenance_from_job(source_root: Path) -> dict[str, str]:
-    """The same three facts, read from the job record beside the source.
-
-    Checked against a real hosted run: `/work/source` has no `.git`, and `/work/job.json` carries
-    `source.repository`, `source.ref` and `source.commit_sha`. Without this the manifest field is
-    written empty exactly where it is most needed.
-    """
+    """Source provenance read from the job record beside a checkout that has no `.git`."""
     for candidate in (source_root.parent / "job.json", source_root / "job.json"):
         try:
             body = json.loads(candidate.read_text(encoding="utf-8"))
@@ -53,27 +48,14 @@ def _provenance_from_job(source_root: Path) -> dict[str, str]:
 
 
 def source_provenance(source_root: str) -> dict[str, str]:
-    """Which commit of which repository the tools in this world came from.
-
-    A sealed bundle carries `source_root`, but that is a path inside a sandbox that stops existing
-    when the job ends, and `restore` needs the agent's own code back before any tool has a body.
-    Without this the bundle cannot say what to check out, and the only record is the job row on the
-    platform. Read from the checkout rather than passed in, so it stays true for a local build too.
-
-    Any userinfo in the remote is stripped: a clone URL can carry a token, and this file is
-    uploaded to object storage.
-    """
+    """Which commit of which repository this world's tools came from; remote userinfo stripped."""
     import re
     import subprocess
 
     root = Path(source_root or "")
-    # A path that is not there is not a source, and answering for it would attribute this world to
-    # a checkout nobody can point at.
     if not source_root or not root.is_dir():
         return {}
     if not (root / ".git").exists():
-        # The hosted path materialises the source without a `.git`, so asking git there answers
-        # nothing. The job record sitting beside it already knows, and it is the same three facts.
         return _provenance_from_job(root)
     found: dict[str, str] = {}
     for key, argv in (
@@ -226,9 +208,6 @@ def save(
                 # be able to import the tools it was bound to, and a scenario run happens
                 # long after the build stage that found the path.
                 "source_root": world.source_root,
-                # What to check out to get those tools back. `source_root` is a sandbox path that
-                # stops existing when the job ends, so without this the bundle cannot say which
-                # commit of which repository it was built against.
                 "source_provenance": source_provenance(world.source_root),
                 # A run refuses legacy/demo worlds whose handlers were authored by the harness.
                 # New worlds can only acquire handlers through adopt_tool, and a source root is

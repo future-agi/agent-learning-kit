@@ -9,10 +9,8 @@ Nothing here is modality-specific. It reasons over the world's tables, the actio
 took and what was said, which a voice call, a typed conversation and a browser the agent drives all
 leave behind in the same shape, so the wording stays neutral rather than naming a call.
 
-The explanation is read by the agent's owner, so it speaks only about what the agent did. Anything
-about the judging itself (a failed query, a missing transcript, a crash) goes to the log, never into
-the verdict. A judge that still cannot decide after a retry with the evidence inlined returns held
-None, which the scheduler never reports as a pass.
+The explanation speaks only about the agent; judging details go to the log. A judge that cannot
+decide after one retry returns held None.
 """
 
 from __future__ import annotations
@@ -81,7 +79,7 @@ def _dump(value: object) -> str:
 
 
 def _dump_calls(calls: Sequence[Any]) -> str:
-    """Every action, however long the conversation: only each field is trimmed, never the list."""
+    """Every action, with each field trimmed."""
     return json.dumps([_short(_call(c)) for c in calls], default=str, indent=1)
 
 

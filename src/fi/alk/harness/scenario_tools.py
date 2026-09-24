@@ -103,10 +103,7 @@ _CHECK_NAMES_A_TOOL = re.compile(r"""c(?:all)?\.name\s*==\s*["']([a-zA-Z_][\w-]*
 def _shared_check_bound_to_one_task(
     scenario: Scenario, catalogue: Catalogue, kept: list[Scenario]
 ) -> list[str]:
-    """A refusal sub-goal shared across task levels whose check turns on one task's tool.
-
-    Sharing cuts both ways: one check has to hold for every scenario naming it.
-    """
+    """A refusal sub-goal shared across task levels whose check turns on one task's tool."""
     problems: list[str] = []
     mine = str((scenario.coverage or {}).get("task") or "")
     by_name = {one.name: one for one in catalogue.sub_goals}
@@ -341,10 +338,7 @@ def journalled(destination: Path) -> list[Scenario]:
     return list(found.values())
 
 
-# How much of a suite one value of a persona field may account for. Counting distinct values does
-# not catch a suite that is 28 United States and one each of two others: it has three locations
-# and has still tested one. A third, because a ceiling is read as a target. The bound has to be
-# nearer the even share than the extreme for the spread to come out even.
+# Largest share of a suite one value of a persona field may take.
 MOST_OF_A_SUITE = 0.34
 # Below this a suite is too small for a share to mean anything.
 FEWEST_FOR_A_SHARE = 8
@@ -365,13 +359,7 @@ def _first_names_on_disk(destination: Path, excluding: str = "") -> set[str]:
 def _already_in_the_suite(
     args: dict[str, Any], kept: list[Scenario], elsewhere: set[str] | None = None
 ) -> str:
-    """Why this scenario is one the suite already has, or "" when it is new.
-
-    Two scenarios on the same cell asserting the same sub-goals are one scenario with the names
-    changed: the report shows two results and the agent was asked one question. The caller's first
-    name is the other half of the same problem, because a reader cannot tell two results apart when
-    the same person appears in both.
-    """
+    """Why this scenario is one the suite already has, or "" when it is new."""
     name = str(args.get("name") or "").strip()
     coverage = {
         str(axis): str(level)
@@ -384,8 +372,7 @@ def _already_in_the_suite(
     }
     persona = args.get("persona") or {}
     first = str(persona.get("name") or "").strip().split(" ")[0].lower()
-    # A parallel writer starts empty by design, so `kept` is its own slice and a name a sibling
-    # already used is invisible in it. The saved suite is the only place both can see.
+    # Parallel writers start empty, so only the saved suite shows names a sibling already used.
     if first and first in (elsewhere or set()):
         return (
             f"another scenario in this suite already has a caller named {first.title()!r}. Two "
@@ -422,13 +409,7 @@ def _already_in_the_suite(
 
 
 def crowded_field(kept: list[Scenario], candidate: Any, wanted: int) -> str:
-    """Which persona field this scenario would push past its share of the suite, if any.
-
-    The plan deals these out across the writers, and a writer that ignores its share produces a
-    suite where everybody is the same person in different clothes. A distinct-values check passes
-    on three values, so the share is what is enforced. Refused here because at the end it costs the
-    suite rather than one turn.
-    """
+    """Which persona field this scenario would push past its share of the suite, if any."""
     if wanted < FEWEST_FOR_A_SHARE or candidate is None:
         return ""
     ceiling = max(2, int(wanted * MOST_OF_A_SUITE))
@@ -451,12 +432,7 @@ def crowded_field(kept: list[Scenario], candidate: Any, wanted: int) -> str:
     return ""
 
 
-# A scenario is a coordinate over the same axes for every agent, which is what lets one suite be
-# compared with the next and one framework cover voice, chat and whatever comes after. The names are
-# fixed here; everything about *what they contain* stays in `plan-suite/SKILL.md` and the kind files,
-# which is where levels are meant to be edited. Overlay carries three of them because folding the
-# vector and the intensity into the type would turn nine types into thirty-six labels and break every
-# count that reads them.
+# Fixed for every agent; what each level contains lives in `plan-suite/SKILL.md`.
 CANONICAL_AXES = (
     "task",
     "counterparty",
@@ -482,9 +458,7 @@ _LEVELS_MISTAKEN_FOR_AXES = {
 }
 
 
-# The twelve are closed, which is the whole reason the task axis can be exhaustive: every request
-# is one of these applied to something the agent owns. Reads, writes, or manages the process, and
-# there is no fourth kind.
+# Closed set: every task is one of these applied to something the agent owns.
 OPERATIONS = (
     "retrieve",
     "compare",
@@ -564,17 +538,7 @@ def _grid_off_the_framework(axes: dict[str, list[str]]) -> str:
     return " ".join(said)
 
 
-# How much of a suite may carry an attack. Real callers are overwhelmingly ordinary, and a suite
-# that is mostly adversarial measures the red team rather than the agent.
-#
-# The floor is one, not three. Every cap here counts only what THIS writer has kept, because a
-# parallel writer starts empty by design and the parent merges the lists afterwards. A floor of
-# three was therefore three per writer: four writers turned a ten percent target into forty, which
-# is what a suite of twenty came back as.
-# The four the planning skill makes mandatory in any suite of twenty or more: the cells where being
-# wrong costs the most. The share cap exists to stop *sampled* attacks crowding out ordinary
-# traffic, not to refuse these, and counting them against it deadlocks the stage. The plan deals
-# them, the writers are briefed them, and the gate then refused them.
+# Mandatory overlays, exempt from the adversarial share cap.
 ALWAYS_WORTH_AN_ATTACK = frozenset(
     {"destructive", "minor_vulnerable", "emergency_crisis", "privacy_pii"}
 )
@@ -589,28 +553,20 @@ def _MOST_ADVERSARIAL(wanted: int) -> int:
     return max(1, round(wanted * float(os.environ.get("ALK_ADVERSARIAL_SHARE", "0.10"))))
 
 
-# What makes a scenario harder than the ordinary run of its task. A scenario that names none of
-# these and carries no overlay is a plain control: worth exactly one per task level, because it
-# proves the capability exists and proving it twice proves nothing new.
+# A scenario naming none of these and carrying no overlay is a plain control.
 _NAMES_A_DIFFICULTY = re.compile(
     r"\b(refus|correct|contradict|mishear|misheard|disagree|withhold|changes? (their )?mind"
     r"|interrupt|instead of|wrong|mistake|mismatch|does not match|insist|pushe?s? back"
     r"|repeats?|unclear|ambigu|confus|silen|hesitat|goes quiet|steps away"
     r"|declin|unavailable|fail|error|expired|invalid|denied|blocked|suspend"
     r"|sounds? like|swapped|no referent|not serviceable|geocodes? to nothing"
-    # An obligation the agent owes before it may proceed is a difficulty too: it can simply be
-    # skipped, and skipping it is the failure. A surge disclosure read as a plain booking is how
-    # a real test gets mistaken for a control.
     r"|disclos|surge|waive|policy|before (completing|booking|proceeding)|must (confirm|verify))\b",
     re.IGNORECASE,
 )
 
 
 def _a_second_plain_control(scenario: Scenario, kept: list[Scenario]) -> str:
-    """Why this scenario is the suite's second plain run of the same task, or "".
-
-    A control is worth one per task level.
-    """
+    """Why this scenario is the suite's second plain run of the same task, or ""."""
     coverage = scenario.coverage or {}
     if str(coverage.get("overlay") or "none") != "none":
         return ""
@@ -649,22 +605,11 @@ def _a_second_plain_control(scenario: Scenario, kept: list[Scenario]) -> str:
 def _over_its_share(
     coverage: Any, grid: dict[str, list[str]] | None, kept: list[Scenario], wanted: int
 ) -> str:
-    """Why this coordinate is a level the suite already has enough of, or "" when it is not.
-
-    Three suites in a row put half their scenarios on one level while every level was used and every
-    scenario placed, so nothing the report showed was wrong and the suite still tested one cell over
-    and over. A third is the bound: above it a level is no longer a sample, it is the suite.
-
-    Refused only while somewhere better exists, so a writer is never cornered: if every other declared
-    level of that axis is also at its share, the crowding is the plan's to fix and this says nothing.
-    """
+    """Why this coordinate is a level the suite already has enough of, or "" when it is not."""
     if not grid or wanted < 12 or not isinstance(coverage, dict):
         return ""
     share = max(1, (wanted + 2) // 3)
-    # The overlay axis is the exception, and treating it like the others is what produced a suite
-    # that was 67% adversarial against a 5-10% target: `none` is one level among nine, so capping
-    # it at a third forced two thirds of the suite to carry an attack. Real traffic is nearly all
-    # ordinary, so the attacks are the sample here and `none` is the ground.
+    # Overlay is capped on its adversarial share, not per level: `none` is the ground, not a sample.
     carrying = sum(
         1
         for one in kept
@@ -672,9 +617,7 @@ def _over_its_share(
         not in ALWAYS_WORTH_AN_ATTACK | {"none"}
     )
     asked = str(coverage.get("overlay") or "none")
-    # The plan deals the overlay levels and the suite owes one scenario to each. The share is a
-    # floor under the levels dealt, never a ceiling on them: cover each level once, and only a
-    # SECOND scenario on an already-covered level is a sample that has to fit the share.
+    # Each dealt overlay level is owed one scenario; only a repeat counts against the share.
     dealt = [
         level_name(one)
         for one in ((grid or {}).get("overlay") or [])
@@ -703,10 +646,7 @@ def _over_its_share(
         if not mine or len(levels) < 3:
             continue
         if axis in _OVERLAY_DERIVED and mine in _STRUCTURAL_ABSENCE:
-            # A scenario carrying no overlay has no intensity and no vector to vary, so these
-            # levels are not a sample competing for share: they are what the rest of the suite
-            # structurally is. Capping them at a third, while the adversarial share caps the
-            # overlays themselves, leaves a writer with no legal cell at all.
+            # No overlay means no intensity or vector, so these levels are not a sample.
             continue
         counted: Counter[str] = Counter(
             level_name((one.coverage or {}).get(axis, "")) for one in kept
@@ -730,10 +670,7 @@ def _over_its_share(
 
 
 def _off_the_grid(coverage: Any, grid: dict[str, list[str]] | None) -> str:
-    """Why this coordinate is not on the grid the plan dealt, or "" when it is.
-
-    Silent when no grid was declared, so a plan that declares none behaves exactly as before.
-    """
+    """Why this coordinate is not on the grid the plan dealt, or "" when it is."""
     if not grid:
         return ""
     if not isinstance(coverage, dict) or not any(
@@ -746,11 +683,6 @@ def _off_the_grid(coverage: Any, grid: dict[str, list[str]] | None) -> str:
             + "; ".join(f"{one} = {', '.join(levels)}" for one, levels in grid.items())
             + ". Set coverage from the cell your brief dealt you."
         )
-    # Every declared axis, not just one of them. A scenario carrying only `task` is placed on the
-    # task axis and missing from the overlay axis entirely, so the coverage grid counts fewer
-    # scenarios than the suite holds: a suite of fifteen showed three in its overlay rows, and a
-    # reader sees a grid whose cells do not add up to the suite and cannot tell which half is
-    # wrong. Placed everywhere or placed nowhere.
     placed = {level_name(axis) for axis in (coverage or {}) if str(coverage[axis] or "").strip()}
     absent = [axis for axis in grid if level_name(axis) not in placed]
     if absent:
@@ -762,8 +694,7 @@ def _off_the_grid(coverage: Any, grid: dict[str, list[str]] | None) -> str:
             "means the ordinary case where nothing is applied. The grid is: "
             + "; ".join(f"{one} = {', '.join(levels)}" for one, levels in grid.items())
         )
-    # Folded through the same spelling the scenario's own coverage is stored under, so a plan that
-    # deals `privacy/PII` and a writer that submits `privacy_pii` are one level rather than two.
+    # Folded through `level_name` so `privacy/PII` and `privacy_pii` are one level.
     folded = {
         level_name(axis): {level_name(level): level for level in levels}
         for axis, levels in grid.items()
@@ -790,17 +721,7 @@ def _off_the_grid(coverage: Any, grid: dict[str, list[str]] | None) -> str:
 
 
 def _overlay_asserts_nothing(scenario: Scenario, catalogue: Catalogue) -> list[str]:
-    """An overlay scenario that names no sub-goal the overlay could fail.
-
-    This is the defect that survives every advisory written against it. An agent that books the
-    ride and also obeys the injection passes all twelve.
-
-    Refused here rather than remarked on at save, because a writer holds `add_sub_goal` and can
-    settle it in one turn, while a remark at save time arrives after the suite is written and
-    after the session that could have fixed it has ended. It costs turns, never coverage: the
-    scenario is kept the moment it names a claim, and `validate_sub_goal` plus the vacuity gate
-    stop that claim from being a formality.
-    """
+    """An overlay scenario that names no sub-goal the overlay could fail."""
     level = str((scenario.coverage or {}).get("overlay") or "").strip()
     if level.lower() in NO_OVERLAY:
         return []
@@ -823,9 +744,7 @@ def _overlay_asserts_nothing(scenario: Scenario, catalogue: Catalogue) -> list[s
     ]
 
 
-# An identifier is a prefix, an underscore and a name: `plc_blr_airport`, `rdr_arjun`, `ord_2`. The
-# shape is the agent's own, so it is read off the world rather than listed here, which is what keeps
-# this from inventing a pattern a different agent does not use.
+# Identifier shape (`plc_blr_airport`, `ord_2`) is read off the world, not hard-coded.
 def _world_identifiers(state: dict[str, list[dict[str, Any]]]) -> set[str]:
     """Every identifier-shaped value the world holds, for reading an instruction against."""
     found: set[str] = set()
@@ -844,16 +763,7 @@ _AN_IDENTIFIER = re.compile(r"[a-z]{2,5}_[a-z0-9_]{2,40}")
 
 
 def _identifiers_the_instruction_invents(scenario: Scenario, trial: Any) -> list[str]:
-    """Identifiers the caller is told to say that the world does not hold after setup.
-
-    The fixture check above reads values handed over as data. This reads the instruction, because a
-    scenario can name a record in prose and never put it in the fixture: one declared `origin: seed`,
-    seeded nothing, and told the caller to ask for two places that exist nowhere. The caller then
-    cannot succeed and the agent is blamed for it.
-
-    Keyed on the identifier shape the world itself uses, so a run whose ids look like something else
-    is simply silent. Measured across nine suites: it fires on exactly those two, and on nothing else.
-    """
+    """Identifiers the caller is told to say that the world does not hold after setup."""
     spoken = set(_AN_IDENTIFIER.findall(scenario.instruction or ""))
     if not spoken:
         return []
@@ -922,18 +832,6 @@ def accept_scenario(
     ``persist`` is off for a writer that shares the destination with siblings: writing the suite
     removes every folder not in the writer's own list, so persisting here would delete whatever
     the others have proved. Those writers keep their work in ``kept`` and the caller saves once.
-
-    ``rename_on_collision`` decides what a name already in ``kept`` means. For the session that
-    owns the suite it means a deliberate replacement, which is how a refused scenario gets fixed.
-    For a writer it cannot mean that: writers share one list and cannot see each other, so two of
-    them reaching for the same obvious name is a coincidence, and replacing silently destroys
-    proved work.
-
-    ``vocabulary`` is the keyword set the planner declared with ``aim_for``. A word outside it is
-    replaced here and named in the reply, never refused: the scenario has already cleared all three
-    gates by this point, and no keyword is worth losing proved work over. Writers cannot see each
-    other, so without this each invents its own words for the same idea and the suite ends with a
-    keyword per row.
     """
     try:
         scenario = Scenario.model_validate(payload)
@@ -953,13 +851,8 @@ def accept_scenario(
             spoken=spoken,
         )
         problems.extend(contract_sequence_problems(scenario, hard_constraints or []))
-        # A credential the caller is handed, that the correct agent then passes to a tool, has to
-        # be in the world once setup has run. Advisory at save time this is found after the suite
-        # is written; refused here it costs the writer one turn and it can seed the record.
         problems.extend(_credentials_the_world_lacks(scenario, trial))
         problems.extend(_identifiers_the_instruction_invents(scenario, trial))
-        # An overlay with nothing that can fail it is the defect every advisory has failed to
-        # stop. Refused at the one moment a writer can still settle it.
         problems.extend(_overlay_asserts_nothing(scenario, catalogue))
         problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
     finally:
@@ -1011,8 +904,7 @@ def accept_scenario(
                     inside.append(settled)
             else:
                 outside.append(word)
-        # Never emptied: a scenario no filter can reach is worse than one reached by a word the
-        # plan did not pick, so a total miss keeps what the writer chose and only says so.
+        # Never emptied: a total miss keeps the writer's own keywords.
         if inside:
             scenario.keywords = inside
     # A proved scenario is already valuable work. Persist it immediately so a stopped model,
@@ -1044,9 +936,7 @@ def accept_scenario(
         else "All three gates pass: the world is ready for it, the reference solution passes "
         "its checks, and those checks fail when nothing is done."
     )
-    # Names, bounded. Withholding them entirely costs more than echoing them: a session that
-    # cannot see what is taken re-reads the suite to find out, and a read carries a whole
-    # scenario body for the rest of the run. Saying what the list is for is what stops that.
+    # Names, bounded: without them a session re-reads the suite to learn what is taken.
     names = [one.name for one in kept]
     recent, more = ", ".join(names), ""
     if len(recent) > 2000:
@@ -1082,13 +972,7 @@ def not_ready(kept: list[Scenario], wanted: int, catalogue: Catalogue) -> list[s
             "is already there, so adding to one always reads like this. If you wrote extra "
             "nobody asked for, drop_scenario takes them off."
         )
-    # Both happened in the same suite: a delivered-order refusal was filed under "cancel a pending
-    # order", which is neither what it tests nor distinguishable afterwards from the scenario that
-    # really does test that. A use case is how coverage is counted, so a duplicate quietly
-    # overstates it. Keyed on the pair, not the use case alone. A use case fans out into several
-    # branches and each is a separate test, so keying on the use case alone caps a suite at one
-    # scenario per use case — which is how a request for forty against fourteen use cases became
-    # unsaveable.
+    # Keyed on the (use case, branch) pair: one use case fans out into several branches.
     claimed: dict[tuple[str, str], list[str]] = {}
     for one in kept:
         case = (one.use_case or "").strip().lower()
@@ -1121,16 +1005,7 @@ def _rows_of(table: Any) -> list[Any]:
 
 
 def _what_moved(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
-    """The rows the calls actually changed, and nothing else.
-
-    What a writer needs after running a reference solution is what its calls did, which is a small
-    set of rows. Echoing every table on every probe puts unchanged rows into a conversation that is
-    re-read on every later turn.
-
-    Saying **nothing changed** is information the old dump could not express: a solution whose calls
-    leave the world untouched cannot be checked against world state, and the writer needs to know
-    that before it writes checks that can only ever pass.
-    """
+    """The rows the calls actually changed, and nothing else."""
     lines: list[str] = []
     for name in sorted(after):
         was = {json.dumps(row, sort_keys=True, default=str) for row in _rows_of(before.get(name))}
@@ -1148,10 +1023,7 @@ def _what_moved(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
 
 
 def _coverage_gaps(coverage: dict[str, Any]) -> str:
-    """The part of the coverage report worth saying out loud: what the plan promised and missed.
-
-    Silent unless a design was declared, because without one there is nothing to have missed.
-    """
+    """The part of the coverage report worth saying out loud: what the plan promised and missed."""
     lines = []
     for axis, body in coverage.get("axes", {}).items():
         unused = body.get("unused") or []
@@ -1195,10 +1067,6 @@ def scenario_tools(
 
     ``start_from`` seeds that list. A parallel writer starts empty rather than from disk, so it
     is never counted as already having what a sibling wrote.
-
-    ``rename_on_collision`` defaults to whether this session is one of several writers, because a
-    name two blind writers both reached for is a coincidence. A session editing one named scenario
-    is the exception: it means to replace, so it passes False and keeps the name.
     """
     rename_on_collision = (
         (not can_save) if rename_on_collision is None else rename_on_collision
@@ -1210,8 +1078,7 @@ def scenario_tools(
     simulator_prompt = load_simulator_prompt(destination)
     target = {"count": wanted}
     exploration = {"since_submit": 0}
-    # How many times one scenario has come back with the identical refusal. A gate the
-    # writer cannot satisfy would otherwise be resubmitted forever and the stage never ends.
+    # Identical-refusal counts per scenario, so an unsatisfiable gate ends the stage.
     refused: dict[tuple[str, int], int] = {}
     external_runtime_target = _is_external_runtime(world_root)
     tool_free_target = not bool(contract.tools) or external_runtime_target
@@ -1219,8 +1086,6 @@ def scenario_tools(
     # ``branch`` is required because coverage is counted on the use case and branch pair, and the
     # merge drops a repeat of that pair. A writer that leaves it out gives every scenario in its
     # slice the same pair, and all but the first are silently thrown away.
-    # ``keywords`` was required while it lived on the persona, and it stays required now it sits on
-    # the scenario: a suite whose rows carry none can only be filtered by its axis levels.
     scenario_required = [
         "name",
         "branch",
@@ -1327,8 +1192,7 @@ def scenario_tools(
             if not applied.ok:
                 return _err(f"the setup did not run: {applied.said}")
             world.calls = []
-            # The world as the scenario's own setup left it, so what is reported below is what the
-            # calls did and not what the fixture already contained.
+            # After the scenario's own setup, so the report shows only what the calls changed.
             before = world.state()
             lines: list[str] = []
             for step in args.get("calls") or []:
@@ -1394,13 +1258,9 @@ def scenario_tools(
         ]
         catalogue.sub_goals.append(sub_goal)
         save_catalogue(catalogue, destination)
-        # Defining a sub-goal decides whether it is settled in code, and scenarios naming it may
-        # already be on disk from an earlier round. Their folders are brought into step now, or
-        # the bundle reader refuses them long after the session that could have fixed them ended.
+        # Bring scenarios already on disk that name this sub-goal into step with it.
         restated = refresh_check(destination, sub_goal)
-        # Rewriting a check is not the same as the scenario still passing it. A scenario proved
-        # against one definition keeps its proof while quietly inheriting another, and the suite
-        # ships graded by a check nothing ever ran against it. Three of sixty did exactly that.
+        # A rewritten check can break scenarios proved against the old one.
         broken = _no_longer_hold(destination, catalogue, restated, world_root)
         reword = "; ".join(
             one for one in (judged_wording_advisory(sub_goal), already_claimed(sub_goal, catalogue)) if one
@@ -1556,8 +1416,7 @@ def scenario_tools(
                         "communication_style",
                         "initial_message",
                         "languages",
-                        # Off a call there is no voice to pick, so asking for an accent makes a
-                        # writer invent one against a situation that says nothing about it.
+                        # Accent only applies on a call.
                         *(["accent"] if _is_spoken(contract) else []),
                     ],
                 },
@@ -1646,8 +1505,7 @@ def scenario_tools(
     )
     async def submit_scenario(args: dict[str, Any]) -> dict[str, Any]:
         if external_runtime_target and args.get("solution"):
-            # Nothing local can replay reference calls against a connect-only agent, so they are
-            # dropped rather than refused: the live call and the judged sub-goals are the evidence.
+            # Nothing local can replay reference calls against a connect-only agent.
             args = {**args, "solution": []}
 
         def _refuse(said: str, as_given: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1660,12 +1518,7 @@ def scenario_tools(
                 )
             return as_given or _err(said)
 
-        # The suite stops at the size it was asked for. This is the refusal that makes the number
-        # asked for the number produced, so it applies to the stage and to every worker alike.
-        # Replacing a scenario that already exists stays allowed, because fixing a refused one is
-        # how a writer finishes its part. Before the gates, like the spread bound: a label is
-        # cheap to correct and proving is not. An undeclared axis or level adds a column to the
-        # coverage denominator nothing can fill.
+        # Cheap label checks run before the gates, since proving is expensive.
         strayed = _off_the_grid(args.get("coverage"), target.get("axes"))
         if strayed:
             return _refuse(strayed)
@@ -1692,10 +1545,6 @@ def scenario_tools(
             ) if args.get("persona") else ""
             if crowded:
                 return _refuse(crowded)
-        # The caller's own name is the cheapest thing to get wrong and the most visible: the agent
-        # greets by the name on the account, so a persona the record does not know misreports who was
-        # served in every line of the transcript. Refused here rather than remarked on at save,
-        # because renaming a person costs a writer nothing and proving costs it a minute.
         if args.get("persona") and args.get("fixture"):
             try:
                 stranger = persona_off_the_record(
@@ -1906,8 +1755,7 @@ def scenario_tools(
             )
             if wrong:
                 return _err(wrong)
-            # Merged, never replaced. Declaring is additive; narrowing is not a thing you can do
-            # to a denominator scenarios have already been counted against.
+            # Merged, never replaced: scenarios have already been counted against this grid.
             merged = {axis: list(levels) for axis, levels in (target.get("axes") or {}).items()}
             for axis, levels in grid.items():
                 seen = merged.setdefault(axis, [])
@@ -1919,11 +1767,7 @@ def scenario_tools(
                 + ", ".join(f"{axis} ({len(levels)})" for axis, levels in grid.items())
                 + "; a scenario placed anywhere else is refused before it is proved"
             )
-            # Scenarios kept BEFORE the first grid was declared were never checked against one,
-            # because the gate is silent while no grid exists. The same vocabulary is applied again
-            # when the environment is validated, and there a single stray level fails the whole
-            # job: one five-hundred authored every scenario and then died at that gate over 25 of
-            # them. Named here, they cost a relabel each; found there, they cost the run.
+            # Scenarios kept before the first grid was declared were never checked against it.
             already_off = sorted(
                 one.name for one in kept if _off_the_grid(one.coverage, grid)
             )
@@ -1936,8 +1780,6 @@ def scenario_tools(
                     + ". Relabel them onto the grid now. The environment validation applies the "
                     "same vocabulary at the end of the run and one stray level fails the whole job"
                 )
-        # The levels of an overlay-shaped axis are the ones that need a sub-goal each, and this is
-        # the moment the harness can see both lists.
         if grid:
             held = " ".join(one.name for one in catalogue.sub_goals).lower()
             for axis, levels in grid.items():
@@ -1983,9 +1825,6 @@ def scenario_tools(
         empty = uncovered_cells(kept, design)
         if empty:
             lines.append("cells still empty: " + "; ".join(empty))
-        # An overlay nothing asserts is a cell the coverage report counts and no run tests. It is
-        # found at save time today, when the work is already done; said here it costs one more
-        # round instead of a remark nobody can act on.
         unasserted = [
             said.split(":")[0]
             for said in redteam_problems(kept)
@@ -1996,9 +1835,6 @@ def scenario_tools(
                 "overlays asserting nothing beyond the plain task, brief a round to name what "
                 "each must produce or prevent: " + ", ".join(unasserted[:12])
             )
-        # Names, with where each sits. Whoever reads the suite has to be able to name a scenario
-        # before it can read one: `inspect_scenario` takes a name and there is no other way to
-        # learn them, so without this a reviewer discovers the suite only by guessing wrong.
         if kept and bool(args.get("names")):
             placed = [
                 f"{one.name} [{', '.join(f'{k}={v}' for k, v in sorted(one.coverage.items()))}]"
@@ -2012,9 +1848,6 @@ def scenario_tools(
                 + "; ".join(shown)
                 + ("" if len(shown) == len(placed) else f"; and {len(placed) - len(shown)} before them")
             )
-        # A task only ever seen under an attack is a task whose ordinary path nothing tests. The
-        # plan says every task gets one plain scenario first; said here it costs one more round,
-        # found at the end it costs the suite. Measured on a hosted 3: two of three task levels.
         plain = {
             one.coverage.get("task")
             for one in kept
@@ -2125,19 +1958,14 @@ def scenario_tools(
         # which is how a suite that asked for fifty and reached twenty-eight saved nothing at all.
         # What is off about the suite is said, not enforced.
         noted = not_ready(kept, target["count"], catalogue)
-        # Before anything is written, because the files on disk are what the platform reads and an
-        # archive holding two spellings of one keyword has already split the filter in two.
         design = _args.get("design") if isinstance(_args.get("design"), dict) else None
-        # The grid declared to aim_for is the same grid, so a plan that declared it there never has
-        # to repeat it here, and a suite whose save forgot it still gets a real denominator rather
-        # than counting only the levels that happen to appear.
+        # Reuse the grid declared to aim_for as the design's axes.
         if target.get("axes"):
             design = {**(design or {})}
             design["axes"] = {**target["axes"], **(design.get("axes") or {})}
         settled, invented = tidy_keywords(kept, vocabulary_from(design))
         path = write_scenarios(kept, destination, catalogue)
-        # A catalogue entry no scenario names is a probe, a draft or a superseded duplicate. Only
-        # what the suite actually uses ships, so the report never lists a check nothing ran.
+        # Only sub-goals the suite actually names ship.
         dropped = unused_sub_goals(catalogue, kept)
         if dropped:
             catalogue.sub_goals = [one for one in catalogue.sub_goals if one.name not in set(dropped)]
@@ -2146,12 +1974,7 @@ def scenario_tools(
                 f"{len(dropped)} sub-goals no scenario names were left out of the catalogue: "
                 + ", ".join(dropped[:12])
             )
-        # Read back after writing, because it is the check files on disk that get run, not the
-        # intention behind them. Advisory: a thin check is still a check and still saves.
-        #
-        # Every one of these is a remark about the suite, never a condition on keeping it, so none of
-        # them may cost a writer work that already cleared all three gates. One unreadable check file
-        # or one setup that will not replay is a reason to say less, not a reason to lose the save.
+        # Advisory only: a remark that fails must never cost the save.
         for remark in (
             lambda: check_problems(destination),
             lambda: unchecked_sub_goals(destination, catalogue),
@@ -2184,8 +2007,6 @@ def scenario_tools(
                 + (f" and {len(invented) - 12} more" if len(invented) > 12 else "")
                 + ". Declare them in design.keywords if they belong."
             )
-        # How much of the space this suite covered, written beside it so the number and the
-        # scenarios it describes can never drift apart.
         coverage = coverage_report(kept, design)
         (destination / "coverage.json").write_text(
             json.dumps(coverage, indent=2, ensure_ascii=False), encoding="utf-8"
@@ -2252,9 +2073,7 @@ def scenario_tools(
             suite_progress,
             drop_scenario,
         ]
-        # Saving rewrites the index and deletes any folder it does not know about, so only the
-        # session that owns the suite gets it. A worker is handed this same server with this one
-        # tool filtered out.
+        # Only the session that owns the suite may save; saving deletes unknown folders.
         + ([save_scenarios] if can_save else []),
     )
     return server, kept
@@ -2278,11 +2097,7 @@ _ALWAYS = (
 
 
 def tool_names() -> tuple[str, ...]:
-    """The tools a saving session publishes.
-
-    One list for every request now that fanning out is delegation rather than a tool: a worker
-    gets this same surface minus ``save_scenarios``, because the stage is what saves.
-    """
+    """The tools a saving session publishes; a worker gets the same minus ``save_scenarios``."""
     return _ALWAYS
 
 
@@ -2304,10 +2119,7 @@ def world_summary(world_root: Path) -> str:
     world = restore(world_root)
     try:
         state = world.state()
-        # An empty collection is the one a writer cannot copy a row from, and the one a cell like
-        # cancellation depends on. Told only "0 rows", twelve of twelve cancel and status scenarios
-        # on a sixty-scenario run had the agent build the row with its own tools across twelve steps
-        # rather than seed it. Naming the fields is what makes seeding as easy as booking.
+        # Name the fields of empty collections so a writer can seed a row there.
         lines = [
             f"  {name}: {len(rows)} rows"
             + (
@@ -2344,12 +2156,7 @@ _CLAIMS_A_RECORD = re.compile(
 
 
 def _handed_to_the_caller(fixture: Any, key: str = "") -> list[tuple[str, str]]:
-    """Values the fixture gives the caller that name a record the world is supposed to already hold.
-
-    Only keys that clearly denote a credential or an identifier, and only values carrying a digit.
-    A pickup time or a passenger count is something the run creates, not something it looks up, and
-    flagging those would make this cry wolf the way an over-broad rule always does.
-    """
+    """Fixture values given to the caller that name a record the world should already hold."""
     if isinstance(fixture, dict):
         return [one for k, v in fixture.items() for one in _handed_to_the_caller(v, str(k))]
     if isinstance(fixture, list):
@@ -2361,24 +2168,13 @@ def _handed_to_the_caller(fixture: Any, key: str = "") -> list[tuple[str, str]]:
 
 
 def grounding_problems(scenarios: list[Scenario], world_root: Path) -> list[str]:
-    """Scenarios that hand the caller a credential the world does not hold once setup has run.
-
-    The three admission gates all pass on these, because they ask whether a check *can* fail, not whether it
-    can fail for the reason the scenario is about. This asks the separate question: does the person
-    on the call have what the call needs.
-
-    Advisory. It reads the world after `setup`, so a scenario that seeds its own code is correct and
-    is left alone.
-    """
+    """Scenarios that hand the caller a credential the world does not hold once setup has run."""
     problems: list[str] = []
     for scenario in scenarios:
         claimed = _handed_to_the_caller(scenario.fixture)
         if not claimed:
             continue
-        # Only what the correct agent actually looks up. A value no solution step ever passes is
-        # not a key into the world: a guest hands over a phone so the agent can reach them, and
-        # in a world with no account to create it is never queried. Checking the arguments rather
-        # than the tool names is what makes this hold for worlds that name their tools anything.
+        # Only values some solution step actually passes to a tool.
         used = json.dumps(
             [step.arguments for step in scenario.solution], default=str
         ).lower()
@@ -2425,16 +2221,7 @@ def _words(text: str) -> set[str]:
 
 
 def persona_off_the_record(scenarios: list[Scenario], world_root: Path) -> list[str]:
-    """Callers whose own name is nowhere on the record the agent's lookup will return.
-
-    The agent greets by the name on the account. Somebody who says they are Liam on the row a
-    lookup of their number returns as Eli is two people, and every transcript after that misreports
-    who was served.
-
-    Only the rows the fixture's own identifiers appear in are read, and only the persona name is
-    compared, so a guest the world does not hold and a world that names nobody are both silent.
-    Advisory.
-    """
+    """Callers whose own name is nowhere on the record the agent's lookup will return."""
     problems: list[str] = []
     base = None
     for scenario in scenarios:
@@ -2451,8 +2238,7 @@ def persona_off_the_record(scenarios: list[Scenario], world_root: Path) -> list[
                 base = restore(world_root).state()
             known = _named_in(base, pinned)
             if not known:
-                # Only worth restoring and replaying setup for the scenarios that seed their own
-                # caller, which is the minority and the only case the base world cannot answer.
+                # Replay setup only for scenarios that seed their own caller.
                 trial, _applied, _ready = prepared(scenario, world_root)
                 known = _named_in(trial.state(), pinned)
         except Exception:

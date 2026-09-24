@@ -567,10 +567,7 @@ async def validate_once(
             ),
             generic_artifact_root=(authoring / "generic-harness") if generic else None,
         )
-        # Copies of the agent's runtime to check scenarios against at once. Every scenario is
-        # checked against a world resealed for it, and that reset is the cost of this stage. Each
-        # instance owns its ports and its databases, so lanes do not see each other. Processes
-        # inside the one sandbox, never more sandboxes.
+        # Parallel runtime instances inside the one sandbox, each with its own ports and databases.
         requested_lanes = max(1, int(os.environ.get("ALK_VALIDATION_INSTANCES", "1") or 1))
         executor = ThreadPoolExecutor(
             max_workers=requested_lanes, thread_name_prefix="runtime-validation"
@@ -668,7 +665,6 @@ async def validate_once(
                 world_isolation = _world_isolation_status(build_output)
             factory = ProcessWorldFactory(work)
             runtime = runtimes[0]
-            # The provider hands back fewer than asked when ports or memory do not allow it.
             lanes = len(runtimes) or 1
             phase = "scenarios"
             scenarios = await asyncio.to_thread(load_scenarios, bundle)
@@ -679,13 +675,10 @@ async def validate_once(
 
             baseline_state_digest: str | None = None
 
-            # A reset that keeps the agent's processes alive only reseals the store under them. A
-            # process caching across scenarios can fail that, so a failure is re-checked once
-            # against a full restart before it counts.
+            # A failure under an in-place reset is re-checked once against a full restart.
             in_place = os.environ.get("ALK_VALIDATION_RESET_IN_PLACE", "1") != "0"
 
             async def check_setups(invariants, suite=None):
-                # Dealt round-robin so every lane gets the same mix of cheap and expensive setups.
                 suite = scenarios if suite is None else suite
                 failures: list[str] = []
 
@@ -704,7 +697,6 @@ async def validate_once(
                     )
                 )
                 if failures:
-                    # Sorted: lanes finish out of order and two runs should read the same.
                     raise RuntimeValidationError(phase, "\n".join(sorted(failures)))
 
             async def check_setup(scenario, invariants, against=None):
@@ -767,10 +759,6 @@ async def validate_once(
                 f"{time.monotonic() - started:.0f}s",
                 flush=True,
             )
-            # Invariants are authored before the suite is walked, so the suite is walked once. A
-            # walk reseals a world per scenario, so walking twice cost 2N resets where N would do:
-            # at 500 scenarios that is 500 wasted. The price is a model review paid even when a
-            # setup is broken, which is one call against N resets.
             invariants: list = []
             if external_provider:
                 # A connect-only provider owns its state and executes its tools outside
@@ -781,9 +769,6 @@ async def validate_once(
                     "skipping local source-data invariant review",
                     flush=True,
                 )
-                # Still one walk over every scenario whose setup or ready does something. One that
-                # does nothing on either leaves an empty world empty and holds by construction, and
-                # checking it costs a world reset and two interpreters for no information.
                 active = [
                     scenario
                     for scenario in scenarios
@@ -1131,9 +1116,6 @@ async def validate_and_repair(
                             allowed_reason_codes={item.code for item in diagnostics},
                         )
                         artifacts.write_world_ir(repaired_world)
-                        # The invariants are SQL over rows the IR already holds, so a patch that
-                        # did not close them is visible here for nothing. Rebuilding the whole
-                        # environment to learn it costs minutes a run does not have.
                         still_broken = _invariants_the_ir_still_breaks(
                             repaired_world, authoring
                         )

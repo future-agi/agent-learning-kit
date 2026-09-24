@@ -94,45 +94,24 @@ def tool_server(
 # session build time rather than silently dropped.
 FILE_TOOLS = ("Read", "Glob", "Grep")
 ASK_TOOL = "AskUserQuestion"
-# The capability of running part of a stage in a session of its own. Named here rather than by
-# whatever each SDK calls its own delegation tool, so a stage asks for it once.
+# Backend-neutral name for running part of a stage in a sub-session.
 DELEGATE_TOOL = "Delegate"
 KNOWN_BUILTINS = (*FILE_TOOLS, ASK_TOOL, DELEGATE_TOOL)
 
-# The one ceiling on fan-out: how many workers may be in flight at once. A safety limit on the
-# machine rather than a judgement about the work, so it stays in code while the decision to
-# delegate at all stays with the model. Told to the stage as well, so it plans against it.
-# Writers a stage may run at the same time. This is what decides wall clock on a large suite: a
-# thousand scenarios in slices of twenty is fifty writers, and how many rounds that takes is the
-# suite divided by this. Raising it trades wall clock against the provider's rate limit, which a
-# refused session pays back as backoff, so it is tunable rather than fixed.
+# Ceiling on workers in flight at once.
 MOST_WORKERS_AT_ONCE = int(os.environ.get("ALK_HARNESS_WORKERS_AT_ONCE", "12") or 12)
 
 
 @dataclass
 class WorkerSpec:
-    """A worker the model may run to do part of its stage, in its own session.
-
-    Both SDKs behind the current backends can run a sub-session natively, and both do it better
-    than the harness could from outside: they own the scheduling, the budget and the failure.
-    So a stage declares what a worker is and each backend hands that to its own mechanism.
-
-    ``description`` is what the model reads when deciding whether to delegate, so it says when
-    the worker is worth running rather than what it is. ``instructions`` is the worker's own
-    system prompt. ``servers`` and ``builtins`` are its tools, which default to the parent's
-    when left empty, and are the place to withhold a tool the parent has.
-
-    One definition covers every call: the model writes the brief when it delegates, so the same
-    worker takes whichever work it decides to hand out.
-    """
+    """A worker the model may run to do part of its stage, in its own session."""
 
     description: str
     instructions: str
     servers: dict[str, ToolServer] = field(default_factory=dict)
     builtins: tuple[str, ...] = ()
     max_turns: int = 40
-    # Empty inherits the parent's model, which is what a worker doing the parent's own kind of
-    # work should get.
+    # Empty inherits the parent's model.
     model: str = ""
 
     def granted(self, parent: "SessionSpec") -> list[str]:
@@ -191,9 +170,7 @@ class SessionSpec:
     # own bound: it is working the whole time and has nothing to say while it does, so the
     # default reads honest work as a hang and kills it.
     idle_timeout_seconds: float = 0.0
-    # Workers this session may run, by name. Empty is the ordinary case and every backend
-    # behaves exactly as it did before the capability existed. Declaring one is what makes
-    # DELEGATE_TOOL mean something; whether to use it is the model's call, not a threshold.
+    # Workers this session may run, by name.
     workers: dict[str, WorkerSpec] = field(default_factory=dict)
     conversation: ConversationSession | None = None
 
@@ -205,11 +182,7 @@ class SessionSpec:
         return names
 
     def granted_anywhere(self) -> list[str]:
-        """Every tool name this session or any of its workers may call.
-
-        A worker's calls are made inside the parent's session, so a deny-by-default gate built
-        from ``granted()`` alone refuses the worker its own tools. The gate is built from this.
-        """
+        """Every tool name this session or any of its workers may call."""
         names = list(self.granted())
         for worker in self.workers.values():
             names.extend(worker.granted(self))
@@ -248,8 +221,7 @@ class Call:
     id: str
     name: str
     arguments: dict[str, Any] = field(default_factory=dict)
-    # Which agent made the call. Empty when the backend does not distinguish one. Without it a
-    # stage that delegates cannot tell its own spending from its workers'.
+    # Which agent made the call; empty when the backend does not distinguish one.
     by: str = ""
     invocation_id: str = ""
 

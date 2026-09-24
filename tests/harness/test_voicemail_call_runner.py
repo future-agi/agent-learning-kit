@@ -155,7 +155,6 @@ def test_the_operator_saying_the_agent_opens_overrides_the_direction_default() -
     assert cr._target_speaks_first(outbound, {}, {}) is False
     assert cr._target_speaks_first({}, {}, {}) is True
     assert cr._target_speaks_first(outbound, {}, {"target_speaks_first": True}) is True
-    # An unticked box is not an instruction: the direction still decides.
     assert cr._target_speaks_first({}, {}, {"target_speaks_first": False}) is True
     assert cr._target_speaks_first(outbound, {}, {"target_speaks_first": False}) is False
 

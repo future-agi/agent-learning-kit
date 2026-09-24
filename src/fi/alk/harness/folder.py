@@ -140,12 +140,7 @@ def folder_for(destination: Path, name: str) -> Path:
 
 
 def document_for(scenario: Scenario) -> dict:
-    """One scenario as JSON: everything about it except the code, which lives in its own files.
-
-    The single answer to "what is this scenario", so the folder and the index cannot disagree about
-    it. Keeping a second copy of the code here would let the two drift and leave nobody able to say
-    which one ran.
-    """
+    """One scenario as JSON: everything about it except the code, which lives in its own files."""
     body = scenario.model_dump()
     body.pop("setup_code", None)
     body.pop("ready_code", None)
@@ -181,9 +176,7 @@ def write_folder(scenario: Scenario, catalogue: Catalogue, destination: Path) ->
             sub_goal.check.rstrip() + "\n" + _RUNNABLE, encoding="utf-8"
         )
 
-    # A rewrite can drop a sub-goal, and a check left behind from the previous shape reads like a
-    # check this scenario still makes. Keyed on sub_goals rather than on what this pass wrote: a
-    # catalogue that cannot supply a body is a reason to leave the file alone, not to delete it.
+    # Drop checks for sub-goals a rewrite removed.
     wanted = {f"{name}.py" for name in scenario.sub_goals}
     for stale in (root / "checks").glob("*.py"):
         if stale.name not in wanted:
@@ -192,14 +185,7 @@ def write_folder(scenario: Scenario, catalogue: Catalogue, destination: Path) ->
 
 
 def refresh_check(destination: Path, sub_goal: SubGoal) -> list[str]:
-    """Bring every folder that names this sub-goal into step with its new definition.
-
-    A sub-goal can be defined after the scenarios that name it are already on disk, and defining
-    it is what decides whether it is settled in code or by a judge. Without this, a sub-goal that
-    gains a check leaves those folders with no `checks/<name>.py`, which the bundle reader refuses
-    an hour later, and one that loses its check leaves a file nothing in the catalogue backs.
-    Returns the scenarios it touched.
-    """
+    """Bring every folder that names this sub-goal into step with its new definition."""
     root = Path(destination) / SCENARIOS
     if not root.is_dir():
         return []
@@ -246,12 +232,6 @@ def write_index(scenarios: list[Scenario], destination: Path) -> Path:
 
     Regenerated from the folders rather than maintained alongside them, so it can never disagree
     with what is actually on disk.
-
-    It carries each scenario in full rather than a summary of it. This file is the only view of the
-    suite anything outside the sandbox gets: the platform reads it straight into the stage output
-    the Scenarios tab renders. A summary here meant the caller, the branch, the seeded data and the
-    known-good solution never reached the tab at all, and a scenario that had all of them showed as
-    a row of blanks.
     """
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
@@ -295,12 +275,7 @@ def read_all(destination: Path) -> list[Scenario]:
 
 
 def _tools_selected(body: str) -> set[str]:
-    """Every tool name this check narrows the calls to.
-
-    Parsed rather than matched on a variable name. The regex this replaces required the loop
-    variable to be called ``c``, so a real suite writing ``call.name == "book_ride"`` was invisible
-    to it and the duplicate-claim remark never fired once across a hundred scenarios.
-    """
+    """Every tool name this check narrows the calls to."""
     try:
         tree = ast.parse(textwrap.dedent(body))
     except SyntaxError:
@@ -322,11 +297,7 @@ def _tools_selected(body: str) -> set[str]:
 
 
 def unchecked_sub_goals(folder: Path, catalogue: Catalogue) -> list[str]:
-    """Scenarios naming a sub-goal the catalogue settles in code with no check file to settle it.
-
-    Read here off the same two sources the reader compares, so the answer cannot differ from
-    its.
-    """
+    """Scenarios naming a sub-goal the catalogue settles in code with no check file to settle it."""
     settled = {one.name for one in catalogue.sub_goals if one.deterministic()}
     if not settled:
         return []
@@ -357,17 +328,7 @@ def unchecked_sub_goals(folder: Path, catalogue: Catalogue) -> list[str]:
 
 
 def unasserted_behaviour(scenarios: list[Scenario], folder: Path) -> list[str]:
-    """Tools the reference solution calls that no check for that scenario ever reads.
-
-    A scenario's solution is what a correct agent does. A tool it calls that nothing asserts is a
-    step the agent may simply skip and still pass, and it is usually the step the scenario is named
-    for. Six of sixty on a real suite called `get_booking_status` last, said in their `tests` line
-    that they checked the booking status, and named only booking sub-goals: an agent that booked the
-    ride and never looked it up passed all six.
-
-    Advisory, and narrow on purpose. It reports a tool no check mentions at all, not one checked
-    loosely, because plenty of solution steps are setup that nothing should assert.
-    """
+    """The claimed last call of a reference solution that no check for that scenario reads."""
     problems: list[str] = []
     for scenario in scenarios:
         used = [step.tool for step in (scenario.solution or []) if step.tool]
@@ -379,18 +340,10 @@ def unasserted_behaviour(scenarios: list[Scenario], folder: Path) -> list[str]:
         asserted = ""
         for check in sorted(checks.glob("*.py")):
             asserted += check.read_text(encoding="utf-8", errors="replace").split("if __name__")[0]
-        # The last call, unasserted, and **claimed**. What separates the real fault is the
-        # scenario saying it tests that thing: six ended on a status lookup, said so in their
-        # tests line, and asserted only the booking. So the claim is the discriminator, not the
-        # tool.
         outcome = used[-1]
         claimed = f"{scenario.name} {scenario.tests or ''}".lower()
         spoken = [word for word in re.split(r"[^a-z]+", outcome.lower()) if len(word) > 3]
-        # The words together, not scattered. Requiring each one separately flagged a scenario
-        # whose tests line said "sends payment link SMS ... upon explicit confirmation", because
-        # `send` and `confirmation` both appeared while neither referred to send_confirmation_sms,
-        # and its payment-link SMS was asserted. Adjacent is the strictest reading and the only one
-        # that has not cried wolf; it misses a paraphrase, which is the right way to be wrong.
+        # Adjacent words only: matching them separately flagged unrelated tests lines.
         together = re.search(r"\W+".join(spoken), claimed) if spoken else None
         if outcome not in asserted and together:
             problems.append(
@@ -401,22 +354,7 @@ def unasserted_behaviour(scenarios: list[Scenario], folder: Path) -> list[str]:
 
 
 def check_problems(folder: Path) -> list[str]:
-    """Checks that cannot fail for the reason their scenario exists.
-
-    Two shapes, both read off the files that actually run rather than the intention behind them.
-
-    **Plumbing only.** A check that touches neither ``world`` nor the call's ``arguments``
-    asserts that a tool was reached and nothing else, so every agent that reaches it passes and
-    an agent that did the right thing another way fails.
-
-    **The same tool twice.** Two checks on one scenario narrowing to the same tool, neither
-    reading ``world``, are two readings of one call. A real hundred-scenario suite shipped
-    `lookup_weather_executed` and `weather_lookup_succeeded` together on seventy scenarios: one
-    asserted a successful call carrying a location, the other a successful call carrying a non-
-    empty location, and neither said what the caller was told.
-
-    Deliberately narrow. A check that cries wolf is worse than no check. Advisory either way.
-    """
+    """Checks that touch neither world nor arguments, or that read the same tool call twice."""
     problems: list[str] = []
     plumbing = 0
     for scenario_dir in sorted(one for one in (folder / SCENARIOS).glob("*") if one.is_dir()):

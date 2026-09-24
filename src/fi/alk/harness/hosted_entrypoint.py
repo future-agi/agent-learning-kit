@@ -1350,8 +1350,7 @@ class OutboundAdapter:
     async def scenario_retried(
         self, *, scenario_key: str, from_world: int, to_world: int, cause: str = ""
     ) -> None:
-        # Same budget and order as world_unhealthy: redact first, then truncate, because the
-        # builder's own redaction runs after this call and cannot shrink an over-long string.
+        # Redact before truncating, as world_unhealthy does.
         redacted = ob.redact_outbound_text(cause, self._extra_secret_values)
         if len(redacted) > 200:
             redacted = redacted[:200]

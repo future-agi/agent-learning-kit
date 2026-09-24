@@ -47,12 +47,7 @@ _DEFAULT_BUILTIN = "OFFICE_AMBIENCE"
 
 
 def distinct_beds(environments) -> dict[str, list[str]]:
-    """The clips a set of place names actually produces, keyed by clip.
-
-    Nine names for one recording is one condition tested nine times. A coverage claim counts what
-    the agent heard, so it counts these rather than the names, and the places sharing a clip are
-    returned with it so a report can say which collapsed.
-    """
+    """The clips a set of place names actually produces, keyed by clip."""
     grouped: dict[str, list[str]] = {}
     for environment in environments:
         named = str(environment or "").strip().lower()

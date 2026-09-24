@@ -49,24 +49,14 @@ from .base import (
     qualified,
 )
 
-# The loop is Claude Code; what it spends on is not. This harness may only bill Gemini, so an
-# Anthropic id as the default is refused the moment anything resolves it.
+# The loop is Claude Code; the model it bills is not.
 DEFAULT_MODEL = "gemini-3.7-flash"
 
-# What this SDK calls the tool that runs a worker. It reports itself under both names depending
-# on the version, and the gate matches on the reported name, so both are granted or delegation
-# is denied by the very gate the workers exist to pass.
+# The SDK reports its worker tool under either name depending on version, so both are granted.
 DELEGATION_TOOLS = ("Agent", "Task")
 
 def _can_reach_its_workers(spec: SessionSpec, allowed: list[str]) -> None:
-    """Refuse a session whose workers it has no way to call, before it spends an hour on it.
-
-    A stage that hands its work out has its own writing tools taken away on purpose, so the
-    delegation tool is the only thing it can still produce with. Missing that, it can read and
-    plan and nothing else, and it does not fail: it writes the suite out as prose, says the
-    tools are not connected yet, and ends reporting success with nothing saved. Twice, an hour
-    each, before this was written.
-    """
+    """Refuse a session whose workers it has no way to call."""
     if not spec.workers:
         return
     reachable = set(allowed)
@@ -129,16 +119,9 @@ def _sdk_server(server: ToolServer, *, gateway_compatible: bool = False) -> Any:
 
 
 def _definition(worker: WorkerSpec, parent: SessionSpec) -> AgentDefinition:
-    """A ``WorkerSpec`` as this SDK's own sub-agent definition.
-
-    ``model="inherit"`` rather than a name: a worker doing the parent's kind of work on a
-    different model is a difference nobody asked for and nothing on screen would explain.
-    """
+    """A ``WorkerSpec`` as this SDK's own sub-agent definition."""
     tools = [name for name in worker.granted(parent) if name != DELEGATE_TOOL]
-    # Only when the worker itself asks for it, never by inheriting the stage's. A worker that could
-    # hand out again would spend the stage's budget on a tree of its own and nothing on screen would
-    # say which of them wrote what. Workers declare no builtins, so reading the parent's here handed
-    # every writer the delegation tools by accident.
+    # Only when the worker itself asks for it, never inherited from the stage.
     if DELEGATE_TOOL in (worker.builtins or ()):
         tools.extend(DELEGATION_TOOLS)
     return AgentDefinition(
@@ -148,14 +131,10 @@ def _definition(worker: WorkerSpec, parent: SessionSpec) -> AgentDefinition:
         mcpServers=list(worker.servers or parent.servers),
         model=worker.model or "inherit",
         maxTurns=worker.max_turns,
-        # Blocking, so the delegating turn receives the worker's report rather than a handle to
-        # a run that outlives the stage that started it.
         background=False,
     )
 
 
-# The server and tool a session publishes when it runs its workers itself. Qualified the way
-# every other harness tool is, so the gate, the ledger and the skills all read it the same way.
 def _said(text: str, *, is_error: bool = False) -> dict[str, Any]:
     """A tool result in the shape every harness tool already returns."""
     reply: dict[str, Any] = {"content": [{"type": "text", "text": text}]}
@@ -165,13 +144,7 @@ def _said(text: str, *, is_error: bool = False) -> dict[str, Any]:
 
 
 def _child_of(parent: SessionSpec, worker: WorkerSpec) -> SessionSpec:
-    """The session one worker runs in.
-
-    Everything the worker did not name falls back to the parent's, which is what makes a worker a
-    part of its stage rather than a session with its own opinions. It gets no workers of its own:
-    a stage hands work out once, and a worker that could hand out again would spend the stage's
-    budget somewhere nobody is watching.
-    """
+    """The session one worker runs in, falling back to the parent's settings."""
     return SessionSpec(
         system_prompt=worker.instructions,
         servers=dict(worker.servers or parent.servers),
@@ -213,8 +186,6 @@ class ClaudeSession:
         self._streaming = streaming
         self._client: ClaudeSDKClient | None = None
         self._mirror_errors: list[str] = []
-        # None for every session that runs no workers, which is every session this backend built
-        # before delegation existed.
 
     async def start(self) -> None:
         self._client = ClaudeSDKClient(options=self._options)
@@ -345,12 +316,7 @@ class ClaudeSession:
 
 
 def _cost(model_usage: Any, counted: dict[str, int], reported: float | None) -> float | None:
-    """What the run cost, priced here rather than taken from the loop that ran it.
-
-    The CLI prices every call from its own table, which holds Claude models. Where the harness
-    has a price for the model it is the one that stands; where it has none, the CLI's figure is
-    passed through rather than replaced by silence.
-    """
+    """What the run cost, priced here where possible, else the CLI's own figure."""
     from .vertex_gemini import priced
 
     named = [str(name) for name in (model_usage or {})]
@@ -361,8 +327,7 @@ def _cost(model_usage: Any, counted: dict[str, int], reported: float | None) -> 
     known = [one for one in ours if one is not None]
     if not known:
         return reported
-    # One price per model, and a stage runs on one: summing would multiply the same tokens by
-    # however many ids the SDK happened to report.
+    # One stage runs on one model: summing would price the same tokens once per reported id.
     return max(known)
 
 
@@ -387,9 +352,7 @@ def _tokens(model_usage: Any) -> dict[str, int]:
             read += int(getattr(usage, "input_tokens", 0) or 0)
             written += int(getattr(usage, "output_tokens", 0) or 0)
             cached += int(getattr(usage, "cache_read_input_tokens", 0) or 0)
-    # The SDK reports cache reads beside fresh input, the way the Messages API does; the ledger
-    # reads tokens_cached as a part of tokens_in. Left unadded, a turn served almost entirely from
-    # cache looks like a turn that barely sent anything.
+    # The SDK reports cache reads beside fresh input; the ledger reads them as part of tokens_in.
     return {"tokens_in": read + cached, "tokens_out": written, "tokens_cached": cached}
 
 
@@ -420,8 +383,7 @@ class ClaudeBackend:
     def create(self, spec: SessionSpec) -> ClaudeSession:
         from ..config import gateway_wire_model
 
-        # An alias on the wire is not what was billed, so the session reports the model the run
-        # chose. With the real id on the wire there is nothing to correct.
+        # An alias on the wire is not what was billed, so report the model the run chose.
         reported = spec.model if gateway_wire_model(spec.model) != spec.model else None
         context = spec.conversation
         return ClaudeSession(
@@ -431,11 +393,7 @@ class ClaudeBackend:
         )
 
     def _options(self, spec: SessionSpec) -> ClaudeAgentOptions:
-        """The SDK options for one session.
-
-        Workers are handed to the SDK's own sub-agents. There is no second delegation
-        implementation in this backend: one way to run a worker, and it is the SDK's.
-        """
+        """The SDK options for one session."""
         from ..config import (
             UNWANTED,
             gate_hooks,
@@ -446,18 +404,11 @@ class ClaudeBackend:
             thinking_config,
         )
 
-        # Tool schemas are translated for the provider behind the gateway, which is a property of
-        # the route rather than of the name on the wire: it applies whether the wire carries the
-        # real id or an alias.
         wire_model = gateway_wire_model(spec.model)
         gateway_compatible = behind_gateway(spec.model)
-        # Everything the session or any of its workers may call. A worker's calls are made
-        # inside this session, so building the gate from the parent's tools alone would deny a
-        # worker the very tools it was given.
+        # A worker's calls are made inside this session, so the gate covers its tools too.
         allowed = [name for name in spec.granted_anywhere() if name != DELEGATE_TOOL]
-        # Union the tools per server name rather than letting the last worker win. What each agent
-        # may actually call is already restricted by its own `tools` allowlist in `_definition`,
-        # so registering the union here is safe and is what makes that allowlist mean anything.
+        # Union per server name; each agent is still restricted by its own `tools` allowlist.
         servers: dict[str, ToolServer] = {}
         for source in (spec.servers, *(worker.servers for worker in spec.workers.values())):
             for server_name, server in (source or {}).items():
@@ -478,10 +429,8 @@ class ClaudeBackend:
             if context.config_dir:
                 environment["CLAUDE_CONFIG_DIR"] = context.config_dir
         if spec.workers:
-            # How many sub-agents the CLI may run at once. This is the only fan-out ceiling now.
             environment["CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"] = str(MOST_WORKERS_AT_ONCE)
-            # A worker sent to the background returns a handle, and the turn that sent it can end
-            # before the worker reports: a stage then closes with most of its suite unwritten.
+            # A backgrounded worker lets the stage end before the worker reports.
             environment["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
             allowed.extend(DELEGATION_TOOLS)
         _can_reach_its_workers(spec, allowed)
@@ -528,9 +477,7 @@ class ClaudeBackend:
         return options
 
 
-# The SDK puts a string system prompt straight onto the CLI's argv, and a stage's prompt is the
-# agent's contract, its world summary and a skill or three. The SDK already accepts a file
-# instead, so anything large goes through a file and small prompts keep the exact shape they had.
+# A string system prompt goes onto the CLI's argv, so anything larger goes through a file.
 _PROMPT_ON_ARGV = 16_000
 
 

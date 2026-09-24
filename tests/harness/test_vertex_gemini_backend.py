@@ -99,7 +99,6 @@ def test_forgetting_twice_changes_nothing_more() -> None:
 
 
 def test_forgetting_leaves_the_session_event_alone() -> None:
-    """ADK shallow-copies a Part into the request, so an in-place edit would rewrite history."""
     from google.genai import types
 
     session = [
@@ -115,7 +114,6 @@ def test_forgetting_leaves_the_session_event_alone() -> None:
 
 
 def test_compaction_is_configured_and_can_be_switched_off(monkeypatch) -> None:
-    """ADK only compacts when an App carries the config; a bare agent runs unbounded."""
     from fi.alk.harness.backends import vertex_gemini
 
     monkeypatch.setattr(vertex_gemini, "COMPACT_ABOVE_TOKENS", 90_000)
@@ -129,7 +127,6 @@ def test_compaction_is_configured_and_can_be_switched_off(monkeypatch) -> None:
 
 
 def test_a_tool_call_carries_the_agent_that_made_it() -> None:
-    """A delegating stage cannot tell its own spending from its workers' without this."""
     from fi.alk.harness.backends import Call
 
     assert Call(id="c1", name="x").by == ""
@@ -137,24 +134,19 @@ def test_a_tool_call_carries_the_agent_that_made_it() -> None:
 
 
 def test_a_cache_read_is_not_charged_at_the_full_input_rate() -> None:
-    """Most of an authoring stage's input is cache reads; full-rate billing overstates it ~4x."""
     from fi.alk.harness.backends.vertex_gemini import CACHE_READ_SHARE, priced
 
     full = priced("gemini-3.7-flash", 1_000_000, 0, 0)
     all_cached = priced("gemini-3.7-flash", 1_000_000, 0, 1_000_000)
     assert full == 0.75
     assert all_cached == round(0.75 * CACHE_READ_SHARE, 6) or abs(all_cached - 0.075) < 1e-9
-    # A cached count larger than the input it came from cannot make the bill negative.
     assert priced("gemini-3.7-flash", 1_000, 0, 999_999) >= 0
 
 
 def test_the_claude_sdk_drives_gemini_only_behind_the_gateway(monkeypatch):
-    """Which provider gets billed is the whole question. The SDK backend advertises a Gemini id
-    only when a gateway key is present, because without one the CLI reaches Anthropic directly."""
     from fi.alk.harness.backends import resolve
 
     backend = resolve("claude-gemini")
-    # One backend now: the gateway is a route it takes, not a backend of its own.
     assert backend.name == "claude"
 
     monkeypatch.delenv("AGENTCC_API_KEY", raising=False)
@@ -166,9 +158,6 @@ def test_the_claude_sdk_drives_gemini_only_behind_the_gateway(monkeypatch):
 
 
 def test_the_gateway_route_never_carries_the_vertex_claude_flag(monkeypatch):
-    """CLAUDE_CODE_USE_VERTEX means Anthropic's own models hosted on Vertex. On the gateway route
-    it must be off, and the service account must not travel with it either: credentials belong to
-    whoever talks to the provider, and behind a gateway that is the gateway."""
     from fi.alk.harness.config import provider_env
 
     monkeypatch.setenv("AGENTCC_API_KEY", "not-a-real-key")
@@ -178,15 +167,11 @@ def test_the_gateway_route_never_carries_the_vertex_claude_flag(monkeypatch):
     assert env["CLAUDE_CODE_USE_VERTEX"] == "0"
     assert "GOOGLE_APPLICATION_CREDENTIALS" not in env
     assert env["ANTHROPIC_BASE_URL"] == "https://gateway.example.test"
-    # The wire carries the real id, so the job chooses its model rather than gateway config, and
-    # every model the session can reach is pinned to it: a suite written by forty sub-agents
-    # cannot land on the CLI's own preference.
     for pinned in ("ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL"):
         assert env[pinned] == "vertex_ai/gemini-3.7-flash"
     # A model the SDK does not know has no window to look up, so the run declares one.
     assert env["CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT"] == "1"
 
-    # A gateway that publishes only Claude-shaped names is served by naming its alias.
     monkeypatch.setenv("AGENTCC_CLAUDE_MODEL_ALIAS", "claude-sonnet-4-6")
     aliased = provider_env("vertex_ai/gemini-3.7-flash")
     assert aliased["ANTHROPIC_MODEL"] == "claude-sonnet-4-6"
