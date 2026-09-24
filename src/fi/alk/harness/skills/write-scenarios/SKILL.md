@@ -792,10 +792,9 @@ GOOD   interface: disfluent          persona: communication_style "halting, rest
 There cannot be a mismatch between the cell, the persona and the words the caller actually says.
 A suite whose accents are all `Neutral` has tested one accent, whatever its coverage map reports.
 
-**Spread noise across the places, not across synonyms.** Each place draws from its own recordings:
-`street` (traffic), `vehicle` (inside a moving car), `transit` (airport, train station), `retail`
-(grocery store, mall), `office`, `outdoors` (park), plus a crowded room for `restaurant`, `cafe` or
-`crowd`. Metro, train and bus share the city bed with street, so naming all three tests one sound
+**Spread noise across the places, not across synonyms.** The places this deployment can play are
+listed in your brief and in the `background_noise` field, each with the recordings behind it.
+Several names can share one recording, so naming three synonyms for the same place tests one sound
 three times. Pick the place the situation puts the caller in, and let a suite visit several of them.
 
 **A caller speaks one language, and a non-native caller is a language fact, not a label.**

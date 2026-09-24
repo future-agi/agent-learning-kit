@@ -62,7 +62,7 @@ here.
 
 | question | voice answers with |
 |---|---|
-| how clean is the input | quiet line · background noise (street, vehicle, transit, retail, office, outdoors, crowd) · accent · non-native speech |
+| how clean is the input | quiet line · background noise (the places this deployment plays) · accent · non-native speech |
 | what channel it arrives on | inbound call · outbound call, and whoever picks up |
 | how reliable and timely it is | fluent speech · disfluency and self-correction · long pauses |
 | what competing signal exists | the ambience bed behind the caller, and nothing else the call can render |
@@ -84,7 +84,7 @@ The planning skill asks the kind file for its X levels. A level with no field be
 | Level | Where it lands |
 |---|---|
 | `quiet_line` | `background_noise` false, the control a noisy scenario is measured against; rare, about one call in ten |
-| `noisy_line` | `background_noise`, the string naming the place: street, vehicle, transit, retail, office, outdoors, crowd |
+| `noisy_line` | `background_noise`, the string naming the place, one of those the brief and the field list |
 | `accented` | `persona.accent` |
 | `non_native` | `persona.accent`, with English as `persona.languages` |
 | `disfluent` | `persona.communication_style`, with both values seeded where one is corrected aloud |
@@ -94,12 +94,12 @@ The planning skill asks the kind file for its X levels. A level with no field be
 Two ways this table gets read wrongly, both measured on a fresh hundred.
 
 **The bed is a finite set of ambiences and it never speaks.** `background_noise` takes one of the
-places the deployment ships - street, vehicle, transit, retail, office, outdoors, crowd and whatever
-else its catalogue lists. A bare `true` gets a place picked by the scenario's name, which may not fit the situation.
-Anything you describe that is not one of those is not produced: a station announcement, an alarm, a
-crowd that argues, a voice behind the caller. Those are a second speaker under another name, and
-there is no second speaker. If the situation needs the caller to know something the room told them,
-have the caller say it. Refused at submit.
+places the deployment ships, which the brief and the `background_noise` field list. A bare `true`
+gets a place picked by the scenario's name, which may not fit the situation. Anything you describe
+that is not one of those is not produced: a station announcement, an alarm, a crowd that argues, a
+voice behind the caller. Those are a second speaker under another name, and there is no second
+speaker. If the situation needs the caller to know something the room told them, have the caller say
+it. Refused at submit.
 
 **The caller's own voice is synthesised clean, every line.** The engine has a rate, an accent and an
 emotion; it has no impairment and the line never degrades. Slurred, garbled, mumbled, muffled or

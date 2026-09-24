@@ -824,13 +824,12 @@ suite has to be dealt out in the briefs, one share each.
 
 The people are the thing to deal, and **deal them as whole people, not as separate fields.** Give
 each writer two or three caller profiles, and no profile to two writers where you can help it. A
-profile is one believable person-type: an accent, the languages that go with it, where they live, and
-the naming tradition that fits, for example `Indian accent, English and Hindi, Pune, Indian names` or
-`Neutral, Spanish and English, Houston, Hispanic names`. Dealt field by field, an accent to one list
-and name letters to another, the writer is left to join them and produces an Indian-accented caller
-called Zach Taylor. Measured on a live thirty: every mismatched name came from a brief that dealt the
-accent and the name letters separately. A few deliberate crossings, a second-generation caller or a
-married name, are real people too; deal them as their own profile, never by accident.
+profile is one believable person-type: an accent, the one language they speak on the call, where
+they live, and the naming tradition that fits, for example `Indian accent, English, Pune, Indian
+names` or `Neutral, Spanish, Houston, Hispanic names`. Dealt field by field, an accent to one list
+and name letters to another, the writer is left to join them and can produce an Indian-accented
+caller called Zach Taylor. A few deliberate crossings, a second-generation caller or a married name,
+are real people too; deal them as their own profile, never by accident.
 
 Across the suite the callers should sound like the people who really ring this agent: every language
 it supports and at least one it must turn away, several accents, several ages and temperaments. A
@@ -842,12 +841,12 @@ one call in ten: real callers are rarely in a silent room. Size the `quiet_line`
 Spread the places across writers the way you spread profiles, so the suite hears several of them
 rather than one bed everywhere.
 
-**Deal out the initial letters of their family names in the same breath.** Narrowing a writer to
-one language without also narrowing its names makes collisions worse, not better: two writers both
-given non-native callers both reached for the same name. Three letters each, no letter to two
-writers, and no two people in the suite share a name. The letters bind the family name only, so the
-given name stays free to be a real, common name for that person's background; dealt on given names,
-they produced callers nobody is actually called.
+**Deal out the initial letters of their family names in the same breath.** Narrowing a writer to one
+language without also narrowing its names makes collisions worse, not better: two writers both given
+non-native callers both reached for the same name. Three letters each, no letter to two writers, and
+no two people in the suite share a name. The letters bind the family name only, so the given name
+stays free to be a real, common name for that person's background. Letters dealt on given names
+force names nobody is actually called.
 
 Two signs the sizing is wrong: every slice holds one or two scenarios, which means you listed
 scenarios instead of grouping them and every writer will re-read the world for almost nothing; or

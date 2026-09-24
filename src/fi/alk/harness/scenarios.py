@@ -642,9 +642,9 @@ def callers_for(index: int, wanted: int, slice_name: str = "", spoken: bool = Tr
         dealt = [order[(index + step) % len(order)] for step in range(min(len(order), max(3, wanted)))]
         said += (
             " Most callers ring from somewhere, and a quiet line is rare, about one call in ten: name "
-            "the place in background_noise on every scenario not on a quiet_line level, starting "
-            "from these, "
-            f"{', '.join(dealt)}. The places this deployment can play, with how many recordings "
+            "the place in background_noise on every scenario not on a quiet_line level. Use these "
+            f"places first, {', '.join(dealt)}, and any other listed place where the situation "
+            "calls for it. The places this deployment can play, with how many recordings "
             f"each draws on: {', '.join(f'{place} ({count})' for place, count in beds.items())}."
         )
     return said

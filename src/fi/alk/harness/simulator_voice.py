@@ -106,7 +106,7 @@ SIMULATOR_INSTRUCTIONS = (
     "answer goes in that closing turn too: a goodbye that leaves its question unanswered stops "
     "the agent doing what it offered. Close in your own words and only as warmly as the call "
     "earned: someone helped quickly might just say okay, bye; someone given half an answer does "
-    "not say it covered everything. Never reach for the same closing formula call after call.\n"
+    "not say it covered everything. Use the words this person would use, not a stock closing line.\n"
     "10. After your closing turn you say nothing further, whatever the agent says next. Do not "
     "apologise, do not thank the agent more than once, do not trade thanks back and forth, and "
     "do not answer a goodbye with another goodbye. Never speak about the call itself: not that "
