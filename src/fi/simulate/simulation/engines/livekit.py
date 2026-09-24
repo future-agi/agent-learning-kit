@@ -1071,15 +1071,23 @@ class _TestRunnerAgent(Agent):
             self._goodbye_said = True
         chat_ctx = _with_opening_line(chat_ctx, self._persona.persona.get("initial_message"))
         self._saying = ""
-        messages = _session_messages(self._session) if self._session is not None else []
         heard = next(
             (
-                str(message.get("content") or "")
-                for message in reversed(messages)
-                if message.get("role") == "user"
+                str(message.text_content or "")
+                for message in reversed(list(chat_ctx.messages()))
+                if message.role == "user"
             ),
             "",
         )
+        if not heard and self._session is not None:
+            heard = next(
+                (
+                    str(message.get("content") or "")
+                    for message in reversed(_session_messages(self._session))
+                    if message.get("role") == "user"
+                ),
+                "",
+            )
         if pinned := _pinned_credential_reply(self._persona, heard):
             self._saying = pinned
             yield pinned

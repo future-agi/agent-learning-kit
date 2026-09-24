@@ -108,7 +108,8 @@ def test_simulator_answers_pinned_guest_pin_without_sampling(monkeypatch) -> Non
         created_at=0.0,
         metrics={},
     )
-    session = SimpleNamespace(history=SimpleNamespace(items=[item]))
+    session = SimpleNamespace(history=SimpleNamespace(items=[]))
+    chat_ctx = SimpleNamespace(messages=lambda: [item])
     reached: list[str] = []
 
     async def _base_llm_node(self, chat_ctx, tools, model_settings):
@@ -126,7 +127,7 @@ def test_simulator_answers_pinned_guest_pin_without_sampling(monkeypatch) -> Non
     agent._goodbye_said = False
 
     async def drain():
-        return [chunk async for chunk in agent.llm_node(None, [], None)]
+        return [chunk async for chunk in agent.llm_node(chat_ctx, [], None)]
 
     assert asyncio.run(drain()) == ["Seven six eight two."]
     assert reached == []
