@@ -485,6 +485,14 @@ The named things this agent can be checked on. Defined **here, once**, because e
 names the ones it needs — that is what makes results add up. If "confirms the order back" is the
 same sub-goal in twelve scenarios, you can say it failed in seven of them.
 
+**Cover the difficulties the suite will test, not only the outcome.** A catalogue whose sub-goals
+all fit every call (answered the request, stayed on topic, spoke clearly) leaves every scenario
+checked by the same few lines, and a scenario built around a hard moment passes whether or not the
+agent handled that moment. Give each kind of difficulty the agent is expected to meet its own
+sub-goal: a request too vague to act on, a caller who corrects a detail they gave earlier, a change
+of subject partway through, a request outside what the agent handles, pressure to break a rule. One
+behaviour each, named once, so the suite can report how often the agent got that moment right.
+
 **Write the check as code wherever the answer is observable.**
 
 ```python

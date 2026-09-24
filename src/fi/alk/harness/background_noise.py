@@ -147,13 +147,14 @@ def _pick(seed: str, size: int) -> int:
 
 # Words in a situation that say where the caller is, for the places a deployment can play.
 _SETTING_WORDS: dict[str, str] = {
-    "office": r"office|desk|workplace|cubicle|meeting room",
-    "street": r"street|sidewalk|pavement|walking|outside a|crosswalk",
-    "vehicle": r"\bcar\b|driving|taxi|cab\b|in traffic|behind the wheel",
-    "transit": r"airport|flight|boarding|gate\b|terminal|train|station|platform|metro|subway",
-    "retail": r"\bstore\b|\bshop\b|shopping|mall|grocery|supermarket|checkout",
-    "outdoors": r"\bpark\b|outdoors|garden|hiking|beach",
-    "crowd": r"cafe|café|restaurant|coffee shop|\bbar\b|canteen|cafeteria|crowd",
+    "airport": r"\bairports?\b|\bboarding\b|\bdeparture gate\b|\bbaggage claim\b|\blayover\b",
+    "transit": r"\btrain\b|\brailway\b|\bstation\b|\bmetro\b|\bsubway\b|\bbus stop\b|\bon the bus\b",
+    "vehicle": r"\bin (?:the|my|a) car\b|\bdriving\b|\bin (?:a|the) (?:taxi|cab)\b|\bin traffic\b|\bbehind the wheel\b",
+    "retail": r"\bstores?\b|\bshops?\b|\bshopping\b|\bmall\b|\bgrocery\b|\bsupermarket\b",
+    "crowd": r"\bcaf[eé]s?\b|\brestaurants?\b|\bcoffee shop\b|\bcanteen\b|\bcafeteria\b|\bcrowd(?:ed)?\b",
+    "outdoors": r"\bparks?\b|\boutdoors\b|\bgardens?\b|\bhiking\b|\bbeach\b",
+    "street": r"\bstreets?\b|\bsidewalk\b|\bpavement\b|\bwalking\b|\bcrosswalk\b",
+    "office": r"\boffices?\b|\bdesk\b|\bworkplace\b|\bcubicle\b|\bmeeting room\b",
 }
 
 

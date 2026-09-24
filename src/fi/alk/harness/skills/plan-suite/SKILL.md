@@ -613,7 +613,10 @@ scenario itself**, in `coverage`, one value per axis you actually varied:
 "coverage": {"task": "create_booking", "counterparty": "first_time", "overlay": "topic_switch"}
 ```
 
-Use your own axis names and your own level names; nothing downstream requires a fixed vocabulary. Use
+Use your own axis names and your own level names; nothing downstream requires a fixed vocabulary. A
+level names the condition it tests, never a particular language, product or agent, so the same name
+reads correctly in any suite. Writers use the levels you planned; a level nobody planned splits the
+report into cells of one. Use
 the axes you genuinely dealt out, not all six for the sake of it: an axis you held constant across the
 suite tells a reader nothing and makes the report claim breadth that is not there.
 

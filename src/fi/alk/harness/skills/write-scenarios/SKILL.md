@@ -477,9 +477,9 @@ Four of these are enforced by validation. Seven are your judgement, and no check
 - **The scenario seeds what it needs.** *(enforced: a fixture claiming data must create it)* Every
   record whose state decides the outcome is created by this scenario's `setup_code`.
 - **The name says what is tested.** *(enforced: the person's name may not appear in it)* In words, in
-  the shape "disputed_fee_after_cancelled_ride": never a sequence number, and never the agent's or the
-  product's name as a prefix, which every scenario in the suite would share and which tells a reader
-  nothing.
+  the shape "disputed_fee_after_cancelled_ride": never a sequence number, and never a prefix shared
+  with other scenarios, whether the agent's or the product's name or the task your slice is about.
+  Every scenario in the slice would carry it, and it tells a reader nothing.
 - **The situation can actually be produced on the call.** *(judgement)* The caller is one synthesised
   voice over one background bed. It cannot sound cut off, garbled or unintelligible, and it cannot
   bring a second voice; a scenario that depends on one tests something that never happens. A caller
@@ -488,7 +488,10 @@ Four of these are enforced by validation. Seven are your judgement, and no check
 - **The scenario's own claim is asserted.** *(judgement)* Sub-goals that fit every call (tone, how
   numbers are spoken, brevity) are fine to share, but they are not what this scenario is for. At least
   one sub-goal must fail when the agent gets *this* scenario's difficulty wrong: the thing its `tests`
-  line names. A scenario checked only by suite-wide style can pass whatever the agent does.
+  line names. A scenario checked only by suite-wide style can pass whatever the agent does, and a
+  sub-goal that fits any scenario (answered the request, resolved the call) is not this scenario's
+  claim either. When the catalogue has no sub-goal for this scenario's difficulty, add one with
+  `add_sub_goal` rather than falling back on a general one.
 - **The people and places are real-sounding and unremarkable.** *(judgement)* Ordinary names, ordinary
   companies, ordinary streets. Never a fictional character, a celebrity, a famous address from film or
   television, or an obvious placeholder: a reviewer who spots one stops trusting the suite.
@@ -790,6 +793,7 @@ Name it from the places the runtime knows: `street`, `transit`, `vehicle`, `in-c
 scenario. An accented, non-native, hurried or hostile caller is still on a street, in a car or at a
 desk, so name that place, from the places your brief dealt when it dealt any. A suite where most
 calls are silent tests a line real callers rarely have; keep quiet calls rare, about one in ten.
+Level names such as `quiet_line` belong to the suite, never to the words the caller is given.
 
 **The coordinate is a claim about the call, so the persona has to carry it.** `interface` is not a
 label you attach afterwards; it says what the agent actually hears. If the cell says the caller is
@@ -1013,7 +1017,7 @@ is a level you should change.
 followed by a bullet block: `Your details: - Name: ... - Phone: ... - Pickup: ... - Payment: ...`. Two
 things are wrong with it. It repeats what the prose above it already said, and it hands the simulator a
 list, which is an invitation to read the list out. A caller who recites four facts in one turn is the
-clearest sign in a transcript that nobody real was on the line, and it defeats the rule that says one
+clearest sign that nobody real is on the line, and it defeats the rule that says one
 fact at a time, when asked. Measured on a hosted 100: **43 of them ended in a block like that.** Put the
 facts in the sentences where the person would naturally say them, and let the agent ask.
 

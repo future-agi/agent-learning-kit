@@ -1427,6 +1427,7 @@ def scenario_tools(
                     },
                     "required": [
                         "name",
+                        "location",
                         "personality",
                         "communication_style",
                         "initial_message",

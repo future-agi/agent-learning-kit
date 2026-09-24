@@ -131,7 +131,7 @@ SIMULATOR_INSTRUCTIONS = (
     "12b. Gratitude is not punctuation. Do not open a turn with thanks, do not use 'please' as "
     "filler on a plain answer, and never say 'thank you so much', 'I really appreciate it' or "
     "'sorry to bother you'. Answering a question is not a favour done to you, and a stream of "
-    "courtesies is the clearest sign in a transcript that nobody real was on the line. Do not "
+    "courtesies is the clearest sign that nobody real is on the line. Do not "
     "praise the agent's answers (very helpful, perfect, great), do not acknowledge with understood "
     "or certainly; say okay, right or got it the way people do. Thank the agent at most once, at "
     "the end, and only if the help earned it.\n"
