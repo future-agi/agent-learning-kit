@@ -7,34 +7,46 @@ import json
 import os
 from types import SimpleNamespace
 
-from test_chat_call_runner import _Adapter, _context
+from test_chat_call_runner import (
+    _Adapter,
+    _ToolWorld,
+    _context,
+    _single_exchange,
+)
 
 from fi.alk.harness import chat_call_runner, chat_worker
-from fi.alk.harness.hosted_scheduler import CallOutcome
-from fi.alk.harness.process_runtime import EnvironmentRuntime, RuntimeState
+from fi.alk.harness.process_runtime import (
+    EnvironmentRuntime,
+    RuntimeEndpoint,
+    RuntimeState,
+)
+from fi.simulate.agent.wrapper import AgentResponse
 
 
-def test_isolated_chat_worker_preserves_source_scenario_identity(
+def test_isolated_chat_worker_uses_authored_scenario_for_selected_trial(
     tmp_path, monkeypatch
 ):
     context = _context(tmp_path)
-    observed = {}
 
-    class Runner:
-        def __init__(self, *_args):
+    class Wrapper:
+        def __init__(self, **_kwargs):
             pass
 
-        async def run(self, scenario, _runtime):
-            observed["scenario_key"] = scenario.scenario_key
-            observed["source_scenario_key"] = scenario.source_scenario_key
-            observed["scenario_id"] = scenario.scenario_id
-            return CallOutcome((), 1, None, None, 1)
+        async def call(self, _input):
+            return AgentResponse(content="Your account is active.")
 
     runtime = EnvironmentRuntime(
         runtime_id="runtime-1",
         world_index=0,
         bundle_digest="sha256:" + "a" * 64,
         state=RuntimeState.READY,
+        endpoints={
+            "target_http": RuntimeEndpoint(
+                capability="target_http",
+                protocol="http",
+                address="http://agent.invalid",
+            )
+        },
     )
     payload = {
         "job": context.job.model_dump(mode="json"),
@@ -45,22 +57,27 @@ def test_isolated_chat_worker_preserves_source_scenario_identity(
         "attempt_number": 1,
         "runtime": runtime.model_dump(mode="json"),
         "scenario_key": "trial-key",
-        "source_scenario_key": "authored-key",
-        "scenario_id": "scenario-id",
+        "source_scenario_key": "one",
+        "scenario_id": "trial-id",
     }
     result_path = tmp_path / "worker-result.json"
-    monkeypatch.setattr(chat_call_runner, "HostedChatCallRunner", Runner)
+    monkeypatch.setattr(chat_call_runner, "HTTPAgentWrapper", Wrapper)
+    monkeypatch.setattr(chat_call_runner, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat_call_runner, "_drive_conversation", _single_exchange)
     monkeypatch.setattr(chat_worker.sys, "stdin", io.StringIO(json.dumps(payload)))
     monkeypatch.setattr(chat_worker.sys, "argv", ["chat_worker", str(result_path)])
 
     asyncio.run(chat_worker.main())
 
-    assert observed == {
-        "scenario_key": "trial-key",
-        "source_scenario_key": "authored-key",
-        "scenario_id": "scenario-id",
-    }
-    assert json.loads(result_path.read_text())["outcome"]["turns"] == 1
+    result = json.loads(result_path.read_text())
+    assert "error" not in result
+    transcript = json.loads(
+        base64.b64decode(result["artifacts"][0]["data"], validate=True)
+    )
+    assert transcript["messages"] == [
+        {"role": "user", "content": "Look up account ACC-2048"},
+        {"role": "assistant", "content": "Your account is active."},
+    ]
 
 
 def test_parallel_chat_workers_keep_routing_private_and_upload_in_parent(
