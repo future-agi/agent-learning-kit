@@ -469,7 +469,10 @@ Four of these are enforced by validation. Seven are your judgement, and no check
   call the agent made returned that fact, so an agent that took another legitimate route to it passes.
 - **The scenario seeds what it needs.** *(enforced: a fixture claiming data must create it)* Every
   record whose state decides the outcome is created by this scenario's `setup_code`.
-- **The name says what is tested.** *(enforced: the person's name may not appear in it)*
+- **The name says what is tested.** *(enforced: the person's name may not appear in it)* In words, in
+  the shape "disputed_fee_after_cancelled_ride": never a sequence number, and never the agent's or the
+  product's name as a prefix, which every scenario in the suite would share and which tells a reader
+  nothing.
 - **The situation can actually be produced on the call.** *(judgement)* The caller is one synthesised
   voice over one background bed. It cannot sound cut off, garbled or unintelligible, and it cannot
   bring a second voice; a scenario that depends on one tests something that never happens. A caller
