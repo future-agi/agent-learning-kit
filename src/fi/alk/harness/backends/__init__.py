@@ -25,10 +25,13 @@ from .base import (
     ModelReply,
     Say,
     SessionOpened,
+    DELEGATE_TOOL,
+    MOST_WORKERS_AT_ONCE,
     SessionSpec,
     StageDone,
     ToolReturned,
     ToolServer,
+    WorkerSpec,
     ToolSpec,
     qualified,
     tool,
@@ -46,10 +49,13 @@ __all__ = [
     "ModelReply",
     "Say",
     "SessionOpened",
+    "DELEGATE_TOOL",
+    "MOST_WORKERS_AT_ONCE",
     "SessionSpec",
     "StageDone",
     "ToolReturned",
     "ToolServer",
+    "WorkerSpec",
     "ToolSpec",
     "backend_names",
     "qualified",
@@ -67,6 +73,10 @@ _ALIASES = {
     "vertex_gemini": "vertex-gemini",
     "vertexai-gemini": "vertex-gemini",
     "claude-code": "claude",
+    # Gateway routes resolve to the Claude backend.
+    "claude_gemini": "claude",
+    "claude-gemini": "claude",
+    "claude-sdk": "claude",
 }
 _LIVE: dict[str, HarnessBackend] = {}
 

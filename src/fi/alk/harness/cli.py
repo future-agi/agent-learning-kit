@@ -1027,7 +1027,11 @@ async def _auto(args: argparse.Namespace) -> int:
                 repair_attempt = 0
                 wanted = int(stage_args.count)
                 written_count = len(load_written(destination))
-                while written_count != wanted and repair_attempt < 2:
+                # One round per writer's worth of missing scenarios, capped.
+                from .scenarios import writers_for
+
+                rounds = min(max(2, writers_for(max(wanted - written_count, 1))), 6)
+                while written_count != wanted and repair_attempt < rounds:
                     repair_attempt += 1
                     missing = wanted - written_count
                     # Count alone is the wrong instruction: asked only for a number, the
@@ -1038,7 +1042,11 @@ async def _auto(args: argparse.Namespace) -> int:
                             f"only {written_count} are currently saved. "
                             + (
                                 f"Add exactly {missing} distinct validated scenario(s) and "
-                                "call save_scenarios. Preserve all existing scenarios. Each "
+                                "call save_scenarios. A writer only runs when you call it: "
+                                "saying that writers have been dispatched, or standing by for "
+                                "them, writes nothing and ends this stage where it stands. Put "
+                                "the calls in the message and read every report before you "
+                                "finish. Preserve all existing scenarios. Each "
                                 "one must meet the same bar as the rest of the suite: a "
                                 "different branch of the agent's behaviour from every "
                                 "scenario already saved, several steps deep, and failing "

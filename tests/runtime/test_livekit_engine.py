@@ -1331,9 +1331,136 @@ def test_end_call_signals_runner_after_minimum_balanced_conversation() -> None:
     result = asyncio.run(agent.end_call(SimpleNamespace(speech_handle=speech_handle)))
     asyncio.run(agent.wait_for_end_speech())
 
-    assert result == "Conversation ended."
+    assert result is None
     assert agent.end_requested.is_set()
     assert speech_handle.waited is True
+
+
+def test_end_call_waits_while_the_other_side_is_still_speaking() -> None:
+    class FakeSession:
+        user_state = "speaking"
+        history = SimpleNamespace(items=[])
+
+    agent = livekit._TestRunnerAgent(
+        persona=_scenario().dataset[0],
+        instructions="Be a customer.",
+        min_turn_messages=0,
+    )
+    agent._session = FakeSession()
+    result = asyncio.run(agent.end_call(SimpleNamespace(speech_handle=None)))
+    assert result.startswith("Not yet: the other person is still talking")
+    assert not agent.end_requested.is_set()
+
+
+def test_the_caller_waits_out_a_two_part_opening_then_returns_to_normal_timing() -> None:
+    updates: list[dict] = []
+
+    class FakeSession:
+        options = SimpleNamespace(endpointing={"mode": "fixed", "min_delay": 0.9, "max_delay": 3.0})
+        history = SimpleNamespace(items=[])
+
+        def update_options(self, *, endpointing_opts):
+            updates.append(dict(endpointing_opts))
+
+    session = FakeSession()
+
+    async def scenario() -> None:
+        task = asyncio.create_task(livekit._patient_opening(session))
+        await asyncio.sleep(0.05)
+        assert updates[-1]["min_delay"] == livekit._OPENING_ENDPOINTING_SECONDS
+        session.history.items.append(
+            SimpleNamespace(type="message", role="assistant", text_content="Hi, I need help.")
+        )
+        await asyncio.wait_for(task, timeout=2)
+
+    asyncio.run(scenario())
+    assert updates[-1] == {"mode": "fixed", "min_delay": 0.9, "max_delay": 3.0}
+
+
+def _drain_hold_filter(chunks: list) -> list:
+    async def stream():
+        for chunk in chunks:
+            yield chunk
+
+    async def collect() -> list:
+        return [chunk async for chunk in livekit._without_hold_marker(stream())]
+
+    return asyncio.run(collect())
+
+
+def _text_chunk(content: str) -> SimpleNamespace:
+    return SimpleNamespace(delta=SimpleNamespace(content=content, tool_calls=[]))
+
+
+def test_a_reply_that_is_only_the_hold_marker_is_never_spoken() -> None:
+    usage = SimpleNamespace(delta=None, usage={"tokens": 3})
+    assert _drain_hold_filter([_text_chunk("SIL"), _text_chunk("ENCE."), usage]) == [usage]
+    assert _drain_hold_filter(["silence"]) == []
+
+
+def test_a_dropped_marker_reports_the_hold_and_an_ordinary_reply_does_not() -> None:
+    held: list[bool] = []
+
+    async def run(chunks):
+        async def stream():
+            for chunk in chunks:
+                yield chunk
+
+        return [c async for c in livekit._without_hold_marker(stream(), on_hold=lambda: held.append(True))]
+
+    asyncio.run(run(["SILENCE"]))
+    assert held == [True]
+    asyncio.run(run(["Sure, go ahead."]))
+    assert held == [True]
+
+
+def test_a_caller_left_on_hold_checks_in_once_when_nothing_follows(monkeypatch) -> None:
+    replies: list[str] = []
+
+    class FakeSession:
+        history = SimpleNamespace(
+            items=[SimpleNamespace(type="message", role="user", text_content="One moment please.")]
+        )
+        agent_state = "listening"
+        user_state = "listening"
+
+        def generate_reply(self, *, instructions):
+            replies.append(instructions)
+
+    monkeypatch.setattr(livekit, "_HOLD_PATIENCE_SECONDS", 0.01)
+    agent = livekit._TestRunnerAgent(
+        persona=_scenario().dataset[0], instructions="Be a customer.", min_turn_messages=0
+    )
+    agent._session = FakeSession()
+
+    async def scenario():
+        agent._on_hold()
+        await agent._hold_check
+
+    asyncio.run(scenario())
+    assert len(replies) == 1 and "still on the line" in replies[0]
+
+    replies.clear()
+
+    async def answered():
+        agent._on_hold()
+        agent._session.history.items.append(
+            SimpleNamespace(type="message", role="user", text_content="Thanks for waiting.")
+        )
+        await agent._hold_check
+
+    asyncio.run(answered())
+    assert replies == []
+
+
+def test_an_ordinary_reply_passes_whole_and_in_order() -> None:
+    chunks = [_text_chunk("Si"), _text_chunk("lly question, but"), _text_chunk(" why?")]
+    assert _drain_hold_filter(chunks) == chunks
+    call = SimpleNamespace(delta=SimpleNamespace(content="", tool_calls=[object()]))
+    assert _drain_hold_filter([call]) == [call]
+    assert _drain_hold_filter(["Silence is not an answer."]) == ["Silence is not an answer."]
+    for opening in ("नमस्ते, ", "你好", "مرحبا"):
+        assert not "silence".startswith(livekit._letters(opening))
 
 
 def test_minimum_messages_is_a_floor_not_a_stop_trigger() -> None:

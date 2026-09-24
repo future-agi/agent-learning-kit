@@ -1170,6 +1170,22 @@ _IGNORED_GENERATED_SOURCE_DIRECTORIES = frozenset(
 )
 
 
+# Build outputs a world only reads, symlinked rather than copied per world.
+_SHARED_BUILD_OUTPUTS = frozenset({".venv", "venv", "node_modules"})
+
+
+def _link_shared_build_outputs(build_dir: Path, runtime_dir: Path) -> None:
+    for dirpath, dirnames, _ in os.walk(build_dir):
+        for name in list(dirnames):
+            if name in _SHARED_BUILD_OUTPUTS:
+                target = Path(dirpath) / name
+                link = runtime_dir / target.relative_to(build_dir)
+                if link.parent.is_dir() and not link.exists() and not link.is_symlink():
+                    link.symlink_to(target, target_is_directory=True)
+            if name in _IGNORED_GENERATED_SOURCE_DIRECTORIES:
+                dirnames.remove(name)
+
+
 def _reject_escaping_symlinks(
     tree_root: Path, allowed_root: Path, *, process_name: str
 ) -> None:
@@ -2205,6 +2221,7 @@ def spawn_source_process(
                     gid=resolved_user.pw_gid,
                     chown=chown,
                 )
+            _link_shared_build_outputs(build_dir, runtime_dir)
         except OSError as exc:
             raise ProcessRuntimeError(
                 "spawn",
@@ -3641,11 +3658,19 @@ def apply_seed_file(
             domain=FailureDomain.ENVIRONMENT,
         )
     if result.returncode != 0:
-        stderr = (result.stderr or "").strip()[:2000]
+        # Tails of both streams: psql's ERROR can land on either.
+        said = "\n".join(
+            part
+            for part in (
+                (result.stderr or "").strip()[-1500:],
+                (result.stdout or "").strip()[-1500:],
+            )
+            if part
+        )
         raise ProcessRuntimeError(
             "seed",
             "seed_failed",
-            f"{file}: exited {result.returncode}" + (f": {stderr}" if stderr else ""),
+            f"{file}: exited {result.returncode}" + (f": {said}" if said else ""),
             process=process_name,
             domain=FailureDomain.ENVIRONMENT,
         )
@@ -4885,6 +4910,14 @@ def _reset_template_database(
     )
 
 
+def _stores_reset_in_place(manifest: EnvironmentBundleV2) -> bool:
+    """Whether every managed store resets without respawning (only `template_database`)."""
+    if manifest.seed is None:
+        return False
+    strategies = {store.baseline.strategy for store in manifest.seed.stores}
+    return bool(strategies) and strategies == {BaselineStrategy.TEMPLATE_DATABASE}
+
+
 def _clone_or_reset_world(
     manifest: EnvironmentBundleV2,
     world_index: int,
@@ -4893,6 +4926,7 @@ def _clone_or_reset_world(
     baseline: BuildOutput,
     job_shared_handles: dict[str, SpawnedWorldProcess],
     existing_handles: dict[str, SpawnedWorldProcess],
+    keep_processes: bool = False,
 ) -> WorldSpawnResult:
     """Shared by `ProcessRuntimeProvider._ensure_world` (first creation / sick-world replace) and
     `reset_world` (mid-job restore) — both are "terminate this world's own per-world handles,
@@ -4906,8 +4940,9 @@ def _clone_or_reset_world(
     # world's own postgres while its `tools-api`/`agent` may still hold connections, guaranteeing
     # the full escalation wait every reset. A dict preserves insertion order, so `reversed()` here
     # IS reverse-topological order without recomputing it.
+    in_place = keep_processes and bool(existing_handles) and _stores_reset_in_place(manifest)
     for name, handle in reversed(list(existing_handles.items())):
-        if name not in job_shared_handles:
+        if not in_place and name not in job_shared_handles:
             # M7, p6-review-r1: waits for real exit before `_seal_world_store` below `rmtree`s
             # this same process's data directory and rebinds its port — a bare `terminate()`
             # racing that `rmtree` is exactly `EADDRINUSE` / "remove a live server's data dir".
@@ -4954,6 +4989,16 @@ def _clone_or_reset_world(
 
     # `spawn_world` sets its own (more complete — it starts from `new_handles` and accumulates
     # further) `partial_handles` on a raise, so no extra wrapping is needed here for that case.
+    if in_place:
+        return WorldSpawnResult(
+            handles=dict(existing_handles),
+            endpoints=build_endpoints(
+                manifest,
+                world_index=world_index,
+                port_plan=context.port_plan,
+                credentials=context.credentials,
+            ),
+        )
     return spawn_world(
         manifest, world_index=world_index, context=context, shared_handles=new_handles
     )
@@ -5003,6 +5048,7 @@ def reset_world(
     baseline: BuildOutput,
     job_shared_handles: dict[str, SpawnedWorldProcess],
     existing_handles: dict[str, SpawnedWorldProcess],
+    keep_processes: bool = False,
 ) -> tuple[dict[str, SpawnedWorldProcess], bool]:
     """§4.2's per-world reset, exactly — returns the world's refreshed handle map and whether
     every declared store's sentinel passed afterward. NEVER raises for a sentinel failure: §4.2's
@@ -5017,6 +5063,7 @@ def reset_world(
         baseline=baseline,
         job_shared_handles=job_shared_handles,
         existing_handles=existing_handles,
+        keep_processes=keep_processes,
     )
     ok = _check_all_sentinels(manifest, world_index, context=context)
     return result.handles, ok
@@ -5848,8 +5895,11 @@ class ProcessRuntimeProvider:
             knob_bearing=knob,
         )
         if reason == "port_not_consumable":
-            self._raise_port_not_consumable(process_name, knob_bearing=knob)
-        # Graceful degrade to 1.
+            logger.warning(
+                "world %d could not bind its own port (%s); continuing on one world",
+                world_index, process_name,
+            )
+            reason = "world_start_failed"
         self._append_degrade(reason, from_ceiling, 1)
 
     def _raise_port_not_consumable(
@@ -6153,10 +6203,15 @@ class ProcessRuntimeProvider:
                     self._append_degrade("conformance_gate_failed", effective, 1)
                     effective = 1
                 else:
-                    # Gate declared-port LISTENER check (C1 §4) — a DISTINCT provision step that
-                    # raises a TERMINAL `port_not_consumable` out-of-band; it never touches the
-                    # conformance flag or the gate-return vocabulary.
-                    self._check_no_declared_port_listener(bundle)
+                    # Gate declared-port LISTENER check (C1 §4). A listener on a declared port
+                    # means the worlds would collide, so the job continues on world 0 alone.
+                    try:
+                        self._check_no_declared_port_listener(bundle)
+                    except ProcessRuntimeError as exc:
+                        logger.warning("%s; continuing on one world", exc)
+                        self._teardown_world(1)
+                        self._append_degrade("world_start_failed", effective, 1)
+                        effective = 1
         elif self._conformance_checked and build_output.conformance is False:
             # A degrade decided by an EARLIER call must keep holding on every later reconcile call
             # too — the latched ceiling already reflects it, but `conformance is False` predates
@@ -6180,8 +6235,6 @@ class ProcessRuntimeProvider:
                 try:
                     self._ensure_world(world_index)
                 except (ProcessRuntimeError, OSError, shutil.Error) as exc:
-                    if getattr(exc, "code", None) == "port_not_consumable":
-                        raise
                     # Rule 2: continue on the contiguous 0..k−1 prefix — NO renumbering. Tear
                     # down whatever this world published, drop the ceiling to k, ledger
                     # `world_start_failed`, re-write build.json.
@@ -6710,12 +6763,20 @@ class ProcessRuntimeProvider:
             if world_dir.exists():
                 shutil.rmtree(world_dir, ignore_errors=True)
 
-    async def reset(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> None:
+    async def reset(
+        self,
+        runtime: EnvironmentRuntime,
+        *,
+        work_directory: Path,
+        keep_processes: bool = False,
+    ) -> None:
         import asyncio
 
-        await asyncio.to_thread(self._reset_sync, runtime)
+        await asyncio.to_thread(self._reset_sync, runtime, keep_processes)
 
-    def _reset_sync(self, runtime: EnvironmentRuntime) -> None:
+    def _reset_sync(
+        self, runtime: EnvironmentRuntime, keep_processes: bool = False
+    ) -> None:
         if (
             self._manifest is None
             or self._context is None
@@ -6738,6 +6799,7 @@ class ProcessRuntimeProvider:
                 baseline=self._build_output,
                 job_shared_handles=self._job_shared_handles,
                 existing_handles=self._world_handles.get(world_index, {}),
+                keep_processes=keep_processes,
             )
         except (OSError, shutil.Error) as exc:
             # reset's own filesystem work is fundamentally "reseal this world's stores from

@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -25,13 +27,17 @@ from ..backends import tool, tool_server
 
 from ..amend import add_rule, drop_rule, fix_tool, set_modality, widen
 from ..catalogue import (
+    SUB_GOAL_RULES,
+    already_claimed,
     SubGoal,
     catalogue_problems,
     load_catalogue,
     save_catalogue,
     compares_to_a_value,
     validate_sub_goal,
+    judged_wording_advisory,
     weak_check_advisory,
+    without_delivery_overlay,
 )
 from ..checks import run_check, run_world_check
 from ..contract import AgentContract, is_data_free_conversation
@@ -96,6 +102,8 @@ WORLD_CHECK_HELP = (
     "reading the world passes forever, and it is rejected once the world is broken on purpose "
     "and it stays green."
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _shapes(world: Any) -> str:
@@ -351,6 +359,162 @@ def _err(text: str) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": text}], "is_error": True}
 
 
+_NOT_A_COLUMN = {"CONSTRAINT", "PRIMARY", "FOREIGN", "UNIQUE", "CHECK", "EXCLUDE", ")"}
+
+
+def _world_columns(world: Any, table: str) -> dict[str, bool] | None:
+    """Each column the world models for a table, and whether it refuses NULL."""
+    store = getattr(world, "store", None)
+    if store is None:
+        return None
+    try:
+        rows = store.query(f'PRAGMA table_info("{table}")')
+        if rows:
+            return {str(r["name"]).lower(): bool(r["notnull"]) for r in rows}
+    except Exception:  # noqa: BLE001 - not sqlite
+        pass
+    try:
+        rows = store.query(
+            "SELECT column_name, is_nullable FROM information_schema.columns "
+            "WHERE table_name = %s",
+            (table,),
+        )
+        return {str(r["column_name"]).lower(): r["is_nullable"] == "NO" for r in rows} or None
+    except Exception:  # noqa: BLE001 - an engine that cannot say is not refused for it
+        return None
+
+
+def _still_refusing(counts: dict[str, int], gate: str, problems: list[str]) -> bool:
+    key = f"{gate}:{sorted(problems)}"
+    counts[key] = counts.get(key, 0) + 1
+    if counts[key] < 3:
+        return True
+    logger.warning("save_world: %s refusal repeated, saving anyway: %s", gate, problems)
+    return False
+
+
+def _tables_the_source_lacks(
+    state: dict, source_root: str, contract: Any, world: Any = None
+) -> list[str]:
+    """Tables and columns the agent's own schema never declares."""
+    if not source_root:
+        return []
+    from pathlib import Path as _Path
+
+    from ..bundle_author_v2 import _source_schema_paths
+
+    try:
+        paths = _source_schema_paths(
+            _Path(source_root),
+            contract=contract.model_dump() if hasattr(contract, "model_dump") else None,
+        )
+    except Exception:
+        return []
+    if not paths:
+        return []
+    declared: dict[str, set[str]] = {}
+    required: dict[str, set[str]] = {}
+    cites: dict[str, dict[str, tuple[str, str]]] = {}
+    for path in paths:
+        # Comments first: a trailing `-- matched against caller_ani` is prose, not a column.
+        sql = re.sub(r"--[^\n]*", "", path.read_text(encoding="utf-8"))
+        for found in re.finditer(
+            r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:"?\w+"?\.)?"?([A-Za-z_]\w*)"?\s*\(',
+            sql,
+            re.IGNORECASE,
+        ):
+            # Count parentheses: `VARCHAR(20)` or `CHECK (...)` would end a first-close match early.
+            depth, at = 1, found.end()
+            while at < len(sql) and depth:
+                depth += (sql[at] == "(") - (sql[at] == ")")
+                at += 1
+            columns, must = set(), set()
+            points_at: dict[str, tuple[str, str]] = {}
+            for part in re.split(r",(?![^()]*\))", sql[found.end() : at - 1]):
+                word = part.strip().split(" ")[0].strip('"').strip()
+                if not word or word.upper() in _NOT_A_COLUMN:
+                    continue
+                columns.add(word.lower())
+                said = part.upper()
+                # PRIMARY KEY counts: it is NOT NULL without saying so.
+                insists = "NOT NULL" in said or "PRIMARY KEY" in said
+                if insists and "DEFAULT" not in said:
+                    must.add(word.lower())
+                cite = re.search(
+                    r'REFERENCES\s+"?([A-Za-z_]\w*)"?\s*\(\s*"?([A-Za-z_]\w*)"?',
+                    part,
+                    re.IGNORECASE,
+                )
+                if cite:
+                    points_at[word.lower()] = (cite.group(1).lower(), cite.group(2).lower())
+            declared.setdefault(found.group(1).lower(), set()).update(columns)
+            required.setdefault(found.group(1).lower(), set()).update(must)
+            cites.setdefault(found.group(1).lower(), {}).update(points_at)
+
+    problems: list[str] = []
+    for name, rows in state.items():
+        if name.lower().startswith("sqlite_"):
+            continue
+        if name.lower() not in declared:
+            problems.append(f"{name} (the whole table)")
+            continue
+        used: set[str] = set()
+        for row in rows if isinstance(rows, list) else list(rows.values()):
+            if isinstance(row, dict):
+                used |= {str(key).lower() for key in row}
+        invented = sorted(used - declared[name.lower()])
+        if invented:
+            problems.append(f"{name}.{{{', '.join(invented)}}}")
+        if used:
+            absent = sorted(required.get(name.lower(), set()) - used)
+            if absent:
+                problems.append(
+                    f"{name} rows leave out {', '.join(absent)}, which the schema requires"
+                )
+        # Rows or none: scenario setups insert into this table later.
+        modelled = _world_columns(world, name) if world is not None else None
+        if modelled is not None:
+            loose = sorted(
+                column
+                for column in required.get(name.lower(), set())
+                if not modelled.get(column, False)
+            )
+            if loose:
+                problems.append(
+                    f"{name} models {', '.join(loose)} as missing or nullable, but the schema "
+                    "requires it: declare it NOT NULL as the schema does"
+                )
+    # Foreign keys last, once every table's rows are in hand.
+    held: dict[str, set[str]] = {}
+    for name, rows in state.items():
+        for row in rows if isinstance(rows, list) else list(rows.values()):
+            if isinstance(row, dict):
+                for key, value in row.items():
+                    held.setdefault(f"{name.lower()}.{str(key).lower()}", set()).add(str(value))
+    for name, rows in state.items():
+        for column, (target, target_column) in cites.get(name.lower(), {}).items():
+            # An empty target table is still checked: that is exactly the dangling case.
+            if target not in {name.lower() for name in state}:
+                continue
+            there = held.get(f"{target}.{target_column}", set())
+            dangling = sorted(
+                {
+                    str(row[key])
+                    for row in (rows if isinstance(rows, list) else list(rows.values()))
+                    if isinstance(row, dict)
+                    for key in row
+                    if str(key).lower() == column and row[key] is not None
+                }
+                - there
+            )
+            if dangling:
+                problems.append(
+                    f"{name}.{column} points at {target}.{target_column} rows that do not "
+                    f"exist: {', '.join(dangling[:5])}"
+                )
+    return problems
+
+
 def world_tools(
     contract: AgentContract,
     destination: Path,
@@ -461,6 +625,8 @@ def world_tools(
     # How many times each tool has been attempted, so a binding that cannot be made to work
     # is told to stop rather than tried indefinitely.
     tried: dict[str, int] = {}
+    # The same heuristic refusal three times is advice the builder cannot act on, not a fault.
+    unmovable: dict[str, int] = {}
     sequences: list[dict[str, Any]] = (
         list(read_manifest(destination).get("sequences") or [])
         if existing
@@ -1078,10 +1244,17 @@ def world_tools(
         "wrong, or None when it held. `world` is the environment afterwards; `calls` is every "
         "tool call made, each with .name, .arguments, .ok and .refused — so a check can insist "
         "a call happened with the right arguments, not merely that it happened.\n\n"
-        "Use `judged` only where nothing observable settles it, saying what a model has to "
-        "decide and why code cannot.",
+        + SUB_GOAL_RULES
+        + "Use `judged` only where nothing observable settles it, saying what a model has to "
+        "decide and why code cannot.\n\n"
+        "`overlay` names the overlay level this sub-goal is the claim for, when it is one: "
+        "`prompt_injection`, `social_engineering`, `privacy_pii`. A scenario carrying an "
+        "overlay is refused until it names a sub-goal that fails when that overlay is "
+        "mishandled, so this is what makes one available. Leave it empty for an ordinary "
+        "task sub-goal.",
         schema(
-            {"name": str, "what": str, "check": str, "judged": str}, ["name", "what"]
+            {"name": str, "what": str, "check": str, "judged": str, "overlay": str},
+            ["name", "what"],
         ),
     )
     async def add_sub_goal(args: dict[str, Any]) -> dict[str, Any]:
@@ -1090,10 +1263,12 @@ def world_tools(
             what=str(args.get("what") or ""),
             check=str(args.get("check") or ""),
             judged=str(args.get("judged") or ""),
+            overlay=str(args.get("overlay") or ""),
         )
         problems = validate_sub_goal(sub_goal)
         if problems:
             return _err("Not added:\n  - " + "\n  - ".join(problems))
+        sub_goal, cleared = without_delivery_overlay(sub_goal)
         # Run it here, the same way a handler is run the moment it is defined. A check that raises
         # is not a check, and accepting one now means every scenario that names it is refused later
         # for a reason that looks like the scenario's fault rather than this one's.
@@ -1115,12 +1290,21 @@ def world_tools(
         save_catalogue(catalogue, destination)
         # Said on acceptance rather than as a refusal: a truthiness check is weak, not unusable,
         # and a gate the authoring loop cannot satisfy fails the run instead of improving it.
-        advisory = weak_check_advisory(sub_goal)
+        advisory = "; ".join(
+            one
+            for one in (
+                weak_check_advisory(sub_goal),
+                judged_wording_advisory(sub_goal),
+                already_claimed(sub_goal, catalogue),
+            )
+            if one
+        )
         settled = sum(1 for one in catalogue.sub_goals if one.deterministic())
         return _ok(
             f"{sub_goal.name} added. The catalogue has {len(catalogue.sub_goals)}, "
             f"{settled} settled by code: "
             + ", ".join(sorted(catalogue.names()))
+            + cleared
             + (f"\n\nWorth strengthening: {advisory}" if advisory else "")
         )
 
@@ -1309,6 +1493,15 @@ def world_tools(
         runtime_only = bool(contract.tools) and set(contract.tool_names()).issubset(
             runtime_tools
         )
+        strayed = _tables_the_source_lacks(world.state(), source_root, contract, world)
+        if strayed and _still_refusing(unmovable, "schema", strayed):
+            return _err(
+                "Not saved. This world does not match the agent's own schema: "
+                + ", ".join(strayed) + ". The runtime seed is that schema followed by "
+                "rows from this world, so an insert naming any of these fails and the environment "
+                "never stands up. Use the agent's own names, or drop what it does not have. A "
+                "column it never declares is one its code never reads."
+            )
         data_free = (
             (is_data_free_conversation(contract) or external_runtime or runtime_only)
             and not world.state()
@@ -1332,9 +1525,10 @@ def world_tools(
                 "Not saved. Declare at least one sequence first: a world whose calls each work "
                 "alone can still forget what the previous one did."
             )
-        if data_problems := _base_data_problems(
+        data_problems = _base_data_problems(
             world.state(), source_state=contract.base_environment
-        ):
+        )
+        if data_problems and _still_refusing(unmovable, "seed", data_problems):
             return _err(
                 "Not saved. The shared seed would make every scenario look like demo data:\n  - "
                 + "\n  - ".join(data_problems)

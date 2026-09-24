@@ -14,7 +14,12 @@ from typing import Any
 from .backends import qualified as qualified  # noqa: F401  (re-export; callers import it here)
 from .backends import tool, tool_server
 
-from .contract import CALL_DIRECTIONS, MODALITIES, AgentContract, validate_contract
+from .contract import (
+    CALL_DIRECTIONS,
+    AgentContract,
+    known_modalities,
+    validate_contract,
+)
 
 CONTRACT_SERVER = "contract"
 
@@ -225,7 +230,7 @@ def contract_tools(
                 },
                 "modality": {
                     "type": "string",
-                    "enum": list(MODALITIES),
+                    "enum": list(known_modalities()),
                     "description": "How a person reaches it, read from its runtime. A voice "
                     "session (LiveKit, telephony, TTS/STT) is voice; a text interface is chat; "
                     "a browser-driving agent is browser. This decides how it is later run.",

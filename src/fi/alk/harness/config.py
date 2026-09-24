@@ -97,6 +97,43 @@ def provisioning(enabled: bool | None = None) -> bool:
     }
 
 
+# Models this harness is allowed to spend on.
+BILLABLE = ("gemini",)
+FORBIDDEN = ("claude", "sonnet", "opus", "haiku")
+
+
+def refuse_a_model_we_cannot_afford(model: str) -> None:
+    """Raise unless this is a model we are allowed to spend on; called wherever a model resolves."""
+    named = (model or "").strip().lower()
+    if not named:
+        raise ValueError("no model was chosen; refusing to let the provider pick one")
+    if any(word in named for word in FORBIDDEN):
+        raise ValueError(
+            f"refusing to run on {model!r}: this harness may only spend on "
+            f"{', '.join(BILLABLE)} models. Set ALK_HARNESS_MODEL to a Gemini model."
+        )
+    if not any(word in named for word in BILLABLE):
+        raise ValueError(
+            f"refusing to run on {model!r}: it is not recognisably a "
+            f"{'/'.join(BILLABLE)} model, and an unrecognised id is how a Claude model gets "
+            "billed by accident."
+        )
+
+
+def behind_gateway(model: str) -> bool:
+    """Whether this model is reached through Agent Command Center rather than the CLI's own route."""
+    return bool(os.environ.get("AGENTCC_API_KEY", "").strip()) and "claude" not in (
+        model or ""
+    ).lower()
+
+
+def gateway_wire_model(model: str) -> str:
+    """The name the SDK puts on the wire for `model`: the real id unless an alias is configured."""
+    if not behind_gateway(model):
+        return model
+    return os.environ.get("AGENTCC_CLAUDE_MODEL_ALIAS", "").strip() or model
+
+
 def provider_env(model: str | None = None) -> dict[str, str]:
     """The provider block passed to the session.
 
@@ -110,6 +147,40 @@ def provider_env(model: str | None = None) -> dict[str, str]:
     # by twenty writers then runs on whatever that preference happens to be rather than on the
     # model the run asked for.
     chosen = chosen_model(model)
+    refuse_a_model_we_cannot_afford(chosen)
+    # Agent Command Center speaks Anthropic Messages in front of the model this run chose.
+    agentcc_key = os.environ.get("AGENTCC_API_KEY", "").strip()
+    if agentcc_key and not os.environ.get("ALK_CLAUDE_GATEWAY_URL", "").strip():
+        base_url = (
+            os.environ.get("AGENTCC_BASE_URL", "https://gateway.futureagi.com")
+            .strip()
+            .rstrip("/")
+        )
+        wire = gateway_wire_model(chosen)
+        return {
+            # Bearer token, which is how a virtual key authenticates (API_KEY would use x-api-key).
+            "ANTHROPIC_AUTH_TOKEN": agentcc_key,
+            "ANTHROPIC_BASE_URL": base_url,
+            # ClaudeAgentOptions.env is merged over the parent's, so a parent's Vertex flag must be undone.
+            "CLAUDE_CODE_USE_VERTEX": "0",
+            # The SDK cannot look up a non-Claude context window, so it is declared.
+            **(
+                {}
+                if "claude" in wire.lower()
+                else {
+                    "CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT": "1",
+                    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": os.environ.get(
+                        "ALK_HARNESS_MAX_CONTEXT_TOKENS", "1000000"
+                    ),
+                }
+            ),
+            "ANTHROPIC_MODEL": wire,
+            "ANTHROPIC_DEFAULT_SONNET_MODEL": wire,
+            "ANTHROPIC_DEFAULT_OPUS_MODEL": wire,
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL": wire,
+            "ANTHROPIC_SMALL_FAST_MODEL": wire,
+            "CLAUDE_CODE_SUBAGENT_MODEL": wire,
+        }
     env = {
         "ANTHROPIC_MODEL": chosen,
         "ANTHROPIC_DEFAULT_SONNET_MODEL": chosen,
@@ -296,10 +367,29 @@ def artifact_dir(agent: str, root: str | Path | None = None) -> Path:
 HARNESS = SKILLS_ROOT / "harness.md"
 
 
+def declared_modalities() -> tuple[str, ...]:
+    """Every modality a kind file under ``skills/kinds/`` declares in its ``applies_to``."""
+    root = SKILLS_ROOT / "kinds"
+    found: set[str] = set()
+    if not root.is_dir():
+        return ()
+    for path in sorted(root.glob("*.md")):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        head = text.split("---")[1] if text.startswith("---") and "---" in text[3:] else ""
+        for line in head.splitlines():
+            if not line.strip().lower().startswith("applies_to:"):
+                continue
+            for clause in line.split(":", 1)[1].split(","):
+                key, _, value = clause.strip().lower().partition("=")
+                if key.strip() == "modality" and value.strip():
+                    found.add(value.strip())
+    return tuple(sorted(found))
+
+
 def discovered_skills(**about: str) -> str:
     """Every extra skill that says it applies to this agent, found by looking rather than by name.
 
-    A skill is a markdown file under ``skills/kinds/`` whose first lines declare what it is for::
+    A skill is a markdown file under either whose first lines declare what it is for::
 
         ---
         name: voice
@@ -312,16 +402,19 @@ def discovered_skills(**about: str) -> str:
 
     Naming each kind in code would mean editing code to add one, and there will be many: voice, chat,
     browser, and whatever a customer turns up with next. **Adding support for a kind of agent is
-    adding a file here.**
+    adding a file to ``kinds/``, and adding something that cuts across them is adding one to
+    ``modules/``.** Deleting either file removes what it taught, which is how the people block
+    stops existing for an agent that talks to nobody.
     """
-    root = SKILLS_ROOT / "kinds"
-    if not root.is_dir():
-        return ""
+    roots = [SKILLS_ROOT / "kinds", SKILLS_ROOT / "modules"]
     wanted = {
         key.lower(): str(value).strip().lower() for key, value in about.items() if value
     }
     found: list[tuple[str, str]] = []
-    for path in sorted(root.glob("*.md")):
+    for path in sorted(
+        (one for root in roots if root.is_dir() for one in root.glob("*.md")),
+        key=lambda one: one.stem,
+    ):
         text = path.read_text(encoding="utf-8")
         head = (
             text.split("---")[1] if text.startswith("---") and "---" in text[3:] else ""
@@ -349,7 +442,7 @@ def discovered_skills(**about: str) -> str:
     return "\n\n---\n\n" + "\n\n---\n\n".join(text for _name, text in found)
 
 
-def load_skill(name: str) -> str:
+def load_skill(name: str, *, preamble: bool = True) -> str:
     """One stage's instructions, behind what the harness as a whole is for.
 
     Every stage gets the same opening: what this harness produces, why the division between what
@@ -374,7 +467,7 @@ def load_skill(name: str) -> str:
             f"\n\n---\n\n# references/{reference.name}\n\n"
             f"{reference.read_text(encoding='utf-8')}"
         )
-    if not HARNESS.exists():
+    if not preamble or not HARNESS.exists():
         return stage
     return (
         f"{HARNESS.read_text(encoding='utf-8')}\n\n"
@@ -382,3 +475,8 @@ def load_skill(name: str) -> str:
         "# The stage you are in now\n\n"
         f"{stage}"
     )
+
+
+def writer_model() -> str:
+    """The model a scenario writer runs on, from ALK_HARNESS_WRITER_MODEL; empty inherits."""
+    return os.environ.get("ALK_HARNESS_WRITER_MODEL", "").strip()

@@ -295,3 +295,12 @@ def test_large_suite_can_be_reviewed_in_batches_within_bounded_turns(
     monkeypatch.setattr(subject, "Stage", Stage)
     checks = asyncio.run(subject.author_invariants(source, out, ReadWorld()))
     assert [check["name"] for check in checks] == [declaration()["name"]]
+
+
+def test_a_failed_relationship_names_the_rows_to_repair():
+    world = ReadWorld()
+    with pytest.raises(ValueError) as failed:
+        asyncio.run(subject.check_invariants(world, [declaration()]))
+    message = str(failed.value)
+    assert "1 violating rows: {" in message
+    assert "missing" in message

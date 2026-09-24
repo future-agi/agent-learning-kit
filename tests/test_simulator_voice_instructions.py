@@ -26,3 +26,12 @@ def test_the_caller_may_not_claim_an_action_it_cannot_perform():
     assert "tapped a link" not in simulator_instructions(
         "outbound", "unaware", "voicemail"
     )
+
+
+def test_the_caller_asks_again_for_the_part_of_its_question_left_unanswered():
+    assert "hold the answer against what you asked" in SIMULATOR_INSTRUCTIONS
+    assert "ask for that part once" in SIMULATOR_INSTRUCTIONS
+
+
+def test_the_closing_turn_answers_the_agents_last_question():
+    assert "the answer goes in that closing turn too" in SIMULATOR_INSTRUCTIONS

@@ -38,8 +38,8 @@ def _drive(monkeypatch, decision: dict, *, world=None, raises: bool = False):
     world = world or _World()
 
     class _Stage:
-        def __init__(self, spec, name=""):
-            self.spec, self.name = spec, name
+        def __init__(self, spec, name="", overheard=True):
+            self.spec, self.name, self.overheard = spec, name, overheard
 
         async def __aenter__(self):
             return self
@@ -98,26 +98,30 @@ def test_bad_model_sql_is_returned_as_recoverable_tool_feedback(monkeypatch):
     assert world.queried == ["select 1"]
 
 
-def test_an_undecided_judge_reports_unjudged_not_failed(monkeypatch):
-    """A judge that cannot tell is not evidence against the agent; the platform skips held None."""
+def test_a_judge_that_will_not_commit_is_unjudged_and_says_nothing_internal(monkeypatch):
     (held, why), _ = _drive(
         monkeypatch, {"undecided": True, "explanation": "no table records intent"}
     )
     assert held is None
-    assert "intent" in why
+    assert why == ""
+
+
+def test_a_verdict_given_as_text_is_not_read_as_a_pass(monkeypatch):
+    (held, _), _ = _drive(monkeypatch, {"passed": "false", "explanation": "the agent refused"})
+    assert held is None
 
 
 def test_a_verdict_with_no_explanation_is_refused(monkeypatch):
     """An explanation-free verdict is the placeholder again, so decide() refuses it."""
     (held, why), _ = _drive(monkeypatch, {"passed": True, "explanation": "  "})
     assert held is None
-    assert "without a verdict" in why
+    assert why == ""
 
 
 def test_a_judge_that_raises_never_fails_the_agent(monkeypatch):
     (held, why), _ = _drive(monkeypatch, {"passed": True, "explanation": "x"}, raises=True)
     assert held is None
-    assert "could not run" in why
+    assert why == ""
 
 
 def test_the_judge_model_is_changeable(monkeypatch):
@@ -133,17 +137,20 @@ def test_the_judge_needs_no_environment_to_pick_a_priced_model(monkeypatch):
     The override must stay an override: a deployment that sets none of these has to work, or the
     judge would need a new env var to be usable at all.
     """
-    from fi.alk.harness.backends import vertex_gemini
+    from fi.alk.harness.backends import resolve, vertex_gemini
 
     for name in (judge_module.JUDGE_MODEL_ALIAS, "ALK_HARNESS_MODEL", "ALK_HARNESS"):
         monkeypatch.delenv(name, raising=False)
 
+    backend = resolve()
     model = judge_module.judge_model()
 
-    assert model == vertex_gemini.DEFAULT_MODEL
-    assert model in vertex_gemini.PRICES_PER_MILLION, (
-        f"the judge would run unpriced on {model}, so its spend would be missing from the ledger"
-    )
+    assert model == backend.default_model
+    if backend.name == "vertex-gemini":
+        assert model in vertex_gemini.PRICES_PER_MILLION, (
+            f"the judge would run unpriced on {model}, so its spend would be missing "
+            "from the ledger"
+        )
 
 
 def test_a_long_cell_is_trimmed_rather_than_flooding_the_judge():
@@ -157,6 +164,91 @@ def test_the_judge_is_given_what_was_said_not_only_what_was_done():
     said = [{"role": "user", "content": "one large fries"}] * 400
     said.append({"role": "assistant", "content": "your order is one large fries"})
     rendered = judge_module._transcript(said)
-    assert "user: one large fries" in rendered
+    assert "Customer: one large fries" in rendered
+    assert "Agent: your order is one large fries" in rendered
     assert "your order is one large fries" in rendered
     assert len(rendered) <= judge_module._TRANSCRIPT_LIMIT + 8
+
+
+def test_a_judging_stage_is_not_overheard_in_the_chat() -> None:
+    from pathlib import Path as _P
+
+    source = _P("src/fi/alk/harness/judge.py").read_text(encoding="utf-8")
+    assert 'name="judge-sub-goals", overheard=False' in source
+
+    session = _P("src/fi/alk/harness/session.py").read_text(encoding="utf-8")
+    assert "if self._overheard:" in session
+    assert "self.channel.waiting() if self._overheard else []" in session
+
+
+def test_the_retry_carries_the_evidence_and_can_settle_the_claim(monkeypatch):
+    prompts: list[str] = []
+
+    class _Stage:
+        def __init__(self, spec, name="", overheard=True):
+            self.spec = spec
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return None
+
+        async def say(self, prompt):
+            prompts.append(prompt)
+            if len(prompts) == 2:
+                tools = {t.name: t for t in self.spec.servers["world"].tools}
+                await tools["decide"].handler(
+                    {"passed": True, "explanation": "the agent confirmed the booking"}
+                )
+
+    class _Scenario:
+        instruction = "the caller books a ride to the airport"
+        tests = "the agent confirms before booking"
+
+    monkeypatch.setattr(judge_module, "Stage", _Stage)
+    said = [{"role": "assistant", "content": "shall I book it?"}]
+    calls = [type("C", (), {"name": f"step_{i}", "arguments": {}, "result": None})() for i in range(30)]
+    held, why = asyncio.run(
+        judge_module.judge(_Goal(), _World(), calls, messages=said, scenario=_Scenario())
+    )
+    assert (held, why) == (True, "the agent confirmed the booking")
+    assert "books a ride to the airport" in prompts[0]
+    assert "step_29" in prompts[0]
+    assert "shall I book it?" in prompts[1]
+
+
+def test_with_no_actions_the_judge_is_told_the_conversation_is_the_evidence(monkeypatch):
+    prompts: list[str] = []
+
+    class _Stage:
+        def __init__(self, spec, name="", overheard=True):
+            self.spec = spec
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return None
+
+        async def say(self, prompt):
+            prompts.append(prompt)
+            tools = {t.name: t for t in self.spec.servers["world"].tools}
+            await tools["decide"].handler({"passed": True, "explanation": "it read the fee first"})
+
+    monkeypatch.setattr(judge_module, "Stage", _Stage)
+    asyncio.run(judge_module.judge(_Goal(), _World(rows=[]), []))
+    assert "only the conversation is observable" in prompts[0]
+    call = type("C", (), {"name": "lookup", "arguments": {}, "result": None})()
+    asyncio.run(judge_module.judge(_Goal(), _World(), [call]))
+    assert "only the conversation is observable" not in prompts[1]
+
+
+def test_a_situation_that_never_came_up_is_not_a_pass():
+    assert "never came up" in judge_module._INSTRUCTIONS
+    assert "decide false" in judge_module._INSTRUCTIONS
+
+
+def test_an_answer_with_nothing_to_check_it_against_is_never_called_accurate():
+    assert "never call what the agent said accurate" in judge_module._INSTRUCTIONS
+    assert "left a part unanswered" in judge_module._INSTRUCTIONS

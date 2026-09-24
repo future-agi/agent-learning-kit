@@ -161,7 +161,12 @@ def customer_prompt(
     from ..simulator import fill
 
     if written:
-        filled, _missing = fill(written, scenario.slots())
+        filled, missing = fill(written, scenario.slots())
+        if missing:
+            raise RuntimeError(
+                f"the simulator prompt asks for {', '.join(missing)}, which {scenario.name} does "
+                "not supply. An unfilled slot reaches the caller verbatim."
+            )
     else:
         # No simulator prompt was written, which the environment gate refuses for a
         # conversational agent. Kept minimal rather than inventing a character.

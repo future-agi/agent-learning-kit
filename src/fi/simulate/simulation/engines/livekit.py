@@ -98,7 +98,11 @@ from fi.simulate.runtime import (
 from fi.simulate.simulation.engines.base import BaseEngine
 from fi.simulate.simulation.generator import ScenarioGenerator
 from fi.simulate.simulation.models import Persona, Scenario, TestCaseResult, TestReport
-from fi.simulate.simulation.voice_prompt import CallType, build_voice_simulator_prompt
+from fi.simulate.simulation.voice_prompt import (
+    HOLD_MARKER,
+    CallType,
+    build_voice_simulator_prompt,
+)
 
 logger = logging.getLogger(__name__)
 _SAFE_ROOM = re.compile(r"[^A-Za-z0-9_.-]+")
@@ -660,6 +664,7 @@ class _TestRunnerAgent(Agent):
         self._session: AgentSession | None = None
         self._end_requested = asyncio.Event()
         self._end_speech_handle: Any | None = None
+        self._hold_check: asyncio.Task | None = None
         self._usage_collector = metrics.ModelUsageCollector()
 
     @function_tool(
@@ -670,10 +675,13 @@ class _TestRunnerAgent(Agent):
             "Use it once you have nothing further."
         ),
     )
-    async def end_call(self, ctx: RunContext) -> str:
+    async def end_call(self, ctx: RunContext) -> str | None:
         if self._session is None:
             logger.warning("endCall refused: no session yet")
             return "Continue the conversation before ending the call."
+        if getattr(self._session, "user_state", None) == "speaking":
+            logger.warning("endCall refused: the other side is still speaking")
+            return "Not yet: the other person is still talking. Let them finish, then call endCall again."
         messages = _session_messages(self._session)
         floor, alternation_required = _turn_requirements(self._min_turn_messages)
         below_floor = len(messages) < floor or (
@@ -702,7 +710,7 @@ class _TestRunnerAgent(Agent):
         # before TTS starts and ``session.current_speech`` becomes non-None.
         self._end_speech_handle = ctx.speech_handle
         self._end_requested.set()
-        return "Conversation ended."
+        return None
 
     async def wait_for_end_speech(self) -> None:
         if self._end_speech_handle is not None:
@@ -1022,8 +1030,26 @@ class _TestRunnerAgent(Agent):
             if self._mailbox_greeted or self._voicemail_greeting is not None:
                 return
             self._mailbox_greeted = True
-        async for chunk in super().llm_node(chat_ctx, tools, model_settings):
+        async for chunk in _without_hold_marker(
+            super().llm_node(chat_ctx, tools, model_settings), on_hold=self._on_hold
+        ):
             yield chunk
+
+    def _on_hold(self) -> None:
+        if self._session is None:
+            return
+        heard = len(_session_messages(self._session))
+        self._hold_check = asyncio.get_running_loop().create_task(self._still_there(heard))
+
+    async def _still_there(self, heard: int) -> None:
+        """A person left waiting in silence speaks up once, before the silence ends the call."""
+        await asyncio.sleep(_HOLD_PATIENCE_SECONDS)
+        session = self._session
+        if session is None or self._end_requested.is_set():
+            return
+        if len(_session_messages(session)) != heard or _either_side_busy(session):
+            return
+        session.generate_reply(instructions=_HOLD_CHECK_IN)
 
     async def transcription_node(
         self,
@@ -1036,6 +1062,62 @@ class _TestRunnerAgent(Agent):
                 extra={"timed": isinstance(chunk, TimedString)},
             )
             yield chunk
+
+
+def _chunk_text(chunk: Any) -> str | None:
+    """The text a streamed chunk carries, or None for a tool call."""
+    if isinstance(chunk, str):
+        return chunk
+    delta = getattr(chunk, "delta", None)
+    if delta is None:
+        return ""
+    if getattr(delta, "tool_calls", None):
+        return None
+    return getattr(delta, "content", None) or ""
+
+
+def _letters(text: str) -> str:
+    return re.sub(r"[\W_]", "", text.lower())
+
+
+# Under the settled-silence floor, so the caller checks in before a quiet line is taken for the end.
+_HOLD_PATIENCE_SECONDS = 10.0
+_HOLD_CHECK_IN = (
+    "The agent asked you to wait and has said nothing since. Say once, briefly and in your own "
+    "words, that you are still on the line. If it had said it was transferring you or ending the "
+    "call, close the call instead."
+)
+
+
+async def _without_hold_marker(
+    stream: AsyncIterable[Any], on_hold: Callable[[], None] | None = None
+) -> AsyncIterable[Any]:
+    """Pass the reply through unless all it says is the hold marker, which is dropped unspoken."""
+    marker = _letters(HOLD_MARKER)
+    held: list[Any] = []
+    text = ""
+    holding = True
+    async for chunk in stream:
+        if not holding:
+            yield chunk
+            continue
+        piece = _chunk_text(chunk)
+        held.append(chunk)
+        if piece is not None:
+            text += piece
+            if marker.startswith(_letters(text)):
+                continue
+        holding = False
+        for item in held:
+            yield item
+        held = []
+    if holding:
+        silent = _letters(text) == marker
+        for item in held:
+            if not silent or (not isinstance(item, str) and getattr(item, "delta", None) is None):
+                yield item
+        if silent and on_hold is not None:
+            on_hold()
 
 
 class LiveKitEngine(BaseEngine):
@@ -2081,6 +2163,7 @@ class LiveKitEngine(BaseEngine):
                 on_target_transcription(buffered_reader, buffered_identity)
 
             opener: asyncio.Task[None] | None = None
+            patience: asyncio.Task[None] | None = None
             if conversation_direction == "simulator_first" or _answered_by_voicemail():
                 # A mailbox speaks first and needs no watchdog to break a mutual silence.
                 customer_agent.open_conversation()
@@ -2094,6 +2177,7 @@ class LiveKitEngine(BaseEngine):
                         timeout_seconds=_OPEN_INSTEAD_AFTER_SECONDS,
                     )
                 )
+                patience = asyncio.create_task(_patient_opening(session))
             try:
                 stop_reason = await _wait_for_conversation_end(
                     room,
@@ -2108,8 +2192,9 @@ class LiveKitEngine(BaseEngine):
             finally:
                 # However the conversation ended, including badly, the watchdog goes with it: a
                 # pending task at loop close is noise in the log of every call.
-                if opener is not None and not opener.done():
-                    opener.cancel()
+                for watcher in (opener, patience):
+                    if watcher is not None and not watcher.done():
+                        watcher.cancel()
             logger.info(
                 "livekit_conversation_ended stop_reason=%s run=%s case=%s",
                 stop_reason,
@@ -3295,6 +3380,41 @@ def _tone_frame(hz: float, seconds: float) -> "rtc.AudioFrame":
 def _answered_by_voicemail() -> bool:
     """Whether a mailbox answered rather than a person; set per scenario by the call runner."""
     return os.environ.get("HARNESS_ANSWERED_BY", "").strip().lower() == "voicemail"
+
+
+# The caller's first reply waits longer, so a two-part agent opening is not interrupted.
+_OPENING_ENDPOINTING_SECONDS = 4.0
+_OPENING_PATIENCE_LIMIT_SECONDS = 60.0
+
+
+async def _patient_opening(session: AgentSession) -> None:
+    """Hold the caller's first reply until the agent's opening has really finished."""
+    try:
+        normal = dict(session.options.endpointing)
+        session.update_options(
+            endpointing_opts={
+                **normal,
+                "min_delay": _OPENING_ENDPOINTING_SECONDS,
+                "max_delay": max(
+                    float(normal.get("max_delay") or 0), _OPENING_ENDPOINTING_SECONDS
+                ),
+            }
+        )
+    except Exception:  # noqa: BLE001 - a session that cannot change timing keeps its own
+        return
+    try:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _OPENING_PATIENCE_LIMIT_SECONDS
+        while loop.time() < deadline and not any(
+            message["role"] == "assistant" and message["content"]
+            for message in _session_messages(session)
+        ):
+            await asyncio.sleep(0.2)
+    finally:
+        try:
+            session.update_options(endpointing_opts=normal)
+        except Exception:  # noqa: BLE001 - restoring timing must never fail the call
+            pass
 
 
 async def _open_if_nobody_speaks_first(

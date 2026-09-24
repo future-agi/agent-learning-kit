@@ -85,6 +85,46 @@ class ScenarioDocumentInvalid(RuntimeError):
     a suite that passed with fewer scenarios than it should have."""
 
 
+
+def _is_docstring(node: ast.stmt) -> bool:
+    return (
+        isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, str)
+    )
+
+
+def does_nothing(function: Callable[..., object]) -> bool:
+    """Whether scenario source is a single function whose body only returns None."""
+    source = getattr(function, "_alk_source", None)
+    entry = getattr(function, "_alk_entry", None)
+    if not isinstance(source, str) or not entry:
+        return False
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return False
+    body = [node for node in tree.body if not _is_docstring(node)]
+    if len(body) != 1 or not isinstance(body[0], ast.FunctionDef):
+        return False
+    definition = body[0]
+    if (
+        definition.name != entry
+        or definition.decorator_list
+        or definition.args.defaults
+        or any(definition.args.kw_defaults)
+    ):
+        return False
+    return all(
+        isinstance(node, ast.Pass)
+        or (
+            isinstance(node, ast.Return)
+            and (node.value is None or (isinstance(node.value, ast.Constant) and node.value.value is None))
+        )
+        for node in definition.body
+        if not _is_docstring(node)
+    )
+
 def bundle_has_scenarios(bundle_dir: Path) -> bool:
     """The LAYOUT DECISION's presence test: `<bundle_dir>/scenarios/` exists and at least one of
     its subdirectories holds a `scenario.json`. Deliberately narrow -- an empty or missing

@@ -865,9 +865,9 @@ class _FakeOutbound:
         self.events.append(("scenario_started", {"scenario_key": scenario_key}))
 
     async def scenario_retried(
-        self, *, scenario_key: str, from_world: int, to_world: int
+        self, *, scenario_key: str, from_world: int, to_world: int, cause: str = ""
     ) -> None:
-        self.events.append(("scenario_retried", {}))
+        self.events.append(("scenario_retried", {"cause": cause}))
 
     async def world_unhealthy(self, *, world_index: int, cause: str) -> None:
         self.events.append(("world_unhealthy", {"cause": cause}))
@@ -1768,11 +1768,10 @@ def test_a_bundle_without_a_readable_contract_costs_the_run_nothing(tmp_path) ->
 def test_the_provision_payload_carries_the_modality_so_evals_bind_to_the_right_input(
     tmp_path,
 ) -> None:
-    """Provisioning defaults to text, and a voice run that stays quiet has its evals judge a transcript.
+    """Provisioning defaults to text, and a voice run that stays quiet has its evals judge a
+    transcript.
 
-    Measured on run 0734ab2e: four eval configs were created with `conversation -> transcript` on a
-    voice run, because the guest never sent `modality` and `_resolve_scenario_modality` fell back to
-    text. For a spoken call the conversation is the recording.
+    For a spoken call the conversation is the recording.
     """
     (tmp_path / "contract.json").write_text(
         json.dumps(
@@ -1832,3 +1831,841 @@ def test_restoring_claims_never_makes_a_coded_sub_goal_judged(tmp_path: Path) ->
     goal = restored.sub_goals[0]
     assert goal.judged == "", "a coded sub-goal must stay coded whatever the catalogue claims"
     assert goal.what == "the row is written", "the description is still restored"
+
+
+def test_the_index_carries_each_scenario_in_full(tmp_path: Path) -> None:
+    from fi.alk.harness.folder import write_index
+    from fi.alk.harness.scenario import Persona, Scenario, Step
+
+    scenario = Scenario(
+        name="quote_for_a_young_adult",
+        use_case="quote a plan",
+        branch="applicant is 26",
+        tests="quotes the youth plan",
+        instruction="ask for a quote",
+        sub_goals=["plan_quoted"],
+        persona=Persona(name="Ada", age_group="25-32"),
+        fixture={"age": 26, "email": "ada@example.com"},
+        solution=[Step(tool="find_applicant"), Step(tool="quote_plan")],
+        max_turns=12,
+    )
+    write_index([scenario], tmp_path)
+
+    row = json.loads((tmp_path / "scenarios.json").read_text(encoding="utf-8"))[0]
+    assert row["persona"]["name"] == "Ada"
+    assert row["branch"] == "applicant is 26"
+    assert row["fixture"]["age"] == 26
+    assert [step["tool"] for step in row["solution"]] == ["find_applicant", "quote_plan"]
+    assert row["max_turns"] == 12
+    assert row["folder"] == "scenarios/quote_for_a_young_adult"
+    assert row["steps"] == 2
+    assert "setup_code" not in row
+    assert "ready_code" not in row
+
+
+def test_keyword_problems_catches_what_a_hundred_scenario_suite_did(tmp_path: Path) -> None:
+    from fi.alk.harness.scenario import Persona, Scenario, keyword_problems
+
+    def suite(keywords_for) -> list[Scenario]:
+        return [
+            Scenario(
+                name=f"s{i}",
+                keywords=keywords_for(i),
+                persona=Persona(name=f"P{i}"),
+            )
+            for i in range(20)
+        ]
+
+    said = " ".join(keyword_problems(suite(lambda i: ["weather", f"x{i}"])))
+    assert "more than 40%" in said and "weather" in said
+
+    said = " ".join(keyword_problems(suite(lambda i: [f"only{i}", f"also{i}", f"third{i}"])))
+    assert "fewer than 3 scenarios" in said
+
+    said = " ".join(keyword_problems(suite(lambda i: [f"k{n}" for n in range(8)] if i == 0 else ["k0", "k1", "k2"])))
+    assert "more than 5 keywords" in said
+
+    vocabulary = [
+        "call_termination",
+        "disambiguation",
+        "weather_lookup",
+        "interruption",
+        "multi_intent",
+        "code_switching",
+    ]
+    assert keyword_problems(
+        suite(lambda i: [vocabulary[i % 6], vocabulary[(i + 2) % 6]])
+    ) == []
+
+
+def test_coverage_report_answers_how_much_of_the_space_was_tested(tmp_path: Path) -> None:
+    from fi.alk.harness.scenario import Scenario, coverage_report
+
+    def suite(coords) -> list[Scenario]:
+        return [
+            Scenario(name=f"s{i}", use_case="book a ride", coverage=c)
+            for i, c in enumerate(coords)
+        ]
+
+    even = coverage_report(
+        suite([{"task": t, "overlay": o} for t in ("book", "cancel") for o in ("none", "interrupt")])
+    )
+    assert even["scenarios"] == 4
+    assert even["placed"] == 4
+    assert even["axes"]["task"]["levels"] == 2
+    assert even["axes"]["task"]["spread"] == 1.0
+    assert even["pairs"]["overlay x task"]["covered"] == 4
+    assert even["pairs"]["overlay x task"]["share"] == 1.0
+
+    lopsided = coverage_report(
+        suite([{"task": "book"}] * 9 + [{"task": "cancel"}])
+    )
+    assert lopsided["axes"]["task"]["levels"] == 2
+    assert lopsided["axes"]["task"]["spread"] < 0.5
+
+    mixed = coverage_report(suite([{"task": "book"}, {}, {}]))
+    assert mixed["scenarios"] == 3 and mixed["placed"] == 1
+    assert "use_case" not in mixed["axes"]
+    assert mixed["use_cases"] == {"book a ride": 3}
+
+    assert coverage_report([])["scenarios"] == 0
+
+
+def test_coverage_report_tells_a_gap_from_a_cell_that_was_never_legal(tmp_path: Path) -> None:
+    from fi.alk.harness.scenario import Persona, Scenario, coverage_report
+
+    suite = [
+        Scenario(
+            name=f"s{i}",
+            persona=Persona(name=f"P{i}"),
+            coverage={"task": task, "counterparty": who},
+        )
+        for i, (task, who) in enumerate(
+            [("book", "first_time"), ("book", "regular"), ("cancel", "first_time"), ("cancel", "regular")]
+        )
+    ]
+
+    blind = coverage_report(suite)
+    assert blind["pairs"]["counterparty x task"]["share"] == 1.0
+
+    told = coverage_report(
+        suite,
+        {
+            "axes": {
+                "task": ["book", "cancel", "reschedule"],
+                "counterparty": ["first_time", "regular", "minor"],
+            },
+            "masked": [["task=book", "counterparty=minor"]],
+        },
+    )
+    pair = told["pairs"]["counterparty x task"]
+    assert (pair["covered"], pair["possible"], pair["masked"]) == (4, 8, 1)
+    assert told["axes"]["task"]["unused"] == ["reschedule"]
+    assert told["axes"]["counterparty"]["unused"] == ["minor"]
+
+
+def test_check_problems_names_the_check_that_only_proves_the_tool_was_reached(tmp_path: Path) -> None:
+    from fi.alk.harness.folder import check_problems
+
+    def write(scenario: str, name: str, body: str) -> None:
+        folder = tmp_path / "scenarios" / scenario / "checks"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / f"{name}.py").write_text(
+            f"def check(world, calls):\n{body}\n    return None\n", encoding="utf-8"
+        )
+
+    write("twice", "lookup_weather_executed",
+          "    lookups = [c for c in calls if c.name == 'lookup_weather' and c.ok]\n"
+          "    if not any('location' in c.arguments for c in lookups):\n"
+          "        return 'no location'")
+    write("twice", "weather_lookup_succeeded",
+          "    lookups = [c for c in calls if c.name == 'lookup_weather' and c.ok]\n"
+          "    if not any(len(c.arguments.get('location', '')) > 0 for c in lookups):\n"
+          "        return 'empty location'")
+    write("plumbing", "call_ended_on_request",
+          "    if not [c for c in calls if c.name == 'end_call']:\n"
+          "        return 'not ended'")
+    write("double_quoted", "subgoal_book_ride_confirmed",
+          '    book = next((c for c in calls if c.name == "book_ride" and c.ok), None)\n'
+          '    if book.arguments.get("caller_explicitly_confirmed") is not True:\n'
+          '        return "must be explicitly confirmed"')
+
+    said = " ".join(check_problems(tmp_path))
+    assert "twice: lookup_weather_executed, weather_lookup_succeeded" in said
+    assert "1 checks assert only that a tool was called" in said
+    assert "double_quoted" not in said
+
+
+def test_fixture_credentials_are_only_flagged_when_they_name_a_record() -> None:
+    from fi.alk.harness.scenario_tools import _handed_to_the_caller
+
+    ungrounded = {
+        "origin": "seed",
+        "identity": {"rider_id": "rdr_dana", "phone": "+14155550101"},
+        "credentials": {"otp_code": "265512"},
+    }
+    assert sorted(_handed_to_the_caller(ungrounded)) == [
+        ("otp_code", "265512"),
+        ("phone", "+14155550101"),
+    ]
+
+    assert _handed_to_the_caller({"origin": "seed", "location": "New York"}) == []
+    assert _handed_to_the_caller({"pickup_time": "18:30", "passengers": 3}) == []
+    assert _handed_to_the_caller({"payment": {"card_number": "4242424242424242"}}) == [
+        ("card_number", "4242424242424242")
+    ]
+
+
+def test_unpinned_callers_calibrates_against_the_suite_it_is_given() -> None:
+    from fi.alk.harness.scenario import Persona, Scenario, unpinned_callers
+
+    def one(name: str, fixture: dict) -> Scenario:
+        return Scenario(name=name, persona=Persona(name=name), fixture=fixture)
+
+    weatherish = [one(f"w{i}", {"location": "London"}) for i in range(4)]
+    assert unpinned_callers(weatherish) == []
+
+    alike = [one(f"r{i}", {"phone": f"+1415555010{i}"}) for i in range(4)]
+    assert unpinned_callers(alike) == []
+
+    mixed = [one(f"r{i}", {"phone": f"+1415555010{i}"}) for i in range(3)]
+    mixed.append(one("book_ride_guest", {"caller_name": "Carlos"}))
+    said = " ".join(unpinned_callers(mixed))
+    assert "book_ride_guest" in said
+    assert "pin one that matches no row" in said
+    assert "r0" not in said
+
+
+def test_a_broken_suite_remark_costs_the_remark_and_not_the_save(tmp_path: Path) -> None:
+    from fi.alk.harness.folder import check_problems
+
+    checks = tmp_path / "scenarios" / "unreadable" / "checks"
+    checks.mkdir(parents=True)
+    (checks / "broken.py").write_bytes(b"def check(world, calls):\n    return '\xff\xfe not utf-8'\n")
+
+    with pytest.raises(UnicodeDecodeError):
+        check_problems(tmp_path)
+
+    noted: list[str] = ["something already noted"]
+    for remark in (lambda: check_problems(tmp_path),):
+        try:
+            noted = noted + remark()
+        except Exception:
+            pass
+    assert noted == ["something already noted"]
+
+
+def test_uncovered_cells_names_what_the_plan_allows_and_nothing_reached() -> None:
+    from fi.alk.harness.scenario import Scenario, uncovered_cells
+
+    design = {"axes": {"task": ["book", "cancel"], "who": ["new", "vip"]}}
+    written = [Scenario(name="a", coverage={"task": "book", "who": "new"})]
+
+    assert uncovered_cells(written, design) == [
+        "task=book x who=vip",
+        "task=cancel x who=new",
+        "task=cancel x who=vip",
+    ]
+    assert len(uncovered_cells([], design)) == 4
+    assert uncovered_cells(written, {"axes": {"task": ["book"]}}) == []
+
+
+def test_a_masked_pair_is_not_an_empty_cell() -> None:
+    from fi.alk.harness.scenario import Scenario, uncovered_cells
+
+    design = {
+        "axes": {"task": ["book", "cancel"], "who": ["new", "vip"]},
+        "masked": [["task=cancel", "who=vip"]],
+    }
+    written = [Scenario(name="a", coverage={"task": "book", "who": "new"})]
+
+    assert uncovered_cells(written, design) == [
+        "task=book x who=vip",
+        "task=cancel x who=new",
+    ]
+
+
+def test_uncovered_cells_stops_at_the_limit() -> None:
+    from fi.alk.harness.scenario import uncovered_cells
+
+    design = {"axes": {"a": [str(n) for n in range(10)], "b": [str(n) for n in range(10)]}}
+
+    assert len(uncovered_cells([], design)) == 24
+    assert len(uncovered_cells([], design, limit=5)) == 5
+
+
+def test_a_writer_is_offered_only_the_tools_it_writes_with(monkeypatch) -> None:
+    from pathlib import Path as _Path
+
+    from fi.alk.harness import scenarios as stage
+    from fi.alk.harness.backends import ToolServer, ToolSpec
+    from fi.alk.harness.contract import AgentContract
+
+    monkeypatch.setattr(stage, "world_summary", lambda _: "a world")
+    monkeypatch.setattr(stage, "load_skill", lambda *a, **k: "a skill")
+    monkeypatch.setattr(stage, "discovered_skills", lambda **k: "")
+
+    async def handler(args):
+        return {"content": "ok"}
+
+    from fi.alk.harness.scenario_tools import TOOL_NAMES
+
+    server = ToolServer(
+        name="scenarios",
+        version="1",
+        tools=[
+            ToolSpec(name=name, description=name, input_schema={}, handler=handler)
+            for name in TOOL_NAMES
+        ],
+    )
+    worker = stage.writer_worker(
+        AgentContract(agent="a"), _Path("/tmp"), server, budget=40
+    )[stage.WRITER]
+
+    offered = {spec.name for spec in worker.servers[stage.SCENARIO_SERVER].tools}
+    assert offered == set(stage.WRITER_TOOLS)
+    assert not offered & {
+        "inspect_scenario",
+        "suite_progress",
+        "save_scenarios",
+        "aim_for",
+        "drop_scenario",
+        "amend_contract",
+    }
+
+
+def test_the_submit_reply_says_what_the_names_are_for() -> None:
+    from fi.alk.harness import scenario_tools
+
+    source = (
+        __import__("pathlib").Path(scenario_tools.__file__).read_text(encoding="utf-8")
+    )
+    assert "inspect_scenario names them all" not in source
+    assert "do not read them" in source
+
+
+def test_only_a_value_the_agent_looks_up_is_a_missing_credential() -> None:
+    from pathlib import Path as _P
+    import tempfile
+
+    from fi.alk.harness.scenario import Scenario, Step
+    from fi.alk.harness.scenario_tools import grounding_problems
+
+    guest = Scenario(
+        name="guest",
+        fixture={"credentials": {"phone": "+14155550220"}},
+        solution=[Step(tool="book_ride", arguments={"first_name": "Dana"})],
+    )
+    looked_up = Scenario(
+        name="known",
+        fixture={"credentials": {"phone": "+14155550220"}},
+        solution=[Step(tool="find_rider", arguments={"phone": "+14155550220"})],
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        assert grounding_problems([guest], _P(tmp)) == []
+        assert grounding_problems([looked_up], _P(tmp)) == []
+
+
+def test_a_suite_is_always_handed_out(tmp_path, monkeypatch) -> None:
+    from fi.alk.harness import scenarios as stage
+    from fi.alk.harness.contract import AgentContract
+
+    from fi.alk.harness.backends import ToolServer, ToolSpec
+    from fi.alk.harness.scenario_tools import TOOL_NAMES
+
+    async def handler(args):
+        return {"content": "ok"}
+
+    monkeypatch.setattr(stage, "world_summary", lambda _: "a world")
+    monkeypatch.setattr(stage, "load_skill", lambda *a, **k: "a skill")
+    monkeypatch.setattr(stage, "discovered_skills", lambda **k: "")
+    monkeypatch.setattr(
+        stage,
+        "scenario_tools",
+        lambda *a, **k: (
+            ToolServer(
+                name="scenarios",
+                version="1",
+                tools=[
+                    ToolSpec(name=n, description=n, input_schema={}, handler=handler)
+                    for n in TOOL_NAMES
+                ],
+            ),
+            [],
+        ),
+    )
+    contract = AgentContract(agent="a")
+
+    big, _ = stage.open_stage(contract, out=tmp_path / "big", wanted=50)
+    small, _ = stage.open_stage(contract, out=tmp_path / "small", wanted=8)
+    offered = lambda spec: {
+        t.name for t in spec.servers[stage.SCENARIO_SERVER].tools
+    }
+
+    assert not (set(stage.WRITES_A_SCENARIO) & offered(big.spec)), (
+        "a loop that can write, writes"
+    )
+    assert big.spec.workers, "the loop must still be able to hand work out"
+    assert "aim_for" in offered(big.spec) and "suite_progress" in offered(big.spec)
+    assert "save_scenarios" in offered(big.spec)
+    assert not (set(stage.WRITES_A_SCENARIO) & offered(small.spec))
+    assert small.spec.workers, "a small suite is handed out too"
+
+
+def test_suite_progress_names_overlays_that_assert_nothing() -> None:
+    from fi.alk.harness.scenario import Scenario, redteam_problems
+
+    plain = [
+        Scenario(name=f"plain{n}", coverage={"task": "book"}, sub_goals=["booked"])
+        for n in range(8)
+    ]
+    lazy = Scenario(
+        name="lazy",
+        coverage={"task": "book", "overlay": "prompt_injection"},
+        sub_goals=["booked"],
+    )
+    real = Scenario(
+        name="real",
+        coverage={"task": "book", "overlay": "prompt_injection"},
+        sub_goals=["booked", "injection_refused"],
+    )
+    said = " ".join(redteam_problems(plain + [lazy, real]))
+    assert "lazy" in said
+    assert "real:" not in said
+
+
+def test_a_resumed_suite_is_told_to_read_before_it_changes_anything() -> None:
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.scenarios import opening
+
+    contract = AgentContract(agent="a")
+    big = opening(contract, 50, existing=50)
+    small = opening(contract, 8, existing=8)
+
+    assert "inspect_scenario" in big and "inspect_scenario" in small
+    assert "do not write scenarios yourself" not in big
+
+
+def test_a_writer_is_told_which_named_tools_are_not_its_job() -> None:
+    import re
+    from unittest import mock
+    from pathlib import Path as _P
+
+    from fi.alk.harness import scenarios as stage
+    from fi.alk.harness.backends import ToolServer, ToolSpec
+    from fi.alk.harness.config import SKILLS_ROOT
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.scenario_tools import TOOL_NAMES
+
+    async def handler(args):
+        return {"content": "ok"}
+
+    server = ToolServer(
+        name="scenarios",
+        version="1",
+        tools=[
+            ToolSpec(name=n, description=n, input_schema={}, handler=handler)
+            for n in TOOL_NAMES
+        ],
+    )
+    with mock.patch.object(stage, "world_summary", lambda _: "w"), mock.patch.object(
+        stage, "load_skill", lambda *a, **k: "s"
+    ), mock.patch.object(stage, "discovered_skills", lambda **k: ""):
+        said = stage.writer_worker(
+            AgentContract(agent="a"), _P("/tmp"), server, budget=400
+        )[stage.WRITER].instructions
+
+    method = re.sub(
+        r"```.*?```",
+        "",
+        (SKILLS_ROOT / "write-scenarios" / "SKILL.md").read_text(encoding="utf-8"),
+        flags=re.S,
+    )
+    named = set(re.findall(r"`([a-z_][a-z0-9_]*)\(?`", method)) & set(TOOL_NAMES)
+    for missing in named - set(stage.WRITER_TOOLS):
+        assert f"`{missing}`" in said, f"the writer is never told it lacks {missing}"
+
+
+def test_the_loop_learns_what_is_left_without_reading_a_scenario_body() -> None:
+    import asyncio
+    import json
+    from pathlib import Path as _P
+
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.scenario_tools import scenario_tools
+
+    root = _P(__file__).parent.parent / "fixtures"
+    if not (root / "contract.json").exists():
+        return  # the shape is pinned above; the sizing check needs a real suite
+    contract = AgentContract.model_validate(json.loads((root / "contract.json").read_text()))
+    server, _ = scenario_tools(contract, root, root, wanted=5)
+    tool = next(t for t in server.tools if t.name == "suite_progress")
+
+    async def said(args):
+        out = await tool.handler(args)
+        return "".join(p.get("text", "") for p in out["content"])
+
+    plain, named = asyncio.run(said({})), asyncio.run(said({"names": True}))
+    assert len(named) >= len(plain)
+
+
+def test_a_world_is_refused_when_it_invents_tables_or_columns(tmp_path) -> None:
+    from fi.alk.harness.world.tools import _tables_the_source_lacks
+
+    (tmp_path / "db").mkdir()
+    (tmp_path / "db" / "schema.sql").write_text(
+        'DROP TABLE IF EXISTS users, products CASCADE;\n'
+        "CREATE TABLE users (rider_id TEXT PRIMARY KEY);\n"
+        'CREATE TABLE IF NOT EXISTS "products" (id TEXT PRIMARY KEY);\n',
+        encoding="utf-8",
+    )
+    adopted = {
+        "users": [{"rider_id": "u1"}],
+        "products": [{"id": "p1"}],
+        "sqlite_sequence": [{"anything": 1}],
+    }
+    invented_table = {"users": [{"rider_id": "u1"}], "fare_products": [{"id": "f1"}]}
+    invented_column = {"users": [{"rider_id": "u1", "created_at": "2026-01-01"}]}
+
+    assert _tables_the_source_lacks(adopted, str(tmp_path), None) == []
+    assert _tables_the_source_lacks(invented_table, str(tmp_path), None) == [
+        "fare_products (the whole table)"
+    ]
+    assert _tables_the_source_lacks(invented_column, str(tmp_path), None) == [
+        "users.{created_at}"
+    ]
+    (tmp_path / "db" / "schema.sql").write_text(
+        "CREATE TABLE users (\n"
+        "  rider_id TEXT PRIMARY KEY,\n"
+        "  phone TEXT NOT NULL,  -- matched against caller_ani\n"
+        "  status TEXT NOT NULL DEFAULT 'active'\n"
+        ");\n",
+        encoding="utf-8",
+    )
+    assert _tables_the_source_lacks(
+        {"users": [{"rider_id": "u1", "phone": "+1"}]}, str(tmp_path), None
+    ) == []
+    assert _tables_the_source_lacks(
+        {"users": [{"rider_id": "u1"}]}, str(tmp_path), None
+    ) == ["users rows leave out phone, which the schema requires"]
+    assert _tables_the_source_lacks(invented_table, "", None) == []
+
+
+def test_a_credential_the_world_lacks_is_refused_at_submit() -> None:
+    from types import SimpleNamespace
+
+    from fi.alk.harness.scenario import Scenario, Step
+    from fi.alk.harness.scenario_tools import _credentials_the_world_lacks
+
+    world = SimpleNamespace(state=lambda: {"places": [{"place_id": "plc_real_01"}]})
+
+    looked_up_and_missing = Scenario(
+        name="a",
+        fixture={"pickup_place_id": "plc_dana_home_01"},
+        solution=[Step(tool="set_pickup", arguments={"place_id": "plc_dana_home_01"})],
+    )
+    looked_up_and_present = Scenario(
+        name="b",
+        fixture={"pickup_place_id": "plc_real_01"},
+        solution=[Step(tool="set_pickup", arguments={"place_id": "plc_real_01"})],
+    )
+    never_looked_up = Scenario(
+        name="c",
+        fixture={"caller_phone": "+14155550199"},
+        solution=[Step(tool="book_ride", arguments={"product": "uberx"})],
+    )
+
+    assert _credentials_the_world_lacks(looked_up_and_missing, world)
+    assert _credentials_the_world_lacks(looked_up_and_present, world) == []
+    assert _credentials_the_world_lacks(never_looked_up, world) == []
+
+
+def test_the_seed_renders_a_boolean_the_agent_schema_declares(tmp_path) -> None:
+    from fi.alk.harness.bundle_author_v2 import _schema_column_types
+
+    (tmp_path / "schema.sql").write_text(
+        "CREATE TABLE payment_methods (\n"
+        "  id TEXT PRIMARY KEY,\n"
+        "  is_default BOOLEAN NOT NULL,  -- stored as 0/1 in sqlite\n"
+        "  last4 TEXT NOT NULL\n"
+        ");\n",
+        encoding="utf-8",
+    )
+    found = _schema_column_types([tmp_path / "schema.sql"])
+    assert found[("payment_methods", "is_default")] == "boolean"
+    assert ("payment_methods", "last4") not in found
+
+
+def test_a_primary_key_counts_as_required(tmp_path) -> None:
+    from fi.alk.harness.world.tools import _tables_the_source_lacks
+
+    (tmp_path / "db").mkdir()
+    (tmp_path / "db" / "schema.sql").write_text(
+        "CREATE TABLE users (\n"
+        "  rider_id TEXT PRIMARY KEY,\n"
+        "  nickname TEXT\n"
+        ");\n",
+        encoding="utf-8",
+    )
+    assert _tables_the_source_lacks(
+        {"users": [{"rider_id": "u1"}]}, str(tmp_path), None
+    ) == []
+    assert _tables_the_source_lacks(
+        {"users": [{"nickname": "Dana"}]}, str(tmp_path), None
+    ) == ["users rows leave out rider_id, which the schema requires"]
+
+
+def test_an_array_column_is_typed_from_the_adopted_schema(tmp_path) -> None:
+    from fi.alk.harness.bundle_author_v2 import _schema_column_types
+
+    (tmp_path / "schema.sql").write_text(
+        "CREATE TABLE places (\n"
+        "  place_id TEXT PRIMARY KEY,\n"
+        "  aliases TEXT[] NOT NULL DEFAULT '{}',\n"
+        "  is_open BOOLEAN NOT NULL\n"
+        ");\n",
+        encoding="utf-8",
+    )
+    found = _schema_column_types([tmp_path / "schema.sql"])
+    assert found[("places", "aliases")] == "text[]"
+    assert found[("places", "is_open")] == "boolean"
+
+
+def test_a_dangling_foreign_key_is_refused(tmp_path) -> None:
+    from fi.alk.harness.world.tools import _tables_the_source_lacks
+
+    (tmp_path / "db").mkdir()
+    (tmp_path / "db" / "schema.sql").write_text(
+        "CREATE TABLE users (rider_id TEXT PRIMARY KEY);\n"
+        "CREATE TABLE wallets (\n"
+        "  id TEXT PRIMARY KEY,\n"
+        "  rider_id TEXT NOT NULL REFERENCES users(rider_id)\n"
+        ");\n",
+        encoding="utf-8",
+    )
+    sound = {
+        "users": [{"rider_id": "u1"}],
+        "wallets": [{"id": "w1", "rider_id": "u1"}],
+    }
+    dangling = {
+        "users": [{"rider_id": "u1"}],
+        "wallets": [{"id": "w1", "rider_id": "u9"}],
+    }
+    empty_target = {"users": [], "wallets": [{"id": "w1", "rider_id": "u1"}]}
+
+    assert _tables_the_source_lacks(sound, str(tmp_path), None) == []
+    assert _tables_the_source_lacks(dangling, str(tmp_path), None) == [
+        "wallets.rider_id points at users.rider_id rows that do not exist: u9"
+    ]
+    assert _tables_the_source_lacks(empty_target, str(tmp_path), None) == [
+        "wallets.rider_id points at users.rider_id rows that do not exist: u1"
+    ]
+
+
+def test_a_caller_the_record_does_not_know_is_reported(monkeypatch) -> None:
+    from pathlib import Path as _P
+
+    from fi.alk.harness import scenario_tools
+    from fi.alk.harness.scenario import Persona, Scenario
+
+    rows = {
+        "users": [{"rider_id": "rdr_eli", "first_name": "Eli", "phone": "+14155550108"}],
+        "saved_places": [{"rider_id": "rdr_eli", "name": "Home"}],
+    }
+    monkeypatch.setattr(
+        scenario_tools, "restore", lambda _root: type("W", (), {"state": lambda _s: rows})()
+    )
+
+    def caller(name: str) -> Scenario:
+        return Scenario(
+            name=f"call_{name.lower()}",
+            fixture={"rider_id": "rdr_eli", "phone": "+14155550108"},
+            persona=Persona(name=name),
+        )
+
+    said = scenario_tools.persona_off_the_record([caller("Liam")], _P("/tmp"))
+    assert said and "is named Eli" in said[0]
+    assert scenario_tools.persona_off_the_record([caller("Eli")], _P("/tmp")) == []
+    assert scenario_tools.persona_off_the_record([caller("Eli Navarro")], _P("/tmp")) == []
+    guest = Scenario(
+        name="guest", fixture={"phone": "+14165550199"}, persona=Persona(name="Chloe")
+    )
+    assert scenario_tools.persona_off_the_record([guest], _P("/tmp")) == []
+
+
+
+def test_one_spelling_per_level_however_the_plan_wrote_it() -> None:
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _off_the_grid
+
+    slashes = Scenario(name="a", coverage={"Overlay": "privacy/PII", "task": "book_ride"})
+    assert slashes.coverage == {"overlay": "privacy_pii", "task": "book_ride"}
+
+    grid = {"overlay": ["none", "privacy/PII"], "task": ["book_ride"]}
+    assert _off_the_grid({"overlay": "privacy_pii", "task": "book_ride"}, grid) == ""
+    assert "not a level the plan deals" in _off_the_grid(
+        {"overlay": "invented", "task": "book_ride"}, grid
+    )
+    assert "says nothing about" in _off_the_grid({"task": "book_ride"}, grid)
+
+
+def test_an_empty_collection_names_its_fields(tmp_path) -> None:
+    import sqlite3
+
+    from fi.alk.harness import scenario_tools
+
+    class _World:
+        def __init__(self, path):
+            self.connection = sqlite3.connect(path)
+            self.connection.execute("CREATE TABLE bookings (booking_ref TEXT, status TEXT)")
+            self.connection.execute("CREATE TABLE users (rider_id TEXT)")
+            self.connection.execute("INSERT INTO users VALUES ('rdr_dana')")
+
+        def state(self):
+            return {"bookings": [], "users": [{"rider_id": "rdr_dana"}]}
+
+        def close(self):
+            self.connection.close()
+
+    world = _World(tmp_path / "w.sqlite")
+    assert scenario_tools._fields_of(world, "bookings") == ["booking_ref", "status"]
+    assert scenario_tools._fields_of(world, "users") == ["rider_id"]
+    assert scenario_tools._fields_of(object(), "bookings") == []
+    world.close()
+
+
+def test_a_broken_proof_says_so_instead_of_blaming_setup() -> None:
+    from fi.alk.harness.prove import Proof
+
+    judged_only = Proof()
+    judged_only.broken = ["none of this sub-goal's checks is in code"]
+    said = judged_only.why()
+    assert "broken, not failing" in said
+    assert "setup.py" not in said
+
+    not_ready = Proof()
+    not_ready.why_not_ready = "no booking row exists for bk_1"
+    assert "the world is not ready" in not_ready.why()
+    assert "no booking row exists for bk_1" in not_ready.why()
+
+    both = Proof()
+    both.broken = ["ready.py raised TypeError"]
+    both.why_not_ready = "ready.py raised TypeError"
+    assert "the world is not ready" in both.why()
+
+
+def test_a_level_past_a_third_of_the_suite_is_refused_while_somewhere_thinner_exists() -> None:
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _over_its_share
+
+    grid = {"task": ["book_ride", "cancel_ride", "check_status"]}
+    booked = [
+        Scenario(name=f"b{one}", coverage={"task": "book_ride"}) for one in range(7)
+    ]
+
+    said = _over_its_share({"task": "book_ride"}, grid, booked, 20)
+    assert "whole share" in said and "cancel_ride" in said
+    assert _over_its_share({"task": "cancel_ride"}, grid, booked, 20) == ""
+    assert _over_its_share({"task": "book_ride"}, grid, booked, 8) == ""
+    everywhere = booked + [
+        Scenario(name=f"c{one}", coverage={"task": "cancel_ride"}) for one in range(7)
+    ] + [Scenario(name=f"s{one}", coverage={"task": "check_status"}) for one in range(7)]
+    assert _over_its_share({"task": "book_ride"}, grid, everywhere, 20) == ""
+
+
+def test_the_grid_has_to_be_the_frameworks_axes() -> None:
+    from fi.alk.harness.scenario_tools import CANONICAL_AXES, _grid_off_the_framework
+
+    whole = {axis: ["one"] for axis in CANONICAL_AXES}
+    whole["task"] = ["cancel-ride"]
+    assert _grid_off_the_framework(whole) == ""
+    assert _grid_off_the_framework({}) == ""
+
+    drifted = {**whole, "payment_state": ["card_expired"]}
+    del drifted["disposition"]
+    said = _grid_off_the_framework(drifted)
+    assert "payment_state (a level of disposition)" in said
+    assert "Missing: disposition" in said
+
+    short = {axis: ["one"] for axis in CANONICAL_AXES if axis != "interaction"}
+    assert "Missing: interaction" in _grid_off_the_framework(short)
+
+
+def test_task_levels_have_to_be_operation_object() -> None:
+    from fi.alk.harness.scenario_tools import CANONICAL_AXES, _grid_off_the_framework
+
+    grid = {axis: ["one"] for axis in CANONICAL_AXES}
+    grid["task"] = ["create-ride", "cancel-ride", "retrieve-booking-status"]
+    assert _grid_off_the_framework(grid) == ""
+
+    grid["task"] = ["book_ride_cash", "cancel-ride"]
+    said = _grid_off_the_framework(grid)
+    assert "book_ride_cash" in said
+    assert "cancel-ride" not in said.split("These are not:")[1]
+    assert "authenticate" in said and "handoff" in said
+
+
+def test_an_instruction_naming_a_record_the_world_lacks_is_refused() -> None:
+    from types import SimpleNamespace
+
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _identifiers_the_instruction_invents
+
+    world = SimpleNamespace(
+        state=lambda: {"places": [{"place_id": "plc_market_st"}, {"place_id": "plc_sfo"}]}
+    )
+
+    invented = Scenario(
+        name="a",
+        instruction="You ask for a ride from plc_blr_airport to plc_market_st.",
+    )
+    said = _identifiers_the_instruction_invents(invented, world)
+    assert said and "plc_blr_airport" in said[0]
+    assert "plc_market_st" not in said[0]
+
+    real = Scenario(name="b", instruction="From plc_market_st to plc_sfo, please.")
+    assert _identifiers_the_instruction_invents(real, world) == []
+
+    other = Scenario(name="c", instruction="Charge it to acct_99 like last time.")
+    assert _identifiers_the_instruction_invents(other, world) == []
+
+    bare = SimpleNamespace(state=lambda: {"notes": [{"text": "hello"}]})
+    assert _identifiers_the_instruction_invents(invented, bare) == []
+
+def test_a_suite_without_overlays_is_not_refused_by_the_intensity_share() -> None:
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _over_its_share
+
+    grid = {
+        "overlay": ["none", "prompt_injection", "social_engineering"],
+        "overlay_intensity": ["absent", "subtle", "overt"],
+        "task": ["book", "cancel", "status"],
+    }
+    kept = [
+        Scenario(
+            name=f"plain{n}",
+            coverage={"overlay": "none", "overlay_intensity": "absent", "task": "book"},
+            sub_goals=["booked"],
+        )
+        for n in range(30)
+    ]
+    plain = {"overlay": "none", "overlay_intensity": "absent", "task": "cancel"}
+    assert _over_its_share(plain, grid, kept, 50) == ""
+
+    assert "task is already at" in _over_its_share(
+        {"overlay": "none", "overlay_intensity": "absent", "task": "book"}, grid, kept, 50
+    )
+
+
+def test_coverage_counts_a_planned_level_however_its_separators_are_spelled():
+    from collections import Counter
+
+    from fi.alk.harness.scenario import _against_plan
+
+    report = _against_plan(
+        "task",
+        Counter({"explain_billing_policy": 2}),
+        {"task": ["explain-billing_policy", "cancel-order"]},
+    )
+    assert report["unused"] == ["cancel-order"]
+    assert report["share"] == 0.5

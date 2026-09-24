@@ -16,6 +16,7 @@ from .repair_patch import (
     apply_world_ir_repair_patch,
 )
 from .session import Stage
+from .source_data_invariants import world_from_ir
 from .source_model import SourceModel
 from .world_ir import WorldIR
 
@@ -80,17 +81,50 @@ async def request_world_ir_patch(
             ]
         }
 
+    backing = world_from_ir(world)
+    backing.query("PRAGMA query_only = ON")
+
+    def _rows(value: object) -> dict[str, object]:
+        return {"content": [{"type": "text", "text": json.dumps(value, default=str)[:20000]}]}
+
+    @tool(
+        "inspect_world",
+        "The generated world's tables: without a name, every table and its row count; with one, "
+        "all of its rows.",
+        {"type": "object", "properties": {"table": {"type": "string"}}},
+    )
+    async def inspect_world(arguments: dict[str, object]) -> dict[str, object]:
+        name = str(arguments.get("table") or "").strip()
+        if not name:
+            return _rows({table.source_name: len(table.rows) for table in world.tables})
+        return _rows(backing.query(f'SELECT * FROM "{name.replace(chr(34), "")}"'))
+
+    @tool(
+        "query_world",
+        "Run one read-only SQL query against the generated world, for example the diagnostic's own "
+        "query, to see exactly which rows are wrong.",
+        {"type": "object", "properties": {"sql": {"type": "string"}}, "required": ["sql"]},
+    )
+    async def query_world(arguments: dict[str, object]) -> dict[str, object]:
+        try:
+            return _rows(backing.query(str(arguments.get("sql") or "")))
+        except Exception as exc:  # noqa: BLE001 - a bad query is feedback, not a failed repair
+            return {"content": [{"type": "text", "text": f"query failed: {exc}"}], "is_error": True}
+
     diagnostics_json = [
         item.model_dump(mode="json", exclude={"redacted_message"})
         | {"message": item.redacted_message}
         for item in diagnostics
     ]
-    system_prompt = """You repair generated environment data for arbitrary agent runtimes.
+    system_prompt = """You repair generated environment data for arbitrary agent runtimes. Your goal:
+every supplied diagnostic passes afterwards. Explore as much as you need to get there: read the
+submitted source with Read, Glob and Grep, list and read the generated world with inspect_world,
+and run the failing queries yourself with query_world to see exactly which rows are wrong.
 Submitted source and the canonical source model are authoritative. Never modify source, invent
-an action/service, remove a scenario, weaken a check, or alter credentials/egress. Use Read, Glob,
-and Grep only to verify source evidence. Your only write capability is submit_world_ir_patch.
-Every operation reason must exactly match one supplied diagnostic code. Make the smallest patch
-that resolves the complete diagnostic set, call the tool, then stop."""
+an action/service, remove a scenario, weaken a check, or alter credentials/egress. Your only write
+capability is submit_world_ir_patch. Every operation reason must exactly match one supplied
+diagnostic code. Make the smallest patch that resolves the complete diagnostic set, call the
+tool, then stop."""
     briefing = (
         "Repair this candidate.\n\nDIAGNOSTICS\n"
         + json.dumps(diagnostics_json, sort_keys=True, indent=2)[:16000]
@@ -107,7 +141,12 @@ that resolves the complete diagnostic set, call the tool, then stop."""
     # Claude Agent SDK's max-turn bound is cumulative within a session, so merely prompting a
     # session that exhausted its first turn does not provide another repair opportunity.
     passes = (
-        ((), 16, "Use the supplied typed evidence first; call submit_world_ir_patch."),
+        (
+            FILE_TOOLS,
+            24,
+            "Look at the rows the diagnostics are about before patching; call "
+            "submit_world_ir_patch.",
+        ),
         (
             FILE_TOOLS,
             40,
@@ -120,7 +159,11 @@ that resolves the complete diagnostic set, call the tool, then stop."""
         stage = Stage(
             SessionSpec(
                 system_prompt=system_prompt,
-                servers={"repair": tool_server("repair", tools=[submit])},
+                servers={
+                    "repair": tool_server(
+                        "repair", tools=[submit, inspect_world, query_world]
+                    )
+                },
                 builtins=builtins,
                 cwd=str(source_root.resolve()),
                 # Repair is part of the same authoring run and must use the explicitly

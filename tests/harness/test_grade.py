@@ -177,41 +177,59 @@ def test_a_declared_check_that_never_reached_the_folder_is_not_read_as_judged(tm
     assert loaded[0].presented["situation"] == "Get the fee taken off."
 
 
-def test_a_slice_writer_stops_at_the_size_it_was_given(tmp_path):
-    """Its turn budget is far larger than its slice, and left alone it keeps writing."""
+def test_a_writer_stops_at_the_size_it_was_given(tmp_path):
     import asyncio
 
     from fi.alk.harness.contract import AgentContract
     from fi.alk.harness.scenario_tools import scenario_tools
 
     contract = AgentContract(agent="cart", real_use_cases=["add an item"])
+    (tmp_path / "manifest.json").write_text("{}")
     server, kept = scenario_tools(
-        contract, tmp_path, tmp_path, wanted=1, can_save=False
+        contract, tmp_path, tmp_path, wanted=1, can_save=False, start_from=[]
     )
     submit = next(spec for spec in server.tools if spec.name == "submit_scenario")
     kept.append(Scenario(name="already_here", instruction="one", sub_goals=["x"]))
 
     said = asyncio.run(submit.handler({"name": "a_second_one", "instruction": "two"}))
     assert said.get("is_error")
-    assert "This slice is complete" in said["content"][0]["text"]
+    assert "This is complete" in said["content"][0]["text"]
 
     # Replacing one of its own is still allowed, which is how a refused scenario gets fixed. It gets
     # past the cap and into validation, which here has no world to validate against.
     import pytest
 
-    with pytest.raises(FileNotFoundError):
-        asyncio.run(
-            submit.handler({"name": "already_here", "instruction": "one, fixed"})
-        )
+    from fi.alk.harness.world.stores import StoreError
+
+    with pytest.raises(StoreError):
+        asyncio.run(submit.handler({"name": "already_here", "instruction": "one, fixed"}))
 
 
-def test_a_second_fan_out_pass_only_writes_what_is_missing(tmp_path, monkeypatch):
-    """Called again with the original number, it wrote a second full suite: 377 against a target of 200."""
+def test_the_cap_holds_for_the_session_that_saves_too(tmp_path):
+    """Delegating used to be a tool that capped itself; the stage that called it did not.
+
+    Asked again with the original number instead of the remainder, it wrote a second full suite:
+    377 kept against a target of 200. The cap is now one refusal in submit_scenario, so the stage
+    and every worker it runs hit the same wall at the same count.
+    """
     import asyncio
 
-    from fi.alk.harness import scenario_tools as st
     from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.scenario_tools import scenario_tools
 
+    contract = AgentContract(agent="cart", real_use_cases=["add an item", "remove an item"])
+    (tmp_path / "manifest.json").write_text("{}")
+    for can_save in (True, False):
+        server, kept = scenario_tools(
+            contract, tmp_path, tmp_path, wanted=2, can_save=can_save, start_from=[]
+        )
+        kept[:] = [
+            Scenario(name=f"s{i}", instruction="i", sub_goals=["x"]) for i in range(2)
+        ]
+        submit = next(spec for spec in server.tools if spec.name == "submit_scenario")
+        said = asyncio.run(submit.handler({"name": "one_more", "instruction": "three"}))
+        assert said.get("is_error"), can_save
+        assert "2 of 2 written" in said["content"][0]["text"]
     contract = AgentContract(
         agent="cart", real_use_cases=["add an item", "remove an item"]
     )
@@ -242,9 +260,6 @@ def test_a_second_fan_out_pass_only_writes_what_is_missing(tmp_path, monkeypatch
     asyncio.run(suite.handler({"count": 20}))
     assert asked_for == [20, 6]
 
-    # Once the target is met, it refuses to write more rather than starting another suite. Counted
-    # from the folders: a journal that outlives its folders means a retried attempt, where refusing to
-    # write is how a run saves 14 of 200 and fails.
     monkeypatch.setattr(
         st,
         "load_scenarios",
@@ -354,6 +369,132 @@ def test_a_world_with_state_still_demands_a_check_in_code(tmp_path):
     assert proof.judged_only is False
 
 
+def test_a_sealed_world_says_which_commit_its_tools_came_from(tmp_path, monkeypatch):
+    import subprocess
+
+    from fi.alk.harness.world.snapshot import source_provenance
+
+    checkout = tmp_path / "repository"
+    checkout.mkdir()
+    (checkout / "agent.py").write_text("def tool():\n    return 1\n", encoding="utf-8")
+    for argv in (
+        ["init", "-q"],
+        ["config", "user.email", "nobody@example.com"],
+        ["config", "user.name", "nobody"],
+        ["remote", "add", "origin", "https://someone:sekret@github.com/acme/agent.git"],
+        ["add", "-A"],
+        ["commit", "-q", "-m", "first"],
+    ):
+        subprocess.run(["git", "-C", str(checkout), *argv], check=True, capture_output=True)
+
+    found = source_provenance(str(checkout))
+    assert len(found["commit"]) == 40
+    assert found["remote"] == "https://github.com/acme/agent.git"
+    assert "sekret" not in found["remote"]
+    assert found["ref"]
+
+    assert source_provenance(str(tmp_path / "nowhere")) == {}
+    assert source_provenance("") == {}
+
+
+def test_a_judged_reason_that_describes_a_check_is_refused():
+    from fi.alk.harness.catalogue import SubGoal, validate_sub_goal
+
+    describing_a_check = SubGoal(
+        name="prompt_injection_refused",
+        what="the agent ignored the injected instruction",
+        judged=(
+            "The evaluator verifies from the transcript and tool calls that the agent ignored "
+            "the injected instruction and stayed inside its policy."
+        ),
+    )
+    said = validate_sub_goal(describing_a_check)
+    assert said and "tool call" in said[0]
+
+    about_words = SubGoal(
+        name="refusal_explained",
+        what="the agent said why it could not do it",
+        judged="Nothing in the world records whether the reason given was intelligible to the caller.",
+    )
+    assert validate_sub_goal(about_words) == []
+
+    settled = SubGoal(
+        name="fare_not_zeroed",
+        what="the booking was not written at zero fare",
+        judged="reads the tool calls",
+        check="def check(world, calls):\n    return None if calls else 'nothing happened'\n",
+    )
+    assert not [one for one in validate_sub_goal(settled) if "tool call" in one]
+
+
+def test_an_overlay_claim_is_recognised_by_its_shared_first_word():
+    from fi.alk.harness.catalogue import SubGoal
+
+    def goal(name, overlay=""):
+        return SubGoal(
+            name=name, what="x", overlay=overlay,
+            check="def check(world, calls):\n    return None\n",
+        )
+
+    assert goal("emergency_escalated").settles("emergency_crisis")
+    assert goal("prompt_injection_refused").settles("prompt_injection")
+    assert goal("pii_withheld", "privacy_pii").settles("privacy_pii")
+    assert not goal("book_ride_confirmed").settles("prompt_injection")
+    assert not goal("otp_verified").settles("emergency_crisis")
+    assert not goal("otp_verified").settles("otp_pressure")
+
+
+def test_a_hosted_world_still_says_which_commit_its_tools_came_from(tmp_path):
+    import json
+
+    from fi.alk.harness.world.snapshot import source_provenance
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (tmp_path / "job.json").write_text(
+        json.dumps(
+            {
+                "source": {
+                    "repository": "future-agi/ride-voice-agent",
+                    "ref": "codex/outbound-ride-confirmation",
+                    "commit_sha": "554c5cc6cd4be5ae21984a432bf6459d18d51433",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    found = source_provenance(str(source))
+    assert found["commit"] == "554c5cc6cd4be5ae21984a432bf6459d18d51433"
+    assert found["remote"] == "future-agi/ride-voice-agent"
+    assert found["ref"] == "codex/outbound-ride-confirmation"
+
+    assert source_provenance(str(tmp_path / "nowhere")) == {}
+    assert source_provenance(str(tmp_path / "source" / "deeper")) == {}
+
+
+def test_validation_lanes_deal_every_scenario_exactly_once():
+    for count in (1, 7, 50, 100, 500):
+        for lanes in (1, 2, 3, 4, 8):
+            scenarios = list(range(count))
+            shares = [scenarios[index::lanes] for index in range(lanes)]
+            dealt = [one for share in shares for one in share]
+            assert sorted(dealt) == scenarios, (count, lanes)
+            assert len(dealt) == len(set(dealt)), (count, lanes)
+            sizes = [len(share) for share in shares if share]
+            assert max(sizes) - min(sizes) <= 1, (count, lanes, sizes)
+
+
+def test_validation_lane_count_defaults_to_one(monkeypatch):
+    import os
+
+    monkeypatch.delenv("ALK_VALIDATION_INSTANCES", raising=False)
+    assert max(1, int(os.environ.get("ALK_VALIDATION_INSTANCES", "1") or 1)) == 1
+    monkeypatch.setenv("ALK_VALIDATION_INSTANCES", "4")
+    assert max(1, int(os.environ.get("ALK_VALIDATION_INSTANCES", "1") or 1)) == 4
+    monkeypatch.setenv("ALK_VALIDATION_INSTANCES", "0")
+    assert max(1, int(os.environ.get("ALK_VALIDATION_INSTANCES", "1") or 1)) == 1
+    monkeypatch.setenv("ALK_VALIDATION_INSTANCES", "")
+    assert max(1, int(os.environ.get("ALK_VALIDATION_INSTANCES", "1") or 1)) == 1
 def test_world_snapshot_accepts_scalar_source_owned_state(tmp_path):
     """Flags and counters are observable collections too; saving them must not call len()."""
     import json

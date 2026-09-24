@@ -736,7 +736,20 @@ def test_runtime_gate_resets_each_scenario_and_preserves_execution_secrets(
         assert "target-secret-value" not in str(error.value)
         assert "0: setup:" in str(error.value)
         assert "1: setup:" in str(error.value)
-        assert calls == ["provision", "reset", "setup", "reset", "setup", "close"]
+        assert calls == [
+            "provision",
+            "reset",
+            "reset",
+            "reset",
+            "setup",
+            "reset",
+            "setup",
+            "reset",
+            "setup",
+            "reset",
+            "setup",
+            "close",
+        ]
     else:
         assert (
             asyncio.run(validate_once(job, tmp_path, authoring, secrets_path=original))
@@ -745,11 +758,11 @@ def test_runtime_gate_resets_each_scenario_and_preserves_execution_secrets(
         assert calls == [
             "provision",
             "reset",
+            "reset",
+            "reset",
             "setup",
             "reset",
             "setup",
-            "reset",
-            "reset",
             "close",
         ]
     assert original.exists()
@@ -851,6 +864,140 @@ def test_connect_only_provider_validation_does_not_invent_source_data_review(
 
     assert (
         asyncio.run(validate_once(job, tmp_path, authoring, secrets_path=original)) == 1
+    )
+    assert calls == ["provision", "reset", "close"]
+
+
+def _sourced(entry, source):
+    def function(*_args):
+        return None
+
+    function._alk_source = source
+    function._alk_entry = entry
+    return function
+
+
+def _noop(entry):
+    return _sourced(entry, f'def {entry}(world):\n    """Nothing beyond the base world."""\n')
+
+
+def test_does_nothing_reads_only_a_bare_function_as_a_no_op():
+    from fi.alk.harness.scenario_source import does_nothing
+
+    assert does_nothing(_noop("setup"))
+    assert does_nothing(_sourced("ready", "def ready(world):\n    return None\n"))
+    assert does_nothing(_sourced("setup", "def setup(world):\n    pass\n"))
+    for source in (
+        "def setup(world):\n    world.insert('t', {})\n",
+        "import os\ndef setup(world):\n    pass\n",
+        "def setup(world, seed=print('x')):\n    pass\n",
+        "def setup(world):\n    return True\n",
+        "def other(world):\n    pass\n",
+    ):
+        assert not does_nothing(_sourced("setup", source)), source
+    assert not does_nothing(lambda _world: None)
+
+
+def test_connect_only_validation_walks_only_scenarios_whose_setup_does_something(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness import (
+        bundle_author_v2,
+        hosted_entrypoint,
+        outbound,
+        process_preflight,
+        process_runtime,
+        scenario_source,
+        source_data_invariants,
+    )
+
+    original = tmp_path / "execution-secrets.json"
+    original.write_text('{"RETELL_API_KEY":"secret"}')
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    calls = []
+
+    async def forbidden_review(*_args, **_kwargs):
+        pytest.fail(
+            "connect-only provider state cannot be reviewed as local source data"
+        )
+
+    monkeypatch.setattr(source_data_invariants, "author_invariants", forbidden_review)
+
+    class Provider:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def provision(self, *_args, **_kwargs):
+            calls.append("provision")
+            return [SimpleNamespace(endpoints={})]
+
+        async def reset(self, *_args, **_kwargs):
+            calls.append("reset")
+
+        async def close(self, **_kwargs):
+            calls.append("close")
+
+    class World:
+        def read_only(self):
+            return self
+
+    class Factory:
+        def __init__(self, _work):
+            pass
+
+        async def create(self, *_args, **_kwargs):
+            return World()
+
+    monkeypatch.setattr(process_runtime, "ProcessRuntimeProvider", Provider)
+    monkeypatch.setattr(hosted_entrypoint, "ProcessWorldFactory", Factory)
+    monkeypatch.setattr(
+        bundle_author_v2, "author_bundle_v2", lambda **_kwargs: object()
+    )
+    monkeypatch.setattr(process_preflight, "preflight_bundle", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        outbound,
+        "load_capabilities",
+        lambda *, unlink: SimpleNamespace(attempt_id="test", expires_at=None),
+    )
+    monkeypatch.setattr(
+        scenario_source,
+        "load_scenarios",
+        lambda _bundle: [
+            SimpleNamespace(scenario_key=f"quiet-{index}", setup=_noop("setup"), ready=_noop("ready"))
+            for index in range(3)
+        ]
+        + [
+            SimpleNamespace(
+                scenario_key="seeds",
+                setup=_sourced("setup", "def setup(world):\n    world.insert('t', {})\n"),
+                ready=_noop("ready"),
+            )
+        ],
+    )
+    job = HarnessJob(
+        job_id="job-provider",
+        run_id="run-provider",
+        execution="hosted",
+        source={"kind": "provider"},
+        agent={
+            "connector": "retell",
+            "mode": "connect_only",
+            "config": {"agent_id": "agent_test"},
+            "secret_refs": {
+                "api_key": {
+                    "manager": "platform-vault",
+                    "key": "retell-key",
+                    "purpose": "target_provider",
+                }
+            },
+        },
+        scenario_count=4,
+        runtime={"isolation": "dedicated_vm"},
+    )
+
+    assert (
+        asyncio.run(validate_once(job, tmp_path, authoring, secrets_path=original)) == 4
     )
     assert calls == ["provision", "reset", "close"]
 
@@ -1166,3 +1313,38 @@ def test_default_generic_repair_dispatches_unknown_runtime_to_repository_inspect
     assert inspected == [
         (source, "unknown-framework", "generated_runtime_plan_invalid")
     ]
+
+
+def test_a_store_only_reset_is_offered_only_where_nothing_needs_respawning() -> None:
+    from fi.alk.harness.process_runtime import _stores_reset_in_place
+
+    class _Store:
+        def __init__(self, strategy):
+            self.baseline = type("B", (), {"strategy": strategy})()
+
+    class _Manifest:
+        def __init__(self, strategies):
+            self.seed = (
+                type("S", (), {"stores": [_Store(one) for one in strategies]})()
+                if strategies is not None
+                else None
+            )
+
+    from fi.alk.harness.process_runtime import BaselineStrategy
+
+    assert _stores_reset_in_place(_Manifest([BaselineStrategy.TEMPLATE_DATABASE]))
+    mixed = [BaselineStrategy.TEMPLATE_DATABASE, BaselineStrategy.DATADIR_COPY]
+    assert not _stores_reset_in_place(_Manifest(mixed))
+    assert not _stores_reset_in_place(_Manifest([]))
+    assert not _stores_reset_in_place(_Manifest(None))
+
+
+def test_declared_invariants_survive_a_review_that_forgot_to_finish() -> None:
+    from pathlib import Path as _P
+
+    import fi.alk.harness.source_data_invariants as invariants
+
+    source = _P(invariants.__file__).read_text(encoding="utf-8")
+    assert "if not saved and checks:" in source
+    assert "declared no executable check" in source
+    assert "did not finish; not certified" not in source
