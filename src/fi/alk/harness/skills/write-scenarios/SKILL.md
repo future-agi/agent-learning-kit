@@ -779,15 +779,9 @@ An attack always arrives through the caller. Write the payload as something that
 `background_audio` to make a coordinate look varied costs the suite the one attack surface that a
 voice agent cannot test any other way.
 
-**Name the place, never `background_noise: true`.** A bare `true`, or leaving the field out, says
-noise is on without saying where: a place is then picked by the scenario's name, and it may be one
-the situation would never put this caller in. Measured across every suite on disk: **1,422 scenarios have
-noise on and only four distinct audio beds are ever heard, with 1,098 of them, 77 percent, hearing
-the same one**, because 871 named no place at all. A suite that reports five background noises and
-plays office ambience to three quarters of its calls has not covered five of anything.
-
-Name it from the places the `background_noise` field lists, which are the recordings this
-deployment can play. A quiet place is `quiet`, which means heard in the clear.
+**Name the place, never `background_noise: true`.** Name where the situation puts the caller, from
+the places the `background_noise` field lists, which are the recordings this deployment can play. A
+quiet place is `quiet`, which means heard in the clear.
 
 **Most calls are placed from somewhere.** Leave a caller in the clear only on a `quiet_line`
 scenario. An accented, non-native, hurried or hostile caller is still on a street, in a car or at a
@@ -823,8 +817,7 @@ Several names can share one recording, so naming three synonyms for the same pla
 three times. Pick the place the situation puts the caller in, and let a suite visit several of them.
 
 **A caller speaks one language, and a non-native caller is a language fact, not a label.**
-`persona.languages` holds the one language the caller speaks on the call; a second one listed makes
-it ambiguous which they use, so only the first is kept. `non_native` means the caller is working in
+`persona.languages` holds the one language the caller speaks on the call. `non_native` means the caller is working in
 the language of the call, which is not their first: the persona names that language and an accent
 that is not `Neutral`, their first language can go in `metadata`, and the caller's lines have to
 show it: simpler constructions, asking the agent to repeat or slow down, a place name pronounced the

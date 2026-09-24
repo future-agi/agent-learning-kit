@@ -554,14 +554,8 @@ def planned(wanted: int, use_cases: list[str], given: list[dict] | None) -> list
     return slices
 
 
-# Initial letters dealt out so parallel writers cannot invent the same people. Three per writer, which
-# is enough choice to suit a scenario and keeps seven writers disjoint before the letters wrap; beyond
-# that two writers share initials but still choose different names. Numbers are partitioned by a
-# three-digit prefix instead: a hundred slots collided twice on a run with twenty slices, which is
-# what the birthday arithmetic predicts, and a thousand makes it rare. A repeated verification code is
-# a real collision; a repeated initial is not.
-_NAME_LETTERS = "ABCDEFGHIJKLMNOPRSTVWY"
-_LETTER_BLOCK = "abc"
+# Numbers are partitioned by a three-digit prefix per slice: a hundred slots collided twice on a run with
+# twenty slices, which is what the birthday arithmetic predicts, and a thousand makes it rare.
 
 
 def _slot(of: str, index: int) -> int:
@@ -595,32 +589,15 @@ def callers_for(index: int, wanted: int, slice_name: str = "", spoken: bool = Tr
         "\n\nStart from these callers, and move off them only where the scenario calls for "
         f"somebody else: {', '.join(picks)}."
     )
-    # Writers cannot see each other, so left to themselves they invent the same handful of people and
-    # the same round numbers, and the suite comes back with one name on a dozen scenarios and one
-    # verification code shared between them. Partitioning the space of values costs nothing and makes
-    # a collision impossible: each writer owns some initial letters and one leading digit, so no
-    # shared list of names or codes has to exist for the values to stay distinct.
+    # Writers cannot see each other, so left to themselves they reuse the same round numbers; a leading
+    # prefix per slice keeps codes distinct without a shared list.
     slot = _slot(slice_name, index)
-    block = max(len(_LETTER_BLOCK), min(8, (max(1, wanted) + 2) // 3))
-    letters = "".join(
-        _NAME_LETTERS[(slot * block + step) % len(_NAME_LETTERS)]
-        for step in range(block)
-    )
     said += (
-        "\n\nEvery person you invent has a given name and a family name, both real and common "
-        "among people of that caller's background, the names you would expect to meet, never an "
-        "unusual, invented or novelty one. Given and family name belong together and fit where the "
-        "person comes from. Prefer a family name beginning with "
-        f"one of {letters}, but only where a common family name from that background begins with one "
-        "of them; otherwise use one that fits, because a name that does not belong to the person is "
-        "worse than a shared initial. Avoid a given name with the same initial as the family name. "
-        "Every number you invent "
+        "\n\nEvery person you invent is one believable person: a given name and a family name that are "
+        "both common among people of that caller's background and home. Every number you invent "
         "that the agent will look up, a code or a reference or an account "
-        f"number, must begin with {slot % 1000:03d}. Other writers own the other letters and "
-        "prefixes, so this is what keeps two scenarios from sharing a name or a code. Within your own "
-        "slice, no two people may share a name and no two scenarios may share a code or a "
-        "reference: the prefix keeps you clear of other writers, it does not keep you clear of "
-        "yourself."
+        f"number, must begin with {slot % 1000:03d}. No two people in your slice share a name, and "
+        "no two scenarios share a code or a reference."
     )
     if accents and spoken:
         # Spread several offered accents across this writer's callers rather than naming just one,

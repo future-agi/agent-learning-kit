@@ -165,15 +165,3 @@ def test_a_suite_keeps_quiet_lines_to_a_small_share() -> None:
     assert _over_its_share({"interface": "quiet_line"}, grid, quiet[:10], 100) == ""
     assert _over_its_share({"interface": "noisy_street"}, grid, quiet, 100) == ""
 
-
-def test_a_scenario_checked_only_by_suite_wide_sub_goals_is_sent_back() -> None:
-    from fi.alk.harness.scenario import Scenario
-    from fi.alk.harness.scenario_tools import _checked_only_by_the_suite
-
-    def one(i, goals):
-        return Scenario(name=f"s{i}", use_case="u", sub_goals=goals)
-
-    kept = [one(i, ["answers"]) for i in range(4)] + [one(i + 4, ["answers", f"own{i}"]) for i in range(20)]
-    assert "on most of the suite" in _checked_only_by_the_suite(one(99, ["answers"]), kept)
-    assert _checked_only_by_the_suite(one(99, ["answers", "own_difficulty"]), kept) == ""
-    assert _checked_only_by_the_suite(one(99, ["answers"]), kept[4:]) == ""

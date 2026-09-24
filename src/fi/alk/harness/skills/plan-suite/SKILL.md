@@ -451,12 +451,6 @@ and can read them side by side. So say it in the brief, for each writer that get
 separates your own scenarios from each other**, one clause per scenario, in the same words as the
 difficulty rule above. Then the writer has no excuse and no need to guess.
 
-**At large counts names converge unless the people differ.** Two or three hundred callers exhaust
-the obvious names, and writers that cannot see each other reach for the same ones. The save refuses a
-caller whose name the suite already has, so uniqueness is enforced for you; what keeps the names
-varied and believable is dealing varied people. Deal profiles, never letters: a writer handed initial
-letters invents names nobody from that caller's background is called.
-
 **Names have to be distinguishable when spoken, not merely different.** "No two people share a name" lets
 Laura and Lauren through, and over a phone line they are one name. Tell each writer to
 reject a pair that a listener would not separate: one differing letter, one differing syllable, or the
@@ -612,9 +606,7 @@ scenario itself**, in `coverage`, one value per axis you actually varied:
 ```
 
 Use your own axis names and your own level names; nothing downstream requires a fixed vocabulary. A
-level names the condition it tests, never a particular language, product or agent, so the same name
-reads correctly in any suite. Writers use the levels you planned; a level nobody planned splits the
-report into cells of one. Use
+level names the condition it tests, never a particular language, product or agent. Use
 the axes you genuinely dealt out, not all six for the sake of it: an axis you held constant across the
 suite tells a reader nothing and makes the report claim breadth that is not there.
 
@@ -828,10 +820,8 @@ suite has to be dealt out in the briefs, one share each.
 The people are the thing to deal, and **deal them as whole people, not as separate fields.** Give
 each writer two or three caller profiles, and no profile to two writers where you can help it. A
 profile is one believable person-type: an accent, the one language they speak on the call, where
-they live, and the naming tradition that fits them. Dealt field by field, an accent to one list and
-name letters to another, the writer is left to join them and can produce a caller whose name, accent
-and home do not belong to one person. A few deliberate crossings, a second-generation caller or a
-married name, are real people too; deal them as their own profile, never by accident.
+they live, and the names people of that background carry. A few deliberate crossings, a
+second-generation caller or a married name, are real people too; deal them as their own profile.
 
 Across the suite the callers should sound like the people who really ring this agent: every language
 it supports and at least one it must turn away, several accents, several ages and temperaments. A
@@ -843,10 +833,8 @@ one call in ten: real callers are rarely in a silent room. Size the `quiet_line`
 Spread the places across writers the way you spread profiles, so the suite hears several of them
 rather than one bed everywhere.
 
-**Never deal name letters or name rules.** Every name comes from the person: a given name and a
-family name that are both common among people of that profile's background, the names you would
-expect to meet, never rare, antique or invented ones. The save refuses a name the suite already has,
-and the writer then picks another name from the same background.
+**Every name comes from its person:** a given name and a family name both common among people of
+that profile's background. No two people in the suite share a name.
 
 Two signs the sizing is wrong: every slice holds one or two scenarios, which means you listed
 scenarios instead of grouping them and every writer will re-read the world for almost nothing; or

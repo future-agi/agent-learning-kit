@@ -571,26 +571,6 @@ _NAMES_A_DIFFICULTY = re.compile(
 )
 
 
-def _checked_only_by_the_suite(scenario: Scenario, kept: list[Scenario]) -> str:
-    """Why every sub-goal on this scenario is one most of the suite already carries, or ""."""
-    if len(kept) < 20 or not scenario.sub_goals:
-        return ""
-    carried: Counter[str] = Counter(name for one in kept for name in set(one.sub_goals))
-    common = {name for name, count in carried.items() if count * 2 > len(kept)}
-
-    def generic(one: Scenario) -> bool:
-        return bool(one.sub_goals) and set(one.sub_goals) <= common
-
-    if not generic(scenario) or sum(1 for one in kept if generic(one)) * 10 < len(kept):
-        return ""
-    return (
-        f"every sub-goal here ({', '.join(sorted(scenario.sub_goals))}) is on most of the suite, "
-        "so nothing checks what this scenario is for. Add the sub-goal that fails when the agent "
-        "gets this scenario's own difficulty wrong: name it from the catalogue, or add it with "
-        "add_sub_goal if the catalogue has none"
-    )
-
-
 def _a_second_plain_control(scenario: Scenario, kept: list[Scenario]) -> str:
     """Why this scenario is the suite's second plain run of the same task, or ""."""
     coverage = scenario.coverage or {}
@@ -1583,12 +1563,6 @@ def scenario_tools(
             second_control = ""
         if second_control:
             return _refuse(second_control)
-        try:
-            generic_only = _checked_only_by_the_suite(Scenario.model_validate(args), kept)
-        except Exception:  # noqa: BLE001 - a malformed scenario is the validator's to report
-            generic_only = ""
-        if generic_only:
-            return _refuse(generic_only)
         twin = _already_in_the_suite(
             args, kept, _first_names_on_disk(destination, str(args.get("name") or ""))
         )
