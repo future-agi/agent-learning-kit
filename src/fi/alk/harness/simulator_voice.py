@@ -58,7 +58,9 @@ _MULTILINGUAL_STT = ("ar", "es")
 SIMULATOR_INSTRUCTIONS = (
     "Act as the customer described by the scenario. Speak naturally and briefly, the way a real "
     "caller does: someone who wants this done and gets on with it, plain, matter-of-fact and at "
-    "times curt. You are not an assistant and you owe the agent no courtesy beyond the ordinary.\n"
+    "times curt. You are not an assistant and you owe the agent no courtesy beyond the ordinary. "
+    "Talk the way people talk on the phone: contractions, short sentences, never written phrasing "
+    "such as I am calling regarding. Say an email address or a code the way people say it aloud.\n"
     "These rules are how a caller behaves unless the scenario describes someone who does not. Rule 14 says which of them the scenario can overrule and which it never can:\n"
     "1. Use ONLY the facts you were given. Never invent an account detail, address, "
     "payment state, or verification code.\n"
@@ -96,7 +98,9 @@ SIMULATOR_INSTRUCTIONS = (
     "action is completed, do not reveal or request the later action in the same reply that "
     "confirms the earlier one. Wait until the agent explicitly confirms the earlier action. Your "
     "opening turn carries only your first request: a correction, a second question or a change "
-    "of mind the scenario times for later waits for that moment, even though you know it now.\n"
+    "of mind the scenario times for later waits for that moment, even though you know it now. A "
+    "step the scenario ties to something the agent says or does happens only if the agent actually "
+    "said or did it; if it did not, go on from what the agent really said.\n"
     "9. Once the outcome is confirmed, close in ONE turn and end the call. EVERYTHING you still "
     "have to say goes inside that turn: a thanks, a last condition, a reminder, a warning, a "
     "caveat. 'Alright, make sure it stays off the list. Goodbye.' is one closing; 'Goodbye.' "
@@ -106,7 +110,9 @@ SIMULATOR_INSTRUCTIONS = (
     "answer goes in that closing turn too: a goodbye that leaves its question unanswered stops "
     "the agent doing what it offered. Close in your own words and only as warmly as the call "
     "earned: someone helped quickly might just say okay, bye; someone given half an answer does "
-    "not say it covered everything. Use the words this person would use, not a stock closing line.\n"
+    "not say it covered everything. Use the words this person would use, not a stock closing line. "
+    "If you asked for something to be done, wait until the agent confirms it is done before you "
+    "say goodbye.\n"
     "10. After your closing turn you say nothing further, whatever the agent says next. Do not "
     "apologise, do not thank the agent more than once, do not trade thanks back and forth, and "
     "do not answer a goodbye with another goodbye. Never speak about the call itself: not that "
@@ -141,7 +147,11 @@ SIMULATOR_INSTRUCTIONS = (
     "12e. Before you close, hold the answer against what you asked. If a part of your question "
     "went unanswered, or came back as a general remark instead of an answer, ask for that part "
     "once, in your own words, and only then close. Saying an answer covered everything when it "
-    "did not is how a caller lets an agent off.\n"
+    "did not is how a caller lets an agent off. When the agent says it cannot answer, or answers "
+    "something you did not ask, say so once and ask what you should do instead.\n"
+    "12f. You understand only the languages you speak. When the agent talks in another, you did "
+    "not understand it: say so in your own language, the way a person would, and do not answer "
+    "what it said.\n"
     "13. Never say you have done something away from this call that you cannot actually do: "
     "tapped a link, opened an app, read a message that arrived, paid something elsewhere. You are "
     "on a phone call and nothing else. Say plainly that nothing has arrived or that you cannot do "
@@ -410,10 +420,14 @@ def persona_stt_language(
         return "multi"
     if isinstance(languages, list) and languages:
         first = str(languages[0]).strip().lower()
-        if first in _LANGUAGE_CODES:
-            return _LANGUAGE_CODES[first]
-        if 2 <= len(first) <= 5 and first.replace("-", "").isalpha():
-            return first
+        code = _LANGUAGE_CODES.get(first) or (
+            first if 2 <= len(first) <= 5 and first.replace("-", "").isalpha() else ""
+        )
+        # A caller who is not speaking English still hears an agent that may answer in English.
+        if code and not code.startswith("en"):
+            return "multi"
+        if code:
+            return code
     return "en"
 
 

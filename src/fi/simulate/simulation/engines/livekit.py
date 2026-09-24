@@ -1067,7 +1067,12 @@ class _TestRunnerAgent(Agent):
     def _on_hold(self) -> None:
         if self._session is None:
             return
-        heard = len(_session_messages(self._session))
+        messages = _session_messages(self._session)
+        # Asked something, the caller is not on hold: silence here is a question left unanswered.
+        if _was_asked(messages):
+            self._on_unspoken("(silent after a question)")
+            return
+        heard = len(messages)
         self._hold_check = asyncio.get_running_loop().create_task(self._still_there(heard))
 
     async def _still_there(self, heard: int) -> None:
@@ -1116,7 +1121,7 @@ _ANSWER_ALOUD = (
 # The caller's first turn is written by the model like any other, so it sounds spoken, not read.
 _OPENING_TURN = (
     "This is your first turn. Open the way this person naturally would, with just your first "
-    "request, which is: {opening} Put it in your own words. If the agent has already spoken and "
+    "request, which is: {opening} Put it in your own words, in one or two short sentences. If the agent has already spoken and "
     "asked you something, answer that briefly first. Everything else in your situation waits for "
     "its moment."
 )
@@ -1131,6 +1136,16 @@ def _with_opening_line(chat_ctx: Any, opening: Any) -> Any:
     briefed = chat_ctx.copy()
     briefed.add_message(role="system", content=_OPENING_TURN.format(opening=opening.strip()))
     return briefed
+
+
+def _was_asked(messages: list[dict[str, Any]]) -> bool:
+    """Whether the agent's latest turn, heard by the caller as the other speaker, ends on a question."""
+    for message in reversed(messages):
+        if message.get("role") == "user":
+            return str(message.get("content") or "").rstrip().endswith("?")
+        if message.get("role") == "assistant":
+            return False
+    return False
 
 
 def _letters(text: str) -> str:

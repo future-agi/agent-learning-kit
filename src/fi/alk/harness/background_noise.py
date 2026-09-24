@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import os
 from pathlib import Path
 from typing import Any
@@ -144,13 +145,33 @@ def _pick(seed: str, size: int) -> int:
     return int(hashlib.sha256(seed.encode("utf-8")).hexdigest()[:8], 16) % size
 
 
-def place_for(name: str, fixture: Any = None) -> str:
-    """Where a caller with noise on and no place named is heard from: the fixture's place, else one by name."""
+# Words in a situation that say where the caller is, for the places a deployment can play.
+_SETTING_WORDS: dict[str, str] = {
+    "office": r"office|desk|workplace|cubicle|meeting room",
+    "street": r"street|sidewalk|pavement|walking|outside a|crosswalk",
+    "vehicle": r"\bcar\b|driving|taxi|cab\b|in traffic|behind the wheel",
+    "transit": r"airport|flight|boarding|gate\b|terminal|train|station|platform|metro|subway",
+    "retail": r"\bstore\b|\bshop\b|shopping|mall|grocery|supermarket|checkout",
+    "outdoors": r"\bpark\b|outdoors|garden|hiking|beach",
+    "crowd": r"cafe|café|restaurant|coffee shop|\bbar\b|canteen|cafeteria|crowd",
+}
+
+
+def place_for(name: str, fixture: Any = None, situation: str = "") -> str:
+    """Where a caller with noise on and no place named is heard from.
+
+    The fixture's place first, then a place the situation itself describes, and only then one
+    picked by the scenario's name, so the sound never contradicts what the scenario says.
+    """
     if isinstance(fixture, dict):
         named = str(fixture.get("environment") or "").strip().lower()
         if named:
             return named
     options = list(places())
+    text = (situation or "").lower()
+    for place, words in _SETTING_WORDS.items():
+        if place in options and re.search(words, text):
+            return place
     return options[_pick(name or "x", len(options))] if options else ""
 
 

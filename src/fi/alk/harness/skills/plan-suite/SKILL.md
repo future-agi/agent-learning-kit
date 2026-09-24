@@ -848,7 +848,9 @@ language without also narrowing its names makes collisions worse, not better: tw
 non-native callers both reached for the same name. Three letters each, no letter to two writers, and
 no two people in the suite share a name. The letters bind the family name only, so the given name
 stays free to be a real, common name for that person's background. Letters dealt on given names
-force names nobody is actually called.
+force names nobody is actually called. The letters are a preference that keeps writers apart, never
+a reason for a name that does not fit: where no common family name from the person's background
+starts with one of them, the writer uses one that fits.
 
 Two signs the sizing is wrong: every slice holds one or two scenarios, which means you listed
 scenarios instead of grouping them and every writer will re-read the world for almost nothing; or

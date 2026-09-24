@@ -145,3 +145,11 @@ def test_a_caller_speaks_one_language():
 
     one = Persona(name="Rahul Varma", languages=["English", "Hindi"], accent="Indian", multilingual=True)
     assert one.languages == ["English"] and one.multilingual is False
+
+
+def test_a_place_the_situation_describes_wins_over_a_pick_by_name(catalogue):
+    from fi.alk.harness.background_noise import place_for
+
+    assert place_for("any", None, "You are rushing through the airport to your gate.") == "transit"
+    assert place_for("any", None, "You call from a busy street corner.") == "street"
+    assert place_for("any", {"environment": "vehicle"}, "at the airport") == "vehicle"

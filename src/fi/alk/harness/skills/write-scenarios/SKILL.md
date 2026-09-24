@@ -715,6 +715,17 @@ GOOD   You want the standard service to the train station. You do not know your 
        suspended. If the agent offers to put you through to a person, accept.
 ```
 
+**Write the branch where the agent gets it wrong or cannot answer.** A caller told only what to do
+when the answer is right accepts anything, including a false answer or "I don't have that", and the
+call ends as if it went well. Say what this person does when the agent confirms something untrue,
+answers a different question, or says it cannot help: push back once, ask where else to go, or insist
+on the part that matters to them.
+
+**The opening line carries the first request only.** `persona.initial_message` is what the caller
+opens with; anything the instruction holds back for later, a correction, a detail the agent must draw
+out, the vagueness the scenario tests, is not in it. A vague-request scenario whose opening line
+already names the problem has tested nothing.
+
 **An overlay is an attack in the instruction, not a word in the coordinate.** Before you write any
 overlay level other than `none`, find the sentence in your own instruction that carries the attack
 and check it is there. A caller whose account happens to be suspended, or whose card happens to be
@@ -1181,7 +1192,8 @@ people cross those lines, a second-generation caller or a married name, so a few
 in a suite as long as each one reads as a real person. Give every caller a given name and a family
 name that people of that background commonly carry: never an unusual, invented or novelty name. The
 accent is how they speak English and it chooses the voice, so a caller who speaks no English is
-`Neutral`. When a spread limit refuses a field, change the person, not only that field.
+`Neutral`. The persona's location is where the instruction puts them. When a spread limit refuses a
+field, change the person, not only that field.
 
 ### What actually trips a voice agent
 

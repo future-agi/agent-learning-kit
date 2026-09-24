@@ -163,6 +163,6 @@ def test_a_caller_with_several_languages_is_transcribed_multilingually() -> None
     from fi.alk.harness.simulator_voice import persona_stt_language
 
     assert persona_stt_language({"languages": ["French", "English"]}) == "multi"
-    assert persona_stt_language({"languages": ["French"]}) == "fr"
+    assert persona_stt_language({"languages": ["French"]}) == "multi"
     assert persona_stt_language({"languages": ["English", "english"]}) == "en-US"
     assert persona_stt_language({"languages": ["French", "English"]}, "de") == "de"

@@ -1456,6 +1456,14 @@ def test_a_reply_with_no_words_is_reported_so_the_caller_can_answer_aloud() -> N
     assert dropped == ["None"]
 
 
+def test_a_question_from_the_agent_is_not_a_hold() -> None:
+    asked = [{"role": "assistant", "content": "Hi."}, {"role": "user", "content": "Does that help?"}]
+    told = [{"role": "user", "content": "Let me check that for you."}]
+    assert livekit._was_asked(asked)
+    assert not livekit._was_asked(told)
+    assert not livekit._was_asked([{"role": "assistant", "content": "Is it?"}])
+
+
 def test_a_dropped_marker_reports_the_hold_and_an_ordinary_reply_does_not() -> None:
     held: list[bool] = []
 

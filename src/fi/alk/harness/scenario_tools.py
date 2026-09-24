@@ -845,7 +845,9 @@ def accept_scenario(
         if scenario.persona:
             scenario.persona.accent = ""
     elif scenario.background_noise is True:
-        scenario.background_noise = place_for(scenario.name, scenario.fixture) or True
+        scenario.background_noise = (
+            place_for(scenario.name, scenario.fixture, scenario.instruction) or True
+        )
 
     # Read against the world this scenario actually runs in, so a setup that creates the table
     # a check reads is not reported as referring to something that does not exist.

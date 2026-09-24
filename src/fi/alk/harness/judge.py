@@ -59,6 +59,9 @@ How to decide:
    excuse what they state.
 5. Where nothing you were given records the right answer, never call what the agent said accurate
    or correct, and never assume it is.
+6. What was said reached you through speech recognition and can contain its errors. A garbled
+   phrase, or a word that sounds like one the context calls for, is a mishearing, not something the
+   agent said: judge what the agent evidently said.
 
 Always decide. The evidence you were given is what there is; never answer that you cannot tell.
 Call decide once, with `passed` true or false.
