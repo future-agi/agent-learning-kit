@@ -557,6 +557,13 @@ The same holds for every other axis. `interaction: correction` means the caller 
 the agent has already answered or acted on, in a later turn. "X, wait, actually Y" in one breath is
 heard as Y alone, so the agent is never tested on letting go of X. The same holds for a change of
 topic: it comes once the agent has answered the first one.
+
+**A plain question is still a conversation.** An instruction that asks one thing and stops produces a
+call of one question, one answer and a goodbye, and tests only that the agent can answer once. Give
+the caller what a real one does with the answer: a follow-up that depends on it. If the answer is
+no, what they do instead; if it is a list of steps, the one step they are unsure of; if it is a
+figure, what it means for them. Write it conditionally on what the agent says, never as the answer
+the agent must give.
 `counterparty: third_party` means somebody other than the account holder is on the line. A cell you
 cannot express in what the caller says and does is a cell this scenario should not claim.
 

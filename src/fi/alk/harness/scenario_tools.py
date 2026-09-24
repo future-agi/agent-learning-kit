@@ -1449,7 +1449,10 @@ def scenario_tools(
         "change of topic packed into the opening sentence is heard as the final request alone and "
         "tests nothing. Sub-goals that fit every call (tone, length, answered the inquiry) are "
         "shared background: name at least one that fails only when the agent gets this "
-        "scenario's own difficulty wrong, defining it with add_sub_goal if the catalogue has none.",
+        "scenario's own difficulty wrong, defining it with add_sub_goal if the catalogue has none. "
+        "One question and a goodbye is not a call: give the caller a follow-up that depends on the "
+        "answer it gets (what now if that is not possible, a detail of the step it was told, how "
+        "long it takes), so the agent has to hold the thread past its first reply.",
         schema(
             {
                 "name": {
