@@ -563,10 +563,10 @@ def certify_template(
             )
             checks.append(f"engine-{engine}")
 
-        disk_path = "/tmp/futureagi-certification-disk-kib"
+        disk_path = "/tmp/futureagi-certification-disk-capacity-kib"
         _sandbox_command(
             sandbox,
-            f"df -Pk /work | awk 'NR == 2 {{print $4}}' > {disk_path}",
+            f"df -Pk /work | awk 'NR == 2 {{print $2}}' > {disk_path}",
             label="disk-capacity",
         )
         disk_output = sandbox.files.read(disk_path, user="svc-control")
@@ -574,7 +574,7 @@ def certify_template(
         disk_gb = disk_kib // (1024 * 1024)
         if disk_kib < required_disk_gb * 1024 * 1024:
             raise RuntimeError(
-                f"certification failed [disk-capacity]: {disk_gb} GiB available, "
+                f"certification failed [disk-capacity]: {disk_gb} GiB capacity, "
                 f"{required_disk_gb} GiB required"
             )
         checks.append("disk-capacity")
