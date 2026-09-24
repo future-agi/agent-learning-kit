@@ -78,6 +78,7 @@ class IsolatedChatCallRunner:
                 "attempt_number": context.attempt_number,
                 "runtime": runtime.model_dump(mode="json"),
                 "scenario_key": scenario.scenario_key,
+                "source_scenario_key": getattr(scenario, "source_scenario_key", None),
                 "scenario_id": scenario.scenario_id,
             },
             environ=environ,
@@ -146,7 +147,9 @@ async def main() -> None:
         )
         outcome = await runner_type(collector, context).run(
             SimpleNamespace(
-                scenario_key=payload["scenario_key"], scenario_id=payload["scenario_id"]
+                scenario_key=payload["scenario_key"],
+                source_scenario_key=payload.get("source_scenario_key"),
+                scenario_id=payload["scenario_id"],
             ),
             EnvironmentRuntime.model_validate(payload["runtime"]),
         )

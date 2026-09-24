@@ -223,6 +223,46 @@ def test_generic_validation_uses_typed_patch_policy_and_persists_history(
     assert proof["setup_ready_scenarios"] == 5
 
 
+def test_generic_repair_without_typed_patch_keeps_validation_failure(
+    tmp_path, monkeypatch
+) -> None:
+    from fi.alk.harness import repair_authoring
+
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    artifacts = authoring / "generic-harness"
+    source.mkdir()
+    artifacts.mkdir(parents=True)
+    (source / "agent.py").write_text("agent", encoding="utf-8")
+    (artifacts / "source-model.json").write_text("source", encoding="utf-8")
+    (artifacts / "world-ir.json").write_text("world", encoding="utf-8")
+    monkeypatch.setattr(
+        GenericHarnessArtifactStore, "read_source_model", lambda self: object()
+    )
+    monkeypatch.setattr(
+        GenericHarnessArtifactStore, "read_world_ir", lambda self: object()
+    )
+
+    async def no_patch(*args):
+        raise repair_authoring.RepairPatchNotSubmittedError("no patch submitted")
+
+    monkeypatch.setattr(repair_authoring, "request_world_ir_patch", no_patch)
+    calls = []
+
+    async def validate(*args):
+        calls.append("validate")
+        raise RuntimeValidationError(
+            "environment", "Source data invariant review did not finish; not certified"
+        )
+
+    job = SimpleNamespace(metadata={"generic_harness_v1": True})
+    with pytest.raises(RuntimeValidationError, match="Source data invariant review"):
+        asyncio.run(validate_and_repair(job, source, authoring, validate=validate))
+    assert calls == ["validate"]
+    history = json.loads((artifacts / "repair-history.json").read_text())
+    assert history["results"][0]["outcome"] == "failed"
+
+
 def test_generic_validation_applies_typed_world_patch_transactionally(tmp_path) -> None:
     source_root = tmp_path / "source"
     authoring = tmp_path / "authoring"
@@ -983,7 +1023,9 @@ def test_local_runtime_validation_does_not_require_hosted_capabilities(
     monkeypatch.setattr(
         outbound,
         "load_capabilities",
-        lambda **_kwargs: pytest.fail("local validation must not load hosted capabilities"),
+        lambda **_kwargs: pytest.fail(
+            "local validation must not load hosted capabilities"
+        ),
     )
 
     class Provider:
@@ -1029,18 +1071,15 @@ def test_local_runtime_validation_does_not_require_hosted_capabilities(
             )
         ],
     )
+
     async def author_invariants(*_args, **_kwargs):
         return []
 
     async def check_invariants(*_args, **_kwargs):
         return None
 
-    monkeypatch.setattr(
-        source_data_invariants, "author_invariants", author_invariants
-    )
-    monkeypatch.setattr(
-        source_data_invariants, "check_invariants", check_invariants
-    )
+    monkeypatch.setattr(source_data_invariants, "author_invariants", author_invariants)
+    monkeypatch.setattr(source_data_invariants, "check_invariants", check_invariants)
     job = SimpleNamespace(
         source=SimpleNamespace(kind=None),
         agent=SimpleNamespace(secret_refs={}),

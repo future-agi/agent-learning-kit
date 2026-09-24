@@ -53,6 +53,7 @@ class _FakeJob:
     importing the real pydantic model into this module purely for one attribute."""
 
     run_id: str = "job-1"
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @pytest.fixture(autouse=True)
@@ -1420,17 +1421,6 @@ def test_provision_payload_only_sends_fields_azains_serializer_declares() -> Non
         assert set(persona) == {"scenario_key"}
 
 
-def test_begin_payload_carries_operation_run_test_id_and_the_full_key_set() -> None:
-    # HarnessScenarioBeginSerializer (futureagi/simulate/serializers/hosted_harness.py:193-198):
-    # `scenario_keys` is REQUIRED and `allow_empty=False` -- the full sealed set every time, never
-    # a subset (`begin_scenarios`, services/hosted_harness.py:323-329, 409s on anything less).
-    scenarios = (_scenario("a"), _scenario("b"))
-    payload = ss._begin_payload("run-test-1", scenarios)
-    assert payload == {
-        "operation": "begin",
-        "run_test_id": "run-test-1",
-        "scenario_keys": ["a", "b"],
-    }
 
 
 # -------------------------------------------------------------------------------------------------
@@ -1504,11 +1494,11 @@ def test_scenario_ids_by_key_raises_typed_error_for_empty_scenario_id() -> None:
 
 
 # -------------------------------------------------------------------------------------------------
-# `register_with_platform` -- full sequence: provision -> match (guards) -> begin -> assign.
+# Authoring provisions identities but never begins execution.
 # -------------------------------------------------------------------------------------------------
 
 
-def test_register_with_platform_assigns_platform_ids_and_begins_the_full_set() -> None:
+def test_register_with_platform_assigns_platform_ids_without_beginning() -> None:
     async def scenario() -> None:
         submitted = (_scenario("a"), _scenario("b"))
         client = _FakeScenariosClient(
@@ -1544,15 +1534,41 @@ def test_register_with_platform_assigns_platform_ids_and_begins_the_full_set() -
                 "personas": [{"scenario_key": "a"}, {"scenario_key": "b"}],
             }
         ]
-        assert client.begin_calls == [
-            {
-                "operation": "begin",
-                "run_test_id": "run-test-1",
-                "scenario_keys": ["a", "b"],
-            },
-        ]
+        assert client.begin_calls == []
 
     asyncio.run(scenario())
+
+
+def test_execution_manifest_selects_and_expands_trials_without_reauthoring() -> None:
+    authored = (_scenario("a"), _scenario("b"))
+    selected = ss._scenarios_for_execution_manifest(
+        authored,
+        [
+            {
+                "execution_key": "a-trial-1",
+                "scenario_key": "a",
+                "scenario_id": "platform-a",
+                "trial_index": 1,
+            },
+            {
+                "execution_key": "a-trial-2",
+                "scenario_key": "a",
+                "scenario_id": "platform-a",
+                "trial_index": 2,
+            },
+        ],
+    )
+
+    assert [scenario.scenario_key for scenario in selected] == [
+        "a-trial-1",
+        "a-trial-2",
+    ]
+    assert [scenario.scenario_id for scenario in selected] == [
+        "platform-a",
+        "platform-a",
+    ]
+    assert selected[0].setup is authored[0].setup
+    assert selected[1].ready is authored[0].ready
 
 
 def test_register_with_platform_guard_failure_never_calls_begin() -> None:
@@ -1667,9 +1683,9 @@ def test_mutation_missing_scenario_guard_removed_is_killed() -> None:
 
 
 def test_mutation_id_assignment_skipped_is_killed() -> None:
-    # Mutant: `register_with_platform`'s final `replace(scenario, scenario_id=...)` step deleted --
-    # provision/begin both still run (a response-shape bug would not be caught by this mutant), but
-    # the scenarios handed back to the scheduler never actually carry the platform's id.
+    # Mutant: `register_with_platform`'s final identity-assignment step deleted.
+    # Provision still succeeds, but execution would receive scenarios without
+    # the platform identity required by receipts.
     async def scenario() -> None:
         submitted = (_scenario("a"),)
         client = _FakeScenariosClient(
@@ -1683,12 +1699,8 @@ def test_mutation_id_assignment_skipped_is_killed() -> None:
         assert real[0].scenario_id == "platform-a"  # baseline: the real fix assigns it
 
         async def _skip_assignment_mutant(scenarios_client, scenarios, *, run_name):
-            provision_result = await asyncio.to_thread(
-                scenarios_client.provision, ss._provision_payload(run_name, scenarios)
-            )
             await asyncio.to_thread(
-                scenarios_client.begin,
-                ss._begin_payload(provision_result["run_test_id"], scenarios),
+                scenarios_client.provision, ss._provision_payload(run_name, scenarios)
             )
             return scenarios  # mutant's defect: returned VERBATIM, ids never merged in
 

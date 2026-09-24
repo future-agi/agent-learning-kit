@@ -226,6 +226,17 @@ class HarnessRetryPolicy(BaseModel):
         return self
 
 
+class HarnessExecutionManifestEntry(BaseModel):
+    """One platform-preallocated scenario/trial execution."""
+
+    execution_key: str = Field(min_length=1, max_length=255)
+    scenario_key: str = Field(min_length=1, max_length=255)
+    scenario_id: str = Field(min_length=1)
+    dataset_row_id: str | None = None
+    trial_index: int = Field(ge=1, le=20)
+    call_execution_id: str = Field(min_length=1)
+
+
 class HarnessJob(BaseModel):
     schema_version: str = HARNESS_JOB_SCHEMA_VERSION
     job_id: str
@@ -246,6 +257,22 @@ class HarnessJob(BaseModel):
     def _validate_job(self) -> HarnessJob:
         if self.schema_version != HARNESS_JOB_SCHEMA_VERSION:
             raise ValueError(f"harness_job_version_unsupported: {self.schema_version}")
+        execution_manifest = self.metadata.get("execution_manifest")
+        if execution_manifest is not None:
+            if not isinstance(execution_manifest, list) or not execution_manifest:
+                raise ValueError("execution_manifest_invalid")
+            parsed_manifest = [
+                HarnessExecutionManifestEntry.model_validate(entry)
+                for entry in execution_manifest
+            ]
+            execution_keys = [entry.execution_key for entry in parsed_manifest]
+            if len(execution_keys) != len(set(execution_keys)):
+                raise ValueError("execution_manifest_duplicate_key")
+            if len(parsed_manifest) != self.scenario_count:
+                raise ValueError("execution_manifest_count_mismatch")
+            self.metadata["execution_manifest"] = [
+                entry.model_dump(mode="json") for entry in parsed_manifest
+            ]
         if (
             self.execution is ExecutionMode.LOCAL
             and self.source.kind is SourceKind.GITHUB
@@ -450,6 +477,7 @@ __all__ = [
     "FailureOwner",
     "HarnessArtifactPolicy",
     "HarnessFailure",
+    "HarnessExecutionManifestEntry",
     "HarnessJob",
     "HarnessJobStatus",
     "HarnessRetryPolicy",

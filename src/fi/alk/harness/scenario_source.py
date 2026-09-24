@@ -10,13 +10,11 @@ scheduler needs off a `scenario.json` written in the newer shape. So this module
 instead of depending on either model -- see the report's design-decisions section for the
 consequences of that choice (HEAD-model drift).
 
-RESOLVED (p13-worker-r2, reports/p13-worker-r2.md CONTRACT NOTES): the `provision`/`begin` wire
-shapes below follow the platform's actual, live route (futureagi/simulate/serializers/services/
-views `hosted_harness.py`) rather than the Scenario Generation Contract text (PR #63), where
-the two disagree -- a single `POST .../scenarios/` discriminated by a body-level `operation` field,
-`begin` keyed on the full `scenario_keys` set, and a provision response KEYED by `scenario_key`
-(never a position-ordered array). `register_with_platform` below is the seam that builds those
-payloads and merges the platform-assigned `scenario_id`s back onto each scenario.
+Authoring registers every validated scenario through the platform's keyed
+`provision` operation and then stops. A later simulation-only job carries an
+immutable execution manifest; the adapter selects and expands those authored
+scenarios without provisioning or authoring again. Platform identities are
+always matched by `scenario_key`, never response position.
 """
 
 from __future__ import annotations
@@ -270,6 +268,7 @@ class _CompiledScenario:
     # same document and sent at pre-allocation, so a call can be read on the platform without the
     # scenario file beside it. Presentation only: nothing in the scheduler looks at it.
     presented: dict[str, Any] = field(default_factory=dict)
+    source_scenario_key: str | None = None
 
 
 def _read_text(path: Path, *, label: str) -> str:
@@ -671,19 +670,16 @@ class BundleScenarioSource:
                 f"{bundle_dir / SCENARIOS_DIRNAME}: a scenario document has no non-empty "
                 "scenario_key"
             )
-        # p13: pre-allocation, after load and before the scheduler ever sees a scenario (spine
-        # step 3.5) -- `register_with_platform` raises `ScenarioPreallocationError`/
-        # `ob.HostedFencedError`/`ob.HostedChannelFailedError`/`ob.HostedAttemptSupersededError` on
-        # any failure, all of which `hosted_entrypoint.run_job`'s existing call site around
-        # `scenario_source.build()` already maps to the typed `validating_scenarios`/`platform_sync`
-        # terminal (or the fenced exit) -- nothing new to catch here.
-        # Pre-allocate the WHOLE suite, then run a sample of it.
-        #
-        # The sample used to be taken first, so the platform was handed five personas for a suite of
-        # thirty and refused the job: "expected exactly 30 personas, got 5". Pre-allocation is sealed
-        # against the full set by design (`_begin_payload` sends every key and the platform 409s on a
-        # subset), so the suite is what gets registered and the sample is only what gets called. The
-        # rows that are not called stay unstarted, which is a truthful state rather than a broken job.
+        execution_manifest = list(
+            getattr(job, "metadata", {}).get("execution_manifest") or []
+        )
+        if execution_manifest:
+            return _scenarios_for_execution_manifest(scenarios, execution_manifest)
+        # Authoring registers the complete validated suite but does not begin
+        # execution. The platform returns stable identities keyed by scenario
+        # key; a later selected-Run manifest chooses from those identities.
+        # Transport and response-shape failures remain typed platform-sync
+        # failures at the existing `scenario_source.build()` boundary.
         chosen_evals, agent_prompt, modality = _chosen_evals_and_prompt(bundle_dir)
         run_name = _derive_run_name(job, bundle_dir)
         agent_name = _derive_agent_name(job, bundle_dir)
@@ -697,6 +693,51 @@ class BundleScenarioSource:
             modality=modality,
         )
         return sampled_for_calling(registered)
+
+
+
+def _scenarios_for_execution_manifest(
+    scenarios: Sequence[_CompiledScenario],
+    execution_manifest: Sequence[dict[str, Any]],
+) -> tuple[_CompiledScenario, ...]:
+    """Select and duplicate authored scenarios using platform-frozen trial identities."""
+
+    by_key = {scenario.scenario_key: scenario for scenario in scenarios}
+    execution_keys: set[str] = set()
+    selected: list[_CompiledScenario] = []
+    for entry in execution_manifest:
+        source_key = str(entry.get("scenario_key") or "")
+        execution_key = str(entry.get("execution_key") or "")
+        scenario_id = str(entry.get("scenario_id") or "")
+        trial_index = entry.get("trial_index")
+        if source_key not in by_key:
+            raise ScenarioDocumentInvalid(
+                f"execution manifest names unknown scenario_key {source_key!r}"
+            )
+        if not execution_key or execution_key in execution_keys:
+            raise ScenarioDocumentInvalid(
+                "execution manifest execution_key values must be non-empty and unique"
+            )
+        if not scenario_id:
+            raise ScenarioDocumentInvalid(
+                f"execution manifest entry {execution_key!r} has no scenario_id"
+            )
+        if not isinstance(trial_index, int) or trial_index < 1:
+            raise ScenarioDocumentInvalid(
+                f"execution manifest entry {execution_key!r} has invalid trial_index"
+            )
+        execution_keys.add(execution_key)
+        selected.append(
+            replace(
+                by_key[source_key],
+                scenario_key=execution_key,
+                source_scenario_key=source_key,
+                scenario_id=scenario_id,
+            )
+        )
+    if not selected:
+        raise ScenarioDocumentInvalid("execution manifest is empty")
+    return tuple(selected)
 
 
 def _chosen_evals_and_prompt(bundle_dir: Path) -> tuple[list[str], str, str]:
@@ -827,22 +868,6 @@ def _provision_payload(
     return payload
 
 
-def _begin_payload(
-    run_test_id: str, scenarios: Sequence[_CompiledScenario]
-) -> dict[str, Any]:
-    """`HarnessScenarioBeginSerializer` (futureagi/simulate/serializers/hosted_harness.py:193-198):
-    `scenario_keys` is `allow_empty=False` and REQUIRED, and `begin_scenarios`
-    (services/hosted_harness.py:323-329) 409s (`scenario_key_mismatch`) on anything but an EXACT
-    match against the full sealed set -- there is no "subset to run" semantics on the real
-    platform (that contract text describes an optional partial-subset `scenario_ids`; the
-    live route does not implement that -- CONTRACT NOTES). The full set is sent every time.
-    """
-    return {
-        "operation": "begin",
-        "run_test_id": run_test_id,
-        "scenario_keys": [scenario.scenario_key for scenario in scenarios],
-    }
-
 
 def _scenario_ids_by_key(
     submitted: Sequence[_CompiledScenario], raw_scenarios: Any
@@ -915,17 +940,11 @@ async def register_with_platform(
     agent_prompt: str = "",
     modality: str = "",
 ) -> Sequence[_CompiledScenario]:
-    """The scenario pre-allocation SEAM, now wired against the platform's real route (a single
-    `POST .../scenarios/`, discriminated by a body-level `operation` field -- see
-    `ScenariosClient`'s own docstring for the file:line evidence). `.provision()`/`.begin()` are
-    blocking network calls (same `ScenariosClient` the rest of `hosted_entrypoint.py` already
-    drives off the event loop via `asyncio.to_thread` -- matched here rather than diverging).
+    """Provision the authored suite and attach platform identities without executing it.
 
-    Sequence: provision (get platform-assigned ids, keyed by `scenario_key`) -> match ids back
-    onto `scenarios` with hard guards (`_scenario_ids_by_key`, raises before ANY assignment on any
-    mismatch) -> begin (seals execution against the FULL scenario_keys set; a begin failure means
-    NO scenario in this batch is returned with an id -- the whole call raises, same as a provision
-    failure) -> only then build and return the new scenario list with `scenario_id` filled in.
+    Execution begins only from a later selected-Run job carrying an immutable
+    ``execution_manifest``. Provisioning remains blocking network I/O and is
+    therefore driven off the event loop.
     """
     provision_result = await asyncio.to_thread(
         scenarios_client.provision,
@@ -946,9 +965,6 @@ async def register_with_platform(
         )
     id_by_key = _scenario_ids_by_key(scenarios, provision_result.get("scenarios"))
 
-    await asyncio.to_thread(
-        scenarios_client.begin, _begin_payload(run_test_id, scenarios)
-    )
 
     return tuple(
         replace(scenario, scenario_id=id_by_key[scenario.scenario_key])

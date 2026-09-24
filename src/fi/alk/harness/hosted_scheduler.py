@@ -1605,7 +1605,17 @@ class HostedScheduler:
                         )
                         _record_scenario(span, results[index], context)
                 except NoWorldsAvailable as exc:
-                    abort_holder[0] = _abort_from_no_worlds(exc)
+                    candidate = _abort_from_no_worlds(exc)
+                    current = abort_holder[0]
+                    if current is None or (
+                        current.domain == FailureDomain.INFRASTRUCTURE.value
+                        and candidate.domain
+                        in {
+                            FailureDomain.ENVIRONMENT.value,
+                            FailureDomain.AGENT.value,
+                        }
+                    ):
+                        abort_holder[0] = candidate
                 except _FATAL_OUTBOUND:
                     # Already latched onto `self._pool.fenced` by whichever `_emit`/`_log` call
                     # raised it -- no receipt for a scenario the platform already superseded.

@@ -964,18 +964,24 @@ async def validate_and_repair(
                     for name in ("source-model.json", "world-ir.json")
                 ):
                     from .certification import GenericHarnessArtifactStore
-                    from .repair_authoring import request_world_ir_patch
+                    from .repair_authoring import (
+                        RepairPatchNotSubmittedError,
+                        request_world_ir_patch,
+                    )
 
                     store = GenericHarnessArtifactStore(artifact_root)
                     # Diagnostics are already included in guidance, but the constrained author
                     # consumes their typed form. The closure is called only by the generic loop,
                     # which replaces this placeholder through `_active_repair_diagnostics`.
-                    return await request_world_ir_patch(
-                        source,
-                        store.read_source_model(),
-                        store.read_world_ir(),
-                        _active_repair_diagnostics,
-                    )
+                    try:
+                        return await request_world_ir_patch(
+                            source,
+                            store.read_source_model(),
+                            store.read_world_ir(),
+                            _active_repair_diagnostics,
+                        )
+                    except RepairPatchNotSubmittedError:
+                        return 1
                 return await _build(
                     argparse.Namespace(
                         name=source.name,

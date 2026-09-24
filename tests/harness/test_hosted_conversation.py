@@ -697,7 +697,7 @@ def test_vertex_coordinator_opens_durable_session(tmp_path, monkeypatch):
     asyncio.run(exercise())
 
 
-def test_control_coordinator_restores_identity_without_authoring_archive(
+def test_control_coordinator_restores_journal_without_resuming_missing_provider_session(
     tmp_path, monkeypatch
 ):
     monkeypatch.setenv("ALK_HARNESS", "claude")
@@ -753,9 +753,7 @@ def test_control_coordinator_restores_identity_without_authoring_archive(
         job={},
     )
     asyncio.run(restored._restore_coordinator_state())
-    assert (
-        restored.conversation.stage.spec.conversation.resume_session_id
-        == "provider-session-123"
-    )
+    assert restored.conversation.stage.spec.conversation.resume_session_id is None
     assert restored._read_journal() == {"message-1": "completed"}
+    assert not (cold / ".futureagi-provider-sessions.json").exists()
     assert not (cold / "contract.json").exists()

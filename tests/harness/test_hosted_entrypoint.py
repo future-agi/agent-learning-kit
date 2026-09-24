@@ -3721,13 +3721,9 @@ def test_bundle_without_scenarios_keeps_the_notwired_regression() -> None:
     asyncio.run(scenario())
 
 
-def test_default_scenario_source_wires_the_bundle_adapter_when_scenarios_present() -> (
-    None
-):
-    # item 4 + 5c (end to end): the presence test flips the default over to the real
-    # `BundleScenarioSource` -- no `FakeScenarioSource` involved anywhere in this test. One
-    # deterministic sub_goal that genuinely holds against the fake world, so this proves a real
-    # COMPLETED pass, not just that the vacuous-pass guard fired.
+def test_default_scenario_source_authors_and_stops_before_execution() -> None:
+    # A real BundleScenarioSource provisions stable identities, validates the
+    # suite, and terminalizes authoring without invoking the scheduler.
     async def scenario() -> None:
         harness = _build_harness(
             scenarios=[],
@@ -3759,15 +3755,60 @@ def test_default_scenario_source_wires_the_bundle_adapter_when_scenarios_present
         assert payload["stage"] == "completed"
         assert payload["failure"] is None
 
-        # terminal last: the terminal record is the final event this run ever pushed.
         assert harness.transport.event_records[-1].get("type") == "terminal"
+        assert harness.transport.receipts == {}
 
+    asyncio.run(scenario())
+
+
+def test_execution_manifest_runs_only_the_selected_trial_entries() -> None:
+    async def scenario() -> None:
+        harness = _build_harness(
+            scenarios=[],
+            instances=1,
+            use_default_scenario_source=True,
+            bundle_writer=lambda bundle_dir: _write_bundle_with_scenario_files(
+                bundle_dir,
+                _scenario_doc_files(
+                    "passing",
+                    scenario_key="passing",
+                    scenario_id="",
+                    sub_goals=["holds"],
+                    checks={"holds": "def check(world, calls):\n    return None\n"},
+                ),
+            ),
+        )
+        job = json.loads(harness.job_path.read_text(encoding="utf-8"))
+        job["scenario_count"] = 2
+        job["metadata"]["execution_manifest"] = [
+            {
+                "execution_key": "trial-one",
+                "scenario_key": "passing",
+                "scenario_id": "platform-passing",
+                "dataset_row_id": None,
+                "trial_index": 1,
+                "call_execution_id": "call-one",
+            },
+            {
+                "execution_key": "trial-two",
+                "scenario_key": "passing",
+                "scenario_id": "platform-passing",
+                "dataset_row_id": None,
+                "trial_index": 2,
+                "call_execution_id": "call-two",
+            },
+        ]
+        harness.job_path.write_text(json.dumps(job), encoding="utf-8")
+
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
+
+        assert code == he.EXIT_OK
         statuses = {
             key[1]: body["status"] for key, body in harness.transport.receipts.items()
         }
-        assert statuses == {
-            "passing": "passed"
-        }  # the real scheduler actually ran it, and it held
+        assert statuses == {"trial-one": "passed", "trial-two": "passed"}
 
     asyncio.run(scenario())
 
@@ -3815,90 +3856,26 @@ def test_mutation_adapter_off_makes_the_e2e_test_fail() -> None:
     # R1-6 fold-in (p12-review-r1.md LOW finding): the original version of this test asserted the
     # MUTANT's own failure terminal directly -- true, but it never actually ran the `stage ==
     # "completed"` assertion that is the real kill. This version runs the REAL
-    # `test_default_scenario_source_wires_the_bundle_adapter_when_scenarios_present` under the
+    # `test_default_scenario_source_authors_and_stops_before_execution` under the
     # patch and checks THAT it fails. `mock.patch.object` restores the original function in its own
     # `finally` regardless of how the inner call ends -- no manual restore bookkeeping needed.
     with mock.patch.object(he, "bundle_has_scenarios", lambda bundle_dir: False):
         try:
-            test_default_scenario_source_wires_the_bundle_adapter_when_scenarios_present()
+            test_default_scenario_source_authors_and_stops_before_execution()
         except AssertionError:
             pass
         else:
             raise AssertionError(
                 "adapter-off mutant did not fail "
-                "test_default_scenario_source_wires_the_bundle_adapter_when_scenarios_present "
+                "test_default_scenario_source_authors_and_stops_before_execution "
                 "(no pytest.raises here -- this file runs stand-alone via TESTS, per its own "
                 "module docstring)"
             )
 
     # Restored: the real test passes again.
-    test_default_scenario_source_wires_the_bundle_adapter_when_scenarios_present()
+    test_default_scenario_source_authors_and_stops_before_execution()
 
 
-def test_bundle_scenario_id_is_assigned_by_registration_and_receipt_now_delivers() -> (
-    None
-):
-    # p13 UPDATE of the former `test_empty_scenario_id_receipt_is_dropped_by_the_wire_schema`
-    # (p12): that test pinned a real gap -- `outbound.py`'s `ResultReceiptDraft` schema requires
-    # `scenario_id` non-empty (pydantic `min_length=1`), and before this task nothing ever filled
-    # it in, so a bundle-sourced scenario's receipt was silently dropped. Registration
-    # (`register_with_platform`, scenario_source.py) now runs between load and the scheduler and
-    # OVERWRITES `scenario_id` with the platform-assigned one before `BundleScenarioSource.build`
-    # ever returns -- the document is written with `scenario_id=""` here specifically to prove the
-    # id on the wire came from the (fake) platform's provision response, not the document. See
-    # `test_unregistered_scenario_with_empty_scenario_id_receipt_still_drops_safely` just below for
-    # the property this test used to pin, preserved on the path that never registers at all.
-    async def scenario() -> None:
-        harness = _build_harness(
-            scenarios=[],
-            instances=1,
-            use_default_scenario_source=True,
-            bundle_writer=lambda bundle_dir: _write_bundle_with_scenario_files(
-                bundle_dir,
-                _scenario_doc_files(
-                    "passing",
-                    scenario_key="passing",
-                    scenario_id="",
-                    sub_goals=["holds"],
-                    checks={"holds": "def check(world, calls):\n    return None\n"},
-                ),
-            ),
-        )
-        code = await he.run_job(
-            harness.job_path, harness.source, harness.output, deps=harness.deps
-        )
-        assert code == he.EXIT_OK
-
-        terminals = harness.transport.terminal_events()
-        assert len(terminals) == 1
-        payload = terminals[0]["payload"]
-        assert payload["stage"] == "completed"
-        assert payload["scenario_counts"]["passed"] == 1
-
-        statuses = {
-            key[1]: body["status"] for key, body in harness.transport.receipts.items()
-        }
-        assert statuses == {"passing": "passed"}  # the receipt DELIVERS now -- no drop.
-
-        ((_, body),) = [
-            (key, body)
-            for key, body in harness.transport.receipts.items()
-            if key[1] == "passing"
-        ]
-        # `FakeTransport`'s fake platform assigns `f"platform-{scenario_key}"` -- confirms the id
-        # on the wire is the PLATFORM's, not the document's own (empty) one.
-        assert body["scenario_id"] == "platform-passing"
-
-        error_logs = [
-            record
-            for record in harness.transport.event_records
-            if record.get("type") == "log"
-            and record["payload"].get("level") == "error"
-            and "ResultReceiptDraft" in record["payload"].get("message", "")
-        ]
-        assert error_logs == []  # no drop, so no drop log either.
-
-    asyncio.run(scenario())
 
 
 def test_unregistered_scenario_with_empty_scenario_id_receipt_still_drops_safely() -> (
@@ -4255,10 +4232,10 @@ TESTS = [
     test_flush_terminal_alone_must_deliver_the_terminal_before_a_skipped_receipt_under_backlog,
     test_post_terminal_wire_block_is_bounded_by_the_remaining_flush_window,
     test_bundle_without_scenarios_keeps_the_notwired_regression,
-    test_default_scenario_source_wires_the_bundle_adapter_when_scenarios_present,
+    test_default_scenario_source_authors_and_stops_before_execution,
+    test_execution_manifest_runs_only_the_selected_trial_entries,
     test_empty_scenario_key_from_bundle_document_fails_cleanly_via_existing_validation,
     test_mutation_adapter_off_makes_the_e2e_test_fail,
-    test_bundle_scenario_id_is_assigned_by_registration_and_receipt_now_delivers,
     test_unregistered_scenario_with_empty_scenario_id_receipt_still_drops_safely,
     test_registration_response_mismatch_reaches_the_typed_platform_sync_terminal,
     test_injected_scenario_source_always_wins_over_the_bundle_adapter,

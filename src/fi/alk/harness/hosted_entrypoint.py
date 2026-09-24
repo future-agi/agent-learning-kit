@@ -2610,6 +2610,14 @@ async def run_job(
                 message=scenario_defect,
             )
 
+        # Authoring is a terminal preparation step. A later user-submitted Run
+        # carries the immutable execution manifest that selects scenarios and
+        # expands trials; only those jobs may enter the scheduler.
+        if isinstance(scenario_source, BundleScenarioSource) and not (
+            job.metadata or {}
+        ).get("execution_manifest"):
+            return await _finish(HarnessStage.COMPLETED, complete=True)
+
         # cancel/fence check at the post-pre-allocation stage boundary.
         if cancel_requested():
             return await _canceled()

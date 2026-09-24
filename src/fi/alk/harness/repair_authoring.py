@@ -21,6 +21,10 @@ from .source_model import SourceModel
 from .world_ir import WorldIR
 
 
+class RepairPatchNotSubmittedError(RuntimeError):
+    pass
+
+
 class _PatchSubmission(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -182,7 +186,7 @@ tool, then stop."""
         if captured:
             break
     if not captured:
-        raise RuntimeError(
+        raise RepairPatchNotSubmittedError(
             "typed_world_ir_patch_not_submitted_after_constrained_and_evidence_passes"
         )
     return captured[0]
