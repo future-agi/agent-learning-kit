@@ -129,7 +129,8 @@ def test_a_brief_for_a_chat_agent_says_nothing_about_noise(catalogue):
     from fi.alk.harness.scenarios import callers_for
 
     assert "background_noise" in callers_for(0, 6)
-    assert "background_noise" not in callers_for(0, 6, spoken=False)
+    typed = callers_for(0, 6, spoken=False)
+    assert "background_noise" not in typed and "accent" not in typed and "believable person" in typed
 
 
 def test_a_caller_who_speaks_no_english_has_no_english_accent():

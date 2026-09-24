@@ -841,6 +841,8 @@ def accept_scenario(
         return _err(f"Not kept. {invalid}"[:600])
     if not spoken:
         scenario.background_noise = False
+        if scenario.persona:
+            scenario.persona.accent = ""
     elif scenario.background_noise is True:
         scenario.background_noise = place_for(scenario.name, scenario.fixture) or True
 

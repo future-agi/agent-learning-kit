@@ -618,7 +618,7 @@ def callers_for(index: int, wanted: int, slice_name: str = "", spoken: bool = Tr
         "reference: the prefix keeps you clear of other writers, it does not keep you clear of "
         "yourself."
     )
-    if accents:
+    if accents and spoken:
         # Spread several offered accents across this writer's callers rather than naming just one,
         # so the suite does not collapse to a single default accent and the agent's speech handling
         # is genuinely varied.
@@ -635,6 +635,11 @@ def callers_for(index: int, wanted: int, slice_name: str = "", spoken: bool = Tr
             "character's name: choose the accent, languages, home and name together, so an Indian "
             "accent comes with a name and background that make it plausible. The accent is how "
             "they speak English, so a caller who speaks no English is Neutral."
+        )
+    elif not spoken:
+        said += (
+            " Each person is one ordinary, believable person, never a celebrity's or a fictional "
+            "character's name: choose their language, home and name together."
         )
     beds = places() if spoken else {}
     if beds:
