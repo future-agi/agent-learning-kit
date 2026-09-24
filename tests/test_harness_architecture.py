@@ -27,7 +27,13 @@ from fi.alk.harness.executor import (
     HarnessExecutor,
     _failure_from_events,
 )
-from fi.alk.harness.job import FailureDomain, HarnessFailure, HarnessJob, HarnessStage
+from fi.alk.harness.job import (
+    MAX_HOSTED_SCENARIO_COUNT,
+    FailureDomain,
+    HarnessFailure,
+    HarnessJob,
+    HarnessStage,
+)
 from fi.alk.harness.provision import source_fingerprint
 from fi.simulate.runtime.spec import RuntimeIsolation
 from fi.simulate.runtime.events import CanonicalEvent
@@ -958,7 +964,7 @@ def test_local_and_hosted_jobs_reject_the_other_sides_source() -> None:
         )
 
 
-def test_hosted_job_accepts_two_hundred_scenarios_and_rejects_more() -> None:
+def test_hosted_job_accepts_the_ceiling_and_rejects_one_more() -> None:
     common = {
         "job_id": "job",
         "run_id": "run",
@@ -968,9 +974,18 @@ def test_hosted_job_accepts_two_hundred_scenarios_and_rejects_more() -> None:
         "runtime": {"isolation": "dedicated_vm"},
     }
 
-    assert HarnessJob(**common, scenario_count=200).scenario_count == 200
-    with pytest.raises(ValueError, match="hosted_scenario_count_out_of_range"):
-        HarnessJob(**common, scenario_count=201)
+    # The bound is whatever MAX_HOSTED_SCENARIO_COUNT says, not a literal repeated in a test, and
+    # it has to match the platform's own ceiling or a job the API accepts dies in the guest.
+    assert (
+        HarnessJob(**common, scenario_count=MAX_HOSTED_SCENARIO_COUNT).scenario_count
+        == MAX_HOSTED_SCENARIO_COUNT
+    )
+    # Above the ceiling the field bound fires before the hosted-only validator, so either message
+    # is a correct refusal. What must hold is that it is refused at all.
+    with pytest.raises(
+        ValueError, match="hosted_scenario_count_out_of_range|less_than_equal"
+    ):
+        HarnessJob(**common, scenario_count=MAX_HOSTED_SCENARIO_COUNT + 1)
 
 
 def test_job_carries_references_but_rejects_resolved_secrets() -> None:

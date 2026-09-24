@@ -660,6 +660,8 @@ def _verify_fixed_port_duplicate(manifest: EnvironmentBundleV2) -> None:
 # token parked directly in an argv, or in an env var the command never references, moves nothing.
 _SHELL_FORMS = {"sh", "bash", "/bin/sh", "/bin/bash", "/usr/bin/sh", "/usr/bin/bash"}
 _ENV_REFERENCE = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?")
+# The knob the harness's own worker shim reads; see `_verify_fixed_port_consumable_wiring`.
+_WORKER_HEALTH_PORT_KNOB = "FI_WORKER_HEALTH_PORT"
 
 
 def _command_referenced_env_vars(run_command: list[str]) -> set[str]:
@@ -675,11 +677,17 @@ def _command_referenced_env_vars(run_command: list[str]) -> set[str]:
 
 
 def _verify_fixed_port_consumable_wiring(manifest: EnvironmentBundleV2) -> None:
-    """C1 §1: a process declaring `fixed_port_consumable: true` MUST wire its run command to
-    consume the rendered per-world port — the `{{PORT_<own-name>}}` token in an `environment`
-    value the command references by `$KEY` inside `sh -c`. Anything else (token in an argv, token
-    in an unreferenced env var, no token at all) is a preflight reject
-    `fixed_port_consumable_unwired`."""
+    """C1 §1: a process declaring `fixed_port_consumable: true` MUST actually consume the rendered
+    per-world port. There are two honest wirings, and nothing else:
+
+    - **command-consumed**: the `{{PORT_<own-name>}}` token sits in an `environment` value the
+      command references by `$KEY` inside `sh -c`. A token in an argv, in an unreferenced env
+      var, or absent entirely is the `fixed_port_consumable_unwired` lie.
+    - **knob-consumed**: `FI_WORKER_HEALTH_PORT` carries the token. The LiveKit CLI exposes no
+      `--port`, so there is no literal to rewrite; the harness's own shim reads the knob at worker
+      start and moves or disables the health server before it binds. The consumer is ours, not the
+      command's, which is why the command carries no reference.
+    """
     for process in manifest.processes:
         if not isinstance(process, SourceProcess) or not process.fixed_port_consumable:
             continue
@@ -687,13 +695,16 @@ def _verify_fixed_port_consumable_wiring(manifest: EnvironmentBundleV2) -> None:
         env_keys_with_token = {
             key for key, value in process.environment.items() if token in value
         }
+        if _WORKER_HEALTH_PORT_KNOB in env_keys_with_token:
+            continue
         referenced = _command_referenced_env_vars(list(process.run_command))
         if not (env_keys_with_token & referenced):
             raise PreflightError(
                 "fixed_port_consumable_unwired",
                 f"{process.name} declares fixed_port_consumable but its run_command does not "
-                f"reference an environment value carrying {token} via $KEY inside sh -c (the "
-                "only wiring that consumes the per-world port; run_command is exec'd verbatim)",
+                f"reference an environment value carrying {token} via $KEY inside sh -c, and it "
+                f"does not carry {token} on {_WORKER_HEALTH_PORT_KNOB} either (the only two "
+                "wirings that consume the per-world port)",
             )
 
 

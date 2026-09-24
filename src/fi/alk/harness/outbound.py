@@ -269,6 +269,12 @@ def _mask_userinfo(match: re.Match[str]) -> str:
     return f"{scheme}{user}:***@" if password is not None else f"{scheme}***@"
 
 
+# A declared value shorter than this is configuration, not a credential, and substring-replacing it
+# destroys ordinary prose: a value of "on" turned every "confirms" into "c***firms" in the graded
+# receipts of a real hosted run.
+_SHORTEST_REDACTABLE_SECRET = 8
+
+
 def redact_outbound_text(value: str, extra_secret_values: tuple[str, ...] = ()) -> str:
     """Scrubs a single free-text field before it can leave the sandbox on any of the three
     channels (outbound-channels.md v1.3 "Redaction (enforced before emit)"; hosted-execution-
@@ -291,7 +297,7 @@ def redact_outbound_text(value: str, extra_secret_values: tuple[str, ...] = ()) 
     """
     redacted = _USERINFO_PATTERN.sub(_mask_userinfo, value)
     for secret in extra_secret_values:
-        if secret:
+        if len(secret) >= _SHORTEST_REDACTABLE_SECRET:
             redacted = redacted.replace(secret, "***")
     return redacted
 
@@ -684,6 +690,8 @@ class ScenarioRetriedPayload(BaseModel):
     scenario_key: str = Field(min_length=1)
     from_world: int = Field(ge=0)
     to_world: int = Field(ge=0)
+    # Why the first try is being replayed. Without it a retry reads as an unexplained repeat.
+    cause: str = Field(default="", max_length=200)
 
 
 class LogPayload(BaseModel):

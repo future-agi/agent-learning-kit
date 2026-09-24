@@ -149,7 +149,7 @@ async def judge(
         "Inspect the world and the transcript as needed, then call decide."
     )
     try:
-        async with Stage(spec, name="judge-sub-goals") as stage:
+        async with Stage(spec, name="judge-sub-goals", overheard=False) as stage:
             await stage.say(prompt)
     except Exception as exc:  # noqa: BLE001 - a judge that could not run is not a failed agent
         return None, f"the judge could not run: {type(exc).__name__}: {exc}"

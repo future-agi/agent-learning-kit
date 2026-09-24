@@ -21,12 +21,45 @@ _BUILTIN_BY_ENVIRONMENT: dict[str, str] = {
     "street": "CITY_AMBIENCE",
     "transit": "CITY_AMBIENCE",
     "vehicle": "CITY_AMBIENCE",
+    "in-car": "CITY_AMBIENCE",
+    "in_car": "CITY_AMBIENCE",
+    "car": "CITY_AMBIENCE",
+    "metro": "CITY_AMBIENCE",
+    "train": "CITY_AMBIENCE",
+    "bus": "CITY_AMBIENCE",
+    "traffic": "CITY_AMBIENCE",
     "outdoors": "FOREST_AMBIENCE",
+    "park": "FOREST_AMBIENCE",
     "retail": "CROWDED_ROOM",
+    "airport": "CROWDED_ROOM",
+    "restaurant": "CROWDED_ROOM",
+    "cafe": "CROWDED_ROOM",
+    "coffee_shop": "CROWDED_ROOM",
+    "bar": "CROWDED_ROOM",
+    "hotel": "CROWDED_ROOM",
+    "crowd": "CROWDED_ROOM",
     "office": "OFFICE_AMBIENCE",
     "home": "OFFICE_AMBIENCE",
 }
+# A scenario that names a quiet place is asking to be heard in the clear, not for a default bed.
+_SILENT_ENVIRONMENTS = frozenset({"quiet", "silent", "silence", "none", "clear", "quiet_line"})
 _DEFAULT_BUILTIN = "OFFICE_AMBIENCE"
+
+
+def distinct_beds(environments) -> dict[str, list[str]]:
+    """The clips a set of place names actually produces, keyed by clip.
+
+    Nine names for one recording is one condition tested nine times. A coverage claim counts what
+    the agent heard, so it counts these rather than the names, and the places sharing a clip are
+    returned with it so a report can say which collapsed.
+    """
+    grouped: dict[str, list[str]] = {}
+    for environment in environments:
+        named = str(environment or "").strip().lower()
+        if not named or named in _SILENT_ENVIRONMENTS:
+            continue
+        grouped.setdefault(source_for(named), []).append(named)
+    return {clip: sorted(set(places)) for clip, places in grouped.items()}
 
 
 def enabled() -> bool:
@@ -60,6 +93,8 @@ def source_for(environment: str = "", seed: str = "") -> str:
     hears the same place across runs.
     """
     env = (environment or "").strip().lower()
+    if env in _SILENT_ENVIRONMENTS:
+        return ""
     catalog = os.environ.get("ALK_BACKGROUND_NOISE_CATALOG", "").strip()
     if catalog and Path(catalog).is_file():
         try:

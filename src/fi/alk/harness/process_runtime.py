@@ -3462,10 +3462,15 @@ def apply_seed_file(
                 apply_postgres_world_ir(file, **world_kwargs)
             except Exception as exc:
                 diagnostics = tuple(getattr(exc, "diagnostics", ()))
+                # Say which statement or column refused. Without it a hosted run dies with a
+                # sentence that names the stage and nothing else, and the sandbox is gone.
+                said = "; ".join(
+                    f"{item.code}: {item.message}" for item in diagnostics
+                ) or f"{type(exc).__name__}: {exc}"
                 raise ProcessRuntimeError(
                     "seed",
                     "seed_failed",
-                    "canonical World IR could not be compiled or applied",
+                    f"canonical World IR could not be compiled or applied: {said[:700]}",
                     process=process_name,
                     domain=FailureDomain.ENVIRONMENT,
                     diagnostics=diagnostics,
@@ -3606,11 +3611,21 @@ def apply_seed_file(
             domain=FailureDomain.ENVIRONMENT,
         )
     if result.returncode != 0:
-        stderr = (result.stderr or "").strip()[:2000]
+        # Both streams, tail first. psql prints its NOTICEs to stderr before the ERROR that stopped
+        # it, and where the script echoes statements the ERROR itself lands on stdout, so reporting
+        # the head of stderr alone says "table does not exist, skipping" and never says why.
+        said = "\n".join(
+            part
+            for part in (
+                (result.stderr or "").strip()[-1500:],
+                (result.stdout or "").strip()[-1500:],
+            )
+            if part
+        )
         raise ProcessRuntimeError(
             "seed",
             "seed_failed",
-            f"{file}: exited {result.returncode}" + (f": {stderr}" if stderr else ""),
+            f"{file}: exited {result.returncode}" + (f": {said}" if said else ""),
             process=process_name,
             domain=FailureDomain.ENVIRONMENT,
         )
@@ -4850,6 +4865,19 @@ def _reset_template_database(
     )
 
 
+def _stores_reset_in_place(manifest: EnvironmentBundleV2) -> bool:
+    """Whether every managed store can be driven back to baseline without respawning anything.
+
+    True only for `template_database`, where the engine is job-shared and already running and the
+    reset is a drop and recreate of the world's own logical database. Any other strategy reseals a
+    data directory, which means the engine owning it has to be down first.
+    """
+    if manifest.seed is None:
+        return False
+    strategies = {store.baseline.strategy for store in manifest.seed.stores}
+    return bool(strategies) and strategies == {BaselineStrategy.TEMPLATE_DATABASE}
+
+
 def _clone_or_reset_world(
     manifest: EnvironmentBundleV2,
     world_index: int,
@@ -4858,6 +4886,7 @@ def _clone_or_reset_world(
     baseline: BuildOutput,
     job_shared_handles: dict[str, SpawnedWorldProcess],
     existing_handles: dict[str, SpawnedWorldProcess],
+    keep_processes: bool = False,
 ) -> WorldSpawnResult:
     """Shared by `ProcessRuntimeProvider._ensure_world` (first creation / sick-world replace) and
     `reset_world` (mid-job restore) — both are "terminate this world's own per-world handles,
@@ -4871,8 +4900,11 @@ def _clone_or_reset_world(
     # world's own postgres while its `tools-api`/`agent` may still hold connections, guaranteeing
     # the full escalation wait every reset. A dict preserves insertion order, so `reversed()` here
     # IS reverse-topological order without recomputing it.
+    # Keeping them alive is only coherent when nothing needs a data directory resealed underneath
+    # it, and when there is something to keep: a first clone has no handles yet.
+    in_place = keep_processes and bool(existing_handles) and _stores_reset_in_place(manifest)
     for name, handle in reversed(list(existing_handles.items())):
-        if name not in job_shared_handles:
+        if not in_place and name not in job_shared_handles:
             # M7, p6-review-r1: waits for real exit before `_seal_world_store` below `rmtree`s
             # this same process's data directory and rebinds its port — a bare `terminate()`
             # racing that `rmtree` is exactly `EADDRINUSE` / "remove a live server's data dir".
@@ -4919,6 +4951,20 @@ def _clone_or_reset_world(
 
     # `spawn_world` sets its own (more complete — it starts from `new_handles` and accumulates
     # further) `partial_handles` on a raise, so no extra wrapping is needed here for that case.
+    if in_place:
+        # The world's own processes were never stopped, so there is nothing to spawn and their
+        # endpoints are the ones they already hold. The logical database they talk to has been
+        # dropped and recreated from the template, and the drop terminated their connections, so a
+        # pooled client reconnects on its next statement.
+        return WorldSpawnResult(
+            handles=dict(existing_handles),
+            endpoints=build_endpoints(
+                manifest,
+                world_index=world_index,
+                port_plan=context.port_plan,
+                credentials=context.credentials,
+            ),
+        )
     return spawn_world(
         manifest, world_index=world_index, context=context, shared_handles=new_handles
     )
@@ -4968,6 +5014,7 @@ def reset_world(
     baseline: BuildOutput,
     job_shared_handles: dict[str, SpawnedWorldProcess],
     existing_handles: dict[str, SpawnedWorldProcess],
+    keep_processes: bool = False,
 ) -> tuple[dict[str, SpawnedWorldProcess], bool]:
     """§4.2's per-world reset, exactly — returns the world's refreshed handle map and whether
     every declared store's sentinel passed afterward. NEVER raises for a sentinel failure: §4.2's
@@ -4982,6 +5029,7 @@ def reset_world(
         baseline=baseline,
         job_shared_handles=job_shared_handles,
         existing_handles=existing_handles,
+        keep_processes=keep_processes,
     )
     ok = _check_all_sentinels(manifest, world_index, context=context)
     return result.handles, ok
@@ -6678,12 +6726,20 @@ class ProcessRuntimeProvider:
             if world_dir.exists():
                 shutil.rmtree(world_dir, ignore_errors=True)
 
-    async def reset(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> None:
+    async def reset(
+        self,
+        runtime: EnvironmentRuntime,
+        *,
+        work_directory: Path,
+        keep_processes: bool = False,
+    ) -> None:
         import asyncio
 
-        await asyncio.to_thread(self._reset_sync, runtime)
+        await asyncio.to_thread(self._reset_sync, runtime, keep_processes)
 
-    def _reset_sync(self, runtime: EnvironmentRuntime) -> None:
+    def _reset_sync(
+        self, runtime: EnvironmentRuntime, keep_processes: bool = False
+    ) -> None:
         if (
             self._manifest is None
             or self._context is None
@@ -6706,6 +6762,7 @@ class ProcessRuntimeProvider:
                 baseline=self._build_output,
                 job_shared_handles=self._job_shared_handles,
                 existing_handles=self._world_handles.get(world_index, {}),
+                keep_processes=keep_processes,
             )
         except (OSError, shutil.Error) as exc:
             # reset's own filesystem work is fundamentally "reseal this world's stores from

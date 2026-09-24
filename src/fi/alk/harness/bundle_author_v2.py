@@ -758,6 +758,46 @@ def _source_schema_paths(
     return [unique[key] for key in sorted(unique)]
 
 
+def _schema_column_types(paths: list[Path]) -> dict[tuple[str, str], str]:
+    """Column declarations read off the agent's own schema, keyed by table and column.
+
+    SQLite erases the distinctions the target cares about: a BOOLEAN comes back as INTEGER and
+    renders as 0 or 1, an array comes back as the JSON text "[]" rather than "{}", and postgres
+    refuses both. The adopted schema is the authority on what these columns really are, and
+    nothing else in this path reads it.
+    """
+    declared: dict[tuple[str, str], str] = {}
+    for path in paths:
+        sql = re.sub(r"--[^\n]*", "", path.read_text(encoding="utf-8"))
+        for found in re.finditer(
+            r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"?([A-Za-z_]\w*)"?\s*\(',
+            sql,
+            re.IGNORECASE,
+        ):
+            depth, at = 1, found.end()
+            while at < len(sql) and depth:
+                depth += (sql[at] == "(") - (sql[at] == ")")
+                at += 1
+            for part in re.split(r",(?![^()]*\))", sql[found.end() : at - 1]):
+                words = part.strip().split()
+                if len(words) < 2:
+                    continue
+                name = words[0].strip('"')
+                if name.upper() in ("PRIMARY", "FOREIGN", "UNIQUE", "CHECK", "CONSTRAINT"):
+                    continue
+                kind = words[1].upper()
+                rest = " ".join(words[1:]).upper()
+                if kind.startswith("BOOL"):
+                    declared[(found.group(1).lower(), name.lower())] = "boolean"
+                elif "[]" in rest or kind.startswith("ARRAY"):
+                    # SQLite keeps an array as the JSON text "[]"; postgres wants "{}" and
+                    # refuses the literal with "malformed array literal".
+                    declared[(found.group(1).lower(), name.lower())] = "text[]"
+                elif kind.startswith("JSONB"):
+                    declared[(found.group(1).lower(), name.lower())] = "jsonb"
+    return declared
+
+
 def _adopted_seed_sql(
     authoring: Path,
     *,
@@ -785,7 +825,10 @@ def _adopted_seed_sql(
         if sqlite.is_file():
             rows = _sqlite_sql(
                 sqlite,
-                contract_declarations=_contract_column_declarations(contract or {}),
+                contract_declarations={
+                    **_contract_column_declarations(contract or {}),
+                    **_schema_column_types(source_schemas),
+                },
                 include_schema=False,
             )
             return schema_sql + "\n" + rows, adopted + ["world.sqlite"]
@@ -1057,7 +1100,7 @@ def _plan_python(
                     "download-files",
                 ]
             )
-        run = ["uv", "run", "--no-sync", "python", entry]
+        run = [*_uv_run(root), "python", entry]
     elif (root / "requirements.txt").is_file():
         commands = [
             [python, "-m", "venv", ".venv"],
@@ -1091,6 +1134,17 @@ def _docker_python(root: Path) -> str:
     return f"python{direct.group(1)}" if direct else "python3.12"
 
 
+def _uv_run(root: Path) -> list[str]:
+    """`uv run`, skipping the dependency sync only when there is a venv to skip it for.
+
+    `--no-sync` means install nothing. With a prepared venv that is exactly right and saves a
+    minute per process. With no venv, uv creates an empty one and the process dies on its first
+    import — the agent exited on `ModuleNotFoundError: No module named 'dotenv'` before it could
+    register, and four repair rounds went on an environment that could never start.
+    """
+    return ["uv", "run"] if not (root / ".venv").is_dir() else ["uv", "run", "--no-sync"]
+
+
 def _dockerfile_run(root: Path) -> list[str] | None:
     dockerfile = root / "Dockerfile"
     if not dockerfile.is_file():
@@ -1120,17 +1174,28 @@ def _dockerfile_run(root: Path) -> list[str] | None:
     if argv[0] == "python":
         argv[0] = ".venv/bin/python" if (root / "requirements.txt").is_file() else "uv"
         if argv[0] == "uv":
-            argv[1:1] = ["run", "--no-sync", "python"]
+            argv[0:1] = [*_uv_run(root), "python"]
     elif (
         argv[0] in {"uvicorn", "gunicorn", "flask"}
         and (root / "requirements.txt").is_file()
     ):
-        argv[0] = f".venv/bin/{argv[0]}"
+        # A requirements.txt was read as proof that `.venv/bin/<server>` exists. Nothing builds a
+        # venv at the service root, so the process died on `.venv/bin/uvicorn: not found` and the
+        # readiness probe then spent three minutes timing out. Point at the venv only when it is
+        # really there; otherwise `uv run`, the same fallback the `python` branch above takes.
+        if (root / ".venv" / "bin" / argv[0]).is_file():
+            argv[0] = f".venv/bin/{argv[0]}"
+        else:
+            argv[0:1] = [*_uv_run(root), argv[0]]
     return argv
 
 
 # LiveKit's CLI needs a subcommand: `agent.py` alone prints usage and exits without registering.
 _LIVEKIT_WORKER_SUBCOMMANDS = frozenset({"start", "dev", "connect", "console"})
+
+
+# LiveKit's production CLI binds its health server here and exposes no `--port`.
+_LIVEKIT_CLI_HEALTH_PORT = 8081
 
 
 def _livekit_cli_fixed_health_port(command: list[str]) -> int | None:
@@ -1142,7 +1207,26 @@ def _livekit_cli_fixed_health_port(command: list[str]) -> int | None:
     OS for an ephemeral port and needs no declaration.
     """
 
-    return 8081 if "start" in command else None
+    return _LIVEKIT_CLI_HEALTH_PORT if "start" in command else None
+
+
+def _knob_bearing_health_port_is_consumable(process: SourceProcess) -> bool:
+    """Whether a LiveKit worker's declared 8081 may parallelize instead of forcing one world.
+
+    The CLI exposes no ``--port``, so the port is declared rather than rewritten out of the
+    command. The harness's own shim reads ``FI_WORKER_HEALTH_PORT`` at worker start and either
+    disables the health server or moves it to the allocated port, so a knob-bearing worker never
+    binds 8081 at W>1. Keying on the knob carrying this process's OWN token is what makes the
+    claim honest: without it the declaration stays code-fixed and degrades to W=1.
+    """
+    # Only the CLI's own health port. A process that is BOTH the knob-bearing worker and an HTTP
+    # server pins a service port instead, and both would resolve to the same token: it stays
+    # code-fixed and degrades to one world honestly.
+    return (
+        process.fixed_port == _LIVEKIT_CLI_HEALTH_PORT
+        and process.environment.get("FI_WORKER_HEALTH_PORT")
+        == f"{{{{PORT_{process.name}}}}}"
+    )
 
 
 def _hands_off_to_livekit_cli(root: Path, entry: str) -> bool:
@@ -1270,12 +1354,21 @@ def _submitted_command(process: SourceProcess, command: list[str]) -> list[str]:
     if not command:
         return list(process.run_command)
     normalized = [str(item) for item in command]
+    # `uv run` may or may not carry `--no-sync`, depending on whether the source had a venv to
+    # skip the sync for, so the prefix is matched on `uv run` and carried forward whole.
+    launcher = (
+        process.run_command[:3]
+        if process.run_command[:3] == ["uv", "run", "--no-sync"]
+        else process.run_command[:2]
+        if process.run_command[:2] == ["uv", "run"]
+        else []
+    )
     if normalized[0] in {"python", "python3", "python3.11", "python3.12", "python3.13"}:
-        if process.run_command[:3] == ["uv", "run", "--no-sync"]:
-            return [*process.run_command[:4], *normalized[1:]]
+        if launcher:
+            return [*launcher, process.run_command[len(launcher)], *normalized[1:]]
         return [process.run_command[0], *normalized[1:]]
-    if process.run_command[:3] == ["uv", "run", "--no-sync"] and normalized[0] != "uv":
-        return ["uv", "run", "--no-sync", *normalized]
+    if launcher and normalized[0] != "uv":
+        return [*launcher, *normalized]
     return normalized
 
 
@@ -1720,6 +1813,14 @@ def resolve_environment_plan(
                         ),
                     }
                 )
+                if process.fixed_port is not None:
+                    process = process.model_copy(
+                        update={
+                            "fixed_port_consumable": (
+                                _knob_bearing_health_port_is_consumable(process)
+                            )
+                        }
+                    )
             processes.append(process)
             if port:
                 slug = "target_http" if service_name == control_name else "tools_api"
@@ -1937,6 +2038,14 @@ def resolve_environment_plan(
             final_run_command = update.get("run_command", process.run_command)
             update["fixed_port"] = _livekit_cli_fixed_health_port(final_run_command)
             process = process.model_copy(update=update)
+            if process.fixed_port is not None:
+                process = process.model_copy(
+                    update={
+                        "fixed_port_consumable": (
+                            _knob_bearing_health_port_is_consumable(process)
+                        )
+                    }
+                )
         processes.append(process)
         if port:
             capabilities["target_http"] = CapabilityV2(

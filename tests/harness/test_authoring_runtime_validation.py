@@ -696,7 +696,19 @@ def test_runtime_gate_resets_each_scenario_and_preserves_execution_secrets(
         assert "target-secret-value" not in str(error.value)
         assert "0: setup:" in str(error.value)
         assert "1: setup:" in str(error.value)
-        assert calls == ["provision", "reset", "setup", "reset", "setup", "close"]
+        # The invariant baseline is taken before the suite is walked, so its two resets come
+        # first and the suite is then walked exactly once. Each scenario still gets its own
+        # reset immediately before its own setup, which is what this test exists to pin.
+        assert calls == [
+            "provision",
+            "reset",
+            "reset",
+            "reset",
+            "setup",
+            "reset",
+            "setup",
+            "close",
+        ]
     else:
         assert (
             asyncio.run(validate_once(job, tmp_path, authoring, secrets_path=original))
@@ -705,11 +717,11 @@ def test_runtime_gate_resets_each_scenario_and_preserves_execution_secrets(
         assert calls == [
             "provision",
             "reset",
+            "reset",
+            "reset",
             "setup",
             "reset",
             "setup",
-            "reset",
-            "reset",
             "close",
         ]
     assert original.exists()
@@ -1127,3 +1139,43 @@ def test_default_generic_repair_dispatches_unknown_runtime_to_repository_inspect
     assert inspected == [
         (source, "unknown-framework", "generated_runtime_plan_invalid")
     ]
+
+
+def test_a_store_only_reset_is_offered_only_where_nothing_needs_respawning() -> None:
+    """The twenty seconds a reset costs is the respawn, not the data, but only template_database
+    can be driven back to baseline underneath a running process."""
+    from fi.alk.harness.process_runtime import _stores_reset_in_place
+
+    class _Store:
+        def __init__(self, strategy):
+            self.baseline = type("B", (), {"strategy": strategy})()
+
+    class _Manifest:
+        def __init__(self, strategies):
+            self.seed = (
+                type("S", (), {"stores": [_Store(one) for one in strategies]})()
+                if strategies is not None
+                else None
+            )
+
+    from fi.alk.harness.process_runtime import BaselineStrategy
+
+    assert _stores_reset_in_place(_Manifest([BaselineStrategy.TEMPLATE_DATABASE]))
+    # A data directory has to be resealed with its engine down, so any of those forces the respawn.
+    mixed = [BaselineStrategy.TEMPLATE_DATABASE, BaselineStrategy.DATADIR_COPY]
+    assert not _stores_reset_in_place(_Manifest(mixed))
+    assert not _stores_reset_in_place(_Manifest([]))
+    assert not _stores_reset_in_place(_Manifest(None))
+
+
+def test_declared_invariants_survive_a_review_that_forgot_to_finish() -> None:
+    """One run declared nine executable checks, never called finish_review, and lost all nine."""
+    from pathlib import Path as _P
+
+    import fi.alk.harness.source_data_invariants as invariants
+
+    source = _P(invariants.__file__).read_text(encoding="utf-8")
+    # The failure is now about having nothing to keep, not about the call that was skipped.
+    assert "if not saved and checks:" in source
+    assert "declared no executable check" in source
+    assert "did not finish; not certified" not in source

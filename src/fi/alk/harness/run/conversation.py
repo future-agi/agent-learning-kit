@@ -161,7 +161,12 @@ def customer_prompt(
     from ..simulator import fill
 
     if written:
-        filled, _missing = fill(written, scenario.slots())
+        filled, missing = fill(written, scenario.slots())
+        if missing:
+            raise RuntimeError(
+                f"the simulator prompt asks for {', '.join(missing)}, which {scenario.name} does "
+                "not supply. An unfilled slot reaches the caller verbatim."
+            )
     else:
         # No simulator prompt was written, which the environment gate refuses for a
         # conversational agent. Kept minimal rather than inventing a character.
@@ -275,8 +280,10 @@ async def converse(
 
     transcript.calls = list(target.world.calls) if hasattr(target, "world") else []
     transcript.spent_usd = target.spent_usd + customer.spent_usd
+    # Same accessor as the failure path above: a customer that reports no tokens meters zero
+    # rather than taking the whole call down on the way out.
     (
         transcript.simulator_input_tokens,
         transcript.simulator_output_tokens,
-    ) = customer.simulator_tokens
+    ) = getattr(customer, "simulator_tokens", (0, 0))
     return transcript

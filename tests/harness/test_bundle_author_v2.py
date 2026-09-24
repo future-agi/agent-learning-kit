@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from fi.alk.harness.process_runtime import plan_ports
 from fi.alk.harness.bundle_author_v2 import (
     BundleAuthorError,
     _compile_source_tool_handlers,
@@ -2149,6 +2150,46 @@ def test_normal_separate_tools_api_is_still_consumable(tmp_path: Path) -> None:
     assert "FI_TOOLS_PORT" not in control.environment
 
 
+def test_livekit_control_worker_health_port_is_consumable(tmp_path: Path) -> None:
+    # The CLI has no `--port`, so 8081 is declared rather than rewritten out of the command, and
+    # declaring it code-fixed forced every bundle carrying a LiveKit worker down to one world. The
+    # harness's own shim consumes FI_WORKER_HEALTH_PORT at worker start, so the declaration is
+    # env-consumable and a suite runs four worlds wide.
+    source = tmp_path / "voice-agent"
+    source.mkdir()
+    (source / "agent.py").write_text(
+        "from livekit.agents import cli, WorkerOptions\n"
+        "cli.run_app(WorkerOptions(entrypoint_fnc=None))\n",
+        encoding="utf-8",
+    )
+    (source / "pyproject.toml").write_text(
+        "[project]\nname='agent'\nversion='1'\n", encoding="utf-8"
+    )
+    (source / "Dockerfile").write_text(
+        'FROM python:3.13\nCMD ["python", "agent.py", "start"]\n', encoding="utf-8"
+    )
+    authoring = _authoring(tmp_path)
+    _write_voice_contract(authoring)
+    job = _job(
+        connector="auto",
+        with_secrets=True,
+        secret_aliases=("LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "LIVEKIT_URL"),
+    )
+
+    bundle = author_bundle_v2(
+        source=source, job=job, authoring=authoring, output=tmp_path / "bundle"
+    )
+
+    agent = next(process for process in bundle.processes if process.name == "agent")
+    assert agent.fixed_port == 8081
+    assert agent.fixed_port_consumable is True
+    assert agent.environment["FI_WORKER_HEALTH_PORT"] == "{{PORT_agent}}"
+
+    ports = plan_ports(bundle, instances=4)
+    assert ports.effective_instances == 4
+    assert ports.degraded_reason is None
+
+
 def test_livekit_worker_carries_the_worker_knob_env(tmp_path: Path) -> None:
     # C1 §4: FI_WORKER_HEALTH_PORT is authored UNCONDITIONALLY into every LiveKit-worker process,
     # each fed its OWN `{{PORT_<name>}}`. Its presence IS the knob-bearing mark; it is the only
@@ -2375,8 +2416,10 @@ def test_nested_script_runtime_uses_project_environment_without_agent_py(
 
     agent = next(process for process in plan.processes if process.name == "agent")
     assert agent.working_directory == "."
+    # The fixture ships no `.venv`, so uv installs before it runs. `--no-sync` there would hand
+    # the process an empty environment and it would die on its first import.
     assert agent.environment["ALK_SUBPROCESS_COMMAND"] == json.dumps(
-        ["uv", "run", "--no-sync", "kickoff"]
+        ["uv", "run", "kickoff"]
     )
     assert "ThreadingHTTPServer" in agent.run_command[-1]
 
@@ -2473,3 +2516,47 @@ def test_declared_http_runtime_uses_contract_command_port_and_health(
         item for item in plan.readiness if item.capability == "target_http"
     )
     assert readiness.path == "/docs"
+
+def test_a_server_command_never_points_at_a_venv_that_was_not_built(tmp_path: Path) -> None:
+    """A requirements.txt is not proof that `.venv/bin/uvicorn` exists.
+
+    Nothing builds a venv at the service root, so the rewrite produced a command that died on
+    `sh: 1: .venv/bin/uvicorn: not found`. The readiness probe then timed out for three minutes,
+    every tool the scenarios needed reported "no endpoint in this environment", and runtime
+    validation burned its repair budget on an environment that could never come up.
+    """
+    from fi.alk.harness.bundle_author_v2 import _dockerfile_run
+
+    service = tmp_path / "tools-api"
+    service.mkdir()
+    (service / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (service / "Dockerfile").write_text(
+        'FROM python:3.12-slim\nCMD ["uvicorn", "main:app", "--port", "8080"]\n',
+        encoding="utf-8",
+    )
+
+    # No venv on disk, so uv must install before it runs: `--no-sync` would hand the process an
+    # empty environment and it would die on its first import.
+    without_venv = _dockerfile_run(service)
+    assert without_venv[:3] == ["uv", "run", "uvicorn"]
+
+    binary = service / ".venv" / "bin" / "uvicorn"
+    binary.parent.mkdir(parents=True)
+    binary.write_text("#!/bin/sh\n", encoding="utf-8")
+    with_venv = _dockerfile_run(service)
+    assert with_venv[0] == ".venv/bin/uvicorn"
+
+def test_a_prepared_venv_still_skips_the_dependency_sync(tmp_path: Path) -> None:
+    """The sync is skipped only when there is something to skip it for.
+
+    A populated venv makes `--no-sync` right and saves a minute per process; an absent one makes
+    it fatal, because uv creates an empty environment and the process dies on its first import.
+    """
+    from fi.alk.harness.bundle_author_v2 import _uv_run
+
+    service = tmp_path / "agent"
+    service.mkdir()
+    assert _uv_run(service) == ["uv", "run"]
+
+    (service / ".venv" / "bin").mkdir(parents=True)
+    assert _uv_run(service) == ["uv", "run", "--no-sync"]
