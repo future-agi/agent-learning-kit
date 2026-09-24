@@ -630,11 +630,11 @@ def callers_for(index: int, wanted: int, slice_name: str = "", spoken: bool = Tr
             " Give your callers varied accents from the offered set, a different one per caller "
             f"where it fits rather than defaulting everyone to the same accent: {', '.join(spread)}. "
             "A suite where every caller sounds the same is a missed test of the agent's speech "
-            "handling, so do not make them all American unless a scenario truly requires it. "
+            "handling, so do not give them all the same accent unless a scenario truly requires it. "
             "Each caller is one ordinary, believable person, never a celebrity's or a fictional "
             "character's name: choose the accent, languages, home and name together, so the accent "
-            "comes with a name and background that make it plausible. The accent is how "
-            "they speak English, so a caller who speaks no English is Neutral."
+            "comes with a name and background that make it plausible. A caller whose language has "
+            "no offered accent is Neutral."
         )
     elif not spoken:
         said += (

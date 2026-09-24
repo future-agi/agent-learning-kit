@@ -86,7 +86,7 @@ The planning skill asks the kind file for its X levels. A level with no field be
 | `quiet_line` | `background_noise` false, the control a noisy scenario is measured against; rare, about one call in ten |
 | `noisy_line` | `background_noise`, the string naming the place, one of those the brief and the field list |
 | `accented` | `persona.accent` |
-| `non_native` | `persona.accent`, with English as `persona.languages` |
+| `non_native` | `persona.accent`, with the language of the call as `persona.languages` |
 | `disfluent` | `persona.communication_style`, with both values seeded where one is corrected aloud |
 | `terse` / `formal` / `anxious` | `persona.communication_style` |
 | `outbound_expecting` | `call_direction` outbound, `caller_awareness` "expecting" |

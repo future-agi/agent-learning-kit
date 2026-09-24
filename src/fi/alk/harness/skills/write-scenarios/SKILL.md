@@ -821,10 +821,10 @@ three times. Pick the place the situation puts the caller in, and let a suite vi
 **A caller speaks one language, and a non-native caller is a language fact, not a label.**
 `persona.languages` holds the one language the caller speaks on the call; a second one listed makes
 it ambiguous which they use, so only the first is kept. `non_native` means the caller is working in
-English that is not their first language: the persona names English and an accent that is not
-`Neutral`, their first language can go in `metadata`, and the caller's lines have to show it:
-simpler constructions, asking the agent to repeat or slow down, a place name pronounced the way a
-non-native speaker would reach for it.
+the language of the call, which is not their first: the persona names that language and an accent
+that is not `Neutral`, their first language can go in `metadata`, and the caller's lines have to
+show it: simpler constructions, asking the agent to repeat or slow down, a place name pronounced the
+way a non-native speaker would reach for it.
 
 Spend the language coverage across the suite rather than writing every non-native caller the same
 way: a caller whose English is fluent but accented, a caller who is hesitant and needs repetition, a
@@ -1191,9 +1191,9 @@ fill a spread. The test is believable, not strict: real people cross those lines
 second-generation caller or a married name, so a few such callers belong in a suite as long as each
 one reads as a real person. Give every caller a given name and a family name that people of that
 background commonly carry: never an unusual, invented or novelty name. The accent is how they speak
-English and it chooses the voice, so a caller who speaks no English is `Neutral`. The persona's
-location is where the instruction puts them. When a spread limit refuses a field, change the person,
-not only that field.
+the language of the call and it chooses the voice, so a caller whose language has no offered accent
+is `Neutral`. The persona's location is where the instruction puts them. When a spread limit refuses
+a field, change the person, not only that field.
 
 ### What actually trips a voice agent
 

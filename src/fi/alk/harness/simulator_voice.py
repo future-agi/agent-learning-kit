@@ -423,7 +423,7 @@ def persona_stt_language(
         code = _LANGUAGE_CODES.get(first) or (
             first if 2 <= len(first) <= 5 and first.replace("-", "").isalpha() else ""
         )
-        # A caller who is not speaking English still hears an agent that may answer in English.
+        # The caller transcribes the agent, whose language may not be the caller's own.
         if code and not code.startswith("en"):
             return "multi"
         if code:

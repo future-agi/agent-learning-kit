@@ -73,6 +73,10 @@ class Step(BaseModel):
     environment_arguments: dict[str, Any] = Field(default_factory=dict)
 
 
+# The language every accent in the platform's accent vocabulary is a way of speaking.
+_ACCENTED_LANGUAGE = "english"
+
+
 class Persona(BaseModel):
     """The simulated caller, in the same shape used by existing voice scenarios.
 
@@ -105,8 +109,8 @@ class Persona(BaseModel):
         spoken = [str(one).strip() for one in self.languages if str(one).strip()]
         self.languages = spoken[:1]
         self.multilingual = False
-        # The accent is how they speak English and it picks the voice; without English it is Neutral.
-        if self.languages and "english" not in self.languages[0].casefold():
+        # An offered accent describes how the vocabulary's own language is spoken and picks the voice.
+        if self.languages and _ACCENTED_LANGUAGE not in self.languages[0].casefold():
             self.accent = "Neutral"
         return self
 
