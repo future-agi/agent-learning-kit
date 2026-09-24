@@ -11,9 +11,11 @@ LiveKit's builtin clips join the same pool, and need no external asset.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 # LiveKit ships these; they are the reliable default when no custom catalog is configured.
 _BUILTIN_BY_ENVIRONMENT: dict[str, str] = {
@@ -135,7 +137,21 @@ def source_for(environment: str = "", seed: str = "") -> str:
         pool.append(_BUILTIN_BY_ENVIRONMENT[env])
     if not pool:
         pool = [location for _, location in clips] + sorted(set(_BUILTIN_BY_ENVIRONMENT.values()))
-    return pool[sum(ord(character) for character in (seed or env or "x")) % len(pool)]
+    return pool[_pick(seed or env or "x", len(pool))]
+
+
+def _pick(seed: str, size: int) -> int:
+    return int(hashlib.sha256(seed.encode("utf-8")).hexdigest()[:8], 16) % size
+
+
+def place_for(name: str, fixture: Any = None) -> str:
+    """Where a caller with noise on and no place named is heard from: the fixture's place, else one by name."""
+    if isinstance(fixture, dict):
+        named = str(fixture.get("environment") or "").strip().lower()
+        if named:
+            return named
+    options = list(places())
+    return options[_pick(name or "x", len(options))] if options else ""
 
 
 def scenario_source(

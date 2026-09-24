@@ -109,3 +109,31 @@ def test_a_writer_brief_deals_the_places_it_can_play(catalogue):
     brief = callers_for(0, 6)
     assert "transit (3)" in brief and "vehicle (2)" in brief
     assert "believable person" in brief and "celebrity" in brief
+
+
+def test_a_voice_scenario_with_noise_on_is_given_a_place(catalogue, tmp_path):
+    from fi.alk.harness.background_noise import place_for, places
+    from fi.alk.harness.scenario import Scenario
+
+    def derived(value, fixture=None):
+        one = Scenario(name="caller", instruction="x", sub_goals=["a"], background_noise=value, fixture=fixture or {})
+        return place_for(one.name, one.fixture) if one.background_noise is True else one.background_noise
+
+    assert derived(True) in places()
+    assert derived("street") == "street"
+    assert derived(False) is False
+    assert derived(True, {"environment": "vehicle", "origin": "seed"}) == "vehicle"
+
+
+def test_a_brief_for_a_chat_agent_says_nothing_about_noise(catalogue):
+    from fi.alk.harness.scenarios import callers_for
+
+    assert "background_noise" in callers_for(0, 6)
+    assert "background_noise" not in callers_for(0, 6, spoken=False)
+
+
+def test_a_caller_who_speaks_no_english_has_no_english_accent():
+    from fi.alk.harness.scenario import Persona
+
+    assert Persona(name="Paloma Reyes", languages=["Spanish"], accent="Canadian").accent == "Neutral"
+    assert Persona(name="Rahul Varma", languages=["English", "Hindi"], accent="Indian").accent == "Indian"

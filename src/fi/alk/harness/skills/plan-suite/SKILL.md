@@ -455,9 +455,9 @@ difficulty rule above. Then the writer has no excuse and no need to guess.
 exhaust the obvious names, and writers that cannot see each other converge. Measured on a live run at a
 hundred and thirty callers: **eight pairs a listener would not separate**, among them two differing by one
 letter and two by one syllable. Deal each writer a disjoint set of initial letters as below, and where the
-count is larger than the letters available, deal each writer a distinct *rule* as well - names of a given
-syllable count, always within the naming tradition of the profile it was dealt - so two writers cannot
-arrive at neighbouring names by independently reaching for the commonest one.
+count is larger than the letters available, deal each writer a distinct *rule* as well - a family name
+of a given syllable count, always a real name within the naming tradition of the profile it was dealt -
+so two writers cannot arrive at neighbouring names by independently reaching for the commonest one.
 
 **Names have to be distinguishable when spoken, not merely different.** "No two people share a name" lets
 Laura and Lauren through, and over a phone line they are one name. Deal initial letters as above, and
@@ -842,10 +842,12 @@ one call in ten: real callers are rarely in a silent room. Size the `quiet_line`
 Spread the places across writers the way you spread profiles, so the suite hears several of them
 rather than one bed everywhere.
 
-**Deal out the initial letters of their names in the same breath, inside each profile's naming
-tradition.** Narrowing a writer to one language without also narrowing its names makes collisions
-worse, not better: two writers both given non-native callers both reached for the same name. Three
-letters each, no letter to two writers, and no two people in the suite share a name.
+**Deal out the initial letters of their family names in the same breath.** Narrowing a writer to
+one language without also narrowing its names makes collisions worse, not better: two writers both
+given non-native callers both reached for the same name. Three letters each, no letter to two
+writers, and no two people in the suite share a name. The letters bind the family name only, so the
+given name stays free to be a real, common name for that person's background; dealt on given names,
+they produced callers nobody is actually called.
 
 Two signs the sizing is wrong: every slice holds one or two scenarios, which means you listed
 scenarios instead of grouping them and every writer will re-read the world for almost nothing; or

@@ -96,7 +96,7 @@ Two ways this table gets read wrongly, both measured on a fresh hundred.
 
 **The bed is a finite set of ambiences and it never speaks.** `background_noise` takes one of the
 places the deployment ships - street, vehicle, transit, retail, office, outdoors, crowd and whatever
-else its catalogue lists. A bare `true` leaves the choice to chance and reports as unspecified.
+else its catalogue lists. A bare `true` gets a place picked by the scenario's name, which may not fit the situation.
 Anything you describe that is not one of those is not produced: a station announcement, an alarm, a
 crowd that argues, a voice behind the caller. Those are a second speaker under another name, and
 there is no second speaker. If the situation needs the caller to know something the room told them,

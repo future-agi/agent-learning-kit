@@ -99,6 +99,13 @@ class Persona(BaseModel):
     # long tool-heavy phone flow.
     scripted_caller: dict[str, Any] | None = None
 
+    @model_validator(mode="after")
+    def _accent_of_a_non_english_speaker(self) -> "Persona":
+        # The accent is how they speak English and it picks the voice; without English it is Neutral.
+        if self.languages and not any("english" in str(one).casefold() for one in self.languages):
+            self.accent = "Neutral"
+        return self
+
     def described(self) -> bool:
         return bool(
             self.name

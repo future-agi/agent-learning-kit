@@ -40,6 +40,7 @@ from .scenario import Scenario, voicemail_enabled
 from .scenario_tools import (
     SCENARIO_SERVER,
     TOOL_NAMES,
+    _is_spoken,
     load_scenarios,
     scenario_tools,
     world_summary,
@@ -571,7 +572,7 @@ def _slot(of: str, index: int) -> int:
     return int(hashlib.sha256(of.encode("utf-8")).hexdigest()[:8], 16)
 
 
-def callers_for(index: int, wanted: int, slice_name: str = "") -> str:
+def callers_for(index: int, wanted: int, slice_name: str = "", spoken: bool = True) -> str:
     """Which callers this slice should write, so the suite varies across slices as well as within.
 
     Instruction alone cannot do this. Worse, a slice writing a single scenario has nothing to
@@ -606,12 +607,14 @@ def callers_for(index: int, wanted: int, slice_name: str = "") -> str:
         for step in range(block)
     )
     said += (
-        f"\n\nEvery person you invent must have a name beginning with one of {letters}, given name "
-        "or, where no name that fits the caller has that letter, family name, and "
-        "every number you invent that the agent will look up, a code or a reference or an account "
+        "\n\nEvery person you invent has a given name and a family name, both real and common "
+        "among people of that caller's background, the names you would expect to meet, never an "
+        "unusual, invented or novelty one (Wynter, Posie, Zion). The family name must begin with "
+        f"one of {letters}; the given name is free, so it can fit the person. Every number you invent "
+        "that the agent will look up, a code or a reference or an account "
         f"number, must begin with {slot % 1000:03d}. Other writers own the other letters and "
         "prefixes, so this is what keeps two scenarios from sharing a name or a code. Within your own "
-        "slice, no two people may share a given name and no two scenarios may share a code or a "
+        "slice, no two people may share a name and no two scenarios may share a code or a "
         "reference: the prefix keeps you clear of other writers, it does not keep you clear of "
         "yourself."
     )
@@ -630,9 +633,10 @@ def callers_for(index: int, wanted: int, slice_name: str = "") -> str:
             "handling, so do not make them all American unless a scenario truly requires it. "
             "Each caller is one ordinary, believable person, never a celebrity's or a fictional "
             "character's name: choose the accent, languages, home and name together, so an Indian "
-            "accent comes with a name and background that make it plausible."
+            "accent comes with a name and background that make it plausible. The accent is how "
+            "they speak English, so a caller who speaks no English is Neutral."
         )
-    beds = places()
+    beds = places() if spoken else {}
     if beds:
         order = list(beds)
         dealt = [order[(index + step) % len(order)] for step in range(min(len(order), max(3, wanted)))]
@@ -771,7 +775,10 @@ async def _write_slice(
         stage = Stage(sliced, name=f"{SKILL}:{mine.named()[:40]}")
         async with stage:
             return await stage.say(
-                brief_for(contract, mine, siblings, callers_for(index, mine.count)),
+                brief_for(
+                    contract, mine, siblings,
+                    callers_for(index, mine.count, spoken=_is_spoken(contract)),
+                ),
                 on_event=watch,
             )
 

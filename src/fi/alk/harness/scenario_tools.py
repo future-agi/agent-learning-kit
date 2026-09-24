@@ -22,7 +22,7 @@ from typing import Any
 from .backends import tool, tool_server
 
 from .amend import add_rule, drop_rule, fix_tool, widen
-from .background_noise import places
+from .background_noise import place_for, places
 from .catalogue import (
     NO_OVERLAY,
     SUB_GOAL_RULES,
@@ -839,6 +839,10 @@ def accept_scenario(
         scenario = Scenario.model_validate(payload)
     except Exception as invalid:
         return _err(f"Not kept. {invalid}"[:600])
+    if not spoken:
+        scenario.background_noise = False
+    elif scenario.background_noise is True:
+        scenario.background_noise = place_for(scenario.name, scenario.fixture) or True
 
     # Read against the world this scenario actually runs in, so a setup that creates the table
     # a check reads is not reported as referring to something that does not exist.
@@ -1341,8 +1345,8 @@ def scenario_tools(
                     "description": "Where the caller is phoning from: "
                     f"{', '.join(places())}. Name it on every scenario not on a quiet_line level; "
                     "a caller leaving a hotel or standing on a street is not in a quiet room. "
-                    "Left out, noise is on unless the interface level is quiet, and the report "
-                    "shows it as unspecified.",
+                    "Left out, noise is on unless the interface level is quiet, at a place picked "
+                    "by the scenario's name that may not fit the situation.",
                 },
                 "call_direction": {
                     "type": "string",

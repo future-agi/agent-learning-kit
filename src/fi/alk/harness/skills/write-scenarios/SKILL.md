@@ -755,8 +755,8 @@ An attack always arrives through the caller. Write the payload as something that
 voice agent cannot test any other way.
 
 **Name the place, never `background_noise: true`.** A bare `true`, or leaving the field out, says
-noise is on without saying where: the call hears whichever bed the seed lands on, and the coverage
-report shows it as unspecified. Measured across every suite on disk: **1,422 scenarios have
+noise is on without saying where: a place is then picked by the scenario's name, and it may be one
+the situation would never put this caller in. Measured across every suite on disk: **1,422 scenarios have
 noise on and only four distinct audio beds are ever heard, with 1,098 of them, 77 percent, hearing
 the same one**, because 871 named no place at all. A suite that reports five background noises and
 plays office ambience to three quarters of its calls has not covered five of anything.
@@ -1169,8 +1169,10 @@ them: the name, the languages and the accent are one fact about one person. An I
 to a caller whose name, location and languages make it plausible; a Spanish speaker named Diego
 Ramos is not given an Indian accent to fill a spread. The test is believable, not strict: real
 people cross those lines, a second-generation caller or a married name, so a few such callers belong
-in a suite as long as each one reads as a real person. When a spread limit refuses a field, change
-the person, not only that field.
+in a suite as long as each one reads as a real person. Give every caller a given name and a family
+name that people of that background commonly carry: never an unusual, invented or novelty name. The
+accent is how they speak English and it chooses the voice, so a caller who speaks no English is
+`Neutral`. When a spread limit refuses a field, change the person, not only that field.
 
 ### What actually trips a voice agent
 
