@@ -709,6 +709,7 @@ class _TestRunnerAgent(Agent):
         # the outer runner so it cannot snapshot history in the brief interval
         # before TTS starts and ``session.current_speech`` becomes non-None.
         self._end_speech_handle = ctx.speech_handle
+        self._goodbye_said = bool(_letters(_STAGE_DIRECTION.sub("", self._saying)))
         self._end_requested.set()
         return None
 
@@ -1030,16 +1031,23 @@ class _TestRunnerAgent(Agent):
             if self._mailbox_greeted or self._voicemail_greeting is not None:
                 return
             self._mailbox_greeted = True
-        # The goodbye was the last thing said; anything after it narrates the hang-up.
+        # Once a goodbye was said, anything after it narrates the hang-up; a silent hang-up gets one goodbye.
         if self._end_requested.is_set():
-            return
+            if self._goodbye_said:
+                return
+            self._goodbye_said = True
         chat_ctx = _with_opening_line(chat_ctx, self._persona.persona.get("initial_message"))
+        self._saying = ""
         async for chunk in _without_hold_marker(
             super().llm_node(chat_ctx, tools, model_settings),
             on_hold=self._on_hold,
             on_unspoken=self._on_unspoken,
         ):
+            self._saying += _chunk_text(chunk) or ""
             yield chunk
+
+    _goodbye_said: bool = False
+    _saying: str = ""
 
     _answered_again_at: int = -1
 
