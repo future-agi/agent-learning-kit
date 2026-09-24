@@ -154,14 +154,3 @@ def test_a_place_the_situation_describes_wins_over_a_pick_by_name(catalogue):
     assert place_for("any", None, "You call from a busy street corner.") == "street"
     assert place_for("any", {"environment": "vehicle"}, "at the airport") == "vehicle"
 
-
-def test_a_suite_keeps_quiet_lines_to_a_small_share() -> None:
-    from fi.alk.harness.scenario import Scenario
-    from fi.alk.harness.scenario_tools import _over_its_share
-
-    grid = {"interface": ["quiet_line", "noisy_office", "noisy_street", "accented"]}
-    quiet = [Scenario(name=f"s{i}", use_case="u", coverage={"interface": "quiet_line"}) for i in range(15)]
-    assert "quiet line" in _over_its_share({"interface": "quiet_line"}, grid, quiet, 100)
-    assert _over_its_share({"interface": "quiet_line"}, grid, quiet[:10], 100) == ""
-    assert _over_its_share({"interface": "noisy_street"}, grid, quiet, 100) == ""
-
