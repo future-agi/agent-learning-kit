@@ -242,7 +242,7 @@ one scenario written twice.
 |---|---|
 | life stage | child · young adult · adult · senior |
 | literacy, technical and domain | novice · average · expert |
-| language | native · regional accent · non-native · code-switching · prefers another language |
+| language | native · regional accent · non-native · prefers another language |
 | expression | clear · mild difference · strong difference |
 | role | self · on behalf of another · professional third party · privileged or admin |
 | identity | anonymous · identified but unverified · authenticated · elevated |
@@ -714,7 +714,7 @@ to derive and why it cannot drift:
 | what the agent must do | T, operation and object | `disambiguation`, `unit_conversion`, `multi_intent`, `call_termination`, `handoff`, `tool_failure_recovery` |
 | what it touches | T's object, from the contract's tools | `weather_lookup`, `order_status`, `transfer_endpoint` |
 | what is being done to it | O, the overlay | `topic_switch`, `prompt_injection`, `social_engineering`, `refusal_bait` |
-| the conditions | X, whatever this agent's kind file says can be varied | `noisy_line`, `code_switching`, `outbound_call` on a call; `pasted_blob`, `split_message`, `self_correction` in a chat |
+| the conditions | X, whatever this agent's kind file says can be varied | `noisy_line`, `non_native`, `outbound_call` on a call; `pasted_blob`, `split_message`, `self_correction` in a chat |
 
 Take the X levels from the kind file you were given, not from this table: it knows which conditions
 its modality can actually apply, and a kind added later carries its own.

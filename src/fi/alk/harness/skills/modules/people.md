@@ -15,7 +15,7 @@ account for rather than a list of adjectives.
 ```
 life stage      child · young adult · adult · senior
 literacy        novice · average · expert            (with this domain, not with technology in general)
-language        native · regional accent · non-native · switches between two · prefers another
+language        native · regional accent · non-native · prefers another
 expression      clear · some difficulty · marked difficulty
 role            themselves · on behalf of somebody · a professional third party · an administrator
 standing        anonymous · claims an identity · verified · privileged

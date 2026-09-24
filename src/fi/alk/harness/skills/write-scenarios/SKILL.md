@@ -798,17 +798,17 @@ A suite whose accents are all `Neutral` has tested one accent, whatever its cove
 `crowd`. Metro, train and bus share the city bed with street, so naming all three tests one sound
 three times. Pick the place the situation puts the caller in, and let a suite visit several of them.
 
-**A non-native caller is a language fact, not a label.** `non_native` means the caller is working in
-a language that is not their first. The persona has to name **both** languages and an accent that is
-not `Neutral`, and the caller's lines have to show it: simpler constructions, an occasional word
-reached for in the other language, asking the agent to repeat or slow down, a place name pronounced
-the way a non-native speaker would reach for it. `multilingual` is true only when the caller can
-actually switch, and code switching means the caller does switch mid-call and the agent has to keep
-up, not that a second language is listed and never used.
+**A caller speaks one language, and a non-native caller is a language fact, not a label.**
+`persona.languages` holds the one language the caller speaks on the call; a second one listed makes
+it ambiguous which they use, so only the first is kept. `non_native` means the caller is working in
+English that is not their first language: the persona names English and an accent that is not
+`Neutral`, their first language can go in `metadata`, and the caller's lines have to show it:
+simpler constructions, asking the agent to repeat or slow down, a place name pronounced the way a
+non-native speaker would reach for it.
 
 Spend the language coverage across the suite rather than writing every non-native caller the same
 way: a caller whose English is fluent but accented, a caller who is hesitant and needs repetition, a
-caller who switches to their first language under stress, and a caller the agent has to ask to spell
+caller who searches for a word, and a caller the agent has to ask to spell
 a name are four different tests of the same axis. Every caller speaking neutral, fluent English is
 one test, whatever the interface column says.
 

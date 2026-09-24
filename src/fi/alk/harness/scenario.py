@@ -100,9 +100,13 @@ class Persona(BaseModel):
     scripted_caller: dict[str, Any] | None = None
 
     @model_validator(mode="after")
-    def _accent_of_a_non_english_speaker(self) -> "Persona":
+    def _one_language_and_its_accent(self) -> "Persona":
+        # One language per caller, the one spoken on the call, so which one they speak is never ambiguous.
+        spoken = [str(one).strip() for one in self.languages if str(one).strip()]
+        self.languages = spoken[:1]
+        self.multilingual = False
         # The accent is how they speak English and it picks the voice; without English it is Neutral.
-        if self.languages and not any("english" in str(one).casefold() for one in self.languages):
+        if self.languages and "english" not in self.languages[0].casefold():
             self.accent = "Neutral"
         return self
 
@@ -524,8 +528,6 @@ def _condition_the_call_lacks(scenario: Scenario) -> str:
     style = str(getattr(persona, "communication_style", "") or "")
     languages = [one for one in (getattr(persona, "languages", None) or []) if str(one).strip()]
     noise = scenario.background_noise
-    if level in {"non_native", "non-native"} and len(languages) < 2:
-        return f"interface {level}, persona speaks only {len(languages) or 'no'} named language"
     if level == "code_switching" and (
         len(languages) < 2 or not getattr(persona, "multilingual", False)
     ):

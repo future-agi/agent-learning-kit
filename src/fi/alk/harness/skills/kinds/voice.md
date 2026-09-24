@@ -62,7 +62,7 @@ here.
 
 | question | voice answers with |
 |---|---|
-| how clean is the input | quiet line · background noise (street, vehicle, transit, retail, office, outdoors, crowd) · accent · non-native speech · code-switching |
+| how clean is the input | quiet line · background noise (street, vehicle, transit, retail, office, outdoors, crowd) · accent · non-native speech |
 | what channel it arrives on | inbound call · outbound call, and whoever picks up |
 | how reliable and timely it is | fluent speech · disfluency and self-correction · long pauses |
 | what competing signal exists | the ambience bed behind the caller, and nothing else the call can render |
@@ -86,8 +86,7 @@ The planning skill asks the kind file for its X levels. A level with no field be
 | `quiet_line` | `background_noise` false, the control a noisy scenario is measured against; rare, about one call in ten |
 | `noisy_line` | `background_noise`, the string naming the place: street, vehicle, transit, retail, office, outdoors, crowd |
 | `accented` | `persona.accent` |
-| `non_native` | `persona.accent` with `persona.languages` |
-| `code_switching` | `persona.languages` and `persona.multilingual` |
+| `non_native` | `persona.accent`, with English as `persona.languages` |
 | `disfluent` | `persona.communication_style`, with both values seeded where one is corrected aloud |
 | `terse` / `formal` / `anxious` | `persona.communication_style` |
 | `outbound_expecting` | `call_direction` outbound, `caller_awareness` "expecting" |

@@ -137,3 +137,10 @@ def test_a_caller_who_speaks_no_english_has_no_english_accent():
 
     assert Persona(name="Paloma Reyes", languages=["Spanish"], accent="Canadian").accent == "Neutral"
     assert Persona(name="Rahul Varma", languages=["English", "Hindi"], accent="Indian").accent == "Indian"
+
+
+def test_a_caller_speaks_one_language():
+    from fi.alk.harness.scenario import Persona
+
+    one = Persona(name="Rahul Varma", languages=["English", "Hindi"], accent="Indian", multilingual=True)
+    assert one.languages == ["English"] and one.multilingual is False

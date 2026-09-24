@@ -1412,6 +1412,7 @@ def scenario_tools(
                         "languages": {
                             "type": "array",
                             "items": persona_field("languages"),
+                            "description": "The one language the caller speaks on the call.",
                         },
                         "accent": persona_field("accent"),
                         "multilingual": {"type": "boolean"},

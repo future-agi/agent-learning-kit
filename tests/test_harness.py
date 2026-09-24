@@ -2468,7 +2468,8 @@ def test_a_persona_is_a_structured_simulator_prompt_slot():
     assert "Name: Maya" in filled
     assert "Occupation: rider" in filled
     assert "Personality: anxious" in filled
-    assert "Language(s): English, Hindi" in filled
+    assert "Language(s): English\n" in filled
+    assert "Switch languages" not in filled
     assert "Accent: South Asian English" in filled
     assert "Pickup Context: busy airport curb" in filled
     assert "in a noisy curbside area" not in filled
