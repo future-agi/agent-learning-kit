@@ -1037,6 +1037,7 @@ class _TestRunnerAgent(Agent):
         # The goodbye was the last thing said; anything after it narrates the hang-up.
         if self._end_requested.is_set():
             return
+        chat_ctx = _with_opening_line(chat_ctx, self._persona.persona.get("initial_message"))
         async for chunk in _without_hold_marker(
             super().llm_node(chat_ctx, tools, model_settings), on_hold=self._on_hold
         ):
@@ -1084,6 +1085,25 @@ def _chunk_text(chunk: Any) -> str | None:
     if getattr(delta, "tool_calls", None):
         return None
     return getattr(delta, "content", None) or ""
+
+
+# Where the agent greets first, the caller's first reply is written by the model rather than read.
+_OPENING_TURN = (
+    "This is your first turn. Say your opening line, in these words: \"{opening}\" If the agent's "
+    "greeting asked you something the line does not answer, answer that briefly first. Say nothing "
+    "else yet: everything else in your situation waits for its moment."
+)
+
+
+def _with_opening_line(chat_ctx: Any, opening: Any) -> Any:
+    """The context for the caller's reply, told to open with its scripted line if it has not spoken yet."""
+    if not isinstance(opening, str) or not opening.strip():
+        return chat_ctx
+    if any(message.role == "assistant" for message in chat_ctx.messages()):
+        return chat_ctx
+    briefed = chat_ctx.copy()
+    briefed.add_message(role="system", content=_OPENING_TURN.format(opening=opening.strip()))
+    return briefed
 
 
 def _letters(text: str) -> str:

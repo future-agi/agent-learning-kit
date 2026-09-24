@@ -1418,6 +1418,20 @@ def test_a_stage_direction_inside_a_reply_is_not_spoken() -> None:
     assert asyncio.run(run(["Plain words only."])) == "Plain words only."
 
 
+def test_a_caller_greeted_first_is_told_to_open_with_its_scripted_line() -> None:
+    from livekit.agents.llm import ChatContext
+
+    greeted = ChatContext()
+    greeted.add_message(role="user", content="This call is recorded. How can I help?")
+    briefed = livekit._with_opening_line(greeted, "I need to download our August invoice.")
+    assert "I need to download our August invoice." in briefed.messages()[-1].text_content
+    assert len(greeted.messages()) == 1
+
+    greeted.add_message(role="assistant", content="Hi, I need our August invoice.")
+    assert livekit._with_opening_line(greeted, "I need to download our August invoice.") is greeted
+    assert livekit._with_opening_line(ChatContext(), "") is not None
+
+
 def test_a_dropped_marker_reports_the_hold_and_an_ordinary_reply_does_not() -> None:
     held: list[bool] = []
 
