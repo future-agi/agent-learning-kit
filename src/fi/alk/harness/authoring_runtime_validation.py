@@ -15,6 +15,7 @@ import random
 import re
 import shutil
 import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -468,7 +469,7 @@ async def validate_once(
         default_user_resolver,
         fixed_sandbox_user_resolver,
     )
-    from .scenario_source import load_scenarios
+    from .scenario_source import does_nothing, load_scenarios
     from .source_data_invariants import author_invariants, check_invariants
     from .tool_certification import ToolAvailability, certify_tool_inventory
 
@@ -566,9 +567,12 @@ async def validate_once(
             ),
             generic_artifact_root=(authoring / "generic-harness") if generic else None,
         )
+        # Parallel runtime instances inside the one sandbox, each with its own ports and databases.
+        requested_lanes = max(1, int(os.environ.get("ALK_VALIDATION_INSTANCES", "1") or 1))
         executor = ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix="runtime-validation"
+            max_workers=requested_lanes, thread_name_prefix="runtime-validation"
         )
+        started = time.monotonic()
         phase = "runtime"
         try:
             bundle = work / "bundle"
@@ -581,7 +585,9 @@ async def validate_once(
             )
             if local_runtime:
                 _make_local_seed_files_readable(bundle)
-            validation_parallelism = 1 if external_provider or not generic else 2
+            validation_parallelism = (
+                1 if external_provider else max(requested_lanes, 2 if generic else 1)
+            )
             preflight_bundle(
                 bundle,
                 manifest,
@@ -659,6 +665,7 @@ async def validate_once(
                 world_isolation = _world_isolation_status(build_output)
             factory = ProcessWorldFactory(work)
             runtime = runtimes[0]
+            lanes = len(runtimes) or 1
             phase = "scenarios"
             scenarios = await asyncio.to_thread(load_scenarios, bundle)
             if len(scenarios) != job.scenario_count:
@@ -668,20 +675,45 @@ async def validate_once(
 
             baseline_state_digest: str | None = None
 
-            async def check_setups(invariants):
-                failures = []
-                for scenario in scenarios:
-                    try:
-                        await check_setup(scenario, invariants)
-                    except RuntimeValidationError as exc:
-                        failures.append(str(exc))
-                if failures:
-                    raise RuntimeValidationError(phase, "\n".join(failures))
+            # A failure under an in-place reset is re-checked once against a full restart.
+            in_place = os.environ.get("ALK_VALIDATION_RESET_IN_PLACE", "1") != "0"
 
-            async def check_setup(scenario, invariants):
+            async def check_setups(invariants, suite=None):
+                suite = scenarios if suite is None else suite
+                failures: list[str] = []
+
+                async def lane(own, against):
+                    for scenario in own:
+                        try:
+                            await check_setup(scenario, invariants, against)
+                        except RuntimeValidationError as exc:
+                            failures.append(str(exc))
+
+                await asyncio.gather(
+                    *(
+                        lane(suite[index::lanes], runtimes[index])
+                        for index in range(lanes)
+                        if suite[index::lanes]
+                    )
+                )
+                if failures:
+                    raise RuntimeValidationError(phase, "\n".join(sorted(failures)))
+
+            async def check_setup(scenario, invariants, against=None):
+                try:
+                    await check_setup_once(scenario, invariants, against, in_place)
+                except Exception:
+                    if not in_place:
+                        raise
+                    await check_setup_once(scenario, invariants, against, False)
+
+            async def check_setup_once(scenario, invariants, against, keep_processes):
                 nonlocal baseline_state_digest
-                await provider.reset(runtime, work_directory=work)
-                world = await factory.create(runtime, rng=random.Random(job.seed or 0))
+                against = runtime if against is None else against
+                await provider.reset(
+                    against, work_directory=work, keep_processes=keep_processes
+                )
+                world = await factory.create(against, rng=random.Random(job.seed or 0))
                 if generic and not external_provider:
                     current_digest = _world_state_digest(world)
                     if baseline_state_digest is None:
@@ -721,9 +753,13 @@ async def validate_once(
                                 f"{scenario.scenario_key}: ready precondition did not hold",
                             )
 
-            # Collect all executable setup errors before spending a model review or
-            # a repair attempt. Each scenario still gets an independent clean world.
-            await check_setups([])
+            print(
+                f"runtime validation: {len(scenarios)} scenarios across {lanes} lane"
+                f"{'s' if lanes != 1 else ''}, environment ready in "
+                f"{time.monotonic() - started:.0f}s",
+                flush=True,
+            )
+            invariants: list = []
             if external_provider:
                 # A connect-only provider owns its state and executes its tools outside
                 # this sandbox. There is no harness-owned source database to probe or
@@ -733,6 +769,17 @@ async def validate_once(
                     "skipping local source-data invariant review",
                     flush=True,
                 )
+                active = [
+                    scenario
+                    for scenario in scenarios
+                    if not (does_nothing(scenario.setup) and does_nothing(scenario.ready))
+                ]
+                print(
+                    f"runtime validation: {len(scenarios) - len(active)} of {len(scenarios)} "
+                    "scenarios set up nothing and hold by construction; walking the rest",
+                    flush=True,
+                )
+                await check_setups(invariants, active)
                 if generic:
                     _write_runtime_evidence(
                         job=job,
@@ -751,7 +798,7 @@ async def validate_once(
             await provider.reset(runtime, work_directory=work)
             baseline = await factory.create(runtime, rng=random.Random(job.seed or 0))
             print("runtime validation: reviewing source data invariants", flush=True)
-            invariants = await author_invariants(
+            invariants[:] = await author_invariants(
                 source, authoring, baseline.read_only(), endpoints=runtime.endpoints
             )
             # Review probes may have effects; none belongs in the test baseline.
@@ -802,8 +849,14 @@ async def validate_once(
                     runtime, rng=random.Random(job.seed or 0)
                 )
             phase = "scenarios"
-            if invariants:
-                await check_setups(invariants)
+            walk = time.monotonic()
+            await check_setups(invariants)
+            print(
+                f"runtime validation: setup pass {time.monotonic() - walk:.0f}s for "
+                f"{len(scenarios)} scenarios with {len(invariants)} invariants, "
+                f"complete in {time.monotonic() - started:.0f}s",
+                flush=True,
+            )
             if generic:
                 await provider.reset(runtime, work_directory=work)
                 reset_world = await factory.create(
@@ -857,6 +910,20 @@ async def validate_once(
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
             await provider.close(work_directory=work)
+
+
+def _invariants_the_ir_still_breaks(world, authoring: Path) -> list[str]:
+    """Declared invariants the patched rows still violate, judged without building anything."""
+    from .source_data_invariants import ARTIFACT, violations_in_ir
+
+    document = authoring / ARTIFACT
+    if not document.is_file():
+        return []
+    try:
+        checks = json.loads(document.read_text(encoding="utf-8")).get("checks") or []
+        return violations_in_ir(world, checks)
+    except Exception:  # noqa: BLE001 - a check we cannot run is the real environment's to judge
+        return []
 
 
 async def validate_and_repair(
@@ -1049,6 +1116,16 @@ async def validate_and_repair(
                             allowed_reason_codes={item.code for item in diagnostics},
                         )
                         artifacts.write_world_ir(repaired_world)
+                        still_broken = _invariants_the_ir_still_breaks(
+                            repaired_world, authoring
+                        )
+                        if still_broken:
+                            print(
+                                "runtime validation: patch did not close the invariants, "
+                                "repairing again without rebuilding: "
+                                + "; ".join(still_broken)[:400],
+                                flush=True,
+                            )
                         status = 0
                     elif isinstance(repair_result, RuntimePlanPatch):
                         apply_runtime_plan_patch(

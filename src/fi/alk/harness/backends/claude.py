@@ -11,10 +11,14 @@ name rather than implemented here.
 
 from __future__ import annotations
 
+import asyncio
+import dataclasses
 import os
-from typing import Any, AsyncIterator
+import tempfile
+from typing import Any, AsyncIterator, Callable
 
 from claude_agent_sdk import (
+    AgentDefinition,
     AssistantMessage,
     ClaudeAgentOptions,
     ClaudeSDKClient,
@@ -30,6 +34,8 @@ from claude_agent_sdk import (
 
 from .base import (
     ASK_TOOL,
+    DELEGATE_TOOL,
+    MOST_WORKERS_AT_ONCE,
     Call,
     ModelReply,
     Say,
@@ -38,10 +44,31 @@ from .base import (
     StageDone,
     ToolReturned,
     ToolServer,
+    ToolSpec,
+    WorkerSpec,
     qualified,
 )
 
-DEFAULT_MODEL = "claude-sonnet-4-6"
+# The loop is Claude Code; the model it bills is not.
+DEFAULT_MODEL = "gemini-3.7-flash"
+
+# The SDK reports its worker tool under either name depending on version, so both are granted.
+DELEGATION_TOOLS = ("Agent", "Task")
+
+def _can_reach_its_workers(spec: SessionSpec, allowed: list[str]) -> None:
+    """Refuse a session whose workers it has no way to call."""
+    if not spec.workers:
+        return
+    reachable = set(allowed)
+    if reachable & set(DELEGATION_TOOLS):
+        return
+    if any(name in DELEGATION_TOOLS for name in reachable):
+        return
+    raise ValueError(
+        f"this stage has workers ({', '.join(sorted(spec.workers))}) and no way to call them: "
+        "no delegation tool is reachable, so it can only read. Reachable: "
+        f"{sorted(reachable)}"
+    )
 
 
 def _gateway_compatible_schema(value: Any) -> Any:
@@ -56,7 +83,9 @@ def _gateway_compatible_schema(value: Any) -> Any:
         return [_gateway_compatible_schema(item) for item in value]
     if not isinstance(value, dict):
         return value
-    result = {key: _gateway_compatible_schema(item) for key, item in value.items()}
+    result = {
+        key: _gateway_compatible_schema(item) for key, item in value.items()
+    }
     kind = result.get("type")
     if isinstance(kind, list):
         concrete = [item for item in kind if item != "null"]
@@ -89,6 +118,50 @@ def _sdk_server(server: ToolServer, *, gateway_compatible: bool = False) -> Any:
     )
 
 
+def _definition(worker: WorkerSpec, parent: SessionSpec) -> AgentDefinition:
+    """A ``WorkerSpec`` as this SDK's own sub-agent definition."""
+    tools = [name for name in worker.granted(parent) if name != DELEGATE_TOOL]
+    # Only when the worker itself asks for it, never inherited from the stage.
+    if DELEGATE_TOOL in (worker.builtins or ()):
+        tools.extend(DELEGATION_TOOLS)
+    return AgentDefinition(
+        description=worker.description,
+        prompt=worker.instructions,
+        tools=tools,
+        mcpServers=list(worker.servers or parent.servers),
+        model=worker.model or "inherit",
+        maxTurns=worker.max_turns,
+        background=False,
+    )
+
+
+def _said(text: str, *, is_error: bool = False) -> dict[str, Any]:
+    """A tool result in the shape every harness tool already returns."""
+    reply: dict[str, Any] = {"content": [{"type": "text", "text": text}]}
+    if is_error:
+        reply["is_error"] = True
+    return reply
+
+
+def _child_of(parent: SessionSpec, worker: WorkerSpec) -> SessionSpec:
+    """The session one worker runs in, falling back to the parent's settings."""
+    return SessionSpec(
+        system_prompt=worker.instructions,
+        servers=dict(worker.servers or parent.servers),
+        builtins=tuple(
+            name for name in (worker.builtins or parent.builtins) if name != DELEGATE_TOOL
+        ),
+        cwd=parent.cwd,
+        max_turns=worker.max_turns,
+        model=worker.model or parent.model,
+        ask=parent.ask,
+        gated=parent.gated,
+        thinking=parent.thinking,
+        permission_override=parent.permission_override,
+        idle_timeout_seconds=parent.idle_timeout_seconds,
+    )
+
+
 def _flattened(content: Any) -> str:
     """A tool result's content as one string, however the SDK packaged it."""
     if isinstance(content, list):
@@ -105,12 +178,12 @@ class ClaudeSession:
         self,
         options: ClaudeAgentOptions,
         *,
-        streaming: bool = False,
         reported_model: str | None = None,
+        streaming: bool = False,
     ) -> None:
         self._options = options
-        self._streaming = streaming
         self._reported_model = reported_model
+        self._streaming = streaming
         self._client: ClaudeSDKClient | None = None
         self._mirror_errors: list[str] = []
 
@@ -190,12 +263,15 @@ class ClaudeSession:
             return [
                 ModelReply(
                     parts=parts,
-                    model=self._reported_model or getattr(received, "model", "") or "",
+                    model=self._reported_model
+                    or getattr(received, "model", "")
+                    or "",
                 )
             ]
         if isinstance(received, ResultMessage):
             # subtype alone is not the outcome. A call that failed upstream still arrives with
             # subtype "success", so the error facts ride along and Stage decides what failed.
+            counted = _tokens(getattr(received, "model_usage", None))
             errors = [
                 *list(getattr(received, "errors", None) or []),
                 *self._mirror_errors,
@@ -204,8 +280,12 @@ class ClaudeSession:
                 StageDone(
                     outcome=received.subtype,
                     turns=received.num_turns,
-                    cost_usd=received.total_cost_usd,
-                    **_tokens(getattr(received, "model_usage", None)),
+                    cost_usd=_cost(
+                        getattr(received, "model_usage", None),
+                        counted,
+                        received.total_cost_usd,
+                    ),
+                    **counted,
                     session_id=received.session_id,
                     models=(
                         {self._reported_model}
@@ -235,6 +315,22 @@ class ClaudeSession:
         return []
 
 
+def _cost(model_usage: Any, counted: dict[str, int], reported: float | None) -> float | None:
+    """What the run cost, priced here where possible, else the CLI's own figure."""
+    from .vertex_gemini import priced
+
+    named = [str(name) for name in (model_usage or {})]
+    ours = [
+        priced(name, counted["tokens_in"], counted["tokens_out"], counted["tokens_cached"])
+        for name in named
+    ]
+    known = [one for one in ours if one is not None]
+    if not known:
+        return reported
+    # One stage runs on one model: summing would price the same tokens once per reported id.
+    return max(known)
+
+
 def _tokens(model_usage: Any) -> dict[str, int]:
     """Input and output tokens across every model a stage used, for the ledger to audit against.
 
@@ -242,14 +338,22 @@ def _tokens(model_usage: Any) -> dict[str, int]:
     """
     read = 0
     written = 0
+    cached = 0
     for usage in (model_usage or {}).values():
         if isinstance(usage, dict):
             read += int(usage.get("inputTokens") or usage.get("input_tokens") or 0)
             written += int(usage.get("outputTokens") or usage.get("output_tokens") or 0)
+            cached += int(
+                usage.get("cacheReadInputTokens")
+                or usage.get("cache_read_input_tokens")
+                or 0
+            )
         else:
             read += int(getattr(usage, "input_tokens", 0) or 0)
             written += int(getattr(usage, "output_tokens", 0) or 0)
-    return {"tokens_in": read, "tokens_out": written}
+            cached += int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+    # The SDK reports cache reads beside fresh input; the ledger reads them as part of tokens_in.
+    return {"tokens_in": read + cached, "tokens_out": written, "tokens_cached": cached}
 
 
 class ClaudeBackend:
@@ -257,8 +361,13 @@ class ClaudeBackend:
     default_model = DEFAULT_MODEL
 
     def can_drive(self, model: str) -> bool:
+        # Agent CC's native Anthropic endpoint accepts the Claude Agent SDK wire format and
+        # translates it for the provider named by the model. Without a gateway, this backend
+        # still only advertises models supported by Claude Code directly.
         named = (model or "").lower()
         if "claude" in named:
+            return True
+        if os.environ.get("AGENTCC_API_KEY", "").strip():
             return True
         gateway_ready = bool(
             (
@@ -272,58 +381,80 @@ class ClaudeBackend:
         return gateway_ready and bool(named)
 
     def create(self, spec: SessionSpec) -> ClaudeSession:
+        from ..config import gateway_wire_model
+
+        # An alias on the wire is not what was billed, so report the model the run chose.
+        reported = spec.model if gateway_wire_model(spec.model) != spec.model else None
+        context = spec.conversation
+        return ClaudeSession(
+            self._options(spec),
+            reported_model=reported,
+            streaming=bool(context and context.streaming),
+        )
+
+    def _options(self, spec: SessionSpec) -> ClaudeAgentOptions:
+        """The SDK options for one session."""
         from ..config import (
             UNWANTED,
             gate_hooks,
             permission_gate,
+            behind_gateway,
+            gateway_wire_model,
             provider_env,
             thinking_config,
         )
 
-        allowed = [
-            *(name for name in spec.builtins if name != ASK_TOOL),
-            *(
-                qualified(server_name, tool_spec.name)
-                for server_name, server in spec.servers.items()
-                for tool_spec in server.tools
-            ),
-        ]
+        wire_model = gateway_wire_model(spec.model)
+        gateway_compatible = behind_gateway(spec.model)
+        # A worker's calls are made inside this session, so the gate covers its tools too.
+        allowed = [name for name in spec.granted_anywhere() if name != DELEGATE_TOOL]
+        # Union per server name; each agent is still restricted by its own `tools` allowlist.
+        servers: dict[str, ToolServer] = {}
+        for source in (spec.servers, *(worker.servers for worker in spec.workers.values())):
+            for server_name, server in (source or {}).items():
+                existing = servers.get(server_name)
+                if existing is None:
+                    servers[server_name] = server
+                    continue
+                seen = {tool.name for tool in existing.tools}
+                servers[server_name] = dataclasses.replace(
+                    existing,
+                    tools=[*existing.tools, *(t for t in server.tools if t.name not in seen)],
+                )
+        environment = dict(provider_env(spec.model))
         context = spec.conversation
-        explicit_gateway = bool(
-            os.environ.get("ALK_CLAUDE_GATEWAY_URL", "").strip()
-            and os.environ.get("ALK_CLAUDE_GATEWAY_API_KEY", "").strip()
-        )
-        legacy_agentcc = bool(os.environ.get("AGENTCC_API_KEY", "").strip())
-        gateway_compatible = bool(
-            (explicit_gateway or legacy_agentcc) and "claude" not in spec.model.lower()
-        )
-        wire_model = spec.model
-        if gateway_compatible and not explicit_gateway:
-            # Older/local AgentCC deployments require a Claude-shaped alias because Claude Code
-            # validates model names before making the request. The hosted gateway accepts the
-            # requested provider model directly and therefore keeps the real model on the wire.
-            wire_model = os.environ.get(
-                "AGENTCC_CLAUDE_MODEL_ALIAS", "claude-sonnet-4-6"
-            ).strip()
-        env = provider_env(wire_model)
         if context is not None:
-            env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
-            env["CLAUDE_CODE_PROJECT_DIR_NAME"] = context.session_id
+            environment["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
+            environment["CLAUDE_CODE_PROJECT_DIR_NAME"] = context.session_id
             if context.config_dir:
-                env["CLAUDE_CONFIG_DIR"] = context.config_dir
+                environment["CLAUDE_CONFIG_DIR"] = context.config_dir
+        if spec.workers:
+            environment["CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"] = str(MOST_WORKERS_AT_ONCE)
+            # A backgrounded worker lets the stage end before the worker reports.
+            environment["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
+            allowed.extend(DELEGATION_TOOLS)
+        _can_reach_its_workers(spec, allowed)
         options = ClaudeAgentOptions(
-            tools=list(spec.builtins),
-            system_prompt=spec.system_prompt,
+            system_prompt=_prompt_for(spec.system_prompt),
             allowed_tools=allowed,
             mcp_servers={
-                server_name: _sdk_server(server, gateway_compatible=gateway_compatible)
-                for server_name, server in spec.servers.items()
+                server_name: _sdk_server(
+                    server, gateway_compatible=gateway_compatible
+                )
+                for server_name, server in servers.items()
             },
+            agents=(
+                {
+                    name: _definition(worker, spec)
+                    for name, worker in spec.workers.items()
+                }
+                or None
+            ),
             strict_mcp_config=True,
             setting_sources=[],
             max_turns=spec.max_turns,
             model=wire_model,
-            env=env,
+            env=environment,
             include_partial_messages=bool(context and context.streaming),
             resume=context.resume_session_id if context is not None else None,
             session_store=context.transcript_store if context is not None else None,
@@ -343,8 +474,20 @@ class ClaudeBackend:
             )
         if spec.thinking:
             options.thinking = thinking_config()
-        return ClaudeSession(
-            options,
-            streaming=bool(context and context.streaming),
-            reported_model=spec.model if gateway_compatible else None,
-        )
+        return options
+
+
+# A string system prompt goes onto the CLI's argv, so anything larger goes through a file.
+_PROMPT_ON_ARGV = 16_000
+
+
+def _prompt_for(prompt: str | None) -> Any:
+    """The prompt as the SDK should receive it: inline while small, a file once it is not."""
+    if not prompt or len(prompt) <= _PROMPT_ON_ARGV:
+        return prompt
+    handle = tempfile.NamedTemporaryFile(
+        "w", suffix=".md", prefix="alk-system-prompt-", delete=False, encoding="utf-8"
+    )
+    with handle as written:
+        written.write(prompt)
+    return {"type": "file", "path": handle.name}

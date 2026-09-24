@@ -10,60 +10,175 @@ of these harder" is the next thing said rather than a regeneration from nothing.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import asyncio
-import hashlib
 import logging
 import os
 import random
-from dataclasses import dataclass
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
-from .backends import SessionSpec, ToolServer, tool, tool_server
-
-from .config import artifact_dir, chosen_model, discovered_skills, load_skill
-from .catalogue import load_catalogue
+from .backends import (
+    DELEGATE_TOOL,
+    MOST_WORKERS_AT_ONCE,
+    SessionSpec,
+    ToolServer,
+    WorkerSpec,
+)
+from .config import (
+    artifact_dir,
+    chosen_model,
+    discovered_skills,
+    load_skill,
+    writer_model,
+)
 from .contract import AgentContract
-from .scenario import Scenario, suite_diversity_problems, voicemail_enabled
+from .scenario import Scenario, voicemail_enabled
 from .scenario_tools import (
-    journalled,
-    worth_delegating,
     SCENARIO_SERVER,
+    TOOL_NAMES,
     load_scenarios,
     scenario_tools,
     world_summary,
-    write_scenarios,
 )
 from .session import Stage
-from .tools import schema
 
 logger = logging.getLogger(__name__)
 
 SKILL = "write-scenarios"
 PLAN_SKILL = "plan-suite"
 
-# The review pass runs its own tool server, kept apart from the writers' one so a reviewer can
-# only report gaps and never submit or save a scenario itself.
-REVIEW_SERVER = "suite-review"
-
-
-# Turns a scenario costs in practice: look at the world, rehearse the calls, submit, and often
-# one more to correct what a gate refused.
-TURNS_EACH = 3
+# Turns a scenario costs a briefed writer, which re-reads the world in its own context.
+TURNS_EACH = 9
 # Enough to write a handful without the budget being the thing that stops it.
 TURNS_FLOOR = 120
+# One writer's own ceiling, so a single slice cannot spend the whole stage budget.
+WRITER_TURNS = int(os.environ.get("ALK_HARNESS_WRITER_TURNS", "300") or 300)
+WRITER_TOOLS = ("inspect_world", "try_calls", "add_sub_goal", "submit_scenario")
+# Withheld from a loop that hands the suite out.
+WRITES_A_SCENARIO = ("try_calls", "submit_scenario")
+# Above this, the loop hands the suite out instead of writing it. Zero: always.
+HANDS_OUT_ABOVE = int(os.environ.get("ALK_HARNESS_HANDS_OUT_ABOVE", "0") or 0)
+
+
+# How many scenarios one writer should be given.
+SLICE = int(os.environ.get("ALK_HARNESS_SLICE", "6") or 6)
+
+
+def writers_for(wanted: int) -> int:
+    """How many writers a suite of this size needs."""
+    most_a_writer_can_write = max(WRITER_TURNS // TURNS_EACH, 1)
+    each = max(1, min(SLICE, most_a_writer_can_write))
+    return max(min(-(-wanted // each), MOST_WORKERS_AT_ONCE), 1)
 
 
 def turns_for(wanted: int) -> int:
-    """A turn budget that grows with the suite being asked for.
+    """A turn budget that affords one writer per slice, plus the loop itself.
 
     A fixed ceiling is what made asking for a large suite pointless: generation stopped partway
     through, and `save_scenarios` refuses a count that does not match what was asked for, so a run
-    that asked for fifty and reached twenty-eight saved nothing at all. The budget has to follow
-    the request, or the request cannot be honoured.
+    that asked for fifty and reached twenty-eight saved nothing at all.
     """
-    return max(TURNS_FLOOR, wanted * TURNS_EACH + 40)
+    writers = writers_for(wanted)
+    own = 40 + writers
+    return max(TURNS_FLOOR, (writers * WRITER_TURNS + own) * 3)
+
+
+# Underscores: one backend sanitises worker names into identifiers, the other does not.
+WRITER = "scenario_writer"
+
+
+def writer_worker(
+    contract: AgentContract, destination: Path, server: ToolServer, budget: int
+) -> dict[str, WorkerSpec]:
+    """The worker this stage may run to write part of the suite."""
+    return {
+        WRITER: WorkerSpec(
+            description=(
+                "Writes and proves part of a scenario suite in its own session. Brief it with "
+                "which use cases and situations to cover, how many scenarios, and what makes "
+                "them different from what the other writers were given.\n\n"
+                "**Brief it fifteen to twenty scenarios, never two or three.** A writer reads the "
+                "world once and then writes its whole slice, so that reading is paid once per "
+                "writer whatever the slice is worth. Measured on a hundred-scenario run: 45 "
+                "writers were briefed instead of the seven the budget allows, the world was read "
+                "215 times, and the stage cost $12.86 where fifty scenarios in slices of sixteen "
+                "cost $3.85. Group the empty cells until a brief is worth a session."
+            ),
+            instructions=(
+                f"## This agent\n\n{contract.brief(with_data=True, sample_rows=3)}"
+                f"\n\n## Its world\n\n{world_summary(destination)}"
+                f"\n\n{load_skill(SKILL)}"
+                + discovered_skills(
+                    modality=contract.modality,
+                    voicemail="on" if voicemail_enabled() else "off",
+                    conversational="yes" if contract.conversational else "no",
+                )
+                + (
+                    "\n\n## Not yours to do\n\nThe method above names tools this session does "
+                    "not have: "
+                    + ", ".join(
+                        f"`{name}`"
+                        for name in TOOL_NAMES
+                        if name not in WRITER_TOOLS
+                    )
+                    + ". Planning the suite, saving it, reading it back and changing the contract "
+                    "belong to whoever briefed you. Where the method tells you to reach for one, "
+                    "say so in your report instead and it will be done for you."
+                )
+                + "\n\n## Your part of the suite\n\nYou are one writer among several working "
+                "on the same suite at the same time. Your brief names what the others were "
+                "given; that list is there so you can stay out of theirs, not so you can "
+                "cover it. Write only what your own brief names: a scenario that strays is "
+                "either a duplicate of somebody else's or a gap in yours. The names already "
+                "taken come back with every submission.\n\n"
+                "Each scenario carries its use case verbatim and its own one-line `branch` "
+                "saying what makes it different from the others you write here. **Branches are "
+                "where the variety lives**: the ordinary path, the branch that cannot be "
+                "completed, the rule under pressure, state that has to carry across turns, the "
+                "same request against a differently seeded world.\n\n"
+                "What each one has to be, before you submit it:\n"
+                "  - every value real, read out of the world with inspect_world, never invented\n"
+                "  - an instruction that is a circumstance the person is living through, not a "
+                "script of lines to say\n"
+                "  - a setup that makes true whatever the instruction presumes, and a ready "
+                "check that proves it\n"
+                "  - a solution worked out with try_calls first, so the gates are not where you "
+                "find out it cannot be passed\n"
+                "  - sub-goals named from the shared catalogue, and checks that assert the right "
+                "call with the right arguments or the right end state, never that something "
+                "merely happened\n"
+                "  - a scenario a competent agent could plausibly fail. If any correct "
+                "implementation passes it for free, it teaches nothing and is not worth the "
+                "run\n\n"
+                "**The number in your brief is yours, not the suite's.** Every submission "
+                "reports how many the whole suite holds, across every writer; that count is not "
+                "your target and reaching it is not your job. Write what you were asked for and "
+                "stop.\n\n"
+                "Look at the world first, and read the sub-goals already defined. Submit each "
+                "scenario with submit_scenario as you prove it rather than holding them to the "
+                "end, then stop: do not save, and do not ask what to do next.\n\n"
+                "**Finish with a report, because it is the only thing the loop sees of your "
+                "session.** Name every scenario you wrote and the cell each one covers; say "
+                "which part of your brief you could not cover and why, whether a gate refused "
+                "you and what it said, and anything the world would not support. A round is "
+                "planned from these reports, so a brief that comes back with a bare count "
+                "leaves the next round guessing at what is still missing."
+            ),
+            servers={
+                SCENARIO_SERVER: ToolServer(
+                    name=server.name,
+                    version=server.version,
+                    tools=[spec for spec in server.tools if spec.name in WRITER_TOOLS],
+                )
+            },
+            max_turns=min(WRITER_TURNS, budget),
+            # Empty inherits the parent's model.
+            model=writer_model(),
+        )
+    }
 
 
 def open_stage(
@@ -77,16 +192,26 @@ def open_stage(
     """A live write-the-scenarios stage, and where it will write."""
     destination = out or artifact_dir(contract.agent)
     server, kept = scenario_tools(contract, destination, destination, wanted=wanted)
+    budget = max_turns or turns_for(wanted)
+    affordable = max(budget // WRITER_TURNS, 1)
+    at_once = max(min(affordable, MOST_WORKERS_AT_ONCE), 1)
+    most_a_writer_can_write = max(WRITER_TURNS // TURNS_EACH, 1)
+    hands_out = wanted > HANDS_OUT_ABOVE
+    loop_server = ToolServer(
+        name=server.name,
+        version=server.version,
+        tools=[
+            one
+            for one in server.tools
+            if not hands_out or one.name not in WRITES_A_SCENARIO
+        ],
+    )
     spec = SessionSpec(
-        # Same ordering as the slice writer: the agent and its world before the method.
         system_prompt=(
-            f"## This agent\n\n{contract.brief(with_data=True)}"
+            f"## This agent\n\n{contract.brief(with_data=True, sample_rows=3)}"
             f"\n\n## Its world\n\n{world_summary(destination)}"
-            f"\n\n{load_skill(SKILL)}"
-            # Planning and writing are two stages. This session does the first, so it gets both;
-            # a slice writer gets the writing skill alone, because the plan is already made and
-            # widening a slice is the one thing it must not do.
-            + (f"\n\n{load_skill(PLAN_SKILL)}" if worth_delegating(wanted) else "")
+            + f"\n\n{load_skill(SKILL)}"
+            + f"\n\n{load_skill(PLAN_SKILL, preamble=False)}"
             # Whatever this kind of agent adds on top. A file under skills/kinds/ that
             # declares `applies_to: modality=<kind>` is appended here, so supporting a
             # new kind of agent is adding that file and nothing else.
@@ -94,6 +219,48 @@ def open_stage(
             + discovered_skills(
                 modality=contract.modality,
                 voicemail="on" if voicemail_enabled() else "off",
+                conversational="yes" if contract.conversational else "no",
+            )
+            + f"\n\nPlan the grid first, then decide how to cut it. You choose how many "
+            f"scenarios each writer gets and how many writers the suite needs; you have read the "
+            f"grid and know which cells are rich and which are thin, and an even split sizes a "
+            f"use case with one real branch the same as one with six.\n\n"
+            f"Two limits are not yours to choose. A writer may spend {WRITER_TURNS} turns and a "
+            f"scenario costs about {TURNS_EACH}, so one writer is worth roughly "
+            f"{most_a_writer_can_write} scenarios: brief it more and it runs out mid-slice and "
+            f"the rest of its cells come back empty. And at most {at_once} writers run at once; "
+            f"a brief beyond that is refused and has written nothing.\n\n"
+            f"Brief a whole round in ONE message: sub-agents briefed in the same message run at "
+            f"the same time, and briefing one, waiting for it, then briefing the next runs them "
+            f"one at a time for no reason. That single choice is the difference between a large "
+            f"suite taking one writer's time and taking {at_once} times as long. Each brief names "
+            f"different cells, so no two writers are given the same work.\n\n"
+            f"A writer runs only when you call it. Writing that writers have been dispatched, or "
+            f"that you are standing by for them, calls nothing: the stage ends there with whatever "
+            f"was already submitted. One hosted run announced three writers and saved 11 of 50.\n\n"
+            + (
+                "\n\nYou do not hold the scenario-writing tools on this suite. It is too large to "
+                "write in one context and writing it there is what makes a twenty take forty "
+                "minutes, so this stage is yours to plan, brief and check, and the scenarios are "
+                "your sub-agents' to write. Brief a whole round in ONE message.\n\n"
+                if wanted > HANDS_OUT_ABOVE
+                else ""
+            )
+            + (
+            f"Every writer comes back with a report: what it wrote, and what of its brief it "
+            f"could not cover. Read those, then call suite_progress, which names the cells still "
+            f"empty without returning a scenario body. The next round goes out the same way, in "
+            f"one message, for what is still missing. Repeat until suite_progress reports the "
+            f"count. Never say work is running on the strength of a brief you did not see "
+            f"accepted, and check suite_progress before you believe your own count.")
+            + (
+                f"\n\nYou have {budget} turns for this whole stage and every tool call spends one, "
+                f"including the calls your writers make: a writer reads the world in its own "
+                f"context, which is far cheaper than carrying it in yours, but its turns come out "
+                f"of this same budget. A writer may spend up to {WRITER_TURNS}, so across all "
+                f"rounds together brief at most {max(budget // WRITER_TURNS, 1)} writers and keep "
+                f"turns back for yourself. Running out mid-suite loses everything the spent turns "
+                f"bought."
             )
             + (
                 f"\n\nWrite {wanted} scenarios."
@@ -103,22 +270,24 @@ def open_stage(
                 + ". Submitting one under an existing name replaces it."
             )
         ),
-        servers={SCENARIO_SERVER: server},
-        builtins=("AskUserQuestion",),
+        servers={SCENARIO_SERVER: loop_server},
+        builtins=("AskUserQuestion", DELEGATE_TOOL),
+        workers=writer_worker(contract, destination, server, budget),
         cwd=str(destination.parent if destination.parent.exists() else Path.cwd()),
-        max_turns=max_turns or turns_for(wanted),
+        max_turns=budget,
         model=chosen_model(),
         ask=ask,
         thinking=True,
-        # Silence means something different once the writing is delegated: see the constant.
-        idle_timeout_seconds=(
-            QUIET_WHILE_DELEGATING_SECONDS if worth_delegating(wanted) else 0.0
-        ),
+        idle_timeout_seconds=QUIET_WHILE_DELEGATING_SECONDS,
     )
     return Stage(spec, name=SKILL), destination
 
 
-def opening(contract: AgentContract, wanted: int = 10, existing: int = 0) -> str:
+def opening(
+    contract: AgentContract,
+    wanted: int = 10,
+    existing: int = 0,
+) -> str:
     if existing:
         return (
             f"There are already {existing} scenarios for {contract.agent!r}, and they are "
@@ -129,9 +298,12 @@ def opening(contract: AgentContract, wanted: int = 10, existing: int = 0) -> str
     return (
         f"Write {wanted} scenarios for {contract.agent!r}.\n\n"
         "Look at the world first with inspect_world so every scenario names real records, and "
-        "read the sub-goals already defined. After that inspection, immediately work out and "
-        "submit one scenario at a time; never hold the whole suite in one long response. Emit a "
-        "tool call after each scenario so progress is visible and proved work survives a stop. "
+        "read the sub-goals already defined. Then plan the suite, and decide from that plan "
+        "whether to write it yourself or to brief writers to write parts of it at the same "
+        "time; your method says how to judge that and you are the one who saves either way.\n\n"
+        "However it is written, each scenario is worked out and submitted on its own; never "
+        "hold a suite in one long response. Emit a tool call after each scenario so progress is "
+        "visible and proved work survives a stop. "
         "Work out each scenario's solution with try_calls before you submit it, because a "
         "scenario is only kept if its solution passes its own "
         "checks and those checks fail without it. In a source-provisioned world, keep each "
@@ -147,13 +319,6 @@ def opening(contract: AgentContract, wanted: int = 10, existing: int = 0) -> str
         "across several turns. If a proof says an intended check is vacuous or broken, repair "
         "that named sub-goal with add_sub_goal and resubmit. Never evade a gate by deleting a "
         "check for behavior the scenario still claims to test. Then save_scenarios."
-        + (
-            "\n\nFor a suite rather than one scenario, say briefly how you are splitting it "
-            "across the agent's use cases and then write it with generate_suite in the same "
-            "turn: it runs a writer per use case at the same time and saves what they prove."
-            if worth_delegating(wanted)
-            else ""
-        )
     )
 
 
@@ -164,26 +329,6 @@ def load(destination: Path) -> list[Scenario]:
 
 # What a suite costs, and what it is allowed to cost.
 #
-# Writers run as separate model sessions, so wall clock is roughly the number of scenarios
-# divided by how many run at once. The two ceilings below exist for different reasons: one
-# protects the machine, the other protects the person waiting. Asking for a thousand scenarios
-# is a reasonable thing to want and an unreasonable thing to do in one go, so a large ask is
-# served a batch at a time with the rest offered back.
-AT_ONCE = 4
-# Writers each drive their own model session, so this is a request rate as much as a concurrency.
-# Eight of them exhausts the provider quota and the writers that get the 429 lose their whole
-# slice, which costs more scenarios than the extra concurrency buys.
-MOST_AT_ONCE = int(os.environ.get("HARNESS_WRITERS_AT_ONCE") or 4)
-# How many a single generate_suite pass will write. A hosted run is unattended, so a cap here
-# does not pause for a person, it just returns fewer than were asked for and stops. Kept as a
-# backstop against a runaway ask rather than as a batch size.
-MOST_IN_ONE_GO = 1000
-
-# How many times the suite is reviewed and topped up after the first pass. One is enough to
-# catch a slice that came back short or a use case nobody covered; more turns it into a loop
-# that keeps finding smaller things to say.
-TOP_UP_ROUNDS = 1
-
 # How long a session may say nothing before the harness treats it as hung, where the default of
 # ten minutes is wrong for this stage.
 #
@@ -196,18 +341,9 @@ TOP_UP_ROUNDS = 1
 # Still bounded, because the reason the bound exists is real: a dropped provider stream leaves a
 # session alive forever. The outer bound is the run's own authoring deadline.
 QUIET_WHILE_DELEGATING_SECONDS = 5400.0
-# A writer is quiet while one of its own tool calls runs, and its longest is a proof: restore the
-# world, apply setup, play the solution, then play it again against an untouched world. Minutes,
-# not an hour, and keeping this shorter than the planner's bound is what frees a stuck writer's
-# slot for the next slice instead of holding it until the whole stage times out.
-QUIET_WHILE_WRITING_SECONDS = 1800.0
 
 
-# A session refused by the provider is retried rather than abandoned: its work is still worth doing and
-# a slice keeps what it already proved. The quota is measured over a minute, so each wait clears a
-# minute; a shorter one asks inside the same window and is refused again for the same reason. What is
-# bounded is the total, not the number of tries: five minutes of waiting is worth a slice, and a run
-# that waits longer than that is not going to be rescued by waiting more.
+# A provider refusal is retried; what is bounded is the total wait, not the number of tries.
 RATE_LIMIT_BACKOFF_SECONDS = 60
 RATE_LIMIT_JITTER_SECONDS = 30
 RATE_LIMIT_TOTAL_WAIT_SECONDS = 300
@@ -298,6 +434,36 @@ async def survive_refusal(
         if on_event:
             on_event({"type": "waiting_on_provider", "what": what, "seconds": pause})
         await asyncio.sleep(pause)
+
+
+# The review pass runs its own tool server, kept apart from the writers' one so a reviewer can
+# only report gaps and never submit or save a scenario itself.
+REVIEW_SERVER = "suite-review"
+# What a suite costs, and what it is allowed to cost.
+#
+# Writers run as separate model sessions, so wall clock is roughly the number of scenarios
+# divided by how many run at once. The two ceilings below exist for different reasons: one
+# protects the machine, the other protects the person waiting. Asking for a thousand scenarios
+# is a reasonable thing to want and an unreasonable thing to do in one go, so a large ask is
+# served a batch at a time with the rest offered back.
+AT_ONCE = 4
+# Writers each drive their own model session, so this is a request rate as much as a concurrency.
+# Eight of them exhausts the provider quota and the writers that get the 429 lose their whole
+# slice, which costs more scenarios than the extra concurrency buys.
+MOST_AT_ONCE = int(os.environ.get("HARNESS_WRITERS_AT_ONCE") or 4)
+# How many a single generate_suite pass will write. A hosted run is unattended, so a cap here
+# does not pause for a person, it just returns fewer than were asked for and stops. Kept as a
+# backstop against a runaway ask rather than as a batch size.
+MOST_IN_ONE_GO = 1000
+# How many times the suite is reviewed and topped up after the first pass. One is enough to
+# catch a slice that came back short or a use case nobody covered; more turns it into a loop
+# that keeps finding smaller things to say.
+TOP_UP_ROUNDS = 1
+# A writer is quiet while one of its own tool calls runs, and its longest is a proof: restore the
+# world, apply setup, play the solution, then play it again against an untouched world. Minutes,
+# not an hour, and keeping this shorter than the planner's bound is what frees a stuck writer's
+# slot for the next slice instead of holding it until the whole stage times out.
+QUIET_WHILE_WRITING_SECONDS = 1800.0
 
 
 @dataclass(frozen=True)
@@ -398,13 +564,6 @@ _LETTER_BLOCK = "abc"
 
 def _slot(of: str, index: int) -> int:
     """A stable number for one slice, so its share of the value space does not move between passes.
-
-    Using the position in the current batch looked right and was not: a second `generate_suite` pass
-    numbers its slices from zero again, so its first writer is handed the same letters and the same
-    leading digits as the first writer of the pass before it, and their codes collide. Measured on a
-    377-scenario run: two verification codes shared, both between passes. Derived from the slice's own
-    name instead, which does not change when the batch does, and deterministically so two runs of the
-    same plan partition the same way.
     """
     if not of:
         return index
@@ -414,10 +573,7 @@ def _slot(of: str, index: int) -> int:
 def callers_for(index: int, wanted: int, slice_name: str = "") -> str:
     """Which callers this slice should write, so the suite varies across slices as well as within.
 
-    Instruction alone cannot do this. Each writer is blind to the others, so each independently
-    picks the safest value and the suite converges on it: measured across three suites, more
-    than half the callers came out "Professional and formal" and over three quarters American,
-    with nobody doing anything wrong. Worse, a slice writing a single scenario has nothing to
+    Instruction alone cannot do this. Worse, a slice writing a single scenario has nothing to
     vary at all.
 
     So the spread is dealt out here, the same way the work is. Each slice is handed a different
@@ -442,9 +598,6 @@ def callers_for(index: int, wanted: int, slice_name: str = "") -> str:
     # a collision impossible: each writer owns some initial letters and one leading digit, so no
     # shared list of names or codes has to exist for the values to stay distinct.
     slot = _slot(slice_name, index)
-    # More letters where the slice is larger: a writer inventing twelve people from three initials
-    # reuses a name, which is most of why distinctness measured 73 percent rather than the 90 the
-    # suite rule wants.
     block = max(len(_LETTER_BLOCK), min(8, (max(1, wanted) + 2) // 3))
     letters = "".join(
         _NAME_LETTERS[(slot * block + step) % len(_NAME_LETTERS)]
@@ -931,7 +1084,10 @@ async def write(
         # The planning turn is the expensive one to lose: a refusal here costs the whole suite, not
         # one slice, so it waits the same way a writer does.
         await survive_refusal(
-            lambda: stage.say(opening(contract, wanted), on_event=on_event),
+            lambda: stage.say(
+                opening(contract, wanted),
+                on_event=on_event,
+            ),
             what="the opening turn",
             on_event=on_event,
         )

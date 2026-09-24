@@ -23,6 +23,7 @@ other's dependencies installed.
 
 from __future__ import annotations
 
+import os
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
@@ -93,7 +94,33 @@ def tool_server(
 # session build time rather than silently dropped.
 FILE_TOOLS = ("Read", "Glob", "Grep")
 ASK_TOOL = "AskUserQuestion"
-KNOWN_BUILTINS = (*FILE_TOOLS, ASK_TOOL)
+# Backend-neutral name for running part of a stage in a sub-session.
+DELEGATE_TOOL = "Delegate"
+KNOWN_BUILTINS = (*FILE_TOOLS, ASK_TOOL, DELEGATE_TOOL)
+
+# Ceiling on workers in flight at once.
+MOST_WORKERS_AT_ONCE = int(os.environ.get("ALK_HARNESS_WORKERS_AT_ONCE", "12") or 12)
+
+
+@dataclass
+class WorkerSpec:
+    """A worker the model may run to do part of its stage, in its own session."""
+
+    description: str
+    instructions: str
+    servers: dict[str, ToolServer] = field(default_factory=dict)
+    builtins: tuple[str, ...] = ()
+    max_turns: int = 40
+    # Empty inherits the parent's model.
+    model: str = ""
+
+    def granted(self, parent: "SessionSpec") -> list[str]:
+        """Every tool name this worker may call, falling back to the parent's."""
+        servers = self.servers or parent.servers
+        names = [*(self.builtins or parent.builtins)]
+        for server_name, server in servers.items():
+            names.extend(qualified(server_name, spec.name) for spec in server.tools)
+        return names
 
 
 @dataclass
@@ -143,6 +170,8 @@ class SessionSpec:
     # own bound: it is working the whole time and has nothing to say while it does, so the
     # default reads honest work as a hang and kills it.
     idle_timeout_seconds: float = 0.0
+    # Workers this session may run, by name.
+    workers: dict[str, WorkerSpec] = field(default_factory=dict)
     conversation: ConversationSession | None = None
 
     def granted(self) -> list[str]:
@@ -151,6 +180,13 @@ class SessionSpec:
         for server_name, server in self.servers.items():
             names.extend(qualified(server_name, spec.name) for spec in server.tools)
         return names
+
+    def granted_anywhere(self) -> list[str]:
+        """Every tool name this session or any of its workers may call."""
+        names = list(self.granted())
+        for worker in self.workers.values():
+            names.extend(worker.granted(self))
+        return list(dict.fromkeys(names))
 
     def grant(self, server_name: str, server: ToolServer) -> None:
         """Add a tool server before the session opens."""
@@ -185,6 +221,8 @@ class Call:
     id: str
     name: str
     arguments: dict[str, Any] = field(default_factory=dict)
+    # Which agent made the call; empty when the backend does not distinguish one.
+    by: str = ""
     invocation_id: str = ""
 
 

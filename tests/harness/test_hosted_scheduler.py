@@ -255,7 +255,7 @@ class FakeOutbound:
         )
 
     async def scenario_retried(
-        self, *, scenario_key: str, from_world: int, to_world: int
+        self, *, scenario_key: str, from_world: int, to_world: int, cause: str = ""
     ) -> None:
         self.events.append(
             (
@@ -264,6 +264,7 @@ class FakeOutbound:
                     "scenario_key": scenario_key,
                     "from_world": from_world,
                     "to_world": to_world,
+                    "cause": cause,
                 },
             )
         )
@@ -2819,7 +2820,11 @@ def test_call_aborted_retries_on_reset_same_world_when_pool_size_is_one() -> Non
         retry_events = [
             kwargs for event, kwargs in outbound.events if event == "scenario_retried"
         ]
-        assert retry_events == [{"scenario_key": "s1", "from_world": 0, "to_world": 0}]
+        assert len(retry_events) == 1
+        replayed = retry_events[0]
+        assert replayed["scenario_key"] == "s1"
+        assert (replayed["from_world"], replayed["to_world"]) == (0, 0)
+        assert replayed["cause"].startswith("call_failed:")
         await pool.close()
 
     asyncio.run(scenario())
@@ -3734,7 +3739,7 @@ def test_a_judged_sub_goal_failing_fails_the_scenario(monkeypatch) -> None:
     asyncio.run(scenario())
 
 
-def test_an_undecided_judge_does_not_fail_a_scenario_its_checks_passed(
+def test_an_undecided_judge_never_reads_as_a_pass(
     monkeypatch,
 ) -> None:
     """A judge that could not tell is not evidence against the agent, so it cannot read as failed.
@@ -3778,15 +3783,15 @@ def test_an_undecided_judge_does_not_fail_a_scenario_its_checks_passed(
         ]
         result = await scheduler.run(scenarios)
         receipt = result.receipts[0]
-        assert receipt.status == "passed"
+        assert receipt.status == "errored"
         assert [goal.held for goal in receipt.sub_goals] == [True, None]
-        assert receipt.failure is None
+        assert receipt.failure.code == "judge_undecided"
         await pool.close()
 
     asyncio.run(scenario())
 
 
-def test_a_judge_that_settled_nothing_still_does_not_error_the_scenario(monkeypatch) -> None:
+def test_a_judge_that_settled_nothing_is_not_a_pass(monkeypatch) -> None:
     """No judge outcome errors a scenario, including every sub-goal undecided.
 
     The call ran and its evidence stands. The unsettled sub-goals stay visible as `None` on the
@@ -3827,15 +3832,15 @@ def test_a_judge_that_settled_nothing_still_does_not_error_the_scenario(monkeypa
         ]
         result = await scheduler.run(scenarios)
         receipt = result.receipts[0]
-        assert receipt.status == "passed"
+        assert receipt.status == "errored"
         assert [goal.held for goal in receipt.sub_goals] == [None, None]
-        assert receipt.failure is None
+        assert receipt.failure.code == "judge_undecided"
         await pool.close()
 
     asyncio.run(scenario())
 
 
-def test_a_judge_that_raises_does_not_error_the_scenario(monkeypatch) -> None:
+def test_a_judge_that_raises_is_not_a_pass_and_leaks_nothing(monkeypatch) -> None:
     """The scheduler's own net, not the judge's.
 
     `judge()` swallows its own exceptions today, so this never fires in production. It is pinned
@@ -3876,10 +3881,10 @@ def test_a_judge_that_raises_does_not_error_the_scenario(monkeypatch) -> None:
         ]
         result = await scheduler.run(scenarios)
         receipt = result.receipts[0]
-        assert receipt.status == "passed"
-        assert receipt.failure is None
+        assert receipt.status == "errored"
+        assert receipt.failure.code == "judge_undecided"
         assert [goal.held for goal in receipt.sub_goals] == [None]
-        assert "the judge could not run" in (receipt.sub_goals[0].reason or "")
+        assert receipt.sub_goals[0].reason == ""
         await pool.close()
 
     asyncio.run(scenario())
@@ -3888,7 +3893,7 @@ def test_a_judge_that_raises_does_not_error_the_scenario(monkeypatch) -> None:
 @pytest.mark.parametrize(
     "verdict", [None, True, (True, "why", "extra")], ids=["none", "bare-bool", "three-tuple"]
 )
-def test_a_judge_answering_in_the_wrong_shape_does_not_error_the_scenario(
+def test_a_judge_answering_in_the_wrong_shape_is_not_a_pass(
     verdict, monkeypatch
 ) -> None:
     """The judge is an injected seam, so its return shape is not guaranteed by the caller.
@@ -3931,10 +3936,10 @@ def test_a_judge_answering_in_the_wrong_shape_does_not_error_the_scenario(
         ]
         result = await scheduler.run(scenarios)
         receipt = result.receipts[0]
-        assert receipt.status == "passed"
-        assert receipt.failure is None
+        assert receipt.status == "errored"
+        assert receipt.failure.code == "judge_undecided"
         assert [goal.held for goal in receipt.sub_goals] == [None]
-        assert "no usable verdict" in (receipt.sub_goals[0].reason or "")
+        assert receipt.sub_goals[0].reason == ""
         await pool.close()
 
     asyncio.run(scenario())
@@ -4037,7 +4042,7 @@ def test_a_judge_answering_with_a_two_element_list_is_still_read(monkeypatch) ->
     asyncio.run(scenario())
 
 
-def test_a_judge_whose_signature_does_not_match_does_not_error_the_scenario(
+def test_a_judge_whose_signature_does_not_match_is_not_a_pass(
     monkeypatch,
 ) -> None:
     """The call itself, not the awaited result.
@@ -4080,10 +4085,10 @@ def test_a_judge_whose_signature_does_not_match_does_not_error_the_scenario(
         ]
         result = await scheduler.run(scenarios)
         receipt = result.receipts[0]
-        assert receipt.status == "passed"
-        assert receipt.failure is None
+        assert receipt.status == "errored"
+        assert receipt.failure.code == "judge_undecided"
         assert receipt.sub_goals[0].held is None
-        assert "the judge could not run" in (receipt.sub_goals[0].reason or "")
+        assert receipt.sub_goals[0].reason == ""
         await pool.close()
 
     asyncio.run(scenario())

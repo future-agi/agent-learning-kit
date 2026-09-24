@@ -475,6 +475,17 @@ def _dials_the_person(
     return direction.strip().lower() == "outbound"
 
 
+def _target_speaks_first(
+    doc: Mapping[str, Any],
+    environ: Mapping[str, str],
+    simulator_config: Mapping[str, Any],
+) -> bool:
+    # Only an explicit True overrides the agent's own direction.
+    if simulator_config.get("target_speaks_first") is True:
+        return True
+    return not _dials_the_person(doc, environ)
+
+
 def _build_spec(
     *,
     run_id: str,
@@ -595,9 +606,9 @@ def _build_spec(
         ),
         simulator=simulator,
         # An outbound agent dials; the person answers, so the caller opens.
-        direction="simulator_first"
-        if _dials_the_person(doc, environ)
-        else "agent_first",
+        direction="agent_first"
+        if _target_speaks_first(doc, environ, simulator_config)
+        else "simulator_first",
         max_seconds=call_timeout_seconds,
         min_turn_messages=min_turn_messages,
         # Hosted targets can legitimately spend tens of seconds in a provider call or a tool
