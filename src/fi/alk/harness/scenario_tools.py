@@ -63,6 +63,7 @@ from .scenario import (
     redteam_problems,
     level_name,
     _pinned_identity,
+    _QUIET_INTERFACE,
     unpinned_callers,
     crowded_cells,
     duplicated_branches,
@@ -344,6 +345,8 @@ def journalled(destination: Path) -> list[Scenario]:
 MOST_OF_A_SUITE = 0.34
 # Below this a suite is too small for a share to mean anything.
 FEWEST_FOR_A_SHARE = 8
+# Largest share of a suite heard in the clear.
+MOST_ON_A_QUIET_LINE = 0.15
 
 
 def _first_names_on_disk(destination: Path, excluding: str = "") -> set[str]:
@@ -641,6 +644,16 @@ def _over_its_share(
             "suite is plain: write this cell with overlay 'none', or a task level nothing has "
             "covered plainly yet"
         )
+    if level_name(coverage.get("interface") or "") in _QUIET_INTERFACE:
+        quiet = sum(
+            1 for one in kept if level_name((one.coverage or {}).get("interface") or "") in _QUIET_INTERFACE
+        )
+        if quiet >= max(1, int(wanted * MOST_ON_A_QUIET_LINE)):
+            return (
+                f"{quiet} of {wanted} are already on a quiet line, which is its whole share: real "
+                "callers are rarely somewhere silent. Put this caller somewhere: move it to a noisy "
+                "interface level and name the place in background_noise"
+            )
     for axis, levels in grid.items():
         if axis == "overlay":
             # Capped above, on the share of the suite rather than per level.
