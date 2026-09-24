@@ -7961,8 +7961,9 @@ def test_an_overlay_that_names_no_attack_is_cleared_rather_than_claimed():
     assert kept.overlay == "prompt_injection" and said == ""
 
 
-def test_a_save_refused_for_the_suites_shape_is_accepted_on_the_third_try(tmp_path, monkeypatch):
-    """A five-hundred looped for a quarter of an hour on a keyword count it could not fix."""
+def test_a_save_refused_for_the_suites_shape_is_accepted_on_the_second_try(tmp_path, monkeypatch):
+    """A five-hundred looped for a quarter of an hour on a keyword count it could not fix, and a fifty
+    spent as long between two saves rewriting scenarios into the share caps."""
     import asyncio
 
     from mcp.types import CallToolRequestParams
@@ -7981,10 +7982,10 @@ def test_a_save_refused_for_the_suites_shape_is_accepted_on_the_third_try(tmp_pa
         )
         return answer.isError, answer.content[0].text
 
-    first, second, third = (asyncio.run(save()) for _ in range(3))
-    assert first[0] and second[0] and "overwritten by the next save" in first[1]
-    assert not third[0]
-    assert "too many distinct keywords" in third[1] and "End the stage now" in third[1]
+    first, second = (asyncio.run(save()) for _ in range(2))
+    assert first[0] and "one pass, not a rewrite" in first[1]
+    assert not second[0]
+    assert "too many distinct keywords" in second[1] and "End the stage now" in second[1]
 
 
 def test_a_judged_claim_of_accuracy_or_unrenderable_audio_is_named_for_rewording():

@@ -1173,7 +1173,7 @@ def _coverage_gaps(coverage: dict[str, Any]) -> str:
 
 
 # A save refused for the suite's shape ends a stage that cannot fix it rather than looping on it.
-SAVE_REFUSALS_BEFORE_ACCEPTING = 3
+SAVE_REFUSALS_BEFORE_ACCEPTING = 2
 
 
 def scenario_tools(
@@ -2220,8 +2220,9 @@ def scenario_tools(
                     said
                     + "\n\nSaved as a checkpoint, but the suite is not ready to run:\n  - "
                     + "\n  - ".join(diversity)
-                    + "\nFix these with submit_scenario and drop_scenario, then save again. A file "
-                    "changed any other way is overwritten by the next save."
+                    + "\nFix what a handful of submit_scenario and drop_scenario calls can fix, then "
+                    "save again: the next save keeps the suite either way, so this is one pass, not "
+                    "a rewrite. A file changed any other way is overwritten by the next save."
                 )
             said += (
                 "\n\nStill open after "
