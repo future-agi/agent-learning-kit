@@ -4,10 +4,9 @@ A scenario that sets ``background_noise`` wants the agent to handle a caller pho
 real: a car, a street, an office. The clip is chosen here and handed to the voice engine, which
 mixes it under the simulated caller's audio.
 
-Two sources, in order. A run may point ``ALK_BACKGROUND_NOISE_CATALOG`` at a JSON file of clips
-(each with an ``environment`` tag and a ``url`` or ``path``); the catalog stays a local file so its
-asset locations are never committed here. When no catalog matches, a LiveKit builtin clip is used,
-which needs no external asset and always works.
+Two sources, pooled. ``ALK_BACKGROUND_NOISE_CATALOG`` may carry a JSON list of clips, inline or as a
+file path, each with an ``environment`` tag and a ``url`` or ``path``; the platform supplies its own.
+LiveKit's builtin clips join the same pool, and need no external asset.
 """
 
 from __future__ import annotations
@@ -43,7 +42,6 @@ _BUILTIN_BY_ENVIRONMENT: dict[str, str] = {
 }
 # A scenario that names a quiet place is asking to be heard in the clear, not for a default bed.
 _SILENT_ENVIRONMENTS = frozenset({"quiet", "silent", "silence", "none", "clear", "quiet_line"})
-_DEFAULT_BUILTIN = "OFFICE_AMBIENCE"
 
 
 def distinct_beds(environments) -> dict[str, list[str]]:
@@ -80,33 +78,46 @@ def enabled() -> bool:
     )
 
 
+def _catalogue() -> list[tuple[str, str]]:
+    """``(environment, location)`` for each clip in ``ALK_BACKGROUND_NOISE_CATALOG``, inline JSON or a path."""
+    raw = os.environ.get("ALK_BACKGROUND_NOISE_CATALOG", "").strip()
+    if not raw:
+        return []
+    try:
+        if raw.startswith("["):
+            entries = json.loads(raw)
+        elif Path(raw).is_file():
+            entries = json.loads(Path(raw).read_text(encoding="utf-8"))
+        else:
+            return []
+    except (OSError, ValueError):
+        return []
+    if not isinstance(entries, list):
+        return []
+    return [
+        (str(entry.get("environment", "")).strip().lower(), str(entry.get("url") or entry.get("path")).strip())
+        for entry in entries
+        if isinstance(entry, dict) and (entry.get("url") or entry.get("path"))
+    ]
+
+
 def source_for(environment: str = "", seed: str = "") -> str:
     """A background-noise source for a scenario.
 
-    Returns a ``url``/``path`` from the configured catalog when one matches the environment, else the
-    name of a LiveKit builtin clip. The choice is deterministic in ``seed`` so the same scenario
-    hears the same place across runs.
+    Returns a ``url``/``path`` from the configured catalog or the name of a LiveKit builtin clip,
+    drawn from every bed that matches the environment, or from all of them when none does. The
+    choice is deterministic in ``seed`` so the same scenario hears the same place across runs.
     """
     env = (environment or "").strip().lower()
     if env in _SILENT_ENVIRONMENTS:
         return ""
-    catalog = os.environ.get("ALK_BACKGROUND_NOISE_CATALOG", "").strip()
-    if catalog and Path(catalog).is_file():
-        try:
-            entries = json.loads(Path(catalog).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            entries = []
-        if isinstance(entries, list) and entries:
-            pool = [
-                entry
-                for entry in entries
-                if str(entry.get("environment", "")).strip().lower() == env
-            ] or entries
-            chosen = pool[sum(ord(character) for character in (seed or env or "x")) % len(pool)]
-            located = str(chosen.get("url") or chosen.get("path") or "").strip()
-            if located:
-                return located
-    return _BUILTIN_BY_ENVIRONMENT.get(env, _DEFAULT_BUILTIN)
+    clips = _catalogue()
+    pool = [location for tag, location in clips if tag == env]
+    if env in _BUILTIN_BY_ENVIRONMENT:
+        pool.append(_BUILTIN_BY_ENVIRONMENT[env])
+    if not pool:
+        pool = [location for _, location in clips] + sorted(set(_BUILTIN_BY_ENVIRONMENT.values()))
+    return pool[sum(ord(character) for character in (seed or env or "x")) % len(pool)]
 
 
 def scenario_source(

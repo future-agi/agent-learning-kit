@@ -821,6 +821,8 @@ class _TestRunnerAgent(Agent):
                 if not clip_source:
                     return
                 self._background_noise_file = clip_source
+            elif source and Path(source).is_file():
+                clip_source = source
             elif source:
                 clip_source = getattr(BuiltinAudioClip, source, None)
                 if clip_source is None:
@@ -828,6 +830,8 @@ class _TestRunnerAgent(Agent):
                         "background audio clip %r is not one LiveKit ships", source
                     )
                     return
+            if clip_source is not None:
+                volume *= await _bed_gain(clip_source)
             # A player is created even with no ambience clip, because a mailbox tone needs a
             # published track whether or not this scenario also asked for a room.
             player = (
@@ -3314,6 +3318,41 @@ def _voicemail_tone_style() -> str:
         or _DEFAULT_VOICEMAIL_STYLE
     )
     return style if style in _VOICEMAIL_TONE_BY_STYLE else ""
+
+
+# Clips are recorded at wildly different levels; each is scaled to the office clip's loudness,
+# the level the volume above was tuned against.
+_BED_RMS: dict[str, float] = {}
+
+
+async def _bed_rms(path: str) -> float:
+    """Root-mean-square level of up to twenty seconds of a clip, as the mixer will receive it."""
+    if path not in _BED_RMS:
+        total, count = 0, 0
+        frames = audio_frames_from_file(path)
+        try:
+            async for frame in frames:
+                samples = array.array("h", bytes(frame.data))
+                total += sum(sample * sample for sample in samples)
+                count += len(samples)
+                if count >= _BACKGROUND_MIXER_RATE * 20:
+                    break
+        finally:
+            await frames.aclose()
+        _BED_RMS[path] = math.sqrt(total / count) if count else 0.0
+    return _BED_RMS[path]
+
+
+async def _bed_gain(clip: Any) -> float:
+    """The factor that brings a clip to the office clip's loudness, or 1.0 when either is unreadable."""
+    try:
+        path = clip.path() if isinstance(clip, BuiltinAudioClip) else str(clip)
+        reference = await _bed_rms(BuiltinAudioClip.OFFICE_AMBIENCE.path())
+        level = await _bed_rms(path)
+    except Exception:
+        logger.warning("background clip level not measured", exc_info=True)
+        return 1.0
+    return reference / level if reference and level else 1.0
 
 
 def _downloaded_audio(source: str) -> str | None:

@@ -785,11 +785,11 @@ GOOD   interface: disfluent          persona: communication_style "halting, rest
 There cannot be a mismatch between the cell, the persona and the words the caller actually says.
 A suite whose accents are all `Neutral` has tested one accent, whatever its coverage map reports.
 
-**Noise places that sound the same are one condition, not several.** The place name is not the
-recording. Street, metro, train, bus, car and traffic all play the same city bed; home plays the
-office one. Spreading a suite across nine of those names tests one sound nine times and reports nine
-levels. Pick places that differ audibly: a city bed, an office, a crowded room, open air, and a clear
-line are what the caller can actually be heard through today.
+**Spread noise across the places, not across synonyms.** Each place draws from its own recordings:
+`street` (traffic), `vehicle` (inside a moving car), `transit` (airport, train station), `retail`
+(grocery store, mall), `office`, `outdoors` (park), plus a crowded room for `restaurant`, `cafe` or
+`crowd`. Metro, train and bus share the city bed with street, so naming all three tests one sound
+three times. Pick the place the situation puts the caller in, and let a suite visit several of them.
 
 **A non-native caller is a language fact, not a label.** `non_native` means the caller is working in
 a language that is not their first. The persona has to name **both** languages and an accent that is
