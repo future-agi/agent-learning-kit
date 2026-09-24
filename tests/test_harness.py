@@ -2390,7 +2390,12 @@ def test_a_sub_goal_that_settles_nothing_is_rejected():
     assert settled.deterministic()
 
     judged = SubGoal(
-        name="polite", what="stayed polite", judged="nothing observable shows tone"
+        name="polite", what="stayed polite", judged=(
+            "Applies when: the agent declines a request.\n"
+            "Pass when: it tells the caller why it cannot help.\n"
+            "Fail when: it declines without giving any reason.\n"
+            "If it does not arise: Pass, because nothing was declined."
+        )
     )
     assert validate_sub_goal(judged) == [] and not judged.deterministic()
 

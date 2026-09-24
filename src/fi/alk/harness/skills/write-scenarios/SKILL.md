@@ -177,6 +177,13 @@ in seven of twelve scenarios is one sentence somebody can act on, rather than se
 **Sharing cuts both ways: one check must hold for every scenario naming it.** Read the check before
 naming it. Same pressure with a different right outcome is a different sub-goal.
 
+**A judged sub-goal is an eval with its own criteria**, four labelled lines: Applies when, Pass when,
+Fail when, If it does not arise (see `add_sub_goal`). Name one on a scenario whose situation brings its
+"Applies when" about, and read its "If it does not arise" line first: a scenario where the situation
+cannot come up tests nothing with it, and one where the agent can keep it from coming up is exactly
+where that line decides the verdict. When you add a judged sub-goal, write all four lines so two
+judges would reach the same verdict: what the agent says or does, never "handles it well".
+
 **The mechanical test: does the check turn on a tool your task does not use?** If it names
 `create_booking` and your scenario cancels, or names `cancel_booking` and yours creates, the check is not
 shareable with you no matter how well its name fits. Two real failures, both from one suite each:
@@ -392,8 +399,8 @@ conversation is the only evidence there will be. Everything else in this skill s
 - `solution: []`. There is nothing to replay; `try_calls` has nothing to call, so do not call it.
 - **The `tests` line says only what the conversation shows.** Not what the agent passed to a tool or
   whether it called one: nobody can hear that.
-- **Every sub-goal is judged.** Write each so the conversation alone can settle it, and give it a pass
-  and a fail a reader could agree on: "states the fee before asking to confirm", "reads the address
+- **Every sub-goal is judged.** Write each so the conversation alone can settle it, with its four
+  criteria lines, and a pass and a fail a reader could agree on: "states the fee before asking to confirm", "reads the address
   back before acting", "refuses to disclose another person's details", "offers a person when asked
   twice". Nuance is fine when it is observable: order of steps, what was disclosed, what was refused,
   the language it answered in.

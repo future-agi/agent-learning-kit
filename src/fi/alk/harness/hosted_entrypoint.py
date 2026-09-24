@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import hashlib
+import functools
 import json
 import logging
 import os
@@ -66,6 +67,7 @@ from .process_runtime import (
     fixed_sandbox_user_resolver,
     RuntimeEndpoint,
 )
+from .judge import judge as _judge_sub_goal
 from .scenario_source import (
     BundleScenarioSource,
     ScenarioDocumentInvalid,
@@ -704,6 +706,28 @@ class NotWiredCallRunner:
 
 
 _VOICE_CONNECTORS = {"livekit", "vapi", "retell", "phone"}
+
+
+def _agent_instructions(job: Any, bundle_dir: Path) -> str:
+    """What the agent is meant to do, for the judge: its own prompt where the job carries one, and the
+    rules read from it."""
+    parts: list[str] = []
+    config = getattr(getattr(job, "agent", None), "config", None) or {}
+    prompt = str(config.get("target_system_prompt") or "").strip()
+    if prompt:
+        parts.append(prompt[:12000])
+    try:
+        body = json.loads((bundle_dir / "contract.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        body = {}
+    if isinstance(body, dict):
+        summary = str(body.get("one_liner") or "").strip()
+        rules = [str(rule).strip() for rule in body.get("hard_constraints") or [] if str(rule).strip()]
+        if summary:
+            parts.append(f"Summary: {summary}")
+        if rules:
+            parts.append("Rules:\n- " + "\n- ".join(rules[:30]))
+    return "\n\n".join(parts)
 
 
 def _bundle_contract_value(bundle_dir: Path, key: str) -> str | None:
@@ -2636,6 +2660,9 @@ async def run_job(
             outbound=adapter,
             job_seed=job_seed,
             cancel_requested=cancel_requested,
+            judge=functools.partial(
+                _judge_sub_goal, agent_instructions=_agent_instructions(job, bundle_dir)
+            ),
         )
         result: RunResult = await scheduler.run(scenarios)
 
