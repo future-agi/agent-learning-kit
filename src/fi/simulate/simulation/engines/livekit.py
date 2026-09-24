@@ -672,7 +672,7 @@ class _TestRunnerAgent(Agent):
         # Nothing quotable and nothing English-specific: wording here comes back out as speech.
         description=(
             "Ends the call. Nothing else ends it and no one else ends it for you. "
-            "Use it once you have nothing further."
+            "Use it in the same turn as your goodbye."
         ),
     )
     async def end_call(self, ctx: RunContext) -> str | None:
@@ -1034,6 +1034,9 @@ class _TestRunnerAgent(Agent):
             if self._mailbox_greeted or self._voicemail_greeting is not None:
                 return
             self._mailbox_greeted = True
+        # The goodbye was the last thing said; anything after it narrates the hang-up.
+        if self._end_requested.is_set():
+            return
         async for chunk in _without_hold_marker(
             super().llm_node(chat_ctx, tools, model_settings), on_hold=self._on_hold
         ):
@@ -1055,12 +1058,15 @@ class _TestRunnerAgent(Agent):
             return
         session.generate_reply(instructions=_HOLD_CHECK_IN)
 
+    def tts_node(self, text: AsyncIterable[str], model_settings: ModelSettings):
+        return Agent.default.tts_node(self, _spoken_words(text), model_settings)
+
     async def transcription_node(
         self,
         text: AsyncIterable[str | TimedString],
         model_settings: ModelSettings,
     ):
-        async for chunk in text:
+        async for chunk in _spoken_words(text):
             logger.debug(
                 "Simulator transcription chunk",
                 extra={"timed": isinstance(chunk, TimedString)},
@@ -1082,6 +1088,47 @@ def _chunk_text(chunk: Any) -> str | None:
 
 def _letters(text: str) -> str:
     return re.sub(r"[\W_]", "", text.lower())
+
+
+# A reply that is only a stage direction or an echoed empty result, never words a person says.
+_NOT_SPEECH = re.compile(r"\s*(?:\[[^\]]*\]|\*[^*]*\*|\([^)]*\)|none|null|n/?a)\s*[.!]?\s*", re.IGNORECASE)
+
+
+def _not_speech(text: str) -> bool:
+    return bool(text.strip()) and _NOT_SPEECH.fullmatch(text) is not None
+
+
+def _may_not_be_speech(text: str) -> bool:
+    """Whether the reply so far could still turn out to be only a stage direction or an empty result."""
+    opened = text.lstrip()[:1]
+    closer = {"[": "]", "*": "*", "(": ")"}.get(opened)
+    if closer and closer not in text.lstrip()[1:]:
+        return True
+    letters = _letters(text)
+    return _not_speech(text) or any(word.startswith(letters) for word in ("none", "null", "na") if letters)
+
+
+_STAGE_DIRECTION = re.compile(r"\[[^\]]*\]|\*[^*]*\*")
+
+
+async def _spoken_words(text: AsyncIterable[Any]) -> AsyncIterable[Any]:
+    """The text with any bracketed or starred stage direction removed, however it is chunked."""
+    pending = ""
+    async for chunk in text:
+        if not isinstance(chunk, str) or (not pending and "[" not in chunk and "*" not in chunk):
+            yield chunk
+            continue
+        pending += chunk
+        open_at = max(pending.rfind("["), -1) if pending.count("[") > pending.count("]") else -1
+        if open_at < 0 and pending.count("*") % 2:
+            open_at = pending.rfind("*")
+        ready, pending = (pending, "") if open_at < 0 else (pending[:open_at], pending[open_at:])
+        cleaned = _STAGE_DIRECTION.sub("", ready)
+        if cleaned:
+            yield cleaned
+    cleaned = _STAGE_DIRECTION.sub("", pending)
+    if cleaned and not cleaned.lstrip().startswith(("[", "*")):
+        yield cleaned
 
 
 # Under the settled-silence floor, so the caller checks in before a quiet line is taken for the end.
@@ -1109,18 +1156,19 @@ async def _without_hold_marker(
         held.append(chunk)
         if piece is not None:
             text += piece
-            if marker.startswith(_letters(text)):
+            if marker.startswith(_letters(text)) or _may_not_be_speech(text):
                 continue
         holding = False
         for item in held:
             yield item
         held = []
     if holding:
-        silent = _letters(text) == marker
+        on_hold_now = _letters(text) == marker
+        silent = on_hold_now or _not_speech(text)
         for item in held:
             if not silent or (not isinstance(item, str) and getattr(item, "delta", None) is None):
                 yield item
-        if silent and on_hold is not None:
+        if on_hold_now and on_hold is not None:
             on_hold()
 
 
