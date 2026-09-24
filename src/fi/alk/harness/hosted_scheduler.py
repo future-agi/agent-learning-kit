@@ -1561,6 +1561,9 @@ class HostedScheduler:
         # model call. Resolved here rather than as a default argument, which would bind at import
         # and ignore both injection and patching.
         self._judge = judge or _judge
+        # Calls may run in parallel, but provider-backed judge sessions share one gateway lane.
+        # Keep each scenario's batch together so concurrent worlds cannot invalidate both verdicts.
+        self._judge_batch_lock = asyncio.Lock()
         self._executor: ThreadPoolExecutor | None = None
 
     async def run(self, scenarios: Sequence[Scenario]) -> RunResult:
@@ -2189,29 +2192,35 @@ class HostedScheduler:
             )
 
         if judged_pending:
-            # Judged sub-goals only read, so they are independent of each other and of the coded
-            # checks: one round trip for all of them rather than one each.
-            try:
-                context = (
-                    {"scenario": scenario}
-                    if "scenario" in inspect.signature(self._judge).parameters
-                    else {}
-                )
-            except (TypeError, ValueError):
-                context = {}
+            # A scenario's judged sub-goals can run together, but judge batches from parallel
+            # worlds must not overlap on the shared provider session.
+            async with self._judge_batch_lock:
+                try:
+                    context = (
+                        {"scenario": scenario}
+                        if "scenario" in inspect.signature(self._judge).parameters
+                        else {}
+                    )
+                except (TypeError, ValueError):
+                    context = {}
 
-            async def _settle(goal: Any) -> Any:
-                # Awaited, not called inline: calling an injected judge whose signature does not
-                # match raises while the coroutines are still being built, which is outside
-                # `gather`'s net and errors the scenario. Inside a coroutine it is just a fault.
-                return await self._judge(
-                    goal, check_handle, calls, messages=call_outcome.messages, **context
-                )
+                async def _settle(goal: Any) -> Any:
+                    # Awaited, not called inline: calling an injected judge whose signature does
+                    # not match raises while the coroutines are still being built, which is
+                    # outside `gather`'s net and errors the scenario. Inside a coroutine it is
+                    # just a fault.
+                    return await self._judge(
+                        goal,
+                        check_handle,
+                        calls,
+                        messages=call_outcome.messages,
+                        **context,
+                    )
 
-            verdicts = await asyncio.gather(
-                *(_settle(goal) for _, goal in judged_pending),
-                return_exceptions=True,
-            )
+                verdicts = await asyncio.gather(
+                    *(_settle(goal) for _, goal in judged_pending),
+                    return_exceptions=True,
+                )
             for (slot, goal), outcome in zip(judged_pending, verdicts):
                 if isinstance(outcome, BaseException):
                     logger.warning("judge could not run for %s: %r", goal.name, outcome)
@@ -2223,7 +2232,11 @@ class HostedScheduler:
                         # An injected judge that answers in some other shape is unreadable, not
                         # authoritative. Unpacking it here would raise inside `_grade` and error
                         # the whole scenario, which is the one thing a verdict must never do.
-                        logger.warning("judge gave an unusable verdict for %s: %r", goal.name, outcome)
+                        logger.warning(
+                            "judge gave an unusable verdict for %s: %r",
+                            goal.name,
+                            outcome,
+                        )
                         held, why = None, ""
                 sub_goal_results[slot] = SubGoalResult(
                     name=goal.name, held=held, reason=why, judged=True

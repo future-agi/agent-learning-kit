@@ -3997,6 +3997,56 @@ def test_judged_sub_goals_are_decided_together_not_one_after_another(
     asyncio.run(scenario())
 
 
+def test_parallel_scenarios_serialize_judge_batches(monkeypatch) -> None:
+    """Parallel calls must not overlap provider-backed judge sessions."""
+    active = 0
+    max_active = 0
+
+    async def _verdict(goal, world, calls, *, messages=()):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.02)
+        active -= 1
+        return True, f"{goal.name} seen"
+
+    monkeypatch.setattr(hs, "_judge", _verdict)
+
+    async def scenario() -> None:
+        outbound = FakeOutbound()
+        pool, _ = _pool(2, outbound=outbound)
+        await pool.start()
+
+        class Runner:
+            async def run(self, scenario, runtime):
+                return _call_outcome(turns=4, calls=())
+
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=Runner(),
+            outbound=outbound,
+            job_seed=1,
+        )
+        scenarios = [
+            FakeScenario(
+                f"scenario-{index}",
+                f"id-{index}",
+                sub_goals=[
+                    FakeSubGoal(f"goal-{index}", lambda w, c: None, judged="judge")
+                ],
+                requires_tool_evidence=False,
+            )
+            for index in range(2)
+        ]
+        result = await scheduler.run(scenarios)
+        assert [receipt.status for receipt in result.receipts] == ["passed", "passed"]
+        assert max_active == 1
+        await pool.close()
+
+    asyncio.run(scenario())
+
+
 def test_a_judge_answering_with_a_two_element_list_is_still_read(monkeypatch) -> None:
     """The guard rejects unreadable answers, not merely non-tuples: a pair that unpacks is a pair."""
 
