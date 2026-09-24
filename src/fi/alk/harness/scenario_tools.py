@@ -1443,7 +1443,9 @@ def scenario_tools(
         "celebrity's or a fictional character's name, not even with a second surname added. A "
         "difficulty lands after the agent has answered or acted: a correction, change of mind or "
         "change of topic packed into the opening sentence is heard as the final request alone and "
-        "tests nothing.",
+        "tests nothing. Sub-goals that fit every call (tone, length, answered the inquiry) are "
+        "shared background: name at least one that fails only when the agent gets this "
+        "scenario's own difficulty wrong, defining it with add_sub_goal if the catalogue has none.",
         schema(
             {
                 "name": {
