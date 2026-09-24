@@ -1416,6 +1416,7 @@ def test_a_stage_direction_inside_a_reply_is_not_spoken() -> None:
     assert asyncio.run(run(["Okay, thanks. Bye. [Call", " Ended]"])).strip() == "Okay, thanks. Bye."
     assert asyncio.run(run(["Sure, *pauses* go ahead."])) == "Sure,  go ahead."
     assert asyncio.run(run(["Plain words only."])) == "Plain words only."
+    assert asyncio.run(run(["No, [laugh", "ter] you're kidding."])) == "No, [laughter] you're kidding."
 
 
 def test_a_caller_is_told_its_first_request_until_it_has_spoken() -> None:

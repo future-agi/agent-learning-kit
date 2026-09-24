@@ -477,7 +477,7 @@ Four of these are enforced by validation. Seven are your judgement, and no check
 - **The scenario seeds what it needs.** *(enforced: a fixture claiming data must create it)* Every
   record whose state decides the outcome is created by this scenario's `setup_code`.
 - **The name says what is tested.** *(enforced: the person's name may not appear in it)* In words, in
-  the shape "disputed_fee_after_cancelled_ride": never a sequence number, and never a prefix shared
+  the shape "refund_refused_after_deadline": never a sequence number, and never a prefix shared
   with other scenarios, whether the agent's or the product's name or the task your slice is about.
   Every scenario in the slice would carry it, and it tells a reader nothing.
 - **The situation can actually be produced on the call.** *(judgement)* The caller is one synthesised
@@ -785,9 +785,8 @@ noise on and only four distinct audio beds are ever heard, with 1,098 of them, 7
 the same one**, because 871 named no place at all. A suite that reports five background noises and
 plays office ambience to three quarters of its calls has not covered five of anything.
 
-Name it from the places the runtime knows: `street`, `transit`, `vehicle`, `in-car`, `metro`,
-`train`, `bus`, `traffic`, `outdoors`, `park`, `retail`, `airport`, `restaurant`, `cafe`, `bar`,
-`hotel`, `crowd`, `office`, `home`. A quiet place is `quiet`, which means heard in the clear.
+Name it from the places the `background_noise` field lists, which are the recordings this
+deployment can play. A quiet place is `quiet`, which means heard in the clear.
 
 **Most calls are placed from somewhere.** Leave a caller in the clear only on a `quiet_line`
 scenario. An accented, non-native, hurried or hostile caller is still on a street, in a car or at a
@@ -833,7 +832,7 @@ way a non-native speaker would reach for it.
 Spend the language coverage across the suite rather than writing every non-native caller the same
 way: a caller whose English is fluent but accented, a caller who is hesitant and needs repetition, a
 caller who searches for a word, and a caller the agent has to ask to spell
-a name are four different tests of the same axis. Every caller speaking neutral, fluent English is
+a name are four different tests of the same axis. Every caller speaking neutral, fluent speech in the language of the call is
 one test, whatever the interface column says.
 
 **The person never names the attack.** A caller does not narrate their own category, and writing it

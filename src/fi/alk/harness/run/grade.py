@@ -24,6 +24,7 @@ from typing import Any
 
 from ..backends import SessionSpec, tool, tool_server
 
+from ..catalogue import criteria_text
 from ..config import chosen_model
 from ..contract import AgentContract
 from ..scenario import Scenario
@@ -155,7 +156,7 @@ def _claims(scenario: Scenario, catalogue: Catalogue) -> list[tuple[str, str]]:
     for name in scenario.sub_goals:
         sub_goal = catalogue.named(name)
         if sub_goal is not None and not sub_goal.deterministic():
-            judged.append((sub_goal.judged or sub_goal.what, name))
+            judged.append((criteria_text(sub_goal.judged or sub_goal.what), name))
     return judged
 
 

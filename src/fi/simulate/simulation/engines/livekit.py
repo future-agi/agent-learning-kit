@@ -1121,9 +1121,10 @@ _ANSWER_ALOUD = (
 # The caller's first turn is written by the model like any other, so it sounds spoken, not read.
 _OPENING_TURN = (
     "This is your first turn. Open the way this person naturally would, with just your first "
-    "request, which is: {opening} Put it in your own words, in one or two short sentences. If the agent has already spoken and "
-    "asked you something, answer that briefly first. Everything else in your situation waits for "
-    "its moment."
+    "request, which is: {opening} Say it in your own words, in one or two short sentences, keeping "
+    "its manner: if it is halting, vague or unfinished, say it that way, and keep any exact words "
+    "or values it contains. If the agent has already spoken and asked you something, answer that "
+    "briefly first. Everything else in your situation waits for its moment."
 )
 
 
@@ -1170,7 +1171,8 @@ def _may_not_be_speech(text: str) -> bool:
     return _not_speech(text) or any(word.startswith(letters) for word in ("none", "null", "na") if letters)
 
 
-_STAGE_DIRECTION = re.compile(r"\[[^\]]*\]|\*[^*]*\*")
+# The one bracketed cue the voice renders is kept; see CARTESIA_DELIVERY_CUES.
+_STAGE_DIRECTION = re.compile(r"\[(?!laughter\])[^\]]*\]|\*[^*]*\*", re.IGNORECASE)
 
 
 async def _spoken_words(text: AsyncIterable[Any]) -> AsyncIterable[Any]:

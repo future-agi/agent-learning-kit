@@ -268,3 +268,32 @@ def test_the_judge_is_shown_the_customer_side_and_the_agent_instructions():
     side = judge_module._customer_side(scenario)
     assert "for context only" in side and "Asks for a refund." in side
     assert judge_module._customer_side(None) == ""
+
+
+def test_a_one_sentence_sub_goal_is_read_as_what_the_agent_must_do() -> None:
+    from fi.alk.harness.catalogue import criteria_text
+
+    labelled = "Applies when: x.\nPass when: y.\nFail when: z.\nIf it does not arise: Pass."
+    assert criteria_text(labelled) == labelled
+    read = criteria_text("Confirms the address back")
+    assert read.startswith("Pass when: Confirms the address back") and "If it does not arise:" in read
+
+
+def test_a_caller_outside_the_accented_language_meets_an_accented_level_without_an_accent() -> None:
+    from fi.alk.harness.scenario import Persona, Scenario, _condition_the_call_lacks
+
+    persona = Persona(name="A B", languages=["French"], accent="British")
+    assert persona.accent == "Neutral"
+    scenario = Scenario(name="s", use_case="u", persona=persona, coverage={"interface": "non_native"})
+    assert _condition_the_call_lacks(scenario) == ""
+    english = Scenario(
+        name="t", use_case="u", persona=Persona(name="C D", languages=["English"]), coverage={"interface": "accented"}
+    )
+    assert "accent not set" in _condition_the_call_lacks(english)
+
+
+def test_a_language_outside_the_multilingual_transcriber_is_transcribed_in_its_own() -> None:
+    from fi.alk.harness.simulator_voice import persona_stt_language
+
+    assert persona_stt_language({"languages": ["French"]}) == "multi"
+    assert persona_stt_language({"languages": ["ko"]}) == "ko"

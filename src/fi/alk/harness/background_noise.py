@@ -136,6 +136,10 @@ def source_for(environment: str = "", seed: str = "") -> str:
     pool = [location for tag, location in clips if tag == env]
     if env in _BUILTIN_BY_ENVIRONMENT:
         pool.append(_BUILTIN_BY_ENVIRONMENT[env])
+    if not pool and env:
+        nearest = _place_in(env.replace("_", " ").replace("-", " "), places())
+        if nearest:
+            return source_for(nearest, seed)
     if not pool:
         pool = [location for _, location in clips] + sorted(set(_BUILTIN_BY_ENVIRONMENT.values()))
     return pool[_pick(seed or env or "x", len(pool))]
@@ -158,6 +162,10 @@ _SETTING_WORDS: dict[str, str] = {
 }
 
 
+# Where a deployment has no recording of a place, the one that sounds most like it.
+_NEAREST = {"airport": "transit"}
+
+
 def place_for(name: str, fixture: Any = None, situation: str = "") -> str:
     """Where a caller with noise on and no place named is heard from.
 
@@ -170,10 +178,19 @@ def place_for(name: str, fixture: Any = None, situation: str = "") -> str:
             return named
     options = list(places())
     text = (situation or "").lower()
+    return _place_in(text, options) or (options[_pick(name or "x", len(options))] if options else "")
+
+
+def _place_in(text: str, options) -> str:
+    """The playable place a piece of text describes, or "" when it describes none."""
     for place, words in _SETTING_WORDS.items():
-        if place in options and re.search(words, text):
+        if not re.search(words, text):
+            continue
+        if place in options:
             return place
-    return options[_pick(name or "x", len(options))] if options else ""
+        if _NEAREST.get(place) in options:
+            return _NEAREST[place]
+    return ""
 
 
 def scenario_source(

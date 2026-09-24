@@ -532,11 +532,9 @@ def _condition_the_call_lacks(scenario: Scenario) -> str:
     style = str(getattr(persona, "communication_style", "") or "")
     languages = [one for one in (getattr(persona, "languages", None) or []) if str(one).strip()]
     noise = scenario.background_noise
-    if level == "code_switching" and (
-        len(languages) < 2 or not getattr(persona, "multilingual", False)
-    ):
-        return "interface code_switching, persona is not multilingual in two named languages"
-    if level in _ACCENTED_INTERFACE and accent in _ACCENT_NOT_SET:
+    # An offered accent only applies to its own language; in any other the voice carries no accent to set.
+    accentable = not languages or _ACCENTED_LANGUAGE in str(languages[0]).casefold()
+    if level in _ACCENTED_INTERFACE and accentable and accent in _ACCENT_NOT_SET:
         return f"interface {level}, persona accent not set"
     if level in _DISFLUENT_INTERFACE and not _DISFLUENT_STYLE.search(style):
         return f"interface {level}, nothing hesitant in the communication style"

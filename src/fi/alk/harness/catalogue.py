@@ -418,6 +418,18 @@ def judged_wording_advisory(sub_goal: SubGoal) -> str:
     return f"{sub_goal.name}: " + "; and ".join(said) + ". Add it again reworded" if said else ""
 
 
+def criteria_text(judged: str) -> str:
+    """The criteria as labelled lines, reading a one-sentence sub-goal as what the agent must do."""
+    text = (judged or "").strip()
+    if "pass when:" in text.casefold():
+        return text
+    return (
+        f"Pass when: {text}\n"
+        "If it does not arise: Fail when the agent's own behaviour kept the situation from arising; "
+        "Pass when only the caller's path kept it away."
+    )
+
+
 _CRITERIA_LABELS = ("Applies when", "Pass when", "Fail when", "If it does not arise")
 
 

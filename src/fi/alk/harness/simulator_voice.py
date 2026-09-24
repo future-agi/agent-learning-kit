@@ -132,8 +132,8 @@ SIMULATOR_INSTRUCTIONS = (
     "filler on a plain answer, and never say 'thank you so much', 'I really appreciate it' or "
     "'sorry to bother you'. Answering a question is not a favour done to you, and a stream of "
     "courtesies is the clearest sign that nobody real is on the line. Do not "
-    "praise the agent's answers (very helpful, perfect, great), do not acknowledge with understood "
-    "or certainly; say okay, right or got it the way people do. Thank the agent at most once, at "
+    "praise the agent's answers and do not acknowledge in formal words; acknowledge the short, "
+    "plain way people do in conversation. Thank the agent at most once, at "
     "the end, and only if the help earned it.\n"
     "12c. If you are asked something you have already answered, say that you already gave it, "
     "once, and then give it again. Answering it twice as though it were new is the clearest sign "
@@ -404,6 +404,10 @@ def transcriber_for(language: str) -> tuple[str, str, str]:
     return ("deepgram", "nova-3", language or "en-US")
 
 
+# Languages the multilingual transcriber covers; any other is transcribed in its own language.
+_MULTILINGUAL_STT = frozenset({"en", "es", "fr", "de", "hi", "ru", "pt", "ja", "it", "nl"})
+
+
 def persona_stt_language(
     persona: Mapping[str, object] | None, override: str = ""
 ) -> str:
@@ -421,11 +425,11 @@ def persona_stt_language(
     if isinstance(languages, list) and languages:
         first = str(languages[0]).strip().lower()
         code = _LANGUAGE_CODES.get(first) or (
-            first if 2 <= len(first) <= 5 and first.replace("-", "").isalpha() else ""
+            first if (len(first) in (2, 3) or "-" in first) and first.replace("-", "").isalpha() else ""
         )
         # The caller transcribes the agent, whose language may not be the caller's own.
         if code and not code.startswith("en"):
-            return "multi"
+            return "multi" if code.split("-")[0] in _MULTILINGUAL_STT else code
         if code:
             return code
     return "en"

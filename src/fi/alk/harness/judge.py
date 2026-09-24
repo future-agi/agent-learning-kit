@@ -21,6 +21,7 @@ import os
 from typing import Any, Sequence
 
 from .backends import SessionSpec, tool, tool_server
+from .catalogue import criteria_text
 from .config import chosen_model
 from .session import Stage
 from .tools import schema
@@ -189,7 +190,7 @@ async def judge(
     )
     prompt = (
         f"Sub-goal {getattr(goal, 'name', '')!r}: {getattr(goal, 'what', '') or '(no summary)'}\n\n"
-        f"Criteria:\n{getattr(goal, 'judged', '')}\n\n"
+        f"Criteria:\n{criteria_text(getattr(goal, 'judged', ''))}\n\n"
         f"The agent's own instructions:\n{agent_instructions.strip() or '(not given)'}\n\n"
         f"{_customer_side(scenario)}"
         f"Actions the agent took:\n{_dump_calls(calls)}\n\n"

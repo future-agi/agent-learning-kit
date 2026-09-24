@@ -848,7 +848,10 @@ rather than one bed everywhere.
 **Deal out the initial letters of their family names in the same breath.** Narrowing a writer to one
 language without also narrowing its names makes collisions worse, not better: two writers both given
 non-native callers both reached for the same name. Three letters each, no letter to two writers, and
-no two people in the suite share a name. The letters bind the family name only, so the given name
+no two people in the suite share a name. Choose each writer's letters to suit the profiles it was
+dealt: letters that common family names from those backgrounds actually begin with, never letters
+picked in alphabetical order regardless of who the callers are. Write them into the brief as a
+preference, never as "must". The letters bind the family name only, so the given name
 stays free to be a real, common name for that person's background. Letters dealt on given names
 force names nobody is actually called. The letters are a preference that keeps writers apart, never
 a reason for a name that does not fit: where no common family name from the person's background
