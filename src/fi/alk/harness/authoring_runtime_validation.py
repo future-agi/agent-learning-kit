@@ -469,7 +469,7 @@ async def validate_once(
         default_user_resolver,
         fixed_sandbox_user_resolver,
     )
-    from .scenario_source import load_scenarios
+    from .scenario_source import does_nothing, load_scenarios
     from .source_data_invariants import author_invariants, check_invariants
     from .tool_certification import ToolAvailability, certify_tool_inventory
 
@@ -684,8 +684,9 @@ async def validate_once(
             # against a full restart before it counts.
             in_place = os.environ.get("ALK_VALIDATION_RESET_IN_PLACE", "1") != "0"
 
-            async def check_setups(invariants):
+            async def check_setups(invariants, suite=None):
                 # Dealt round-robin so every lane gets the same mix of cheap and expensive setups.
+                suite = scenarios if suite is None else suite
                 failures: list[str] = []
 
                 async def lane(own, against):
@@ -697,9 +698,9 @@ async def validate_once(
 
                 await asyncio.gather(
                     *(
-                        lane(scenarios[index::lanes], runtimes[index])
+                        lane(suite[index::lanes], runtimes[index])
                         for index in range(lanes)
-                        if scenarios[index::lanes]
+                        if suite[index::lanes]
                     )
                 )
                 if failures:
@@ -780,9 +781,20 @@ async def validate_once(
                     "skipping local source-data invariant review",
                     flush=True,
                 )
-                # Still one walk: there is nothing to assert about source data, but every
-                # scenario's setup and ready check has to hold against the connected runtime.
-                await check_setups(invariants)
+                # Still one walk over every scenario whose setup or ready does something. One that
+                # does nothing on either leaves an empty world empty and holds by construction, and
+                # checking it costs a world reset and two interpreters for no information.
+                active = [
+                    scenario
+                    for scenario in scenarios
+                    if not (does_nothing(scenario.setup) and does_nothing(scenario.ready))
+                ]
+                print(
+                    f"runtime validation: {len(scenarios) - len(active)} of {len(scenarios)} "
+                    "scenarios set up nothing and hold by construction; walking the rest",
+                    flush=True,
+                )
+                await check_setups(invariants, active)
                 if generic:
                     _write_runtime_evidence(
                         job=job,
