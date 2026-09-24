@@ -827,11 +827,10 @@ suite has to be dealt out in the briefs, one share each.
 The people are the thing to deal, and **deal them as whole people, not as separate fields.** Give
 each writer two or three caller profiles, and no profile to two writers where you can help it. A
 profile is one believable person-type: an accent, the one language they speak on the call, where
-they live, and the naming tradition that fits, for example `Indian accent, English, Pune, Indian
-names` or `Neutral, Spanish, Houston, Hispanic names`. Dealt field by field, an accent to one list
-and name letters to another, the writer is left to join them and can produce an Indian-accented
-caller called Zach Taylor. A few deliberate crossings, a second-generation caller or a married name,
-are real people too; deal them as their own profile, never by accident.
+they live, and the naming tradition that fits them. Dealt field by field, an accent to one list and
+name letters to another, the writer is left to join them and can produce a caller whose name, accent
+and home do not belong to one person. A few deliberate crossings, a second-generation caller or a
+married name, are real people too; deal them as their own profile, never by accident.
 
 Across the suite the callers should sound like the people who really ring this agent: every language
 it supports and at least one it must turn away, several accents, several ages and temperaments. A

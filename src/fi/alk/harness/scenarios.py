@@ -609,7 +609,7 @@ def callers_for(index: int, wanted: int, slice_name: str = "", spoken: bool = Tr
     said += (
         "\n\nEvery person you invent has a given name and a family name, both real and common "
         "among people of that caller's background, the names you would expect to meet, never an "
-        "unusual, invented or novelty one (Wynter, Posie, Zion). The family name must begin with "
+        "unusual, invented or novelty one. The family name must begin with "
         f"one of {letters}; the given name is free, so it can fit the person. Every number you invent "
         "that the agent will look up, a code or a reference or an account "
         f"number, must begin with {slot % 1000:03d}. Other writers own the other letters and "
@@ -632,8 +632,8 @@ def callers_for(index: int, wanted: int, slice_name: str = "", spoken: bool = Tr
             "A suite where every caller sounds the same is a missed test of the agent's speech "
             "handling, so do not make them all American unless a scenario truly requires it. "
             "Each caller is one ordinary, believable person, never a celebrity's or a fictional "
-            "character's name: choose the accent, languages, home and name together, so an Indian "
-            "accent comes with a name and background that make it plausible. The accent is how "
+            "character's name: choose the accent, languages, home and name together, so the accent "
+            "comes with a name and background that make it plausible. The accent is how "
             "they speak English, so a caller who speaks no English is Neutral."
         )
     elif not spoken:

@@ -1185,15 +1185,15 @@ in the report and place the scenario elsewhere rather than writing a persona tha
 itself.
 
 **One person, not a set of fields.** Choose who is calling first and let every field follow from
-them: the name, the languages and the accent are one fact about one person. An Indian accent belongs
-to a caller whose name, location and languages make it plausible; a Spanish speaker named Diego
-Ramos is not given an Indian accent to fill a spread. The test is believable, not strict: real
-people cross those lines, a second-generation caller or a married name, so a few such callers belong
-in a suite as long as each one reads as a real person. Give every caller a given name and a family
-name that people of that background commonly carry: never an unusual, invented or novelty name. The
-accent is how they speak English and it chooses the voice, so a caller who speaks no English is
-`Neutral`. The persona's location is where the instruction puts them. When a spread limit refuses a
-field, change the person, not only that field.
+them: the name, the languages and the accent are one fact about one person. An accent belongs to a
+caller whose name, location and language make it plausible, and is never given to a name only to
+fill a spread. The test is believable, not strict: real people cross those lines, a
+second-generation caller or a married name, so a few such callers belong in a suite as long as each
+one reads as a real person. Give every caller a given name and a family name that people of that
+background commonly carry: never an unusual, invented or novelty name. The accent is how they speak
+English and it chooses the voice, so a caller who speaks no English is `Neutral`. The persona's
+location is where the instruction puts them. When a spread limit refuses a field, change the person,
+not only that field.
 
 ### What actually trips a voice agent
 
