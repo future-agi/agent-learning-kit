@@ -305,7 +305,10 @@ class RetellChatCallRunner:
                 config.get("provider_api_base_url") or "https://api.retellai.com"
             ),
         )
-        document = _scenario_document(self._context.bundle_dir, scenario.scenario_key)
+        document = _scenario_document(
+            self._context.bundle_dir,
+            getattr(scenario, "source_scenario_key", None) or scenario.scenario_key,
+        )
         conversation_scenario = _conversation_scenario(document)
         target_world = _tool_world(
             self._context.bundle_dir,
