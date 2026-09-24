@@ -554,8 +554,7 @@ def planned(wanted: int, use_cases: list[str], given: list[dict] | None) -> list
     return slices
 
 
-# Numbers are partitioned by a three-digit prefix per slice: a hundred slots collided twice on a run with
-# twenty slices, which is what the birthday arithmetic predicts, and a thousand makes it rare.
+# Numbers a writer invents carry a three-digit prefix per slice, so parallel writers never share a code.
 
 
 def _slot(of: str, index: int) -> int:
@@ -589,8 +588,6 @@ def callers_for(index: int, wanted: int, slice_name: str = "", spoken: bool = Tr
         "\n\nStart from these callers, and move off them only where the scenario calls for "
         f"somebody else: {', '.join(picks)}."
     )
-    # Writers cannot see each other, so left to themselves they reuse the same round numbers; a leading
-    # prefix per slice keeps codes distinct without a shared list.
     slot = _slot(slice_name, index)
     said += (
         "\n\nEvery person you invent is one believable person: a given name and a family name that are "
