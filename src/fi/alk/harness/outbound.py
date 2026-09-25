@@ -2800,13 +2800,19 @@ _RESERVED_ARTIFACT_KINDS = frozenset(
         ArtifactKind.TRANSCRIPT,
         ArtifactKind.TOOL_TRACE,
         ArtifactKind.RESULT,
+        # Complete manifests require build, result, and log. A recording-heavy run must not be
+        # allowed to consume the budget and strand terminalization after all scenarios finish.
+        ArtifactKind.LOG,
     }
 )
 
 
 def is_reserved_artifact_kind(kind: ArtifactKind) -> bool:
-    """ "the budget is partitioned by reservation: `build` + `transcript` + `tool_trace` + `result`
-    are reserved (always admitted); recordings next; `trace`/`log`/`other` last.\""""
+    """Return whether an artifact bypasses the soft guest-side admission budget.
+
+    Build, result, and log are mandatory for every complete manifest; transcript and tool trace
+    are durable result evidence. Recordings are admitted next, followed by optional trace/other.
+    """
     return kind in _RESERVED_ARTIFACT_KINDS
 
 
@@ -2822,8 +2828,8 @@ _RECORDING_ARTIFACT_KINDS = frozenset(
 
 def priority_class(kind: ArtifactKind) -> int:
     """N16: the contract's three-tier budget partition as a total order, lower = admitted first --
-    `0` reserved (`is_reserved_artifact_kind`, always admitted), `1` recordings, `2` `trace`/`log`/
-    `other` (admitted last)."""
+    `0` reserved (`is_reserved_artifact_kind`, always admitted), `1` recordings, `2` optional
+    `trace`/`other` (admitted last)."""
     if is_reserved_artifact_kind(kind):
         return 0
     if kind in _RECORDING_ARTIFACT_KINDS:

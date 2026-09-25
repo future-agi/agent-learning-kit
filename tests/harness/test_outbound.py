@@ -1872,6 +1872,7 @@ def test_artifact_budget_tracker_reserved_kinds_always_admitted() -> None:
     # Reserved kinds are counted (for accounting) but never refused, even once over budget.
     assert tracker.admitted_bytes == 1_000_000
     assert tracker.would_admit(ArtifactKind.BUILD, 999, digest="d2")
+    assert tracker.would_admit(ArtifactKind.LOG, 999, digest="d3")
 
 
 def test_artifact_budget_tracker_refuses_non_reserved_once_budget_is_exhausted() -> (
@@ -1882,7 +1883,7 @@ def test_artifact_budget_tracker_refuses_non_reserved_once_budget_is_exhausted()
     tracker.record(ArtifactKind.TRACE, 60, digest="d1")
     assert tracker.would_admit(ArtifactKind.TRACE, 40, digest="d2")
     tracker.record(ArtifactKind.TRACE, 40, digest="d2")
-    assert not tracker.would_admit(ArtifactKind.LOG, 1, digest="d3")
+    assert not tracker.would_admit(ArtifactKind.OTHER, 1, digest="d3")
 
 
 def test_artifact_budget_tracker_duplicate_digest_is_free() -> None:
@@ -1901,17 +1902,17 @@ def test_priority_class_orders_reserved_recordings_other() -> None:
     assert priority_class(ArtifactKind.BUILD) == 0
     assert priority_class(ArtifactKind.TRANSCRIPT) == 0
     assert priority_class(ArtifactKind.TOOL_TRACE) == 0
+    assert priority_class(ArtifactKind.LOG) == 0
     assert priority_class(ArtifactKind.RECORDING_COMBINED) == 1
     assert priority_class(ArtifactKind.RECORDING_STEREO) == 1
     assert priority_class(ArtifactKind.TRACE) == 2
-    assert priority_class(ArtifactKind.LOG) == 2
     assert priority_class(ArtifactKind.OTHER) == 2
 
 
-def test_artifact_budget_tracker_reserves_recording_headroom_from_trace_log_other() -> (
+def test_artifact_budget_tracker_reserves_recording_headroom_from_trace_and_other() -> (
     None
 ):
-    # N16: a non-zero recording_headroom_bytes shrinks what a trace/log/other candidate may
+    # N16: a non-zero recording_headroom_bytes shrinks what a trace/other candidate may
     # consume, leaving room for recordings not yet seen -- default (0) behavior is unaffected
     # (covered by the pre-existing tracker tests above).
     tracker = ArtifactBudgetTracker(max_artifact_bytes=100, recording_headroom_bytes=30)
@@ -2178,7 +2179,7 @@ class FakePlatform:
 
         self.events_to_reject: set[str] = set()
         self.budget_remaining: int | None = None
-        self.reserved_kinds = {"build", "transcript", "tool_trace", "result"}
+        self.reserved_kinds = {"build", "transcript", "tool_trace", "result", "log"}
 
         self.programmed: list[Exception | TransportResponse] = []
         self.crash_after_next_write = False
@@ -3616,7 +3617,7 @@ def test_artifacts_client_latches_after_413_and_skips_non_reserved_without_the_t
 
     second_data = b"another non-reserved upload"
     second = client.upload(
-        hashlib.sha256(second_data).hexdigest(), second_data, kind=ArtifactKind.LOG
+        hashlib.sha256(second_data).hexdigest(), second_data, kind=ArtifactKind.OTHER
     )
     assert not second.delivered
     assert (
@@ -3625,9 +3626,9 @@ def test_artifacts_client_latches_after_413_and_skips_non_reserved_without_the_t
     )
     assert len(platform.calls) == calls_after_413  # no new transport call
 
-    reserved_data = b"reserved kind always goes through"
+    reserved_data = b"mandatory terminal log always goes through"
     reserved_digest = hashlib.sha256(reserved_data).hexdigest()
-    third = client.upload(reserved_digest, reserved_data, kind=ArtifactKind.RESULT)
+    third = client.upload(reserved_digest, reserved_data, kind=ArtifactKind.LOG)
     assert third.delivered  # reserved kinds are never latched out
     assert len(platform.calls) == calls_after_413 + 1
 
@@ -3639,7 +3640,7 @@ def test_artifacts_client_413_budget_exceeded_is_never_retried() -> None:
     data = b"too big for the budget"
     digest_hex = hashlib.sha256(data).hexdigest()
 
-    result = client.upload(digest_hex, data, kind=ArtifactKind.LOG)
+    result = client.upload(digest_hex, data, kind=ArtifactKind.TRACE)
     assert not result.delivered
     assert result.error is not None
     assert result.error.outcome is ChannelOutcome.BUDGET_EXCEEDED
