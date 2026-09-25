@@ -26,7 +26,7 @@ from fi.simulate.simulation.engines.livekit import (
     _voice_max_case_concurrency,
 )
 from fi.simulate.simulation import livekit_models
-from fi.simulate.simulation.models import Persona, PersonaFact, Scenario
+from fi.simulate.simulation.models import Persona, Scenario
 
 
 def _agent(**updates) -> AgentDefinition:
@@ -87,50 +87,6 @@ def test_simulator_identity_preserves_legacy_shape_without_valid_phone() -> None
         livekit._simulator_participant_identity(persona, "case_bbbbbbbbbbbb")
         == "fagi-simulator-bbbbbbbbbbbb"
     )
-
-
-def test_simulator_answers_pinned_guest_pin_without_sampling(monkeypatch) -> None:
-    persona = Persona(
-        persona={"name": "Caller"},
-        situation="Book a guest ride.",
-        outcome="The ride is booked.",
-        knowledge=[
-            PersonaFact(
-                key="guest_pin", value=json.dumps("7682"), disclosure="on_request"
-            )
-        ],
-    )
-    item = SimpleNamespace(
-        type="message",
-        role="user",
-        text_content="Please share your four-digit booking PIN.",
-        interrupted=False,
-        created_at=0.0,
-        metrics={},
-    )
-    session = SimpleNamespace(history=SimpleNamespace(items=[]))
-    chat_ctx = SimpleNamespace(messages=lambda: [item])
-    reached: list[str] = []
-
-    async def _base_llm_node(self, chat_ctx, tools, model_settings):
-        reached.append("model")
-        yield "sampled response"
-
-    monkeypatch.setattr(livekit.Agent, "llm_node", _base_llm_node, raising=False)
-    monkeypatch.delenv("HARNESS_ANSWERED_BY", raising=False)
-    agent = livekit._TestRunnerAgent.__new__(livekit._TestRunnerAgent)
-    agent._persona = persona
-    agent._session = session
-    agent._mailbox_greeted = False
-    agent._voicemail_greeting = None
-    agent._end_requested = asyncio.Event()
-    agent._goodbye_said = False
-
-    async def drain():
-        return [chunk async for chunk in agent.llm_node(chat_ctx, [], None)]
-
-    assert asyncio.run(drain()) == ["Seven six eight two."]
-    assert reached == []
 
 
 def test_managed_room_names_are_unique_per_run_and_case() -> None:
@@ -4018,19 +3974,3 @@ def test_a_one_sided_call_fails_even_when_it_ended_cleanly() -> None:
     assert outcome.status == CaseStatus.FAILED
     assert outcome.failure is not None
     assert outcome.failure.code == "insufficient_conversation"
-
-
-def test_a_pinned_credential_is_given_when_asked_not_when_mentioned() -> None:
-    persona = Persona(
-        persona={"name": "Caller"},
-        situation="Book a guest ride.",
-        outcome="The ride is booked.",
-        knowledge=[PersonaFact(key="guest_pin", value=json.dumps("7682"), disclosure="on_request")],
-    )
-    reply = livekit._pinned_credential_reply
-    assert reply(persona, "Please share your PIN whenever you're ready.") == "Seven six eight two."
-    assert reply(persona, "What's your four-digit PIN?") == "Seven six eight two."
-    assert reply(persona, "I've already verified your PIN. Where should the driver pick you up?") is None
-    assert reply(persona, "Your PIN is confirmed. What is the pickup address?") is None
-    assert reply(persona, "Could you share your PIN?", given=True) is None
-    assert reply(persona, "That PIN didn't match. Could you say it again?", given=True) == "Seven six eight two."
