@@ -495,6 +495,19 @@ async def _scenarios(args: argparse.Namespace) -> int:
     existing = len(load_written(destination))
     wanted = args.count or existing or 10
 
+    # The Uber Guest Booking POC policy is supplied only through the platform-owned simulator
+    # secret channel and is gated against the exact submitted phone target. Keep it in the model's
+    # authoring brief: saved scenarios should be authored with natural PIN behavior, never rewritten
+    # mechanically after generation or intercepted while a call is running.
+    from .poc_guest_booking import guest_booking_pin_guidance
+
+    poc_guidance = guest_booking_pin_guidance(
+        getattr(args, "job", None), scenario_count=wanted
+    )
+    guidance = [*(getattr(args, "guidance", None) or [])]
+    if poc_guidance:
+        guidance.append(poc_guidance)
+
     print(
         f"agent: {contract.agent}  "
         + (f"({existing} scenarios, loaded)" if existing else f"(writing {wanted})")
@@ -507,10 +520,12 @@ async def _scenarios(args: argparse.Namespace) -> int:
         out=destination,
         wanted=wanted,
         ask=permission_gate(_ask_operator) if args.interactive else None,
+        authoring_guidance=poc_guidance,
     )
     await _converse(
         stage,
-        scenario_opening(contract, wanted, existing) + _guidance(args),
+        scenario_opening(contract, wanted, existing)
+        + _guidance(argparse.Namespace(guidance=guidance)),
         interactive=args.interactive,
         until=lambda: bool(load_written(destination)),
         nudge=(
@@ -984,6 +999,7 @@ async def _auto(args: argparse.Namespace) -> int:
                 count=args.count,
                 interactive=False,
                 guidance=[],
+                job=job,
             ),
         ),
     ]

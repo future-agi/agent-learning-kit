@@ -28,6 +28,10 @@ _PASSTHROUGH = {
     "ALK_VOICEMAIL_SCENARIOS",
     "ALK_BACKGROUND_NOISE",
     "ALK_BACKGROUND_NOISE_CATALOG",
+    # Temporary, private scenario-authoring policy for the Uber Guest Booking POC. The exact
+    # target comes from platform deployment configuration, never from customer environment input.
+    "ALK_UBER_GUEST_POC_TARGET_PHONE_NUMBER",
+    "ALK_UBER_GUEST_POC_PIN",
     "ALK_CLAUDE_GATEWAY_URL",
     "ALK_CLAUDE_GATEWAY_API_KEY",
     "ANTHROPIC_API_KEY",
@@ -147,8 +151,9 @@ def main(argv: list[str] | None = None) -> int:
     all_values = _load_values(_SECRETS_PATH)
     values = _platform_simulator_values(all_values)
     # The launch-time fallback authoring command runs before hosted_entrypoint consumes this
-    # control-plane channel. Read only the two authoring gateway values and leave the file for
-    # hosted_entrypoint to consume and delete. Never copy customer target credentials here.
+    # control-plane channel. Read only the allowlisted platform-owned authoring values and leave
+    # the file for hosted_entrypoint to consume and delete. Never copy customer target credentials
+    # here.
     try:
         gateway_values = _load_values(_SIMULATOR_SECRETS_PATH)
     except (OSError, ValueError):
@@ -161,6 +166,8 @@ def main(argv: list[str] | None = None) -> int:
                 "AGENTCC_BASE_URL",
                 "ALK_BACKGROUND_NOISE",
                 "ALK_BACKGROUND_NOISE_CATALOG",
+                "ALK_UBER_GUEST_POC_TARGET_PHONE_NUMBER",
+                "ALK_UBER_GUEST_POC_PIN",
             )
             if gateway_values.get(name)
         }

@@ -93,7 +93,11 @@ WRITER = "scenario_writer"
 
 
 def writer_worker(
-    contract: AgentContract, destination: Path, server: ToolServer, budget: int
+    contract: AgentContract,
+    destination: Path,
+    server: ToolServer,
+    budget: int,
+    authoring_guidance: str = "",
 ) -> dict[str, WorkerSpec]:
     """The worker this stage may run to write part of the suite."""
     return {
@@ -168,6 +172,11 @@ def writer_worker(
                 "you and what it said, and anything the world would not support. A round is "
                 "planned from these reports, so a brief that comes back with a bare count "
                 "leaves the next round guessing at what is still missing."
+                + (
+                    f"\n\n## Run-specific authoring policy\n\n{authoring_guidance}"
+                    if authoring_guidance
+                    else ""
+                )
             ),
             servers={
                 SCENARIO_SERVER: ToolServer(
@@ -190,6 +199,7 @@ def open_stage(
     wanted: int = 10,
     ask: Callable[..., Any] | None = None,
     max_turns: int = 0,
+    authoring_guidance: str = "",
 ) -> tuple[Stage, Path]:
     """A live write-the-scenarios stage, and where it will write."""
     destination = out or artifact_dir(contract.agent)
@@ -271,10 +281,17 @@ def open_stage(
                 + ", ".join(scenario.name for scenario in kept)
                 + ". Submitting one under an existing name replaces it."
             )
+            + (
+                f"\n\n## Run-specific authoring policy\n\n{authoring_guidance}"
+                if authoring_guidance
+                else ""
+            )
         ),
         servers={SCENARIO_SERVER: loop_server},
         builtins=("AskUserQuestion", DELEGATE_TOOL),
-        workers=writer_worker(contract, destination, server, budget),
+        workers=writer_worker(
+            contract, destination, server, budget, authoring_guidance
+        ),
         cwd=str(destination.parent if destination.parent.exists() else Path.cwd()),
         max_turns=budget,
         model=chosen_model(),
