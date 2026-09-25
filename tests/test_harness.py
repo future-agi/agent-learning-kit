@@ -5437,10 +5437,6 @@ def test_voice_simulator_makes_payment_and_otp_facts_non_negotiable(monkeypatch)
     assert "Never answer Visa" in policy
     assert "847293" in policy and "never alter its digits" in policy
 
-    monkeypatch.setenv("HARNESS_FIXTURE", json.dumps({"guest_pin": "7682"}))
-    guest_pin_policy = voice_cases._simulator_policy()
-    assert "7682" in guest_pin_policy and "never alter its digits" in guest_pin_policy
-
 
 def test_voice_simulator_derives_literal_transaction_facts(monkeypatch):
     monkeypatch.syspath_prepend(
@@ -5465,13 +5461,6 @@ def test_voice_simulator_derives_literal_transaction_facts(monkeypatch):
     assert policy["payment"] == "Cash, please."
     assert policy["otp"] == "Eight four seven two nine three."
     assert policy["cancel_after_booking"] is True
-
-    guest_pin = voice_cases._derived_scripted_caller(
-        {"guest_pin": "7682"},
-        "Book a guest ride with PIN 7682.",
-        "The guest ride is booked.",
-    )
-    assert guest_pin["otp"] == "Seven six eight two."
 
     cash_only = voice_cases._derived_scripted_caller(
         {"payment": "cash"},
@@ -5515,7 +5504,6 @@ def test_scripted_caller_answers_direct_name_and_destination_questions(monkeypat
     policy = {
         "name": "Leila Haddad.",
         "dropoff": "333 O'Farrell Street, San Francisco.",
-        "otp": "Seven six eight two.",
     }
 
     def fallback(_heard, _current):
@@ -5527,9 +5515,6 @@ def test_scripted_caller_answers_direct_name_and_destination_questions(monkeypat
     assert voice_cases.recover_scripted_reply(
         "And where are you headed?", policy, fallback
     ) == ("333 O'Farrell Street, San Francisco.", False)
-    assert voice_cases.recover_scripted_reply(
-        "Please share your four-digit guest booking PIN.", policy, fallback
-    ) == ("Seven six eight two.", False)
 
 
 def test_scripted_caller_stops_after_repeating_the_same_fact_three_times(monkeypatch):

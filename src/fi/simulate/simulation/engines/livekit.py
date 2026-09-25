@@ -645,39 +645,6 @@ def _simulator_turn_handling(
     }
 
 
-_PIN_FACT_KEYS = frozenset({"guest_pin", "pin", "otp", "otp_code"})
-_PIN_QUESTION_CUES = ("pin", "verification code", "one-time code", "four digits", "four-digit")
-_DIGIT_WORDS = {
-    "0": "zero",
-    "1": "one",
-    "2": "two",
-    "3": "three",
-    "4": "four",
-    "5": "five",
-    "6": "six",
-    "7": "seven",
-    "8": "eight",
-    "9": "nine",
-}
-
-
-def _pinned_credential_reply(persona: Persona, heard: str) -> str | None:
-    """Return an exact scenario credential when the target asks for it."""
-    if not any(cue in heard.lower() for cue in _PIN_QUESTION_CUES):
-        return None
-    for fact in persona.knowledge:
-        if fact.key.lower() not in _PIN_FACT_KEYS:
-            continue
-        try:
-            value = json.loads(fact.value)
-        except (json.JSONDecodeError, TypeError):
-            value = fact.value
-        digits = [one for one in str(value) if one.isdigit()]
-        if digits:
-            return " ".join(_DIGIT_WORDS[one] for one in digits).capitalize() + "."
-    return None
-
-
 class _TestRunnerAgent(Agent):
     def __init__(
         self,
@@ -1071,27 +1038,6 @@ class _TestRunnerAgent(Agent):
             self._goodbye_said = True
         chat_ctx = _with_opening_line(chat_ctx, self._persona.persona.get("initial_message"))
         self._saying = ""
-        heard = next(
-            (
-                str(message.text_content or "")
-                for message in reversed(list(chat_ctx.messages()))
-                if message.role == "user"
-            ),
-            "",
-        )
-        if not heard and self._session is not None:
-            heard = next(
-                (
-                    str(message.get("content") or "")
-                    for message in reversed(_session_messages(self._session))
-                    if message.get("role") == "user"
-                ),
-                "",
-            )
-        if pinned := _pinned_credential_reply(self._persona, heard):
-            self._saying = pinned
-            yield pinned
-            return
         async for chunk in _without_hold_marker(
             super().llm_node(chat_ctx, tools, model_settings),
             on_hold=self._on_hold,

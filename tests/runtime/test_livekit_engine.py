@@ -89,7 +89,7 @@ def test_simulator_identity_preserves_legacy_shape_without_valid_phone() -> None
     )
 
 
-def test_simulator_answers_pinned_guest_pin_without_sampling(monkeypatch) -> None:
+def test_simulator_does_not_override_agent_turn_with_pinned_fact(monkeypatch) -> None:
     persona = Persona(
         persona={"name": "Caller"},
         situation="Book a guest ride.",
@@ -103,7 +103,7 @@ def test_simulator_answers_pinned_guest_pin_without_sampling(monkeypatch) -> Non
     item = SimpleNamespace(
         type="message",
         role="user",
-        text_content="Please share your four-digit booking PIN.",
+        text_content="Your PIN is verified. What is your pickup location?",
         interrupted=False,
         created_at=0.0,
         metrics={},
@@ -129,8 +129,8 @@ def test_simulator_answers_pinned_guest_pin_without_sampling(monkeypatch) -> Non
     async def drain():
         return [chunk async for chunk in agent.llm_node(chat_ctx, [], None)]
 
-    assert asyncio.run(drain()) == ["Seven six eight two."]
-    assert reached == []
+    assert asyncio.run(drain()) == ["sampled response"]
+    assert reached == ["model"]
 
 
 def test_managed_room_names_are_unique_per_run_and_case() -> None:
