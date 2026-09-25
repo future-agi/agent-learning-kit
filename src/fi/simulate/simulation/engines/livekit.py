@@ -661,9 +661,19 @@ _DIGIT_WORDS = {
 }
 
 
-def _pinned_credential_reply(persona: Persona, heard: str) -> str | None:
-    """Return an exact scenario credential when the target asks for it."""
-    if not any(cue in heard.lower() for cue in _PIN_QUESTION_CUES):
+_ASKING = re.compile(r"\?|\b(share|tell|provide|give|say|enter|read|repeat|what is|what's)\b", re.IGNORECASE)
+_SETTLED = re.compile(r"\b(confirmed|verified|validated|accepted|already|got your)\b", re.IGNORECASE)
+_REJECTED = re.compile(r"\b(again|repeat|incorrect|invalid|wrong|didn't match|does not match|doesn't match|not match)\b", re.IGNORECASE)
+
+
+def _pinned_credential_reply(persona: Persona, heard: str, given: bool = False) -> str | None:
+    """Return an exact scenario credential when the target asks for it, not when it mentions it."""
+    lowered = heard.lower()
+    if not any(cue in lowered for cue in _PIN_QUESTION_CUES) or not _ASKING.search(heard):
+        return None
+    if _SETTLED.search(heard) and not _REJECTED.search(heard):
+        return None
+    if given and not _REJECTED.search(heard):
         return None
     for fact in persona.knowledge:
         if fact.key.lower() not in _PIN_FACT_KEYS:
@@ -1088,7 +1098,8 @@ class _TestRunnerAgent(Agent):
                 ),
                 "",
             )
-        if pinned := _pinned_credential_reply(self._persona, heard):
+        if pinned := _pinned_credential_reply(self._persona, heard, self._credential_given):
+            self._credential_given = True
             self._saying = pinned
             yield pinned
             return
@@ -1102,6 +1113,7 @@ class _TestRunnerAgent(Agent):
 
     _goodbye_said: bool = False
     _saying: str = ""
+    _credential_given: bool = False
 
     _answered_again_at: int = -1
 

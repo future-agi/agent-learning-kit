@@ -4018,3 +4018,19 @@ def test_a_one_sided_call_fails_even_when_it_ended_cleanly() -> None:
     assert outcome.status == CaseStatus.FAILED
     assert outcome.failure is not None
     assert outcome.failure.code == "insufficient_conversation"
+
+
+def test_a_pinned_credential_is_given_when_asked_not_when_mentioned() -> None:
+    persona = Persona(
+        persona={"name": "Caller"},
+        situation="Book a guest ride.",
+        outcome="The ride is booked.",
+        knowledge=[PersonaFact(key="guest_pin", value=json.dumps("7682"), disclosure="on_request")],
+    )
+    reply = livekit._pinned_credential_reply
+    assert reply(persona, "Please share your PIN whenever you're ready.") == "Seven six eight two."
+    assert reply(persona, "What's your four-digit PIN?") == "Seven six eight two."
+    assert reply(persona, "I've already verified your PIN. Where should the driver pick you up?") is None
+    assert reply(persona, "Your PIN is confirmed. What is the pickup address?") is None
+    assert reply(persona, "Could you share your PIN?", given=True) is None
+    assert reply(persona, "That PIN didn't match. Could you say it again?", given=True) == "Seven six eight two."
