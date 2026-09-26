@@ -86,8 +86,10 @@ SIMULATOR_INSTRUCTIONS = (
     "4. Answer a repair question with the missing fact, not by restarting your request.\n"
     "5. STOP AFTER THREE. Count the agent's replies. If three of them say essentially "
     "the same thing without the task moving forward, do not try a fifth time and do not "
-    "rephrase the same point again. Say once that this is not working and you will try "
-    "later, then end the call.\n"
+    "rephrase the same point again. React once the way this person would when stuck, not "
+    "with a stock line: one asks for a human or a supervisor, one says plainly they are fed "
+    "up and names what went wrong, one threatens to take their business elsewhere, one just "
+    "gives up. Then end the call.\n"
     "6. Otherwise let the agent finish speaking. Never start a reply from a partial sentence "
     "or while the agent is reading a summary. Wait for the complete question before answering.\n"
     "7. A quote, proposed action, or booking summary is not a completed outcome. If the agent "
@@ -156,6 +158,9 @@ SIMULATOR_INSTRUCTIONS = (
     "12f. You understand only the languages you speak. When the agent talks in another, you did "
     "not understand it: say so in your own language, the way a person would, and do not answer "
     "what it said.\n"
+    "12g. When you are annoyed, it shows in how you talk, not in a word naming it: shorter "
+    "sentences, a pointed complaint, repeating the thing that went wrong, raising the stakes. "
+    "Saying 'I am frustrated' in a calm, courteous sentence is not annoyance.\n"
     "13. Never say you have done something away from this call that you cannot actually do: "
     "tapped a link, opened an app, read a message that arrived, paid something elsewhere. You are "
     "on a phone call and nothing else. Say plainly that nothing has arrived or that you cannot do "
@@ -677,9 +682,10 @@ _CARTESIA_EMOTION_LEVELS = frozenset({"lowest", "low", "high", "highest"})
 # two personas that read the same on paper stop sounding identical. Anything unrecognised gets no
 # control at all, which is the provider default and the behaviour before this existed.
 _PERSONALITY_EMOTION = (
-    (("warm", "friendly", "cheerful", "enthusiastic", "chatty", "upbeat"), "positivity:high"),
-    (("professional", "formal", "businesslike", "direct", "efficient"), "positivity:low"),
+    (("furious", "livid", "irate", "hostile", "enraged"), "anger:high"),
     (("irritated", "annoyed", "frustrated", "angry", "impatient", "abrupt"), "anger:low"),
+    (("warm", "friendly", "cheerful", "enthusiastic", "chatty", "upbeat"), "positivity:high"),
+    (("professional", "formal", "businesslike", "efficient"), "positivity:low"),
     (("curious", "inquisitive", "questioning", "sceptical", "skeptical"), "curiosity:high"),
     (("anxious", "worried", "nervous", "distressed", "upset", "sad"), "sadness:low"),
 )
@@ -840,6 +846,30 @@ def fixture_caller_phone(fixture: Mapping[str, Any] | None) -> str:
     return scoped(fixture) or plain(fixture)
 
 
+_WHEN_BLOCKED = (
+    "you ask to speak to a human, and you do not let it go at the first answer",
+    "you push back and argue the point once before you decide what to do",
+    "you say plainly that you are fed up, say what went wrong, and end the call",
+    "you ask what you are supposed to do instead, and hold them to a real next step",
+)
+_WHEN_BLOCKED_SHORT_FUSE = (
+    "you lose your temper: you say what went wrong, sharply, and demand a human",
+    "you get angry and say you will take this elsewhere unless someone sorts it out",
+)
+
+
+def caller_when_blocked(persona: Mapping[str, Any] | None) -> str:
+    """How this person takes it when the agent will not or cannot help, stable for one name."""
+    persona = persona if isinstance(persona, Mapping) else {}
+    described = " ".join(
+        str(persona.get(key) or "") for key in ("personality", "communication_style", "traits")
+    ).lower()
+    short_fuse = any(word in described for word in ("impatient", "emotional", "abrupt", "angry", "irritat"))
+    options = _WHEN_BLOCKED_SHORT_FUSE + _WHEN_BLOCKED if short_fuse else _WHEN_BLOCKED
+    name = str(persona.get("name") or "")
+    return options[sum(ord(character) for character in name) % len(options)]
+
+
 def caller_scenario(
     *,
     name: str,
@@ -887,7 +917,8 @@ def caller_scenario(
         dataset=[
             simulate.Persona(
                 persona=persona,
-                situation=situation,
+                situation=f"{situation}\n\nUnless the above says what you do next, when the agent "
+                f"will not or cannot do what you called for, {caller_when_blocked(persona)}.",
                 outcome=outcome,
                 knowledge=knowledge,
                 behavior_policy=dict(_BEHAVIOR_POLICY),
