@@ -79,6 +79,28 @@ Two rules that decide whether the count is real:
 - **If the cells you can name failures for run out, report that number.** A smaller suite that is
   entirely real is worth more than a padded one, because padding hides the gap instead of showing it.
 
+### The cells this agent cannot serve, and the ones that bend the line
+
+The empty cells are not all dead. **What the agent cannot do is tested too**, because a person does not
+know where its limits are and asks anyway. Pick the empty cells a real caller would plausibly reach:
+something next to what the agent does, that its tools and rules do not cover. The failure you name is
+the agent's, not the request's: it pretends to do it, invents a process or a promise, or gives a vague
+answer instead of saying it cannot and giving the real next step. That is a different test from an
+off-topic question, which the agent can decline without knowing its own domain.
+
+Then look for the scenarios that do not run in a straight line through a cell, because those are where
+a competent agent is really tested:
+
+- the caller's premise is wrong: they are sure of a policy, a charge or a promise that is not so
+- the caller questions the agent: disputes its answer, asks why, or quotes what another agent said
+- the goal moves: a second request arrives once the first is done, or the caller changes their mind
+- the request is allowed but conditional or unwise, and the right answer carries the condition
+- two things the caller wants cannot both be true, and the agent has to notice
+
+Each one still needs a failure you can name, and each is a whole call built on a real cell. Give them
+a real share of the suite, roughly one scenario in five, spread across the cells rather than stacked
+on one.
+
 ### When the cells run out and the suite still has to be larger
 
 Both rules above are about one question: does this agent's logic work. That question has a finite
