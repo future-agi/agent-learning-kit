@@ -4491,6 +4491,28 @@ def test_every_emotion_we_can_emit_is_one_cartesia_accepts():
     assert persona_emotion(None) == []
 
 
+def test_an_impatient_caller_is_voiced_with_anger_not_formality():
+    from fi.alk.harness.simulator_voice import persona_emotion
+
+    assert persona_emotion({"personality": "Impatient and direct"}) == ["anger:low"]
+    assert persona_emotion({"personality": "Furious"}) == ["anger:high"]
+
+
+def test_a_caller_takes_a_refusal_the_same_way_every_run():
+    from fi.alk.harness.simulator_voice import (
+        _WHEN_BLOCKED,
+        _WHEN_BLOCKED_SHORT_FUSE,
+        caller_when_blocked,
+    )
+
+    calm = {"name": "Priya Nair", "personality": "Friendly and cooperative"}
+    assert caller_when_blocked(calm) == caller_when_blocked(dict(calm))
+    assert caller_when_blocked(calm) in _WHEN_BLOCKED
+    short = {"name": "Priya Nair", "personality": "Impatient and direct"}
+    assert caller_when_blocked(short) in _WHEN_BLOCKED_SHORT_FUSE + _WHEN_BLOCKED
+    assert caller_when_blocked(None) in _WHEN_BLOCKED
+
+
 def test_two_personalities_do_not_share_one_emotional_register():
     from fi.alk.harness.simulator_voice import persona_emotion
 
