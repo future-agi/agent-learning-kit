@@ -46,9 +46,9 @@ VOICE_COMMUNICATION_STYLE_GUIDES: dict[str, str] = {
 # Cartesia is definitely the voice, because Deepgram's Aura neither renders nor strips them, so
 # a caller on Aura would literally say "left bracket laughter right bracket".
 #
-# Deliberately narrow. `<speed>` and `<volume>` carry a decimal that a token stream can split
-# ("1", ".", "0"), which makes the tag be read out, so they are left out. `<emotion>` carries no
-# number, and Cartesia documents inline emotion tags for shifting feeling sentence to sentence.
+# Deliberately narrow. Cartesia documents five SSML tags and one nonverbalism, but `<speed>` and
+# `<volume>` carry a decimal that a token stream can split ("1", ".", "0"), which makes the tag
+# be read out. What is left is the three that are safe to hand a model writing a turn at a time.
 CARTESIA_DELIVERY_CUES = """# HOW YOU SOUND
 
 Your voice follows your mood, and your mood moves with the call: patient at first, sharper when

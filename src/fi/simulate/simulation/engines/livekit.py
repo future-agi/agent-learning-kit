@@ -1185,7 +1185,6 @@ def _may_not_be_speech(text: str) -> bool:
 
 # The one bracketed cue the voice renders is kept; see CARTESIA_DELIVERY_CUES.
 _STAGE_DIRECTION = re.compile(r"\[(?!laughter\])[^\]]*\]|\*[^*]*\*", re.IGNORECASE)
-# The caller's delivery cues are rendered, not said, so the transcript leaves them out.
 _DELIVERY_MARKUP = re.compile(r"<[^<>]*>|\[laughter\]", re.IGNORECASE)
 
 

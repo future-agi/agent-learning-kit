@@ -671,8 +671,6 @@ def _cartesia_lang_key(persona: dict) -> str:
     return "en"
 
 
-# Cartesia's voices recommended for emotion control, added to the English pool for accents they
-# match. They extend the catalog rather than replace it, so every catalog voice stays in use.
 _CARTESIA_EMOTION_VOICES = {
     "female": (
         "26403c37-80c1-4a1a-8692-540551ca2ae5",
@@ -927,7 +925,6 @@ _WHEN_BLOCKED_SHORT_FUSE = (
 
 
 def caller_when_blocked(persona: Mapping[str, Any] | None) -> str:
-    """How this person takes it when the agent will not or cannot help, stable for one name."""
     persona = persona if isinstance(persona, Mapping) else {}
     described = " ".join(
         str(persona.get(key) or "") for key in ("personality", "communication_style", "traits")
@@ -954,7 +951,6 @@ _DEFAULT_CALL_HABIT = "you check that what you are told fits your own case befor
 
 
 def caller_habit(persona: Mapping[str, Any] | None) -> str:
-    """How this person tends to talk on a call, from their personality and style."""
     persona = persona if isinstance(persona, Mapping) else {}
     described = " ".join(
         str(persona.get(key) or "") for key in ("personality", "communication_style", "traits")
@@ -970,15 +966,12 @@ _CALL_MOVES = (
     "you ask what a word the agent uses means",
     "you ask the what-if your own situation raises",
     "you weigh what the answer costs you in time, money or effort, and say so",
-    "when the agent offers you choices, you hesitate, or pick one and then change it once",
     "before you go, you make sure you know exactly what happens next and what you have to do",
-    "you say you need to check with someone before you commit",
     "you ask why a step is needed",
 )
 
 
 def caller_moves(persona: Mapping[str, Any] | None, scenario_name: str = "") -> tuple[str, str]:
-    """Two natural moves this caller makes where they fit, stable for one person and scenario."""
     persona = persona if isinstance(persona, Mapping) else {}
     seed = sum(ord(character) for character in f"{persona.get('name') or ''}{scenario_name}")
     first = seed % len(_CALL_MOVES)
