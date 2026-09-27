@@ -1128,11 +1128,15 @@ _ANSWER_ALOUD = (
 
 # The caller's first turn is written by the model like any other, so it sounds spoken, not read.
 _OPENING_TURN = (
-    "This is your first turn. Open the way this person naturally would, with just your first "
-    "request, which is: {opening} Say it in your own words, in one or two short sentences, keeping "
-    "its manner: if it is halting, vague or unfinished, say it that way, and keep any exact words "
-    "or values it contains. If the agent has already spoken and asked you something, answer that "
-    "briefly first. Everything else in your situation waits for its moment."
+    "This is your first turn. Open the way this person naturally would on the phone, with just "
+    "your first request, which is: {opening} Say it in your own words, as it comes out of your "
+    "mouth rather than as a prepared summary: often a hello and the gist, with the rest following "
+    "once the agent is listening or asks. Keep its manner: if it is halting, vague or unfinished, "
+    "say it that way, and keep any exact words or values it contains when you say them. If the "
+    "agent has already spoken and asked you something, answer that briefly first. If all you have "
+    "heard so far is an announcement, such as that the call is recorded, and nobody has greeted "
+    f"you or asked you anything, it is not your turn yet: your whole reply is {HOLD_MARKER}. "
+    "Everything else in your situation waits for its moment."
 )
 
 
@@ -1181,6 +1185,8 @@ def _may_not_be_speech(text: str) -> bool:
 
 # The one bracketed cue the voice renders is kept; see CARTESIA_DELIVERY_CUES.
 _STAGE_DIRECTION = re.compile(r"\[(?!laughter\])[^\]]*\]|\*[^*]*\*", re.IGNORECASE)
+# The caller's delivery cues are rendered, not said, so the transcript leaves them out.
+_DELIVERY_MARKUP = re.compile(r"<[^<>]*>|\[laughter\]", re.IGNORECASE)
 
 
 async def _spoken_words(text: AsyncIterable[Any]) -> AsyncIterable[Any]:
@@ -3735,10 +3741,13 @@ def _canonical_report_messages(session: AgentSession) -> list[dict[str, Any]]:
     role_map = {"assistant": "user", "user": "assistant"}
     messages: list[dict[str, Any]] = []
     for source in _session_messages(session):
+        content = source["content"]
+        if source["role"] == "assistant" and isinstance(content, str):
+            content = " ".join(_DELIVERY_MARKUP.sub(" ", content).split())
         messages.append(
             {
                 "role": role_map.get(source["role"], source["role"]),
-                "content": source["content"],
+                "content": content,
                 "created_at": source.get("created_at"),
                 "started_speaking_at": source.get("started_speaking_at"),
                 "stopped_speaking_at": source.get("stopped_speaking_at"),

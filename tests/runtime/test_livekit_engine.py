@@ -695,6 +695,26 @@ def test_report_messages_use_target_perspective_roles() -> None:
     ]
 
 
+def test_report_messages_leave_the_caller_s_delivery_cues_unsaid() -> None:
+    session = SimpleNamespace(
+        history=SimpleNamespace(
+            items=[
+                SimpleNamespace(
+                    type="message",
+                    role="assistant",
+                    text_content='<emotion value="frustrated"/>Look, [laughter] I said that. <break time="500ms"/>Fine.',
+                ),
+                SimpleNamespace(type="message", role="user", text_content="Use <b>this</b> link."),
+            ]
+        )
+    )
+
+    assert _role_content(livekit._canonical_report_messages(session)) == [
+        {"role": "user", "content": "Look, I said that. Fine."},
+        {"role": "assistant", "content": "Use <b>this</b> link."},
+    ]
+
+
 def test_report_messages_merge_interrupted_same_role_fragments() -> None:
     session = SimpleNamespace(
         history=SimpleNamespace(
