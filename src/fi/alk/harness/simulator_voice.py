@@ -65,20 +65,22 @@ SIMULATOR_INSTRUCTIONS = (
     "mind ('and also', 'and what happens if'), it waits for your next turn, after this one is "
     "answered. Your closing turn is the exception, and rule 9 says what goes in it. You are not "
     "an assistant and you owe the agent no courtesy beyond the ordinary. "
-    "Talk the way people talk on the phone: contractions, short sentences, never written phrasing. A "
-    "formal person is formal in what they say, not in how a letter reads. Say an email address or a "
-    "code the way people say it aloud. You are speaking, not writing: half sentences are fine, so is "
-    "an 'oh', 'right', 'hm' or 'wait' before your point, and so is leaving out what you both already "
-    "know. Most of your turns are short: an answer to what you were asked is often a word or two "
+    "Talk the way people talk on the phone: contractions, short sentences, never written "
+    "phrasing. A formal person is formal in what they say, not in how a letter reads: everyone "
+    "says 'it's', 'I'm' and 'that's' out loud, and 'It is seven six eight two' is how a form "
+    "reads, not a person. Say an email address or a code the way people say it aloud. You are "
+    "speaking, not writing: half sentences are fine, so is an 'oh', 'right', 'hm' or 'wait' "
+    "before your point, and so is leaving out what you both already know. Most of your turns "
+    "are short: an answer to what you were asked is often a word or two "
     "('yeah', 'the fourteenth', 'no, the second one'), and taking something in is a bare 'okay', "
     "'right' or 'got it', never a sentence of thanks. You talk longer only when you are explaining "
     "your problem. You open the way people open a call: a hello and the gist in a few words, or the "
     "problem the way it comes out of your mouth, not a prepared summary of your whole case; the "
     "specifics follow once the agent is listening or asks. A question is as long as people ask it "
     "out loud ('and the CSV, where's that?'), not a written sentence with every clause in it. "
-    "People trip over a word, restart a sentence, or say 'uh', mostly at the start "
-    "of what they say or just before a number or a name, never in every sentence; how much depends "
-    "on who you are, and your personality says how you talk. Speech has no dashes, semicolons, "
+    "People trip over a word, restart a sentence, or say 'uh', mostly at the start of what "
+    "they say or just before a number or a name, never in every sentence; how much depends on "
+    "who you are, and your personality says how you talk. Speech has no dashes, semicolons, "
     "brackets or lists.\n"
     "These rules are how a caller behaves unless the scenario describes someone who does not. Rule 14 says which of them the scenario can overrule and which it never can:\n"
     "1. Use ONLY the facts you were given. Never invent an account detail, address, "
@@ -131,7 +133,8 @@ SIMULATOR_INSTRUCTIONS = (
     "which is not a goodbye and gives the agent room to add anything and you a moment to remember "
     "a last thing; then, once the agent answers, your goodbye in ONE turn and end the call. A "
     "goodbye turn never asks anything: if you still have a question, ask it, end your turn on it, "
-    "and wait for the answer. EVERYTHING you still have to say goes inside the goodbye turn: a thanks, a last condition, a reminder, a warning, a "
+    "and wait for the answer. EVERYTHING you still have to say goes inside the goodbye turn: a "
+    "thanks, a last condition, a reminder, a warning, a "
     "caveat. 'Alright, make sure it stays off the list. Goodbye.' is one closing; 'Goodbye.' "
     "followed by 'Make sure it stays off the list.' is two, and the second one is the tell. Say "
     "your last point BEFORE the farewell, in the same breath, or do not say it at all. If the agent's "
@@ -185,9 +188,6 @@ SIMULATOR_INSTRUCTIONS = (
     "12f. You understand only the languages you speak. When the agent talks in another, you did "
     "not understand it: say so in your own language, the way a person would, and do not answer "
     "what it said.\n"
-    "12f2. When you agree, just say so: 'yeah', 'sure', 'okay'. When you turn something down, "
-    "disagree or say it is not what you wanted, start with 'well', 'hm' or 'uh' and give your "
-    "reason, the way people soften a no.\n"
     "12g. When you are annoyed, it shows in how you talk, not in a word naming it: shorter "
     "sentences, a pointed complaint, repeating the thing that went wrong, raising the stakes. "
     "Saying 'I am frustrated' in a calm, courteous sentence is not annoyance. It builds the way "
@@ -198,12 +198,15 @@ SIMULATOR_INSTRUCTIONS = (
     "12h. You are on a phone and can see nothing. When the agent gives you steps, a path or a "
     "number you would have to act on later, do what a person on a call does: say back the part you "
     "are unsure of in a few words, never the whole list, ask about the exact bit you missed ('the "
-    "first of what?', 'fifteen or fifty?'), ask for "
-    "it again, or ask to take it one step at a time; and say so when a word it used means nothing "
+    "first of what?', 'fifteen or fifty?'), ask for it again, or ask to take it one step at a "
+    "time; and say so when a word it used means nothing "
     "to you. These are questions about what you heard, not facts you volunteer, so rule 3 does not "
     "stop them. When you say something back, stop there and let the agent confirm or correct it "
     "before you ask anything else or close: a check you do not wait for is not a check. Once is "
     "enough, and never for what you already understood.\n"
+    "12i. When you agree, just say so: 'yeah', 'sure', 'okay'. When you turn something down, "
+    "disagree or say it is not what you wanted, start with 'well', 'hm' or 'uh' and give your "
+    "reason, the way people soften a no.\n"
     "13. Never say you have done something away from this call that you cannot actually do: "
     "tapped a link, opened an app, read a message that arrived, paid something elsewhere. You are "
     "on a phone call and nothing else. Say plainly that nothing has arrived or that you cannot do "
@@ -668,6 +671,25 @@ def _cartesia_lang_key(persona: dict) -> str:
     return "en"
 
 
+# Cartesia's voices recommended for emotion control, added to the English pool for accents they
+# match. They extend the catalog rather than replace it, so every catalog voice stays in use.
+_CARTESIA_EMOTION_VOICES = {
+    "female": (
+        "26403c37-80c1-4a1a-8692-540551ca2ae5",
+        "cc00e582-ed66-4004-8336-0175b85c85f6",
+        "6ccbfb76-1fc6-48f7-b71d-91ac6298247b",
+        "cbaf8084-f009-4838-a096-07ee2e6612b1",
+    ),
+    "male": (
+        "c961b81c-a935-4c17-bfb3-ba2239de8c2f",
+        "f4a3a8e4-694c-4c45-9ca0-27caf97901b5",
+        "6776173b-fd72-460d-89b3-d85812ee518d",
+        "0834f3df-e650-4766-a20c-5a93a43aa6e3",
+    ),
+}
+_CARTESIA_EMOTION_VOICE_ACCENTS = frozenset({"", "american", "canadian", "neutral"})
+
+
 def cartesia_voice_for(persona: dict) -> str:
     """A stable Cartesia voice id for one caller, chosen by accent/language and gender.
 
@@ -688,6 +710,10 @@ def cartesia_voice_for(persona: dict) -> str:
     )
     if not voices:
         return CARTESIA_DEFAULT_VOICE
+    if key == "en" and _norm(persona.get("accent")) in _CARTESIA_EMOTION_VOICE_ACCENTS:
+        voices = list(voices) + [
+            voice for voice in _CARTESIA_EMOTION_VOICES.get(gender, ()) if voice not in voices
+        ]
     index = sum(ord(character) for character in str(persona.get("name") or "")) % len(
         voices
     )
@@ -797,7 +823,7 @@ def simulator_definition(
     stt_default_provider, stt_model, stt_language = transcriber_for(language)
     stt_provider = stt_override or stt_default_provider
     defaults = {
-        "llm": {"google": "gemini-2.5-flash", "openai": "gpt-4o-mini"},
+        "llm": {"google": "gemini-3.8-flash", "openai": "gpt-4o-mini"},
         "stt": {"deepgram": stt_model, "cartesia": "ink-2", "google": "chirp_2"},
         "tts": {
             "deepgram": "aura-asteria-en",
@@ -906,7 +932,9 @@ def caller_when_blocked(persona: Mapping[str, Any] | None) -> str:
     described = " ".join(
         str(persona.get(key) or "") for key in ("personality", "communication_style", "traits")
     ).lower()
-    short_fuse = any(word in described for word in ("impatient", "emotional", "abrupt", "angry", "irritat"))
+    short_fuse = any(
+        word in described for word in ("impatient", "emotional", "abrupt", "angry", "irritat")
+    )
     options = _WHEN_BLOCKED_SHORT_FUSE + _WHEN_BLOCKED if short_fuse else _WHEN_BLOCKED
     name = str(persona.get("name") or "")
     return options[sum(ord(character) for character in name) % len(options)]
@@ -1011,8 +1039,8 @@ def caller_scenario(
                 f"person does before giving up: a smaller or split version of the ask, another "
                 f"time, another way to get the same thing done. If that fails too, or the agent "
                 f"keeps going round in circles, {caller_when_blocked(persona)}. On a call, "
-                f"{caller_habit(persona)}. Somewhere in this "
-                f"call, where it fits and only if it does, "
+                f"{caller_habit(persona)}. Somewhere in this call, where it fits and only if it "
+                f"does, "
                 f"{'; and '.join(caller_moves(persona, name))}.",
                 outcome=outcome,
                 knowledge=knowledge,

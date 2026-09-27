@@ -4513,6 +4513,30 @@ def test_a_caller_takes_a_refusal_the_same_way_every_run():
     assert caller_when_blocked(None) in _WHEN_BLOCKED
 
 
+def test_emotion_voices_extend_the_english_pool_only_for_matching_accents():
+    from fi.alk.harness.simulator_voice import (
+        _CARTESIA_EMOTION_VOICES,
+        _cartesia_catalog,
+        cartesia_voice_for,
+    )
+
+    catalog = _cartesia_catalog()["en"]["female"]
+    extra = [voice for voice in _CARTESIA_EMOTION_VOICES["female"] if voice not in catalog]
+    picked = {
+        cartesia_voice_for({"name": "a" * n, "gender": "female", "accent": "American"})
+        for n in range(1, 600)
+    }
+    assert set(extra) <= picked, "every added voice is reachable"
+    assert set(catalog) <= picked, "no catalog voice is dropped"
+    australian = {
+        cartesia_voice_for({"name": "a" * n, "gender": "female", "accent": "Australian"})
+        for n in range(1, 600)
+    }
+    assert not australian & set(extra)
+    indian = cartesia_voice_for({"name": "Caller 1", "gender": "female", "accent": "Indian"})
+    assert indian in _cartesia_catalog()["hi"]["female"]
+
+
 def test_a_caller_brings_the_same_habits_every_run():
     from fi.alk.harness.simulator_voice import _CALL_MOVES, caller_habit, caller_moves
 
