@@ -59,7 +59,10 @@ SIMULATOR_INSTRUCTIONS = (
     "Act as the customer described by the scenario. Keep each turn short, the way a real "
     "caller does: someone who wants this done and gets on with it, plain, matter-of-fact and at "
     "times curt. A short turn is not a short call: you stay on until what you called about is "
-    "settled for you. You are not an assistant and you owe the agent no courtesy beyond the ordinary. "
+    "settled for you. Each turn does one thing: one question, one check or one reaction, and a "
+    "turn with a question ends on that question; then you stop and let the agent answer. A person on the phone does not stack questions into one "
+    "breath: when a second one comes to mind ('and also', 'and what happens if'), it waits for "
+    "your next turn, after this one is answered. Your closing turn is the exception, and rule 9 says what goes in it. You are not an assistant and you owe the agent no courtesy beyond the ordinary. "
     "Talk the way people talk on the phone: contractions, short sentences, never written phrasing. A "
     "formal person is formal in what they say, not in how a letter reads. Say an email address or a "
     "code the way people say it aloud.\n"
@@ -109,7 +112,9 @@ SIMULATOR_INSTRUCTIONS = (
     "situation, not when one question has had one answer. Before that, a person checks the answer "
     "fits their case, asks about the part of it that worries them, and makes sure they have the "
     "steps right; your situation says what they need, and the agent's answers raise the rest. Once "
-    "the outcome is settled, close in ONE turn and end the call. EVERYTHING you still "
+    "the outcome is settled, close in ONE turn and end the call. A closing turn never asks "
+    "anything: if you still have a question, this is not your closing turn, so ask it, end your "
+    "turn on it, and wait for the answer. EVERYTHING you still "
     "have to say goes inside that turn: a thanks, a last condition, a reminder, a warning, a "
     "caveat. 'Alright, make sure it stays off the list. Goodbye.' is one closing; 'Goodbye.' "
     "followed by 'Make sure it stays off the list.' is two, and the second one is the tell. Say "
@@ -165,6 +170,13 @@ SIMULATOR_INSTRUCTIONS = (
     "12g. When you are annoyed, it shows in how you talk, not in a word naming it: shorter "
     "sentences, a pointed complaint, repeating the thing that went wrong, raising the stakes. "
     "Saying 'I am frustrated' in a calm, courteous sentence is not annoyance.\n"
+    "12h. You are on a phone and can see nothing. When the agent gives you steps, a path or a "
+    "number you would have to act on later, do what a person on a call does: say it back, ask for "
+    "it again, or ask to take it one step at a time; and say so when a word it used means nothing "
+    "to you. These are questions about what you heard, not facts you volunteer, so rule 3 does not "
+    "stop them. When you say something back, stop there and let the agent confirm or correct it "
+    "before you ask anything else or close: a check you do not wait for is not a check. Once is "
+    "enough, and never for what you already understood.\n"
     "13. Never say you have done something away from this call that you cannot actually do: "
     "tapped a link, opened an app, read a message that arrived, paid something elsewhere. You are "
     "on a phone call and nothing else. Say plainly that nothing has arrived or that you cannot do "
@@ -874,6 +886,52 @@ def caller_when_blocked(persona: Mapping[str, Any] | None) -> str:
     return options[sum(ord(character) for character in name) % len(options)]
 
 
+_CALL_HABITS = (
+    (("detail", "analytical", "cautious", "sceptical", "skeptical", "technical"),
+     "you say steps and figures back in your own words to make sure you have them right"),
+    (("anxious", "emotional", "reserved", "passive", "nervous"),
+     "you ask to take things one step at a time, and ask again when you are not sure"),
+    (("impatient", "direct", "assertive", "confident", "abrupt"),
+     "you want the short version, skip ahead, and question any step that sounds unnecessary"),
+    (("friendly", "easy-going", "talkative", "casual", "collaborative"),
+     "you think out loud about how what you hear applies to you, and ask the what-if it raises"),
+)
+_DEFAULT_CALL_HABIT = "you check that what you are told fits your own case before you accept it"
+
+
+def caller_habit(persona: Mapping[str, Any] | None) -> str:
+    """How this person tends to talk on a call, from their personality and style."""
+    persona = persona if isinstance(persona, Mapping) else {}
+    described = " ".join(
+        str(persona.get(key) or "") for key in ("personality", "communication_style", "traits")
+    ).lower()
+    return next(
+        (habit for words, habit in _CALL_HABITS if any(word in described for word in words)),
+        _DEFAULT_CALL_HABIT,
+    )
+
+
+_CALL_MOVES = (
+    "you describe what is going on in your own words rather than naming the fix you think you need",
+    "you ask what a word the agent uses means",
+    "you ask the what-if your own situation raises",
+    "you weigh what the answer costs you in time, money or effort, and say so",
+    "when the agent offers you choices, you lean one way, change your mind, and may go back",
+    "before you go, you make sure you know exactly what happens next and what you have to do",
+    "you say you need to check with someone before you commit",
+    "you ask why a step is needed",
+)
+
+
+def caller_moves(persona: Mapping[str, Any] | None, scenario_name: str = "") -> tuple[str, str]:
+    """Two natural moves this caller makes where they fit, stable for one person and scenario."""
+    persona = persona if isinstance(persona, Mapping) else {}
+    seed = sum(ord(character) for character in f"{persona.get('name') or ''}{scenario_name}")
+    first = seed % len(_CALL_MOVES)
+    second = (first + 1 + seed // len(_CALL_MOVES) % (len(_CALL_MOVES) - 1)) % len(_CALL_MOVES)
+    return _CALL_MOVES[first], _CALL_MOVES[second]
+
+
 def caller_scenario(
     *,
     name: str,
@@ -922,8 +980,13 @@ def caller_scenario(
             simulate.Persona(
                 persona=persona,
                 situation=f"{situation}\n\nUnless the above says what you do next, when the agent "
-                f"will not or cannot do what you called for, or keeps going round in circles, "
-                f"{caller_when_blocked(persona)}.",
+                f"will not or cannot do what you called for, first ask once, in your own words, "
+                f"whether it could be done some other way that still works for you, the way a "
+                f"person does before giving up: a smaller or split version of the ask, another "
+                f"time, another way to get the same thing done. If that fails too, or the agent keeps going round in circles, "
+                f"{caller_when_blocked(persona)}. On a call, {caller_habit(persona)}. Somewhere "
+                f"in this call, where it fits and only if it does, "
+                f"{'; and '.join(caller_moves(persona, name))}.",
                 outcome=outcome,
                 knowledge=knowledge,
                 behavior_policy=dict(_BEHAVIOR_POLICY),

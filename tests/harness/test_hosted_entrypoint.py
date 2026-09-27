@@ -4513,6 +4513,17 @@ def test_a_caller_takes_a_refusal_the_same_way_every_run():
     assert caller_when_blocked(None) in _WHEN_BLOCKED
 
 
+def test_a_caller_brings_the_same_habits_every_run():
+    from fi.alk.harness.simulator_voice import _CALL_MOVES, caller_habit, caller_moves
+
+    careful = {"name": "Priya Nair", "personality": "Detail-oriented and cautious"}
+    assert "say steps and figures back" in caller_habit(careful)
+    assert caller_habit(None) == caller_habit({})
+    first, second = caller_moves(careful, "billing-question")
+    assert first != second and {first, second} <= set(_CALL_MOVES)
+    assert caller_moves(dict(careful), "billing-question") == (first, second)
+
+
 def test_two_personalities_do_not_share_one_emotional_register():
     from fi.alk.harness.simulator_voice import persona_emotion
 
