@@ -63,6 +63,9 @@ How to decide:
 6. What was said reached you through speech recognition and can contain its errors. A garbled
    phrase, or a word that sounds like one the context calls for, is a mishearing, not something the
    agent said: judge what the agent evidently said.
+7. A phone call can open with an announcement the line plays before the agent speaks, such as a
+   notice that the call is recorded. When the agent's instructions do not ask for it, it is not the
+   agent's words: judge the agent from where it starts speaking for itself.
 
 Always decide. The evidence you were given is what there is; never answer that you cannot tell.
 Call decide once, with `passed` true or false.
