@@ -32,6 +32,7 @@ import atexit
 import asyncio
 import gc
 import json
+import random
 import logging
 import os
 import stat
@@ -1158,6 +1159,11 @@ class CallRunnerImpl:
         )
         if noise:
             call_environ["HARNESS_BACKGROUND_NOISE"] = noise
+            base = self._environ.get(BACKGROUND_NOISE_VOLUME_ALIAS) or "2.0"
+            try:
+                call_environ[BACKGROUND_NOISE_VOLUME_ALIAS] = f"{float(base) * random.uniform(0.9, 1.25):.2f}"
+            except ValueError:
+                pass
         else:
             call_environ.pop("HARNESS_BACKGROUND_NOISE", None)
 
