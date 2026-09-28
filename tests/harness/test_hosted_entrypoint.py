@@ -4356,7 +4356,7 @@ def test_the_caller_is_given_a_countable_reason_to_lose_patience():
     assert "already gave it" in text, "a repeated question must be named as repeated"
     # The rules that protect the intake flow must survive.
     assert "Answer only what was asked, one fact at a time" in text
-    assert "your goodbye in ONE turn" in text
+    assert "close in ONE turn and end the call" in text
 
 
 def test_the_persona_s_pace_reaches_the_speech_provider(monkeypatch):
