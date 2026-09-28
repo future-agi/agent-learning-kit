@@ -670,6 +670,11 @@ they want pursues it. Open with the goal in their own words, "get <the thing> pu
 history that led to it. Then give them the facts they hold, the values they can be asked for, and
 what they will only say when asked.
 
+**Say how they feel when the call starts, from what is at stake**, and never how they take the
+agent's answers or how the call ends. "Someone has collapsed in front of you and you need to get them
+to a hospital now" is a situation; "if you are told to call emergency services, acknowledge it and
+say you will" scripts a calm, compliant caller into a crisis, and the call tests nothing.
+
 **What they know but will not volunteer goes in its own paragraph**, marked as such: *"You know the
 reference for it, but you will only give it if asked."* Whether the agent asks is the whole point of
 many scenarios. Put it in the instruction and the agent gets it for free; leave it out entirely and
