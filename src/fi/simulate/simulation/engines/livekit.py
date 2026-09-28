@@ -814,11 +814,9 @@ class _TestRunnerAgent(Agent):
             return
 
         try:
-            # 2.0, not the 0.3 this used to default to. Measured in an isolated two-participant
-            # room, the office clip peaks at 119 of 32768 at 0.3, which is below the noise floor of
-            # speech near 15000: the ambience played and nobody could hear it. At 2.0 the same clip
-            # measures 752 to 789 on real calls, which is audible under a voice without masking it.
-            volume = float(os.environ.get("HARNESS_BACKGROUND_NOISE_VOLUME", "2.0"))
+            # Every bed is first brought to the office clip's level (about -55 dBFS); 9.0 lifts that
+            # to about 15 to 20 dB under the caller's voice, audible without masking it.
+            volume = float(os.environ.get("HARNESS_BACKGROUND_NOISE_VOLUME", "9.0"))
             clip_source: Any = None
             if source.startswith(("http://", "https://")):
                 clip_source = await asyncio.to_thread(_downloaded_audio, source)

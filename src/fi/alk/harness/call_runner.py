@@ -1159,7 +1159,7 @@ class CallRunnerImpl:
         )
         if noise:
             call_environ["HARNESS_BACKGROUND_NOISE"] = noise
-            base = self._environ.get(BACKGROUND_NOISE_VOLUME_ALIAS) or "2.0"
+            base = self._environ.get(BACKGROUND_NOISE_VOLUME_ALIAS) or "9.0"
             try:
                 call_environ[BACKGROUND_NOISE_VOLUME_ALIAS] = f"{float(base) * random.uniform(0.7, 1.4):.2f}"
             except ValueError:
