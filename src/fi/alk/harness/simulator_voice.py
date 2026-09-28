@@ -207,9 +207,6 @@ SIMULATOR_INSTRUCTIONS = (
     "14b. Whatever the scenario has you do, the call still ends. Press as far as it tells you to and no further, then close the way rule 9 describes."
 )
 
-# An outbound call is not an inbound call with the greeting reworded. The person did not dial in,
-# so they have no opening request to make and no reason to explain themselves first. A caller who
-# states their task anyway tests nothing about how the agent opens a call it placed.
 # How a person names each place a background bed can sound like.
 _PLACE_WORDS = {
     "airport": "an airport",
@@ -231,6 +228,9 @@ _WHERE_YOU_ARE = (
     "that fits the moment.\n"
 )
 
+# An outbound call is not an inbound call with the greeting reworded. The person did not dial in,
+# so they have no opening request to make and no reason to explain themselves first. A caller who
+# states their task anyway tests nothing about how the agent opens a call it placed.
 _OUTBOUND_FRAMING = (
     "\nTHIS CALL WAS PLACED TO YOU. You did not dial anyone. You were doing something else when "
     "the phone rang. These override the numbered rules wherever they disagree.\n"

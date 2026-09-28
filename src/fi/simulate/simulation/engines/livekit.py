@@ -814,8 +814,7 @@ class _TestRunnerAgent(Agent):
             return
 
         try:
-            # Every bed is first brought to the office clip's level (about -55 dBFS); 9.0 lifts that
-            # to about 15 to 20 dB under the caller's voice, audible without masking it.
+            # Beds are levelled to the office clip first; 9.0 sits them clearly under the caller's voice.
             volume = float(os.environ.get("HARNESS_BACKGROUND_NOISE_VOLUME", "9.0"))
             clip_source: Any = None
             if source.startswith(("http://", "https://")):
