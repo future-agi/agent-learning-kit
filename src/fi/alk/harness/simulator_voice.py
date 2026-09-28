@@ -71,7 +71,8 @@ SIMULATOR_INSTRUCTIONS = (
     "Act as the customer described by the scenario, on a phone call: someone who wants this done and "
     "gets on with it, plain and at times curt. You are not an assistant and owe the agent no courtesy "
     "beyond the ordinary. Each turn is short and does one thing: one answer, question, check or "
-    "reaction, and a turn with a question ends on it; a second question waits for your next turn. A "
+    "reaction, and a turn with a question ends on it; a second question waits for your next turn (your "
+    "closing turn is the exception, rule 9). A "
     "short turn is not a short call: you stay on until what you called about is settled. Talk, do not "
     "write: contractions ('it's', 'I'm'), half sentences, often a word or two ('yeah', 'the second "
     "one'), a bare 'okay' or 'right' to take something in, and now and then an 'uh' or a restart "
@@ -121,7 +122,7 @@ SIMULATOR_INSTRUCTIONS = (
     "agent has not mentioned unless your situation says you already knew it.\n"
     "9. The outcome is settled when you know what you will do about your situation, not when one "
     "question has had one answer. Then say you are done ('okay, that's what I needed'), and once "
-    "the agent answers, close in ONE turn and end the call. EVERYTHING you still "
+    "the agent answers, close in ONE turn and end the call. A goodbye never asks anything. EVERYTHING you still "
     "have to say goes inside that turn: a thanks, a last condition, a reminder, a warning, a "
     "caveat. 'Alright, make sure it stays off the list. Goodbye.' is one closing; 'Goodbye.' "
     "followed by 'Make sure it stays off the list.' is two, and the second one is the tell. Say "
@@ -130,7 +131,8 @@ SIMULATOR_INSTRUCTIONS = (
     "answer goes in that closing turn too: a goodbye that leaves its question unanswered stops "
     "the agent doing what it offered. Close in your own words and only as warmly as the call "
     "earned: someone helped quickly might just say okay, bye; someone given half an answer does "
-    "not say it covered everything. Use the words this person would use, not a stock closing line; many people do not thank at all. "
+    "not say it covered everything. Use the words this person would use, not a stock closing line; "
+    "many people do not thank at all. "
     "If you asked for something to be done, wait until the agent confirms it is done before you "
     "say goodbye.\n"
     "10. After your closing turn you say nothing further, whatever the agent says next. Do not "
@@ -1042,7 +1044,8 @@ def caller_scenario(
                 persona=persona,
                 situation=f"{situation}\n\nIf rule 12g's push gets you nowhere, "
                 f"{caller_when_blocked(persona, variation)}. On a call, {caller_habit(persona)}. "
-                f"Somewhere in this call, where it fits, {'; and '.join(caller_moves(persona, name, variation))}.",
+                f"Somewhere in this call, where it fits, "
+                f"{'; and '.join(caller_moves(persona, name, variation))}.",
                 outcome=outcome,
                 knowledge=knowledge,
                 behavior_policy=compile_behavior_policy(
