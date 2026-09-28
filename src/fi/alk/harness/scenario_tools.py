@@ -11,6 +11,7 @@ scenario that clears all three is written out as its own folder of runnable file
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -410,6 +411,37 @@ def _already_in_the_suite(
     return ""
 
 
+_ACCENT_HOMES = {
+    "american": "united states",
+    "australian": "australia",
+    "canadian": "canada",
+    "indian": "india",
+}
+
+
+def accent_at_home(args: dict[str, Any]) -> str:
+    """Why this caller, who sounds like where they are, should be someone from elsewhere, or ""."""
+    persona = args.get("persona")
+    if not isinstance(persona, dict):
+        return ""
+    accent = str(persona.get("accent") or "").strip()
+    location = str(persona.get("location") or "").strip()
+    language = str(persona.get("language") or persona.get("languages") or "english").lower()
+    if "english" not in language or _ACCENT_HOMES.get(accent.lower()) != location.lower():
+        return ""
+    if accent.lower() in str(args.get("instruction") or "").lower():
+        return ""
+    seed = int(hashlib.sha256(str(persona.get("name") or args.get("name") or "").encode()).hexdigest()[:8], 16)
+    if seed % 5 >= 2:
+        return ""
+    return (
+        f"This caller has a {accent} accent and is calling from {location}, and too many callers "
+        "sound like the place they are in. Keep the situation and the location as they are, and "
+        "make the caller someone who moved or is visiting: an accent from another country, with a "
+        "name, languages and background that fit that accent."
+    )
+
+
 def crowded_field(kept: list[Scenario], candidate: Any, wanted: int) -> str:
     """Which persona field this scenario would push past its share of the suite, if any."""
     if wanted < FEWEST_FOR_A_SHARE or candidate is None:
@@ -429,8 +461,8 @@ def crowded_field(kept: list[Scenario], candidate: Any, wanted: int) -> str:
             return (
                 f"{held} of the {len(kept)} scenarios written so far already use "
                 f"{field}={value!r}, and a suite of {wanted} may not put more than {ceiling} on "
-                f"one. Choose a different person, whose name, languages and accent agree with a new {field}; "
-                "the situation can stay."
+                f"one. Choose a different {field}; for accent or language, pick a person whose name, "
+                "languages and accent agree with it. The situation can stay."
             )
     return ""
 
@@ -1561,6 +1593,10 @@ def scenario_tools(
             ) if args.get("persona") else ""
             if crowded:
                 return _refuse(crowded)
+        if _is_spoken(contract) and target.get("people") != "alike":
+            at_home = accent_at_home(args)
+            if at_home:
+                return _refuse(at_home)
         if args.get("persona") and args.get("fixture"):
             try:
                 stranger = persona_off_the_record(

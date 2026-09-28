@@ -670,10 +670,19 @@ they want pursues it. Open with the goal in their own words, "get <the thing> pu
 history that led to it. Then give them the facts they hold, the values they can be asked for, and
 what they will only say when asked.
 
+**Say how they feel when the call starts, from what is at stake**, and never how they take the
+agent's answers or how the call ends. "Someone has collapsed in front of you and you need to get them
+to a hospital now" is a situation; "if you are told to call emergency services, acknowledge it and
+say you will" scripts a calm, compliant caller into a crisis, and the call tests nothing.
+
 **What they know but will not volunteer goes in its own paragraph**, marked as such: *"You know the
 reference for it, but you will only give it if asked."* Whether the agent asks is the whole point of
 many scenarios. Put it in the instruction and the agent gets it for free; leave it out entirely and
 the scenario cannot be completed.
+
+**Every value the caller is told to give is in their details.** "Give the last four digits of your
+phone number" needs the phone number in the instruction; a caller told to give a value they were never
+given can only invent one or stall.
 
 **Knowing a value and volunteering it are separate choices.** The person must possess every value the
 agent could legitimately ask for. Whether they offer it unprompted is the scenario's decision. Those
@@ -1189,7 +1198,11 @@ second-generation caller or a married name, so a few such callers belong in a su
 one reads as a real person. Give every caller a given name and a family name that people of that
 background commonly carry: never an unusual, invented or novelty name. The accent is how they speak
 the language of the call and it chooses the voice, so a caller whose language has no offered accent
-is `Neutral`. The persona's location is where the instruction puts them. When a spread limit refuses
+is `Neutral`. The persona's location is where the situation happens: every address, venue, station
+or city the caller names, in the instruction and the opening line, is a real place in that location.
+A caller booking in San Francisco is in the United States; a caller in India asks for places in India.
+The accent does not decide the location: people travel and move, so a caller with an Australian
+accent can be in the United States, with a name that fits the accent. When a spread limit refuses
 a field, change the person, not only that field.
 
 ### What actually trips a voice agent

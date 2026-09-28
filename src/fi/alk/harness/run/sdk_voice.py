@@ -67,6 +67,7 @@ def build_spec(run_id: str) -> SimulationSpec:
             tts_provider=simulator.tts.provider,
             outcome=os.environ.get("HARNESS_OUTCOME", ""),
             initial_message=os.environ.get("HARNESS_INITIAL_MESSAGE", ""),
+            variation=run_id,
         ),
         simulator=simulator,
         direction=direction,
