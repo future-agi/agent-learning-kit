@@ -1169,30 +1169,13 @@ class _TestRunnerAgent(Agent):
         if len(_session_messages(session)) != heard:
             logger.info("simulator hold rescue canceled: conversation advanced")
             return
-        deadline = asyncio.get_running_loop().time() + _HOLD_BUSY_GRACE_SECONDS
-        logged_busy = False
-        while _either_side_busy(session):
-            if not logged_busy:
-                logger.info(
-                    "simulator hold rescue waiting for idle agent_state=%s user_state=%s",
-                    getattr(session, "agent_state", None),
-                    getattr(session, "user_state", None),
-                )
-                logged_busy = True
-            if len(_session_messages(session)) != heard or self._end_requested.is_set():
-                logger.info(
-                    "simulator hold rescue canceled while busy: conversation advanced"
-                )
-                return
-            if asyncio.get_running_loop().time() >= deadline:
-                logger.warning(
-                    "simulator hold rescue forcing check-in after busy-state grace "
-                    "agent_state=%s user_state=%s",
-                    getattr(session, "agent_state", None),
-                    getattr(session, "user_state", None),
-                )
-                break
-            await asyncio.sleep(0.1)
+        if _either_side_busy(session):
+            logger.info(
+                "simulator hold rescue canceled: session busy agent_state=%s user_state=%s",
+                getattr(session, "agent_state", None),
+                getattr(session, "user_state", None),
+            )
+            return
         logger.info("simulator hold rescue generating check-in")
         session.generate_reply(instructions=_HOLD_CHECK_IN)
 
@@ -1349,7 +1332,6 @@ async def _spoken_words(text: AsyncIterable[Any]) -> AsyncIterable[Any]:
 
 # Under the settled-silence floor, so the caller checks in before a quiet line is taken for the end.
 _HOLD_PATIENCE_SECONDS = 10.0
-_HOLD_BUSY_GRACE_SECONDS = 15.0
 _HOLD_CHECK_IN = (
     "The agent asked you to wait and has said nothing since. Say once, briefly and in your own "
     "words, that you are still on the line. If it had said it was transferring you or ending the "
