@@ -640,9 +640,11 @@ def callers_for(index: int, wanted: int, slice_name: str = "", spoken: bool = Tr
             ]
             said += (
                 " Where each caller is calling from is separate from their accent, because people "
-                f"travel and move: start from these, {'; '.join(placed)}. The places they ask for "
-                "are where they are, not where their accent comes from, unless the agent only "
-                "serves somewhere else."
+                f"travel and move: start from these, {'; '.join(placed)}. Where they are calling "
+                "from decides every place in the scenario: each address, venue, station or city in "
+                "the instruction and the opening line is a real place there, never one from the "
+                "agent's own examples that sits somewhere else. If the agent only serves somewhere "
+                "else, the caller is visiting it and the instruction says so."
             )
     elif not spoken:
         said += (

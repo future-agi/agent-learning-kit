@@ -1189,7 +1189,11 @@ second-generation caller or a married name, so a few such callers belong in a su
 one reads as a real person. Give every caller a given name and a family name that people of that
 background commonly carry: never an unusual, invented or novelty name. The accent is how they speak
 the language of the call and it chooses the voice, so a caller whose language has no offered accent
-is `Neutral`. The persona's location is where the instruction puts them. When a spread limit refuses
+is `Neutral`. The persona's location and the situation are one place: every address, venue, station
+or city the caller names, in the instruction and the opening line, is a real place in that location,
+never one borrowed from the agent's own examples that sits somewhere else. A caller in India asks for
+places in India. If the agent only serves somewhere else, the caller is visiting it and the
+instruction says so. When a spread limit refuses
 a field, change the person, not only that field.
 
 ### What actually trips a voice agent
