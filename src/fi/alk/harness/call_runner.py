@@ -603,6 +603,7 @@ def _build_spec(
             situation=doc["instruction"],
             fixture=doc.get("fixture"),
             tts_provider=simulator.tts.provider,
+            variation=run_id,
         ),
         simulator=simulator,
         # An outbound agent dials; the person answers, so the caller opens.
@@ -1149,10 +1150,11 @@ class CallRunnerImpl:
 
         # The engine reads this from the environment at call time, so it is set per
         # scenario and cleared otherwise rather than leaking into the next call.
+        run_id = new_run_id()
         noise = scenario_source(
             doc.get("background_noise"),
             doc.get("fixture"),
-            seed=str(doc.get("name") or ""),
+            seed=f"{doc.get('name') or ''}|{run_id}",
         )
         if noise:
             call_environ["HARNESS_BACKGROUND_NOISE"] = noise
@@ -1253,7 +1255,7 @@ class CallRunnerImpl:
             )
 
         spec = _build_spec(
-            run_id=new_run_id(),
+            run_id=run_id,
             room_name=room_name,
             connector=connector,
             agent_name=agent_name,

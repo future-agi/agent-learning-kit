@@ -627,8 +627,10 @@ def callers_for(index: int, wanted: int, slice_name: str = "", spoken: bool = Tr
             "A suite where every caller sounds the same is a missed test of the agent's speech "
             "handling, so do not give them all the same accent unless a scenario truly requires it. "
             "Each caller is one ordinary, believable person, never a celebrity's or a fictional "
-            "character's name: choose the accent, languages, home and name together, so the accent "
-            "comes with a name and background that make it plausible. A caller whose language has "
+            "character's name: choose the accent, languages and name together, so the accent comes "
+            "with a name and background that make it plausible. Where they are calling from is "
+            "separate: people travel and move, so an Australian can be booking in the US; do not "
+            "put every caller with an accent in that accent's country. A caller whose language has "
             "no offered accent is Neutral."
         )
     elif not spoken:

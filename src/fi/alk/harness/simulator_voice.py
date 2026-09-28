@@ -6,6 +6,7 @@ means a change lands in both rather than in whichever one the author had open.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from collections.abc import Callable, Mapping
@@ -14,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from fi import simulate
+from fi.simulate.simulation.behavior_policy import compile_behavior_policy
 from fi.simulate.runtime import (
     AgentEndpointSpec,
     EnvironmentSpec,
@@ -43,11 +45,20 @@ SIMULATOR_MODEL_ENV = frozenset(
 )
 
 _TARGET_NAME = "harness-livekit-target"
-_BEHAVIOR_POLICY = {
-    "disclosure_policy": 0.72,
-    "cooperation_bounds": 0.9,
-    "repair_propensity": 0.85,
-}
+# Urgency, cooperation and withdrawal per personality, compiled into the caller's behaviour policy.
+_TEMPERAMENTS = (
+    (("impatient", "abrupt"), (0.85, 0.4, 0.2)),
+    (("emotional",), (0.75, 0.35, 0.4)),
+    (("anxious", "nervous"), (0.6, 0.4, 0.5)),
+    (("confident", "assertive"), (0.6, 0.6, 0.2)),
+    (("talkative",), (0.5, 0.6, 0.2)),
+    (("cautious", "skeptical", "sceptical"), (0.45, 0.5, 0.45)),
+    (("professional", "formal", "detail"), (0.4, 0.7, 0.3)),
+    (("analytical", "technical"), (0.35, 0.75, 0.3)),
+    (("friendly", "cooperative"), (0.3, 0.8, 0.2)),
+    (("easy-going", "casual"), (0.2, 0.7, 0.35)),
+    (("reserved", "passive"), (0.25, 0.5, 0.6)),
+)
 
 # Languages transcribed with Deepgram's multilingual model rather than a single language code.
 _MULTILINGUAL_STT = ("ar", "es")
@@ -194,7 +205,8 @@ SIMULATOR_INSTRUCTIONS = (
     "it does in people: the first no you take in your stride, the second makes you short and "
     "pointed, and by the third you are openly annoyed. An annoyed person does not say 'please', "
     "'I'd like to' or 'are you sure'; they say 'no, that doesn't work for me' and 'so what am I "
-    "supposed to do?'.\n"
+    "supposed to do?'. When the agent then actually sorts it out, the edge goes out of your "
+    "voice: you are relieved, not still angry.\n"
     "12h. You are on a phone and can see nothing. When the agent gives you steps, a path or a "
     "number you would have to act on later, do what a person on a call does: say back the part you "
     "are unsure of in a few words, never the whole list, ask about the exact bit you missed ('the "
@@ -847,7 +859,7 @@ def simulator_definition(
             "provider": llm_provider,
             "model": model("llm", llm_provider),
             "temperature": float(
-                (get("SIMULATOR_LLM_TEMPERATURE") or "").strip() or "0.35"
+                (get("SIMULATOR_LLM_TEMPERATURE") or "").strip() or "0.7"
             ),
         },
         stt={
@@ -924,7 +936,27 @@ _WHEN_BLOCKED_SHORT_FUSE = (
 )
 
 
-def caller_when_blocked(persona: Mapping[str, Any] | None) -> str:
+def _trial_seed(persona: Mapping[str, Any], *parts: str) -> int:
+    text = "|".join((str(persona.get("name") or ""), *parts))
+    return int(hashlib.sha256(text.encode("utf-8")).hexdigest()[:12], 16)
+
+
+def caller_temperament(persona: Mapping[str, Any] | None, variation: str = "") -> dict[str, float]:
+    persona = persona if isinstance(persona, Mapping) else {}
+    described = str(persona.get("personality") or "").lower()
+    base = next(
+        (values for words, values in _TEMPERAMENTS if any(word in described for word in words)),
+        (0.5, 0.5, 0.5),
+    )
+    seed = _trial_seed(persona, "temperament", variation)
+    jitter = [((seed >> (8 * index)) % 25 - 12) / 100 for index in range(3)]
+    return {
+        axis: round(min(1.0, max(0.0, value + delta)), 2)
+        for axis, value, delta in zip(("rajas", "sattva", "tamas"), base, jitter)
+    }
+
+
+def caller_when_blocked(persona: Mapping[str, Any] | None, variation: str = "") -> str:
     persona = persona if isinstance(persona, Mapping) else {}
     described = " ".join(
         str(persona.get(key) or "") for key in ("personality", "communication_style", "traits")
@@ -933,8 +965,7 @@ def caller_when_blocked(persona: Mapping[str, Any] | None) -> str:
         word in described for word in ("impatient", "emotional", "abrupt", "angry", "irritat")
     )
     options = _WHEN_BLOCKED_SHORT_FUSE + _WHEN_BLOCKED if short_fuse else _WHEN_BLOCKED
-    name = str(persona.get("name") or "")
-    return options[sum(ord(character) for character in name) % len(options)]
+    return options[_trial_seed(persona, "blocked", variation) % len(options)]
 
 
 _CALL_HABITS = (
@@ -971,9 +1002,11 @@ _CALL_MOVES = (
 )
 
 
-def caller_moves(persona: Mapping[str, Any] | None, scenario_name: str = "") -> tuple[str, str]:
+def caller_moves(
+    persona: Mapping[str, Any] | None, scenario_name: str = "", variation: str = ""
+) -> tuple[str, str]:
     persona = persona if isinstance(persona, Mapping) else {}
-    seed = sum(ord(character) for character in f"{persona.get('name') or ''}{scenario_name}")
+    seed = _trial_seed(persona, "moves", scenario_name, variation)
     first = seed % len(_CALL_MOVES)
     second = (first + 1 + seed // len(_CALL_MOVES) % (len(_CALL_MOVES) - 1)) % len(_CALL_MOVES)
     return _CALL_MOVES[first], _CALL_MOVES[second]
@@ -988,6 +1021,7 @@ def caller_scenario(
     tts_provider: str,
     outcome: str = "",
     initial_message: str = "",
+    variation: str = "",
 ) -> "simulate.Scenario":
     """One simulated caller.
 
@@ -1031,13 +1065,20 @@ def caller_scenario(
                 f"whether it could be done some other way that still works for you, the way a "
                 f"person does before giving up: a smaller or split version of the ask, another "
                 f"time, another way to get the same thing done. If that fails too, or the agent "
-                f"keeps going round in circles, {caller_when_blocked(persona)}. On a call, "
+                f"keeps going round in circles, {caller_when_blocked(persona, variation)}. On a call, "
                 f"{caller_habit(persona)}. Somewhere in this call, where it fits and only if it "
                 f"does, "
-                f"{'; and '.join(caller_moves(persona, name))}.",
+                f"{'; and '.join(caller_moves(persona, name, variation))}.",
                 outcome=outcome,
                 knowledge=knowledge,
-                behavior_policy=dict(_BEHAVIOR_POLICY),
+                behavior_policy=compile_behavior_policy(
+                    simulate.Persona(
+                        persona={},
+                        situation="",
+                        outcome="",
+                        temperament=caller_temperament(persona, f"{name}|{variation}"),
+                    )
+                ),
             )
         ],
     )

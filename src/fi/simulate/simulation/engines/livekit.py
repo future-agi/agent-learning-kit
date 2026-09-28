@@ -659,6 +659,7 @@ class _TestRunnerAgent(Agent):
         )
         super().__init__(**kwargs)
         self._persona = persona
+        self._mood = _CallerMood(persona)
         self._min_turn_messages = min_turn_messages
         self._session_turn_handling = turn_handling
         self._session: AgentSession | None = None
@@ -1037,6 +1038,8 @@ class _TestRunnerAgent(Agent):
                 return
             self._goodbye_said = True
         chat_ctx = _with_opening_line(chat_ctx, self._persona.persona.get("initial_message"))
+        if getattr(self, "_mood", None) is not None:
+            chat_ctx = self._mood.brief(chat_ctx)
         self._saying = ""
         async for chunk in _without_hold_marker(
             super().llm_node(chat_ctx, tools, model_settings),
@@ -1138,6 +1141,70 @@ _OPENING_TURN = (
     f"you or asked you anything, it is not your turn yet: your whole reply is {HOLD_MARKER}. "
     "Everything else in your situation waits for its moment."
 )
+
+
+_REFUSAL_CUES = (
+    "unable to", "not able to", "can't", "cannot", "isn't available", "aren't available",
+    "not supported", "don't have a way", "not possible", "i'm afraid",
+)
+_PROGRESS_CUES = ("confirmed", "booked", "all set", "updated", "you're set", "here's how", "is done")
+_MOOD_CAUSES = {
+    "refused": "the agent keeps saying it can't do what you need",
+    "repeated": "the agent just said the same thing again",
+}
+
+
+def _word_set(text: str) -> set[str]:
+    return set(re.findall(r"[a-z']+", text.lower()))
+
+
+class _CallerMood:
+    """Pressure from what the agent actually does, scaled by the caller's compiled policy."""
+
+    def __init__(self, persona: Persona) -> None:
+        policy = persona.behavior_policy
+        self._gain = 0.6 + (policy.interruption_propensity if policy else 0.1)
+        self._recovery = 0.3 + 0.4 * (policy.repair_propensity if policy else 0.5)
+        self._pressure = 0.0
+        self._heard: list[str] = []
+
+    def brief(self, chat_ctx: Any) -> Any:
+        agent = [
+            str(getattr(message, "text_content", "") or "")
+            for message in chat_ctx.messages()
+            if message.role == "user"
+        ]
+        cause = ""
+        for turn in agent[len(self._heard):]:
+            words, lowered = _word_set(turn), turn.lower()
+            rise = 0.0
+            if len(words) > 3 and any(cue in lowered for cue in _REFUSAL_CUES):
+                rise, cause = rise + 0.2, "refused"
+            if len(words) > 5 and any(
+                len(words & _word_set(earlier)) / len(words | _word_set(earlier)) >= 0.6
+                for earlier in self._heard
+            ):
+                rise, cause = rise + 0.25, "repeated"
+            if rise:
+                self._pressure = min(1.0, self._pressure + rise * self._gain)
+            elif self._pressure >= 0.2 and any(cue in lowered for cue in _PROGRESS_CUES):
+                self._pressure, cause = max(0.0, self._pressure - self._recovery), "progress"
+            self._heard.append(turn)
+        if not cause:
+            return chat_ctx
+        if cause == "progress":
+            line = "The agent has now actually moved things forward, so the edge goes out of your voice."
+        elif self._pressure >= 0.75:
+            line = f"You have had enough: {_MOOD_CAUSES[cause]}. Say so plainly; you may ask for a person."
+        elif self._pressure >= 0.45:
+            line = f"You are frustrated now: {_MOOD_CAUSES[cause]}. It shows in shorter, sharper words."
+        elif self._pressure >= 0.2:
+            line = f"You are getting a little impatient: {_MOOD_CAUSES[cause]}."
+        else:
+            return chat_ctx
+        briefed = chat_ctx.copy()
+        briefed.add_message(role="system", content=f"Where you are now: {line}")
+        return briefed
 
 
 def _with_opening_line(chat_ctx: Any, opening: Any) -> Any:

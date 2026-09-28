@@ -4038,3 +4038,32 @@ def test_a_one_sided_call_fails_even_when_it_ended_cleanly() -> None:
     assert outcome.status == CaseStatus.FAILED
     assert outcome.failure is not None
     assert outcome.failure.code == "insufficient_conversation"
+
+
+def test_caller_mood_rises_on_refusals_and_repeats_and_eases_on_progress() -> None:
+    from fi.simulate.simulation.models import BehaviorPolicy, Persona
+
+    class _Ctx:
+        def __init__(self, turns):
+            self.items = [SimpleNamespace(role=role, text_content=text) for role, text in turns]
+
+        def messages(self):
+            return list(self.items)
+
+        def copy(self):
+            return _Ctx([(item.role, item.text_content) for item in self.items])
+
+        def add_message(self, *, role, content):
+            self.items.append(SimpleNamespace(role=role, text_content=content))
+
+    persona = Persona(persona={}, situation="", outcome="", behavior_policy=BehaviorPolicy(interruption_propensity=0.2))
+    mood = livekit._CallerMood(persona)
+    refusal = "I'm afraid I can't set up recurring rides through this service today."
+    turns = [("user", refusal)]
+    assert mood.brief(_Ctx(turns)).messages()[-1].text_content == refusal
+    turns += [("assistant", "Could we book them one by one?"), ("user", refusal)]
+    assert "You are frustrated" in mood.brief(_Ctx(turns)).messages()[-1].text_content
+    turns += [("assistant", "Fine."), ("user", "Your ride is confirmed for tomorrow at nine.")]
+    assert "edge goes out" in mood.brief(_Ctx(turns)).messages()[-1].text_content
+    turns += [("assistant", "Thanks."), ("user", "Anything else?")]
+    assert mood.brief(_Ctx(turns)).messages()[-1].text_content == "Anything else?"

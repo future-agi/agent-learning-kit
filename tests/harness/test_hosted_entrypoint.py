@@ -4628,3 +4628,23 @@ def test_the_closing_turn_must_carry_everything_left_to_say():
     # And the rules this must not undo.
     assert "Answer only what was asked, one fact at a time" in text
     assert "After your closing turn you say nothing further" in text
+
+
+def test_a_caller_reacts_differently_across_trials_but_the_same_within_one():
+    from fi.alk.harness.simulator_voice import caller_scenario
+
+    def built(variation):
+        return caller_scenario(
+            name="recurring-rides",
+            persona={"name": "Priya Nair", "personality": "Impatient and direct"},
+            situation="You want four morning rides.",
+            fixture=None,
+            tts_provider="cartesia",
+            variation=variation,
+        ).dataset[0]
+
+    assert built("run-a").situation == built("run-a").situation
+    assert built("run-a").behavior_policy == built("run-a").behavior_policy
+    trials = [built(f"run-{index}") for index in range(6)]
+    assert len({persona.situation for persona in trials}) > 1
+    assert len({persona.behavior_policy.interruption_propensity for persona in trials}) > 1
