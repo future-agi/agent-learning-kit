@@ -32,6 +32,7 @@ import atexit
 import asyncio
 import gc
 import json
+import random
 import logging
 import os
 import stat
@@ -603,6 +604,7 @@ def _build_spec(
             situation=doc["instruction"],
             fixture=doc.get("fixture"),
             tts_provider=simulator.tts.provider,
+            variation=run_id,
         ),
         simulator=simulator,
         # An outbound agent dials; the person answers, so the caller opens.
@@ -1149,13 +1151,19 @@ class CallRunnerImpl:
 
         # The engine reads this from the environment at call time, so it is set per
         # scenario and cleared otherwise rather than leaking into the next call.
+        run_id = new_run_id()
         noise = scenario_source(
             doc.get("background_noise"),
             doc.get("fixture"),
-            seed=str(doc.get("name") or ""),
+            seed=f"{doc.get('name') or ''}|{run_id}",
         )
         if noise:
             call_environ["HARNESS_BACKGROUND_NOISE"] = noise
+            base = self._environ.get(BACKGROUND_NOISE_VOLUME_ALIAS) or "2.0"
+            try:
+                call_environ[BACKGROUND_NOISE_VOLUME_ALIAS] = f"{float(base) * random.uniform(0.9, 1.25):.2f}"
+            except ValueError:
+                pass
         else:
             call_environ.pop("HARNESS_BACKGROUND_NOISE", None)
 
@@ -1253,7 +1261,7 @@ class CallRunnerImpl:
             )
 
         spec = _build_spec(
-            run_id=new_run_id(),
+            run_id=run_id,
             room_name=room_name,
             connector=connector,
             agent_name=agent_name,
