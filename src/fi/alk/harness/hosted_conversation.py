@@ -18,6 +18,8 @@ from .outbound import RequestsTransport, Transport, TransportError
 CONVERSATION_SCHEMA_VERSION = "futureagi.harness-conversation.v1"
 EVENT_SCHEMA_VERSION = "futureagi.harness-conversation-event.v1"
 DEFAULT_CAPABILITIES_PATH = Path("/run/futureagi/conversation.json")
+# Finish retries before the platform's 90-second heartbeat expiry can replace this process.
+_UNAVAILABLE_BUDGET_SECONDS = 60.0
 
 
 class ConversationTransportError(RuntimeError):
@@ -284,8 +286,13 @@ class ConversationClient:
         *,
         json_body: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _UNAVAILABLE_BUDGET_SECONDS
         delay = 0.25
-        for attempt in range(5):
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise ConversationTransportError("conversation endpoint remained unavailable")
             try:
                 response = await asyncio.to_thread(
                     self.transport.request,
@@ -293,7 +300,7 @@ class ConversationClient:
                     url,
                     headers=self.capabilities.auth_headers(),
                     json_body=json_body,
-                    timeout=35.0,
+                    timeout=min(35.0, remaining),
                 )
             except TransportError:
                 response = None
@@ -304,22 +311,23 @@ class ConversationClient:
             ):
                 return response.body
             if response is not None and response.status_code in {
+                400,
                 401,
                 403,
+                404,
                 409,
                 422,
             }:
                 raise ConversationTransportError(
                     f"conversation endpoint returned HTTP {response.status_code}"
                 )
-            if attempt == 4:
+            if loop.time() + delay > deadline:
                 status = response.status_code if response is not None else "unreachable"
                 raise ConversationTransportError(
                     f"conversation endpoint remained unavailable ({status})"
                 )
             await asyncio.sleep(delay)
-            delay = min(delay * 2, 2.0)
-        raise AssertionError("unreachable")
+            delay = min(delay * 2, 5.0)
 
 
 class PlatformSessionStore:
