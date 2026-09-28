@@ -80,6 +80,14 @@ def test_the_person_still_opens_a_call_the_agent_never_starts():
     )
     assert opened == []
 
+    greeting = type(
+        "S", (), {"user_state": "speaking", "history": type("H", (), {"items": []})()}
+    )()
+    asyncio.run(
+        livekit._open_if_nobody_speaks_first(greeting, Agent(), timeout_seconds=0.05)
+    )
+    assert opened == []
+
 
 def test_a_mailbox_call_carries_no_ambience(monkeypatch):
     """Nothing stands behind a mailbox, so a scenario asking for a room must not get one: it would
@@ -260,15 +268,15 @@ def test_a_recorded_greeting_opens_the_call_by_itself(monkeypatch):
         "P", (), {"persona": {"initial_message": "Hi, this is Liam."}}
     )()
 
-    # No recording: the persona's own greeting opens the call, as it always did.
+    # No recording: the persona opens the call in its own words.
     agent._voicemail_greeting = None
     agent.open_conversation()
-    assert said == ["Hi, this is Liam."]
+    assert said == ["<generated>"]
 
     # With one, the clip has already greeted and nothing further is said.
     agent._voicemail_greeting = object()
     agent.open_conversation()
-    assert said == ["Hi, this is Liam."]
+    assert said == ["<generated>"]
 
 
 def test_a_clip_without_words_is_heard_but_never_invents_a_turn(monkeypatch):
@@ -323,7 +331,14 @@ def test_a_mailbox_speaks_once_and_never_answers_the_agent(monkeypatch):
         yield "a reply the model wanted to give"
 
     monkeypatch.setattr(livekit.Agent, "llm_node", _base_llm_node, raising=False)
-    agent = livekit._TestRunnerAgent.__new__(livekit._TestRunnerAgent)
+
+    def _runner():
+        runner = livekit._TestRunnerAgent.__new__(livekit._TestRunnerAgent)
+        runner._end_requested = asyncio.Event()
+        runner._persona = type("P", (), {"persona": {}})()
+        return runner
+
+    agent = _runner()
 
     async def drain():
         return [chunk async for chunk in agent.llm_node(None, [], None)]
@@ -337,7 +352,7 @@ def test_a_mailbox_speaks_once_and_never_answers_the_agent(monkeypatch):
     assert reached == ["model"]
 
     # A recording has already greeted, so not even the first turn is allowed.
-    recorded = livekit._TestRunnerAgent.__new__(livekit._TestRunnerAgent)
+    recorded = _runner()
     recorded._voicemail_greeting = object()
 
     async def drain_recorded():
@@ -349,7 +364,7 @@ def test_a_mailbox_speaks_once_and_never_answers_the_agent(monkeypatch):
 
     # A person still gets the model on every turn.
     monkeypatch.setenv("HARNESS_ANSWERED_BY", "person")
-    person = livekit._TestRunnerAgent.__new__(livekit._TestRunnerAgent)
+    person = _runner()
 
     async def drain_person():
         return [chunk async for chunk in person.llm_node(None, [], None)]
