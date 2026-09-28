@@ -18,9 +18,8 @@ from .outbound import RequestsTransport, Transport, TransportError
 CONVERSATION_SCHEMA_VERSION = "futureagi.harness-conversation.v1"
 EVENT_SCHEMA_VERSION = "futureagi.harness-conversation-event.v1"
 DEFAULT_CAPABILITIES_PATH = Path("/run/futureagi/conversation.json")
-# Long enough to ride out a platform deploy or restart. A process that is fenced out or whose
-# lease expired gets a definite 4xx and stops at once; the platform restarts a lost one.
-_UNAVAILABLE_BUDGET_SECONDS = 180.0
+# Finish retries before the platform's 90-second heartbeat expiry can replace this process.
+_UNAVAILABLE_BUDGET_SECONDS = 60.0
 
 
 class ConversationTransportError(RuntimeError):
@@ -291,6 +290,9 @@ class ConversationClient:
         deadline = loop.time() + _UNAVAILABLE_BUDGET_SECONDS
         delay = 0.25
         while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise ConversationTransportError("conversation endpoint remained unavailable")
             try:
                 response = await asyncio.to_thread(
                     self.transport.request,
@@ -298,7 +300,7 @@ class ConversationClient:
                     url,
                     headers=self.capabilities.auth_headers(),
                     json_body=json_body,
-                    timeout=35.0,
+                    timeout=min(35.0, remaining),
                 )
             except TransportError:
                 response = None
@@ -309,8 +311,10 @@ class ConversationClient:
             ):
                 return response.body
             if response is not None and response.status_code in {
+                400,
                 401,
                 403,
+                404,
                 409,
                 422,
             }:
