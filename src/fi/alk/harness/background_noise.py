@@ -146,6 +146,14 @@ def source_for(environment: str = "", seed: str = "") -> str:
     return pool[_pick(seed or env or "x", len(pool))]
 
 
+def place_of(source: str) -> str:
+    """The place a chosen bed sounds like, or "" when the source is not one this module hands out."""
+    for tag, location in _catalogue():
+        if location == source:
+            return tag
+    return _PLACE_BY_BUILTIN.get(source, "")
+
+
 def _pick(seed: str, size: int) -> int:
     return int(hashlib.sha256(seed.encode("utf-8")).hexdigest()[:8], 16) % size
 

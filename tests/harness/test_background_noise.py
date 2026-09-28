@@ -156,3 +156,10 @@ def test_a_place_the_situation_describes_wins_over_a_pick_by_name(catalogue):
     assert _place_in("you are at home in the kitchen.", ["hospital", "home"]) == "home"
     assert place_for("any", {"environment": "vehicle"}, "at the airport") == "vehicle"
 
+
+def test_a_chosen_bed_names_its_place(catalogue):
+    from fi.alk.harness.background_noise import place_of
+
+    assert place_of("https://clips.example/car.wav") == "vehicle"
+    assert place_of("OFFICE_AMBIENCE") == "office"
+    assert place_of("https://clips.example/unknown.wav") == ""

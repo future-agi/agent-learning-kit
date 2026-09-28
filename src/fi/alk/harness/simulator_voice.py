@@ -210,6 +210,26 @@ SIMULATOR_INSTRUCTIONS = (
 # An outbound call is not an inbound call with the greeting reworded. The person did not dial in,
 # so they have no opening request to make and no reason to explain themselves first. A caller who
 # states their task anyway tests nothing about how the agent opens a call it placed.
+# How a person names each place a background bed can sound like.
+_PLACE_WORDS = {
+    "airport": "an airport",
+    "crowd": "a busy, crowded place",
+    "home": "home",
+    "hospital": "a hospital",
+    "office": "an office",
+    "outdoors": "outdoors",
+    "retail": "a shop",
+    "street": "the street",
+    "transit": "a station, or on public transport",
+    "vehicle": "a car",
+}
+_WHERE_YOU_ARE = (
+    "\nWHERE YOU ARE: you are calling from {place}, and the other side can hear it behind you. "
+    "If the agent mentions noise or cannot hear you, answer as a person there would: you know "
+    "where you are, so never claim to be somewhere quiet. Repeat yourself, speak up, or move if "
+    "that fits the moment.\n"
+)
+
 _OUTBOUND_FRAMING = (
     "\nTHIS CALL WAS PLACED TO YOU. You did not dial anyone. You were doing something else when "
     "the phone rang. These override the numbered rules wherever they disagree.\n"
@@ -291,12 +311,15 @@ def simulator_instructions(
     answered_by: str = "",
     voicemail_style: str = "",
     recorded: bool = False,
+    place: str = "",
 ) -> str:
     """The caller's rules, framed by whether this call was placed to them or by them.
 
     Chat has no direction: a chat is always started by the person, so it takes the inbound text.
     A mailbox answering replaces the rules outright, because it is not a person.
     """
+    where = _PLACE_WORDS.get(str(place).strip().lower(), "")
+    where = _WHERE_YOU_ARE.format(place=where) if where else ""
     if str(answered_by).strip().lower() == "voicemail":
         style = str(voicemail_style).strip().lower() or _DEFAULT_VOICEMAIL_STYLE
         if recorded:
@@ -305,7 +328,7 @@ def simulator_instructions(
             style, _VOICEMAIL_BY_STYLE[_DEFAULT_VOICEMAIL_STYLE]
         )
     if str(direction).strip().lower() != "outbound":
-        return SIMULATOR_INSTRUCTIONS
+        return SIMULATOR_INSTRUCTIONS + where
     chosen = str(awareness).strip().lower() or _DEFAULT_OUTBOUND_AWARENESS
     return (
         SIMULATOR_INSTRUCTIONS
@@ -313,6 +336,7 @@ def simulator_instructions(
         + _OUTBOUND_AWARENESS.get(
             chosen, _OUTBOUND_AWARENESS[_DEFAULT_OUTBOUND_AWARENESS]
         )
+        + where
     )
 
 
@@ -860,6 +884,7 @@ def simulator_definition(
             get("HARNESS_ANSWERED_BY") or "",
             get("HARNESS_VOICEMAIL_STYLE") or "",
             recorded=bool((get("HARNESS_VOICEMAIL_CLIP") or "").strip()),
+            place=get("HARNESS_BACKGROUND_PLACE") or "",
         ),
         allow_interruptions=True,
         min_endpointing_delay=max(0.4, round(0.9 - 0.7 * urgency, 2)),

@@ -51,7 +51,7 @@ from fi.simulate.runtime.report import SimulationReport
 from fi.simulate.runtime.run import TestCaseStatus
 from fi.simulate.runtime.runner import SimulationRunner
 
-from .background_noise import scenario_source
+from .background_noise import place_of, scenario_source
 from .bundle_v2 import EvidenceSeam
 from .hosted_scheduler import CallAborted, CallOutcome
 from .hosted_scheduler import Scenario as HostedScenario
@@ -1159,6 +1159,7 @@ class CallRunnerImpl:
         )
         if noise:
             call_environ["HARNESS_BACKGROUND_NOISE"] = noise
+            call_environ["HARNESS_BACKGROUND_PLACE"] = place_of(noise)
             base = self._environ.get(BACKGROUND_NOISE_VOLUME_ALIAS) or "9.0"
             try:
                 call_environ[BACKGROUND_NOISE_VOLUME_ALIAS] = f"{float(base) * random.uniform(0.7, 1.4):.2f}"
@@ -1166,6 +1167,7 @@ class CallRunnerImpl:
                 pass
         else:
             call_environ.pop("HARNESS_BACKGROUND_NOISE", None)
+            call_environ.pop("HARNESS_BACKGROUND_PLACE", None)
 
         # Read the same way and for the same reason as the noise source above: the simulator's
         # instructions are built deep inside simulator_definition, which sees the environment and
