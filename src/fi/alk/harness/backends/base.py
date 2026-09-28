@@ -99,7 +99,7 @@ DELEGATE_TOOL = "Delegate"
 KNOWN_BUILTINS = (*FILE_TOOLS, ASK_TOOL, DELEGATE_TOOL)
 
 # Ceiling on workers in flight at once.
-MOST_WORKERS_AT_ONCE = int(os.environ.get("ALK_HARNESS_WORKERS_AT_ONCE", "12") or 12)
+MOST_WORKERS_AT_ONCE = int(os.environ.get("ALK_HARNESS_WORKERS_AT_ONCE", "48") or 48)
 
 
 @dataclass

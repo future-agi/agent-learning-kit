@@ -489,17 +489,17 @@ def test_validation_lanes_deal_every_scenario_exactly_once():
             assert max(sizes) - min(sizes) <= 1, (count, lanes, sizes)
 
 
-def test_validation_lane_count_defaults_to_one(monkeypatch):
+def test_validation_lane_count_defaults_to_four(monkeypatch):
     import os
 
     monkeypatch.delenv("ALK_VALIDATION_INSTANCES", raising=False)
-    assert max(1, int(os.environ.get("ALK_VALIDATION_INSTANCES", "1") or 1)) == 1
-    monkeypatch.setenv("ALK_VALIDATION_INSTANCES", "4")
-    assert max(1, int(os.environ.get("ALK_VALIDATION_INSTANCES", "1") or 1)) == 4
+    assert max(1, int(os.environ.get("ALK_VALIDATION_INSTANCES", "4") or 4)) == 4
+    monkeypatch.setenv("ALK_VALIDATION_INSTANCES", "2")
+    assert max(1, int(os.environ.get("ALK_VALIDATION_INSTANCES", "4") or 4)) == 2
     monkeypatch.setenv("ALK_VALIDATION_INSTANCES", "0")
-    assert max(1, int(os.environ.get("ALK_VALIDATION_INSTANCES", "1") or 1)) == 1
+    assert max(1, int(os.environ.get("ALK_VALIDATION_INSTANCES", "4") or 4)) == 1
     monkeypatch.setenv("ALK_VALIDATION_INSTANCES", "")
-    assert max(1, int(os.environ.get("ALK_VALIDATION_INSTANCES", "1") or 1)) == 1
+    assert max(1, int(os.environ.get("ALK_VALIDATION_INSTANCES", "4") or 4)) == 4
 def test_world_snapshot_accepts_scalar_source_owned_state(tmp_path):
     """Flags and counters are observable collections too; saving them must not call len()."""
     import json

@@ -568,7 +568,7 @@ async def validate_once(
             generic_artifact_root=(authoring / "generic-harness") if generic else None,
         )
         # Parallel runtime instances inside the one sandbox, each with its own ports and databases.
-        requested_lanes = max(1, int(os.environ.get("ALK_VALIDATION_INSTANCES", "1") or 1))
+        requested_lanes = max(1, int(os.environ.get("ALK_VALIDATION_INSTANCES", "4") or 4))
         executor = ThreadPoolExecutor(
             max_workers=requested_lanes, thread_name_prefix="runtime-validation"
         )
