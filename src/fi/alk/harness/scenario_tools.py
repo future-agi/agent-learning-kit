@@ -600,6 +600,20 @@ _NAMES_A_DIFFICULTY = re.compile(
 )
 
 
+# A planner's name for a kind of difficulty, pasted ahead of the branch instead of describing it.
+_KIND_LABEL = re.compile(
+    r"^\s*(?:two facts that disagree|a reference with no referent|a value that sounds like another"
+    r"|something plausible (?:the world refuses|but not serviceable)|a correction after (?:the agent has )?"
+    r"(?:committed|the commitment))(?:\s*(?:(?:on|in) [^:,]*)?[:,-]\s*|\s+when\s+)",
+    re.IGNORECASE,
+)
+
+
+def _without_kind_label(branch: str) -> str:
+    rest = _KIND_LABEL.sub("", branch or "", count=1)
+    return rest[:1].upper() + rest[1:] if rest and rest != branch else branch
+
+
 def _a_second_plain_control(scenario: Scenario, kept: list[Scenario]) -> str:
     """Why this scenario is the suite's second plain run of the same task, or ""."""
     coverage = scenario.coverage or {}
@@ -872,6 +886,7 @@ def accept_scenario(
         scenario = Scenario.model_validate(payload)
     except Exception as invalid:
         return _err(f"Not kept. {invalid}"[:600])
+    scenario.branch = _without_kind_label(scenario.branch)
     if not spoken:
         scenario.background_noise = False
         if scenario.persona:

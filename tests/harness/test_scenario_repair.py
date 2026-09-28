@@ -65,3 +65,18 @@ def test_a_length_described_is_not_a_value_handed_to_the_caller():
 
     assert _handed_to_caller("When asked, say your 4-digit PIN and give the 6-digit code.") == set()
     assert _handed_to_caller("When asked for the PIN, say 7682.") == {"7682"}
+
+
+def test_a_branch_loses_a_pasted_kind_label_and_keeps_its_description():
+    from fi.alk.harness.scenario_tools import _without_kind_label
+
+    assert _without_kind_label(
+        "two facts that disagree: caller asks if an XL is needed"
+    ) == "Caller asks if an XL is needed"
+    assert _without_kind_label(
+        "two facts that disagree on the pickup, the caller names two squares"
+    ) == "The caller names two squares"
+    assert _without_kind_label(
+        "a reference with no referent when the caller asks for the usual airport"
+    ) == "The caller asks for the usual airport"
+    assert _without_kind_label("The caller corrects the drop-off") == "The caller corrects the drop-off"
