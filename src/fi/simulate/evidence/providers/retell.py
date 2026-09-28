@@ -261,6 +261,7 @@ class RetellEvidenceSource:
             "message_count": len(transcript_events),
             "cost": coerce_json(cost) if cost else None,
             "usage": coerce_json(payload.get("llm_token_usage")),
+            "latency": coerce_json(payload.get("latency")),
             "recording_labels": [entry.leg_id for entry in artifacts if entry.leg_id],
         }
         if self._context.caller_phone:

@@ -46,6 +46,7 @@ from fi.simulate.runtime import (
     SimulationSpec,
     new_run_id,
 )
+from fi.simulate.results.futureagi import target_provider_usage
 from fi.simulate.runtime.report import SimulationReport
 from fi.simulate.runtime.run import TestCaseStatus
 from fi.simulate.runtime.runner import SimulationRunner
@@ -800,6 +801,25 @@ def _collect_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
     return tuple(calls)
 
 
+def _target_metrics(case: Any) -> dict[str, Any] | None:
+    """The agent under test's own usage, cost and latency, as its provider reported them.
+
+    Shares the SDK result path's extraction so hosted and SDK runs report the same numbers.
+    """
+    target = target_provider_usage(case) if case is not None else None
+    if target is None:
+        return None
+    reported = {
+        "usage": target.usage,
+        "cost_cents": target.cost_cents,
+        "latency": target.latency,
+    }
+    return {
+        "provider": target.provider,
+        **{key: value for key, value in reported.items() if value is not None},
+    }
+
+
 def _collect_provider_tool_calls(case: Any) -> tuple[Call, ...]:
     """Translate provider-reported tool evidence into scheduler calls.
 
@@ -1451,6 +1471,7 @@ class CallRunnerImpl:
                 and case.result.metadata.get("stop_reason")
                 else None
             ),
+            target_metrics=_target_metrics(case),
         )
 
         if case is None:

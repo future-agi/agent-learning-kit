@@ -2484,6 +2484,34 @@ class CheckpointEvaluation(BaseModel):
 EvaluationResult = MetricEvaluation | CheckpointEvaluation
 
 
+class TargetTokenUsage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prompt_tokens: int | None = Field(default=None, ge=0)
+    completion_tokens: int | None = Field(default=None, ge=0)
+    total_tokens: int | None = Field(default=None, ge=0)
+
+
+class TargetLatency(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    turn: int | None = Field(default=None, ge=0)
+    model: int | None = Field(default=None, ge=0)
+    voice: int | None = Field(default=None, ge=0)
+    transcriber: int | None = Field(default=None, ge=0)
+    endpointing: int | None = Field(default=None, ge=0)
+    turns: list[int] = Field(default_factory=list)
+
+
+class TargetMetrics(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider: Literal["vapi", "retell", "livekit"]
+    usage: TargetTokenUsage | None = None
+    cost_cents: int | None = Field(default=None, ge=0)
+    latency: TargetLatency | None = None
+
+
 class CallSummary(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -2494,6 +2522,9 @@ class CallSummary(BaseModel):
     transcript_artifact: str | None
     recording_artifacts: list[str] = Field(default_factory=list)
     stop_reason: str | None = None
+    # The agent under test's own provider-reported figures (`provider`, `usage`, `cost_cents`,
+    # `latency`), never the simulator's.
+    target_metrics: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def _validate(self) -> "CallSummary":
@@ -2512,6 +2543,8 @@ class CallSummary(BaseModel):
         for artifact in self.recording_artifacts:
             if not is_valid_digest(artifact):
                 raise ValueError(f"call_recording_artifact_invalid: {artifact!r}")
+        if self.target_metrics is not None:
+            TargetMetrics.model_validate(self.target_metrics)
         return self
 
 
@@ -2535,6 +2568,9 @@ def _unset_default_fields(model: BaseModel, prefix: str = "") -> list[str]:
         if isinstance(value, BaseModel):
             names.extend(_unset_default_fields(value, f"{path}."))
     return names
+
+
+_LATER_CALL_FIELDS = frozenset({"stop_reason", "target_metrics"})
 
 
 class ResultReceiptDraft(BaseModel):
@@ -2568,11 +2604,12 @@ class ResultReceiptDraft(BaseModel):
         if not is_valid_digest(self.digest):
             raise ValueError(f"receipt_digest_invalid: {self.digest!r}")
         expected_body = self.model_dump(mode="json", exclude={"digest"})
-        # ``stop_reason`` was added after the initial receipt protocol. Preserve
-        # byte-for-byte compatibility for callers that omit it, while including
-        # it in both the digest and wire body whenever it is explicitly supplied.
-        if self.call is not None and "stop_reason" not in self.call.model_fields_set:
-            expected_body["call"].pop("stop_reason", None)
+        # ``stop_reason`` and ``target_metrics`` were added after the initial receipt
+        # protocol. Preserve byte-for-byte compatibility for callers that omit them,
+        # while including each in both the digest and wire body whenever supplied.
+        if self.call is not None:
+            for name in _LATER_CALL_FIELDS - self.call.model_fields_set:
+                expected_body["call"].pop(name, None)
         expected = whole_object_digest(expected_body)
         if self.digest != expected:
             unset = _unset_default_fields(self)
@@ -2671,8 +2708,9 @@ def build_result_receipt(
     digest = whole_object_digest(core)
     draft = ResultReceiptDraft.model_validate({**core, "digest": digest})
     wire = draft.model_dump(mode="json")
-    if call is not None and "stop_reason" not in call:
-        wire["call"].pop("stop_reason", None)
+    if call is not None:
+        for name in _LATER_CALL_FIELDS - call.keys():
+            wire["call"].pop(name, None)
     return wire
 
 

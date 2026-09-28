@@ -124,6 +124,19 @@ The platform automatically permits the Vapi or Retell API and call transport dom
 matching run-scoped API key is present. Provider keys remain encrypted at rest, are materialized
 only into the hosted attempt, and are never stored in the bundle or lifecycle receipt.
 
+## Observed target metrics
+
+After a Vapi or Retell call ends, ALK fetches the provider's final call record and reports the
+target agent's own metrics with the hosted result receipt:
+
+- Vapi: LLM input/output tokens, total call cost, stage latency, and per-turn latency.
+- Retell: token usage when supplied, combined call cost, stage latency, and end-to-end turn
+  latency.
+
+These values describe the agent under test. They do not include the hosted simulator's model
+usage, which remains on the separate harness usage journal. A provider that does not expose a
+field leaves it unreported; ALK does not infer cost or tokens from the transcript.
+
 ## Failure behavior
 
 Missing manifests, missing declared secrets, invalid receipts, unavailable callback ingress, and

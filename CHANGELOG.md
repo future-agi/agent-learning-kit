@@ -18,6 +18,9 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
   profiles, and apply plans, enforced by the two new Phase-4 gates
   `optimizer_profile_matrix_readiness` and `capability_profile_freeze_readiness`
   (70 gates).
+- Hosted Vapi and Retell calls now carry the target agent's provider-reported
+  tokens, cost, and latency on result receipts instead of dropping that
+  evidence; simulator usage remains separate.
 
 ## v1.0.0-rc.1 — 2026-06-10
 

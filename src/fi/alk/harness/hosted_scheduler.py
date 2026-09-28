@@ -231,6 +231,9 @@ class CallOutcome:
     stop_reason: str | None = None
     # The artifact above is an id the sandbox cannot read back.
     messages: tuple[Any, ...] = ()
+    # The agent under test's own provider-reported usage, cost and latency; `None` when its
+    # provider reports none (a black-box LiveKit or phone target).
+    target_metrics: dict[str, Any] | None = None
 
 
 class CallAborted(RuntimeError):
@@ -320,6 +323,7 @@ class CallSummary:
     transcript_artifact: str | None = None
     recording_artifacts: tuple[str, ...] = ()
     stop_reason: str | None = None
+    target_metrics: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -2292,6 +2296,7 @@ class HostedScheduler:
             transcript_artifact=outcome.transcript_artifact,
             recording_artifacts=outcome.recording_artifacts,
             stop_reason=outcome.stop_reason,
+            target_metrics=outcome.target_metrics,
         )
 
     def _fault(

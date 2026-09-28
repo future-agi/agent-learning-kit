@@ -1472,6 +1472,9 @@ class OutboundAdapter:
             stop_reason = getattr(receipt.call, "stop_reason", None)
             if stop_reason:
                 call["stop_reason"] = stop_reason
+            target_metrics = getattr(receipt.call, "target_metrics", None)
+            if target_metrics:
+                call["target_metrics"] = target_metrics
         elif receipt.call is not None:
             # `hosted_scheduler.CallSummary.started_at` is `str | None`, but
             # `outbound.CallSummary.started_at` requires a real timestamp -- per the contract a
