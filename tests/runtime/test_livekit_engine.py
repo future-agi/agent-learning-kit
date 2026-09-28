@@ -1793,6 +1793,41 @@ def test_conversation_silence_backstop_does_not_fire_at_message_floor() -> None:
     assert asyncio.run(run()) is False
 
 
+def test_a_slow_reply_to_the_caller_is_not_an_ending(monkeypatch) -> None:
+    """The measured window only knows the replies seen so far, so the agent's first slow lookup
+    after the caller spoke would end the call as stalled."""
+    monkeypatch.setattr(livekit, "_SETTLED_SILENCE_FLOOR_SECONDS", 0.05)
+
+    items = [
+        SimpleNamespace(type="message", role="assistant", text_content="Hi"),
+        SimpleNamespace(type="message", role="user", text_content="Hello"),
+        SimpleNamespace(type="message", role="assistant", text_content="A ride, please."),
+        SimpleNamespace(type="message", role="user", text_content="Where to?"),
+        SimpleNamespace(type="message", role="assistant", text_content="Can you book it?"),
+    ]
+    session = SimpleNamespace(
+        agent_state="listening", user_state="listening", history=SimpleNamespace(items=items)
+    )
+
+    async def run() -> tuple[bool, bool]:
+        task = asyncio.create_task(
+            livekit._wait_for_conversation_silence(
+                session, quiet_seconds=5.0, min_turn_messages=6
+            )
+        )
+        await asyncio.sleep(0.30)
+        awaiting_reply = task.done()
+        items.append(SimpleNamespace(type="message", role="user", text_content="Booked."))
+        await asyncio.sleep(0.30)
+        once_answered = task.done()
+        task.cancel()
+        return awaiting_reply, once_answered
+
+    awaiting_reply, once_answered = asyncio.run(run())
+    assert awaiting_reply is False, "ended the call while the agent owed the caller a reply"
+    assert once_answered is True, "never settled once the agent had answered"
+
+
 def test_our_caller_thinking_is_not_silence(monkeypatch) -> None:
     """`agent_state` is THIS SESSION'S agent, which is our simulated caller, not the agent under
     test. So this stops us cutting off our own caller mid-thought.

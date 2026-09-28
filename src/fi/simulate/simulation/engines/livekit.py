@@ -3490,8 +3490,12 @@ async def _wait_for_conversation_silence(
         floor, _ = _turn_requirements(min_turn_messages)
         # Far enough in for the measured window to beat the fixed one. A third of the floor is a
         # threshold, not a derived figure: enough turns to have timed a reply, well short of done.
-        settled = min_turn_messages > 0 and _turns_from_each_side(messages) >= max(
-            2, floor // 3
+        spoken = [message for message in messages if message["content"]]
+        # After the caller's turn the agent owes a reply; a slower one than any so far is not an ending.
+        settled = (
+            min_turn_messages > 0
+            and spoken[-1]["role"] != _CALLER
+            and _turns_from_each_side(messages) >= max(2, floor // 3)
         )
         effective_quiet = (
             _settled_silence_window(
