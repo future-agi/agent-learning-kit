@@ -2921,7 +2921,10 @@ class LiveKitEngine(BaseEngine):
         # How long the agent must talk over this caller before it gives way: assertive callers hold on.
         policy = persona.behavior_policy
         interruption_min_duration = (
-            round(min(0.9, max(0.45, 0.45 + 0.5 * policy.interruption_propensity + random.uniform(-0.05, 0.05))), 2)
+            round(
+                min(0.9, max(0.45, 0.45 + 0.5 * policy.interruption_propensity + random.uniform(-0.05, 0.05))),
+                2,
+            )
             if policy is not None
             else None
         )

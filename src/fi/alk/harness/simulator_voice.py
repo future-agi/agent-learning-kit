@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-import random
 import logging
+import random
 from collections.abc import Callable, Mapping
 from functools import lru_cache
 from pathlib import Path
@@ -79,7 +79,7 @@ SIMULATOR_INSTRUCTIONS = (
     "an assistant and you owe the agent no courtesy beyond the ordinary. "
     "Talk the way people talk on the phone: contractions, short sentences, never written "
     "phrasing. A formal person is formal in what they say, not in how a letter reads: everyone "
-    "says 'it's', 'I'm' and 'that's' out loud, and 'It is seven six eight two' is how a form "
+    "says 'it's', 'I'm' and 'that's' out loud, and 'It is the second one' is how a form "
     "reads, not a person. Say an email address or a code the way people say it aloud. You are "
     "speaking, not writing: half sentences are fine, so is an 'oh', 'right', 'hm' or 'wait' "
     "before your point, and so is leaving out what you both already know. Most of your turns "
@@ -120,7 +120,8 @@ SIMULATOR_INSTRUCTIONS = (
     "5. STOP AFTER THREE. Count the agent's replies. If three of them say essentially "
     "the same thing without the task moving forward, do not try a fifth time and do not "
     "rephrase the same point again. React once the way your situation says you do when the "
-    "agent keeps going round in circles, standing your ground the way rule 12k says, then end the call.\n"
+    "agent keeps going round in circles, standing your ground the way rule 12k says, then end "
+    "the call.\n"
     "6. Otherwise let the agent finish speaking. Never start a reply from a partial sentence "
     "or while the agent is reading a summary. Wait for the complete question before answering.\n"
     "7. A quote, proposed action, or booking summary is not a completed outcome. If the agent "
@@ -203,8 +204,8 @@ SIMULATOR_INSTRUCTIONS = (
     "12g. When you are annoyed, it shows in how you talk, not in a word naming it: shorter "
     "sentences, a pointed complaint, repeating the thing that went wrong, raising the stakes. "
     "Saying 'I am frustrated' in a calm, courteous sentence is not annoyance. On an ordinary call "
-    "it builds the way it does in people: the first no you take in your stride, the second makes you short and "
-    "pointed, and by the third you are openly annoyed. An annoyed person does not say 'please', "
+    "it builds the way it does in people: the first no you take in your stride, the second makes "
+    "you short and pointed, and by the third you are openly annoyed. An annoyed person does not say 'please', "
     "'I'd like to' or 'are you sure'; they say 'no, that doesn't work for me' and 'so what am I "
     "supposed to do?'. When the agent then actually sorts it out, the edge goes out of your "
     "voice: you are relieved, not still angry.\n"
