@@ -1087,7 +1087,15 @@ _TARGET_PROVIDERS = ("vapi", "retell", "livekit")
 class TargetUsage:
     """Normalized target-agent usage extracted from one provider's evidence."""
 
-    __slots__ = ("provider", "usage", "cost_cents", "raw", "latency")
+    __slots__ = (
+        "provider",
+        "usage",
+        "cost_cents",
+        "raw",
+        "latency",
+        "call_id",
+        "ended_reason",
+    )
 
     def __init__(
         self,
@@ -1096,12 +1104,16 @@ class TargetUsage:
         cost_cents: int | None,
         raw: dict[str, Any] | None,
         latency: dict[str, Any] | None = None,
+        call_id: str | None = None,
+        ended_reason: str | None = None,
     ) -> None:
         self.provider = provider
         self.usage = usage
         self.cost_cents = cost_cents
         self.raw = raw
         self.latency = latency
+        self.call_id = call_id
+        self.ended_reason = ended_reason
 
 
 def target_provider_usage(case) -> TargetUsage | None:
@@ -1156,9 +1168,19 @@ def _vapi_usage(metadata: dict[str, Any]) -> TargetUsage | None:
         usage = _normalized_usage(prompt, completion)
     cost_cents = _dollars_to_cents(cost.get("total"))
     latency = _vapi_latency(metadata.get("latency"))
-    if usage is None and cost_cents is None and latency is None:
+    call_id = str(metadata.get("call_id") or "") or None
+    ended_reason = str(metadata.get("ended_reason") or "") or None
+    if (
+        usage is None
+        and cost_cents is None
+        and latency is None
+        and call_id is None
+        and ended_reason is None
+    ):
         return None
-    return TargetUsage("vapi", usage, cost_cents, breakdown, latency)
+    return TargetUsage(
+        "vapi", usage, cost_cents, breakdown, latency, call_id, ended_reason
+    )
 
 
 def _vapi_latency(performance: Any) -> dict[str, Any] | None:
@@ -1199,9 +1221,19 @@ def _retell_usage(metadata: dict[str, Any]) -> TargetUsage | None:
     # Retell reports combined_cost already in cents.
     cost_cents = _coerce_int_or_none(call_cost.get("combined_cost"))
     latency = _retell_latency(metadata.get("latency"))
-    if usage is None and cost_cents is None and latency is None:
+    call_id = str(metadata.get("call_id") or "") or None
+    ended_reason = str(metadata.get("end_reason") or "") or None
+    if (
+        usage is None
+        and cost_cents is None
+        and latency is None
+        and call_id is None
+        and ended_reason is None
+    ):
         return None
-    return TargetUsage("retell", usage, cost_cents, call_cost or None, latency)
+    return TargetUsage(
+        "retell", usage, cost_cents, call_cost or None, latency, call_id, ended_reason
+    )
 
 
 def _retell_latency(latency: Any) -> dict[str, Any] | None:
@@ -1260,9 +1292,18 @@ def _livekit_usage(metadata: dict[str, Any]) -> TargetUsage | None:
         if isinstance(metadata.get("cost"), dict)
         else None
     )
-    if usage is None and cost_cents is None:
+    call_id = str(metadata.get("call_id") or "") or None
+    ended_reason = str(metadata.get("end_reason") or "") or None
+    if usage is None and cost_cents is None and call_id is None and ended_reason is None:
         return None
-    return TargetUsage("livekit", usage, cost_cents, None)
+    return TargetUsage(
+        "livekit",
+        usage,
+        cost_cents,
+        None,
+        call_id=call_id,
+        ended_reason=ended_reason,
+    )
 
 
 _PROVIDER_USAGE_EXTRACTORS = {

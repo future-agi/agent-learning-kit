@@ -129,9 +129,10 @@ only into the hosted attempt, and are never stored in the bundle or lifecycle re
 After a Vapi or Retell call ends, ALK fetches the provider's final call record and reports the
 target agent's own metrics with the hosted result receipt:
 
-- Vapi: LLM input/output tokens, total call cost, stage latency, and per-turn latency.
-- Retell: token usage when supplied, combined call cost, stage latency, and end-to-end turn
-  latency.
+- Vapi: provider call ID and end reason, LLM input/output tokens, total call cost, stage latency,
+  and per-turn latency.
+- Retell: provider call ID and end reason, token usage when supplied, combined call cost, stage
+  latency, and end-to-end turn latency.
 
 These values describe the agent under test. They do not include the hosted simulator's model
 usage, which remains on the separate harness usage journal. A provider that does not expose a

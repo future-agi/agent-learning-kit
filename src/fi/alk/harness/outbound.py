@@ -2510,6 +2510,8 @@ class TargetMetrics(BaseModel):
     usage: TargetTokenUsage | None = None
     cost_cents: int | None = Field(default=None, ge=0)
     latency: TargetLatency | None = None
+    provider_call_id: str | None = Field(default=None, min_length=1, max_length=255)
+    provider_end_reason: str | None = Field(default=None, min_length=1, max_length=255)
 
 
 class CallSummary(BaseModel):

@@ -813,6 +813,8 @@ def _target_metrics(case: Any) -> dict[str, Any] | None:
         "usage": target.usage,
         "cost_cents": target.cost_cents,
         "latency": target.latency,
+        "provider_call_id": target.call_id,
+        "provider_end_reason": target.ended_reason,
     }
     return {
         "provider": target.provider,
