@@ -62,6 +62,86 @@ def _write_wav(path: Path, samples: np.ndarray, sample_rate: int = 8000) -> None
         wav_file.writeframes(samples.astype(np.int16).tobytes())
 
 
+def test_prompt_opening_accepts_rephrased_guest_greeting() -> None:
+    agent = _agent(
+        room_name=None,
+        room_mode="managed",
+        system_prompt="I'm here to help book you a ride. Please share your PIN whenever you're ready to get started.",
+        transport={
+            "kind": "sip_outbound",
+            "sip_trunk_id": "test",
+            "sip_call_to": "+15555550123",
+            "sip_number": "+15555550124",
+        },
+    )
+    gate = livekit.PromptOpeningGate("Greeting: " + agent.system_prompt)
+    assert gate.hint
+    assert not gate.accepts("This Uber call is being recorded.")
+    assert gate.accepts("Hello, what can I do for you?")
+
+
+def test_prompt_opening_blocks_disclosure_and_all_timer_openings_until_greeting() -> (
+    None
+):
+    async def exercise():
+        agent = livekit._TestRunnerAgent(
+            persona=_scenario().dataset[0], instructions="Be a customer."
+        )
+        agent._prompt_opening = livekit.PromptOpeningGate(
+            "Greeting: Ask how to help the caller."
+        )
+        # No session exists: without the gate this would raise or produce speech.
+        agent.open_conversation()
+        for text in (
+            "This Uber call is being recorded.",
+            "it.",
+        ):
+            with pytest.raises(livekit.StopResponse):
+                await agent.on_user_turn_completed(
+                    None, SimpleNamespace(text_content=text)
+                )
+            agent.open_conversation()
+        greeting = "Hi there, how can I help?"
+        assert agent._prompt_opening.accepts(greeting, completed=False)
+        assert agent._prompt_opening.pending  # speculative LLM cannot open the gate
+        await agent.on_user_turn_completed(None, SimpleNamespace(text_content=greeting))
+        assert not agent._prompt_opening.pending
+        # Subsequent ordinary turns require no PIN language.
+        await agent.on_user_turn_completed(
+            None, SimpleNamespace(text_content="Where are you going?")
+        )
+
+    asyncio.run(exercise())
+
+
+def test_prompt_opening_gates_authoritative_streams_without_delaying_greeting() -> None:
+    async def exercise():
+        gate = livekit.PromptOpeningGate("Greeting: Welcome the caller.")
+        session = _FakeReplySession()
+        captured = []
+        for text in (
+            "This Uber call is being recorded.",
+            "it.",
+        ):
+            await livekit._forward_target_transcription(
+                _FakeTranscriptionReader(text),
+                session,
+                prompt_opening=gate,
+                captured_target_turns=captured,
+            )
+        assert session.reply_inputs == []
+        greeting = "Please share your PIN whenever you're ready to get started."
+        await livekit._forward_target_transcription(
+            _FakeTranscriptionReader(greeting),
+            session,
+            prompt_opening=gate,
+        )
+        assert session.reply_inputs == [greeting]
+        assert len(captured) == 2
+
+    asyncio.run(exercise())
+
+
 def test_simulator_identity_carries_fixture_phone_for_repository_agents() -> None:
     persona = Persona(
         persona={
@@ -1415,15 +1495,22 @@ def _text_chunk(content: str) -> SimpleNamespace:
 
 def test_a_reply_that_is_only_the_hold_marker_is_never_spoken() -> None:
     usage = SimpleNamespace(delta=None, usage={"tokens": 3})
-    assert _drain_hold_filter([_text_chunk("SIL"), _text_chunk("ENCE."), usage]) == [usage]
+    assert _drain_hold_filter([_text_chunk("SIL"), _text_chunk("ENCE."), usage]) == [
+        usage
+    ]
     assert _drain_hold_filter(["silence"]) == []
 
 
-def test_a_reply_that_is_only_a_stage_direction_or_an_empty_result_is_never_spoken() -> None:
+def test_a_reply_that_is_only_a_stage_direction_or_an_empty_result_is_never_spoken() -> (
+    None
+):
     for said in (["[Call", " Ended]"], ["None"], ["*hangs up*"], ["N/A."]):
         assert _drain_hold_filter([_text_chunk(one) for one in said]) == []
     for said in (["No, that is wrong."], ["Nope."], ["Okay, bye."]):
-        assert [c.delta.content for c in _drain_hold_filter([_text_chunk(one) for one in said])] == said
+        assert [
+            c.delta.content
+            for c in _drain_hold_filter([_text_chunk(one) for one in said])
+        ] == said
 
 
 def test_a_stage_direction_inside_a_reply_is_not_spoken() -> None:
@@ -1434,10 +1521,16 @@ def test_a_stage_direction_inside_a_reply_is_not_spoken() -> None:
 
         return "".join([c async for c in livekit._spoken_words(stream())])
 
-    assert asyncio.run(run(["Okay, thanks. Bye. [Call", " Ended]"])).strip() == "Okay, thanks. Bye."
+    assert (
+        asyncio.run(run(["Okay, thanks. Bye. [Call", " Ended]"])).strip()
+        == "Okay, thanks. Bye."
+    )
     assert asyncio.run(run(["Sure, *pauses* go ahead."])) == "Sure,  go ahead."
     assert asyncio.run(run(["Plain words only."])) == "Plain words only."
-    assert asyncio.run(run(["No, [laugh", "ter] you're kidding."])) == "No, [laughter] you're kidding."
+    assert (
+        asyncio.run(run(["No, [laugh", "ter] you're kidding."]))
+        == "No, [laughter] you're kidding."
+    )
 
 
 def test_a_caller_is_told_its_first_request_until_it_has_spoken() -> None:
@@ -1445,12 +1538,19 @@ def test_a_caller_is_told_its_first_request_until_it_has_spoken() -> None:
 
     greeted = ChatContext()
     greeted.add_message(role="user", content="This call is recorded. How can I help?")
-    briefed = livekit._with_opening_line(greeted, "I need to download our August invoice.")
-    assert "I need to download our August invoice." in briefed.messages()[-1].text_content
+    briefed = livekit._with_opening_line(
+        greeted, "I need to download our August invoice."
+    )
+    assert (
+        "I need to download our August invoice." in briefed.messages()[-1].text_content
+    )
     assert len(greeted.messages()) == 1
 
     greeted.add_message(role="assistant", content="Hi, I need our August invoice.")
-    assert livekit._with_opening_line(greeted, "I need to download our August invoice.") is greeted
+    assert (
+        livekit._with_opening_line(greeted, "I need to download our August invoice.")
+        is greeted
+    )
     assert livekit._with_opening_line(ChatContext(), "") is not None
 
 
@@ -1479,7 +1579,10 @@ def test_a_reply_with_no_words_is_reported_so_the_caller_can_answer_aloud() -> N
 
 
 def test_a_question_from_the_agent_is_not_a_hold() -> None:
-    asked = [{"role": "assistant", "content": "Hi."}, {"role": "user", "content": "Does that help?"}]
+    asked = [
+        {"role": "assistant", "content": "Hi."},
+        {"role": "user", "content": "Does that help?"},
+    ]
     told = [{"role": "user", "content": "Let me check that for you."}]
     assert livekit._was_asked(asked)
     assert not livekit._was_asked(told)
@@ -1494,7 +1597,12 @@ def test_a_dropped_marker_reports_the_hold_and_an_ordinary_reply_does_not() -> N
             for chunk in chunks:
                 yield chunk
 
-        return [c async for c in livekit._without_hold_marker(stream(), on_hold=lambda: held.append(True))]
+        return [
+            c
+            async for c in livekit._without_hold_marker(
+                stream(), on_hold=lambda: held.append(True)
+            )
+        ]
 
     asyncio.run(run(["SILENCE"]))
     assert held == [True]
@@ -1507,7 +1615,11 @@ def test_a_caller_left_on_hold_checks_in_once_when_nothing_follows(monkeypatch) 
 
     class FakeSession:
         history = SimpleNamespace(
-            items=[SimpleNamespace(type="message", role="user", text_content="One moment please.")]
+            items=[
+                SimpleNamespace(
+                    type="message", role="user", text_content="One moment please."
+                )
+            ]
         )
         agent_state = "listening"
         user_state = "listening"
@@ -1517,7 +1629,9 @@ def test_a_caller_left_on_hold_checks_in_once_when_nothing_follows(monkeypatch) 
 
     monkeypatch.setattr(livekit, "_HOLD_PATIENCE_SECONDS", 0.01)
     agent = livekit._TestRunnerAgent(
-        persona=_scenario().dataset[0], instructions="Be a customer.", min_turn_messages=0
+        persona=_scenario().dataset[0],
+        instructions="Be a customer.",
+        min_turn_messages=0,
     )
     agent._session = FakeSession()
 
@@ -1533,7 +1647,9 @@ def test_a_caller_left_on_hold_checks_in_once_when_nothing_follows(monkeypatch) 
     async def answered():
         agent._on_hold()
         agent._session.history.items.append(
-            SimpleNamespace(type="message", role="user", text_content="Thanks for waiting.")
+            SimpleNamespace(
+                type="message", role="user", text_content="Thanks for waiting."
+            )
         )
         await agent._hold_check
 
@@ -1546,7 +1662,9 @@ def test_an_ordinary_reply_passes_whole_and_in_order() -> None:
     assert _drain_hold_filter(chunks) == chunks
     call = SimpleNamespace(delta=SimpleNamespace(content="", tool_calls=[object()]))
     assert _drain_hold_filter([call]) == [call]
-    assert _drain_hold_filter(["Silence is not an answer."]) == ["Silence is not an answer."]
+    assert _drain_hold_filter(["Silence is not an answer."]) == [
+        "Silence is not an answer."
+    ]
     for opening in ("नमस्ते, ", "你好", "مرحبا"):
         assert not "silence".startswith(livekit._letters(opening))
 
@@ -3248,6 +3366,106 @@ def test_target_transcription_feeds_simulator_llm_context() -> None:
     assert len(captured) == 1
     assert captured[0]["content"] == "How can I help you today?"
     assert captured[0]["started_speaking_at"] <= captured[0]["stopped_speaking_at"]
+
+
+def test_opening_recording_disclosure_is_captured_but_not_answered() -> None:
+    session = _FakeReplySession()
+    captured: list[dict] = []
+    preamble_detected = asyncio.Event()
+    preamble_audio_finished = asyncio.Event()
+
+    asyncio.run(
+        livekit._forward_target_transcription(
+            _FakeTranscriptionReader("This Uber call is being recorded."),
+            session,
+            conversation_ended=asyncio.Event(),
+            captured_target_turns=captured,
+            opening_turn=True,
+            opening_preamble_detected=preamble_detected,
+            opening_preamble_audio_finished=preamble_audio_finished,
+        )
+    )
+
+    assert preamble_detected.is_set()
+    assert preamble_audio_finished.is_set()
+    assert session.reply_inputs == []
+    assert [c["content"] for c in captured] == ["This Uber call is being recorded."]
+
+
+def test_recording_language_is_not_suppressed_outside_the_opening_turn() -> None:
+    session = _FakeReplySession()
+
+    asyncio.run(
+        livekit._forward_target_transcription(
+            _FakeTranscriptionReader("This call is being recorded."),
+            session,
+            conversation_ended=asyncio.Event(),
+            opening_turn=False,
+        )
+    )
+
+    assert session.reply_inputs == ["This call is being recorded."]
+
+
+def test_concurrent_recording_disclosure_fragment_is_not_answered() -> None:
+    session = _FakeReplySession()
+    preamble_detected = asyncio.Event()
+    opening_classified = asyncio.Event()
+    followup_started = asyncio.Event()
+
+    async def scenario() -> None:
+        first = asyncio.create_task(
+            livekit._forward_target_transcription(
+                _FakeTranscriptionReader("This Uber call is being recorded."),
+                session,
+                conversation_ended=asyncio.Event(),
+                opening_turn=True,
+                opening_preamble_detected=preamble_detected,
+                opening_transcription_classified=opening_classified,
+            )
+        )
+        fragment = asyncio.create_task(
+            livekit._forward_target_transcription(
+                _FakeTranscriptionReader("it."),
+                session,
+                conversation_ended=asyncio.Event(),
+                opening_preamble_detected=preamble_detected,
+                opening_transcription_classified=opening_classified,
+                await_opening_classification=True,
+                opening_followup_started=followup_started,
+            )
+        )
+        await asyncio.gather(first, fragment)
+
+    asyncio.run(scenario())
+
+    assert preamble_detected.is_set()
+    assert opening_classified.is_set()
+    assert not followup_started.is_set()
+    assert session.reply_inputs == []
+
+
+def test_real_greeting_after_recording_disclosure_is_answered() -> None:
+    session = _FakeReplySession()
+    preamble_detected = asyncio.Event()
+    preamble_detected.set()
+    opening_classified = asyncio.Event()
+    opening_classified.set()
+    followup_started = asyncio.Event()
+
+    asyncio.run(
+        livekit._forward_target_transcription(
+            _FakeTranscriptionReader("Hi, how can I help you today?"),
+            session,
+            conversation_ended=asyncio.Event(),
+            opening_preamble_detected=preamble_detected,
+            opening_transcription_classified=opening_classified,
+            opening_followup_started=followup_started,
+        )
+    )
+
+    assert followup_started.is_set()
+    assert session.reply_inputs == ["Hi, how can I help you today?"]
 
 
 def test_target_transcription_after_end_records_without_reply() -> None:

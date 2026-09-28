@@ -123,6 +123,141 @@ def test_target_already_speaking_wins_without_waiting_for_the_watchdog():
     assert opened == []
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "This Uber call is being recorded.",
+        "This conversation may be recorded for quality purposes.",
+        "Your call is being monitored.",
+    ],
+)
+def test_legal_recording_disclosures_are_opening_preambles(text):
+    assert livekit._is_opening_preamble(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Hi there, how can I help?",
+        "Would you like me to record this address?",
+        "Why is this call being recorded? I need help.",
+    ],
+)
+def test_normal_opening_turns_are_not_preambles(text):
+    assert not livekit._is_opening_preamble(text)
+
+
+@pytest.mark.parametrize("text", ["it.", "recorded.", "for quality purposes"])
+def test_tiny_disclosure_residue_is_an_opening_preamble_continuation(text):
+    assert livekit._is_opening_preamble_continuation(text)
+
+
+@pytest.mark.parametrize("text", ["Hi.", "Hello there.", "How can I help?"])
+def test_real_greetings_are_not_opening_preamble_continuations(text):
+    assert not livekit._is_opening_preamble_continuation(text)
+
+
+def test_stream_after_classified_disclosure_is_real_followup_onset():
+    classified = asyncio.Event()
+    classified.set()
+    preamble = asyncio.Event()
+    preamble.set()
+
+    assert livekit._is_opening_followup_stream(
+        opening_turn=False,
+        opening_transcription_classified=classified,
+        opening_preamble_detected=preamble,
+    )
+
+
+def test_concurrently_opened_disclosure_fragment_is_not_followup_onset():
+    classified = asyncio.Event()
+    preamble = asyncio.Event()
+    preamble.set()
+
+    assert not livekit._is_opening_followup_stream(
+        opening_turn=False,
+        opening_transcription_classified=classified,
+        opening_preamble_detected=preamble,
+    )
+
+
+def test_disclosure_rearms_the_four_second_opening_race():
+    opened: list[str] = []
+
+    async def scenario() -> None:
+        preamble = asyncio.Event()
+        preamble_finished = asyncio.Event()
+        target_started = asyncio.Event()
+        task = asyncio.create_task(
+            livekit._open_after_opening_preamble(
+                SimpleNamespace(open_conversation=lambda: opened.append("opened")),
+                timeout_seconds=0.03,
+                preamble_detected=preamble,
+                preamble_audio_finished=preamble_finished,
+                target_started=target_started,
+            )
+        )
+        preamble.set()
+        preamble_finished.set()
+        await task
+
+    asyncio.run(scenario())
+    assert opened == ["opened"]
+
+
+def test_actual_greeting_onset_wins_the_rearmed_race():
+    opened: list[str] = []
+
+    async def scenario() -> None:
+        preamble = asyncio.Event()
+        preamble_finished = asyncio.Event()
+        target_started = asyncio.Event()
+        task = asyncio.create_task(
+            livekit._open_after_opening_preamble(
+                SimpleNamespace(open_conversation=lambda: opened.append("opened")),
+                timeout_seconds=0.2,
+                preamble_detected=preamble,
+                preamble_audio_finished=preamble_finished,
+                target_started=target_started,
+            )
+        )
+        preamble.set()
+        preamble_finished.set()
+        await asyncio.sleep(0.01)
+        target_started.set()
+        await task
+
+    asyncio.run(scenario())
+    assert opened == []
+
+
+def test_rearmed_timeout_starts_after_disclosure_audio_finishes():
+    opened: list[str] = []
+
+    async def scenario() -> None:
+        preamble = asyncio.Event()
+        preamble_finished = asyncio.Event()
+        target_started = asyncio.Event()
+        task = asyncio.create_task(
+            livekit._open_after_opening_preamble(
+                SimpleNamespace(open_conversation=lambda: opened.append("opened")),
+                timeout_seconds=0.03,
+                preamble_detected=preamble,
+                preamble_audio_finished=preamble_finished,
+                target_started=target_started,
+            )
+        )
+        preamble.set()
+        await asyncio.sleep(0.05)
+        assert opened == []
+        preamble_finished.set()
+        await task
+
+    asyncio.run(scenario())
+    assert opened == ["opened"]
+
+
 def test_a_mailbox_call_carries_no_ambience(monkeypatch):
     """Nothing stands behind a mailbox, so a scenario asking for a room must not get one: it would
     tell the agent a person is there when the point of the scenario is that none is."""
