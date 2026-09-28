@@ -118,7 +118,8 @@ def places() -> dict[str, int]:
     named = {tag for tag, _ in clips if tag and tag not in _SILENT_ENVIRONMENTS}
     counts = {}
     for place in sorted(named | set(_PLACE_BY_BUILTIN.values())):
-        counts[place] = sum(1 for tag, _ in clips if tag == place) + (place in _BUILTIN_BY_ENVIRONMENT)
+        recorded = sum(1 for tag, _ in clips if tag == place)
+        counts[place] = recorded or int(place in _BUILTIN_BY_ENVIRONMENT)
     return counts
 
 
@@ -134,7 +135,7 @@ def source_for(environment: str = "", seed: str = "") -> str:
         return ""
     clips = _catalogue()
     pool = [location for tag, location in clips if tag == env]
-    if env in _BUILTIN_BY_ENVIRONMENT:
+    if env in _BUILTIN_BY_ENVIRONMENT and not pool:
         pool.append(_BUILTIN_BY_ENVIRONMENT[env])
     if not pool and env:
         nearest = _place_in(env.replace("_", " ").replace("-", " "), places())
