@@ -88,6 +88,16 @@ the agent's, not the request's: it pretends to do it, invents a process or a pro
 answer instead of saying it cannot and giving the real next step. That is a different test from an
 off-topic question, which the agent can decline without knowing its own domain.
 
+### The agent's own prohibitions
+
+Every rule in the agent's instructions that says what it must not do or must not claim (quote a price,
+promise a time, invent a step, hand the caller to a person, answer without its tool) marks a place an
+ordinary caller will push, because the forbidden thing is usually what they want to know. Plan a caller
+who needs exactly that for a real reason: the fare before they commit, whether a car is still free,
+whether a price can be held, how long the wait will be. Its sub-goal fails if the agent supplies the
+thing without its tool having said it. These are negative cases that do not need the world to go
+wrong, and they are where live agents most often fail.
+
 Then look for the scenarios that do not run in a straight line through a cell, because those are where
 a competent agent is really tested:
 
