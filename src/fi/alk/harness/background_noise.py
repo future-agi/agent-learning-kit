@@ -159,6 +159,8 @@ _SETTING_WORDS: dict[str, str] = {
     "outdoors": r"\bparks?\b|\boutdoors\b|\bgardens?\b|\bhiking\b|\bbeach\b",
     "street": r"\bstreets?\b|\bsidewalk\b|\bpavement\b|\bwalking\b|\bcrosswalk\b",
     "office": r"\boffices?\b|\bdesk\b|\bworkplace\b|\bcubicle\b|\bmeeting room\b",
+    "hospital": r"\bhospitals?\b|\bclinics?\b|\bwaiting room\b|\bemergency room\b|\bward\b",
+    "home": r"\bat home\b|\bkitchen\b|\bliving room\b|\bmy (?:house|flat|apartment)\b",
 }
 
 
