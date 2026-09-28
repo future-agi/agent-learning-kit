@@ -148,9 +148,11 @@ def test_a_caller_speaks_one_language():
 
 
 def test_a_place_the_situation_describes_wins_over_a_pick_by_name(catalogue):
-    from fi.alk.harness.background_noise import place_for
+    from fi.alk.harness.background_noise import _place_in, place_for
 
     assert place_for("any", None, "You are rushing through the airport to your gate.") == "transit"
     assert place_for("any", None, "You call from a busy street corner.") == "street"
+    assert _place_in("you are in the hospital waiting room.", ["hospital", "home"]) == "hospital"
+    assert _place_in("you are at home in the kitchen.", ["hospital", "home"]) == "home"
     assert place_for("any", {"environment": "vehicle"}, "at the airport") == "vehicle"
 
