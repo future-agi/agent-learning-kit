@@ -420,11 +420,7 @@ _ACCENT_HOMES = {
 
 
 def accent_at_home(args: dict[str, Any]) -> str:
-    """Why this English-speaking caller should sound like somewhere else, or "" when they need not.
-
-    About two callers in five who sound like the place they are calling from are asked for a
-    person from elsewhere instead, so an accent does not decide where the caller is.
-    """
+    """Why this caller, who sounds like where they are, should be someone from elsewhere, or ""."""
     persona = args.get("persona")
     if not isinstance(persona, dict):
         return ""
