@@ -202,6 +202,7 @@ def _attributed_stall(case: Any) -> tuple[str, str] | None:
         )
     return None
 
+
 # C3 §4.5: the engine's dispatch-ack ladder marks +60s exhaustion with this structured
 # `failure.code`. Matched here to pass the marker through on `CallAborted.marker` (never
 # string-matched from `failure.message`). Kept as a literal — the engine module that owns it
@@ -1144,9 +1145,7 @@ class CallRunnerImpl:
         except _ScenarioDocumentUnavailable as exc:
             raise CallAborted(f"voice_scenario_document_unavailable: {exc}") from exc
 
-        room_count = (
-            self._scenario_room_counts.get(scenario.scenario_key, 0) + 1
-        )
+        room_count = self._scenario_room_counts.get(scenario.scenario_key, 0) + 1
         self._scenario_room_counts[scenario.scenario_key] = room_count
         room_name = _room_name(
             job_id=self._context.job.job_id,
@@ -1301,6 +1300,11 @@ class CallRunnerImpl:
         async def place() -> SimulationReport:
             if self._place_call is not None:
                 return await self._place_call(spec)
+            logger.info(
+                "voice worker dispatch scenario=%s voice_run=%s",
+                scenario.scenario_key,
+                spec.run_id,
+            )
             result = await run_json_worker(
                 "fi.alk.harness.call_worker",
                 spec.model_dump(mode="json"),

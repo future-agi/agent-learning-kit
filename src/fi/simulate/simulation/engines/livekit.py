@@ -754,6 +754,30 @@ class _TestRunnerAgent(Agent):
             "metrics_collected",
             lambda event: self._usage_collector.collect(event.metrics),
         )
+        for event_name in (
+            "agent_state_changed",
+            "user_state_changed",
+            "user_input_transcribed",
+            "conversation_item_added",
+            "speech_created",
+            "error",
+        ):
+
+            def record_event(event, name=event_name):
+                item = getattr(event, "item", None)
+                logger.info(
+                    "voice event=%s old=%s new=%s final=%s role=%s interrupted=%s agent=%s user=%s",
+                    name,
+                    getattr(event, "old_state", None),
+                    getattr(event, "new_state", None),
+                    getattr(event, "is_final", None),
+                    getattr(item, "role", None),
+                    getattr(item, "interrupted", None),
+                    getattr(session, "agent_state", None),
+                    getattr(session, "user_state", None),
+                )
+
+            session.on(event_name, record_event)
         default_kinds = [
             rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
             getattr(
@@ -1036,15 +1060,23 @@ class _TestRunnerAgent(Agent):
             if self._goodbye_said:
                 return
             self._goodbye_said = True
-        chat_ctx = _with_opening_line(chat_ctx, self._persona.persona.get("initial_message"))
+        chat_ctx = _with_opening_line(
+            chat_ctx, self._persona.persona.get("initial_message")
+        )
         self._saying = ""
-        async for chunk in _without_hold_marker(
-            super().llm_node(chat_ctx, tools, model_settings),
-            on_hold=self._on_hold,
-            on_unspoken=self._on_unspoken,
-        ):
-            self._saying += _chunk_text(chunk) or ""
-            yield chunk
+        logger.info("simulator llm turn started")
+        try:
+            async for chunk in _without_hold_marker(
+                super().llm_node(chat_ctx, tools, model_settings),
+                on_hold=self._on_hold,
+                on_unspoken=self._on_unspoken,
+            ):
+                self._saying += _chunk_text(chunk) or ""
+                yield chunk
+        finally:
+            logger.info(
+                "simulator llm turn finished spoken_characters=%s", len(self._saying)
+            )
 
     _goodbye_said: bool = False
     _saying: str = ""
@@ -1061,7 +1093,9 @@ class _TestRunnerAgent(Agent):
         if self._answered_again_at == heard:
             return
         self._answered_again_at = heard
-        self._answer_again = asyncio.get_running_loop().create_task(self._answer_aloud(heard))
+        self._answer_again = asyncio.get_running_loop().create_task(
+            self._answer_aloud(heard)
+        )
 
     async def _answer_aloud(self, heard: int) -> None:
         await asyncio.sleep(0.5)
@@ -1082,7 +1116,9 @@ class _TestRunnerAgent(Agent):
             return
         heard = len(messages)
         logger.info("simulator hold rescue scheduled after %s messages", heard)
-        self._hold_check = asyncio.get_running_loop().create_task(self._still_there(heard))
+        self._hold_check = asyncio.get_running_loop().create_task(
+            self._still_there(heard)
+        )
 
     async def _still_there(self, heard: int) -> None:
         """A person left waiting in silence speaks up once, before the provider times out."""
@@ -1105,7 +1141,9 @@ class _TestRunnerAgent(Agent):
                 )
                 logged_busy = True
             if len(_session_messages(session)) != heard or self._end_requested.is_set():
-                logger.info("simulator hold rescue canceled while busy: conversation advanced")
+                logger.info(
+                    "simulator hold rescue canceled while busy: conversation advanced"
+                )
                 return
             if asyncio.get_running_loop().time() >= deadline:
                 logger.warning(
@@ -1169,7 +1207,9 @@ def _with_opening_line(chat_ctx: Any, opening: Any) -> Any:
     if any(message.role == "assistant" for message in chat_ctx.messages()):
         return chat_ctx
     briefed = chat_ctx.copy()
-    briefed.add_message(role="system", content=_OPENING_TURN.format(opening=opening.strip()))
+    briefed.add_message(
+        role="system", content=_OPENING_TURN.format(opening=opening.strip())
+    )
     return briefed
 
 
@@ -1188,7 +1228,9 @@ def _letters(text: str) -> str:
 
 
 # A reply that is only a stage direction or an echoed empty result, never words a person says.
-_NOT_SPEECH = re.compile(r"\s*(?:\[[^\]]*\]|\*[^*]*\*|\([^)]*\)|none|null|n/?a)\s*[.!]?\s*", re.IGNORECASE)
+_NOT_SPEECH = re.compile(
+    r"\s*(?:\[[^\]]*\]|\*[^*]*\*|\([^)]*\)|none|null|n/?a)\s*[.!]?\s*", re.IGNORECASE
+)
 
 
 def _not_speech(text: str) -> bool:
@@ -1202,7 +1244,9 @@ def _may_not_be_speech(text: str) -> bool:
     if closer and closer not in text.lstrip()[1:]:
         return True
     letters = _letters(text)
-    return _not_speech(text) or any(word.startswith(letters) for word in ("none", "null", "na") if letters)
+    return _not_speech(text) or any(
+        word.startswith(letters) for word in ("none", "null", "na") if letters
+    )
 
 
 # The one bracketed cue the voice renders is kept; see CARTESIA_DELIVERY_CUES.
@@ -1213,14 +1257,22 @@ async def _spoken_words(text: AsyncIterable[Any]) -> AsyncIterable[Any]:
     """The text with any bracketed or starred stage direction removed, however it is chunked."""
     pending = ""
     async for chunk in text:
-        if not isinstance(chunk, str) or (not pending and "[" not in chunk and "*" not in chunk):
+        if not isinstance(chunk, str) or (
+            not pending and "[" not in chunk and "*" not in chunk
+        ):
             yield chunk
             continue
         pending += chunk
-        open_at = max(pending.rfind("["), -1) if pending.count("[") > pending.count("]") else -1
+        open_at = (
+            max(pending.rfind("["), -1)
+            if pending.count("[") > pending.count("]")
+            else -1
+        )
         if open_at < 0 and pending.count("*") % 2:
             open_at = pending.rfind("*")
-        ready, pending = (pending, "") if open_at < 0 else (pending[:open_at], pending[open_at:])
+        ready, pending = (
+            (pending, "") if open_at < 0 else (pending[:open_at], pending[open_at:])
+        )
         cleaned = _STAGE_DIRECTION.sub("", ready)
         if cleaned:
             yield cleaned
@@ -1267,7 +1319,9 @@ async def _without_hold_marker(
         on_hold_now = _letters(text) == marker
         silent = on_hold_now or _not_speech(text)
         for item in held:
-            if not silent or (not isinstance(item, str) and getattr(item, "delta", None) is None):
+            if not silent or (
+                not isinstance(item, str) and getattr(item, "delta", None) is None
+            ):
                 yield item
         if on_hold_now and on_hold is not None:
             on_hold()
@@ -2948,9 +3002,13 @@ async def _forward_target_transcription(
     # completion ~= speech end. Timestamps embedded in the stream are the
     # sender's (laptop) clock; skew there would corrupt the derived latencies.
     started_at = time.time()
+    logger.info("target transcription stream started")
     try:
         transcript = (await reader.read_all()).strip()
         stopped_at = time.time()
+        logger.info(
+            "target transcription stream completed characters=%s", len(transcript)
+        )
         if not transcript:
             return
         # Capture the target's turn independently of the simulator session FIRST.
@@ -2976,7 +3034,9 @@ async def _forward_target_transcription(
         if conversation_ended is None or not conversation_ended.is_set():
             try:
                 session.generate_reply(user_input=transcript)
+                logger.info("target transcription reply scheduled")
             except RuntimeError:
+                logger.warning("target transcription reply rejected by closing session")
                 # Session is already closing; the turn is captured above.
                 pass
             else:
@@ -3478,7 +3538,11 @@ _BED_RMS: dict[str, float] = {}
 
 def _rms(pcm: bytes) -> float:
     samples = array.array("h", pcm)
-    return math.sqrt(sum(sample * sample for sample in samples) / len(samples)) if samples else 0.0
+    return (
+        math.sqrt(sum(sample * sample for sample in samples) / len(samples))
+        if samples
+        else 0.0
+    )
 
 
 async def _bed_rms(path: str, key: str = "") -> float:
@@ -3503,7 +3567,9 @@ async def _bed_gain(clip: Any, source: str = "") -> float:
     """The factor that brings a clip to the office clip's loudness, or 1.0 when either is unreadable."""
     try:
         path = clip.path() if isinstance(clip, BuiltinAudioClip) else str(clip)
-        reference = await _bed_rms(BuiltinAudioClip.OFFICE_AMBIENCE.path(), "OFFICE_AMBIENCE")
+        reference = await _bed_rms(
+            BuiltinAudioClip.OFFICE_AMBIENCE.path(), "OFFICE_AMBIENCE"
+        )
         level = await _bed_rms(path, source)
     except Exception:
         logger.warning("background clip level not measured", exc_info=True)

@@ -23,6 +23,9 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
   dropping that evidence; simulator usage remains separate.
 - A simulator left on hold now waits through transient LiveKit busy states and
   checks in before the provider silence timeout, with explicit rescue logs.
+- Hosted voice workers preserve stdout/stderr in the parent diagnostics stream,
+  with per-call correlation, turn-state transitions, transcription dispatch,
+  and simulator generation lifecycle events.
 
 ## v1.0.0-rc.1 — 2026-06-10
 
