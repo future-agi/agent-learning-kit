@@ -11,6 +11,7 @@ scenario that clears all three is written out as its own folder of runnable file
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -408,6 +409,38 @@ def _already_in_the_suite(
                     "caller a name the suite does not have"
                 )
     return ""
+
+
+_ACCENT_HOMES = {
+    "american": "united states",
+    "australian": "australia",
+    "canadian": "canada",
+    "indian": "india",
+}
+
+
+def travelled_accent(args: dict[str, Any]) -> dict[str, Any]:
+    """Give some English-speaking callers an accent from elsewhere, keeping where they are.
+
+    Writers choose accent and home as one person, so every Australian ends up booking in Sydney.
+    People move, so about two callers in five who sound like the place they are in get another
+    English accent instead; the places they ask for stay as written.
+    """
+    persona = args.get("persona")
+    if not isinstance(persona, dict):
+        return args
+    accent = str(persona.get("accent") or "").strip()
+    location = str(persona.get("location") or "").strip().lower()
+    language = str(persona.get("language") or persona.get("languages") or "english").lower()
+    if "english" not in language or _ACCENT_HOMES.get(accent.lower()) != location:
+        return args
+    if accent.lower() in str(args.get("instruction") or "").lower():
+        return args
+    seed = int(hashlib.sha256(str(persona.get("name") or args.get("name") or "").encode()).hexdigest()[:8], 16)
+    if seed % 5 >= 2:
+        return args
+    others = [one for one in ("American", "Australian", "Canadian", "Indian", "Neutral") if one.lower() != accent.lower()]
+    return {**args, "persona": {**persona, "accent": others[seed % len(others)]}}
 
 
 def crowded_field(kept: list[Scenario], candidate: Any, wanted: int) -> str:
@@ -1582,6 +1615,8 @@ def scenario_tools(
                     "for in output tokens. Submitting again under "
                     "an existing name is the only submission left to you, for fixing one of yours."
                 )
+        if _is_spoken(contract):
+            args = travelled_accent(args)
         result = accept_scenario(
             args,
             world_root=world_root,

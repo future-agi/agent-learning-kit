@@ -628,11 +628,22 @@ def callers_for(index: int, wanted: int, slice_name: str = "", spoken: bool = Tr
             "handling, so do not give them all the same accent unless a scenario truly requires it. "
             "Each caller is one ordinary, believable person, never a celebrity's or a fictional "
             "character's name: choose the accent, languages and name together, so the accent comes "
-            "with a name and background that make it plausible. Where they are calling from is "
-            "separate: people travel and move, so an Australian can be booking in the US; do not "
-            "put every caller with an accent in that accent's country. A caller whose language has "
-            "no offered accent is Neutral."
+            "with a name and background that make it plausible. A caller whose language has no "
+            "offered accent is Neutral."
         )
+        homes = offered("location")
+        if homes:
+            # Dealt apart from the accent, so an accent does not decide where the caller books.
+            placed = [
+                f"{accent} accent, calling from {homes[(index + 2 * step + 1) % len(homes)]}"
+                for step, accent in enumerate(spread)
+            ]
+            said += (
+                " Where each caller is calling from is separate from their accent, because people "
+                f"travel and move: start from these, {'; '.join(placed)}. The places they ask for "
+                "are where they are, not where their accent comes from, unless the agent only "
+                "serves somewhere else."
+            )
     elif not spoken:
         said += (
             " Each person is one ordinary, believable person, never a celebrity's or a fictional "
@@ -688,6 +699,13 @@ def brief_for(
         "  - every value real, read out of the world with inspect_world, never invented\n"
         "  - an instruction that is a circumstance the person is living through, not a script "
         "of lines to say\n"
+        "  - a person who does not know everything: they know their own situation and what they "
+        "want, not the product's terms, where things are, what is possible, or what the system "
+        "holds on them. What they do not know is what they work out with the agent, and it is "
+        "what makes a call run like a real one\n"
+        "  - more than one thing on the call where a real person would have it: alongside the "
+        "main need, one or two related things from their own situation that come up once the "
+        "first is settled, written as their circumstances, never as a list of questions\n"
         "  - a setup that makes true whatever the instruction presumes, and a ready check that "
         "proves it\n"
         "  - a solution worked out with try_calls first, so the gates are not where you find "

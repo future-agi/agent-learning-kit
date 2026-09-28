@@ -4648,3 +4648,18 @@ def test_a_caller_reacts_differently_across_trials_but_the_same_within_one():
     trials = [built(f"run-{index}") for index in range(6)]
     assert len({persona.situation for persona in trials}) > 1
     assert len({persona.behavior_policy.interruption_propensity for persona in trials}) > 1
+
+
+def test_some_callers_sound_like_somewhere_other_than_where_they_are():
+    from fi.alk.harness.scenario_tools import travelled_accent
+
+    def accent(name, instruction="Book a ride from Flinders Street.", **persona):
+        base = {"name": name, "accent": "Australian", "location": "Australia", "language": "English"}
+        return travelled_accent({"name": name, "instruction": instruction, "persona": {**base, **persona}})["persona"]["accent"]
+
+    spread = [accent(f"Caller {n}") for n in range(100)]
+    assert 20 < sum(one != "Australian" for one in spread) < 60
+    assert accent("Caller 1") == accent("Caller 1")
+    assert accent("Caller 1", instruction="You speak with an Australian accent.") == "Australian"
+    assert accent("Caller 1", location="United States") == "Australian"
+    assert accent("Caller 1", language="Spanish") == "Australian"
