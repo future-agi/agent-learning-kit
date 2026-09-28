@@ -136,7 +136,7 @@ _SIMULATOR_PLATFORM_ALIAS_MAP = {
     "SIMULATOR_OPENAI_API_KEY": OPENAI_API_KEY_ALIAS,
 }
 
-_DEFAULT_CALL_TIMEOUT_SECONDS = 300.0
+_DEFAULT_CALL_TIMEOUT_SECONDS = 480.0
 
 # sdk_voice.py::build_spec's own phase-overhead constants, reused verbatim so this runner's
 # outer budget composes with the SDK's internal one the same way the local template does.
