@@ -402,7 +402,9 @@ Four more pairs across the other suites overlap by half or more. A writer cannot
 design, so it cannot discover the collision: **the plan is the only place it can be prevented.** Name
 in each brief the one thing that makes that scenario hard - a correction after the agent commits, two
 facts that disagree, a reference with no referent, a value that sounds like another, something
-plausible the world refuses - and never deal the same one twice on the same task level.
+plausible the world refuses - and never deal the same one twice on the same task level. Deal a
+kind only where the task can carry it: a question about what the agent is has no two facts to
+disagree, and a task with no difficulty it can carry is finished at its control.
 
 **The coordinate is read as a conjunction, so no two levels on it may contradict each other.** Every
 level has to be simultaneously true of the same person in the same call. A caller the system already

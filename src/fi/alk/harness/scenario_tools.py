@@ -629,10 +629,10 @@ def _a_second_plain_control(scenario: Scenario, kept: list[Scenario]) -> str:
         return (
             f"{one.name} is already this suite's plain control for {task}: the caller asks for the "
             "ordinary thing, gives the ordinary answers and gets the ordinary result. Proving the "
-            "capability twice proves nothing. Name the one thing that makes this one hard - a "
-            "correction after the agent has committed, two facts that disagree, a reference with "
-            "no referent, a value that sounds like another, something plausible the world refuses "
-            "- and say it in the branch line, or place this on a task level with no control yet"
+            "capability twice proves nothing. If this call really is harder, say in the branch line, "
+            "in your own words, what the caller or the world does here that the control does not; "
+            "a stock phrase that does not describe this call is not a difficulty. If nothing does, "
+            "this task already has its control: write a different task level, or stop"
         )
     return ""
 
