@@ -192,8 +192,18 @@ def place_for(name: str, fixture: Any = None, situation: str = "") -> str:
     return _place_in(text, options) or (options[_pick(name or "x", len(options))] if options else "")
 
 
+# Where the caller is going says nothing about where they are: "a ride to the airport" is not a call
+# from an airport.
+_DESTINATION = re.compile(
+    r"\b(?:ride|trip|transfer|transport|car|cab|taxi|go|going|head|heading|headed|travel\w*|get)"
+    r"\s+(?:back\s+)?to\s+[^.,;]{0,60}|\b(?:destination|drop[- ]?off)\s*(?:is|:|at)?\s+[^.,;]{0,60}",
+    re.IGNORECASE,
+)
+
+
 def _place_in(text: str, options) -> str:
     """The playable place a piece of text describes, or "" when it describes none."""
+    text = _DESTINATION.sub(" ", text)
     for place, words in _SETTING_WORDS.items():
         if not re.search(words, text):
             continue

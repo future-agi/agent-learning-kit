@@ -163,3 +163,12 @@ def test_a_chosen_bed_names_its_place(catalogue):
     assert place_of("https://clips.example/car.wav") == "vehicle"
     assert place_of("OFFICE_AMBIENCE") == "office"
     assert place_of("https://clips.example/unknown.wav") == ""
+
+
+def test_where_the_caller_is_going_is_not_where_they_are():
+    from fi.alk.harness.background_noise import _place_in
+
+    places = ["airport", "transit", "street", "office"]
+    assert _place_in("you are at a hotel and need a ride to heathrow airport terminal 2.", places) == ""
+    assert _place_in("you are at the airport and need a ride to your office.", places) == "airport"
+    assert _place_in("you call from a train station; your destination is the airport.", places) == "transit"
