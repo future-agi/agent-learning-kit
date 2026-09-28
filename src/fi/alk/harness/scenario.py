@@ -856,7 +856,9 @@ def validate_scenario(
     problems.extend(voicemail_sub_goal_problems(scenario, catalogue))
     problems.extend(_world_credential_problems(scenario, world_state))
     problems.extend(self_sufficiency_problems(scenario))
-    problems.extend(alignment_problems(scenario, world_state))
+    # A live target's world is not ours to seed, so what the caller is told cannot be checked against it.
+    if not (allow_empty_solution and not scenario.solution and not (scenario.setup_code or "").strip()):
+        problems.extend(alignment_problems(scenario, world_state))
     problems.extend(hollow_scenario_problems(scenario))
     problems.extend(naming_problems(scenario))
     return problems

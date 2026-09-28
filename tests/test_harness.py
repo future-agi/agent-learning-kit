@@ -7976,3 +7976,22 @@ def test_sub_goals_no_scenario_names_are_the_ones_left_out():
     )
     kept = [SimpleNamespace(sub_goals=["answers"])]
     assert unused_sub_goals(catalogue, kept) == ["test_probe_sub_goal_ast"]
+
+
+def test_a_live_target_is_not_asked_to_seed_what_the_caller_is_told():
+    from fi.alk.harness.catalogue import Catalogue, SubGoal
+    from fi.alk.harness.scenario import Scenario, validate_scenario
+
+    scenario = Scenario(
+        name="pin-on-a-live-line",
+        instruction="When asked for your PIN, say 7682.",
+        tests="whether the agent verifies a spoken PIN",
+        sub_goals=["verified"],
+    )
+    catalogue = Catalogue(sub_goals=[SubGoal(name="verified", what="verified", judged="by a judge")])
+
+    live = validate_scenario(scenario, catalogue, {}, allow_empty_solution=True)
+    owned = validate_scenario(scenario, catalogue, {})
+
+    assert not any("to say back" in problem for problem in live)
+    assert any("to say back" in problem for problem in owned)
