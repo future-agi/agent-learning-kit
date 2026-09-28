@@ -58,3 +58,10 @@ def test_repair_rejects_noop() -> None:
             expected_count=1,
             diagnostic_codes={"generated_setup_invalid"},
         )
+
+
+def test_a_length_described_is_not_a_value_handed_to_the_caller():
+    from fi.alk.harness.scenario import _handed_to_caller
+
+    assert _handed_to_caller("When asked, say your 4-digit PIN and give the 6-digit code.") == set()
+    assert _handed_to_caller("When asked for the PIN, say 7682.") == {"7682"}

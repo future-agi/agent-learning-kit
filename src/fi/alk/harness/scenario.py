@@ -1124,7 +1124,8 @@ _QUOTED_VALUE = re.compile(
 
 # Values that look quotable but are never records the agent looks up.
 _NOT_A_RECORD = re.compile(
-    r"^(?:\d{1,2}[:.]\d{2}|\d{1,4}(?:st|nd|rd|th)|20\d{2}|1?\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)$",
+    r"^(?:\d{1,2}[:.]\d{2}|\d{1,4}(?:st|nd|rd|th)|20\d{2}|1?\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?"
+    r"|\d{1,2}-(?:digits?|characters?|chars?|letters?|numbers?))$",
     re.IGNORECASE,
 )
 
