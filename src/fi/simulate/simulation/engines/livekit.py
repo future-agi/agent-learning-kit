@@ -3692,7 +3692,10 @@ async def _open_if_nobody_speaks_first(
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout_seconds
     while loop.time() < deadline:
-        if any(message["content"] for message in _session_messages(session)):
+        # A greeting still being spoken is not in history yet, but it is a first turn.
+        if getattr(session, "user_state", None) in _USER_BUSY_STATES or any(
+            message["content"] for message in _session_messages(session)
+        ):
             return
         await asyncio.sleep(0.2)
     if any(message["content"] for message in _session_messages(session)):
