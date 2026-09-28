@@ -766,7 +766,7 @@ class _TestRunnerAgent(Agent):
             def record_event(event, name=event_name):
                 item = getattr(event, "item", None)
                 logger.info(
-                    "voice event=%s old=%s new=%s final=%s role=%s interrupted=%s agent=%s user=%s",
+                    "voice event=%s old=%s new=%s final=%s role=%s interrupted=%s agent=%s user=%s speech_id=%s error_type=%s",
                     name,
                     getattr(event, "old_state", None),
                     getattr(event, "new_state", None),
@@ -775,6 +775,8 @@ class _TestRunnerAgent(Agent):
                     getattr(item, "interrupted", None),
                     getattr(session, "agent_state", None),
                     getattr(session, "user_state", None),
+                    getattr(getattr(event, "speech_handle", None), "id", None),
+                    type(getattr(event, "error", None)).__name__,
                 )
 
             session.on(event_name, record_event)
@@ -1053,29 +1055,52 @@ class _TestRunnerAgent(Agent):
         """
         if _answered_by_voicemail():
             if self._mailbox_greeted or self._voicemail_greeting is not None:
+                logger.info("simulator llm skipped reason=voicemail_already_greeted")
                 return
             self._mailbox_greeted = True
         # Once a goodbye was said, anything after it narrates the hang-up; a silent hang-up gets one goodbye.
         if self._end_requested.is_set():
             if self._goodbye_said:
+                logger.info("simulator llm skipped reason=goodbye_already_said")
                 return
             self._goodbye_said = True
         chat_ctx = _with_opening_line(
             chat_ctx, self._persona.persona.get("initial_message")
         )
         self._saying = ""
-        logger.info("simulator llm turn started")
+        turn = id(chat_ctx)
+        started = time.monotonic()
+        first_chunk = True
+        state = "completed"
+        logger.info("simulator llm turn started turn=%s", turn)
         try:
             async for chunk in _without_hold_marker(
                 super().llm_node(chat_ctx, tools, model_settings),
                 on_hold=self._on_hold,
                 on_unspoken=self._on_unspoken,
             ):
+                if first_chunk:
+                    logger.info(
+                        "simulator llm first output turn=%s elapsed=%.3f",
+                        turn,
+                        time.monotonic() - started,
+                    )
+                    first_chunk = False
                 self._saying += _chunk_text(chunk) or ""
                 yield chunk
+        except asyncio.CancelledError:
+            state = "cancelled"
+            raise
+        except Exception as exc:
+            state = type(exc).__name__
+            raise
         finally:
             logger.info(
-                "simulator llm turn finished spoken_characters=%s", len(self._saying)
+                "simulator llm turn finished turn=%s state=%s elapsed=%.3f output_characters=%s",
+                turn,
+                state,
+                time.monotonic() - started,
+                len(self._saying),
             )
 
     _goodbye_said: bool = False
@@ -1088,9 +1113,14 @@ class _TestRunnerAgent(Agent):
         logger.warning("simulator reply not spoken: %r", text[:160])
         session = self._session
         if session is None or self._end_requested.is_set():
+            logger.info("simulator unspoken recovery skipped reason=session_ended")
             return
         heard = len(_session_messages(session))
         if self._answered_again_at == heard:
+            logger.info(
+                "simulator unspoken recovery skipped reason=already_attempted messages=%s",
+                heard,
+            )
             return
         self._answered_again_at = heard
         self._answer_again = asyncio.get_running_loop().create_task(
@@ -1101,9 +1131,18 @@ class _TestRunnerAgent(Agent):
         await asyncio.sleep(0.5)
         session = self._session
         if session is None or self._end_requested.is_set():
+            logger.info("simulator unspoken recovery cancelled reason=session_ended")
             return
         if len(_session_messages(session)) != heard or _either_side_busy(session):
+            logger.info(
+                "simulator unspoken recovery cancelled heard=%s messages=%s agent=%s user=%s",
+                heard,
+                len(_session_messages(session)),
+                getattr(session, "agent_state", None),
+                getattr(session, "user_state", None),
+            )
             return
+        logger.info("simulator unspoken recovery generating reply")
         session.generate_reply(instructions=_ANSWER_ALOUD)
 
     def _on_hold(self) -> None:
@@ -1157,8 +1196,35 @@ class _TestRunnerAgent(Agent):
         logger.info("simulator hold rescue generating check-in")
         session.generate_reply(instructions=_HOLD_CHECK_IN)
 
-    def tts_node(self, text: AsyncIterable[str], model_settings: ModelSettings):
-        return Agent.default.tts_node(self, _spoken_words(text), model_settings)
+    async def tts_node(self, text: AsyncIterable[str], model_settings: ModelSettings):
+        started = time.monotonic()
+        frames = 0
+        state = "completed"
+        logger.info("simulator tts started")
+        try:
+            async for frame in Agent.default.tts_node(
+                self, _spoken_words(text), model_settings
+            ):
+                if frames == 0:
+                    logger.info(
+                        "simulator tts first frame elapsed=%.3f",
+                        time.monotonic() - started,
+                    )
+                frames += 1
+                yield frame
+        except asyncio.CancelledError:
+            state = "cancelled"
+            raise
+        except Exception as exc:
+            state = type(exc).__name__
+            raise
+        finally:
+            logger.info(
+                "simulator tts finished state=%s elapsed=%.3f frames=%s",
+                state,
+                time.monotonic() - started,
+                frames,
+            )
 
     async def transcription_node(
         self,
