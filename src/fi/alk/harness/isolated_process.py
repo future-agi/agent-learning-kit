@@ -36,9 +36,10 @@ def run_worker(main: Callable[[], Awaitable[None]]) -> None:
     """Translate termination into one cancellation so async cleanup can finish."""
 
     logging.basicConfig(
-        level=logging.INFO,
+        level=logging.WARNING,
         format=f"%(asctime)s %(levelname)s job={os.environ.get('ALK_LOG_JOB_ID', '-')} %(name)s: %(message)s",
     )
+    logging.getLogger("fi").setLevel(logging.INFO)
 
     async def supervised() -> None:
         task = asyncio.create_task(main())
