@@ -1275,6 +1275,7 @@ def test_simulator_collects_normalized_model_usage(monkeypatch) -> None:
             "model": "gemini-test",
             "input_tokens": 7,
             "input_cached_tokens": 2,
+            "input_cache_creation_tokens": 0,
             "input_audio_tokens": 0,
             "input_cached_audio_tokens": 0,
             "input_text_tokens": 0,
@@ -1284,6 +1285,7 @@ def test_simulator_collects_normalized_model_usage(monkeypatch) -> None:
             "output_tokens": 5,
             "output_audio_tokens": 0,
             "output_text_tokens": 0,
+            "output_reasoning_tokens": 0,
             "session_duration": 0.0,
         }
     ]
@@ -1394,31 +1396,6 @@ def test_end_call_waits_while_the_other_side_is_still_speaking() -> None:
     result = asyncio.run(agent.end_call(SimpleNamespace(speech_handle=None)))
     assert result.startswith("Not yet: the other person is still talking")
     assert not agent.end_requested.is_set()
-
-
-def test_the_caller_waits_out_a_two_part_opening_then_returns_to_normal_timing() -> None:
-    updates: list[dict] = []
-
-    class FakeSession:
-        options = SimpleNamespace(endpointing={"mode": "fixed", "min_delay": 0.9, "max_delay": 3.0})
-        history = SimpleNamespace(items=[])
-
-        def update_options(self, *, endpointing_opts):
-            updates.append(dict(endpointing_opts))
-
-    session = FakeSession()
-
-    async def scenario() -> None:
-        task = asyncio.create_task(livekit._patient_opening(session))
-        await asyncio.sleep(0.05)
-        assert updates[-1]["min_delay"] == livekit._OPENING_ENDPOINTING_SECONDS
-        session.history.items.append(
-            SimpleNamespace(type="message", role="assistant", text_content="Hi, I need help.")
-        )
-        await asyncio.wait_for(task, timeout=2)
-
-    asyncio.run(scenario())
-    assert updates[-1] == {"mode": "fixed", "min_delay": 0.9, "max_delay": 3.0}
 
 
 def _drain_hold_filter(chunks: list) -> list:
@@ -3835,20 +3812,35 @@ def test_dispatch_failure_is_typed_preparing_failure(monkeypatch) -> None:
     assert "delete_room" in calls
 
 
-def test_the_caller_waits_long_enough_not_to_talk_over_a_question():
-    """A short delay fires inside a sentence, so the caller treats a pause as the end of the turn,
-    talks over the agent and then repeats itself for want of an answer."""
+def test_the_caller_uses_audio_turn_detection_and_speculative_tts():
+    """Audio EOU avoids fixed-delay interruptions while preemptive TTS removes response startup."""
     from fi.simulate.simulation.engines.livekit import _simulator_turn_handling
 
     handling = _simulator_turn_handling(vad=object())
-    assert handling["endpointing"]["min_delay"] == 0.9
-    assert handling["endpointing"]["max_delay"] == 3.0
+    assert isinstance(handling["turn_detection"], livekit.inference.TurnDetector)
+    assert handling["endpointing"] == {
+        "mode": "dynamic",
+        "min_delay": 0.3,
+        "max_delay": 2.5,
+    }
+    assert handling["preemptive_generation"] == {
+        "enabled": True,
+        "preemptive_tts": True,
+    }
     # Still interruptible, but only over something worth interrupting.
     assert handling["interruption"]["enabled"] is True
     assert handling["interruption"]["min_duration"] == 0.6
-    # An explicit value from the scenario still wins.
-    explicit = _simulator_turn_handling(vad=object(), min_endpointing_delay=0.5)
-    assert explicit["endpointing"]["min_delay"] == 0.5
+    # Explicit scenario values, including zero, still win.
+    explicit = _simulator_turn_handling(
+        vad=object(), min_endpointing_delay=0.0, max_endpointing_delay=1.8
+    )
+    assert explicit["endpointing"]["min_delay"] == 0.0
+    assert explicit["endpointing"]["max_delay"] == 1.8
+
+
+def test_the_caller_falls_back_to_stt_turns_without_vad():
+    handling = livekit._simulator_turn_handling(vad=None)
+    assert handling["turn_detection"] == "stt"
 
 
 def test_the_call_ends_on_the_caller_s_own_goodbye() -> None:

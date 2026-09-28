@@ -25,6 +25,7 @@ try:
         BackgroundAudioPlayer,
         RunContext,
         function_tool,
+        inference,
         metrics,
     )
     from livekit.agents.utils.audio import audio_frames_from_file
@@ -127,8 +128,9 @@ _NO_CONVERSATION_TIMEOUT_SECONDS = 120.0
 # says nothing the call is silence until a deadline discards it, and nothing was learned about
 # either side. Kept well under the timeout above, which is what abandons a call nobody started.
 #
-# Eight seconds: the smallest bound that cannot pre-empt a slow first turn.
-_OPEN_INSTEAD_AFTER_SECONDS = 8.0
+# Four seconds is the explicit grace period for an agent that is configured to speak first.
+# Speech onset wins the race; this is not an endpointing delay after the greeting.
+_OPEN_INSTEAD_AFTER_SECONDS = 4.0
 # Frequency and length per kind of mailbox. FULL has no entry: it invites no message.
 _VOICEMAIL_TONE_BY_STYLE: dict[str, tuple[float, float]] = {
     "personal": (1000.0, 0.40),
@@ -627,13 +629,20 @@ def _simulator_turn_handling(
     max_endpointing_delay: float | None = None,
 ) -> dict[str, object]:
     return {
-        "turn_detection": "vad" if vad is not None else "stt",
-        # A short delay fires inside a sentence, on a comma or a breath, so the caller treats a pause
-        # as the end of the turn, talks over the agent and then repeats itself for want of an answer.
+        # Audio end-of-turn detection uses the words and acoustic delivery rather than treating
+        # every pause as a completed thought. The local model keeps hosted E2B workers independent
+        # from LiveKit Inference and falls back internally if a prediction is unavailable.
+        "turn_detection": (
+            inference.TurnDetector(version="v1-mini") if vad is not None else "stt"
+        ),
         "endpointing": {
-            "mode": "fixed",
-            "min_delay": min_endpointing_delay or 0.9,
-            "max_delay": max_endpointing_delay or 3.0,
+            "mode": "dynamic",
+            "min_delay": (
+                min_endpointing_delay if min_endpointing_delay is not None else 0.3
+            ),
+            "max_delay": (
+                max_endpointing_delay if max_endpointing_delay is not None else 2.5
+            ),
         },
         # A real caller interrupts, but only over something long enough to be worth interrupting.
         "interruption": {
@@ -641,7 +650,9 @@ def _simulator_turn_handling(
             "discard_audio_if_uninterruptible": True,
             "min_duration": 0.6,
         },
-        "preemptive_generation": {"enabled": True},
+        # Prepare both words and audio while end-of-turn is being confirmed. LiveKit discards the
+        # speculative work if speech resumes; no unconfirmed audio is played to the target.
+        "preemptive_generation": {"enabled": True, "preemptive_tts": True},
     }
 
 
@@ -1016,6 +1027,12 @@ class _TestRunnerAgent(Agent):
         if self._voicemail_greeting is not None:
             # A recording has already greeted, and a mailbox does not greet twice: a spoken line on
             # top of the clip is one mailbox answering in two voices.
+            return
+        opening = self._persona.persona.get("initial_message")
+        if isinstance(opening, str) and opening.strip():
+            # The authored opening is already the text to say. Sending it straight to TTS avoids
+            # an unnecessary LLM round-trip (and prevents the model from paraphrasing it).
+            self._session.say(opening.strip())
             return
         self._session.generate_reply()
 
@@ -1931,6 +1948,16 @@ class LiveKitEngine(BaseEngine):
                 ),
                 timeout=connect_timeout,
             )
+            # "Agent speaks first" is a four-second race for speech ONSET, not four seconds of
+            # silence after the target finishes. Register before dispatch/readiness so even an
+            # immediate greeting permanently suppresses the simulator's fallback opening.
+            target_speech_started = asyncio.Event()
+
+            def on_target_state_changed(event: Any) -> None:
+                if getattr(event, "new_state", None) == "speaking":
+                    target_speech_started.set()
+
+            session.on("user_state_changed", on_target_state_changed)
             if target_dispatch_deferred:
                 # Session + early buffer handler are live; now dispatch the target
                 # so its greeting stream is captured, not dropped.
@@ -2260,6 +2287,9 @@ class LiveKitEngine(BaseEngine):
                         return
                 elif str(participant_identity) != target.identity:
                     return
+                # Some target agents publish authoritative text before RoomIO reports their audio
+                # state. That is still proof that the target won the opening race.
+                target_speech_started.set()
                 # First target transcription means the target is speaking — stop
                 # the redundant simulator STT so it cannot emit duplicate turns.
                 if not target_transcription_mode:
@@ -2291,7 +2321,6 @@ class LiveKitEngine(BaseEngine):
                 on_target_transcription(buffered_reader, buffered_identity)
 
             opener: asyncio.Task[None] | None = None
-            patience: asyncio.Task[None] | None = None
             if conversation_direction == "simulator_first" or _answered_by_voicemail():
                 # A mailbox speaks first and needs no watchdog to break a mutual silence.
                 customer_agent.open_conversation()
@@ -2303,9 +2332,9 @@ class LiveKitEngine(BaseEngine):
                         session,
                         customer_agent,
                         timeout_seconds=_OPEN_INSTEAD_AFTER_SECONDS,
+                        target_started=target_speech_started,
                     )
                 )
-                patience = asyncio.create_task(_patient_opening(session))
             try:
                 stop_reason = await _wait_for_conversation_end(
                     room,
@@ -2320,7 +2349,7 @@ class LiveKitEngine(BaseEngine):
             finally:
                 # However the conversation ended, including badly, the watchdog goes with it: a
                 # pending task at loop close is noise in the log of every call.
-                for watcher in (opener, patience):
+                for watcher in (opener,):
                     if watcher is not None and not watcher.done():
                         watcher.cancel()
             logger.info(
@@ -3550,39 +3579,14 @@ def _answered_by_voicemail() -> bool:
     return os.environ.get("HARNESS_ANSWERED_BY", "").strip().lower() == "voicemail"
 
 
-# The caller's first reply waits longer, so a two-part agent opening is not interrupted.
-_OPENING_ENDPOINTING_SECONDS = 4.0
-_OPENING_PATIENCE_LIMIT_SECONDS = 60.0
-
-
-async def _patient_opening(session: AgentSession) -> None:
-    """Hold the caller's first reply until the agent's opening has really finished."""
-    try:
-        normal = dict(session.options.endpointing)
-        session.update_options(
-            endpointing_opts={
-                **normal,
-                "min_delay": _OPENING_ENDPOINTING_SECONDS,
-                "max_delay": max(
-                    float(normal.get("max_delay") or 0), _OPENING_ENDPOINTING_SECONDS
-                ),
-            }
-        )
-    except Exception:  # noqa: BLE001 - a session that cannot change timing keeps its own
-        return
-    try:
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + _OPENING_PATIENCE_LIMIT_SECONDS
-        while loop.time() < deadline and not any(
-            message["role"] == "assistant" and message["content"]
-            for message in _session_messages(session)
-        ):
-            await asyncio.sleep(0.2)
-    finally:
-        try:
-            session.update_options(endpointing_opts=normal)
-        except Exception:  # noqa: BLE001 - restoring timing must never fail the call
-            pass
+def _target_has_started(session: Any) -> bool:
+    """Whether the target has begun the opening turn, even if it has not committed yet."""
+    if getattr(session, "user_state", None) == "speaking":
+        return True
+    return any(
+        message["role"] == _TARGET and message["content"]
+        for message in _session_messages(session)
+    )
 
 
 async def _open_if_nobody_speaks_first(
@@ -3590,20 +3594,40 @@ async def _open_if_nobody_speaks_first(
     customer_agent: Any,
     *,
     timeout_seconds: float,
+    target_started: asyncio.Event | None = None,
 ) -> None:
     """Have the simulated person open the conversation when the other side never does.
 
-    Only for a call the agent was supposed to start. It opens exactly the way a simulator-first call
-    does, through ``open_conversation``, so the person's own initial message is used where the
-    persona has one. Returns as soon as anybody speaks, which is the ordinary case.
+    Only for a call the target was supposed to start. The deadline is cancelled at speech onset,
+    not after a transcript commits: a target that begins at 3.9 seconds may speak for as long as
+    needed. Normal end-of-turn handling then decides when the simulator replies.
     """
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout_seconds
-    while loop.time() < deadline:
-        if any(message["content"] for message in _session_messages(session)):
+    if _target_has_started(session):
+        if target_started is not None:
+            target_started.set()
+        return
+
+    if target_started is not None:
+        try:
+            await asyncio.wait_for(target_started.wait(), timeout=timeout_seconds)
             return
-        await asyncio.sleep(0.2)
-    if any(message["content"] for message in _session_messages(session)):
+        except asyncio.TimeoutError:
+            pass
+    else:
+        # Compatibility path for callers without session event wiring. Check the live speech state
+        # frequently; history alone is too late because LiveKit commits a turn after speech ends.
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_seconds
+        while loop.time() < deadline:
+            if _target_has_started(session):
+                return
+            await asyncio.sleep(min(0.02, max(0.0, deadline - loop.time())))
+
+    # Resolve the boundary race in the target's favour. There is intentionally no await between
+    # this final check and opening the simulator, so another coroutine cannot interleave them.
+    if (target_started is not None and target_started.is_set()) or _target_has_started(
+        session
+    ):
         return
     logger.warning(
         "no first turn after %ss; the simulated person opens instead", timeout_seconds

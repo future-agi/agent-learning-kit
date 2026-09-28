@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -11,10 +12,9 @@ pytest.importorskip("livekit")
 from fi.simulate.simulation.engines import livekit
 
 
-def test_the_watchdog_clears_a_slow_first_turn_without_being_generous():
-    """It only sees a turn once the session commits it, and measured agent turn latency on a real
-    run was 4292ms and 3947ms, so a bound near five seconds would talk over the greeting."""
-    assert livekit._OPEN_INSTEAD_AFTER_SECONDS == 8.0
+def test_the_watchdog_uses_the_explicit_agent_first_grace_period():
+    """The timer is a four-second race for speech onset, not an endpointing delay."""
+    assert livekit._OPEN_INSTEAD_AFTER_SECONDS == 4.0
     assert (
         livekit._OPEN_INSTEAD_AFTER_SECONDS < livekit._NO_CONVERSATION_TIMEOUT_SECONDS
     )
@@ -63,7 +63,7 @@ def test_the_person_still_opens_a_call_the_agent_never_starts():
                             (),
                             {
                                 "type": "message",
-                                "role": "assistant",
+                                "role": livekit._TARGET,
                                 "text_content": "hello there",
                                 "created_at": 1.0,
                                 "interrupted": False,
@@ -78,6 +78,48 @@ def test_the_person_still_opens_a_call_the_agent_never_starts():
     asyncio.run(
         livekit._open_if_nobody_speaks_first(spoken, Agent(), timeout_seconds=0.05)
     )
+    assert opened == []
+
+
+def test_target_speech_onset_cancels_the_opening_even_before_a_turn_commits():
+    """A long greeting that starts during the grace period must never be talked over."""
+    opened: list[str] = []
+    target_started = asyncio.Event()
+    session = SimpleNamespace(user_state="listening", history=SimpleNamespace(items=[]))
+    agent = SimpleNamespace(open_conversation=lambda: opened.append("opened"))
+
+    async def scenario() -> None:
+        task = asyncio.create_task(
+            livekit._open_if_nobody_speaks_first(
+                session,
+                agent,
+                timeout_seconds=0.2,
+                target_started=target_started,
+            )
+        )
+        await asyncio.sleep(0.01)
+        session.user_state = "speaking"
+        target_started.set()
+        await task
+
+    asyncio.run(scenario())
+    assert opened == []
+
+
+def test_target_already_speaking_wins_without_waiting_for_the_watchdog():
+    opened: list[str] = []
+    session = SimpleNamespace(user_state="speaking", history=SimpleNamespace(items=[]))
+    agent = SimpleNamespace(open_conversation=lambda: opened.append("opened"))
+
+    asyncio.run(
+        livekit._open_if_nobody_speaks_first(
+            session,
+            agent,
+            timeout_seconds=1.0,
+            target_started=asyncio.Event(),
+        )
+    )
+
     assert opened == []
 
 
@@ -324,6 +366,8 @@ def test_a_mailbox_speaks_once_and_never_answers_the_agent(monkeypatch):
 
     monkeypatch.setattr(livekit.Agent, "llm_node", _base_llm_node, raising=False)
     agent = livekit._TestRunnerAgent.__new__(livekit._TestRunnerAgent)
+    agent._end_requested = asyncio.Event()
+    agent._persona = SimpleNamespace(persona={})
 
     async def drain():
         return [chunk async for chunk in agent.llm_node(None, [], None)]
@@ -350,6 +394,8 @@ def test_a_mailbox_speaks_once_and_never_answers_the_agent(monkeypatch):
     # A person still gets the model on every turn.
     monkeypatch.setenv("HARNESS_ANSWERED_BY", "person")
     person = livekit._TestRunnerAgent.__new__(livekit._TestRunnerAgent)
+    person._end_requested = asyncio.Event()
+    person._persona = SimpleNamespace(persona={})
 
     async def drain_person():
         return [chunk async for chunk in person.llm_node(None, [], None)]
