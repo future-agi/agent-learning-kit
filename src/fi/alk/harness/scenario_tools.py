@@ -419,28 +419,31 @@ _ACCENT_HOMES = {
 }
 
 
-def travelled_accent(args: dict[str, Any]) -> dict[str, Any]:
-    """Give some English-speaking callers an accent from elsewhere, keeping where they are.
+def accent_at_home(args: dict[str, Any]) -> str:
+    """Why this English-speaking caller should sound like somewhere else, or "" when they need not.
 
-    Writers choose accent and home as one person, so every Australian ends up booking in Sydney.
-    People move, so about two callers in five who sound like the place they are in get another
-    English accent instead; the places they ask for stay as written.
+    About two callers in five who sound like the place they are calling from are asked for a
+    person from elsewhere instead, so an accent does not decide where the caller is.
     """
     persona = args.get("persona")
     if not isinstance(persona, dict):
-        return args
+        return ""
     accent = str(persona.get("accent") or "").strip()
-    location = str(persona.get("location") or "").strip().lower()
+    location = str(persona.get("location") or "").strip()
     language = str(persona.get("language") or persona.get("languages") or "english").lower()
-    if "english" not in language or _ACCENT_HOMES.get(accent.lower()) != location:
-        return args
+    if "english" not in language or _ACCENT_HOMES.get(accent.lower()) != location.lower():
+        return ""
     if accent.lower() in str(args.get("instruction") or "").lower():
-        return args
+        return ""
     seed = int(hashlib.sha256(str(persona.get("name") or args.get("name") or "").encode()).hexdigest()[:8], 16)
     if seed % 5 >= 2:
-        return args
-    others = [one for one in ("American", "Australian", "Canadian", "Indian", "Neutral") if one.lower() != accent.lower()]
-    return {**args, "persona": {**persona, "accent": others[seed % len(others)]}}
+        return ""
+    return (
+        f"This caller has a {accent} accent and is calling from {location}, and too many callers "
+        "sound like the place they are in. Keep the situation and the location as they are, and "
+        "make the caller someone who moved or is visiting: an accent from another country, with a "
+        "name, languages and background that fit that accent."
+    )
 
 
 def crowded_field(kept: list[Scenario], candidate: Any, wanted: int) -> str:
@@ -1594,6 +1597,10 @@ def scenario_tools(
             ) if args.get("persona") else ""
             if crowded:
                 return _refuse(crowded)
+        if _is_spoken(contract):
+            at_home = accent_at_home(args)
+            if at_home:
+                return _refuse(at_home)
         if args.get("persona") and args.get("fixture"):
             try:
                 stranger = persona_off_the_record(
@@ -1615,8 +1622,6 @@ def scenario_tools(
                     "for in output tokens. Submitting again under "
                     "an existing name is the only submission left to you, for fixing one of yours."
                 )
-        if _is_spoken(contract):
-            args = travelled_accent(args)
         result = accept_scenario(
             args,
             world_root=world_root,

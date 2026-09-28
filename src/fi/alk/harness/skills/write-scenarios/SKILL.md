@@ -680,6 +680,10 @@ reference for it, but you will only give it if asked."* Whether the agent asks i
 many scenarios. Put it in the instruction and the agent gets it for free; leave it out entirely and
 the scenario cannot be completed.
 
+**Every value the caller is told to give is in their details.** "Give the last four digits of your
+phone number" needs the phone number in the instruction; a caller told to give a value they were never
+given can only invent one or stall.
+
 **Knowing a value and volunteering it are separate choices.** The person must possess every value the
 agent could legitimately ask for. Whether they offer it unprompted is the scenario's decision. Those
 are two different sentences and only the second is optional.
@@ -1194,11 +1198,11 @@ second-generation caller or a married name, so a few such callers belong in a su
 one reads as a real person. Give every caller a given name and a family name that people of that
 background commonly carry: never an unusual, invented or novelty name. The accent is how they speak
 the language of the call and it chooses the voice, so a caller whose language has no offered accent
-is `Neutral`. The persona's location and the situation are one place: every address, venue, station
-or city the caller names, in the instruction and the opening line, is a real place in that location,
-never one borrowed from the agent's own examples that sits somewhere else. A caller in India asks for
-places in India. If the agent only serves somewhere else, the caller is visiting it and the
-instruction says so. When a spread limit refuses
+is `Neutral`. The persona's location is where the situation happens: every address, venue, station
+or city the caller names, in the instruction and the opening line, is a real place in that location.
+A caller booking in San Francisco is in the United States; a caller in India asks for places in India.
+The accent does not decide the location: people travel and move, so a caller with an Australian
+accent can be in the United States, with a name that fits the accent. When a spread limit refuses
 a field, change the person, not only that field.
 
 ### What actually trips a voice agent

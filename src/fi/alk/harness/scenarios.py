@@ -631,21 +631,12 @@ def callers_for(index: int, wanted: int, slice_name: str = "", spoken: bool = Tr
             "with a name and background that make it plausible. A caller whose language has no "
             "offered accent is Neutral."
         )
-        homes = offered("location")
-        if homes:
-            # Dealt apart from the accent, so an accent does not decide where the caller books.
-            placed = [
-                f"{accent} accent, calling from {homes[(index + 2 * step + 1) % len(homes)]}"
-                for step, accent in enumerate(spread)
-            ]
-            said += (
-                " Where each caller is calling from is separate from their accent, because people "
-                f"travel and move: start from these, {'; '.join(placed)}. Where they are calling "
-                "from decides every place in the scenario: each address, venue, station or city in "
-                "the instruction and the opening line is a real place there, never one from the "
-                "agent's own examples that sits somewhere else. If the agent only serves somewhere "
-                "else, the caller is visiting it and the instruction says so."
-            )
+        said += (
+            " Where each caller is calling from is where their situation happens, and every "
+            "address, venue, station or city they name is a real place there. The accent is "
+            "separate from it, because people travel and move: a caller with an accent from one "
+            "country is often calling from another."
+        )
     elif not spoken:
         said += (
             " Each person is one ordinary, believable person, never a celebrity's or a fictional "
