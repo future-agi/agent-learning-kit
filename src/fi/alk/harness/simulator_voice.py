@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import random
 import logging
 from collections.abc import Callable, Mapping
 from functools import lru_cache
@@ -854,6 +855,8 @@ def simulator_definition(
         if tts_provider.lower() == "cartesia"
         else "aura-asteria-en"
     )
+    # How soon this person takes the floor after the agent pauses: an impatient caller jumps in.
+    urgency = min(1.0, max(0.0, caller_temperament(persona)["rajas"] + random.uniform(-0.1, 0.1)))
     return simulate.SimulatorAgentDefinition(
         llm={
             "provider": llm_provider,
@@ -882,6 +885,8 @@ def simulator_definition(
             recorded=bool((get("HARNESS_VOICEMAIL_CLIP") or "").strip()),
         ),
         allow_interruptions=True,
+        min_endpointing_delay=max(0.4, round(0.9 - 0.7 * urgency, 2)),
+        max_endpointing_delay=round(3.0 - 1.5 * urgency, 2),
     )
 
 

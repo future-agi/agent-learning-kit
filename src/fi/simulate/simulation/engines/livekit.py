@@ -6,6 +6,7 @@ import json
 import math
 import logging
 import os
+import random
 import re
 import threading
 import time
@@ -625,6 +626,7 @@ def _simulator_turn_handling(
     allow_interruptions: bool | None = None,
     min_endpointing_delay: float | None = None,
     max_endpointing_delay: float | None = None,
+    interruption_min_duration: float | None = None,
 ) -> dict[str, object]:
     return {
         "turn_detection": "vad" if vad is not None else "stt",
@@ -639,7 +641,7 @@ def _simulator_turn_handling(
         "interruption": {
             "enabled": (True if allow_interruptions is None else allow_interruptions),
             "discard_audio_if_uninterruptible": True,
-            "min_duration": 0.6,
+            "min_duration": interruption_min_duration or 0.6,
         },
         "preemptive_generation": {"enabled": True},
     }
@@ -2916,6 +2918,13 @@ class LiveKitEngine(BaseEngine):
             tts_config=tts_config,
         )
         vad = await asyncio.to_thread(_load_silero_vad_sync)
+        # How long the agent must talk over this caller before it gives way: assertive callers hold on.
+        policy = persona.behavior_policy
+        interruption_min_duration = (
+            round(min(0.9, max(0.45, 0.45 + 0.5 * policy.interruption_propensity + random.uniform(-0.05, 0.05))), 2)
+            if policy is not None
+            else None
+        )
         self._last_simulator_setup = {
             "instructions": instructions,
             "llm_config": llm_config,
@@ -2924,6 +2933,7 @@ class LiveKitEngine(BaseEngine):
             "allow_interruptions": allow_interruptions,
             "min_endpointing_delay": min_endpointing_delay,
             "max_endpointing_delay": max_endpointing_delay,
+            "interruption_min_duration": interruption_min_duration,
             "use_tts_aligned_transcript": use_aligned_transcript,
         }
         agent = _TestRunnerAgent(
@@ -2939,6 +2949,7 @@ class LiveKitEngine(BaseEngine):
                 allow_interruptions=allow_interruptions,
                 min_endpointing_delay=min_endpointing_delay,
                 max_endpointing_delay=max_endpointing_delay,
+                interruption_min_duration=interruption_min_duration,
             ),
             use_tts_aligned_transcript=use_aligned_transcript,
         )
