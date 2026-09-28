@@ -1593,7 +1593,7 @@ def scenario_tools(
             ) if args.get("persona") else ""
             if crowded:
                 return _refuse(crowded)
-        if _is_spoken(contract):
+        if _is_spoken(contract) and target.get("people") != "alike":
             at_home = accent_at_home(args)
             if at_home:
                 return _refuse(at_home)

@@ -1150,10 +1150,18 @@ _REFUSAL_CUES = (
     "not supported", "don't have a way", "not possible", "i'm afraid",
 )
 _PROGRESS_CUES = ("confirmed", "booked", "all set", "updated", "you're set", "here's how", "is done")
+_NOT_YET = re.compile(r"\bnot\b|n't\b|\bnever\b|\byet\b|\bif\b|\bonce\b|\buntil\b|\bbefore\b|\bwhen\b")
 _MOOD_CAUSES = {
     "refused": "the agent keeps saying it can't do what you need",
     "repeated": "the agent just said the same thing again",
 }
+
+
+def _made_progress(lowered: str) -> bool:
+    return any(
+        any(cue in sentence for cue in _PROGRESS_CUES) and not _NOT_YET.search(sentence)
+        for sentence in re.split(r"[.!?]+", lowered)
+    )
 
 
 def _word_set(text: str) -> set[str]:
@@ -1189,7 +1197,7 @@ class _CallerMood:
                 rise, cause = rise + 0.25, "repeated"
             if rise:
                 self._pressure = min(1.0, self._pressure + rise * self._gain)
-            elif self._pressure >= 0.2 and any(cue in lowered for cue in _PROGRESS_CUES):
+            elif self._pressure >= 0.2 and _made_progress(lowered):
                 self._pressure, cause = max(0.0, self._pressure - self._recovery), "progress"
             self._heard.append(turn)
         if not cause:

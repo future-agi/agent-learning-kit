@@ -4063,6 +4063,12 @@ def test_caller_mood_rises_on_refusals_and_repeats_and_eases_on_progress() -> No
     assert mood.brief(_Ctx(turns)).messages()[-1].text_content == refusal
     turns += [("assistant", "Could we book them one by one?"), ("user", refusal)]
     assert "You are frustrated" in mood.brief(_Ctx(turns)).messages()[-1].text_content
+    for not_yet in (
+        "Your ride is not confirmed yet. Please continue to wait.",
+        "Once you share the pickup, it will be booked.",
+    ):
+        turns += [("assistant", "Well?"), ("user", not_yet)]
+        assert mood.brief(_Ctx(turns)).messages()[-1].text_content == not_yet
     turns += [("assistant", "Fine."), ("user", "Your ride is confirmed for tomorrow at nine.")]
     assert "edge goes out" in mood.brief(_Ctx(turns)).messages()[-1].text_content
     turns += [("assistant", "Thanks."), ("user", "Anything else?")]
