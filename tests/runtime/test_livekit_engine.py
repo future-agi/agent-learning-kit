@@ -1163,6 +1163,9 @@ def test_managed_case_dispatches_waits_and_cleans_up(monkeypatch) -> None:
             self.end_requested = asyncio.Event()
             self.end_requested.set()
 
+        def end_of_call(self):
+            pass
+
         async def start_session(self, _room, **_kwargs):
             return FakeSession()
 
@@ -2486,6 +2489,9 @@ class _FakeCustomerAgent:
         self.end_requested = asyncio.Event()
         self.end_requested.set()
 
+    def end_of_call(self):
+        pass
+
     async def start_session(self, _room, **_kwargs):
         return _FakeSipSession()
 
@@ -3779,6 +3785,9 @@ def _order_probe_engine(monkeypatch, calls, *, dispatch_error=None):
         def __init__(self):
             self.end_requested = asyncio.Event()
             self.end_requested.set()
+
+        def end_of_call(self):
+            pass
 
         async def start_session(self, _room, **_kwargs):
             calls.append("start_session")

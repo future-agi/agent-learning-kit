@@ -25,6 +25,7 @@ try:
         AudioConfig,
         BackgroundAudioPlayer,
         RunContext,
+        StopResponse,
         function_tool,
         metrics,
     )
@@ -107,11 +108,18 @@ from fi.simulate.simulation.voice_prompt import (
 
 logger = logging.getLogger(__name__)
 _SAFE_ROOM = re.compile(r"[^A-Za-z0-9_.-]+")
-# On conversation end, wait up to this long for the party still finishing its
-# own turn to commit it (a LiveKit turn lands in history only after its TTS
-# finishes playing), then delete the room so neither side keeps talking into a
-# call the other has already left.
+# On conversation end, wait up to this long for the simulator to finish its own
+# closing turn (a LiveKit turn lands in history only after its TTS finishes).
 _FINAL_TURN_COMMIT_WAIT_SECONDS = 30.0
+# After the simulator's last turn the target usually answers it ("thanks, bye"), and a call cut
+# by the deadline often catches the target mid-sentence. The recorder hears those words either
+# way, so the transcript must too: listen on for the target, then delete the room.
+# Measured replies to a goodbye started 5.4-6.8 s after it ended.
+_TARGET_REPLY_GRACE_SECONDS = 8.0
+# Quiet time after the target's speech before its turn is committed: STT endpointing waits up to
+# 3 s for more speech, and a transcription stream closes shortly after playback ends.
+_TARGET_TURN_SETTLE_SECONDS = 3.5
+_TRAILING_TARGET_WAIT_SECONDS = 30.0
 # The hosted platform inflates ``cleanup_timeout`` to carry the whole run
 # budget (observed 1470s); as a per-step cleanup bound it must stay capped.
 _MAX_CLEANUP_TIMEOUT_SECONDS = 60.0
@@ -719,6 +727,19 @@ class _TestRunnerAgent(Agent):
     async def wait_for_end_speech(self) -> None:
         if self._end_speech_handle is not None:
             await self._end_speech_handle
+
+    _call_over: bool = False
+
+    def end_of_call(self) -> None:
+        """Stop replying: whatever the target still says is recorded but no longer answered."""
+        self._call_over = True
+
+    async def on_user_turn_completed(self, turn_ctx, new_message) -> None:
+        if self._call_over:
+            if self._session is not None:
+                self._session.history.insert(new_message)
+            raise StopResponse()
+        await super().on_user_turn_completed(turn_ctx, new_message)
 
     @property
     def started_session(self) -> AgentSession | None:
@@ -2411,13 +2432,10 @@ class LiveKitEngine(BaseEngine):
                 run_id,
                 test_case_id,
             )
-            # End the call cleanly. First let the party that just spoke commit its
-            # own final turn — a LiveKit turn only lands in history once its TTS
-            # finishes — bounded so we do not wait on the other side. We do NOT
-            # wait for the target's trailing speech: once the conversation has
-            # ended, the target talking on is monologuing into a call the other
-            # side left.
+            # End the call cleanly. First let the simulator commit its own final turn — a
+            # LiveKit turn only lands in history once its TTS finishes.
             conversation_ended.set()
+            customer_agent.end_of_call()
             if stop_reason == "simulator_end_call":
                 wait_for_end_speech = getattr(
                     customer_agent,
@@ -2444,10 +2462,25 @@ class LiveKitEngine(BaseEngine):
                 except Exception:  # noqa: BLE001
                     break
                 await asyncio.sleep(0.2)
-            # Delete the room so the target agent can't keep monologuing into a
-            # dead call (its audio would be recorded but is untranscribable once
-            # the simulator has left) — the recording then ends when the call
-            # actually ends, matching the transcript.
+            session_messages = _session_messages(session)
+            waited = await _await_target_last_words(
+                speaking=lambda: bool(target_transcription_tasks)
+                or getattr(session, "user_state", None) == "speaking",
+                present=lambda: any(
+                    str(participant.identity) == target.identity
+                    for participant in room.remote_participants.values()
+                ),
+                simulator_spoke_last=bool(session_messages)
+                and session_messages[-1]["role"] == "assistant",
+            )
+            logger.info(
+                "target last words waited=%.1fs run=%s case=%s",
+                waited,
+                run_id,
+                test_case_id,
+            )
+            # Then delete the room so the target can't keep monologuing into a call the other
+            # side has left; the recording ends when the call does, matching the transcript.
             if api_client is not None and managed_room_owned:
                 try:
                     await asyncio.wait_for(
@@ -3211,6 +3244,35 @@ def _observed_agent_reply_seconds(messages: list[dict[str, Any]]) -> float:
                     slowest = max(slowest, gap)
         previous = message
     return slowest
+
+
+async def _await_target_last_words(
+    *,
+    speaking: Callable[[], bool],
+    present: Callable[[], bool],
+    simulator_spoke_last: bool,
+) -> float:
+    """Listen on after the conversation ends until the target has finished its last words.
+
+    Returns once the target has been quiet for the settle time after speaking, has left, or the
+    hard cap is reached. When the simulator spoke last, a target that has not started yet gets a
+    grace period to answer; otherwise nothing is pending and the wait is only the settle check.
+    """
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    deadline = started + _TRAILING_TARGET_WAIT_SECONDS
+    grace_until = started + (_TARGET_REPLY_GRACE_SECONDS if simulator_spoke_last else 0.0)
+    heard = False
+    quiet_since = started
+    while loop.time() < deadline and present():
+        now = loop.time()
+        if speaking():
+            heard = True
+            quiet_since = now
+        elif now - quiet_since >= _TARGET_TURN_SETTLE_SECONDS and (heard or now >= grace_until):
+            break
+        await asyncio.sleep(0.2)
+    return loop.time() - started
 
 
 async def _wait_for_conversation_end(
