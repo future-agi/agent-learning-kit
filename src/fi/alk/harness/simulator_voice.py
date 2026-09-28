@@ -225,6 +225,7 @@ _PLACE_WORDS = {
 }
 _WHERE_YOU_ARE = (
     "\nWHERE YOU ARE: you are calling from {place}, and the other side can hear it behind you. "
+    "This is where you are right now, even if your situation says you were somewhere else. "
     "If the agent mentions noise or cannot hear you, answer as a person there would: you know "
     "where you are, so never claim to be somewhere quiet. Repeat yourself, speak up, or move if "
     "that fits the moment.\n"

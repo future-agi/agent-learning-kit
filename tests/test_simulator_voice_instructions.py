@@ -44,5 +44,6 @@ def test_a_caller_heard_through_a_bed_knows_where_it_is():
 
     assert "an office" in simulator_instructions(place="office")
     assert "never claim to be somewhere quiet" in simulator_instructions("outbound", "unaware", place="street")
+    assert "even if your situation says you were somewhere else" in simulator_instructions(place="home")
     assert "WHERE YOU ARE" not in simulator_instructions()
     assert "WHERE YOU ARE" not in simulator_instructions(place="nowhere")
