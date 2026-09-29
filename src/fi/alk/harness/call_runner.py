@@ -444,8 +444,8 @@ def _read_scenario_document(bundle_dir: Path, scenario_key: str) -> dict[str, An
     )
 
 
-# What a person may change on an authored scenario; everything else is as sealed.
-_EDITABLE_FIELDS = ("tests", "max_turns", "background_noise", "keywords")
+# Edits a call actually plays; everything else is as sealed.
+_EDITABLE_FIELDS = ("background_noise",)
 _EDITABLE_PERSONA_FIELDS = (
     "personality",
     "communication_style",
