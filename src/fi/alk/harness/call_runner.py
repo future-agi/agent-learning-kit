@@ -1160,9 +1160,12 @@ class CallRunnerImpl:
         if noise:
             call_environ["HARNESS_BACKGROUND_NOISE"] = noise
             call_environ["HARNESS_BACKGROUND_PLACE"] = place_of(noise)
-            base = self._environ.get(BACKGROUND_NOISE_VOLUME_ALIAS) or "9.0"
+            base = self._environ.get(BACKGROUND_NOISE_VOLUME_ALIAS) or "6.0"
+            # A scenario about the noise itself is heard loud enough to test it.
+            about_noise = any("nois" in str(level) for level in (doc.get("coverage") or {}).values())
+            spread = random.uniform(1.3, 1.8) if about_noise else random.uniform(0.7, 1.4)
             try:
-                call_environ[BACKGROUND_NOISE_VOLUME_ALIAS] = f"{float(base) * random.uniform(0.7, 1.4):.2f}"
+                call_environ[BACKGROUND_NOISE_VOLUME_ALIAS] = f"{float(base) * spread:.2f}"
             except ValueError:
                 pass
         else:

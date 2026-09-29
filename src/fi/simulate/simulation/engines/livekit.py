@@ -814,8 +814,8 @@ class _TestRunnerAgent(Agent):
             return
 
         try:
-            # Beds are levelled to the office clip first; 9.0 sits them clearly under the caller's voice.
-            volume = float(os.environ.get("HARNESS_BACKGROUND_NOISE_VOLUME", "9.0"))
+            # Beds are levelled to the office clip first; 6.0 sits them clearly under the caller's voice.
+            volume = float(os.environ.get("HARNESS_BACKGROUND_NOISE_VOLUME", "6.0"))
             clip_source: Any = None
             if source.startswith(("http://", "https://")):
                 clip_source = await asyncio.to_thread(_downloaded_audio, source)
