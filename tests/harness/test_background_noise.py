@@ -172,3 +172,14 @@ def test_where_the_caller_is_going_is_not_where_they_are():
     assert _place_in("you are at a hotel and need a ride to heathrow airport terminal 2.", places) == ""
     assert _place_in("you are at the airport and need a ride to your office.", places) == "airport"
     assert _place_in("you call from a train station; your destination is the airport.", places) == "transit"
+
+
+def test_calls_from_one_place_go_through_its_clips_before_repeating_one(catalogue):
+    from fi.alk.harness.background_noise import _PLAYED, scenario_source
+
+    _PLAYED.clear()
+    heard = [scenario_source("transit", None, seed=f"call-{n}") for n in range(4)]
+
+    assert set(heard[:2]) == {"https://clips.example/airport.wav", "https://clips.example/station.wav"}
+    assert set(heard[2:]) == set(heard[:2])
+

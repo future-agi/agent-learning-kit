@@ -123,7 +123,11 @@ def places() -> dict[str, int]:
     return counts
 
 
-def source_for(environment: str = "", seed: str = "") -> str:
+# Beds already played this run, per pool, so a place goes through all its clips before repeating one.
+_PLAYED: dict[tuple[str, ...], set[str]] = {}
+
+
+def source_for(environment: str = "", seed: str = "", fresh: bool = False) -> str:
     """A background-noise source for a scenario.
 
     Returns a ``url``/``path`` from the configured catalog or the name of a LiveKit builtin clip,
@@ -140,10 +144,19 @@ def source_for(environment: str = "", seed: str = "") -> str:
     if not pool and env:
         nearest = _place_in(env.replace("_", " ").replace("-", " "), places())
         if nearest:
-            return source_for(nearest, seed)
+            return source_for(nearest, seed, fresh)
     if not pool:
         pool = [location for _, location in clips] + sorted(set(_BUILTIN_BY_ENVIRONMENT.values()))
-    return pool[_pick(seed or env or "x", len(pool))]
+    if fresh:
+        played = _PLAYED.setdefault(tuple(pool), set())
+        unheard = [one for one in pool if one not in played] or pool
+        if len(unheard) == len(pool):
+            played.clear()
+        pool = unheard
+    choice = pool[_pick(seed or env or "x", len(pool))]
+    if fresh:
+        played.add(choice)
+    return choice
 
 
 def place_of(source: str) -> str:
@@ -227,4 +240,4 @@ def scenario_source(
     environment = background_noise if isinstance(background_noise, str) else ""
     if not environment and isinstance(fixture, dict):
         environment = str(fixture.get("environment") or fixture.get("location") or "")
-    return source_for(environment, seed=seed)
+    return source_for(environment, seed=seed, fresh=True)
