@@ -110,11 +110,17 @@ from fi.simulate.simulation.voice_prompt import (
 
 logger = logging.getLogger(__name__)
 _SAFE_ROOM = re.compile(r"[^A-Za-z0-9_.-]+")
-# On conversation end, wait up to this long for the party still finishing its
-# own turn to commit it (a LiveKit turn lands in history only after its TTS
-# finishes playing), then delete the room so neither side keeps talking into a
-# call the other has already left.
+# On conversation end, wait up to this long for the simulator to finish its own
+# closing turn (a LiveKit turn lands in history only after its TTS finishes).
 _FINAL_TURN_COMMIT_WAIT_SECONDS = 30.0
+# After the simulator's last turn the target may answer it ("thanks, bye"), and a call cut by the
+# deadline may still have a tool result pending. The recorder hears those words either way, so the
+# transcript must too: listen on for the target, then delete the room.
+_TARGET_REPLY_GRACE_SECONDS = 8.0
+# Quiet time after the target's speech before its turn is committed: STT endpointing waits up to
+# 3 s for more speech, and a transcription stream closes shortly after playback ends.
+_TARGET_TURN_SETTLE_SECONDS = 3.5
+_TRAILING_TARGET_WAIT_SECONDS = 30.0
 # The hosted platform inflates ``cleanup_timeout`` to carry the whole run
 # budget (observed 1470s); as a per-step cleanup bound it must stay capped.
 _MAX_CLEANUP_TIMEOUT_SECONDS = 60.0
@@ -663,6 +669,8 @@ def _simulator_turn_handling(
 class _TestRunnerAgent(Agent):
     _prompt_opening: PromptOpeningGate | None = None
 
+    _call_over: bool = False
+
     def __init__(
         self,
         persona: Persona,
@@ -683,10 +691,16 @@ class _TestRunnerAgent(Agent):
         self._end_requested = asyncio.Event()
         self._end_speech_handle: Any | None = None
         self._hold_check: asyncio.Task | None = None
+        self._answer_again: asyncio.Task | None = None
+        self._call_over = False
         self._usage_collector = metrics.ModelUsageCollector()
         self._prompt_opening: PromptOpeningGate | None = None
 
     async def on_user_turn_completed(self, turn_ctx, new_message) -> None:
+        if self._call_over:
+            if self._session is not None:
+                self._session.history.insert(new_message)
+            raise StopResponse()
         gate = self._prompt_opening
         if gate is not None and not gate.accepts(new_message.text_content):
             logger.info("prompt opening gate: waiting after non-interactive disclosure")
@@ -741,6 +755,15 @@ class _TestRunnerAgent(Agent):
     async def wait_for_end_speech(self) -> None:
         if self._end_speech_handle is not None:
             await self._end_speech_handle
+
+
+    def end_of_call(self) -> None:
+        """Stop replying: whatever the target still says is recorded but no longer answered."""
+        self._call_over = True
+        for task in (getattr(self, "_hold_check", None), getattr(self, "_answer_again", None)):
+            if task is not None and not task.done():
+                task.cancel()
+
 
     @property
     def started_session(self) -> AgentSession | None:
@@ -1057,6 +1080,8 @@ class _TestRunnerAgent(Agent):
         One turn is allowed, not none, because a mailbox without a recording greets through this path.
         Where a recording has already greeted, no turn is allowed at all.
         """
+        if self._call_over:
+            return
         gate = self._prompt_opening
         if gate is not None and gate.pending:
             latest = next(
@@ -1101,7 +1126,7 @@ class _TestRunnerAgent(Agent):
         """A reply with no words in it is dropped; the caller answers once instead of going quiet."""
         logger.warning("simulator reply not spoken: %r", text[:160])
         session = self._session
-        if session is None or self._end_requested.is_set():
+        if session is None or self._call_over or self._end_requested.is_set():
             return
         heard = len(_session_messages(session))
         if self._answered_again_at == heard:
@@ -1114,14 +1139,14 @@ class _TestRunnerAgent(Agent):
     async def _answer_aloud(self, heard: int) -> None:
         await asyncio.sleep(0.5)
         session = self._session
-        if session is None or self._end_requested.is_set():
+        if session is None or self._call_over or self._end_requested.is_set():
             return
         if len(_session_messages(session)) != heard or _either_side_busy(session):
             return
         session.generate_reply(instructions=_ANSWER_ALOUD)
 
     def _on_hold(self) -> None:
-        if self._session is None:
+        if self._session is None or self._call_over:
             return
         messages = _session_messages(self._session)
         # Asked something, the caller is not on hold: silence here is a question left unanswered.
@@ -1137,7 +1162,7 @@ class _TestRunnerAgent(Agent):
         """A person left waiting in silence speaks up once, before the silence ends the call."""
         await asyncio.sleep(_HOLD_PATIENCE_SECONDS)
         session = self._session
-        if session is None or self._end_requested.is_set():
+        if session is None or self._call_over or self._end_requested.is_set():
             return
         if len(_session_messages(session)) != heard or _either_side_busy(session):
             return
@@ -2559,13 +2584,10 @@ class LiveKitEngine(BaseEngine):
                 run_id,
                 test_case_id,
             )
-            # End the call cleanly. First let the party that just spoke commit its
-            # own final turn — a LiveKit turn only lands in history once its TTS
-            # finishes — bounded so we do not wait on the other side. We do NOT
-            # wait for the target's trailing speech: once the conversation has
-            # ended, the target talking on is monologuing into a call the other
-            # side left.
+            # End the call cleanly. First let the simulator commit its own final turn — a
+            # LiveKit turn only lands in history once its TTS finishes.
             conversation_ended.set()
+            customer_agent.end_of_call()
             if stop_reason == "simulator_end_call":
                 wait_for_end_speech = getattr(
                     customer_agent,
@@ -2592,10 +2614,27 @@ class LiveKitEngine(BaseEngine):
                 except Exception:  # noqa: BLE001
                     break
                 await asyncio.sleep(0.2)
-            # Delete the room so the target agent can't keep monologuing into a
-            # dead call (its audio would be recorded but is untranscribable once
-            # the simulator has left) — the recording then ends when the call
-            # actually ends, matching the transcript.
+            session_messages = _session_messages(session)
+            waited = await _await_target_last_words(
+                speaking=lambda: bool(target_transcription_tasks)
+                or getattr(session, "user_state", None) == "speaking",
+                present=lambda: any(
+                    str(participant.identity) == target.identity
+                    for participant in room.remote_participants.values()
+                ),
+                simulator_spoke_last=bool(session_messages)
+                and session_messages[-1]["role"] == "assistant",
+                pending_target_reply=stop_reason
+                in {"timeout", "conversation_stalled", "conversation_silence_timeout"},
+            )
+            logger.info(
+                "target last words waited=%.1fs run=%s case=%s",
+                waited,
+                run_id,
+                test_case_id,
+            )
+            # Then delete the room so the target can't keep monologuing into a call the other
+            # side has left; the recording ends when the call does, matching the transcript.
             if api_client is not None and managed_room_owned:
                 try:
                     await asyncio.wait_for(
@@ -3408,6 +3447,38 @@ def _observed_agent_reply_seconds(messages: list[dict[str, Any]]) -> float:
                     slowest = max(slowest, gap)
         previous = message
     return slowest
+
+
+async def _await_target_last_words(
+    *,
+    speaking: Callable[[], bool],
+    present: Callable[[], bool],
+    simulator_spoke_last: bool,
+    pending_target_reply: bool = False,
+) -> float:
+    """Listen on after the conversation ends until the target has finished its last words.
+
+    Returns once the target has been quiet for the settle time after speaking, has left, or the
+    hard cap is reached. A target that may still owe a reply gets a grace period to start speaking;
+    otherwise nothing is pending and the wait is only the settle check.
+    """
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    deadline = started + _TRAILING_TARGET_WAIT_SECONDS
+    grace_until = started + (
+        _TARGET_REPLY_GRACE_SECONDS if simulator_spoke_last or pending_target_reply else 0.0
+    )
+    heard = False
+    quiet_since = started
+    while loop.time() < deadline and present():
+        now = loop.time()
+        if speaking():
+            heard = True
+            quiet_since = now
+        elif now - quiet_since >= _TARGET_TURN_SETTLE_SECONDS and (heard or now >= grace_until):
+            break
+        await asyncio.sleep(0.2)
+    return loop.time() - started
 
 
 async def _wait_for_conversation_end(
