@@ -188,8 +188,9 @@ class Conversation:
                 raise RuntimeError("cannot write scenarios before there is a world")
             written = len(scenario_stage.load(self.out))
             wanted = written or self.wanted
+            # Chat is where "add five" comes from, so only here may aim_for raise the cap.
             self.stage, _ = scenario_stage.open_stage(
-                contract, out=self.out, wanted=wanted, ask=self.ask
+                contract, out=self.out, wanted=wanted, ask=self.ask, can_grow=True
             )
             opening = scenario_stage.opening(contract, wanted, written)
         self._prepare_stage(stage_name)

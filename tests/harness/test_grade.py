@@ -272,6 +272,49 @@ def test_the_cap_holds_for_the_session_that_saves_too(tmp_path):
     assert asked_for == [20, 6]
 
 
+def test_only_chat_can_grow_a_finished_suite(tmp_path):
+    """Chat reopens a finished suite with its size as the target, and "add N" goes through aim_for.
+
+    Authoring must still stop at the size it was asked for, whatever aim_for says, and chat stops
+    at the size it raised the target to.
+    """
+    import asyncio
+
+    import pytest
+
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.scenario_tools import scenario_tools
+    from fi.alk.harness.world.stores import StoreError
+
+    contract = AgentContract(agent="cart", real_use_cases=["add an item", "remove an item"])
+    (tmp_path / "manifest.json").write_text("{}")
+    for can_grow in (False, True):
+        server, kept = scenario_tools(
+            contract, tmp_path, tmp_path, wanted=2, start_from=[], can_grow=can_grow
+        )
+        kept[:] = [
+            Scenario(name=f"s{i}", instruction="i", sub_goals=["x"]) for i in range(2)
+        ]
+        tools = {spec.name: spec for spec in server.tools}
+        asyncio.run(tools["aim_for"].handler({"count": 3}))
+        one_more = {"name": "one_more", "instruction": "three"}
+        if not can_grow:
+            said = asyncio.run(tools["submit_scenario"].handler(one_more))
+            assert said.get("is_error")
+            assert "2 of 2 written" in said["content"][0]["text"]
+            continue
+        # Past the cap and into validation, which here has no world to validate against.
+        with pytest.raises(StoreError):
+            asyncio.run(tools["submit_scenario"].handler(one_more))
+        # The raised cap is still a cap.
+        kept.append(Scenario(name="one_more", instruction="three", sub_goals=["x"]))
+        said = asyncio.run(
+            tools["submit_scenario"].handler({"name": "past_it", "instruction": "four"})
+        )
+        assert said.get("is_error")
+        assert "3 of 3 written" in said["content"][0]["text"]
+
+
 def test_a_placeholder_code_is_refused_however_it_is_arranged():
     """The hand-kept list caught 111111 and let 000111 through, which reached a 200-scenario suite twice."""
     from fi.alk.harness.scenario import _predictable

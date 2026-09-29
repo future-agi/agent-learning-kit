@@ -1115,6 +1115,7 @@ def scenario_tools(
     can_save: bool = True,
     start_from: list[Scenario] | None = None,
     rename_on_collision: bool | None = None,
+    can_grow: bool = False,
 ) -> tuple[Any, list[Scenario]]:
     """A server for writing scenarios against one built environment.
 
@@ -1125,6 +1126,10 @@ def scenario_tools(
 
     ``start_from`` seeds that list. A parallel writer starts empty rather than from disk, so it
     is never counted as already having what a sibling wrote.
+
+    ``can_grow`` lets ``aim_for`` move the cap. Only chat sets it: "add five" reopens a finished
+    suite, so the size it was opened with is exactly what the person asked to go past. Authoring
+    keeps the cap it was given, because a model raising its own target is how 200 became 559.
     """
     rename_on_collision = (
         (not can_save) if rename_on_collision is None else rename_on_collision
@@ -1135,6 +1140,10 @@ def scenario_tools(
     catalogue = load_catalogue(destination)
     simulator_prompt = load_simulator_prompt(destination)
     target = {"count": wanted}
+
+    def cap() -> int:
+        return int(target["count"] or 0) if can_grow else wanted
+
     exploration = {"since_submit": 0}
     # Identical-refusal counts per scenario, so an unsatisfiable gate ends the stage.
     refused: dict[tuple[str, int], int] = {}
@@ -1229,9 +1238,9 @@ def scenario_tools(
     )
     async def try_calls(args: dict[str, Any]) -> dict[str, Any]:
         # A suite that already holds what was asked for has nothing left to explore.
-        if wanted and len(kept) >= wanted:
+        if cap() and len(kept) >= cap():
             return _err(
-                f"The suite is complete: {len(kept)} of {wanted}. There is nothing left to work "
+                f"The suite is complete: {len(kept)} of {cap()}. There is nothing left to work "
                 "out. Call save_scenarios and end the stage; probing now spends the run's "
                 "remaining time on a suite that is already written."
             )
@@ -1586,7 +1595,7 @@ def scenario_tools(
         if strayed:
             return _refuse(strayed)
         crowded_level = _over_its_share(
-            args.get("coverage"), target.get("axes"), kept, wanted
+            args.get("coverage"), target.get("axes"), kept, cap()
         )
         if crowded_level:
             return _refuse(crowded_level)
@@ -1602,9 +1611,9 @@ def scenario_tools(
         )
         if twin:
             return _refuse(twin)
-        if wanted and target.get("people") != "alike":
+        if cap() and target.get("people") != "alike":
             crowded = crowded_field(
-                kept, Scenario.model_validate(args).persona, wanted
+                kept, Scenario.model_validate(args).persona, cap()
             ) if args.get("persona") else ""
             if crowded:
                 return _refuse(crowded)
@@ -1621,12 +1630,12 @@ def scenario_tools(
                 stranger = []
             if stranger:
                 return _refuse(stranger[0])
-        if wanted:
+        if cap():
             named = str(args.get("name") or "").strip()
             already = any(one.name == named for one in kept)
-            if not already and len(kept) >= wanted:
+            if not already and len(kept) >= cap():
                 return _err(
-                    f"This is complete: {len(kept)} of {wanted} written. Do not write another. "
+                    f"This is complete: {len(kept)} of {cap()} written. Do not write another. "
                     "Say in two or three lines what you covered and what you could not, and stop. Not one "
                     "entry per scenario: the folders and the coverage report already hold "
                     "every caller, keyword and outcome, and restating twenty of them is paid "
