@@ -25,6 +25,7 @@ in ``submission.json`` and returns cleanly — no HTTP is attempted.
 from __future__ import annotations
 
 import hashlib
+import math
 import json
 import logging
 import os
@@ -1082,6 +1083,7 @@ def _recording_kind(result, path: Path) -> str:
 
 
 _TARGET_PROVIDERS = ("vapi", "retell", "livekit")
+MAX_TARGET_LATENCY_TURNS = 1000
 
 
 class TargetUsage:
@@ -1265,13 +1267,17 @@ def _retell_latency(latency: Any) -> dict[str, Any] | None:
 def _latency(
     stages: dict[str, float | None], turns: list[float]
 ) -> dict[str, Any] | None:
-    """One provider-neutral shape, in whole milliseconds: stage averages plus
-    ``turns``, the end-to-end wait on each turn."""
+    """One provider-neutral shape in whole milliseconds, bounded to the receipt contract."""
     reported: dict[str, Any] = {
-        stage: round(value) for stage, value in stages.items() if value is not None
+        stage: round(value)
+        for stage, value in stages.items()
+        if value is not None and math.isfinite(value) and value >= 0
     }
-    if turns:
-        reported["turns"] = [round(value) for value in turns]
+    valid_turns = [
+        round(value) for value in turns if math.isfinite(value) and value >= 0
+    ][:MAX_TARGET_LATENCY_TURNS]
+    if valid_turns:
+        reported["turns"] = valid_turns
     return reported or None
 
 
@@ -1294,7 +1300,12 @@ def _livekit_usage(metadata: dict[str, Any]) -> TargetUsage | None:
     )
     call_id = str(metadata.get("call_id") or "") or None
     ended_reason = str(metadata.get("end_reason") or "") or None
-    if usage is None and cost_cents is None and call_id is None and ended_reason is None:
+    if (
+        usage is None
+        and cost_cents is None
+        and call_id is None
+        and ended_reason is None
+    ):
         return None
     return TargetUsage(
         "livekit",

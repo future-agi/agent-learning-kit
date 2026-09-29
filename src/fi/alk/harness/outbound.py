@@ -68,6 +68,7 @@ from pydantic import (
     field_serializer,
     model_validator,
 )
+from fi.simulate.results.futureagi import MAX_TARGET_LATENCY_TURNS
 
 from .job import FailureDomain, HarnessStage
 
@@ -2500,7 +2501,7 @@ class TargetLatency(BaseModel):
     voice: int | None = Field(default=None, ge=0)
     transcriber: int | None = Field(default=None, ge=0)
     endpointing: int | None = Field(default=None, ge=0)
-    turns: list[int] = Field(default_factory=list)
+    turns: list[int] = Field(default_factory=list, max_length=MAX_TARGET_LATENCY_TURNS)
 
 
 class TargetMetrics(BaseModel):
