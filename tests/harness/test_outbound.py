@@ -1998,6 +1998,25 @@ def test_target_latency_normalization_matches_outbound_bounds() -> None:
         TargetLatency(turns=[0] * (MAX_TARGET_LATENCY_TURNS + 1))
 
 
+def test_retell_latency_filters_invalid_samples_before_averaging() -> None:
+    from fi.simulate.results.futureagi import _retell_latency
+
+    assert _retell_latency(
+        {
+            "e2e": {"values": [-100, float("nan"), float("inf"), 1000]},
+            "llm": {"values": [-1, 200]},
+            "tts": {"values": ["invalid", 0]},
+            "asr": {"values": [100]},
+        }
+    ) == {
+        "turn": 1000,
+        "model": 200,
+        "voice": 0,
+        "transcriber": 100,
+        "turns": [1000],
+    }
+
+
 def test_build_skipped_receipt_has_the_exact_contract_shape() -> None:
     receipt = build_skipped_receipt(
         job_id="j1",

@@ -1185,6 +1185,10 @@ def _vapi_usage(metadata: dict[str, Any]) -> TargetUsage | None:
     )
 
 
+def _valid_latency_sample(value: float | None) -> bool:
+    return value is not None and math.isfinite(value) and value >= 0
+
+
 def _vapi_latency(performance: Any) -> dict[str, Any] | None:
     if not isinstance(performance, dict):
         return None
@@ -1248,7 +1252,10 @@ def _retell_latency(latency: Any) -> dict[str, Any] | None:
         block = latency.get(stage)
         values = block.get("values") if isinstance(block, dict) else None
         return [
-            value for raw in values or [] if (value := _coerce_float(raw)) is not None
+            value
+            for raw in values or []
+            if (value := _coerce_float(raw)) is not None
+            and _valid_latency_sample(value)
         ]
 
     def average(stage: str) -> float | None:
@@ -1271,11 +1278,11 @@ def _latency(
     reported: dict[str, Any] = {
         stage: round(value)
         for stage, value in stages.items()
-        if value is not None and math.isfinite(value) and value >= 0
+        if value is not None and _valid_latency_sample(value)
     }
-    valid_turns = [
-        round(value) for value in turns if math.isfinite(value) and value >= 0
-    ][:MAX_TARGET_LATENCY_TURNS]
+    valid_turns = [round(value) for value in turns if _valid_latency_sample(value)][
+        :MAX_TARGET_LATENCY_TURNS
+    ]
     if valid_turns:
         reported["turns"] = valid_turns
     return reported or None
