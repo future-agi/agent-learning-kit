@@ -21,6 +21,18 @@ def test_mixed_disclosure_and_greeting_is_interactive():
     assert not gate.pending
 
 
+def test_polite_recording_disclosure_is_not_a_greeting():
+    gate = PromptOpeningGate("Greeting: Ask what they need.")
+    assert not gate.accepts(
+        "Please note that this call is being recorded for quality and training purposes."
+    )
+    assert gate.pending
+    assert gate.accepts(
+        "Please note that this call is being recorded. Please share your PIN."
+    )
+    assert not gate.pending
+
+
 def test_prompt_can_prescribe_recording_disclosure():
     gate = PromptOpeningGate('Greeting: Say "This call is being recorded."')
     assert gate.accepts("This call is being recorded.")
@@ -62,6 +74,22 @@ def test_disclosure_then_silence_rearms_fallback():
         assert not gate.accepts("This call is being recorded.")
         opened = []
         await gate.wait_then_open(lambda: opened.append(True))
+        assert opened == [True]
+
+    asyncio.run(run())
+
+
+def test_speech_without_final_transcription_has_bounded_fallback():
+    async def run():
+        gate = PromptOpeningGate("Greeting: Ask how to help.", timeout=0.02)
+        opened = []
+        task = asyncio.create_task(gate.wait_then_open(lambda: opened.append(True)))
+        await asyncio.sleep(0.005)
+        gate.speech_started()
+        await asyncio.sleep(0.025)
+        assert not opened
+        gate.speech_ended()
+        await asyncio.wait_for(task, 0.1)
         assert opened == [True]
 
     asyncio.run(run())

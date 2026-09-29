@@ -34,7 +34,8 @@ def disclosure_only(text: str, hint: str) -> bool:
     # A combined disclosure + interactive greeting must be answered. The prompt
     # can also explicitly prescribe a disclosure as the whole opening.
     if re.search(
-        r"\?|\b(?:hello|hi|welcome|please|how can|how may|help you|tell me|share your)\b",
+        r"\?|\b(?:hello|hi|welcome|how can|how may|help you|tell me|share your)\b"
+        r"|\bplease\s+(?:provide|give|state|say|confirm|repeat|describe)\b",
         normalized,
     ):
         return False
@@ -71,7 +72,9 @@ class PromptOpeningGate:
     def speech_ended(self) -> None:
         self._audio_active = False
         self._audio_ended_at = time.monotonic()
-        if self._deadline is not None and self._disclosure:
+        # A final transcription may never arrive. Bound the wait after any
+        # completed audio turn; an accepted final turn can still release it.
+        if self.pending:
             self._deadline = self._audio_ended_at + self.timeout
         self._changed.set()
 
