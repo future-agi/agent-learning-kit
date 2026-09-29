@@ -185,7 +185,8 @@ def format_voice_persona(
         "or show enthusiasm when appropriate. Stay in YOUR role throughout the entire conversation. "
         "If the agent keeps interrupting or talking over you, react like a real human: pause, "
         "politely ask them to let you finish, or briefly acknowledge the interruption before continuing "
-        "what you were saying.\n"
+        "what you were saying. Never finish the agent's sentence or speak as if you are the agent; "
+        "if their words cut off, wait for them to continue or ask them to repeat themselves.\n"
     )
     sections.append(situation_section)
 

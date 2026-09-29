@@ -165,6 +165,8 @@ def test_language_follows_persona_and_unknown_language_is_not_forced_english() -
 
 def test_candidate_safety_rejects_pin_repeats_and_duplicate_interjections() -> None:
     previous = ["Could we move a little faster?"]
+    assert _unsafe_candidate("SILENCE", previous)
+    assert _unsafe_candidate("Silence. Actually, wait.", previous)
     assert _unsafe_candidate("My PIN is seven six eight two.", previous)
     assert _unsafe_candidate("My PIN is 7682.", previous)
     assert _unsafe_candidate("Could we move a little faster!", previous)
@@ -203,6 +205,22 @@ def test_repeated_candidate_is_regenerated_with_a_different_reaction() -> None:
     asyncio.run(exercise())
 
 
+def test_private_hold_marker_is_regenerated_before_tts() -> None:
+    async def exercise():
+        controller, model = _controller(_Session(), language="en", seed="marker")
+        phrases = iter(["SILENCE", "Could we move a little faster?"])
+        model.chat = lambda **_kwargs: _ModelStream(next(phrases))
+        controller.dialogue_started()
+        controller.prepare_next()
+        await controller._preparation
+        assert controller._candidate is not None
+        assert controller._candidate[0] == "Could we move a little faster?"
+        assert controller.summary()["diagnostics"]["preparation_rejected_unsafe"] == 1
+        await controller.close()
+
+    asyncio.run(exercise())
+
+
 def test_multiple_barge_ins_are_generated_from_live_context() -> None:
     async def exercise():
         session = _Session()
@@ -226,11 +244,21 @@ def test_multiple_barge_ins_are_generated_from_live_context() -> None:
         assert session.history.items[0].text_content == "Could we move a little faster?"
         controller.target_ended()
         await controller.wait_for_interjection()
+        assert controller.interjected_current_turn
+        controller.events[-1]["speech_state_overlap"] = False
+        assert controller.interjected_current_turn  # played late still counts as caller turn
+        controller.events[-1]["speech_state_overlap"] = True
+        assert session.history.items[0].metrics["started_speaking_at"] > 0
+        assert (
+            session.history.items[0].metrics["stopped_speaking_at"]
+            >= session.history.items[0].metrics["started_speaking_at"]
+        )
         # Force the later-turn coin flip to take the next interjection.
         controller._random.random = lambda: 0.0
         controller.prepare_next()
         await controller._preparation
         controller.target_started()
+        assert not controller.interjected_current_turn
         controller._target_started_at -= 2
         await asyncio.sleep(0.02)
         controller.target_ended()

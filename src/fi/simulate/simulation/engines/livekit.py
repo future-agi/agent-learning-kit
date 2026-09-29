@@ -717,6 +717,12 @@ class _TestRunnerAgent(Agent):
             self._caller_barge_in.target_ended()
             await self._caller_barge_in.wait_for_interjection()
             self._caller_barge_in.dialogue_started()
+            if getattr(self._caller_barge_in, "interjected_current_turn", False):
+                # The caller already spoke over this turn. Let the target react
+                # or continue instead of generating a second, contextless reply.
+                if self._session is not None:
+                    self._session.history.insert(new_message)
+                raise StopResponse()
 
     @function_tool(
         name="endCall",
@@ -772,7 +778,10 @@ class _TestRunnerAgent(Agent):
     def end_of_call(self) -> None:
         """Stop replying: whatever the target still says is recorded but no longer answered."""
         self._call_over = True
-        for task in (getattr(self, "_hold_check", None), getattr(self, "_answer_again", None)):
+        for task in (
+            getattr(self, "_hold_check", None),
+            getattr(self, "_answer_again", None),
+        ):
             if task is not None and not task.done():
                 task.cancel()
 
@@ -3509,6 +3518,10 @@ async def _forward_target_transcription(
         if caller_barge_in is not None:
             caller_barge_in.dialogue_started()
             await caller_barge_in.wait_for_interjection()
+            if getattr(caller_barge_in, "interjected_current_turn", False):
+                # The direct interjection was the response to this turn.
+                session.history.add_message(role="user", content=transcript)
+                return
         # Only elicit a simulator response while the conversation is live; once
         # it has ended the target's turn is recorded but the simulator stays
         # silent. The turn MUST travel through ``generate_reply(user_input=...)``:

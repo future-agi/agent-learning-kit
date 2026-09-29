@@ -37,6 +37,10 @@ _PREPARE_INSTRUCTIONS = (
     "mismatch unless one is established. Do not talk about confirming details "
     "that have not been spoken yet. Unspoken goals may be introduced as new "
     "requests, not as existing facts. Avoid stock clarifications. "
+    "You are the caller, not the agent: do not finish the agent's sentence, "
+    "ask the agent's questions for them, or imitate their service response. "
+    "Your line must stand alone as something this caller would say. "
+    "Never output the private SILENCE hold marker. "
     "Output NONE only if interrupting would be completely out of character. "
     "Output only the sentence or NONE, without quotes or explanation."
 )
@@ -53,6 +57,8 @@ def _unsafe_candidate(
     recent_caller_turns: list[str] | None = None,
 ) -> bool:
     """Reject credentials and near-duplicate interjections, not all restatements."""
+    if re.match(r"^\s*SILENCE\b", phrase, re.I):
+        return True
     if re.search(r"\d", phrase):
         return True
     words = re.findall(r"\b\w+\b", phrase.lower())
@@ -468,6 +474,19 @@ class CallerBargeIn:
         if not short_noninteractive_turn:
             self._candidate = None
 
+    @property
+    def interjected_current_turn(self) -> bool:
+        """Whether the caller has already spoken during the latest target turn.
+
+        The overlap flag is diagnostic only: if playback began just after the
+        target stopped, it is still a caller turn and must not be duplicated.
+        """
+        return any(
+            event.get("target_turn") == self._turn_index
+            and event.get("attempted_at") is not None
+            for event in self.events
+        )
+
     async def wait_for_interjection(self) -> None:
         """Finish the short interjection before handing the completed turn to LiveKit."""
         task = self._finishing_task
@@ -549,7 +568,10 @@ class CallerBargeIn:
     async def _play(
         self, phrase: str, frames: list[Any], event: dict[str, Any]
     ) -> None:
+        history_message: Any | None = None
+
         async def on_started() -> None:
+            nonlocal history_message
             event["attempted_at"] = time.time()
             event["speech_state_overlap"] = self._target_active
             # Direct audio must also appear in the simulator's conversational
@@ -564,7 +586,13 @@ class CallerBargeIn:
                     if not any(item.id == message.id for item in chat_ctx.items):
                         chat_ctx.items.append(message)
                 else:
-                    chat_ctx.add_message(role="assistant", content=phrase)
+                    message = chat_ctx.add_message(role="assistant", content=phrase)
+                history_message = message
+                if message is not None:
+                    message.metrics = {
+                        **(getattr(message, "metrics", None) or {}),
+                        "started_speaking_at": event["attempted_at"],
+                    }
                 await self.agent.update_chat_ctx(chat_ctx)
             except Exception as exc:
                 self._count("history_update_error")
@@ -579,6 +607,14 @@ class CallerBargeIn:
         except Exception as exc:
             self._count("playback_error")
             logger.warning("caller interjection playback failed: %s", type(exc).__name__)
+        finally:
+            if history_message is not None and event["attempted_at"] is not None:
+                stopped_at = time.time()
+                event["stopped_at"] = stopped_at
+                history_message.metrics = {
+                    **(getattr(history_message, "metrics", None) or {}),
+                    "stopped_speaking_at": stopped_at,
+                }
 
     def simulator_state_changed(self, state: str) -> None:
         if state in {"listening", "speaking"} and not self._target_active:

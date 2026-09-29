@@ -3498,6 +3498,60 @@ def test_target_transcription_streams_partial_text_to_barge_gate() -> None:
     assert session.reply_inputs == [probe.partials[-1]]
 
 
+def test_target_transcription_does_not_generate_a_second_reply_after_barge_in() -> None:
+    class Probe:
+        interjected_current_turn = True
+
+        def target_ended(self):
+            pass
+
+        def dialogue_started(self):
+            pass
+
+        async def wait_for_interjection(self):
+            pass
+
+    session = _FakeReplySession()
+    asyncio.run(
+        livekit._forward_target_transcription(
+            _FakeTranscriptionReader("I can only help"),
+            session,
+            caller_barge_in=Probe(),
+        )
+    )
+    assert session.reply_inputs == []
+    assert session.history_adds == [("user", "I can only help")]
+
+
+def test_audio_target_turn_does_not_generate_a_second_reply_after_barge_in() -> None:
+    class Probe:
+        interjected_current_turn = True
+
+        def target_ended(self):
+            pass
+
+        def dialogue_started(self):
+            pass
+
+        async def wait_for_interjection(self):
+            pass
+
+    async def exercise():
+        agent = livekit._TestRunnerAgent(
+            persona=_scenario().dataset[0], instructions="Be a customer."
+        )
+        seen = []
+        agent._session = SimpleNamespace(
+            history=SimpleNamespace(insert=seen.append)
+        )
+        agent._caller_barge_in = Probe()
+        message = SimpleNamespace(text_content="I can only help")
+        with pytest.raises(livekit.StopResponse):
+            await agent.on_user_turn_completed(None, message)
+        assert seen == [message]
+
+    asyncio.run(exercise())
+
 
 class _FakeReplySession:
     def __init__(self, *, reply_error: Exception | None = None) -> None:

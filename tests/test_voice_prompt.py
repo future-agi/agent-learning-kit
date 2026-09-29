@@ -46,6 +46,7 @@ def test_voice_prompt_preserves_complete_platform_persona_rules() -> None:
     assert "Never Break Character" in prompt
     assert "endCall tool" in prompt
     assert "Let the situation guide your behavior, not your narration" in prompt
+    assert "Never finish the agent's sentence" in prompt
 
 
 def test_simulator_instructions_supplement_scenario_prompt() -> None:
