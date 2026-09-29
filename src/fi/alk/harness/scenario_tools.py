@@ -600,6 +600,20 @@ _NAMES_A_DIFFICULTY = re.compile(
 )
 
 
+# A planner's name for a kind of difficulty, pasted ahead of the branch instead of describing it.
+_KIND_LABEL = re.compile(
+    r"^\s*(?:two facts that disagree|a reference with no referent|a value that sounds like another"
+    r"|something plausible (?:the world refuses|but not serviceable)|a correction after (?:the agent has )?"
+    r"(?:committed|the commitment))(?:\s*(?:(?:on|in) [^:,]*)?[:,-]\s*|\s+when\s+)",
+    re.IGNORECASE,
+)
+
+
+def _without_kind_label(branch: str) -> str:
+    rest = _KIND_LABEL.sub("", branch or "", count=1)
+    return rest[:1].upper() + rest[1:] if rest and rest != branch else branch
+
+
 def _a_second_plain_control(scenario: Scenario, kept: list[Scenario]) -> str:
     """Why this scenario is the suite's second plain run of the same task, or ""."""
     coverage = scenario.coverage or {}
@@ -629,10 +643,10 @@ def _a_second_plain_control(scenario: Scenario, kept: list[Scenario]) -> str:
         return (
             f"{one.name} is already this suite's plain control for {task}: the caller asks for the "
             "ordinary thing, gives the ordinary answers and gets the ordinary result. Proving the "
-            "capability twice proves nothing. Name the one thing that makes this one hard - a "
-            "correction after the agent has committed, two facts that disagree, a reference with "
-            "no referent, a value that sounds like another, something plausible the world refuses "
-            "- and say it in the branch line, or place this on a task level with no control yet"
+            "capability twice proves nothing. If this call really is harder, say in the branch line, "
+            "in your own words, what the caller or the world does here that the control does not; "
+            "a stock phrase that does not describe this call is not a difficulty. If nothing does, "
+            "this task already has its control: write a different task level, or stop"
         )
     return ""
 
@@ -872,6 +886,7 @@ def accept_scenario(
         scenario = Scenario.model_validate(payload)
     except Exception as invalid:
         return _err(f"Not kept. {invalid}"[:600])
+    scenario.branch = _without_kind_label(scenario.branch)
     if not spoken:
         scenario.background_noise = False
         if scenario.persona:

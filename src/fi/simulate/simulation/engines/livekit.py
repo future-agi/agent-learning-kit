@@ -836,11 +836,8 @@ class _TestRunnerAgent(Agent):
             return
 
         try:
-            # 2.0, not the 0.3 this used to default to. Measured in an isolated two-participant
-            # room, the office clip peaks at 119 of 32768 at 0.3, which is below the noise floor of
-            # speech near 15000: the ambience played and nobody could hear it. At 2.0 the same clip
-            # measures 752 to 789 on real calls, which is audible under a voice without masking it.
-            volume = float(os.environ.get("HARNESS_BACKGROUND_NOISE_VOLUME", "2.0"))
+            # Beds are levelled to the office clip first; 7.0 sits them clearly under the caller's voice.
+            volume = float(os.environ.get("HARNESS_BACKGROUND_NOISE_VOLUME", "7.0"))
             clip_source: Any = None
             if source.startswith(("http://", "https://")):
                 clip_source = await asyncio.to_thread(_downloaded_audio, source)
@@ -3692,8 +3689,12 @@ async def _wait_for_conversation_silence(
         floor, _ = _turn_requirements(min_turn_messages)
         # Far enough in for the measured window to beat the fixed one. A third of the floor is a
         # threshold, not a derived figure: enough turns to have timed a reply, well short of done.
-        settled = min_turn_messages > 0 and _turns_from_each_side(messages) >= max(
-            2, floor // 3
+        spoken = [message for message in messages if message["content"]]
+        # After the caller's turn the agent owes a reply; a slower one than any so far is not an ending.
+        settled = (
+            min_turn_messages > 0
+            and spoken[-1]["role"] != _CALLER
+            and _turns_from_each_side(messages) >= max(2, floor // 3)
         )
         effective_quiet = (
             _settled_silence_window(

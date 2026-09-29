@@ -901,6 +901,13 @@ Refused at submit.
 These words belong in the coordinate and never in the instruction: overt, overtly, subtle, injection,
 prompt injection, social engineering, adversarial, jailbreak, out of scope, overlay, red team.
 
+**The branch line says what happens in this call, never the name of a kind.** A branch that opens
+"two facts that disagree:" and then describes a caller asking whether the agent is a person names a
+difficulty the call does not contain. Say what disagrees with what, which reference has no referent,
+which value sounds like which. If the kind you were dealt does not fit this task, write the difficulty
+that does and say so in your reply, or submit nothing: a label on an ordinary call is a plain control
+that claims to be something else.
+
 **A difficulty is a GAP in what the caller says, not a word in the branch line.** The commonest way a
 named difficulty turns out not to exist is that the instruction quietly supplies the thing the difficulty
 was supposed to withhold. Two from a hosted 100, both with impeccable branch lines:

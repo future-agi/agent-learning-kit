@@ -51,7 +51,7 @@ from fi.simulate.runtime.report import SimulationReport
 from fi.simulate.runtime.run import TestCaseStatus
 from fi.simulate.runtime.runner import SimulationRunner
 
-from .background_noise import scenario_source
+from .background_noise import place_of, scenario_source
 from .bundle_v2 import EvidenceSeam
 from .hosted_scheduler import CallAborted, CallOutcome
 from .hosted_scheduler import Scenario as HostedScenario
@@ -136,7 +136,7 @@ _SIMULATOR_PLATFORM_ALIAS_MAP = {
     "SIMULATOR_OPENAI_API_KEY": OPENAI_API_KEY_ALIAS,
 }
 
-_DEFAULT_CALL_TIMEOUT_SECONDS = 300.0
+_DEFAULT_CALL_TIMEOUT_SECONDS = 480.0
 
 # sdk_voice.py::build_spec's own phase-overhead constants, reused verbatim so this runner's
 # outer budget composes with the SDK's internal one the same way the local template does.
@@ -1159,13 +1159,18 @@ class CallRunnerImpl:
         )
         if noise:
             call_environ["HARNESS_BACKGROUND_NOISE"] = noise
-            base = self._environ.get(BACKGROUND_NOISE_VOLUME_ALIAS) or "2.0"
+            call_environ["HARNESS_BACKGROUND_PLACE"] = place_of(noise)
+            base = self._environ.get(BACKGROUND_NOISE_VOLUME_ALIAS) or "7.0"
+            # A scenario about the noise itself is heard loud enough to test it.
+            about_noise = any("nois" in str(level) for level in (doc.get("coverage") or {}).values())
+            spread = random.uniform(1.3, 1.8) if about_noise else random.uniform(0.7, 1.4)
             try:
-                call_environ[BACKGROUND_NOISE_VOLUME_ALIAS] = f"{float(base) * random.uniform(0.9, 1.25):.2f}"
+                call_environ[BACKGROUND_NOISE_VOLUME_ALIAS] = f"{float(base) * spread:.2f}"
             except ValueError:
                 pass
         else:
             call_environ.pop("HARNESS_BACKGROUND_NOISE", None)
+            call_environ.pop("HARNESS_BACKGROUND_PLACE", None)
 
         # Read the same way and for the same reason as the noise source above: the simulator's
         # instructions are built deep inside simulator_definition, which sees the environment and
