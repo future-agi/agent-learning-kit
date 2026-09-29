@@ -200,10 +200,13 @@ def open_stage(
     ask: Callable[..., Any] | None = None,
     max_turns: int = 0,
     authoring_guidance: str = "",
+    can_grow: bool = False,
 ) -> tuple[Stage, Path]:
     """A live write-the-scenarios stage, and where it will write."""
     destination = out or artifact_dir(contract.agent)
-    server, kept = scenario_tools(contract, destination, destination, wanted=wanted)
+    server, kept = scenario_tools(
+        contract, destination, destination, wanted=wanted, can_grow=can_grow
+    )
     budget = max_turns or turns_for(wanted)
     affordable = max(budget // WRITER_TURNS, 1)
     at_once = max(min(affordable, MOST_WORKERS_AT_ONCE), 1)
