@@ -68,6 +68,7 @@ from pydantic import (
     field_serializer,
     model_validator,
 )
+from fi.simulate.results.futureagi import MAX_TARGET_LATENCY_TURNS
 
 from .job import FailureDomain, HarnessStage
 
@@ -269,6 +270,10 @@ def _mask_userinfo(match: re.Match[str]) -> str:
     return f"{scheme}{user}:***@" if password is not None else f"{scheme}***@"
 
 
+# Shorter declared values are configuration, not credentials; redacting them mangles prose.
+_SHORTEST_REDACTABLE_SECRET = 8
+
+
 def redact_outbound_text(value: str, extra_secret_values: tuple[str, ...] = ()) -> str:
     """Scrubs a single free-text field before it can leave the sandbox on any of the three
     channels (outbound-channels.md v1.3 "Redaction (enforced before emit)"; hosted-execution-
@@ -291,7 +296,7 @@ def redact_outbound_text(value: str, extra_secret_values: tuple[str, ...] = ()) 
     """
     redacted = _USERINFO_PATTERN.sub(_mask_userinfo, value)
     for secret in extra_secret_values:
-        if secret:
+        if len(secret) >= _SHORTEST_REDACTABLE_SECRET:
             redacted = redacted.replace(secret, "***")
     return redacted
 
@@ -582,8 +587,16 @@ def load_capabilities(
 
 
 class DegradeReason(str, Enum):
-    CONFORMANCE_GATE_FAILED = "conformance_gate_failed"
+    # C4 v1.3 §2 (FROZEN) -- the `parallelism_degraded` reason vocabulary, closed at EXACTLY
+    # these FIVE members, unconditionally. `port_not_consumable` was the former sixth member;
+    # C1 v1.3 §4 decision 2 / D28 reclassifies it OUT of the degrade enum to a TERMINAL job
+    # failure (raised out-of-band, surfaced via the job-failure path), so it is deliberately
+    # absent here and can never be constructed into a `parallelism_degraded` payload.
+    RESOURCE_LIMITED = "resource_limited"
+    LITERAL_LOCAL_ENDPOINT = "literal_local_endpoint"
+    WORLD_START_FAILED = "world_start_failed"
     FIXED_PORT = "fixed_port"
+    CONFORMANCE_GATE_FAILED = "conformance_gate_failed"
 
 
 class LogLevel(str, Enum):
@@ -676,6 +689,8 @@ class ScenarioRetriedPayload(BaseModel):
     scenario_key: str = Field(min_length=1)
     from_world: int = Field(ge=0)
     to_world: int = Field(ge=0)
+    # Why the first try is being replayed.
+    cause: str = Field(default="", max_length=200)
 
 
 class LogPayload(BaseModel):
@@ -2470,6 +2485,36 @@ class CheckpointEvaluation(BaseModel):
 EvaluationResult = MetricEvaluation | CheckpointEvaluation
 
 
+class TargetTokenUsage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prompt_tokens: int | None = Field(default=None, ge=0)
+    completion_tokens: int | None = Field(default=None, ge=0)
+    total_tokens: int | None = Field(default=None, ge=0)
+
+
+class TargetLatency(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    turn: int | None = Field(default=None, ge=0)
+    model: int | None = Field(default=None, ge=0)
+    voice: int | None = Field(default=None, ge=0)
+    transcriber: int | None = Field(default=None, ge=0)
+    endpointing: int | None = Field(default=None, ge=0)
+    turns: list[int] = Field(default_factory=list, max_length=MAX_TARGET_LATENCY_TURNS)
+
+
+class TargetMetrics(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider: Literal["vapi", "retell", "livekit"]
+    usage: TargetTokenUsage | None = None
+    cost_cents: int | None = Field(default=None, ge=0)
+    latency: TargetLatency | None = None
+    provider_call_id: str | None = Field(default=None, min_length=1, max_length=255)
+    provider_end_reason: str | None = Field(default=None, min_length=1, max_length=255)
+
+
 class CallSummary(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -2480,6 +2525,9 @@ class CallSummary(BaseModel):
     transcript_artifact: str | None
     recording_artifacts: list[str] = Field(default_factory=list)
     stop_reason: str | None = None
+    # The agent under test's own provider-reported figures (`provider`, `usage`, `cost_cents`,
+    # `latency`), never the simulator's.
+    target_metrics: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def _validate(self) -> "CallSummary":
@@ -2498,6 +2546,8 @@ class CallSummary(BaseModel):
         for artifact in self.recording_artifacts:
             if not is_valid_digest(artifact):
                 raise ValueError(f"call_recording_artifact_invalid: {artifact!r}")
+        if self.target_metrics is not None:
+            TargetMetrics.model_validate(self.target_metrics)
         return self
 
 
@@ -2521,6 +2571,9 @@ def _unset_default_fields(model: BaseModel, prefix: str = "") -> list[str]:
         if isinstance(value, BaseModel):
             names.extend(_unset_default_fields(value, f"{path}."))
     return names
+
+
+_LATER_CALL_FIELDS = frozenset({"stop_reason", "target_metrics"})
 
 
 class ResultReceiptDraft(BaseModel):
@@ -2554,11 +2607,12 @@ class ResultReceiptDraft(BaseModel):
         if not is_valid_digest(self.digest):
             raise ValueError(f"receipt_digest_invalid: {self.digest!r}")
         expected_body = self.model_dump(mode="json", exclude={"digest"})
-        # ``stop_reason`` was added after the initial receipt protocol. Preserve
-        # byte-for-byte compatibility for callers that omit it, while including
-        # it in both the digest and wire body whenever it is explicitly supplied.
-        if self.call is not None and "stop_reason" not in self.call.model_fields_set:
-            expected_body["call"].pop("stop_reason", None)
+        # ``stop_reason`` and ``target_metrics`` were added after the initial receipt
+        # protocol. Preserve byte-for-byte compatibility for callers that omit them,
+        # while including each in both the digest and wire body whenever supplied.
+        if self.call is not None:
+            for name in _LATER_CALL_FIELDS - self.call.model_fields_set:
+                expected_body["call"].pop(name, None)
         expected = whole_object_digest(expected_body)
         if self.digest != expected:
             unset = _unset_default_fields(self)
@@ -2657,8 +2711,9 @@ def build_result_receipt(
     digest = whole_object_digest(core)
     draft = ResultReceiptDraft.model_validate({**core, "digest": digest})
     wire = draft.model_dump(mode="json")
-    if call is not None and "stop_reason" not in call:
-        wire["call"].pop("stop_reason", None)
+    if call is not None:
+        for name in _LATER_CALL_FIELDS - call.keys():
+            wire["call"].pop(name, None)
     return wire
 
 
@@ -2786,13 +2841,19 @@ _RESERVED_ARTIFACT_KINDS = frozenset(
         ArtifactKind.TRANSCRIPT,
         ArtifactKind.TOOL_TRACE,
         ArtifactKind.RESULT,
+        # Complete manifests require build, result, and log. A recording-heavy run must not be
+        # allowed to consume the budget and strand terminalization after all scenarios finish.
+        ArtifactKind.LOG,
     }
 )
 
 
 def is_reserved_artifact_kind(kind: ArtifactKind) -> bool:
-    """ "the budget is partitioned by reservation: `build` + `transcript` + `tool_trace` + `result`
-    are reserved (always admitted); recordings next; `trace`/`log`/`other` last.\""""
+    """Return whether an artifact bypasses the soft guest-side admission budget.
+
+    Build, result, and log are mandatory for every complete manifest; transcript and tool trace
+    are durable result evidence. Recordings are admitted next, followed by optional trace/other.
+    """
     return kind in _RESERVED_ARTIFACT_KINDS
 
 
@@ -2808,8 +2869,8 @@ _RECORDING_ARTIFACT_KINDS = frozenset(
 
 def priority_class(kind: ArtifactKind) -> int:
     """N16: the contract's three-tier budget partition as a total order, lower = admitted first --
-    `0` reserved (`is_reserved_artifact_kind`, always admitted), `1` recordings, `2` `trace`/`log`/
-    `other` (admitted last)."""
+    `0` reserved (`is_reserved_artifact_kind`, always admitted), `1` recordings, `2` optional
+    `trace`/`other` (admitted last)."""
     if is_reserved_artifact_kind(kind):
         return 0
     if kind in _RECORDING_ARTIFACT_KINDS:

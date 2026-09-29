@@ -1178,6 +1178,24 @@ def _contract_runtime_configuration_names(contract: Any | None) -> list[str]:
             names.update(
                 _configuration_names(str(getattr(reached, field_name, "") or ""))
             )
+        # LiveKit's worker SDK reads these credentials internally, so a repository may never
+        # mention their names in source or Compose. The transport adapter still needs to pass
+        # them to the unchanged worker; record only names, never credential values.
+        if str(getattr(dependency, "engine", "") or "").lower() == "livekit":
+            names.update(("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"))
+        if str(getattr(dependency, "engine", "") or "").lower() in {
+            "google",
+            "gemini",
+            "vertex",
+            "vertex_ai",
+        }:
+            names.update(
+                (
+                    "GOOGLE_APPLICATION_CREDENTIALS",
+                    "GOOGLE_CLOUD_PROJECT",
+                    "GOOGLE_CLOUD_LOCATION",
+                )
+            )
     forbidden = {
         "FI_API_KEY",
         "FI_SECRET_KEY",

@@ -10,18 +10,17 @@ scheduler needs off a `scenario.json` written in the newer shape. So this module
 instead of depending on either model -- see the report's design-decisions section for the
 consequences of that choice (HEAD-model drift).
 
-RESOLVED (p13-worker-r2, reports/p13-worker-r2.md CONTRACT NOTES): the `provision`/`begin` wire
-shapes below follow the platform's actual, live route (futureagi/simulate/serializers/services/
-views `hosted_harness.py`) rather than the Scenario Generation Contract text (PR #63), where
-the two disagree -- a single `POST .../scenarios/` discriminated by a body-level `operation` field,
-`begin` keyed on the full `scenario_keys` set, and a provision response KEYED by `scenario_key`
-(never a position-ordered array). `register_with_platform` below is the seam that builds those
-payloads and merges the platform-assigned `scenario_id`s back onto each scenario.
+Authoring registers every validated scenario through the platform's keyed
+`provision` operation and then stops. A later simulation-only job carries an
+immutable execution manifest; the adapter selects and expands those authored
+scenarios without provisioning or authoring again. Platform identities are
+always matched by `scenario_key`, never response position.
 """
 
 from __future__ import annotations
 
 import asyncio
+import ast
 import json
 import logging
 from dataclasses import dataclass, field, replace
@@ -86,6 +85,46 @@ class ScenarioDocumentInvalid(RuntimeError):
     a suite that passed with fewer scenarios than it should have."""
 
 
+
+def _is_docstring(node: ast.stmt) -> bool:
+    return (
+        isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, str)
+    )
+
+
+def does_nothing(function: Callable[..., object]) -> bool:
+    """Whether scenario source is a single function whose body only returns None."""
+    source = getattr(function, "_alk_source", None)
+    entry = getattr(function, "_alk_entry", None)
+    if not isinstance(source, str) or not entry:
+        return False
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return False
+    body = [node for node in tree.body if not _is_docstring(node)]
+    if len(body) != 1 or not isinstance(body[0], ast.FunctionDef):
+        return False
+    definition = body[0]
+    if (
+        definition.name != entry
+        or definition.decorator_list
+        or definition.args.defaults
+        or any(definition.args.kw_defaults)
+    ):
+        return False
+    return all(
+        isinstance(node, ast.Pass)
+        or (
+            isinstance(node, ast.Return)
+            and (node.value is None or (isinstance(node.value, ast.Constant) and node.value.value is None))
+        )
+        for node in definition.body
+        if not _is_docstring(node)
+    )
+
 def bundle_has_scenarios(bundle_dir: Path) -> bool:
     """The LAYOUT DECISION's presence test: `<bundle_dir>/scenarios/` exists and at least one of
     its subdirectories holds a `scenario.json`. Deliberately narrow -- an empty or missing
@@ -123,7 +162,12 @@ def _judged_placeholder_check(world: Any, calls: Any) -> None:
 
 
 def _compile_entry(
-    source: str, *, label: str, entry: str, allow_empty: bool = True
+    source: str,
+    *,
+    label: str,
+    entry: str,
+    allow_empty: bool = True,
+    defer_execution: bool = False,
 ) -> Callable[..., object]:
     """One scenario code-text -> a bare callable that raises, compiled ONCE here rather than per
     call. Mirrors `folder.py`'s `_run` in exactly two respects: `compile(source, name, "exec")`
@@ -157,6 +201,24 @@ def _compile_entry(
         # SyntaxError is the common case; a NUL byte in the source raises ValueError on some
         # interpreter versions (R1-1) rather than SyntaxError -- both are the same content defect.
         raise ScenarioDocumentInvalid(f"{label} would not compile: {exc}") from exc
+    if defer_execution:
+        definitions = ast.parse(source).body
+        if not any(
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == entry
+            for node in definitions
+        ):
+            raise ScenarioDocumentInvalid(f"{label} defines no {entry}()")
+
+        def deferred(*args: object) -> object:
+            # Compatibility for injected worlds; hosted worlds execute the source in a worker.
+            namespace: dict[str, Any] = {}
+            exec(code, namespace)  # noqa: S102 - compatibility for injected local worlds
+            return namespace[entry](*args)
+
+        deferred._alk_source = source
+        deferred._alk_entry = entry
+        return deferred
     namespace: dict[str, Any] = {}
     try:
         exec(code, namespace)  # noqa: S102 - scenario code is meant to be exec'd; see CONTRACT QUESTIONS
@@ -170,6 +232,8 @@ def _compile_entry(
     function = namespace.get(entry)
     if not callable(function):
         raise ScenarioDocumentInvalid(f"{label} defines no {entry}()")
+    function._alk_source = source
+    function._alk_entry = entry
     return function
 
 
@@ -204,6 +268,7 @@ class _CompiledScenario:
     # same document and sent at pre-allocation, so a call can be read on the platform without the
     # scenario file beside it. Presentation only: nothing in the scheduler looks at it.
     presented: dict[str, Any] = field(default_factory=dict)
+    source_scenario_key: str | None = None
 
 
 def _read_text(path: Path, *, label: str) -> str:
@@ -359,6 +424,7 @@ def _load_one(
     *,
     settled_in_code: set[str] | None = None,
     declared_tools: set[str] | None = None,
+    defer_execution: bool = False,
 ) -> _CompiledScenario:
     """One scenario folder -> a `Scenario`-protocol object. Mirrors `folder.py`'s documented
     layout (`scenario.json` + `setup.py` + `ready.py` + `checks/<goal>.py`) but reads
@@ -425,10 +491,16 @@ def _load_one(
     setup_code = _read_text(folder / _SETUP_PY, label=folder.name)
     ready_code = _read_text(folder / _READY_PY, label=folder.name)
     setup = _compile_entry(
-        setup_code, label=f"{folder.name}/{_SETUP_PY}", entry="setup"
+        setup_code,
+        label=f"{folder.name}/{_SETUP_PY}",
+        entry="setup",
+        defer_execution=defer_execution,
     )
     ready = _compile_entry(
-        ready_code, label=f"{folder.name}/{_READY_PY}", entry="ready"
+        ready_code,
+        label=f"{folder.name}/{_READY_PY}",
+        entry="ready",
+        defer_execution=defer_execution,
     )
 
     sub_goals: list[_CompiledSubGoal] = []
@@ -440,6 +512,7 @@ def _load_one(
                 check_code,
                 label=f"{folder.name}/{_CHECKS_DIRNAME}/{name}.py",
                 entry="check",
+                defer_execution=defer_execution,
                 allow_empty=False,  # R1-2: an existing-but-empty check file is invalid, never a
                 # vacuous pass -- absence of the file is what means "judged".
             )
@@ -502,7 +575,9 @@ def _with_claims(
     return replace(scenario, sub_goals=restored)
 
 
-def load_scenarios(bundle_dir: Path) -> list[_CompiledScenario]:
+def load_scenarios(
+    bundle_dir: Path, *, defer_execution: bool = False
+) -> list[_CompiledScenario]:
     """Every scenario document under `<bundle_dir>/scenarios/`, compiled and wrapped, in the same
     sorted-by-folder-name order `folder.py`'s `read_all` uses. Raises `ScenarioDocumentInvalid` on
     the FIRST unreadable or malformed folder -- unlike `read_all`, which skips one and continues;
@@ -534,6 +609,7 @@ def load_scenarios(bundle_dir: Path) -> list[_CompiledScenario]:
                     folder,
                     settled_in_code=settled_in_code,
                     declared_tools=declared_tools,
+                    defer_execution=defer_execution,
                 ),
                 claims,
             )
@@ -567,7 +643,7 @@ class BundleScenarioSource:
         # `preflight_bundle`, rather than stalling every other in-flight scenario behind it.
         try:
             scenarios = await asyncio.wait_for(
-                asyncio.to_thread(load_scenarios, bundle_dir),
+                asyncio.to_thread(load_scenarios, bundle_dir, defer_execution=True),
                 timeout=_LOAD_TIMEOUT_SECONDS,
             )
         except asyncio.TimeoutError as exc:
@@ -594,19 +670,16 @@ class BundleScenarioSource:
                 f"{bundle_dir / SCENARIOS_DIRNAME}: a scenario document has no non-empty "
                 "scenario_key"
             )
-        # p13: pre-allocation, after load and before the scheduler ever sees a scenario (spine
-        # step 3.5) -- `register_with_platform` raises `ScenarioPreallocationError`/
-        # `ob.HostedFencedError`/`ob.HostedChannelFailedError`/`ob.HostedAttemptSupersededError` on
-        # any failure, all of which `hosted_entrypoint.run_job`'s existing call site around
-        # `scenario_source.build()` already maps to the typed `validating_scenarios`/`platform_sync`
-        # terminal (or the fenced exit) -- nothing new to catch here.
-        # Pre-allocate the WHOLE suite, then run a sample of it.
-        #
-        # The sample used to be taken first, so the platform was handed five personas for a suite of
-        # thirty and refused the job: "expected exactly 30 personas, got 5". Pre-allocation is sealed
-        # against the full set by design (`_begin_payload` sends every key and the platform 409s on a
-        # subset), so the suite is what gets registered and the sample is only what gets called. The
-        # rows that are not called stay unstarted, which is a truthful state rather than a broken job.
+        execution_manifest = list(
+            getattr(job, "metadata", {}).get("execution_manifest") or []
+        )
+        if execution_manifest:
+            return _scenarios_for_execution_manifest(scenarios, execution_manifest)
+        # Authoring registers the complete validated suite but does not begin
+        # execution. The platform returns stable identities keyed by scenario
+        # key; a later selected-Run manifest chooses from those identities.
+        # Transport and response-shape failures remain typed platform-sync
+        # failures at the existing `scenario_source.build()` boundary.
         chosen_evals, agent_prompt, modality = _chosen_evals_and_prompt(bundle_dir)
         run_name = _derive_run_name(job, bundle_dir)
         agent_name = _derive_agent_name(job, bundle_dir)
@@ -620,6 +693,51 @@ class BundleScenarioSource:
             modality=modality,
         )
         return sampled_for_calling(registered)
+
+
+
+def _scenarios_for_execution_manifest(
+    scenarios: Sequence[_CompiledScenario],
+    execution_manifest: Sequence[dict[str, Any]],
+) -> tuple[_CompiledScenario, ...]:
+    """Select and duplicate authored scenarios using platform-frozen trial identities."""
+
+    by_key = {scenario.scenario_key: scenario for scenario in scenarios}
+    execution_keys: set[str] = set()
+    selected: list[_CompiledScenario] = []
+    for entry in execution_manifest:
+        source_key = str(entry.get("scenario_key") or "")
+        execution_key = str(entry.get("execution_key") or "")
+        scenario_id = str(entry.get("scenario_id") or "")
+        trial_index = entry.get("trial_index")
+        if source_key not in by_key:
+            raise ScenarioDocumentInvalid(
+                f"execution manifest names unknown scenario_key {source_key!r}"
+            )
+        if not execution_key or execution_key in execution_keys:
+            raise ScenarioDocumentInvalid(
+                "execution manifest execution_key values must be non-empty and unique"
+            )
+        if not scenario_id:
+            raise ScenarioDocumentInvalid(
+                f"execution manifest entry {execution_key!r} has no scenario_id"
+            )
+        if not isinstance(trial_index, int) or trial_index < 1:
+            raise ScenarioDocumentInvalid(
+                f"execution manifest entry {execution_key!r} has invalid trial_index"
+            )
+        execution_keys.add(execution_key)
+        selected.append(
+            replace(
+                by_key[source_key],
+                scenario_key=execution_key,
+                source_scenario_key=source_key,
+                scenario_id=scenario_id,
+            )
+        )
+    if not selected:
+        raise ScenarioDocumentInvalid("execution manifest is empty")
+    return tuple(selected)
 
 
 def _chosen_evals_and_prompt(bundle_dir: Path) -> tuple[list[str], str, str]:
@@ -750,22 +868,6 @@ def _provision_payload(
     return payload
 
 
-def _begin_payload(
-    run_test_id: str, scenarios: Sequence[_CompiledScenario]
-) -> dict[str, Any]:
-    """`HarnessScenarioBeginSerializer` (futureagi/simulate/serializers/hosted_harness.py:193-198):
-    `scenario_keys` is `allow_empty=False` and REQUIRED, and `begin_scenarios`
-    (services/hosted_harness.py:323-329) 409s (`scenario_key_mismatch`) on anything but an EXACT
-    match against the full sealed set -- there is no "subset to run" semantics on the real
-    platform (that contract text describes an optional partial-subset `scenario_ids`; the
-    live route does not implement that -- CONTRACT NOTES). The full set is sent every time.
-    """
-    return {
-        "operation": "begin",
-        "run_test_id": run_test_id,
-        "scenario_keys": [scenario.scenario_key for scenario in scenarios],
-    }
-
 
 def _scenario_ids_by_key(
     submitted: Sequence[_CompiledScenario], raw_scenarios: Any
@@ -838,17 +940,11 @@ async def register_with_platform(
     agent_prompt: str = "",
     modality: str = "",
 ) -> Sequence[_CompiledScenario]:
-    """The scenario pre-allocation SEAM, now wired against the platform's real route (a single
-    `POST .../scenarios/`, discriminated by a body-level `operation` field -- see
-    `ScenariosClient`'s own docstring for the file:line evidence). `.provision()`/`.begin()` are
-    blocking network calls (same `ScenariosClient` the rest of `hosted_entrypoint.py` already
-    drives off the event loop via `asyncio.to_thread` -- matched here rather than diverging).
+    """Provision the authored suite and attach platform identities without executing it.
 
-    Sequence: provision (get platform-assigned ids, keyed by `scenario_key`) -> match ids back
-    onto `scenarios` with hard guards (`_scenario_ids_by_key`, raises before ANY assignment on any
-    mismatch) -> begin (seals execution against the FULL scenario_keys set; a begin failure means
-    NO scenario in this batch is returned with an id -- the whole call raises, same as a provision
-    failure) -> only then build and return the new scenario list with `scenario_id` filled in.
+    Execution begins only from a later selected-Run job carrying an immutable
+    ``execution_manifest``. Provisioning remains blocking network I/O and is
+    therefore driven off the event loop.
     """
     provision_result = await asyncio.to_thread(
         scenarios_client.provision,
@@ -869,9 +965,6 @@ async def register_with_platform(
         )
     id_by_key = _scenario_ids_by_key(scenarios, provision_result.get("scenarios"))
 
-    await asyncio.to_thread(
-        scenarios_client.begin, _begin_payload(run_test_id, scenarios)
-    )
 
     return tuple(
         replace(scenario, scenario_id=id_by_key[scenario.scenario_key])

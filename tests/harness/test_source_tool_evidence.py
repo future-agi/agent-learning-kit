@@ -333,15 +333,17 @@ def test_a_judged_sub_goal_must_say_why_it_is_judged():
     from fi.alk.harness.catalogue import validate_sub_goal
 
     thin = validate_sub_goal(_goal("polite", judged="was it polite"))
-    assert thin and "does not say what a model has to decide" in thin[0]
+    assert thin and "criteria need the labelled lines" in thin[0]
 
     assert (
         validate_sub_goal(
             _goal(
                 "refusal_explained",
                 judged=(
-                    "Whether the agent explained why it refused, which the world records nothing "
-                    "about because a refusal leaves no row behind"
+            "Applies when: the agent declines a request.\n"
+            "Pass when: it tells the caller why it cannot help.\n"
+            "Fail when: it declines without giving any reason.\n"
+            "If it does not arise: Pass, because nothing was declined."
                 ),
             )
         )
@@ -577,8 +579,62 @@ def test_a_terse_but_real_judged_claim_is_accepted():
     """Caught by the full suite, not by the ones I was watching."""
     from fi.alk.harness.catalogue import validate_sub_goal
 
-    assert validate_sub_goal(_goal("polite", judged="nothing observable shows tone")) == []
+    assert validate_sub_goal(_goal("polite", judged=(
+        "Applies when: the agent declines a request.\n"
+            "Pass when: it tells the caller why it cannot help.\n"
+            "Fail when: it declines without giving any reason.\n"
+            "If it does not arise: Pass, because nothing was declined."
+    ))) == []
 
     # Still refused: the name asked back as a question, which settles nothing.
     problems = validate_sub_goal(_goal("polite", judged="was it polite"))
-    assert problems and "does not say what a model has to decide" in problems[0]
+    assert problems and "criteria need the labelled lines" in problems[0]
+def test_empty_runtime_owned_tool_world_does_not_invent_world_checks(tmp_path):
+    """The real runtime, not an authored shadow world, proves stateless in-process tools."""
+    import asyncio
+
+    from fi.alk.harness.catalogue import Catalogue, SubGoal, save_catalogue
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.simulator import save_simulator_prompt
+    from fi.alk.harness.world.tools import world_tools
+
+    contract = AgentContract(
+        agent="weather-agent",
+        modality="chat",
+        conversational=True,
+        tools=[{"name": "get_weather", "args": ["location"]}],
+        real_use_cases=["Look up weather"],
+    )
+    save_catalogue(
+        Catalogue(
+            sub_goals=[
+                SubGoal(
+                    name="calls_weather_tool",
+                    check=(
+                        "def check(world, calls):\n"
+                        "    return None if any(c.name == 'get_weather' for c in calls) "
+                        "else 'weather tool not called'\n"
+                    ),
+                )
+            ]
+        ),
+        tmp_path,
+    )
+    save_simulator_prompt(
+        "You are a customer described by {{ persona }}. Follow {{ instruction }} in a natural "
+        "multi-turn conversation. Never invent the assistant's responses or claim a tool result "
+        "you have not heard. Ask a concise follow-up when needed and end once the task resolves.",
+        tmp_path,
+    )
+    server, world = world_tools(contract, tmp_path, deferred_runtime=True)
+    tools = {one.name: one.handler for one in server.tools}
+
+    check = asyncio.run(
+        tools["add_world_check"](
+            {"name": "invented", "code": "def check(world): return None"}
+        )
+    )
+    assert "not applicable" in check["content"][0]["text"]
+    saved = asyncio.run(tools["save_world"]({}))
+    assert not saved.get("is_error"), saved
+    assert world.runtime_tools == {"get_weather"}

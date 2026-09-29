@@ -22,6 +22,8 @@ import pytest
 
 from fi.alk.harness import call_runner as cr
 from fi.alk.harness import chat_call_runner as chat
+from fi.alk.harness.authoring_entrypoint import _load_provider_import_profile
+from fi.alk.harness.bundle_author_v2 import resolve_environment_plan
 from fi.alk.harness.bundle_v2 import EvidenceSeam
 from fi.alk.harness.hosted_scheduler import CallAborted, CallOutcome
 from fi.alk.harness.job import (
@@ -680,6 +682,131 @@ def test_provider_connect_only_builds_direct_target_spec(
     # for a complete agent-first clarification flow; no sixth caller acknowledgement is possible
     # after the provider disconnects.
     assert captured["spec"].environment.config["params"]["min_turn_messages"] == 5
+
+
+@pytest.mark.parametrize("connector", ["phone", "vapi", "retell"])
+def test_phone_connect_only_dials_with_platform_sip_credentials(
+    tmp_path: Path, connector: str
+) -> None:
+    _job_obj, context = _context(
+        tmp_path=tmp_path,
+        connector=connector,
+        mode=ProviderExecutionMode.CONNECT_ONLY,
+        config={
+            "phone_number": "+14155551234",
+            "target_system_prompt": "You help callers book appointments.",
+            **(
+                {"assistant_id": "existing-agent"}
+                if connector == "vapi"
+                else {"agent_id": "existing-agent"}
+                if connector == "retell"
+                else {}
+            ),
+        },
+        secrets={"VAPI_API_KEY": "test-vapi", "RETELL_API_KEY": "test-retell"},
+        simulator_secrets={
+            "LIVEKIT_URL": "wss://platform-livekit.example",
+            "LIVEKIT_API_KEY": "platform-livekit-key",
+            "LIVEKIT_API_SECRET": "platform-livekit-secret",
+            "DEEPGRAM_API_KEY": "platform-deepgram-key",
+            "GEMINI_API_KEY": "platform-gemini-key",
+            "SIP_OUTBOUND_TRUNK_ID": "trunk-platform",
+            "SIP_OUTBOUND_FROM_NUMBER": "+14155550000",
+        },
+    )
+    _write_scenario_doc(context.bundle_dir, scenario_key="phone-call")
+    captured: dict[str, Any] = {}
+
+    async def place_call(spec):
+        captured["spec"] = spec
+        return _report()
+
+    runner = cr.CallRunnerImpl(
+        FakeAdapter(), context, place_call=place_call, environ={}
+    )
+    _run(runner, _FakeScenario("phone-call"), _runtime())
+
+    definition = captured["spec"].environment.config["agent_definition"]
+    transport = definition["transport"]
+    assert transport["kind"] == "sip_outbound"
+    assert transport["sip_trunk_id"] == "trunk-platform"
+    assert transport["sip_number"] == "+14155550000"
+    assert transport["sip_call_to"] == "+14155551234"
+    assert definition["system_prompt"] == "You help callers book appointments."
+    assert captured["spec"].environment.config["params"]["min_turn_messages"] == 5
+
+
+def test_phone_connect_only_authoring_uses_only_supplied_prompt() -> None:
+    job = _job(
+        connector="phone",
+        mode=ProviderExecutionMode.CONNECT_ONLY,
+        config={
+            "phone_number": "+14155551234",
+            "target_system_prompt": "You help callers book appointments.",
+        },
+    )
+    assert _load_provider_import_profile(job, None) == {
+        "provider": "phone",
+        "modality": "voice",
+        "phone_number": "+14155551234",
+        "system_prompt": "You help callers book appointments.",
+        "tools": [],
+    }
+
+
+def test_phone_connect_only_rejects_customer_dialer_override() -> None:
+    with pytest.raises(ValueError, match="phone_dialer_config_is_platform_owned"):
+        AgentConnection(
+            connector="phone",
+            mode=ProviderExecutionMode.CONNECT_ONLY,
+            config={
+                "phone_number": "+14155551234",
+                "target_system_prompt": "You help callers book appointments.",
+                "sip_outbound_from_number": "+14155559999",
+            },
+        )
+
+
+def test_phone_connect_only_does_not_launch_customer_source(tmp_path: Path) -> None:
+    job = _job(
+        connector="phone",
+        mode=ProviderExecutionMode.CONNECT_ONLY,
+        config={
+            "phone_number": "+14155551234",
+            "target_system_prompt": "You help callers book appointments.",
+        },
+    ).model_copy(
+        update={
+            "source": RepositorySource(
+                kind=SourceKind.PROVIDER, visibility=SourceVisibility.PUBLIC
+            )
+        }
+    )
+    plan = resolve_environment_plan(tmp_path, job)
+    assert plan.packaging == "provider_connect_only"
+    assert plan.control_service is None
+
+
+def test_phone_connect_only_requires_platform_sip_not_target_sip(
+    tmp_path: Path,
+) -> None:
+    _job_obj, context = _context(
+        tmp_path=tmp_path,
+        connector="phone",
+        mode=ProviderExecutionMode.CONNECT_ONLY,
+        config={
+            "phone_number": "+14155551234",
+            "target_system_prompt": "You help callers book appointments.",
+        },
+        secrets={
+            "SIP_OUTBOUND_TRUNK_ID": "customer-trunk",
+            "SIP_OUTBOUND_FROM_NUMBER": "+14155550000",
+        },
+    )
+    _write_scenario_doc(context.bundle_dir, scenario_key="phone-call")
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, environ={})
+    with pytest.raises(CallAborted, match="SIP_OUTBOUND_TRUNK_ID"):
+        _run(runner, _FakeScenario("phone-call"), _runtime())
 
 
 def test_provider_import_calls_runtime_clone_instead_of_source_target(
@@ -1361,11 +1488,22 @@ def test_construction_exports_target_provider_secrets_to_environ_once(
 ) -> None:
     fake_environ: dict[str, str] = {}
     _job_obj, context = _context(tmp_path=tmp_path)
-    cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
-    assert fake_environ[LIVEKIT_API_KEY] == "lk-key"
-    assert fake_environ[LIVEKIT_API_SECRET] == "lk-secret"
-    assert fake_environ[DEEPGRAM_API_KEY] == "dg-key"
-    assert fake_environ[GEMINI_API_KEY] == "gm-key"
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
+    assert runner._environ[LIVEKIT_API_KEY] == "lk-key"
+    assert runner._environ[LIVEKIT_API_SECRET] == "lk-secret"
+    assert runner._environ[DEEPGRAM_API_KEY] == "dg-key"
+    assert runner._environ[GEMINI_API_KEY] == "gm-key"
+
+
+def test_vapi_control_key_is_only_exported_to_private_call_environment(tmp_path):
+    _job_obj, context = _context(
+        tmp_path=tmp_path,
+        secrets={**_ALL_SECRETS, "VAPI_PUBLIC_API_KEY": "public-control-key"},
+    )
+    parent_environment = {}
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, environ=parent_environment)
+    assert runner._environ["VAPI_PUBLIC_API_KEY"] == "public-control-key"
+    assert "VAPI_PUBLIC_API_KEY" not in parent_environment
 
 
 def test_construction_never_exports_secrets_outside_the_target_provider_map(
@@ -1375,8 +1513,8 @@ def test_construction_never_exports_secrets_outside_the_target_provider_map(
     secrets = dict(_ALL_SECRETS)
     secrets["UNRELATED_ALIAS"] = "should-not-export"
     _job_obj, context = _context(tmp_path=tmp_path, secrets=secrets)
-    cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
-    assert "UNRELATED_ALIAS" not in fake_environ
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
+    assert "UNRELATED_ALIAS" not in runner._environ
 
 
 def test_construction_uses_platform_simulator_key_without_exposing_agent_model_key(
@@ -1397,10 +1535,10 @@ def test_construction_uses_platform_simulator_key_without_exposing_agent_model_k
         secrets=target,
         simulator_secrets=simulator,
     )
-    cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
-    assert fake_environ[DEEPGRAM_API_KEY] == "platform-deepgram-key"
-    assert fake_environ[GEMINI_API_KEY] == "platform-gemini-key"
-    assert "ANTHROPIC_API_KEY" not in fake_environ
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
+    assert runner._environ[DEEPGRAM_API_KEY] == "platform-deepgram-key"
+    assert runner._environ[GEMINI_API_KEY] == "platform-gemini-key"
+    assert "ANTHROPIC_API_KEY" not in runner._environ
 
 
 def test_hosted_run_never_falls_back_to_customer_simulator_keys(tmp_path: Path) -> None:
@@ -1412,8 +1550,8 @@ def test_hosted_run_never_falls_back_to_customer_simulator_keys(tmp_path: Path) 
         simulator_secrets={},
     )
     runner = cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
-    assert DEEPGRAM_API_KEY not in fake_environ
-    assert GEMINI_API_KEY not in fake_environ
+    assert DEEPGRAM_API_KEY not in runner._environ
+    assert GEMINI_API_KEY not in runner._environ
     assert runner._missing_config is not None
 
 
@@ -1424,9 +1562,9 @@ def test_local_sdk_remains_byok_for_simulator_credentials(tmp_path: Path) -> Non
         execution=ExecutionMode.LOCAL,
         simulator_secrets={},
     )
-    cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
-    assert fake_environ[DEEPGRAM_API_KEY] == "dg-key"
-    assert fake_environ[GEMINI_API_KEY] == "gm-key"
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
+    assert runner._environ[DEEPGRAM_API_KEY] == "dg-key"
+    assert runner._environ[GEMINI_API_KEY] == "gm-key"
 
 
 def test_platform_simulator_credentials_win_without_replacing_target_livekit(
@@ -1442,12 +1580,12 @@ def test_platform_simulator_credentials_win_without_replacing_target_livekit(
 
     runner = cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
 
-    assert fake_environ[LIVEKIT_API_KEY] == "lk-key"
-    assert fake_environ[LIVEKIT_API_SECRET] == "lk-secret"
-    assert fake_environ[DEEPGRAM_API_KEY] == "platform-deepgram"
-    assert fake_environ[GEMINI_API_KEY] == "platform-gemini"
+    assert runner._environ[LIVEKIT_API_KEY] == "lk-key"
+    assert runner._environ[LIVEKIT_API_SECRET] == "lk-secret"
+    assert runner._environ[DEEPGRAM_API_KEY] == "platform-deepgram"
+    assert runner._environ[GEMINI_API_KEY] == "platform-gemini"
     assert (
-        fake_environ["GOOGLE_APPLICATION_CREDENTIALS"]
+        runner._environ["GOOGLE_APPLICATION_CREDENTIALS"]
         == "/run/futureagi/platform-vertex.json"
     )
     assert runner._missing_config is None
@@ -1499,9 +1637,9 @@ def test_provider_voice_uses_platform_livekit_without_exposing_customer_livekit(
 
     runner = cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
 
-    assert fake_environ[LIVEKIT_API_KEY] == "platform-livekit-key"
-    assert fake_environ[LIVEKIT_API_SECRET] == "platform-livekit-secret"
-    assert fake_environ[RETELL_API_KEY] == "customer-retell-key"
+    assert runner._environ[LIVEKIT_API_KEY] == "platform-livekit-key"
+    assert runner._environ[LIVEKIT_API_SECRET] == "platform-livekit-secret"
+    assert runner._environ[RETELL_API_KEY] == "customer-retell-key"
     assert runner._livekit_url == "wss://platform-livekit.example"
     assert runner._missing_config is None
 

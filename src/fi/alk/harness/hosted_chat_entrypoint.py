@@ -35,6 +35,52 @@ _PENDING_QUESTION = ".futureagi-pending-question.json"
 _JOURNAL = ".futureagi-conversation.json"
 _PROVIDER_SESSIONS = ".futureagi-provider-sessions.json"
 
+# Both the foreground coordinator and resumed stage conversations need this boundary:
+# authoring tools can edit harness artifacts, but cannot update the target configuration
+# used by the platform or deploy changes to an externally hosted agent.
+_HOSTED_CHAT_CAPABILITIES = """
+
+## What this chat can change
+
+Check whether the requested action is supported BEFORE acknowledging work or calling tools.
+This chat manages the test environment and scenarios for the existing target agent. Available
+tools can inspect progress/results, author or edit environment fixtures and scenarios, correct
+the contract's interpretation of existing agent behavior, and submit simulations when the run
+tool is available. A correction to the contract changes ALK's understanding, not the agent.
+
+This chat CANNOT change the saved target or connection configuration: the phone number dialed
+by a simulation, provider/assistant/agent IDs, connection URLs, credentials, or target model and
+voice settings. It also CANNOT edit or deploy the target agent's actual system prompt,
+instructions, source code, or provider configuration. Updating a local artifact, a copied source
+file, or the contract does not apply any of those changes. Stage routing and request_adjustment
+do not grant these capabilities. Do not use them as a workaround or queue unsupported requests.
+
+For an unsupported request, reply immediately with a clear, brief refusal, naming the limit.
+Do not first say "working on it", "I'll update that", or promise to investigate or apply it.
+Do not ask for a new phone number, prompt, or credentials when you cannot save that change.
+For example:
+- "Change the number we call to +1 202 555 0123" -> "I can't change the simulation's target
+  phone number through this chat. It needs to be changed in the agent configuration."
+- "Update the agent prompt so it always reads full addresses" -> "I can't update the target
+  agent's prompt through this chat. Update it where the agent is configured. I can help add a
+  scenario to test whether it reads the full address."
+Only suggest alternatives this chat actually supports. Drafting or explaining a prompt is
+allowed, but explicitly distinguish a proposed draft from an applied change. Do not invent UI
+buttons, settings paths, or claim that an external change has been made.
+
+Phone numbers in scenario fixture data and the simulated caller's instructions/personality are
+editable test content; they are different from the target phone number and target agent prompt.
+Do not refuse those supported edits just because they mention a number or a prompt. If the user
+only says "change the phone number" or "update the prompt" and the conversation does not make
+the intended object clear, ask which one they mean before promising work. For a mixed request,
+state which part is unsupported and act only on the supported part the user asked for.
+
+For any other requested action, use only capabilities actually exposed by the available tools.
+If there is no tool that can apply the change, explain that it is not possible through this chat.
+A queued adjustment is pending, not applied: only report completion when a tool result or
+observable artifact proves that the requested change has taken effect.
+"""
+
 
 class CoordinatorConversation:
     """One foreground model that owns the user conversation and delegates stage work."""
@@ -117,10 +163,11 @@ class HostedChatRuntime:
                 "You are the foreground harness coordinator. The authoring stages run as "
                 "background workers in this same sandbox. Answer the user immediately from "
                 "run status and observable progress; do not reconstruct or execute Understand, "
-                "Build, Scenarios, or Run yourself. Use get_run_status for progress. Explicit "
-                "changes go through request_adjustment and are applied by the worker at a safe "
-                "boundary. AskUserQuestion is available only when the worker reports a genuine "
-                "missing requirement; never invent a question."
+                "Build, Scenarios, or Run yourself. Use get_run_status for progress. Supported "
+                "authoring changes can be queued through request_adjustment for the worker to "
+                "apply at a safe boundary. AskUserQuestion is available only when the worker "
+                "reports a genuine missing requirement; never invent a question."
+                + _HOSTED_CHAT_CAPABILITIES
             ),
             servers={"platform-control": self._control_server()},
             builtins=("Read", "Glob", "Grep", ASK_TOOL),
@@ -165,9 +212,11 @@ class HostedChatRuntime:
 
         @tool(
             "request_adjustment",
-            "Request a change to the active authoring run. Use this only when the user "
-            "asks to change the environment, scenarios, or agent interpretation. Questions "
-            "must be answered directly without calling this tool.",
+            "Queue a supported authoring change to environment fixtures, scenarios, or the "
+            "contract's interpretation of existing agent behavior. This does not change the "
+            "target phone number, saved connection settings, target agent prompt, source code, "
+            "or provider configuration. Refuse those requests directly without this tool. "
+            "Answer questions directly. A pending response means queued, not applied.",
             schema({"instruction": str}, ["instruction"]),
         )
         async def request_adjustment(args: dict[str, Any]) -> dict[str, Any]:
@@ -203,19 +252,22 @@ class HostedChatRuntime:
         control_only = self._control_only()
         hosted_prompt = (
             "\n\n## Hosted conversation behavior\n"
-            "Reply directly to the user in this conversation. For an actionable "
-            "request, say one short truthful acknowledgement before calling a tool. "
+            "Reply directly to the user in this conversation. First check the capability "
+            "boundaries below. For a supported actionable request, say one short truthful "
+            "acknowledgement before calling a tool. Refuse unsupported changes immediately. "
             "Never describe requested work as completed until its tool result proves "
             "completion. Ask one concise question only when a required fact cannot be "
             "derived from the workspace. Use route_to_stage when another harness "
-            "stage owns the request; stages are an internal detail."
+            "stage owns a supported request; stages are an internal detail."
+            + _HOSTED_CHAT_CAPABILITIES
         )
         if control_only:
             hosted_prompt += (
                 "\n\nThe initial authoring run is active. This is a side conversation: "
                 "answer questions without interrupting or changing the authoring workspace. "
-                "When the user explicitly requests a change, call request_adjustment; the "
-                "active runner applies it at a safe stage boundary. Use get_run_status for "
+                "When the user explicitly requests a supported authoring change, call "
+                "request_adjustment; the active runner can apply it at a safe stage boundary. "
+                "A pending adjustment has not been applied yet. Use get_run_status for "
                 "current progress. Never treat a question as an adjustment."
             )
         servers = spec.servers
@@ -779,7 +831,7 @@ class HostedChatRuntime:
         self._record_provider_session()
         if self._control_only():
             files = {}
-            for name in (_PROVIDER_SESSIONS, _JOURNAL, _PENDING_QUESTION):
+            for name in (_JOURNAL, _PENDING_QUESTION):
                 path = self.workspace / name
                 if path.is_file():
                     files[name] = json.loads(path.read_text(encoding="utf-8"))
@@ -809,7 +861,7 @@ class HostedChatRuntime:
         if not entries:
             return
         files = entries[-1]["files"]
-        for name in (_PROVIDER_SESSIONS, _JOURNAL, _PENDING_QUESTION):
+        for name in (_JOURNAL, _PENDING_QUESTION):
             path = self.workspace / name
             if name in files:
                 temporary = path.with_suffix(".tmp")

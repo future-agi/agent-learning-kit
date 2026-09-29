@@ -94,6 +94,30 @@ def test_data_free_review_is_explicit_and_bound_to_source_and_contract(tmp_path)
         asyncio.run(subject.author_invariants(source, out, world))
 
 
+def test_in_process_graph_state_does_not_require_sql_invariants(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "graph.py").write_text("graph = object()\n")
+    out = tmp_path / "authoring"
+    out.mkdir()
+    (out / "contract.json").write_text(
+        json.dumps(
+            {
+                "agent": "graph",
+                "tools": [{"name": "research"}],
+                "data_store": {"kind": "in_process"},
+                "data_schema": {"AgentState": {"messages": "list"}},
+            }
+        )
+    )
+    world = SimpleNamespace(state=lambda: {"harness_seed_sentinel": []})
+
+    assert asyncio.run(subject.author_invariants(source, out, world)) == []
+    review = json.loads((out / subject.ARTIFACT).read_text())
+    assert review["status"] == "not_applicable"
+    assert "in-process" in review["reason"].lower()
+
+
 @pytest.mark.parametrize(
     "contract_patch,tables",
     [
@@ -271,3 +295,12 @@ def test_large_suite_can_be_reviewed_in_batches_within_bounded_turns(
     monkeypatch.setattr(subject, "Stage", Stage)
     checks = asyncio.run(subject.author_invariants(source, out, ReadWorld()))
     assert [check["name"] for check in checks] == [declaration()["name"]]
+
+
+def test_a_failed_relationship_names_the_rows_to_repair():
+    world = ReadWorld()
+    with pytest.raises(ValueError) as failed:
+        asyncio.run(subject.check_invariants(world, [declaration()]))
+    message = str(failed.value)
+    assert "1 violating rows: {" in message
+    assert "missing" in message

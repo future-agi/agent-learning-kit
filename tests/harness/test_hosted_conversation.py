@@ -697,7 +697,7 @@ def test_vertex_coordinator_opens_durable_session(tmp_path, monkeypatch):
     asyncio.run(exercise())
 
 
-def test_control_coordinator_restores_identity_without_authoring_archive(
+def test_control_coordinator_restores_journal_without_resuming_missing_provider_session(
     tmp_path, monkeypatch
 ):
     monkeypatch.setenv("ALK_HARNESS", "claude")
@@ -753,9 +753,60 @@ def test_control_coordinator_restores_identity_without_authoring_archive(
         job={},
     )
     asyncio.run(restored._restore_coordinator_state())
-    assert (
-        restored.conversation.stage.spec.conversation.resume_session_id
-        == "provider-session-123"
-    )
+    assert restored.conversation.stage.spec.conversation.resume_session_id is None
     assert restored._read_journal() == {"message-1": "completed"}
+    assert not (cold / ".futureagi-provider-sessions.json").exists()
     assert not (cold / "contract.json").exists()
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 409, 422])
+def test_definite_conversation_errors_do_not_retry(status, monkeypatch):
+    from types import SimpleNamespace
+    from fi.alk.harness.hosted_conversation import ConversationTransportError
+
+    class Transport:
+        calls = 0
+
+        def request(self, *args, **kwargs):
+            self.calls += 1
+            return SimpleNamespace(status_code=status, body={})
+
+    async def unexpected_sleep(_delay):
+        pytest.fail("A definite error must not be retried")
+
+    monkeypatch.setattr(asyncio, "sleep", unexpected_sleep)
+    transport = Transport()
+    client = ConversationClient(_capabilities(), transport=transport)
+    with pytest.raises(ConversationTransportError, match=f"HTTP {status}"):
+        asyncio.run(client._request("GET", client.capabilities.endpoints.commands))
+    assert transport.calls == 1
+
+
+def test_unavailable_requests_stop_before_platform_stale_window(monkeypatch):
+    from types import SimpleNamespace
+    from fi.alk.harness.hosted_conversation import ConversationTransportError
+
+    clock = [0.0]
+    timeouts = []
+
+    class Transport:
+        def request(self, *args, timeout, **kwargs):
+            timeouts.append(timeout)
+            clock[0] += timeout
+            return SimpleNamespace(status_code=503, body={})
+
+    async def exercise():
+        loop = asyncio.get_running_loop()
+        monkeypatch.setattr(loop, "time", lambda: clock[0])
+
+        async def sleep(delay):
+            clock[0] += delay
+
+        monkeypatch.setattr(asyncio, "sleep", sleep)
+        client = ConversationClient(_capabilities(), transport=Transport())
+        with pytest.raises(ConversationTransportError, match="remained unavailable"):
+            await client._request("GET", client.capabilities.endpoints.commands)
+
+    asyncio.run(exercise())
+    assert 35 < clock[0] <= 60
+    assert timeouts[-1] < timeouts[0]

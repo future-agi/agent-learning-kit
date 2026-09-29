@@ -128,12 +128,17 @@ def test_both_backends_report_the_same_units():
     assert _tokens({"m": {"inputTokens": 900, "outputTokens": 120}}) == {
         "tokens_in": 900,
         "tokens_out": 120,
+        "tokens_cached": 0,
     }
     assert _tokens(
         {"a": {"input_tokens": 5, "output_tokens": 6}, "b": {"input_tokens": 7, "output_tokens": 8}}
-    ) == {"tokens_in": 12, "tokens_out": 14}
-    assert _tokens(None) == {"tokens_in": 0, "tokens_out": 0}
-    assert _tokens({"m": object()}) == {"tokens_in": 0, "tokens_out": 0}
+    ) == {"tokens_in": 12, "tokens_out": 14, "tokens_cached": 0}
+    assert _tokens(None) == {"tokens_in": 0, "tokens_out": 0, "tokens_cached": 0}
+    assert _tokens({"m": object()}) == {"tokens_in": 0, "tokens_out": 0, "tokens_cached": 0}
+    # Cache reads arrive beside fresh input, the way the Messages API reports them.
+    assert _tokens(
+        {"m": {"inputTokens": 40, "outputTokens": 10, "cacheReadInputTokens": 9_000}}
+    ) == {"tokens_in": 9_040, "tokens_out": 10, "tokens_cached": 9_000}
 
 
 def test_the_ledger_carries_input_the_provider_served_from_cache(tmp_path):
@@ -212,3 +217,12 @@ def test_the_price_table_agrees_with_the_platform_model_table():
         assert entry, f"{name} is priced here but absent from the platform table"
         assert round(entry["input_cost_per_token"] * 1_000_000, 6) == want_in, name
         assert round(entry["output_cost_per_token"] * 1_000_000, 6) == want_out, name
+
+
+def test_a_gateway_route_in_front_of_the_model_does_not_lose_its_price():
+    from fi.alk.harness.backends import vertex_gemini
+
+    bare = vertex_gemini.priced("gemini-3.7-flash", 1_000_000, 1_000_000)
+    assert bare is not None
+    assert vertex_gemini.priced("vertex_ai/gemini-3.7-flash", 1_000_000, 1_000_000) == bare
+    assert vertex_gemini.priced("vertex_ai/a-model-nobody-listed", 1_000, 1_000) is None

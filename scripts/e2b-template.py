@@ -54,8 +54,11 @@ PLATFORM_BOOTSTRAP_COMMAND = (
     "printf '#!/bin/sh\\nexec /opt/alk-venv/bin/python \"$@\"\\n' "
     "> /usr/local/bin/python && chmod 0755 /usr/local/bin/python && "
     "ln -sfn /opt/alk-venv/bin/pip /usr/local/bin/pip && "
-    "ln -sfn /opt/alk-venv/bin/uv /usr/local/bin/uv && "
-    "ln -sfn /opt/alk-venv/bin/uvx /usr/local/bin/uvx"
+    "if [ -x /opt/alk-venv/bin/uv ]; then "
+    "ln -sfn /opt/alk-venv/bin/uv /usr/local/bin/uv; fi && "
+    "if [ -x /opt/alk-venv/bin/uvx ]; then "
+    "ln -sfn /opt/alk-venv/bin/uvx /usr/local/bin/uvx; fi && "
+    "test -x /usr/local/bin/uv && test -x /usr/local/bin/uvx"
 )
 HOSTED_RUNTIME_ENV = {
     "PATH": (
@@ -511,6 +514,12 @@ def certify_template(
             timeout=60,
         )
         checks.append("platform-bootstrap")
+        _sandbox_command(
+            sandbox,
+            "uv --version && uvx --version",
+            label="uv-toolchain",
+        )
+        checks.append("uv-toolchain")
 
         expected_catalog = catalog_path.read_bytes()
         actual_catalog = sandbox.files.read(
@@ -554,10 +563,10 @@ def certify_template(
             )
             checks.append(f"engine-{engine}")
 
-        disk_path = "/tmp/futureagi-certification-disk-kib"
+        disk_path = "/tmp/futureagi-certification-disk-capacity-kib"
         _sandbox_command(
             sandbox,
-            f"df -Pk /work | awk 'NR == 2 {{print $4}}' > {disk_path}",
+            f"df -Pk /work | awk 'NR == 2 {{print $2}}' > {disk_path}",
             label="disk-capacity",
         )
         disk_output = sandbox.files.read(disk_path, user="svc-control")
@@ -565,7 +574,7 @@ def certify_template(
         disk_gb = disk_kib // (1024 * 1024)
         if disk_kib < required_disk_gb * 1024 * 1024:
             raise RuntimeError(
-                f"certification failed [disk-capacity]: {disk_gb} GiB available, "
+                f"certification failed [disk-capacity]: {disk_gb} GiB capacity, "
                 f"{required_disk_gb} GiB required"
             )
         checks.append("disk-capacity")

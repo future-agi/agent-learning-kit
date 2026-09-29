@@ -25,6 +25,62 @@ MANIFEST = "manifest.json"
 STATE = "state.json"
 
 
+def _provenance_from_job(source_root: Path) -> dict[str, str]:
+    """Source provenance read from the job record beside a checkout that has no `.git`."""
+    for candidate in (source_root.parent / "job.json", source_root / "job.json"):
+        try:
+            body = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        named = body.get("source") if isinstance(body, dict) else None
+        if not isinstance(named, dict):
+            continue
+        found = {
+            key: str(named.get(source) or "")
+            for key, source in (
+                ("commit", "commit_sha"),
+                ("remote", "repository"),
+                ("ref", "ref"),
+            )
+        }
+        return {key: value for key, value in found.items() if value}
+    return {}
+
+
+def source_provenance(source_root: str) -> dict[str, str]:
+    """Which commit of which repository this world's tools came from; remote userinfo stripped."""
+    import re
+    import subprocess
+
+    root = Path(source_root or "")
+    if not source_root or not root.is_dir():
+        return {}
+    if not (root / ".git").exists():
+        return _provenance_from_job(root)
+    found: dict[str, str] = {}
+    for key, argv in (
+        ("commit", ["rev-parse", "HEAD"]),
+        ("remote", ["remote", "get-url", "origin"]),
+        ("ref", ["rev-parse", "--abbrev-ref", "HEAD"]),
+    ):
+        try:
+            said = subprocess.run(
+                ["git", "-C", str(root), *argv],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        value = (said.stdout or "").strip()
+        if said.returncode == 0 and value:
+            found[key] = value
+    if "remote" in found:
+        found["remote"] = re.sub(r"://[^/@]*@", "://", found["remote"])
+    return found
+
+
 def saved(path: str | Path | None) -> bool:
     """Whether a world has been written here.
 
@@ -131,7 +187,17 @@ def save(
                 # Written because restore reads it. Without it a restored world publishes no
                 # tool descriptions at all, and every later stage has to reconstruct them.
                 "tool_specs": list(world.tools),
-                "tables": {name: len(rows) for name, rows in state.items()},
+                # Source-owned in-memory collections are not necessarily tabular. A flag,
+                # counter, or singleton object is still valid observable state and must not
+                # crash authoring merely because it has no ``len``.
+                "tables": {
+                    name: (
+                        len(rows)
+                        if isinstance(rows, (dict, list, tuple, set, str, bytes))
+                        else int(rows is not None)
+                    )
+                    for name, rows in state.items()
+                },
                 # Kept because they are judgement about this agent, not something a schema
                 # implies. A world picked up again can be re-verified without redeclaring them.
                 "sequences": list(sequences or []),
@@ -142,6 +208,7 @@ def save(
                 # be able to import the tools it was bound to, and a scenario run happens
                 # long after the build stage that found the path.
                 "source_root": world.source_root,
+                "source_provenance": source_provenance(world.source_root),
                 # A run refuses legacy/demo worlds whose handlers were authored by the harness.
                 # New worlds can only acquire handlers through adopt_tool, and a source root is
                 # required for that import to work.

@@ -255,6 +255,25 @@ async def _understand(args: argparse.Namespace) -> int:
     if contract is None:
         print("\nNo contract was submitted.", file=sys.stderr)
         return 1
+    generic = bool(
+        job is not None
+        and isinstance(getattr(job, "metadata", None), dict)
+        and job.metadata.get("generic_harness_v1") is True
+    )
+    if generic:
+        from .certification import GenericHarnessArtifactStore
+        from .provision import source_fingerprint
+        from .source_discovery import discover_code_source_model
+
+        digest = source_fingerprint(Path(args.path).resolve())
+        if not digest.startswith("sha256:"):
+            digest = f"sha256:{digest}"
+        source_model = discover_code_source_model(
+            Path(args.path), contract, source_digest=digest
+        )
+        GenericHarnessArtifactStore(destination / "generic-harness").write_source_model(
+            source_model
+        )
     print(
         f"\ncontract: {len(contract.tools)} tools, "
         f"{len(contract.hard_constraints)} rules, "
@@ -476,6 +495,19 @@ async def _scenarios(args: argparse.Namespace) -> int:
     existing = len(load_written(destination))
     wanted = args.count or existing or 10
 
+    # The Uber Guest Booking POC policy is supplied only through the platform-owned simulator
+    # secret channel and is gated against the exact submitted phone target. Keep it in the model's
+    # authoring brief: saved scenarios should be authored with natural PIN behavior, never rewritten
+    # mechanically after generation or intercepted while a call is running.
+    from .poc_guest_booking import guest_booking_pin_guidance
+
+    poc_guidance = guest_booking_pin_guidance(
+        getattr(args, "job", None), scenario_count=wanted
+    )
+    guidance = [*(getattr(args, "guidance", None) or [])]
+    if poc_guidance:
+        guidance.append(poc_guidance)
+
     print(
         f"agent: {contract.agent}  "
         + (f"({existing} scenarios, loaded)" if existing else f"(writing {wanted})")
@@ -488,10 +520,12 @@ async def _scenarios(args: argparse.Namespace) -> int:
         out=destination,
         wanted=wanted,
         ask=permission_gate(_ask_operator) if args.interactive else None,
+        authoring_guidance=poc_guidance,
     )
     await _converse(
         stage,
-        scenario_opening(contract, wanted, existing) + _guidance(args),
+        scenario_opening(contract, wanted, existing)
+        + _guidance(argparse.Namespace(guidance=guidance)),
         interactive=args.interactive,
         until=lambda: bool(load_written(destination)),
         nudge=(
@@ -732,6 +766,32 @@ def _load_connection_env(source: Path) -> list[str]:
     return loaded
 
 
+def _declared_connection_env_names(source: Path) -> list[str]:
+    """Preserve local source configuration *names* across a sealed-bundle rerun.
+
+    The bundle intentionally excludes dotenv values.  Without their names, the local
+    provisioner cannot pass even operator-supplied credentials to the submitted runtime.
+    Hosted jobs already carry these names in their run-scoped secret references.
+    """
+    names: set[str] = set()
+    for candidate in (source / ".env.local", source / ".env"):
+        if not candidate.is_file():
+            continue
+        for raw in candidate.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            name = line.split("=", 1)[0].removeprefix("export ").strip()
+            if (
+                name
+                and name[0].isalpha()
+                and name.replace("_", "").isalnum()
+                and not name.startswith("ALK_")
+            ):
+                names.add(name)
+    return sorted(names)
+
+
 def _new_adjustments(
     path: Path | None, cursor: int
 ) -> tuple[list[dict[str, Any]], int]:
@@ -806,7 +866,11 @@ async def _auto(args: argparse.Namespace) -> int:
         ),
         agent=AgentConnection(connector="auto"),
         scenario_count=args.count,
-        metadata={"agent_name": name, "source_kind": args.kind},
+        metadata={
+            "agent_name": name,
+            "source_kind": args.kind,
+            "environment_value_names": _declared_connection_env_names(source),
+        },
     )
     (destination / "job.json").write_text(
         job.model_dump_json(indent=2) + "\n", encoding="utf-8"
@@ -935,6 +999,7 @@ async def _auto(args: argparse.Namespace) -> int:
                 count=args.count,
                 interactive=False,
                 guidance=[],
+                job=job,
             ),
         ),
     ]
@@ -978,7 +1043,11 @@ async def _auto(args: argparse.Namespace) -> int:
                 repair_attempt = 0
                 wanted = int(stage_args.count)
                 written_count = len(load_written(destination))
-                while written_count != wanted and repair_attempt < 2:
+                # One round per writer's worth of missing scenarios, capped.
+                from .scenarios import writers_for
+
+                rounds = min(max(2, writers_for(max(wanted - written_count, 1))), 6)
+                while written_count != wanted and repair_attempt < rounds:
                     repair_attempt += 1
                     missing = wanted - written_count
                     # Count alone is the wrong instruction: asked only for a number, the
@@ -989,7 +1058,11 @@ async def _auto(args: argparse.Namespace) -> int:
                             f"only {written_count} are currently saved. "
                             + (
                                 f"Add exactly {missing} distinct validated scenario(s) and "
-                                "call save_scenarios. Preserve all existing scenarios. Each "
+                                "call save_scenarios. A writer only runs when you call it: "
+                                "saying that writers have been dispatched, or standing by for "
+                                "them, writes nothing and ends this stage where it stands. Put "
+                                "the calls in the message and read every report before you "
+                                "finish. Preserve all existing scenarios. Each "
                                 "one must meet the same bar as the rest of the suite: a "
                                 "different branch of the agent's behaviour from every "
                                 "scenario already saved, several steps deep, and failing "

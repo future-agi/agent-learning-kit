@@ -391,10 +391,10 @@ def test_vapi_originator_supports_provider_managed_phone_number() -> None:
         assert call.status == "queued"
 
     asyncio.run(run())
-    assert [request.url.path for request in requests] == [
-        "/phone-number/phone-123",
-        "/call",
-    ]
+    paths = [request.url.path for request in requests]
+    assert "/assistant/assistant-123" in paths
+    assert "/phone-number/phone-123" in paths
+    assert paths[-1] == "/call"
 
 
 def test_platform_agent_updates_version_instead_of_creating_new_definition(

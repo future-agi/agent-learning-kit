@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .contract import MODALITIES, AgentContract, validate_contract
+from .contract import AgentContract, known_modalities, validate_contract
 
 CONTRACT = "contract.json"
 
@@ -145,10 +145,10 @@ def set_modality(
     read.
     """
     named = (modality or "").strip().lower()
-    if named not in MODALITIES:
+    if named not in known_modalities():
         return (
             False,
-            f"{named!r} is not a modality. It is one of: {', '.join(MODALITIES)}",
+            f"{named!r} is not a modality. It is one of: {', '.join(known_modalities())}",
         )
     if not why.strip():
         return False, "say why: modality decides how every scenario is run"

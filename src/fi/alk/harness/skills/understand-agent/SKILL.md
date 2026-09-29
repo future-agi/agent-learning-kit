@@ -139,6 +139,17 @@ Find, in roughly this order:
    existing health path. Do not invent an endpoint. Without a real ingress the runtime may be
    startable but the simulator cannot honestly claim to have exercised it.
 
+   If an HTTP ingress uses neither the ALK nor OpenAI envelope, do not stop and do not label it as
+   one of those protocols. Read the route models, OpenAPI setup, client examples and tests, then use
+   the JSON-template mapping to record its exact request body, the response text path, and any source-required
+   setup requests such as session creation. These mappings wrap the existing API; they do not
+   modify the agent. When a setup response returns an identifier or token required by a later
+   request, declare a capture from its dotted response path (for example
+   `{"session_id": "id"}`) and reference it later as `{{session_id}}`; never substitute an
+   unrelated built-in identifier. Use only documented template placeholders and only routes
+   proven in source. In particular, a source field named user ID is not itself a template
+   variable: map it to an available identifier such as `{{thread_id}}` when appropriate.
+
 12. **Its data store, and how the connection is chosen.** Which kind it is, and whether the
     connection comes from an environment variable, a config file, or a constructor argument. Say
     so if it is hardcoded: that is the difference between substituting a store cleanly and having
@@ -169,6 +180,11 @@ Find, in roughly this order:
     An exact replica is not the goal. Copying thousands of records through this stage loses
     fidelity rather than gaining it. What is needed is enough for a world that exercises the same
     flows and can refuse for the same reasons.
+
+    If you declare structured collections in `data_schema`, put representative fixture rows in
+    `base_environment` under those *exact collection names*. A semantic summary under different
+    keys cannot seed or verify the store. Read large scenario/test corpora selectively; start
+    from executable code and the fixture/schema loader, then sample scenarios only as needed.
 
 14. **Use cases.** What this agent is *for*, one plain sentence each. "Cancel an order that has
     not yet shipped." "Look up a customer by email." These are capabilities, not test cases: do
@@ -220,6 +236,7 @@ itself, whether it looped, whether it handled being interrupted, whether it stay
 language. Do not choose one that repeats what a check already settles from real tool calls, such as
 task completion; the check reads the calls, the judge only reads the transcript, and the check is
 the better witness.
+If the briefing has no eval catalogue, omit `chosen_evals` entirely.
 
 Two rules, and both are refused rather than tolerated:
 

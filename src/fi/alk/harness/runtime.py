@@ -56,7 +56,11 @@ class RuntimeProvider(Protocol):
     ) -> EnvironmentRuntime: ...
 
     async def reset(
-        self, runtime: EnvironmentRuntime, *, work_directory: Path
+        self,
+        runtime: EnvironmentRuntime,
+        *,
+        work_directory: Path,
+        keep_processes: bool = False,
     ) -> None: ...
 
     async def healthy(
@@ -139,7 +143,13 @@ class LocalComposeRuntimeProvider:
             },
         )
 
-    async def reset(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> None:
+    async def reset(
+        self,
+        runtime: EnvironmentRuntime,
+        *,
+        work_directory: Path,
+        keep_processes: bool = False,
+    ) -> None:
         from .provision import reset
 
         environment = await asyncio.to_thread(reset, work_directory)

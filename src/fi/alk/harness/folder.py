@@ -21,12 +21,16 @@ something you can argue with.
 
 from __future__ import annotations
 
+import ast
 import json
+import re
+import textwrap
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .catalogue import Catalogue
+from .catalogue import Catalogue, SubGoal
 from .scenario import Scenario
 from .world.runtime import GeneratedWorld
 
@@ -135,16 +139,20 @@ def folder_for(destination: Path, name: str) -> Path:
     return Path(destination) / SCENARIOS / name
 
 
+def document_for(scenario: Scenario) -> dict:
+    """One scenario as JSON: everything about it except the code, which lives in its own files."""
+    body = scenario.model_dump()
+    body.pop("setup_code", None)
+    body.pop("ready_code", None)
+    return body
+
+
 def write_folder(scenario: Scenario, catalogue: Catalogue, destination: Path) -> Path:
     """Write one scenario out as its own folder of files."""
     root = folder_for(destination, scenario.name)
     (root / "checks").mkdir(parents=True, exist_ok=True)
 
-    body = scenario.model_dump()
-    # The code lives in its own files; keeping a second copy in the JSON would let the two drift
-    # and leave nobody able to say which one ran.
-    body.pop("setup_code", None)
-    body.pop("ready_code", None)
+    body = document_for(scenario)
     (root / "scenario.json").write_text(
         json.dumps(body, indent=2, ensure_ascii=False), encoding="utf-8"
     )
@@ -167,7 +175,43 @@ def write_folder(scenario: Scenario, catalogue: Catalogue, destination: Path) ->
         (root / "checks" / f"{name}.py").write_text(
             sub_goal.check.rstrip() + "\n" + _RUNNABLE, encoding="utf-8"
         )
+
+    # Drop checks for sub-goals a rewrite removed.
+    wanted = {f"{name}.py" for name in scenario.sub_goals}
+    for stale in (root / "checks").glob("*.py"):
+        if stale.name not in wanted:
+            stale.unlink()
     return root
+
+
+def refresh_check(destination: Path, sub_goal: SubGoal) -> list[str]:
+    """Bring every folder that names this sub-goal into step with its new definition."""
+    root = Path(destination) / SCENARIOS
+    if not root.is_dir():
+        return []
+    touched: list[str] = []
+    for folder in sorted(one for one in root.iterdir() if one.is_dir()):
+        body = folder / "scenario.json"
+        if not body.is_file():
+            continue
+        try:
+            named = json.loads(body.read_text(encoding="utf-8")).get("sub_goals") or []
+        except (OSError, ValueError):
+            continue
+        if sub_goal.name not in named:
+            continue
+        path = folder / "checks" / f"{sub_goal.name}.py"
+        if sub_goal.deterministic():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                sub_goal.check.rstrip() + "\n" + _RUNNABLE, encoding="utf-8"
+            )
+        elif path.is_file():
+            path.unlink()
+        else:
+            continue
+        touched.append(folder.name)
+    return touched
 
 
 def read_folder(destination: Path, name: str) -> Scenario | None:
@@ -184,7 +228,7 @@ def read_folder(destination: Path, name: str) -> Scenario | None:
 
 
 def write_index(scenarios: list[Scenario], destination: Path) -> Path:
-    """The whole suite at a glance, over the folders.
+    """The whole suite, over the folders.
 
     Regenerated from the folders rather than maintained alongside them, so it can never disagree
     with what is actually on disk.
@@ -196,11 +240,7 @@ def write_index(scenarios: list[Scenario], destination: Path) -> Path:
         json.dumps(
             [
                 {
-                    "name": one.name,
-                    "use_case": one.use_case,
-                    "tests": one.tests,
-                    "instruction": one.instruction,
-                    "sub_goals": one.sub_goals,
+                    **document_for(one),
                     "steps": len(one.solution),
                     "folder": f"{SCENARIOS}/{one.name}",
                 }
@@ -232,3 +272,112 @@ def read_all(destination: Path) -> list[Scenario]:
         if scenario is not None:
             found.append(scenario)
     return found
+
+
+def _tools_selected(body: str) -> set[str]:
+    """Every tool name this check narrows the calls to."""
+    try:
+        tree = ast.parse(textwrap.dedent(body))
+    except SyntaxError:
+        return set()
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Compare) or not node.ops:
+            continue
+        if not isinstance(node.ops[0], ast.Eq):
+            continue
+        left, right = node.left, node.comparators[0]
+        if isinstance(right, ast.Attribute) and right.attr == "name":
+            left, right = right, left
+        if not (isinstance(left, ast.Attribute) and left.attr == "name"):
+            continue
+        if isinstance(right, ast.Constant) and isinstance(right.value, str):
+            found.add(right.value)
+    return found
+
+
+def unchecked_sub_goals(folder: Path, catalogue: Catalogue) -> list[str]:
+    """Scenarios naming a sub-goal the catalogue settles in code with no check file to settle it."""
+    settled = {one.name for one in catalogue.sub_goals if one.deterministic()}
+    if not settled:
+        return []
+    problems: list[str] = []
+    for scenario_dir in sorted(
+        one for one in (Path(folder) / SCENARIOS).glob("*") if one.is_dir()
+    ):
+        body = scenario_dir / "scenario.json"
+        if not body.is_file():
+            continue
+        try:
+            named = json.loads(body.read_text(encoding="utf-8")).get("sub_goals") or []
+        except (OSError, ValueError):
+            continue
+        missing = [
+            name
+            for name in named
+            if name in settled
+            and not (scenario_dir / "checks" / f"{name}.py").is_file()
+        ]
+        if missing:
+            problems.append(
+                f"{scenario_dir.name}: {', '.join(sorted(missing))} settled in code by the "
+                "catalogue but no check file was written, so nothing would measure it. Define "
+                "it again with add_sub_goal and save"
+            )
+    return problems
+
+
+def unasserted_behaviour(scenarios: list[Scenario], folder: Path) -> list[str]:
+    """The claimed last call of a reference solution that no check for that scenario reads."""
+    problems: list[str] = []
+    for scenario in scenarios:
+        used = [step.tool for step in (scenario.solution or []) if step.tool]
+        if not used:
+            continue
+        checks = folder_for(folder, scenario.name) / "checks"
+        if not checks.is_dir():
+            continue
+        asserted = ""
+        for check in sorted(checks.glob("*.py")):
+            asserted += check.read_text(encoding="utf-8", errors="replace").split("if __name__")[0]
+        outcome = used[-1]
+        claimed = f"{scenario.name} {scenario.tests or ''}".lower()
+        spoken = [word for word in re.split(r"[^a-z]+", outcome.lower()) if len(word) > 3]
+        # Adjacent words only: matching them separately flagged unrelated tests lines.
+        together = re.search(r"\W+".join(spoken), claimed) if spoken else None
+        if outcome not in asserted and together:
+            problems.append(
+                f"{scenario.name}: it says it tests {outcome}, its reference solution ends there, "
+                "and no check mentions it, so an agent that stops short of it passes anyway"
+            )
+    return problems
+
+
+def check_problems(folder: Path) -> list[str]:
+    """Checks that touch neither world nor arguments, or that read the same tool call twice."""
+    problems: list[str] = []
+    plumbing = 0
+    for scenario_dir in sorted(one for one in (folder / SCENARIOS).glob("*") if one.is_dir()):
+        by_tool: dict[str, list[str]] = defaultdict(list)
+        for check in sorted(scenario_dir.glob("checks/*.py")):
+            body = check.read_text(encoding="utf-8").split("if __name__")[0]
+            inside = body.replace("def check(world, calls):", "")
+            reads_world = "world" in inside
+            reads_arguments = "arguments" in inside
+            if not reads_world and not reads_arguments:
+                plumbing += 1
+            if not reads_world:
+                for tool in _tools_selected(inside):
+                    by_tool[tool].append(check.stem)
+        for tool, names in sorted(by_tool.items()):
+            if len(names) > 1:
+                problems.append(
+                    f"{scenario_dir.name}: {', '.join(sorted(names))} all read the same {tool} call "
+                    "and none of them reads the world, so they are one claim written more than once"
+                )
+    if plumbing:
+        problems.append(
+            f"{plumbing} checks assert only that a tool was called, touching neither its arguments "
+            "nor the world. Every agent that reaches the tool passes them."
+        )
+    return problems

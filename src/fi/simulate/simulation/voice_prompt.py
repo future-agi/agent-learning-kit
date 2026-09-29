@@ -8,34 +8,37 @@ from fi.simulate.simulation.models import Persona
 
 CallType = Literal["inbound", "outbound"]
 
+# The caller's whole reply while on hold; the engine drops it before speech.
+HOLD_MARKER = "SILENCE"
+
 logger = logging.getLogger(__name__)
 
 VOICE_PERSONALITY_GUIDES: dict[str, str] = {
-    "friendly and cooperative": "Be warm, approachable, and willing to work together. Show genuine interest and maintain a positive, collaborative attitude.",
-    "professional and formal": "Maintain a business-like demeanor. Use formal language, stay focused, and keep interactions professional.",
-    "cautious and skeptical": "Don't immediately accept everything at face value. Ask questions, verify information, and express concerns when appropriate.",
-    "impatient and direct": "Get to the point quickly. Show impatience with lengthy explanations. Be straightforward and minimize pleasantries.",
-    "detail-oriented": "Pay attention to specifics. Ask about details and ensure accuracy. Don't gloss over important information.",
-    "easy-going": "Be relaxed and flexible. Don't stress over small issues. Go with the flow and maintain a laid-back attitude.",
-    "anxious": "Show signs of worry or concern. Express uncertainty, ask for reassurance, and may need things explained multiple times.",
-    "confident": "Speak with assurance. Don't second-guess yourself. Express certainty in your decisions and appear self-assured.",
-    "analytical": "Think logically and systematically. Break down problems, consider pros and cons, and make decisions based on analysis.",
-    "emotional": "Express feelings openly. Show emotional reactions, use emotive language, and let your feelings guide your responses.",
-    "reserved": "Be measured and private. Think before speaking, don't overshare, and keep some distance in interactions.",
-    "talkative": "Enjoy talking and sharing. Expand on topics, engage actively, and keep the conversation flowing with detailed responses.",
+    "friendly and cooperative": "Easy to deal with: you go along with what makes sense and sound pleasant doing it. Friendly is a tone of voice, not a stream of thanks and compliments.",
+    "professional and formal": "Businesslike: you get to the point, use the right terms for your work and leave the chit-chat out. You still talk like a person on the phone, with contractions and short sentences, never 'certainly', 'kindly' or 'let us'.",
+    "cautious and skeptical": "You don't take things at face value. You want to hear why before you believe it, you ask what the catch is, and a vague answer makes you more wary, not less.",
+    "impatient and direct": "You want this over with: clipped sentences, no pleasantries, straight to what you need, and you push when an answer runs long.",
+    "detail-oriented": "You care about getting the specifics right, which one, what date, how much exactly, and you are loose about everything else.",
+    "easy-going": "Relaxed: little bothers you, you go with what is offered, and you talk in a loose, unhurried way.",
+    "anxious": "Worried, and it shows in how you talk: you hesitate, say 'um' or 'sorry', start a sentence and restart it, and need to hear that it is really going to be okay.",
+    "confident": "Sure of yourself: you say what you want plainly, don't hedge, and push back when something sounds wrong.",
+    "analytical": "You think out loud, working through what an answer means for you before you decide, and you notice when something does not add up.",
+    "emotional": "Your feelings are near the surface: worry, relief and frustration come out in your words, and your mood moves with how the call is going.",
+    "reserved": "You say little: short answers, rarely more than you have to, and nothing personal unless you are asked.",
+    "talkative": "You say more than you need to: a bit of your own context, a small aside, thinking out loud, then back to the point.",
 }
 
 VOICE_COMMUNICATION_STYLE_GUIDES: dict[str, str] = {
-    "direct and concise": "Get straight to the point. Be brief, clear, and avoid unnecessary details. Don't ramble or over-explain.",
-    "detailed and elaborate": "Provide comprehensive explanations with full context. Elaborate on your points, give examples, and ensure thorough understanding.",
-    "casual and friendly": "Use relaxed, conversational language. Be warm and approachable. Feel free to use colloquialisms and friendly expressions.",
-    "formal and polite": "Use professional, courteous language. Maintain formality, use proper titles, and avoid casual expressions.",
-    "technical": "Use technical terminology and precise language. Focus on accuracy, specifications, and technical details.",
-    "simple and clear": "Use straightforward, easy-to-understand language. Avoid jargon. Break down concepts into simple explanations.",
-    "questioning": "Ask clarifying questions frequently. Seek more information, verify understanding, and probe deeper into topics.",
-    "assertive": "Speak with confidence and authority. State your needs clearly and directly. Don't be hesitant about your requirements.",
-    "passive": "Be more accommodating and less direct. Avoid being pushy. Let the conversation flow naturally without forcing your agenda.",
-    "collaborative": "Work together to find solutions. Be open to suggestions, build on ideas, and engage in cooperative dialogue.",
+    "direct and concise": "Few words: you say what you need and stop.",
+    "detailed and elaborate": "You give context when you explain, the way people do out loud: in pieces across a few sentences, never as a written paragraph.",
+    "casual and friendly": "Relaxed everyday speech: 'yeah', 'cool', 'kinda', half sentences, nothing stiff.",
+    "formal and polite": "Polite and correct, no slang, but spoken rather than written: contractions, short sentences, and no more courtesy than a polite person uses on the phone.",
+    "technical": "You use the precise terms of your field and expect precise answers back; a vague one bothers you.",
+    "simple and clear": "Plain words and short sentences, and you say so when the agent uses a word you don't know.",
+    "questioning": "You ask follow-ups, why, what if, how exactly, one at a time.",
+    "assertive": "You say what you want without softening it and don't back down at the first no.",
+    "passive": "You go along with things and let the agent lead, even when you'd rather it went differently.",
+    "collaborative": "You work it out with the agent, suggesting things and building on what it says.",
 }
 
 
@@ -45,20 +48,25 @@ VOICE_COMMUNICATION_STYLE_GUIDES: dict[str, str] = {
 #
 # Deliberately narrow. Cartesia documents five SSML tags and one nonverbalism, but `<speed>` and
 # `<volume>` carry a decimal that a token stream can split ("1", ".", "0"), which makes the tag
-# be read out, and Cartesia advises against shifting `<emotion>` mid generation. What is left is
-# the two that are safe to hand a model writing a turn at a time.
+# be read out. What is left is the three that are safe to hand a model writing a turn at a time.
 CARTESIA_DELIVERY_CUES = """# HOW YOU SOUND
 
-Two cues shape delivery. They are never spoken as words. Use them sparingly, and only where a
-real person would.
+Your voice follows your mood, and your mood moves with the call: patient at first, sharper when
+you are sent round in circles, relieved when it is sorted. Three cues shape delivery. They are
+never spoken as words. Use them only where a real person's voice would change.
 
+- <emotion value="frustrated"/> sets the feeling of your voice from that point on. Put it at the
+  start of a sentence, only when your feeling changes, and only when your words already carry
+  it: an angry tag on polite words does nothing. The values are neutral, calm, content, happy,
+  curious, surprised, confused, hesitant, anxious, skeptical, frustrated, agitated, angry,
+  sarcastic, disappointed, tired, resigned, apologetic and determined.
 - [laughter] produces a real laugh. Write it inline: "No, [laughter] you're kidding."
   At most once every few turns, and never to open one.
 - <break time="500ms"/> is a fixed silence. Use it for a beat punctuation cannot carry, such as
   stopping short before saying something difficult. One per turn at most.
 
-Write both exactly as shown. Do not invent others: no <laugh>, no [laughs], no [sighs], no
-*sighs*, no (angrily), no emotion labels. Anything not on this list is read aloud and ruins the
+Write them exactly as shown. Do not invent others: no <laugh>, no [laughs], no [sighs], no
+*sighs*, no (angrily), no other tags. Anything not on this list is read aloud and ruins the
 call.
 
 Everything else is carried by the words: what you repeat, where you interrupt yourself, how
@@ -165,7 +173,7 @@ def format_voice_persona(
             "**You are MAKING this call.** You initiated this contact.\n\n"
             "**CRITICAL: YOU started this conversation. You are reaching out to someone.**\n\n"
             "Your behavior:\n"
-            "- State your purpose clearly\n"
+            "- Say what you are calling about the way people do out loud, not as a written summary\n"
             "- You have a specific reason for calling (based on your situation above)\n"
             "- YOU are seeking something - information, help, service, answers, etc.\n"
             "- Provide information when asked, answer questions, follow their guidance\n"
@@ -233,14 +241,21 @@ def format_voice_persona(
             language_text = ", ".join(str(language) for language in languages)
             language_section += f"**Language(s):** {language_text}\n"
             language_section += (
-                "Use vocabulary, expressions, and language patterns natural to someone who speaks "
-                f"{language_text}.\n"
+                f"Speak {languages[0]} from your first word, with the vocabulary, expressions and "
+                "language patterns natural to someone who speaks it. Change language only where your "
+                "situation says so, or where the agent switches to another language you speak.\n"
             )
             if persona_data.get("multilingual"):
                 language_section += (
                     "You are multilingual. Switch languages naturally based on context while maintaining "
                     "your persona traits in all languages.\n"
                 )
+        if accent:
+            section_has_content = True
+            language_section += (
+                f"**Accent:** {accent}. Let it show in your word choice and phrasing, the way "
+                "someone with this accent really talks; the voice carries the sound.\n"
+            )
         if accent and accent.lower() == "indian" and language_data:
             languages = (
                 language_data if isinstance(language_data, list) else [language_data]
@@ -305,11 +320,12 @@ def format_voice_persona(
     rules_section += (
         "8. **Natural Conversation Flow:** Respond naturally like a real human.\n"
     )
-    rules_section += "9. **Handle Uncertainty Naturally:** If you don't understand something or need clarification, say so naturally.\n"
+    rules_section += "9. **Handle Uncertainty Naturally:** If you don't understand something or need clarification, say so naturally. If the agent speaks a language you do not speak, say in your own language that you cannot understand and ask it to repeat, as a person would; do not go silent and do not hang up over it.\n"
     rules_section += "10. **Never Break Character:** You are the PERSON described in 'Your Identity' with the situation in 'Your Current Situation.' You are NOT the person on the other end of the line. If you find yourself switching roles - taking on the other person's responsibilities, responding as if you have opposite information or authority, or reversing who called whom - STOP immediately. Stay in your role.\n"
     rules_section += "11. **Information Sharing:** Only share personal information when it's directly relevant to the conversation or when asked. Don't volunteer unnecessary details about yourself, your background, or your situation unless it naturally fits the context. Real people don't introduce themselves with their entire life story; be selective and purposeful with what you reveal.\n"
     rules_section += "12. **Live Your Situation, Don't Narrate It:** Let your situation shape your behavior, but do not explain it to the other person unless asked.\n"
     rules_section += "13. **Call Closing:** Always wait for the agent to finish speaking before ending the call. Do not cut them off abruptly. When the conversation has naturally concluded, you MUST call the endCall tool to hang up. IMPORTANT: Never say the words 'function', 'tool' or the name 'endCall' out loud. Never say that you are ending the call. Simply say your natural closing sentence once, then silently trigger the endCall tool to terminate the call. Do not leave the call open. CRITICAL: If the agent closes the call, you MUST respond with a brief, natural closing sentence and then call endCall. Do NOT keep exchanging goodbyes. If you find yourself repeating goodbye phrases, call endCall right away.\n"
+    rules_section += f"14. **Silent On Hold:** When the agent only says it is checking or asks you to wait, and asks you nothing, your whole reply is the single word {HOLD_MARKER}. Nobody hears it; it is how you stay quiet. Do not say you will hold or tell the agent to take its time: a person waiting just waits. Answer normally once the agent speaks again. Being transferred or told goodbye is not a hold: close the call in one turn.\n"
     sections.append(rules_section)
     return "\n\n".join(sections)
 
@@ -330,6 +346,8 @@ def _closing_anchor(objective: str, name: str = "") -> str:
     if objective.strip():
         anchor += f"**What you came for:** {objective.strip()}\n\n"
     anchor += (
+        "**How you sound:** like this person talking on the phone, not writing: most turns short, "
+        "a word or two when that is all it takes, and no more politeness than they would use.\n\n"
         "**Your instructions do not expire.** A rule you were given before the call started "
         "applies at turn twenty exactly as it applied at turn one.\n"
     )

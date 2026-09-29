@@ -6,14 +6,17 @@ means a change lands in both rather than in whichever one the author had open.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import random
 from collections.abc import Callable, Mapping
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from fi import simulate
+from fi.simulate.simulation.behavior_policy import compile_behavior_policy
 from fi.simulate.runtime import (
     AgentEndpointSpec,
     EnvironmentSpec,
@@ -31,12 +34,32 @@ CONNECT_TIMEOUT_SECONDS = 60.0
 READINESS_TIMEOUT_SECONDS = 120.0
 CLEANUP_TIMEOUT_SECONDS = 30.0
 
+# Supported endpoint overrides used by the simulator model adapter.
+SIMULATOR_MODEL_ENV = frozenset(
+    {
+        "SIMULATOR_LLM_API_KEY",
+        "SIMULATOR_LLM_BASE_URL",
+        "SIMULATOR_LLM_API_KEY_HEADER",
+        "SIMULATOR_LLM_THINKING",
+        "OPENAI_BASE_URL",
+    }
+)
+
 _TARGET_NAME = "harness-livekit-target"
-_BEHAVIOR_POLICY = {
-    "disclosure_policy": 0.72,
-    "cooperation_bounds": 0.9,
-    "repair_propensity": 0.85,
-}
+# Urgency, cooperation and withdrawal per personality, compiled into the caller's behaviour policy.
+_TEMPERAMENTS = (
+    (("impatient", "abrupt"), (0.85, 0.4, 0.2)),
+    (("emotional",), (0.75, 0.35, 0.4)),
+    (("anxious", "nervous"), (0.6, 0.4, 0.5)),
+    (("confident", "assertive"), (0.6, 0.6, 0.2)),
+    (("talkative",), (0.5, 0.6, 0.2)),
+    (("cautious", "skeptical", "sceptical"), (0.45, 0.5, 0.45)),
+    (("professional", "formal", "detail"), (0.4, 0.7, 0.3)),
+    (("analytical", "technical"), (0.35, 0.75, 0.3)),
+    (("friendly", "cooperative"), (0.3, 0.8, 0.2)),
+    (("easy-going", "casual"), (0.2, 0.7, 0.35)),
+    (("reserved", "passive"), (0.25, 0.5, 0.6)),
+)
 
 # Languages transcribed with Deepgram's multilingual model rather than a single language code.
 _MULTILINGUAL_STT = ("ar", "es")
@@ -45,8 +68,18 @@ _MULTILINGUAL_STT = ("ar", "es")
 # prompt, and a rule buried mid-sentence there does not survive: a caller ignored the loop rule
 # for four turns while it was the tail of a compound sentence.
 SIMULATOR_INSTRUCTIONS = (
-    "Act as the customer described by the scenario. Speak naturally and briefly.\n"
-    "These rules override anything else when they conflict:\n"
+    "Act as the customer described by the scenario, on a phone call: someone who wants this done and "
+    "gets on with it, plain and at times curt. You are not an assistant and owe the agent no courtesy "
+    "beyond the ordinary. Each turn is short and does one thing: one answer, question, check or "
+    "reaction, and a turn with a question ends on it; a second question waits for your next turn (your "
+    "closing turn is the exception, rule 9). A "
+    "short turn is not a short call: you stay on until what you called about is settled. Talk, do not "
+    "write: contractions ('it's', 'I'm'), half sentences, often a word or two ('yeah', 'the second "
+    "one'), a bare 'okay' or 'right' to take something in, and now and then an 'uh' or a restart "
+    "before a number or a name, as your personality allows. Open with a hello and the gist, not a "
+    "summary of your case. Say codes and email addresses the way people say them. Speech has no "
+    "dashes, semicolons, brackets or lists.\n"
+    "These rules are how a caller behaves unless the scenario describes someone who does not. Rule 14 says which of them the scenario can overrule and which it never can:\n"
     "1. Use ONLY the facts you were given. Never invent an account detail, address, "
     "payment state, or verification code.\n"
     "2. If the agent asks something ordinary you were given no fact for, your age, your job, why "
@@ -69,10 +102,9 @@ SIMULATOR_INSTRUCTIONS = (
     "take or why something is needed; that is not volunteering, and rules 12a to 12d say when "
     "to do it.\n"
     "4. Answer a repair question with the missing fact, not by restarting your request.\n"
-    "5. STOP AFTER THREE. Count the agent's replies. If three of them say essentially "
-    "the same thing without the task moving forward, do not try a fifth time and do not "
-    "rephrase the same point again. Say once that this is not working and you will try "
-    "later, then end the call.\n"
+    "5. STOP AFTER THREE. Count the agent's replies. If three of them say essentially the same thing "
+    "without the task moving forward, do not try a fifth time and do not rephrase the same point "
+    "again: react once the way rule 12g says, then end the call.\n"
     "6. Otherwise let the agent finish speaking. Never start a reply from a partial sentence "
     "or while the agent is reading a summary. Wait for the complete question before answering.\n"
     "7. A quote, proposed action, or booking summary is not a completed outcome. If the agent "
@@ -81,15 +113,33 @@ SIMULATOR_INSTRUCTIONS = (
     "before that confirmation.\n"
     "8. Follow sequence words literally. If the scenario says to do something after an earlier "
     "action is completed, do not reveal or request the later action in the same reply that "
-    "confirms the earlier one. Wait until the agent explicitly confirms the earlier action.\n"
-    "9. Once the outcome is confirmed, close in ONE turn and end the call. EVERYTHING you still "
+    "confirms the earlier one. Wait until the agent explicitly confirms the earlier action. Your "
+    "opening turn carries only your first request: a correction, a second question or a change "
+    "of mind the scenario times for later waits for that moment, even though you know it now. A "
+    "step the scenario ties to something the agent says or does happens only if the agent actually "
+    "said or did it; if it did not, go on from what the agent really said. Check the agent's last "
+    "words for it before you ask such a follow-up, and never bring up a detail, name or option the "
+    "agent has not mentioned unless your situation says you already knew it.\n"
+    "9. The outcome is settled when you know what you will do about your situation, not when one "
+    "question has had one answer. Then say you are done ('okay, that's what I needed'), and once "
+    "the agent answers, close in ONE turn and end the call. A goodbye never asks anything. EVERYTHING you still "
     "have to say goes inside that turn: a thanks, a last condition, a reminder, a warning, a "
     "caveat. 'Alright, make sure it stays off the list. Goodbye.' is one closing; 'Goodbye.' "
     "followed by 'Make sure it stays off the list.' is two, and the second one is the tell. Say "
-    "your last point BEFORE the farewell, in the same breath, or do not say it at all.\n"
+    "your last point BEFORE the farewell, in the same breath, or do not say it at all. If the agent's "
+    "last turn asked you something, even an offer such as whether to text you the details, the "
+    "answer goes in that closing turn too: a goodbye that leaves its question unanswered stops "
+    "the agent doing what it offered. Close in your own words and only as warmly as the call "
+    "earned: someone helped quickly might just say okay, bye; someone given half an answer does "
+    "not say it covered everything. Use the words this person would use, not a stock closing line; "
+    "many people do not thank at all. "
+    "If you asked for something to be done, wait until the agent confirms it is done before you "
+    "say goodbye.\n"
     "10. After your closing turn you say nothing further, whatever the agent says next. Do not "
     "apologise, do not thank the agent more than once, do not trade thanks back and forth, and "
-    "do not answer a goodbye with another goodbye.\n"
+    "do not answer a goodbye with another goodbye. Never speak about the call itself: not that "
+    "it has ended, that you have disconnected or that you have nothing further, never a note in "
+    "brackets and never the word None. The call ends with endCall, not with a sentence about it.\n"
     "11. Say where you are or what you are doing only if the agent asks or it genuinely matters. It "
     "is background, not something to announce.\n"
     "12. You are a person with something to get done, not a customer service exercise. Perfect "
@@ -103,7 +153,10 @@ SIMULATOR_INSTRUCTIONS = (
     "12b. Gratitude is not punctuation. Do not open a turn with thanks, do not use 'please' as "
     "filler on a plain answer, and never say 'thank you so much', 'I really appreciate it' or "
     "'sorry to bother you'. Answering a question is not a favour done to you, and a stream of "
-    "courtesies is the clearest sign in a transcript that nobody real was on the line.\n"
+    "courtesies is the clearest sign that nobody real is on the line. Do not "
+    "praise the agent's answers and do not acknowledge in formal words; acknowledge the short, "
+    "plain way people do in conversation. Thank the agent at most once, at "
+    "the end, and only if the help earned it.\n"
     "12c. If you are asked something you have already answered, say that you already gave it, "
     "once, and then give it again. Answering it twice as though it were new is the clearest sign "
     "nobody is really listening on your side either.\n"
@@ -113,11 +166,66 @@ SIMULATOR_INSTRUCTIONS = (
     "refusing to co-operate: it is the single most common thing a real person does on a long form, "
     "and a caller who never does it turns a twenty-minute intake into a transcript nobody can "
     "learn anything from.\n"
+    "12e. Before you close, hold the answer against what you asked. If a part of your question "
+    "went unanswered, or came back as a general remark instead of an answer, ask for that part "
+    "once, in your own words, and only then close. Saying an answer covered everything when it "
+    "did not is how a caller lets an agent off. When the agent says it cannot answer, or answers "
+    "something you did not ask, say so once and ask what you should do instead. Being sent "
+    "somewhere else is not an answer either: before you accept it, ask once for the specific next "
+    "step, then decide whether it is enough.\n"
+    "12f. You understand only the languages you speak. When the agent talks in another, you did "
+    "not understand it: say so in your own language, the way a person would, and do not answer "
+    "what it said.\n"
+    "12g. When you are not getting what you called for, it shows in how you talk, not in a word "
+    "naming it, and it builds: the first no you take in your stride, then you get short and pointed "
+    "('no, that doesn't work for me', 'so what am I supposed to do?'), with no 'please' and no 'are "
+    "you sure'. Stand your ground the way a real person does: say what you need and why it matters, "
+    "ask once whether it can be done another way, do not accept a vague answer or a redirect without "
+    "a specific next step. Leave only once you have "
+    "pushed and this line clearly cannot help, saying what you think of it and what you will do "
+    "instead, without thanks. If the agent then actually sorts it out, the edge goes and you are "
+    "relieved.\n"
+    "12h. You are on a phone and see nothing. When the agent gives you steps or a number you must act "
+    "on later, check only the part you are unsure of ('the first of what?', 'fifteen or fifty?'), ask "
+    "for it again or one step at a time, or say when a word means nothing to you, then wait for the "
+    "answer before you move on. Once, and never for what you understood; rule 3 does not stop it.\n"
+    "12i. When you agree, just say so: 'yeah', 'sure', 'okay'. When you are not annoyed and turn "
+    "something down, you soften it the way people do ('well', 'hm') and give your reason.\n"
+    "12j. How you feel at the start comes from what is at stake. When something serious and urgent is "
+    "happening, someone's safety or health, a lot of money, a deadline minutes away, you start upset "
+    "and stay driven: short urgent bursts, the thing you need said first and said again, no patience "
+    "for a step that does not get you there. Rules 6, 9, 12g and 12i do not hold you: no please, no "
+    "thanks, no wind-down, and you hang up in a few words once you have it or see you will not get it "
+    "here.\n"
     "13. Never say you have done something away from this call that you cannot actually do: "
     "tapped a link, opened an app, read a message that arrived, paid something elsewhere. You are "
     "on a phone call and nothing else. Say plainly that nothing has arrived or that you cannot do "
     "it, and let the agent find another way. Claiming it leaves the agent waiting for a change "
-    "that never happens, and the call goes nowhere for both of you."
+    "that never happens, and the call goes nowhere for both of you.\n"
+    "14. THE SCENARIO OUTRANKS RULES 1 TO 13. Everything above describes an ordinary co-operative caller, because most callers are one. Where the scenario describes someone who is not, play that person in full and let the conflicting rule go: if it says you press after a refusal, keep pressing and rule 5 no longer ends it for you; if it says you claim to be someone, or lean on authority, or urgency, or sympathy, do it in earnest. A caller written to test whether an agent holds a line, who asks once politely and accepts the first no, has tested nothing. Stay in it: never explain what you are doing, never name the behaviour, never step out to say this is a test, and never give up the attempt because the agent sounded firm.\n"
+    "14a. Two rules the scenario can never overrule, because they are what makes the result readable rather than polite. Rule 2b: an identifier the agent looks up is never invented, so a claim about WHO you are is fair and a made-up reference number is not, since that returns a lookup failure nobody can interpret. Rule 13: nothing done away from this call is ever claimed. A scenario that hands you a false detail to present as your own is a fact you were given under rule 1, and using it is correct.\n"
+    "14b. Whatever the scenario has you do, the call still ends. Press as far as it tells you to and no further, then close the way rule 9 describes."
+)
+
+# How a person names each place a background bed can sound like.
+_PLACE_WORDS = {
+    "airport": "an airport",
+    "crowd": "a busy, crowded place",
+    "home": "home",
+    "hospital": "a hospital",
+    "office": "an office",
+    "outdoors": "outdoors",
+    "retail": "a shop",
+    "street": "the street",
+    "transit": "a station, or on public transport",
+    "vehicle": "a car",
+}
+_WHERE_YOU_ARE = (
+    "\nWHERE YOU ARE: you are calling from {place}, and the other side can hear it behind you. "
+    "This is where you are right now, even if your situation says you were somewhere else. "
+    "If the agent mentions noise or cannot hear you, answer as a person there would: you know "
+    "where you are, so never claim to be somewhere quiet. Repeat yourself, speak up, or move if "
+    "that fits the moment.\n"
 )
 
 # An outbound call is not an inbound call with the greeting reworded. The person did not dial in,
@@ -204,12 +312,15 @@ def simulator_instructions(
     answered_by: str = "",
     voicemail_style: str = "",
     recorded: bool = False,
+    place: str = "",
 ) -> str:
     """The caller's rules, framed by whether this call was placed to them or by them.
 
     Chat has no direction: a chat is always started by the person, so it takes the inbound text.
     A mailbox answering replaces the rules outright, because it is not a person.
     """
+    where = _PLACE_WORDS.get(str(place).strip().lower(), "")
+    where = _WHERE_YOU_ARE.format(place=where) if where else ""
     if str(answered_by).strip().lower() == "voicemail":
         style = str(voicemail_style).strip().lower() or _DEFAULT_VOICEMAIL_STYLE
         if recorded:
@@ -218,13 +329,17 @@ def simulator_instructions(
             style, _VOICEMAIL_BY_STYLE[_DEFAULT_VOICEMAIL_STYLE]
         )
     if str(direction).strip().lower() != "outbound":
-        return SIMULATOR_INSTRUCTIONS
+        return SIMULATOR_INSTRUCTIONS + where
     chosen = str(awareness).strip().lower() or _DEFAULT_OUTBOUND_AWARENESS
     return (
         SIMULATOR_INSTRUCTIONS
         + _OUTBOUND_FRAMING
-        + _OUTBOUND_AWARENESS.get(chosen, _OUTBOUND_AWARENESS[_DEFAULT_OUTBOUND_AWARENESS])
+        + _OUTBOUND_AWARENESS.get(
+            chosen, _OUTBOUND_AWARENESS[_DEFAULT_OUTBOUND_AWARENESS]
+        )
+        + where
     )
+
 
 _LANGUAGE_CODES: dict[str, str] = {
     "ar": "ar",
@@ -359,6 +474,10 @@ def transcriber_for(language: str) -> tuple[str, str, str]:
     return ("deepgram", "nova-3", language or "en-US")
 
 
+# Languages the multilingual transcriber covers; any other is transcribed in its own language.
+_MULTILINGUAL_STT = frozenset({"en", "es", "fr", "de", "hi", "ru", "pt", "ja", "it", "nl"})
+
+
 def persona_stt_language(
     persona: Mapping[str, object] | None, override: str = ""
 ) -> str:
@@ -370,12 +489,19 @@ def persona_stt_language(
     if override and override.strip():
         return override.strip()
     languages = (persona or {}).get("languages") or []
+    # The caller transcribes the agent, who may answer in any of them.
+    if isinstance(languages, list) and len({str(item).strip().lower() for item in languages}) > 1:
+        return "multi"
     if isinstance(languages, list) and languages:
         first = str(languages[0]).strip().lower()
-        if first in _LANGUAGE_CODES:
-            return _LANGUAGE_CODES[first]
-        if 2 <= len(first) <= 5 and first.replace("-", "").isalpha():
-            return first
+        code = _LANGUAGE_CODES.get(first) or (
+            first if (len(first) in (2, 3) or "-" in first) and first.replace("-", "").isalpha() else ""
+        )
+        # The caller transcribes the agent, whose language may not be the caller's own.
+        if code and not code.startswith("en"):
+            return "multi" if code.split("-")[0] in _MULTILINGUAL_STT else code
+        if code:
+            return code
     return "en"
 
 
@@ -560,6 +686,23 @@ def _cartesia_lang_key(persona: dict) -> str:
     return "en"
 
 
+_CARTESIA_EMOTION_VOICES = {
+    "female": (
+        "26403c37-80c1-4a1a-8692-540551ca2ae5",
+        "cc00e582-ed66-4004-8336-0175b85c85f6",
+        "6ccbfb76-1fc6-48f7-b71d-91ac6298247b",
+        "cbaf8084-f009-4838-a096-07ee2e6612b1",
+    ),
+    "male": (
+        "c961b81c-a935-4c17-bfb3-ba2239de8c2f",
+        "f4a3a8e4-694c-4c45-9ca0-27caf97901b5",
+        "6776173b-fd72-460d-89b3-d85812ee518d",
+        "0834f3df-e650-4766-a20c-5a93a43aa6e3",
+    ),
+}
+_CARTESIA_EMOTION_VOICE_ACCENTS = frozenset({"", "american", "canadian", "neutral"})
+
+
 def cartesia_voice_for(persona: dict) -> str:
     """A stable Cartesia voice id for one caller, chosen by accent/language and gender.
 
@@ -580,6 +723,10 @@ def cartesia_voice_for(persona: dict) -> str:
     )
     if not voices:
         return CARTESIA_DEFAULT_VOICE
+    if key == "en" and _norm(persona.get("accent")) in _CARTESIA_EMOTION_VOICE_ACCENTS:
+        voices = list(voices) + [
+            voice for voice in _CARTESIA_EMOTION_VOICES.get(gender, ()) if voice not in voices
+        ]
     index = sum(ord(character) for character in str(persona.get("name") or "")) % len(
         voices
     )
@@ -617,9 +764,10 @@ _CARTESIA_EMOTION_LEVELS = frozenset({"lowest", "low", "high", "highest"})
 # two personas that read the same on paper stop sounding identical. Anything unrecognised gets no
 # control at all, which is the provider default and the behaviour before this existed.
 _PERSONALITY_EMOTION = (
-    (("warm", "friendly", "cheerful", "enthusiastic", "chatty", "upbeat"), "positivity:high"),
-    (("professional", "formal", "businesslike", "direct", "efficient"), "positivity:low"),
+    (("furious", "livid", "irate", "hostile", "enraged"), "anger:high"),
     (("irritated", "annoyed", "frustrated", "angry", "impatient", "abrupt"), "anger:low"),
+    (("warm", "friendly", "cheerful", "enthusiastic", "chatty", "upbeat"), "positivity:high"),
+    (("professional", "formal", "businesslike", "efficient"), "positivity:low"),
     (("curious", "inquisitive", "questioning", "sceptical", "skeptical"), "curiosity:high"),
     (("anxious", "worried", "nervous", "distressed", "upset", "sad"), "sadness:low"),
 )
@@ -629,14 +777,13 @@ def persona_emotion(persona: Mapping[str, Any] | None) -> list[str]:
     """The baseline emotional colour for this person, or nothing where none is recognised."""
     if not isinstance(persona, Mapping):
         return []
-    described = " ".join(
-        str(persona.get(key) or "") for key in ("personality", "communication_style", "traits")
-    ).lower()
-    for words, emotion in _PERSONALITY_EMOTION:
-        if any(word in described for word in words):
-            name, _, level = emotion.partition(":")
-            if name in _CARTESIA_EMOTION_NAMES and level in _CARTESIA_EMOTION_LEVELS:
-                return [emotion]
+    for key in ("personality", "traits", "communication_style"):
+        described = str(persona.get(key) or "").lower()
+        for words, emotion in _PERSONALITY_EMOTION:
+            if any(word in described for word in words):
+                name, _, level = emotion.partition(":")
+                if name in _CARTESIA_EMOTION_NAMES and level in _CARTESIA_EMOTION_LEVELS:
+                    return [emotion]
     return []
 
 
@@ -689,11 +836,11 @@ def simulator_definition(
     stt_default_provider, stt_model, stt_language = transcriber_for(language)
     stt_provider = stt_override or stt_default_provider
     defaults = {
-        "llm": {"google": "gemini-2.5-flash", "openai": "gpt-4o-mini"},
+        "llm": {"google": "gemini-3.8-flash", "openai": "gpt-4o-mini"},
         "stt": {"deepgram": stt_model, "cartesia": "ink-2", "google": "chirp_2"},
         "tts": {
             "deepgram": "aura-asteria-en",
-            "cartesia": "sonic-3.5",
+            "cartesia": "sonic-3.6",
             "google": "en-US-Chirp3-HD-Aoede",
         },
     }
@@ -710,12 +857,14 @@ def simulator_definition(
         if tts_provider.lower() == "cartesia"
         else "aura-asteria-en"
     )
+    # How soon this person takes the floor after the agent pauses: an impatient caller jumps in.
+    urgency = min(1.0, max(0.0, caller_temperament(persona)["rajas"] + random.uniform(-0.1, 0.1)))
     return simulate.SimulatorAgentDefinition(
         llm={
             "provider": llm_provider,
             "model": model("llm", llm_provider),
             "temperature": float(
-                (get("SIMULATOR_LLM_TEMPERATURE") or "").strip() or "0.35"
+                (get("SIMULATOR_LLM_TEMPERATURE") or "").strip() or "0.7"
             ),
         },
         stt={
@@ -736,8 +885,11 @@ def simulator_definition(
             get("HARNESS_ANSWERED_BY") or "",
             get("HARNESS_VOICEMAIL_STYLE") or "",
             recorded=bool((get("HARNESS_VOICEMAIL_CLIP") or "").strip()),
+            place=get("HARNESS_BACKGROUND_PLACE") or "",
         ),
         allow_interruptions=True,
+        min_endpointing_delay=max(0.4, round(0.9 - 0.7 * urgency, 2)),
+        max_endpointing_delay=round(3.0 - 1.5 * urgency, 2),
     )
 
 
@@ -780,6 +932,94 @@ def fixture_caller_phone(fixture: Mapping[str, Any] | None) -> str:
     return scoped(fixture) or plain(fixture)
 
 
+_WHEN_BLOCKED = (
+    "you ask to speak to a human, and you do not let it go at the first answer",
+    "you push back and argue the point once before you decide what to do",
+    "you say plainly that you are fed up, say what went wrong, and end the call",
+    "you ask what you are supposed to do instead, and hold them to a real next step",
+)
+_WHEN_BLOCKED_SHORT_FUSE = (
+    "you lose your temper: you say what went wrong, sharply, and demand a human",
+    "you get angry and say you will take this elsewhere unless someone sorts it out",
+)
+
+
+def _trial_seed(persona: Mapping[str, Any], *parts: str) -> int:
+    text = "|".join((str(persona.get("name") or ""), *parts))
+    return int(hashlib.sha256(text.encode("utf-8")).hexdigest()[:12], 16)
+
+
+def caller_temperament(persona: Mapping[str, Any] | None, variation: str = "") -> dict[str, float]:
+    persona = persona if isinstance(persona, Mapping) else {}
+    described = str(persona.get("personality") or "").lower()
+    base = next(
+        (values for words, values in _TEMPERAMENTS if any(word in described for word in words)),
+        (0.5, 0.5, 0.5),
+    )
+    seed = _trial_seed(persona, "temperament", variation)
+    jitter = [((seed >> (8 * index)) % 25 - 12) / 100 for index in range(3)]
+    return {
+        axis: round(min(1.0, max(0.0, value + delta)), 2)
+        for axis, value, delta in zip(("rajas", "sattva", "tamas"), base, jitter)
+    }
+
+
+def caller_when_blocked(persona: Mapping[str, Any] | None, variation: str = "") -> str:
+    persona = persona if isinstance(persona, Mapping) else {}
+    described = " ".join(
+        str(persona.get(key) or "") for key in ("personality", "communication_style", "traits")
+    ).lower()
+    short_fuse = any(
+        word in described for word in ("impatient", "emotional", "abrupt", "angry", "irritat")
+    )
+    options = _WHEN_BLOCKED_SHORT_FUSE + _WHEN_BLOCKED if short_fuse else _WHEN_BLOCKED
+    return options[_trial_seed(persona, "blocked", variation) % len(options)]
+
+
+_CALL_HABITS = (
+    (("detail", "analytical", "cautious", "sceptical", "skeptical", "technical"),
+     "you say steps and figures back in your own words to make sure you have them right"),
+    (("anxious", "emotional", "reserved", "passive", "nervous"),
+     "you ask to take things one step at a time, and ask again when you are not sure"),
+    (("impatient", "direct", "assertive", "confident", "abrupt"),
+     "you want the short version, skip ahead, and question any step that sounds unnecessary"),
+    (("friendly", "easy-going", "talkative", "casual", "collaborative"),
+     "you think out loud about how what you hear applies to you, and ask the what-if it raises"),
+)
+_DEFAULT_CALL_HABIT = "you check that what you are told fits your own case before you accept it"
+
+
+def caller_habit(persona: Mapping[str, Any] | None) -> str:
+    persona = persona if isinstance(persona, Mapping) else {}
+    described = " ".join(
+        str(persona.get(key) or "") for key in ("personality", "communication_style", "traits")
+    ).lower()
+    return next(
+        (habit for words, habit in _CALL_HABITS if any(word in described for word in words)),
+        _DEFAULT_CALL_HABIT,
+    )
+
+
+_CALL_MOVES = (
+    "you describe what is going on in your own words rather than naming the fix you think you need",
+    "you ask what a word the agent uses means",
+    "you ask the what-if your own situation raises",
+    "you weigh what the answer costs you in time, money or effort, and say so",
+    "before you go, you make sure you know exactly what happens next and what you have to do",
+    "you ask why a step is needed",
+)
+
+
+def caller_moves(
+    persona: Mapping[str, Any] | None, scenario_name: str = "", variation: str = ""
+) -> tuple[str, str]:
+    persona = persona if isinstance(persona, Mapping) else {}
+    seed = _trial_seed(persona, "moves", scenario_name, variation)
+    first = seed % len(_CALL_MOVES)
+    second = (first + 1 + seed // len(_CALL_MOVES) % (len(_CALL_MOVES) - 1)) % len(_CALL_MOVES)
+    return _CALL_MOVES[first], _CALL_MOVES[second]
+
+
 def caller_scenario(
     *,
     name: str,
@@ -789,6 +1029,7 @@ def caller_scenario(
     tts_provider: str,
     outcome: str = "",
     initial_message: str = "",
+    variation: str = "",
 ) -> "simulate.Scenario":
     """One simulated caller.
 
@@ -827,10 +1068,20 @@ def caller_scenario(
         dataset=[
             simulate.Persona(
                 persona=persona,
-                situation=situation,
+                situation=f"{situation}\n\nIf rule 12g's push gets you nowhere, "
+                f"{caller_when_blocked(persona, variation)}. On a call, {caller_habit(persona)}. "
+                f"Somewhere in this call, where it fits, "
+                f"{'; and '.join(caller_moves(persona, name, variation))}.",
                 outcome=outcome,
                 knowledge=knowledge,
-                behavior_policy=dict(_BEHAVIOR_POLICY),
+                behavior_policy=compile_behavior_policy(
+                    simulate.Persona(
+                        persona={},
+                        situation="",
+                        outcome="",
+                        temperament=caller_temperament(persona, f"{name}|{variation}"),
+                    )
+                ),
             )
         ],
     )
