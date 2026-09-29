@@ -125,7 +125,7 @@ async def run_json_worker(
                 module,
                 str(result_path),
                 stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.DEVNULL,
+                stdout=None,
                 stderr=None,
                 env=child_env,
                 cwd=root,

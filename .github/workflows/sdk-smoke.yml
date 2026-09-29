@@ -34,9 +34,7 @@ jobs:
           report=json.loads(pathlib.Path('smoke-report.json').read_text());
           assert report['status'] == 'ran' and report['report']['results']"
       - name: Install test dependencies
-        # Pin livekit-agents to the version the runner image ships
-        # (Dockerfile.simulation-runner); an unpinned install resolves a
-        # newer release whose usage schema the engine does not target.
+        # Exercise the minimum LiveKit version supported by pyproject.toml.
         run: >-
           python -m pip install '.[livekit]' pytest pytest-asyncio
           'livekit-agents==1.8.3'

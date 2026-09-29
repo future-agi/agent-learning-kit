@@ -35,13 +35,13 @@ ENV PIP_DEFAULT_TIMEOUT=300 \
 RUN --mount=type=cache,target=/root/.cache/pip \
     python3 -m pip install \
       '.[livekit,harness-ui,harness-stores]' \
-      'livekit-agents==1.5.17' \
-      'livekit-plugins-cartesia==1.5.17' \
-      'livekit-plugins-deepgram==1.5.17' \
-      'livekit-plugins-elevenlabs==1.5.17' \
-      'livekit-plugins-google==1.5.17' \
-      'livekit-plugins-openai==1.5.17' \
-      'livekit-plugins-silero==1.5.17'
+      'livekit-agents==1.8.3' \
+      'livekit-plugins-cartesia==1.8.3' \
+      'livekit-plugins-deepgram==1.8.3' \
+      'livekit-plugins-elevenlabs==1.8.3' \
+      'livekit-plugins-google==1.8.3' \
+      'livekit-plugins-openai==1.8.3' \
+      'livekit-plugins-silero==1.8.3'
 
 ENV ALK_SANDBOX_HOST=0.0.0.0
 ENV ALK_SANDBOX_PORT=8788

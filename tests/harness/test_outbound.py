@@ -75,6 +75,7 @@ from fi.alk.harness.outbound import (
     OutboundSpool,
     OutboundSpoolError,
     ResultReceiptDraft,
+    TargetLatency,
     ResultsClient,
     RetryPolicy,
     ScenarioStatus,
@@ -1977,6 +1978,45 @@ def test_build_result_receipt_matches_the_contract_shaped_example() -> None:
     )  # round-trips through the model unchanged
 
 
+def test_target_latency_normalization_matches_outbound_bounds() -> None:
+    from fi.simulate.results.futureagi import (
+        MAX_TARGET_LATENCY_TURNS,
+        _latency,
+    )
+
+    normalized = _latency(
+        {"turn": -1, "model": 0, "voice": float("nan")},
+        [-1, float("inf"), *range(MAX_TARGET_LATENCY_TURNS + 2)],
+    )
+
+    assert normalized == {
+        "model": 0,
+        "turns": list(range(MAX_TARGET_LATENCY_TURNS)),
+    }
+    TargetLatency.model_validate(normalized)
+    with pytest.raises(ValidationError):
+        TargetLatency(turns=[0] * (MAX_TARGET_LATENCY_TURNS + 1))
+
+
+def test_retell_latency_filters_invalid_samples_before_averaging() -> None:
+    from fi.simulate.results.futureagi import _retell_latency
+
+    assert _retell_latency(
+        {
+            "e2e": {"values": [-100, float("nan"), float("inf"), 1000]},
+            "llm": {"values": [-1, 200]},
+            "tts": {"values": ["invalid", 0]},
+            "asr": {"values": [100]},
+        }
+    ) == {
+        "turn": 1000,
+        "model": 200,
+        "voice": 0,
+        "transcriber": 100,
+        "turns": [1000],
+    }
+
+
 def test_build_skipped_receipt_has_the_exact_contract_shape() -> None:
     receipt = build_skipped_receipt(
         job_id="j1",
@@ -3446,7 +3486,9 @@ def test_redact_outbound_text_scrubs_userinfo_and_extra_secrets() -> None:
     )
     # A short declared value is configuration, not a credential.
     assert (
-        redact_outbound_text("the agent confirms consent only", extra_secret_values=("on",))
+        redact_outbound_text(
+            "the agent confirms consent only", extra_secret_values=("on",)
+        )
         == "the agent confirms consent only"
     )
 
