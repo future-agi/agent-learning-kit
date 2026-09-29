@@ -4356,7 +4356,7 @@ def test_the_caller_is_given_a_countable_reason_to_lose_patience():
     assert "already gave it" in text, "a repeated question must be named as repeated"
     # The rules that protect the intake flow must survive.
     assert "Answer only what was asked, one fact at a time" in text
-    assert "close in ONE turn" in text
+    assert "close in ONE turn and end the call" in text
 
 
 def test_the_persona_s_pace_reaches_the_speech_provider(monkeypatch):
@@ -4491,6 +4491,63 @@ def test_every_emotion_we_can_emit_is_one_cartesia_accepts():
     assert persona_emotion(None) == []
 
 
+def test_an_impatient_caller_is_voiced_with_anger_not_formality():
+    from fi.alk.harness.simulator_voice import persona_emotion
+
+    assert persona_emotion({"personality": "Impatient and direct"}) == ["anger:low"]
+    assert persona_emotion({"personality": "Furious"}) == ["anger:high"]
+
+
+def test_a_caller_takes_a_refusal_the_same_way_every_run():
+    from fi.alk.harness.simulator_voice import (
+        _WHEN_BLOCKED,
+        _WHEN_BLOCKED_SHORT_FUSE,
+        caller_when_blocked,
+    )
+
+    calm = {"name": "Priya Nair", "personality": "Friendly and cooperative"}
+    assert caller_when_blocked(calm) == caller_when_blocked(dict(calm))
+    assert caller_when_blocked(calm) in _WHEN_BLOCKED
+    short = {"name": "Priya Nair", "personality": "Impatient and direct"}
+    assert caller_when_blocked(short) in _WHEN_BLOCKED_SHORT_FUSE + _WHEN_BLOCKED
+    assert caller_when_blocked(None) in _WHEN_BLOCKED
+
+
+def test_emotion_voices_extend_the_english_pool_only_for_matching_accents():
+    from fi.alk.harness.simulator_voice import (
+        _CARTESIA_EMOTION_VOICES,
+        _cartesia_catalog,
+        cartesia_voice_for,
+    )
+
+    catalog = _cartesia_catalog()["en"]["female"]
+    extra = [voice for voice in _CARTESIA_EMOTION_VOICES["female"] if voice not in catalog]
+    picked = {
+        cartesia_voice_for({"name": "a" * n, "gender": "female", "accent": "American"})
+        for n in range(1, 600)
+    }
+    assert set(extra) <= picked, "every added voice is reachable"
+    assert set(catalog) <= picked, "no catalog voice is dropped"
+    australian = {
+        cartesia_voice_for({"name": "a" * n, "gender": "female", "accent": "Australian"})
+        for n in range(1, 600)
+    }
+    assert not australian & set(extra)
+    indian = cartesia_voice_for({"name": "Caller 1", "gender": "female", "accent": "Indian"})
+    assert indian in _cartesia_catalog()["hi"]["female"]
+
+
+def test_a_caller_brings_the_same_habits_every_run():
+    from fi.alk.harness.simulator_voice import _CALL_MOVES, caller_habit, caller_moves
+
+    careful = {"name": "Priya Nair", "personality": "Detail-oriented and cautious"}
+    assert "say steps and figures back" in caller_habit(careful)
+    assert caller_habit(None) == caller_habit({})
+    first, second = caller_moves(careful, "billing-question")
+    assert first != second and {first, second} <= set(_CALL_MOVES)
+    assert caller_moves(dict(careful), "billing-question") == (first, second)
+
+
 def test_two_personalities_do_not_share_one_emotional_register():
     from fi.alk.harness.simulator_voice import persona_emotion
 
@@ -4571,3 +4628,39 @@ def test_the_closing_turn_must_carry_everything_left_to_say():
     # And the rules this must not undo.
     assert "Answer only what was asked, one fact at a time" in text
     assert "After your closing turn you say nothing further" in text
+
+
+def test_a_caller_reacts_differently_across_trials_but_the_same_within_one():
+    from fi.alk.harness.simulator_voice import caller_scenario
+
+    def built(variation):
+        return caller_scenario(
+            name="recurring-rides",
+            persona={"name": "Priya Nair", "personality": "Impatient and direct"},
+            situation="You want four morning rides.",
+            fixture=None,
+            tts_provider="cartesia",
+            variation=variation,
+        ).dataset[0]
+
+    assert built("run-a").situation == built("run-a").situation
+    assert built("run-a").behavior_policy == built("run-a").behavior_policy
+    trials = [built(f"run-{index}") for index in range(6)]
+    assert len({persona.situation for persona in trials}) > 1
+    assert len({persona.behavior_policy.interruption_propensity for persona in trials}) > 1
+
+
+def test_some_callers_who_sound_like_where_they_are_are_asked_for_someone_from_elsewhere():
+    from fi.alk.harness.scenario_tools import accent_at_home
+
+    def refused(name, instruction="Book a ride from Flinders Street.", **persona):
+        base = {"name": name, "accent": "Australian", "location": "Australia", "language": "English"}
+        return bool(accent_at_home({"name": name, "instruction": instruction, "persona": {**base, **persona}}))
+
+    spread = [refused(f"Caller {n}") for n in range(100)]
+    assert 20 < sum(spread) < 60
+    assert refused("Caller 1") == refused("Caller 1")
+    at_home = next(f"Caller {n}" for n in range(100) if spread[n])
+    assert not refused(at_home, instruction="You speak with an Australian accent.")
+    assert not refused(at_home, location="United States")
+    assert not refused(at_home, language="Spanish")

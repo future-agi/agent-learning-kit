@@ -6,6 +6,7 @@ import json
 import math
 import logging
 import os
+import random
 import re
 import threading
 import time
@@ -629,6 +630,7 @@ def _simulator_turn_handling(
     allow_interruptions: bool | None = None,
     min_endpointing_delay: float | None = None,
     max_endpointing_delay: float | None = None,
+    interruption_min_duration: float | None = None,
 ) -> dict[str, object]:
     return {
         # Audio end-of-turn detection uses the words and acoustic delivery rather than treating
@@ -650,7 +652,7 @@ def _simulator_turn_handling(
         "interruption": {
             "enabled": (True if allow_interruptions is None else allow_interruptions),
             "discard_audio_if_uninterruptible": True,
-            "min_duration": 0.6,
+            "min_duration": interruption_min_duration or 0.6,
         },
         # Prepare both words and audio while end-of-turn is being confirmed. LiveKit discards the
         # speculative work if speech resumes; no unconfirmed audio is played to the target.
@@ -674,6 +676,7 @@ class _TestRunnerAgent(Agent):
         )
         super().__init__(**kwargs)
         self._persona = persona
+        self._mood = _CallerMood(persona)
         self._min_turn_messages = min_turn_messages
         self._session_turn_handling = turn_handling
         self._session: AgentSession | None = None
@@ -1080,9 +1083,9 @@ class _TestRunnerAgent(Agent):
             if self._goodbye_said:
                 return
             self._goodbye_said = True
-        chat_ctx = _with_opening_line(
-            chat_ctx, self._persona.persona.get("initial_message")
-        )
+        chat_ctx = _with_opening_line(chat_ctx, self._persona.persona.get("initial_message"))
+        if getattr(self, "_mood", None) is not None:
+            chat_ctx = self._mood.brief(chat_ctx)
         self._saying = ""
         async for chunk in _without_hold_marker(
             super().llm_node(chat_ctx, tools, model_settings),
@@ -1178,12 +1181,88 @@ _ANSWER_ALOUD = (
 
 # The caller's first turn is written by the model like any other, so it sounds spoken, not read.
 _OPENING_TURN = (
-    "This is your first turn. Open the way this person naturally would, with just your first "
-    "request, which is: {opening} Say it in your own words, in one or two short sentences, keeping "
-    "its manner: if it is halting, vague or unfinished, say it that way, and keep any exact words "
-    "or values it contains. If the agent has already spoken and asked you something, answer that "
-    "briefly first. Everything else in your situation waits for its moment."
+    "This is your first turn. Open the way this person naturally would on the phone, with just "
+    "your first request, which is: {opening} Say it in your own words, as it comes out of your "
+    "mouth rather than as a prepared summary: often a hello and the gist, with the rest following "
+    "once the agent is listening or asks. Keep its manner: if it is halting, vague or unfinished, "
+    "say it that way, and keep any exact words or values it contains when you say them. If the "
+    "agent has already spoken and asked you something, answer that briefly first. If all you have "
+    "heard so far is an announcement, such as that the call is recorded, and nobody has greeted "
+    f"you or asked you anything, it is not your turn yet: your whole reply is {HOLD_MARKER}. "
+    "Everything else in your situation waits for its moment."
 )
+
+
+_REFUSAL_CUES = (
+    "unable to", "not able to", "can't", "cannot", "isn't available", "aren't available",
+    "not supported", "don't have a way", "not possible", "i'm afraid",
+)
+_PROGRESS_CUES = ("confirmed", "booked", "all set", "updated", "you're set", "here's how", "is done")
+_NOT_YET = re.compile(r"\bnot\b|n't\b|\bnever\b|\byet\b|\bif\b|\bonce\b|\buntil\b|\bbefore\b|\bwhen\b")
+_MOOD_CAUSES = {
+    "refused": "the agent keeps saying it can't do what you need",
+    "repeated": "the agent just said the same thing again",
+}
+
+
+def _made_progress(lowered: str) -> bool:
+    return any(
+        any(cue in sentence for cue in _PROGRESS_CUES) and not _NOT_YET.search(sentence)
+        for sentence in re.split(r"[.!?]+", lowered)
+    )
+
+
+def _word_set(text: str) -> set[str]:
+    return set(re.findall(r"[a-z']+", text.lower()))
+
+
+class _CallerMood:
+    """Pressure from what the agent actually does, scaled by the caller's compiled policy."""
+
+    def __init__(self, persona: Persona) -> None:
+        policy = persona.behavior_policy
+        self._gain = 0.6 + (policy.interruption_propensity if policy else 0.1)
+        self._recovery = 0.3 + 0.4 * (policy.repair_propensity if policy else 0.5)
+        self._pressure = 0.0
+        self._heard: list[str] = []
+
+    def brief(self, chat_ctx: Any) -> Any:
+        agent = [
+            str(getattr(message, "text_content", "") or "")
+            for message in chat_ctx.messages()
+            if message.role == "user"
+        ]
+        cause = ""
+        for turn in agent[len(self._heard):]:
+            words, lowered = _word_set(turn), turn.lower()
+            rise = 0.0
+            if len(words) > 3 and any(cue in lowered for cue in _REFUSAL_CUES):
+                rise, cause = rise + 0.2, "refused"
+            if len(words) > 5 and any(
+                len(words & _word_set(earlier)) / len(words | _word_set(earlier)) >= 0.6
+                for earlier in self._heard
+            ):
+                rise, cause = rise + 0.25, "repeated"
+            if rise:
+                self._pressure = min(1.0, self._pressure + rise * self._gain)
+            elif self._pressure >= 0.2 and _made_progress(lowered):
+                self._pressure, cause = max(0.0, self._pressure - self._recovery), "progress"
+            self._heard.append(turn)
+        if not cause:
+            return chat_ctx
+        if cause == "progress":
+            line = "The agent has now actually moved things forward, so the edge goes out of your voice."
+        elif self._pressure >= 0.75:
+            line = f"You have had enough: {_MOOD_CAUSES[cause]}. Say so plainly; you may ask for a person."
+        elif self._pressure >= 0.45:
+            line = f"You are frustrated now: {_MOOD_CAUSES[cause]}. It shows in shorter, sharper words."
+        elif self._pressure >= 0.2:
+            line = f"You are getting a little impatient: {_MOOD_CAUSES[cause]}."
+        else:
+            return chat_ctx
+        briefed = chat_ctx.copy()
+        briefed.add_message(role="system", content=f"Where you are now: {line}")
+        return briefed
 
 
 def _with_opening_line(chat_ctx: Any, opening: Any) -> Any:
@@ -1237,6 +1316,7 @@ def _may_not_be_speech(text: str) -> bool:
 
 # The one bracketed cue the voice renders is kept; see CARTESIA_DELIVERY_CUES.
 _STAGE_DIRECTION = re.compile(r"\[(?!laughter\])[^\]]*\]|\*[^*]*\*", re.IGNORECASE)
+_DELIVERY_MARKUP = re.compile(r"<[^<>]*>|\[laughter\]", re.IGNORECASE)
 
 
 async def _spoken_words(text: AsyncIterable[Any]) -> AsyncIterable[Any]:
@@ -2997,6 +3077,16 @@ class LiveKitEngine(BaseEngine):
             tts_config=tts_config,
         )
         vad = await asyncio.to_thread(_load_silero_vad_sync)
+        # How long the agent must talk over this caller before it gives way: assertive callers hold on.
+        policy = persona.behavior_policy
+        interruption_min_duration = (
+            round(
+                min(0.9, max(0.45, 0.45 + 0.5 * policy.interruption_propensity + random.uniform(-0.05, 0.05))),
+                2,
+            )
+            if policy is not None
+            else None
+        )
         self._last_simulator_setup = {
             "instructions": instructions,
             "llm_config": llm_config,
@@ -3005,6 +3095,7 @@ class LiveKitEngine(BaseEngine):
             "allow_interruptions": allow_interruptions,
             "min_endpointing_delay": min_endpointing_delay,
             "max_endpointing_delay": max_endpointing_delay,
+            "interruption_min_duration": interruption_min_duration,
             "use_tts_aligned_transcript": use_aligned_transcript,
         }
         agent = _TestRunnerAgent(
@@ -3020,6 +3111,7 @@ class LiveKitEngine(BaseEngine):
                 allow_interruptions=allow_interruptions,
                 min_endpointing_delay=min_endpointing_delay,
                 max_endpointing_delay=max_endpointing_delay,
+                interruption_min_duration=interruption_min_duration,
             ),
             use_tts_aligned_transcript=use_aligned_transcript,
         )
@@ -4044,10 +4136,13 @@ def _canonical_report_messages(session: AgentSession) -> list[dict[str, Any]]:
     role_map = {"assistant": "user", "user": "assistant"}
     messages: list[dict[str, Any]] = []
     for source in _session_messages(session):
+        content = source["content"]
+        if source["role"] == "assistant" and isinstance(content, str):
+            content = " ".join(_DELIVERY_MARKUP.sub(" ", content).split())
         messages.append(
             {
                 "role": role_map.get(source["role"], source["role"]),
-                "content": source["content"],
+                "content": content,
                 "created_at": source.get("created_at"),
                 "started_speaking_at": source.get("started_speaking_at"),
                 "stopped_speaking_at": source.get("stopped_speaking_at"),
