@@ -21,6 +21,7 @@ from .call_runner import (
     CallRunnerContext,
     _clear_file_tool_calls,
     _collect_file_tool_calls,
+    _with_scenario_edits,
 )
 from .contract import AgentContract
 from .hosted_scheduler import CallAborted, CallOutcome, Scenario, World
@@ -479,9 +480,11 @@ class HostedChatCallRunner:
                 "chat_capability_unavailable: target_http endpoint is absent"
             )
 
-        document = _scenario_document(
-            self._context.bundle_dir,
-            getattr(scenario, "source_scenario_key", None) or scenario.scenario_key,
+        source_key = getattr(scenario, "source_scenario_key", None) or scenario.scenario_key
+        document = _with_scenario_edits(
+            _scenario_document(self._context.bundle_dir, source_key),
+            getattr(self._context.job, "metadata", None),
+            source_key,
         )
         conversation_scenario = _conversation_scenario(document)
         if not conversation_scenario.instruction.strip():
