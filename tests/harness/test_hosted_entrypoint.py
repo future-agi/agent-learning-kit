@@ -921,6 +921,7 @@ def test_load_simulator_secret_values_is_allowlisted_and_destructive(
                 "LIVEKIT_API_SECRET": "platform-livekit-secret",
                 "SIP_OUTBOUND_TRUNK_ID": "platform-trunk",
                 "SIP_OUTBOUND_FROM_NUMBER": "+14155550000",
+                "HARNESS_CALLER_BARGE_IN_RATE": "0.2",
                 "UNRELATED": "must-not-load",
             }
         ),
@@ -937,6 +938,7 @@ def test_load_simulator_secret_values_is_allowlisted_and_destructive(
         "LIVEKIT_API_SECRET": "platform-livekit-secret",
         "SIP_OUTBOUND_TRUNK_ID": "platform-trunk",
         "SIP_OUTBOUND_FROM_NUMBER": "+14155550000",
+        "HARNESS_CALLER_BARGE_IN_RATE": "0.2",
     }
     assert not path.exists()
 
