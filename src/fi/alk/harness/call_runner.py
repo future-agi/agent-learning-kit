@@ -444,6 +444,37 @@ def _read_scenario_document(bundle_dir: Path, scenario_key: str) -> dict[str, An
     )
 
 
+# What a person may change on an authored scenario; everything else is as sealed.
+_EDITABLE_FIELDS = ("tests", "max_turns", "background_noise", "keywords")
+_EDITABLE_PERSONA_FIELDS = (
+    "personality",
+    "communication_style",
+    "accent",
+    "languages",
+    "occupation",
+    "location",
+)
+
+
+def _with_scenario_edits(
+    document: dict[str, Any], metadata: object, scenario_key: str
+) -> dict[str, Any]:
+    """The sealed document with the platform's current edits for this scenario laid over it."""
+    edits = metadata.get("scenario_edits") if isinstance(metadata, Mapping) else None
+    edit = edits.get(scenario_key) if isinstance(edits, Mapping) else None
+    if not isinstance(edit, Mapping):
+        return document
+    merged = dict(document)
+    merged.update({field: edit[field] for field in _EDITABLE_FIELDS if field in edit})
+    persona = edit.get("persona")
+    if isinstance(persona, Mapping):
+        merged["persona"] = {
+            **(merged.get("persona") if isinstance(merged.get("persona"), dict) else {}),
+            **{key: persona[key] for key in _EDITABLE_PERSONA_FIELDS if key in persona},
+        }
+    return merged
+
+
 # --- deterministic room naming (asserted verbatim by tests/harness/test_call_runner.py). WHY this
 # is a PREFIX guarantee, not a full-match one: in managed room_mode, engines/livekit.py::
 # _resolve_room_name appends its own `-{invocation_id}-{test_case_id[-12:]}` suffix unless
@@ -1139,13 +1170,14 @@ class CallRunnerImpl:
                 f"not set for world {runtime.world_index}"
             )
 
+        source_key = getattr(scenario, "source_scenario_key", None) or scenario.scenario_key
         try:
-            doc = _read_scenario_document(
-                self._context.bundle_dir,
-                getattr(scenario, "source_scenario_key", None) or scenario.scenario_key,
-            )
+            doc = _read_scenario_document(self._context.bundle_dir, source_key)
         except _ScenarioDocumentUnavailable as exc:
             raise CallAborted(f"voice_scenario_document_unavailable: {exc}") from exc
+        doc = _with_scenario_edits(
+            doc, getattr(self._context.job, "metadata", None), source_key
+        )
 
         room_count = self._scenario_room_counts.get(scenario.scenario_key, 0) + 1
         self._scenario_room_counts[scenario.scenario_key] = room_count
