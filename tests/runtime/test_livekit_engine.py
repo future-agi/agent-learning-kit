@@ -1679,6 +1679,69 @@ def test_a_caller_left_on_hold_checks_in_once_when_nothing_follows(monkeypatch) 
     asyncio.run(answered())
     assert replies == []
 
+def test_terminal_listening_cancels_pending_caller_replies(monkeypatch) -> None:
+    replies: list[str] = []
+
+    class FakeSession:
+        history = SimpleNamespace(
+            items=[SimpleNamespace(type="message", role="user", text_content="One moment please.")]
+        )
+        agent_state = "listening"
+        user_state = "listening"
+
+        def generate_reply(self, *, instructions):
+            replies.append(instructions)
+
+    monkeypatch.setattr(livekit, "_HOLD_PATIENCE_SECONDS", 0.01)
+    agent = livekit._TestRunnerAgent(
+        persona=_scenario().dataset[0], instructions="Be a customer.", min_turn_messages=0
+    )
+    agent._session = FakeSession()
+
+    async def scenario():
+        agent._on_hold()
+        agent._on_unspoken("(empty model reply)")
+        hold_check = agent._hold_check
+        answer_again = agent._answer_again
+        agent.end_of_call()
+        await asyncio.gather(hold_check, answer_again, return_exceptions=True)
+        await agent._still_there(len(agent._session.history.items))
+        return hold_check, answer_again
+
+    hold_check, answer_again = asyncio.run(scenario())
+    assert hold_check.cancelled()
+    assert answer_again.cancelled()
+    assert replies == []
+
+
+def test_deadline_grace_waits_for_a_delayed_target_confirmation(monkeypatch) -> None:
+    monkeypatch.setattr(livekit, "_TARGET_REPLY_GRACE_SECONDS", 0.4)
+    monkeypatch.setattr(livekit, "_TARGET_TURN_SETTLE_SECONDS", 0.05)
+    monkeypatch.setattr(livekit, "_TRAILING_TARGET_WAIT_SECONDS", 0.5)
+    observed_speech = False
+
+    async def scenario() -> float:
+        started = asyncio.get_running_loop().time()
+
+        def speaking() -> bool:
+            nonlocal observed_speech
+            elapsed = asyncio.get_running_loop().time() - started
+            active = 0.04 <= elapsed < 0.25
+            observed_speech = observed_speech or active
+            return active
+
+        return await livekit._await_target_last_words(
+            speaking=speaking,
+            present=lambda: True,
+            simulator_spoke_last=False,
+            pending_target_reply=True,
+        )
+
+    waited = asyncio.run(scenario())
+    assert observed_speech
+    assert waited >= 0.25
+
+
 
 def test_an_ordinary_reply_passes_whole_and_in_order() -> None:
     chunks = [_text_chunk("Si"), _text_chunk("lly question, but"), _text_chunk(" why?")]
