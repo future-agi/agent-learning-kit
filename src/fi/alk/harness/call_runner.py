@@ -1469,12 +1469,18 @@ class CallRunnerImpl:
         if case is not None and case.result is not None:
             result = case.result
             if result.transcript:
+                transcript_document = {
+                    "schema_version": "futureagi.call-transcript.v1",
+                    "transcript": result.transcript,
+                    "messages": result.messages,
+                }
+                recording_offset_ms = result.metadata.get("recording_offset_ms")
+                if isinstance(recording_offset_ms, (int, float)):
+                    transcript_document["recording_offset_ms"] = int(
+                        recording_offset_ms
+                    )
                 transcript_payload = json.dumps(
-                    {
-                        "schema_version": "futureagi.call-transcript.v1",
-                        "transcript": result.transcript,
-                        "messages": result.messages,
-                    },
+                    transcript_document,
                     sort_keys=True,
                     default=str,
                 ).encode("utf-8")
