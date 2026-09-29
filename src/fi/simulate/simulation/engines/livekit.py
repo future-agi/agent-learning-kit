@@ -1678,7 +1678,9 @@ class LiveKitEngine(BaseEngine):
         cleanup_timeout = min(cleanup_timeout, _MAX_CLEANUP_TIMEOUT_SECONDS)
         current_run_id = run_id or new_run_id()
         try:
-            caller_barge_in_rate = float(os.environ.get("HARNESS_CALLER_BARGE_IN_RATE", "0"))
+            caller_barge_in_rate = float(
+                os.environ.get("HARNESS_CALLER_BARGE_IN_RATE") or "0.4"
+            )
             selected_barge_in_cases = selected_call_indices(
                 current_run_id, len(scenario.dataset), caller_barge_in_rate
             )

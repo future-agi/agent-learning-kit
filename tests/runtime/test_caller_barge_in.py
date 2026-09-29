@@ -142,6 +142,7 @@ def test_selection_is_stable_and_selects_whole_calls() -> None:
         "run-123", 10, 0.2
     )
     assert len(selected_call_indices("run-123", 10, 0.2)) == 2
+    assert len(selected_call_indices("run-123", 10, 0.4)) == 4
     assert len(selected_call_indices("run-123", 20, 0.2)) == 4
     assert selected_call_indices("run-123", 10, 0) == set()
     assert (
