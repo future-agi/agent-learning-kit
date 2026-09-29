@@ -34,8 +34,9 @@ jobs:
           report=json.loads(pathlib.Path('smoke-report.json').read_text());
           assert report['status'] == 'ran' and report['report']['results']"
       - name: Install test dependencies
-        # Pin livekit-agents and its plugins to the versions in uv.lock, so CI tests
-        # the release the package is locked to rather than whatever is newest.
+        # Pin livekit-agents to the version the runner image ships
+        # (Dockerfile.simulation-runner); an unpinned install resolves a
+        # newer release whose usage schema the engine does not target.
         run: >-
           python -m pip install '.[livekit]' pytest pytest-asyncio
           'livekit-agents==1.8.3'
