@@ -21,13 +21,13 @@ def _heard(environment, seeds=range(40)):
     return {source_for(environment, seed=f"scenario-{seed}") for seed in seeds}
 
 
-def test_a_named_place_draws_from_its_clips_and_its_builtin(catalogue):
-    assert _heard("street") == {"https://clips.example/traffic.wav", "CITY_AMBIENCE"}
+def test_a_named_place_draws_from_its_recordings_and_a_builtin_only_without_one(catalogue):
+    assert _heard("street") == {"https://clips.example/traffic.wav"}
     assert _heard("transit") == {
         "https://clips.example/airport.wav",
         "https://clips.example/station.wav",
-        "CITY_AMBIENCE",
     }
+    assert _heard("office") == {"OFFICE_AMBIENCE"}
 
 
 def test_an_unnamed_place_draws_from_every_bed(catalogue):
@@ -90,10 +90,10 @@ def test_an_unreadable_bed_keeps_its_volume(tmp_path):
     assert asyncio.run(_bed_gain(str(broken))) == 1.0
 
 
-def test_places_come_from_the_catalogue_and_the_builtins(catalogue):
+def test_places_count_recordings_and_fall_back_to_builtins(catalogue):
     from fi.alk.harness.background_noise import places
 
-    assert places() == {"crowd": 1, "office": 1, "outdoors": 1, "street": 2, "transit": 3, "vehicle": 2}
+    assert places() == {"crowd": 1, "office": 1, "outdoors": 1, "street": 1, "transit": 2, "vehicle": 1}
 
 
 def test_without_a_catalogue_places_are_the_builtin_beds(monkeypatch):
@@ -107,7 +107,7 @@ def test_a_writer_brief_deals_the_places_it_can_play(catalogue):
     from fi.alk.harness.scenarios import callers_for
 
     brief = callers_for(0, 6)
-    assert "transit (3)" in brief and "vehicle (2)" in brief
+    assert "transit (2)" in brief and "vehicle (1)" in brief
     assert "believable person" in brief and "celebrity" in brief
 
 
@@ -148,9 +148,39 @@ def test_a_caller_speaks_one_language():
 
 
 def test_a_place_the_situation_describes_wins_over_a_pick_by_name(catalogue):
-    from fi.alk.harness.background_noise import place_for
+    from fi.alk.harness.background_noise import _place_in, place_for
 
     assert place_for("any", None, "You are rushing through the airport to your gate.") == "transit"
     assert place_for("any", None, "You call from a busy street corner.") == "street"
+    assert _place_in("you are in the hospital waiting room.", ["hospital", "home"]) == "hospital"
+    assert _place_in("you are at home in the kitchen.", ["hospital", "home"]) == "home"
     assert place_for("any", {"environment": "vehicle"}, "at the airport") == "vehicle"
+
+
+def test_a_chosen_bed_names_its_place(catalogue):
+    from fi.alk.harness.background_noise import place_of
+
+    assert place_of("https://clips.example/car.wav") == "vehicle"
+    assert place_of("OFFICE_AMBIENCE") == "office"
+    assert place_of("https://clips.example/unknown.wav") == ""
+
+
+def test_where_the_caller_is_going_is_not_where_they_are():
+    from fi.alk.harness.background_noise import _place_in
+
+    places = ["airport", "transit", "street", "office"]
+    assert _place_in("you are at a hotel and need a ride to heathrow airport terminal 2.", places) == ""
+    assert _place_in("you are at the airport and need a ride to your office.", places) == "airport"
+    assert _place_in("you call from a train station; your destination is the airport.", places) == "transit"
+    assert _place_in("you need a ride to 12 pine road from your office.", places) == "office"
+
+
+def test_calls_from_one_place_go_through_its_clips_before_repeating_one(catalogue):
+    from fi.alk.harness.background_noise import _PLAYED, scenario_source
+
+    _PLAYED.clear()
+    heard = [scenario_source("transit", None, seed=f"call-{n}") for n in range(4)]
+
+    assert set(heard[:2]) == {"https://clips.example/airport.wav", "https://clips.example/station.wav"}
+    assert set(heard[2:]) == set(heard[:2])
 

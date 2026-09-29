@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import signal
 import sys
@@ -34,6 +35,12 @@ async def _finish(task: asyncio.Task) -> bool:
 def run_worker(main: Callable[[], Awaitable[None]]) -> None:
     """Translate termination into one cancellation so async cleanup can finish."""
 
+    logging.basicConfig(
+        level=logging.WARNING,
+        format=f"%(asctime)s %(levelname)s job={os.environ.get('ALK_LOG_JOB_ID', '-')} %(name)s: %(message)s",
+    )
+    logging.getLogger("fi").setLevel(logging.INFO)
+
     async def supervised() -> None:
         task = asyncio.create_task(main())
         loop = asyncio.get_running_loop()
@@ -54,6 +61,14 @@ def run_worker(main: Callable[[], Awaitable[None]]) -> None:
             loop.remove_signal_handler(signal.SIGTERM)
 
     asyncio.run(supervised())
+
+
+def _job_id() -> str:
+    for handler in logging.getLogger().handlers:
+        for log_filter in handler.filters:
+            if isinstance(getattr(log_filter, "job_id", None), str):
+                return log_filter.job_id
+    return "-"
 
 
 async def _reap(
@@ -101,6 +116,8 @@ async def run_json_worker(
             HOME=str(root),
             XDG_CACHE_HOME=str(root / "cache"),
         )
+        # The worker logs into this process's stream, tagged with the same job id.
+        child_env.setdefault("ALK_LOG_JOB_ID", _job_id())
         creation = asyncio.create_task(
             asyncio.create_subprocess_exec(
                 sys.executable,

@@ -118,11 +118,16 @@ def places() -> dict[str, int]:
     named = {tag for tag, _ in clips if tag and tag not in _SILENT_ENVIRONMENTS}
     counts = {}
     for place in sorted(named | set(_PLACE_BY_BUILTIN.values())):
-        counts[place] = sum(1 for tag, _ in clips if tag == place) + (place in _BUILTIN_BY_ENVIRONMENT)
+        recorded = sum(1 for tag, _ in clips if tag == place)
+        counts[place] = recorded or int(place in _BUILTIN_BY_ENVIRONMENT)
     return counts
 
 
-def source_for(environment: str = "", seed: str = "") -> str:
+# Beds already played this run, per pool, so a place goes through all its clips before repeating one.
+_PLAYED: dict[tuple[str, ...], set[str]] = {}
+
+
+def source_for(environment: str = "", seed: str = "", fresh: bool = False) -> str:
     """A background-noise source for a scenario.
 
     Returns a ``url``/``path`` from the configured catalog or the name of a LiveKit builtin clip,
@@ -134,15 +139,32 @@ def source_for(environment: str = "", seed: str = "") -> str:
         return ""
     clips = _catalogue()
     pool = [location for tag, location in clips if tag == env]
-    if env in _BUILTIN_BY_ENVIRONMENT:
+    if env in _BUILTIN_BY_ENVIRONMENT and not pool:
         pool.append(_BUILTIN_BY_ENVIRONMENT[env])
     if not pool and env:
         nearest = _place_in(env.replace("_", " ").replace("-", " "), places())
         if nearest:
-            return source_for(nearest, seed)
+            return source_for(nearest, seed, fresh)
     if not pool:
         pool = [location for _, location in clips] + sorted(set(_BUILTIN_BY_ENVIRONMENT.values()))
-    return pool[_pick(seed or env or "x", len(pool))]
+    if fresh:
+        played = _PLAYED.setdefault(tuple(pool), set())
+        unheard = [one for one in pool if one not in played] or pool
+        if len(unheard) == len(pool):
+            played.clear()
+        pool = unheard
+    choice = pool[_pick(seed or env or "x", len(pool))]
+    if fresh:
+        played.add(choice)
+    return choice
+
+
+def place_of(source: str) -> str:
+    """The place a chosen bed sounds like, or "" when the source is not one this module hands out."""
+    for tag, location in _catalogue():
+        if location == source:
+            return tag
+    return _PLACE_BY_BUILTIN.get(source, "")
 
 
 def _pick(seed: str, size: int) -> int:
@@ -159,6 +181,8 @@ _SETTING_WORDS: dict[str, str] = {
     "outdoors": r"\bparks?\b|\boutdoors\b|\bgardens?\b|\bhiking\b|\bbeach\b",
     "street": r"\bstreets?\b|\bsidewalk\b|\bpavement\b|\bwalking\b|\bcrosswalk\b",
     "office": r"\boffices?\b|\bdesk\b|\bworkplace\b|\bcubicle\b|\bmeeting room\b",
+    "hospital": r"\bhospitals?\b|\bclinics?\b|\bwaiting room\b|\bemergency room\b|\bward\b",
+    "home": r"\bat home\b|\bkitchen\b|\bliving room\b|\bmy (?:house|flat|apartment)\b",
 }
 
 
@@ -181,8 +205,19 @@ def place_for(name: str, fixture: Any = None, situation: str = "") -> str:
     return _place_in(text, options) or (options[_pick(name or "x", len(options))] if options else "")
 
 
+# Where the caller is going says nothing about where they are: "a ride to the airport" is not a call
+# from an airport.
+_DESTINATION = re.compile(
+    r"\b(?:ride|trip|transfer|transport|car|cab|taxi|go|going|head|heading|headed|travel\w*|get)"
+    r"\s+(?:back\s+)?to\s+(?:(?!\bfrom\b)[^.,;]){0,60}"
+    r"|\b(?:destination|drop[- ]?off)\s*(?:is|:|at)?\s+(?:(?!\bfrom\b)[^.,;]){0,60}",
+    re.IGNORECASE,
+)
+
+
 def _place_in(text: str, options) -> str:
     """The playable place a piece of text describes, or "" when it describes none."""
+    text = _DESTINATION.sub(" ", text)
     for place, words in _SETTING_WORDS.items():
         if not re.search(words, text):
             continue
@@ -206,4 +241,4 @@ def scenario_source(
     environment = background_noise if isinstance(background_noise, str) else ""
     if not environment and isinstance(fixture, dict):
         environment = str(fixture.get("environment") or fixture.get("location") or "")
-    return source_for(environment, seed=seed)
+    return source_for(environment, seed=seed, fresh=True)

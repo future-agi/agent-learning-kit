@@ -856,7 +856,9 @@ def validate_scenario(
     problems.extend(voicemail_sub_goal_problems(scenario, catalogue))
     problems.extend(_world_credential_problems(scenario, world_state))
     problems.extend(self_sufficiency_problems(scenario))
-    problems.extend(alignment_problems(scenario, world_state))
+    # A live target's world is not ours to seed, so what the caller is told cannot be checked against it.
+    if not (allow_empty_solution and not scenario.solution and not (scenario.setup_code or "").strip()):
+        problems.extend(alignment_problems(scenario, world_state))
     problems.extend(hollow_scenario_problems(scenario))
     problems.extend(naming_problems(scenario))
     return problems
@@ -1124,7 +1126,8 @@ _QUOTED_VALUE = re.compile(
 
 # Values that look quotable but are never records the agent looks up.
 _NOT_A_RECORD = re.compile(
-    r"^(?:\d{1,2}[:.]\d{2}|\d{1,4}(?:st|nd|rd|th)|20\d{2}|1?\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)$",
+    r"^(?:\d{1,2}[:.]\d{2}|\d{1,4}(?:st|nd|rd|th)|20\d{2}|1?\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?"
+    r"|\d{1,2}-(?:digits?|characters?|chars?|letters?|numbers?))$",
     re.IGNORECASE,
 )
 

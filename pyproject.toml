@@ -72,8 +72,8 @@ optimize = []
 livekit = [
   "aiohttp>=3.10",
   "audioop-lts>=0.2.1; python_version >= '3.13'",
-  "livekit-agents[cartesia,deepgram,openai,silero,google]>=1.2",
-  "livekit-plugins-elevenlabs>=1.2",
+  "livekit-agents[cartesia,deepgram,openai,silero,google]>=1.8.3,<2",
+  "livekit-plugins-elevenlabs>=1.8.3,<2",
 ]
 langchain = [
   "langchain-core>=1.4.6,<2",            # verified latest stable on PyPI 2026-06-11
@@ -116,15 +116,15 @@ notebook = [
 trinity = [
   "aiohttp>=3.10",
   "audioop-lts>=0.2.1; python_version >= '3.13'",
-  "livekit-agents[cartesia,deepgram,openai,silero,google]>=1.2",
-  "livekit-plugins-elevenlabs>=1.2",
+  "livekit-agents[cartesia,deepgram,openai,silero,google]>=1.8.3,<2",
+  "livekit-plugins-elevenlabs>=1.8.3,<2",
 ]
 all = [
   "aiohttp>=3.10",
   "audioop-lts>=0.2.1; python_version >= '3.13'",
   "chromadb>=0.4.0",
-  "livekit-agents[cartesia,deepgram,openai,silero,google]>=1.2",
-  "livekit-plugins-elevenlabs>=1.2",
+  "livekit-agents[cartesia,deepgram,openai,silero,google]>=1.8.3,<2",
+  "livekit-plugins-elevenlabs>=1.8.3,<2",
   "sentence-transformers>=5.2.3,<6",
   "torch>=2.10.0,<3",
   "transformers>=5.2.0,<6",
