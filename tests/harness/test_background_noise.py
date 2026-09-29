@@ -172,6 +172,7 @@ def test_where_the_caller_is_going_is_not_where_they_are():
     assert _place_in("you are at a hotel and need a ride to heathrow airport terminal 2.", places) == ""
     assert _place_in("you are at the airport and need a ride to your office.", places) == "airport"
     assert _place_in("you call from a train station; your destination is the airport.", places) == "transit"
+    assert _place_in("you need a ride to 12 pine road from your office.", places) == "office"
 
 
 def test_calls_from_one_place_go_through_its_clips_before_repeating_one(catalogue):

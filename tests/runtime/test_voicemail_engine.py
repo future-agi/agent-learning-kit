@@ -88,6 +88,18 @@ def test_the_person_still_opens_a_call_the_agent_never_starts():
     )
     assert opened == []
 
+    empty_again = type("S", (), {"history": type("H", (), {"items": []})()})()
+
+    async def streaming_greeting() -> None:
+        pending = asyncio.ensure_future(asyncio.sleep(1))
+        await livekit._open_if_nobody_speaks_first(
+            empty_again, Agent(), timeout_seconds=0.05, target_streams={pending}
+        )
+        pending.cancel()
+
+    asyncio.run(streaming_greeting())
+    assert opened == []
+
 
 def test_a_mailbox_call_carries_no_ambience(monkeypatch):
     """Nothing stands behind a mailbox, so a scenario asking for a room must not get one: it would

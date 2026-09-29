@@ -209,7 +209,8 @@ def place_for(name: str, fixture: Any = None, situation: str = "") -> str:
 # from an airport.
 _DESTINATION = re.compile(
     r"\b(?:ride|trip|transfer|transport|car|cab|taxi|go|going|head|heading|headed|travel\w*|get)"
-    r"\s+(?:back\s+)?to\s+[^.,;]{0,60}|\b(?:destination|drop[- ]?off)\s*(?:is|:|at)?\s+[^.,;]{0,60}",
+    r"\s+(?:back\s+)?to\s+(?:(?!\bfrom\b)[^.,;]){0,60}"
+    r"|\b(?:destination|drop[- ]?off)\s*(?:is|:|at)?\s+(?:(?!\bfrom\b)[^.,;]){0,60}",
     re.IGNORECASE,
 )
 

@@ -2382,6 +2382,7 @@ class LiveKitEngine(BaseEngine):
                         session,
                         customer_agent,
                         timeout_seconds=_OPEN_INSTEAD_AFTER_SECONDS,
+                        target_streams=target_transcription_tasks,
                     )
                 )
                 patience = asyncio.create_task(_patient_opening(session))
@@ -3685,6 +3686,7 @@ async def _open_if_nobody_speaks_first(
     customer_agent: Any,
     *,
     timeout_seconds: float,
+    target_streams: "set[asyncio.Task[None]] | None" = None,
 ) -> None:
     """Have the simulated person open the conversation when the other side never does.
 
@@ -3695,9 +3697,11 @@ async def _open_if_nobody_speaks_first(
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout_seconds
     while loop.time() < deadline:
-        # A greeting still being spoken is not in history yet, but it is a first turn.
-        if getattr(session, "user_state", None) in _USER_BUSY_STATES or any(
-            message["content"] for message in _session_messages(session)
+        # A greeting still being spoken, heard or streamed as native transcription, is not in history yet.
+        if (
+            getattr(session, "user_state", None) in _USER_BUSY_STATES
+            or target_streams
+            or any(message["content"] for message in _session_messages(session))
         ):
             return
         await asyncio.sleep(0.2)
