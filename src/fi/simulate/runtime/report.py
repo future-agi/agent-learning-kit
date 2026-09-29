@@ -111,6 +111,12 @@ class SimulationReport(BaseModel):
                 result = case.result.model_copy(deep=True)
             else:
                 result = TestCaseResult(persona=case.persona, transcript="")
+            if not include_runtime_metadata:
+                # The legacy compatibility path is byte-stable by contract. Per-turn timing was
+                # added to the unified runtime after that contract was frozen, so do not leak the
+                # new runtime-only field into manifests that explicitly request legacy output.
+                for message in result.messages:
+                    message.pop("latency_ms", None)
             if include_runtime_metadata:
                 result.metadata.update(
                     {

@@ -23,6 +23,67 @@ def test_platform_simulator_values_ignore_customer_target_credentials() -> None:
     assert "ANTHROPIC_API_KEY" not in values
 
 
+def test_fallback_authoring_reads_gateway_key_without_deleting_control_channel(
+    tmp_path, monkeypatch
+) -> None:
+    secrets = tmp_path / "secrets.json"
+    gateway = tmp_path / "simulator-secrets.json"
+    secrets.write_text("{}", encoding="utf-8")
+    gateway.write_text(
+        json.dumps(
+            {
+                "AGENTCC_API_KEY": "platform-key",
+                "AGENTCC_BASE_URL": "https://gateway.example.test",
+                "ALK_UBER_GUEST_POC_TARGET_PHONE_NUMBER": "+15551234567",
+                "ALK_UBER_GUEST_POC_PIN": "7682",
+                "RETELL_API_KEY": "must-not-be-forwarded",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(entrypoint, "_SECRETS_PATH", secrets)
+    monkeypatch.setattr(entrypoint, "_SIMULATOR_SECRETS_PATH", gateway)
+    monkeypatch.setattr(entrypoint, "_ADC_PATH", tmp_path / "adc.json")
+    monkeypatch.setenv("AGENTCC_API_KEY", "pre-test-key")
+    monkeypatch.setenv("AGENTCC_BASE_URL", "https://pre-test.example.test")
+    monkeypatch.setattr(
+        entrypoint, "authoring_main", lambda argv, *, validate_runtime: 0
+    )
+
+    assert entrypoint.main([]) == 0
+    assert entrypoint.os.environ["AGENTCC_API_KEY"] == "platform-key"
+    assert entrypoint.os.environ["AGENTCC_BASE_URL"] == "https://gateway.example.test"
+    assert (
+        entrypoint.os.environ["ALK_UBER_GUEST_POC_TARGET_PHONE_NUMBER"]
+        == "+15551234567"
+    )
+    assert entrypoint.os.environ["ALK_UBER_GUEST_POC_PIN"] == "7682"
+    assert gateway.is_file()
+    assert "RETELL_API_KEY" not in entrypoint.os.environ
+
+
+def test_authoring_hears_the_platform_noise_catalogue(tmp_path, monkeypatch) -> None:
+    secrets = tmp_path / "secrets.json"
+    gateway = tmp_path / "simulator-secrets.json"
+    secrets.write_text("{}", encoding="utf-8")
+    catalogue = json.dumps([{"environment": "street", "url": "https://clips.example.test/a.wav"}])
+    gateway.write_text(
+        json.dumps({"ALK_BACKGROUND_NOISE": "1", "ALK_BACKGROUND_NOISE_CATALOG": catalogue}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(entrypoint, "_SECRETS_PATH", secrets)
+    monkeypatch.setattr(entrypoint, "_SIMULATOR_SECRETS_PATH", gateway)
+    monkeypatch.setattr(entrypoint, "_ADC_PATH", tmp_path / "adc.json")
+    monkeypatch.delenv("ALK_BACKGROUND_NOISE_CATALOG", raising=False)
+    monkeypatch.setattr(
+        entrypoint, "authoring_main", lambda argv, *, validate_runtime: 0
+    )
+
+    assert entrypoint.main([]) == 0
+    assert entrypoint.os.environ["ALK_BACKGROUND_NOISE_CATALOG"] == catalogue
+    assert gateway.is_file()
+
+
 def test_vertex_generation_region_is_not_copied_from_google_location(
     tmp_path, monkeypatch
 ) -> None:
@@ -98,12 +159,7 @@ def test_hosted_entrypoint_passes_one_shot_provider_secret_to_authoring(
 
     monkeypatch.setattr(entrypoint, "authoring_main", authoring_main)
 
-    assert (
-        entrypoint.main(
-            ["job.json", "--source", "source", "--output", "out"]
-        )
-        == 0
-    )
+    assert entrypoint.main(["job.json", "--source", "source", "--output", "out"]) == 0
     assert observed == {
         "argv": [
             "job.json",

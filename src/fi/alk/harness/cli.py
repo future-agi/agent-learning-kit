@@ -33,7 +33,7 @@ from .run.targets import supported as target_kinds
 from .scenarios import load as load_written
 from .scenarios import open_stage as scenario_stage
 from .scenarios import opening as scenario_opening
-from .session import TEXT, Event
+from .session import ARTIFACT, DONE, RESULT, TEXT, TOOL, Event
 from .sessions import Session, new_id, save as save_session
 from .sources import resolve, supported
 from .understand import load, open_stage, opening
@@ -64,6 +64,78 @@ def _render(event: Event) -> None:
     else:
         print(f"\n{line}", flush=True)
 
+_AUTO_EVENT_SINK: Any = None
+
+
+def _render_observable(event: Event) -> None:
+    _render(event)
+    if _AUTO_EVENT_SINK is not None:
+        _AUTO_EVENT_SINK(event)
+_AUTHORING_CLIENT: Any = None
+
+
+async def _drain_authoring_commands(stage) -> None:
+    client = _AUTHORING_CLIENT
+    if os.environ.get("ALK_FOREGROUND_COORDINATOR") == "1":
+        return
+    if client is None:
+        return
+    try:
+        commands = await client.commands()
+    except Exception:
+        return
+    for command in commands:
+        sequence = int(command["sequence"])
+        if sequence <= client.command_watermark:
+            continue
+        content = str((command.get("payload") or {}).get("content") or "").strip()
+        if not content:
+            continue
+        message_id = str(uuid.uuid4())
+        try:
+            await client.emit(
+                "turn_started",
+                invocation_id=message_id,
+                payload={"command_message_id": command["message_id"]},
+            )
+            emitted: list[str] = []
+
+            def receive(event: Event) -> None:
+                if event.kind == TEXT and event.text:
+                    emitted.append(event.text)
+
+            await stage.say(content, on_event=receive)
+            text = "".join(emitted).strip() or "I’m still working on the active authoring stage."
+            await client.emit(
+                "assistant_message",
+                message_id=str(uuid.uuid4()),
+                stage="authoring",
+                invocation_id=message_id,
+                payload={"text": text},
+            )
+            await client.emit(
+                "turn_completed",
+                invocation_id=message_id,
+                payload={"command_message_id": command["message_id"], "outcome": "success"},
+                acknowledge_through=sequence,
+            )
+        except Exception as exc:  # noqa: BLE001 - report the active-stage failure to the UI.
+            await client.emit(
+                "assistant_message",
+                message_id=str(uuid.uuid4()),
+                stage="authoring",
+                invocation_id=message_id,
+                payload={
+                    "text": f"I couldn’t complete that turn: {type(exc).__name__}.",
+                    "error": type(exc).__name__,
+                },
+            )
+            await client.emit(
+                "turn_completed",
+                invocation_id=message_id,
+                payload={"command_message_id": command["message_id"], "outcome": "failed"},
+                acknowledge_through=sequence,
+            )
 
 async def _prompt(question: str) -> str:
     return (await asyncio.to_thread(input, question)).strip()
@@ -183,6 +255,25 @@ async def _understand(args: argparse.Namespace) -> int:
     if contract is None:
         print("\nNo contract was submitted.", file=sys.stderr)
         return 1
+    generic = bool(
+        job is not None
+        and isinstance(getattr(job, "metadata", None), dict)
+        and job.metadata.get("generic_harness_v1") is True
+    )
+    if generic:
+        from .certification import GenericHarnessArtifactStore
+        from .provision import source_fingerprint
+        from .source_discovery import discover_code_source_model
+
+        digest = source_fingerprint(Path(args.path).resolve())
+        if not digest.startswith("sha256:"):
+            digest = f"sha256:{digest}"
+        source_model = discover_code_source_model(
+            Path(args.path), contract, source_digest=digest
+        )
+        GenericHarnessArtifactStore(destination / "generic-harness").write_source_model(
+            source_model
+        )
     print(
         f"\ncontract: {len(contract.tools)} tools, "
         f"{len(contract.hard_constraints)} rules, "
@@ -213,9 +304,10 @@ async def _converse(
     the stage costs everything it just did.
     """
     async with stage:
-        await stage.say(opening_message, on_event=_render)
+        await stage.say(opening_message, on_event=_render_observable)
         if not interactive and until is not None and nudge and not until():
-            await stage.say(nudge, on_event=_render)
+            await stage.say(nudge, on_event=_render_observable)
+        await _drain_authoring_commands(stage)
         while interactive:
             try:
                 said = await _prompt("\nyou  ")
@@ -223,7 +315,8 @@ async def _converse(
                 break
             if not said or said in {"q", "quit", "exit"}:
                 break
-            await stage.say(said, on_event=_render)
+            await stage.say(said, on_event=_render_observable)
+            await _drain_authoring_commands(stage)
 
 
 async def _build(args: argparse.Namespace) -> int:
@@ -402,6 +495,19 @@ async def _scenarios(args: argparse.Namespace) -> int:
     existing = len(load_written(destination))
     wanted = args.count or existing or 10
 
+    # The Uber Guest Booking POC policy is supplied only through the platform-owned simulator
+    # secret channel and is gated against the exact submitted phone target. Keep it in the model's
+    # authoring brief: saved scenarios should be authored with natural PIN behavior, never rewritten
+    # mechanically after generation or intercepted while a call is running.
+    from .poc_guest_booking import guest_booking_pin_guidance
+
+    poc_guidance = guest_booking_pin_guidance(
+        getattr(args, "job", None), scenario_count=wanted
+    )
+    guidance = [*(getattr(args, "guidance", None) or [])]
+    if poc_guidance:
+        guidance.append(poc_guidance)
+
     print(
         f"agent: {contract.agent}  "
         + (f"({existing} scenarios, loaded)" if existing else f"(writing {wanted})")
@@ -414,10 +520,12 @@ async def _scenarios(args: argparse.Namespace) -> int:
         out=destination,
         wanted=wanted,
         ask=permission_gate(_ask_operator) if args.interactive else None,
+        authoring_guidance=poc_guidance,
     )
     await _converse(
         stage,
-        scenario_opening(contract, wanted, existing) + _guidance(args),
+        scenario_opening(contract, wanted, existing)
+        + _guidance(argparse.Namespace(guidance=guidance)),
         interactive=args.interactive,
         until=lambda: bool(load_written(destination)),
         nudge=(
@@ -658,6 +766,32 @@ def _load_connection_env(source: Path) -> list[str]:
     return loaded
 
 
+def _declared_connection_env_names(source: Path) -> list[str]:
+    """Preserve local source configuration *names* across a sealed-bundle rerun.
+
+    The bundle intentionally excludes dotenv values.  Without their names, the local
+    provisioner cannot pass even operator-supplied credentials to the submitted runtime.
+    Hosted jobs already carry these names in their run-scoped secret references.
+    """
+    names: set[str] = set()
+    for candidate in (source / ".env.local", source / ".env"):
+        if not candidate.is_file():
+            continue
+        for raw in candidate.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            name = line.split("=", 1)[0].removeprefix("export ").strip()
+            if (
+                name
+                and name[0].isalpha()
+                and name.replace("_", "").isalnum()
+                and not name.startswith("ALK_")
+            ):
+                names.add(name)
+    return sorted(names)
+
+
 def _new_adjustments(
     path: Path | None, cursor: int
 ) -> tuple[list[dict[str, Any]], int]:
@@ -732,7 +866,11 @@ async def _auto(args: argparse.Namespace) -> int:
         ),
         agent=AgentConnection(connector="auto"),
         scenario_count=args.count,
-        metadata={"agent_name": name, "source_kind": args.kind},
+        metadata={
+            "agent_name": name,
+            "source_kind": args.kind,
+            "environment_value_names": _declared_connection_env_names(source),
+        },
     )
     (destination / "job.json").write_text(
         job.model_dump_json(indent=2) + "\n", encoding="utf-8"
@@ -741,6 +879,19 @@ async def _auto(args: argparse.Namespace) -> int:
     spend.journal_to(destination / "cost.json")
     events = BufferedEventSink(EventOutbox(destination.parent, destination.name))
     event_sequence = 0
+    global _AUTHORING_CLIENT
+    capabilities_path = Path(
+        str(getattr(args, "conversation_capabilities_path", "") or "")
+    )
+    if capabilities_path.is_file():
+        from .hosted_conversation import (
+            ConversationClient,
+            load_conversation_capabilities,
+        )
+
+        _AUTHORING_CLIENT = ConversationClient(
+            load_conversation_capabilities(capabilities_path)
+        )
 
     def emit(event_type: str, stage: str, **payload: Any) -> None:
         nonlocal event_sequence
@@ -756,6 +907,25 @@ async def _auto(args: argparse.Namespace) -> int:
             )
         )
         event_sequence += 1
+
+    def emit_model_event(event: Event) -> None:
+        detail = event.detail or {}
+        safe_detail = {
+            key: detail[key]
+            for key in ("target", "label", "call_id", "is_error", "path", "outcome", "cost_usd")
+            if key in detail
+        }
+        emit(
+            "harness.activity",
+            str(detail.get("stage") or "authoring"),
+            event_kind=event.kind,
+            tool=event.tool or None,
+            text=event.text[:2000] if event.text else None,
+            detail=safe_detail,
+        )
+
+    global _AUTO_EVENT_SINK
+    _AUTO_EVENT_SINK = emit_model_event
 
     now = time.time()
     save_session(
@@ -829,6 +999,7 @@ async def _auto(args: argparse.Namespace) -> int:
                 count=args.count,
                 interactive=False,
                 guidance=[],
+                job=job,
             ),
         ),
     ]
@@ -872,7 +1043,11 @@ async def _auto(args: argparse.Namespace) -> int:
                 repair_attempt = 0
                 wanted = int(stage_args.count)
                 written_count = len(load_written(destination))
-                while written_count != wanted and repair_attempt < 2:
+                # One round per writer's worth of missing scenarios, capped.
+                from .scenarios import writers_for
+
+                rounds = min(max(2, writers_for(max(wanted - written_count, 1))), 6)
+                while written_count != wanted and repair_attempt < rounds:
                     repair_attempt += 1
                     missing = wanted - written_count
                     # Count alone is the wrong instruction: asked only for a number, the
@@ -883,7 +1058,11 @@ async def _auto(args: argparse.Namespace) -> int:
                             f"only {written_count} are currently saved. "
                             + (
                                 f"Add exactly {missing} distinct validated scenario(s) and "
-                                "call save_scenarios. Preserve all existing scenarios. Each "
+                                "call save_scenarios. A writer only runs when you call it: "
+                                "saying that writers have been dispatched, or standing by for "
+                                "them, writes nothing and ends this stage where it stands. Put "
+                                "the calls in the message and read every report before you "
+                                "finish. Preserve all existing scenarios. Each "
                                 "one must meet the same bar as the rest of the suite: a "
                                 "different branch of the agent's behaviour from every "
                                 "scenario already saved, several steps deep, and failing "
@@ -1130,7 +1309,7 @@ async def _chat(args: argparse.Namespace) -> int:
     print(credentials_hint())
     print("\nSay what you want. Enter on its own moves to the next stage; 'q' ends.\n")
 
-    await conversation.start(on_event=_render)
+    await conversation.start(on_event=_render_observable)
     while True:
         try:
             said = await _prompt(f"\nyou ({conversation.stage_name})  ")
@@ -1139,13 +1318,13 @@ async def _chat(args: argparse.Namespace) -> int:
         if said in {"q", "quit", "exit"}:
             break
         if not said:
-            entered = await conversation.advance(on_event=_render)
+            entered = await conversation.advance(on_event=_render_observable)
             if entered is None:
                 print(
                     "\n  [nothing to move on to yet; this stage has not produced its artifact]"
                 )
             continue
-        await conversation.say(said, on_event=_render)
+        await conversation.say(said, on_event=_render_observable)
     await conversation.close()
     print(f"\nspent: ${conversation.spent_usd:.4f}")
     return 0

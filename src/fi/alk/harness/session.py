@@ -19,10 +19,13 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections import Counter
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Callable
+from typing import Any
 
 from . import spend
+from .live import Channel, carrying, folded_in
 from .backends import (
     Call,
     HarnessBackend,
@@ -117,6 +120,9 @@ class Turn:
     outcome: str = ""
     turns: int = 0
     cost_usd: float | None = None
+    tokens_in: int = 0
+    tokens_out: int = 0
+    tokens_cached: int = 0
     error: str = ""
 
 
@@ -200,24 +206,41 @@ class Stage:
         *,
         name: str = "",
         backend: HarnessBackend | None = None,
+        overheard: bool = True,
     ) -> None:
         self._spec = spec
         self._backend = backend
+        # Whether this stage's turns are echoed to the run's conversation channel.
+        self._overheard = overheard
         self._session: HarnessSession | None = None
         self.name = name
         self.session_id: str | None = None
         self.history: list[Turn] = []
+        self.tool_calls: Counter[str] = Counter()
+        self.tool_refusals: Counter[str] = Counter()
+        self._awaiting: dict[str, str] = {}
         # What actually got billed, read back rather than assumed. Asking for a model is not the
         # same as getting one: a request that quietly does not take shows up only on the
         # invoice, weeks later, as a number nobody can explain.
         self.models_used: set[str] = set()
+        self.channel = Channel()
 
     @property
     def spec(self) -> SessionSpec:
         return self._spec
 
+    def configure(self, spec: SessionSpec) -> None:
+        """Replace the unopened session contract after hosted policy/context is applied."""
+        if self._session is not None:
+            raise RuntimeError("configure before the stage opens")
+        self._spec = spec
+
     def grant(
-        self, server_name: str, server: ToolServer, tool_names: list[str], ask: Any = None
+        self,
+        server_name: str,
+        server: ToolServer,
+        tool_names: list[str],
+        ask: Any = None,
     ) -> None:
         """Give this stage one more tool server, before it opens.
 
@@ -238,6 +261,7 @@ class Stage:
     async def __aenter__(self) -> "Stage":
         if self._backend is None:
             self._backend = resolve()
+        self._spec.servers = carrying(self.channel, self._spec.servers)
         self._session = self._backend.create(self._spec)
         await self._session.start()
         return self
@@ -248,12 +272,30 @@ class Stage:
             self._session = None
 
     async def stream(self, message: str) -> AsyncIterator[Event]:
-        """Send a message and yield events as they arrive."""
+        """Send a new message and yield events as they arrive."""
         if self._session is None:
             raise RuntimeError("stage is not open; use it as an async context manager")
-        await self._session.send(message)
+        said = self.channel.waiting() if self._overheard else []
+        for one in said:
+            self.channel.record("said", one, stage=self.name)
+        await self._session.send(folded_in(message, said))
+        async for event in self._pending_events():
+            yield event
+
+    async def resume(self, invocation_id: str) -> AsyncIterator[Event]:
+        """Resume one interrupted provider invocation."""
+        if self._session is None:
+            raise RuntimeError("stage is not open; use it as an async context manager")
+        resume = getattr(self._session, "resume", None)
+        if resume is None:
+            raise RuntimeError("the selected backend cannot resume interrupted turns")
+        await resume(invocation_id)
+        async for event in self._pending_events():
+            yield event
+
+    async def _pending_events(self) -> AsyncIterator[Event]:
         turn = Turn()
-        replies = self._session.replies().__aiter__()
+        replies = self._session.replies().__aiter__()  # type: ignore[union-attr]
         # A stage may ask for a longer silence than the default, because for some stages silence
         # is the work: a session whose turn is one tool call that fans out to other sessions
         # emits nothing until that call returns, and killing it then throws away everything the
@@ -275,6 +317,10 @@ class Stage:
                 # so a front end showing several stages can tell them apart.
                 event.detail.setdefault("stage", self.name)
                 turn.events.append(event)
+                if self._overheard:
+                    self.channel.record(
+                        event.kind, event.text, tool=event.tool, **event.detail
+                    )
                 yield event
         self.history.append(turn)
 
@@ -287,9 +333,22 @@ class Stage:
             for part in received.parts:
                 if isinstance(part, Say):
                     turn.text += part.text
-                    events.append(Event(TEXT, text=part.text))
+                    events.append(
+                        Event(
+                            TEXT,
+                            text=part.text,
+                            detail={
+                                "partial": part.partial,
+                                "event_id": part.event_id,
+                                "invocation_id": part.invocation_id,
+                                "author": part.author,
+                            },
+                        )
+                    )
                 elif isinstance(part, Call):
                     turn.tools_used.append(part.name)
+                    self.tool_calls[f"{part.by or 'loop'}:{part.name}"] += 1
+                    self._awaiting[part.id] = f"{part.by or 'loop'}:{part.name}"
                     events.append(
                         Event(
                             TOOL,
@@ -298,18 +357,27 @@ class Stage:
                                 "target": _target(part.arguments),
                                 "arguments": part.arguments,
                                 "label": readable(part.name),
+                                "call_id": part.id,
+                                "invocation_id": part.invocation_id,
                             },
                         )
                     )
             return events
         if isinstance(received, ToolReturned):
+            refused_tool = self._awaiting.pop(received.id, "")
+            if received.is_error and refused_tool:
+                self.tool_refusals[refused_tool] += 1
             # What a tool said back is the only view a caller has of whether the work is
             # going well. Dropping it leaves a run that can only be diagnosed by guessing.
             events = [
                 Event(
                     RESULT,
                     text=_shown(received.text),
-                    detail={"is_error": received.is_error},
+                    detail={
+                        "is_error": received.is_error,
+                        "call_id": received.id,
+                        "invocation_id": received.invocation_id,
+                    },
                 )
             ]
             path = _saved_path(received.text)
@@ -325,6 +393,9 @@ class Stage:
             turn.outcome = "failed" if failed else received.outcome
             turn.turns = received.turns
             turn.cost_usd = received.cost_usd
+            turn.tokens_in = received.tokens_in
+            turn.tokens_out = received.tokens_out
+            turn.tokens_cached = received.tokens_cached
             # Every harness model call passes here, so the spend ledger is fed once rather than
             # per stage: a writer added later is counted without anybody remembering to.
             spend.record(
@@ -335,10 +406,24 @@ class Stage:
                 received.tokens_in,
                 received.tokens_out,
                 received.tokens_cached,
+                dict(self.tool_calls),
+                dict(self.tool_refusals),
             )
             turn.error = _why_it_failed(received) if failed else ""
             self.session_id = received.session_id or self.session_id
             self.models_used |= received.models
+            billed_what_we_cannot_afford = self.forbidden_models()
+            if billed_what_we_cannot_afford:
+                logger.error(
+                    "STOPPING: the provider billed %s, which this harness may not spend on. "
+                    "Asked for %r.",
+                    ", ".join(sorted(billed_what_we_cannot_afford)),
+                    self._spec.model,
+                )
+                raise RuntimeError(
+                    "the provider billed a model this harness may not spend on: "
+                    + ", ".join(sorted(billed_what_we_cannot_afford))
+                )
             unexpected = self.unexpected_models()
             return [
                 Event(
@@ -379,6 +464,25 @@ class Stage:
                 await self._session.start()
         raise AssertionError("unreachable")
 
+    async def resume_turn(
+        self,
+        invocation_id: str,
+        *,
+        on_event: Callable[[Event], None] | None = None,
+    ) -> Turn:
+        """Resume an interrupted invocation and wait for the whole reply."""
+        async for event in self.resume(invocation_id):
+            if on_event:
+                on_event(event)
+        return self.history[-1]
+
+    async def interrupt_response(self) -> bool:
+        """Interrupt the active model response when the backend supports it."""
+        if self._session is None:
+            return False
+        interrupt = getattr(self._session, "interrupt", None)
+        return bool(await interrupt()) if interrupt is not None else False
+
     def unexpected_models(self) -> set[str]:
         """Models that were billed but not the one asked for."""
         asked = self._spec.model
@@ -386,6 +490,24 @@ class Stage:
             return set()
         return {used for used in self.models_used if asked.split("-2")[0] not in used}
 
+    def forbidden_models(self) -> set[str]:
+        """Models the provider actually billed that this harness may not spend on."""
+        from .config import FORBIDDEN
+
+        return {
+            used
+            for used in self.models_used
+            if any(word in (used or "").lower() for word in FORBIDDEN)
+        }
+
     @property
     def spent_usd(self) -> float:
         return sum(turn.cost_usd or 0.0 for turn in self.history)
+
+    @property
+    def simulator_tokens(self) -> tuple[int, int]:
+        """Provider-reported input/output tokens; never inferred from transcript text."""
+        return (
+            sum(turn.tokens_in for turn in self.history),
+            sum(turn.tokens_out for turn in self.history),
+        )

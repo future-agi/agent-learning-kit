@@ -3,7 +3,11 @@ from types import SimpleNamespace
 
 import pytest
 
+from test_chat_call_runner import _Adapter, _ToolWorld, _context, _single_exchange
+
+from fi.alk.harness import retell_chat_call_runner as retell
 from fi.alk.harness.chat_call_runner import _HostedChatTarget
+from fi.alk.harness.process_runtime import EnvironmentRuntime, RuntimeState
 from fi.alk.harness.retell_chat_call_runner import (
     RetellChatEnded,
     RetellChatWrapper,
@@ -141,6 +145,56 @@ def test_retell_chat_wrapper_close_is_idempotent_after_provider_ended_chat(
     asyncio.run(wrapper.aclose())
 
     assert wrapper._chat_id is None
+
+
+def test_retell_chat_uses_authored_scenario_document_for_selected_trial(
+    tmp_path, monkeypatch
+) -> None:
+    context = _context(tmp_path)
+    looked_up = []
+
+    class Wrapper:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def call(self, _input):
+            return AgentResponse(content="Your account is active.")
+
+        async def aclose(self):
+            return
+
+    source_document = retell._scenario_document
+
+    def load_document(bundle_dir, scenario_key):
+        looked_up.append(scenario_key)
+        return source_document(bundle_dir, scenario_key)
+
+    monkeypatch.setattr(retell, "RetellChatWrapper", Wrapper)
+    monkeypatch.setattr(retell, "_scenario_document", load_document)
+    monkeypatch.setattr(retell, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(retell, "_drive_conversation", _single_exchange)
+    adapter = _Adapter()
+    runner = retell.RetellChatCallRunner(adapter, context)
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1",
+        world_index=0,
+        bundle_digest="sha256:" + "a" * 64,
+        state=RuntimeState.READY,
+    )
+
+    outcome = asyncio.run(
+        runner.run(
+            SimpleNamespace(
+                scenario_key="trial-key",
+                source_scenario_key="one",
+                scenario_id="trial-id",
+            ),
+            runtime,
+        )
+    )
+
+    assert looked_up == ["one"]
+    assert outcome.messages[-1]["content"] == "Your account is active."
 
 
 def test_hosted_chat_target_stops_normally_on_provider_terminal_response() -> None:

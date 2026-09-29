@@ -27,7 +27,13 @@ from fi.alk.harness.executor import (
     HarnessExecutor,
     _failure_from_events,
 )
-from fi.alk.harness.job import FailureDomain, HarnessFailure, HarnessJob, HarnessStage
+from fi.alk.harness.job import (
+    MAX_HOSTED_SCENARIO_COUNT,
+    FailureDomain,
+    HarnessFailure,
+    HarnessJob,
+    HarnessStage,
+)
 from fi.alk.harness.provision import source_fingerprint
 from fi.simulate.runtime.spec import RuntimeIsolation
 from fi.simulate.runtime.events import CanonicalEvent
@@ -121,6 +127,51 @@ def test_executor_freezes_the_resolved_github_commit_before_building(
 
     assert status.stage.value == "completed"
     assert observed["commit"] == commit
+
+
+def test_generic_local_executor_uses_certified_runtime_pipeline(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    observed: dict[str, object] = {}
+
+    async def fake_auto(args) -> int:
+        observed["authoring_only"] = args.authoring_only
+        return 0
+
+    async def fake_certified(job, *, source, authoring):
+        observed["job"] = job.job_id
+        observed["source"] = source
+        observed["authoring"] = authoring
+        return 0, 1
+
+    monkeypatch.setattr("fi.alk.harness.cli._auto", fake_auto)
+    monkeypatch.setattr(
+        "fi.alk.harness.local_certified_runtime.run_local_certified",
+        fake_certified,
+    )
+    source = tmp_path / "repository"
+    source.mkdir()
+    output = tmp_path / "artifacts"
+    job = HarnessJob(
+        job_id="job-generic-local",
+        run_id="run-generic-local",
+        execution="local",
+        source={"kind": "local_repository", "local_path": str(source)},
+        agent={"connector": "auto"},
+        scenario_count=1,
+        metadata={"generic_harness_v1": True},
+    )
+
+    status = asyncio.run(HarnessExecutor().run(job, source=source, output=output))
+
+    assert status.stage is HarnessStage.COMPLETED
+    assert status.completed_scenarios == 1
+    assert observed == {
+        "authoring_only": True,
+        "job": "job-generic-local",
+        "source": source.resolve(),
+        "authoring": output.resolve(),
+    }
 
 
 def test_autonomous_pipeline_cleans_environment_when_a_stage_raises(
@@ -913,7 +964,7 @@ def test_local_and_hosted_jobs_reject_the_other_sides_source() -> None:
         )
 
 
-def test_hosted_job_accepts_two_hundred_scenarios_and_rejects_more() -> None:
+def test_hosted_job_accepts_the_ceiling_and_rejects_one_more() -> None:
     common = {
         "job_id": "job",
         "run_id": "run",
@@ -923,9 +974,15 @@ def test_hosted_job_accepts_two_hundred_scenarios_and_rejects_more() -> None:
         "runtime": {"isolation": "dedicated_vm"},
     }
 
-    assert HarnessJob(**common, scenario_count=200).scenario_count == 200
-    with pytest.raises(ValueError, match="hosted_scenario_count_out_of_range"):
-        HarnessJob(**common, scenario_count=201)
+    assert (
+        HarnessJob(**common, scenario_count=MAX_HOSTED_SCENARIO_COUNT).scenario_count
+        == MAX_HOSTED_SCENARIO_COUNT
+    )
+    # Either validator's message is a correct refusal above the ceiling.
+    with pytest.raises(
+        ValueError, match="hosted_scenario_count_out_of_range|less_than_equal"
+    ):
+        HarnessJob(**common, scenario_count=MAX_HOSTED_SCENARIO_COUNT + 1)
 
 
 def test_job_carries_references_but_rejects_resolved_secrets() -> None:

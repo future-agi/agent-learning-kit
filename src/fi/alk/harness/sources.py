@@ -174,7 +174,7 @@ class SpecSource:
 
 @dataclass
 class ProviderSource:
-    """A sanitized definition fetched from an externally hosted provider.
+    """A sanitized definition of an external target, fetched or supplied by the user.
 
     A connect-only provider agent has no repository in the sandbox.  Representing its empty
     source directory as a :class:`RepoSource` gives an authoring model filesystem tools and can
@@ -198,10 +198,11 @@ class ProviderSource:
 
     def briefing(self) -> str:
         return (
-            "This is an externally hosted provider agent, not a repository. The sanitized "
-            "provider definition below is authoritative for its conversation, prompt, model, "
-            "voice, states, and tool schemas. There is no source code to search or open. Do not "
-            "invent behavior or tool inputs that are absent from this definition.\n\n"
+            "This is an external agent, not a repository. The sanitized definition below is "
+            "the only supplied source of truth. A phone-only connection may contain just the "
+            "user-supplied prompt; it is not a verified provider inspection. There is no source "
+            "code to search or open. Do not invent behavior or tool inputs absent from this "
+            "definition.\n\n"
             f"PROVIDER DEFINITION:\n{json.dumps(self.profile, indent=2, sort_keys=True)}"
         )
 

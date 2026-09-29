@@ -33,11 +33,13 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import os
 import random
 import re
 import threading
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol, Sequence
 
@@ -169,7 +171,11 @@ class WorldProvisioner(Protocol):
     ) -> list[EnvironmentRuntime]: ...
 
     async def reset(
-        self, runtime: EnvironmentRuntime, *, work_directory: Path
+        self,
+        runtime: EnvironmentRuntime,
+        *,
+        work_directory: Path,
+        keep_processes: bool = False,
     ) -> None: ...
 
     async def healthy(
@@ -225,22 +231,31 @@ class CallOutcome:
     stop_reason: str | None = None
     # The artifact above is an id the sandbox cannot read back.
     messages: tuple[Any, ...] = ()
+    # The agent under test's own provider-reported usage, cost and latency; `None` when its
+    # provider reports none (a black-box LiveKit or phone target).
+    target_metrics: dict[str, Any] | None = None
 
 
 class CallAborted(RuntimeError):
     """The call step started but did not finish. `partial`, when known, carries whatever timing
     the call runner already measured — the receipt's `call` field must not be null once the call
-    has genuinely started (outbound-channels.md Channel 2, "errored receipt body")."""
+    has genuinely started (outbound-channels.md Channel 2, "errored receipt body").
+
+    `marker` carries an OPTIONAL structured failure marker the engine surfaced (C3 §4.5 —
+    e.g. `voice_dispatch_unacknowledged`), read from a structured field, NEVER string-matched from
+    the message. The scheduler's `except CallAborted` catch selects the receipt code from it."""
 
     def __init__(
         self,
         message: str,
         *,
         partial: CallOutcome | None = None,
+        marker: str | None = None,
         code: str = "call_failed",
     ) -> None:
         super().__init__(message)
         self.partial = partial
+        self.marker = marker
         self.code = code
 
 
@@ -308,6 +323,7 @@ class CallSummary:
     transcript_artifact: str | None = None
     recording_artifacts: tuple[str, ...] = ()
     stop_reason: str | None = None
+    target_metrics: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -340,7 +356,7 @@ class OutboundPort(Protocol):
     ) -> None: ...
 
     async def scenario_retried(
-        self, *, scenario_key: str, from_world: int, to_world: int
+        self, *, scenario_key: str, from_world: int, to_world: int, cause: str
     ) -> None: ...
 
     async def world_unhealthy(self, *, world_index: int, cause: str) -> None: ...
@@ -377,15 +393,45 @@ _CODE_DOMAIN: dict[str, FailureDomain] = {
     "world_unavailable": FailureDomain.ENVIRONMENT,
     "state_too_large": FailureDomain.SIMULATOR,
     "call_failed": FailureDomain.INFRASTRUCTURE,
+    # C3 §4.5 step 4: the engine's dispatch-ack ladder exhausting at +60s. Domain infrastructure,
+    # like `call_failed`, so it retries once on a fresh world (run-178's post-recovery deliveries
+    # give a retry genuine success probability); classified scenario-errored, never world
+    # retirement (C3 §7 decision 2).
+    "voice_dispatch_unacknowledged": FailureDomain.INFRASTRUCTURE,
+    "target_agent_failed": FailureDomain.AGENT,
     "target_agent_stalled": FailureDomain.AGENT,
     "target_agent_tool_failed": FailureDomain.AGENT,
     "simulator_stalled": FailureDomain.SIMULATOR,
     "driver_crashed": FailureDomain.SIMULATOR,
+    "usage_exhausted": FailureDomain.PLATFORM_SYNC,
+    "usage_check_failed": FailureDomain.PLATFORM_SYNC,
     "world_pool_exhausted": FailureDomain.INFRASTRUCTURE,
 }
 _RETRYABLE_CODES = frozenset(
     {"evidence_missing", "target_agent_stalled", "simulator_stalled"}
 )
+
+# C3 §4.5 step 5: unknown codes must never KeyError inside the `CallAborted` handler (that would
+# mask the real failure), and the seam must be safe if the map-add and the catch-branch land out
+# of order across a deploy. Default any unmapped code to infrastructure + retryable.
+_DEFAULT_UNKNOWN_DOMAIN = FailureDomain.INFRASTRUCTURE
+
+
+def _domain_for(code: str) -> FailureDomain:
+    return _CODE_DOMAIN.get(code, _DEFAULT_UNKNOWN_DOMAIN)
+
+
+def _call_aborted_code(exc: "CallAborted") -> str:
+    """Select the receipt code for a `CallAborted` from its STRUCTURED marker (C3 §4.5 step 3).
+
+    Ack-exhaustion surfaces its own code; every other `CallAborted` keeps the byte-unchanged
+    `call_failed`. The marker is read from `exc.marker`, NEVER string-matched from the message.
+    """
+    marker = getattr(exc, "marker", None)
+    if marker == "voice_dispatch_unacknowledged":
+        return "voice_dispatch_unacknowledged"
+    return exc.code
+
 
 # hosted-execution-seams.md v1.13 §5.4/§2f: the closed provisioner build/run failure-code table --
 # these used to be discarded at the reset()/provision() seam (caught as a bare `Exception`, only
@@ -467,7 +513,9 @@ _USERINFO_PATTERN = re.compile(r"://[^@/]+@")
 
 
 def _is_retryable(code: str) -> bool:
-    return _CODE_DOMAIN[code] in (
+    # C3 §4.5 step 5: `.get(...)`-with-default so an unmapped code defaults to
+    # infrastructure (retryable) instead of KeyError inside the `CallAborted` handler.
+    return _domain_for(code) in (
         FailureDomain.ENVIRONMENT,
         FailureDomain.INFRASTRUCTURE,
     ) or (code in _RETRYABLE_CODES)
@@ -487,7 +535,8 @@ def _sanitize_cause(message: str) -> str:
 
 def _failure(code: str, message: str) -> ReceiptFailure:
     return ReceiptFailure(
-        domain=_CODE_DOMAIN[code].value,
+        # C3 §4.5 step 5: `.get(...)`-with-default so an unmapped code cannot KeyError here.
+        domain=_domain_for(code).value,
         stage=HarnessStage.RUNNING.value,
         code=code,
         message=_truncate(message),
@@ -609,6 +658,50 @@ async def _invoke(
         return fn(*args)
 
     async def _call() -> object:
+        from .isolated_process import run_json_worker
+        from .phase_worker import tuples
+        from .process_runtime import _allowlisted_ambient_env
+        from .world.handle import HostedWorld, ReadOnlyWorld as HostedReadOnlyWorld
+
+        if (
+            args
+            and isinstance(args[0], (HostedWorld, HostedReadOnlyWorld))
+            and hasattr(fn, "_alk_source")
+        ):
+            started_flag.set()
+            world = args[0]
+            payload = {
+                "source": fn._alk_source,
+                "entry": fn._alk_entry,
+                "world": world._execution_state(),
+            }
+            if len(args) > 1:
+                payload["calls"] = [asdict(call) for call in args[1]]
+            result = await run_json_worker(
+                "fi.alk.harness.phase_worker",
+                payload,
+                environ=_allowlisted_ambient_env(dict(os.environ)),
+                work_directory=Path(tempfile.gettempdir()) / "alk-phase-workers",
+            )
+            world.rng.setstate(tuples(result["rng"]))
+            if "error" in result:
+                error_types = {
+                    error.__name__: error
+                    for error in (
+                        WorldUnavailable,
+                        WorldStateTooLarge,
+                        WorldReadOnly,
+                        WorldReservedName,
+                        WorldQueryRejected,
+                        WorldUsageError,
+                        WorldError,
+                    )
+                }
+                raise error_types.get(result.get("world_error"), RuntimeError)(
+                    f"{phase} worker raised {result['error']}"
+                )
+            # Preserve broken-verdict classification without serializing arbitrary objects.
+            return object() if result.get("invalid_verdict") else result["value"]
         # B4: real scenario code (`setup`/`ready`/`check`) is synchronous, blocking psycopg calls
         # — it must never run directly on the event loop, or the timeout below is purely
         # decorative and every other world stalls with it. Dispatched to the scheduler's own
@@ -881,6 +974,16 @@ class WorldPool:
         ):
             # m10/R2: spine §4 — "ordered by world_index" and contiguous from 0 (what
             # `range(effective_instances)` on the provider side guarantees).
+            # A provider may have created a partial set before returning malformed metadata;
+            # close it before surfacing the contract violation so failed starts do not leak
+            # engines/processes.  This is serialized with the original provision call.
+            try:
+                # Route cleanup through the pool's shared teardown task.  Callers commonly invoke
+                # ``close()`` again from their top-level error path; using the same idempotent
+                # task prevents a non-idempotent provider from being closed twice.
+                await self.close()
+            except Exception:  # noqa: BLE001 - preserve the primary validation error
+                logger.exception("failed to clean up malformed provision result")
             raise RuntimeError(
                 f"provision() returned world_index set {sorted(indices)}, expected a contiguous "
                 f"0..N-1 subset of 0..{self._instances - 1}"
@@ -1433,6 +1536,7 @@ def _record_scenario(span: Any, receipt: Any, context: Any) -> None:
         attempt=getattr(context, "attempt", None),
     )
 
+
 class HostedScheduler:
     """Drains a job's scenario list across a `WorldPool`, one asyncio task per scenario — lease()
     blocking when the pool is saturated is what caps concurrency at W, so nothing here re-derives
@@ -1461,6 +1565,9 @@ class HostedScheduler:
         # model call. Resolved here rather than as a default argument, which would bind at import
         # and ignore both injection and patching.
         self._judge = judge or _judge
+        # Calls may run in parallel, but provider-backed judge sessions share one gateway lane.
+        # Keep each scenario's batch together so concurrent worlds cannot invalidate both verdicts.
+        self._judge_batch_lock = asyncio.Lock()
         self._executor: ThreadPoolExecutor | None = None
 
     async def run(self, scenarios: Sequence[Scenario]) -> RunResult:
@@ -1505,7 +1612,17 @@ class HostedScheduler:
                         )
                         _record_scenario(span, results[index], context)
                 except NoWorldsAvailable as exc:
-                    abort_holder[0] = _abort_from_no_worlds(exc)
+                    candidate = _abort_from_no_worlds(exc)
+                    current = abort_holder[0]
+                    if current is None or (
+                        current.domain == FailureDomain.INFRASTRUCTURE.value
+                        and candidate.domain
+                        in {
+                            FailureDomain.ENVIRONMENT.value,
+                            FailureDomain.AGENT.value,
+                        }
+                    ):
+                        abort_holder[0] = candidate
                 except _FATAL_OUTBOUND:
                     # Already latched onto `self._pool.fenced` by whichever `_emit`/`_log` call
                     # raised it -- no receipt for a scenario the platform already superseded.
@@ -1705,11 +1822,13 @@ class HostedScheduler:
                 # event and the pending-retry receipt (both exits above) are mutually exclusive
                 # by construction — outbound-channels.md Channel 2: "the failed first try is
                 # recorded by scenario_retried/world_unhealthy events, never by a receipt."
+                failed = pending_retry.outcome.failure
                 await self._emit(
                     self._outbound.scenario_retried(
                         scenario_key=scenario.scenario_key,
                         from_world=pending_retry.world_index,
                         to_world=world_index,
+                        cause=f"{failed.code}: {failed.message}",
                     ),
                     what="scenario_retried",
                 )
@@ -1950,11 +2069,15 @@ class HostedScheduler:
             )
         except CallAborted as exc:
             call = self._call_summary(exc.partial)
+            # C3 §4.5 step 3: select the receipt code from the CallAborted's structured marker.
+            # Ack-exhaustion -> `voice_dispatch_unacknowledged` (infrastructure, retried once on a
+            # fresh world like `call_failed`); everything else stays the byte-unchanged
+            # `call_failed`.
             return self._fault(
                 scenario,
                 world_index,
                 attempt,
-                _failure(exc.code, str(exc)),
+                _failure(_call_aborted_code(exc), str(exc)),
                 sub_goals=_unjudged(scenario.sub_goals),
                 call=call,
             )
@@ -2073,23 +2196,39 @@ class HostedScheduler:
             )
 
         if judged_pending:
-            # Judged sub-goals only read, so they are independent of each other and of the coded
-            # checks: one round trip for all of them rather than one each.
-            async def _settle(goal: Any) -> Any:
-                # Awaited, not called inline: calling an injected judge whose signature does not
-                # match raises while the coroutines are still being built, which is outside
-                # `gather`'s net and errors the scenario. Inside a coroutine it is just a fault.
-                return await self._judge(
-                    goal, check_handle, calls, messages=call_outcome.messages
-                )
+            # A scenario's judged sub-goals can run together, but judge batches from parallel
+            # worlds must not overlap on the shared provider session.
+            async with self._judge_batch_lock:
+                try:
+                    context = (
+                        {"scenario": scenario}
+                        if "scenario" in inspect.signature(self._judge).parameters
+                        else {}
+                    )
+                except (TypeError, ValueError):
+                    context = {}
 
-            verdicts = await asyncio.gather(
-                *(_settle(goal) for _, goal in judged_pending),
-                return_exceptions=True,
-            )
+                async def _settle(goal: Any) -> Any:
+                    # Awaited, not called inline: calling an injected judge whose signature does
+                    # not match raises while the coroutines are still being built, which is
+                    # outside `gather`'s net and errors the scenario. Inside a coroutine it is
+                    # just a fault.
+                    return await self._judge(
+                        goal,
+                        check_handle,
+                        calls,
+                        messages=call_outcome.messages,
+                        **context,
+                    )
+
+                verdicts = await asyncio.gather(
+                    *(_settle(goal) for _, goal in judged_pending),
+                    return_exceptions=True,
+                )
             for (slot, goal), outcome in zip(judged_pending, verdicts):
                 if isinstance(outcome, BaseException):
-                    held, why = None, f"the judge could not run: {outcome!r}"
+                    logger.warning("judge could not run for %s: %r", goal.name, outcome)
+                    held, why = None, ""
                 else:
                     try:
                         held, why = outcome
@@ -2097,10 +2236,12 @@ class HostedScheduler:
                         # An injected judge that answers in some other shape is unreadable, not
                         # authoritative. Unpacking it here would raise inside `_grade` and error
                         # the whole scenario, which is the one thing a verdict must never do.
-                        held, why = (
-                            None,
-                            f"the judge returned no usable verdict: {outcome!r}",
+                        logger.warning(
+                            "judge gave an unusable verdict for %s: %r",
+                            goal.name,
+                            outcome,
                         )
+                        held, why = None, ""
                 sub_goal_results[slot] = SubGoalResult(
                     name=goal.name, held=held, reason=why, judged=True
                 )
@@ -2115,13 +2256,19 @@ class HostedScheduler:
                 call=self._call_summary(call_outcome),
             )
 
-        # A sub-goal the judge did not settle is reported unsettled on the sub-goal itself and
-        # never decides the scenario: the call ran, its evidence stands, and a model that could
-        # not answer is a fault of neither the agent nor the run. Only a settled `False` fails a
-        # scenario. `errored` stays reachable for a call or infrastructure fault, which is raised
-        # elsewhere; nothing about a verdict produces one.
+        # A settled `False` fails the scenario; an unsettled sub-goal makes it not decided.
         if any(result.held is False for result in sub_goal_results):
             status = "failed"
+        elif any(result.held is None for result in sub_goal_results):
+            return self._fault(
+                scenario,
+                world_index,
+                attempt,
+                _failure("judge_undecided", "a judged sub-goal was not decided"),
+                sub_goals=tuple(sub_goal_results),
+                call=self._call_summary(call_outcome),
+                retry=False,
+            )
         else:
             status = "passed"
         failure = None
@@ -2149,6 +2296,7 @@ class HostedScheduler:
             transcript_artifact=outcome.transcript_artifact,
             recording_artifacts=outcome.recording_artifacts,
             stop_reason=outcome.stop_reason,
+            target_metrics=outcome.target_metrics,
         )
 
     def _fault(

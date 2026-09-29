@@ -44,6 +44,73 @@ def test_local_sandbox_rejects_source_outside_allowed_root(tmp_path, monkeypatch
     assert response.status_code == 403
 
 
+def test_local_request_accepts_provider_execution_mode() -> None:
+    request = LocalSandboxRequest.model_validate(
+        {
+            "source_path": "/tmp/provider-source",
+            "connector": "retell",
+            "connector_mode": "connect_only",
+            "connector_config": {"agent_id": "agent_example"},
+        }
+    )
+    assert request.connector_mode.value == "connect_only"
+
+
+def test_local_job_preserves_provider_execution_mode(tmp_path, monkeypatch) -> None:
+    source = tmp_path / "sources" / "provider"
+    source.mkdir(parents=True)
+    monkeypatch.setenv("ALK_SANDBOX_SOURCE_ROOTS", str(tmp_path / "sources"))
+    sandbox = LocalSandbox(tmp_path / "state")
+
+    async def idle(_job, _source):
+        return None
+
+    sandbox._execute = idle
+
+    async def submit():
+        response = sandbox.submit(
+            LocalSandboxRequest(
+                source_path=str(source),
+                connector="retell",
+                connector_mode="connect_only",
+                connector_config={"agent_id": "agent_example"},
+            )
+        )
+        await sandbox._tasks[response.job.job_id]
+        return response
+
+    response = asyncio.run(submit())
+    assert response.job.agent.mode.value == "connect_only"
+
+
+def test_local_connect_only_provider_requires_no_source_upload(tmp_path) -> None:
+    sandbox = LocalSandbox(tmp_path / "state")
+
+    async def idle(_job, _source):
+        return None
+
+    sandbox._execute = idle
+
+    async def submit():
+        response = sandbox.submit(
+            LocalSandboxRequest(
+                provider_only=True,
+                connector="retell",
+                connector_mode="connect_only",
+                connector_config={"agent_id": "agent_example"},
+            )
+        )
+        await sandbox._tasks[response.job.job_id]
+        return response
+
+    response = asyncio.run(submit())
+    assert response.job.source.kind.value == "provider"
+    assert (sandbox.jobs_root / response.job.job_id / "provider-source").is_dir()
+
+    with pytest.raises(ValueError, match="provider_only_requires_connect_only_provider"):
+        LocalSandboxRequest(provider_only=True, connector="auto")
+
+
 def test_second_sandbox_instance_does_not_orphan_live_controller(tmp_path):
     root = tmp_path / "state"
     first = LocalSandbox(root)
@@ -414,6 +481,37 @@ def test_preflight_accepts_uploaded_environment_without_returning_values(
     assert "never-persist-this" not in response.text
 
 
+def test_generic_preflight_defers_blank_template_only_credentials(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "sources" / "agent"
+    source.mkdir(parents=True)
+    (source / "agent.py").write_text(
+        "def run(value):\n    return value\n", encoding="utf-8"
+    )
+    (source / ".env.example").write_text(
+        "OPENAI_API_KEY=\nTAVILY_API_KEY=\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("ALK_SANDBOX_SOURCE_ROOTS", str(tmp_path / "sources"))
+    client = TestClient(create_app(tmp_path / "state"))
+
+    response = client.post(
+        "/v1/preflight",
+        json={
+            "source_path": str(source),
+            "metadata": {"generic_harness_v1": True},
+        },
+    )
+
+    assert response.status_code == 200
+    requirements = {
+        item["environment_name"]: item
+        for item in response.json()["credentials"]["requirements"]
+    }
+    assert requirements["OPENAI_API_KEY"]["required"] is False
+    assert requirements["TAVILY_API_KEY"]["required"] is False
+
+
 def test_uploaded_environment_is_mounted_for_worker_but_not_persisted(
     tmp_path, monkeypatch
 ):
@@ -457,6 +555,7 @@ def test_uploaded_environment_is_mounted_for_worker_but_not_persisted(
     reference = response.job.agent.secret_refs["OPENAI_API_KEY"]
     assert reference.manager == "mounted"
     assert reference.key.startswith("ALK_JOB_")
+    assert reference.purpose == "target_provider"
 
 
 def test_saved_session_rerun_reuses_artifacts_and_keeps_fresh_values_ephemeral(
@@ -619,6 +718,7 @@ def test_secret_file_upload_is_opaque_one_time_and_job_scoped(tmp_path):
 
     assert uploaded.size == len(raw)
     assert uploaded.secret_ref.manager == "mounted"
+    assert uploaded.secret_ref.purpose == "target_provider"
     assert raw.decode() not in uploaded.model_dump_json()
     with pytest.raises(Exception, match="reference_invalid"):
         sandbox._claim_secret_files(

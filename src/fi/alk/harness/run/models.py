@@ -44,9 +44,18 @@ def for_roles(override: str | None = None) -> dict[str, str]:
     """
     if override:
         return {"agent": override, "user": override, "judge": override}
+    # The Claude SDK uses a Claude-shaped wire alias when routed through AgentCC, but the
+    # actual provider model is the requested harness model. Keep the simulator's model choice
+    # and the recorded run evidence aligned with that route.
+    gateway_model = (
+        os.environ.get("ALK_HARNESS_MODEL", "").strip()
+        if os.environ.get("ALK_HARNESS", "").strip().lower() in {"claude", "claude-code"}
+        and os.environ.get("AGENTCC_API_KEY", "").strip()
+        else ""
+    )
     return {
-        "agent": os.environ.get("ALK_AGENT_MODEL", AGENT),
-        "user": os.environ.get("ALK_USER_MODEL", USER),
+        "agent": os.environ.get("ALK_AGENT_MODEL") or gateway_model or AGENT,
+        "user": os.environ.get("ALK_USER_MODEL") or gateway_model or USER,
         # The judge rides the harness backend, so left on its own default it names a model the
         # configured backend may not be able to drive. Following the harness model keeps the
         # pairing valid with one setting; ALK_JUDGE_MODEL still wins when a run needs it.

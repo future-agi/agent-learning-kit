@@ -66,13 +66,12 @@ class RuntimeRequirements(BaseModel):
     isolation: RuntimeIsolation = RuntimeIsolation.SHARED_RUNNER_PROCESS
     cpu_units: int = Field(default=1, ge=1)
     memory_mb: int = Field(default=512, ge=128)
-    parallelism: int = Field(default=1, ge=1, le=8)
+    # Keep parsing permissive so preflight can return the canonical range failure.
+    # Platform admission applies the user-facing maximum of eight.
+    parallelism: int = Field(default=1, ge=1)
     concurrency_weight: int = Field(default=1, ge=1)
     max_duration_seconds: int = Field(default=300, ge=1)
     network_policy: str = "live"
-    # World count for the hosted harness (seam contract §1); the gateway caps
-    # it at admission, so the model stays permissive beyond ge=1.
-    parallelism: int = Field(default=1, ge=1)
 
 
 class TimeoutPolicy(BaseModel):

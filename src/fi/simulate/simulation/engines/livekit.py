@@ -6,6 +6,7 @@ import json
 import math
 import logging
 import os
+import random
 import re
 import threading
 import time
@@ -24,7 +25,9 @@ try:
         AudioConfig,
         BackgroundAudioPlayer,
         RunContext,
+        StopResponse,
         function_tool,
+        inference,
         metrics,
     )
     from livekit.agents.utils.audio import audio_frames_from_file
@@ -53,6 +56,7 @@ except ImportError as exc:
 from datetime import datetime, timezone
 
 from fi.simulate._logging import redacted_exc_info
+from .opening import PromptOpeningGate
 from fi.simulate.agent.definition import (
     AgentDefinition,
     LiveKitSimulatorRuntime,
@@ -98,15 +102,25 @@ from fi.simulate.runtime import (
 from fi.simulate.simulation.engines.base import BaseEngine
 from fi.simulate.simulation.generator import ScenarioGenerator
 from fi.simulate.simulation.models import Persona, Scenario, TestCaseResult, TestReport
-from fi.simulate.simulation.voice_prompt import CallType, build_voice_simulator_prompt
+from fi.simulate.simulation.voice_prompt import (
+    HOLD_MARKER,
+    CallType,
+    build_voice_simulator_prompt,
+)
 
 logger = logging.getLogger(__name__)
 _SAFE_ROOM = re.compile(r"[^A-Za-z0-9_.-]+")
-# On conversation end, wait up to this long for the party still finishing its
-# own turn to commit it (a LiveKit turn lands in history only after its TTS
-# finishes playing), then delete the room so neither side keeps talking into a
-# call the other has already left.
+# On conversation end, wait up to this long for the simulator to finish its own
+# closing turn (a LiveKit turn lands in history only after its TTS finishes).
 _FINAL_TURN_COMMIT_WAIT_SECONDS = 30.0
+# After the simulator's last turn the target may answer it ("thanks, bye"), and a call cut by the
+# deadline may still have a tool result pending. The recorder hears those words either way, so the
+# transcript must too: listen on for the target, then delete the room.
+_TARGET_REPLY_GRACE_SECONDS = 8.0
+# Quiet time after the target's speech before its turn is committed: STT endpointing waits up to
+# 3 s for more speech, and a transcription stream closes shortly after playback ends.
+_TARGET_TURN_SETTLE_SECONDS = 3.5
+_TRAILING_TARGET_WAIT_SECONDS = 30.0
 # The hosted platform inflates ``cleanup_timeout`` to carry the whole run
 # budget (observed 1470s); as a per-step cleanup bound it must stay capped.
 _MAX_CLEANUP_TIMEOUT_SECONDS = 60.0
@@ -123,8 +137,9 @@ _NO_CONVERSATION_TIMEOUT_SECONDS = 120.0
 # says nothing the call is silence until a deadline discards it, and nothing was learned about
 # either side. Kept well under the timeout above, which is what abandons a call nobody started.
 #
-# Eight seconds: the smallest bound that cannot pre-empt a slow first turn.
-_OPEN_INSTEAD_AFTER_SECONDS = 8.0
+# Four seconds is the explicit grace period for an agent that is configured to speak first.
+# Speech onset wins the race; this is not an endpointing delay after the greeting.
+_OPEN_INSTEAD_AFTER_SECONDS = 4.0
 # Frequency and length per kind of mailbox. FULL has no entry: it invites no message.
 _VOICEMAIL_TONE_BY_STYLE: dict[str, tuple[float, float]] = {
     "personal": (1000.0, 0.40),
@@ -155,6 +170,372 @@ _BACKGROUND_MIXER_RATE = 48000
 # config-driven ``max_parallel_cases`` (not a replacement for it) — tune
 # ``ALK_VOICE_MAX_CASE_CONCURRENCY`` to the pod's cores. Caps web cases only.
 _VOICE_MAX_CASE_CONCURRENCY_DEFAULT = 4
+
+# --- C3 dispatch acknowledgment (call-affinity contract v0.4) ---------------------------------
+#
+# The structured marker the ack ladder raises on exhaustion. It travels as the failure ``code``
+# (a STRUCTURED field), NEVER as a substring of ``failure.message`` (C3 §4.4/§4.5). CallRunner
+# re-raises it on ``CallAborted.marker`` and the hosted scheduler selects the receipt code from
+# that same field.
+VOICE_DISPATCH_UNACKNOWLEDGED = "voice_dispatch_unacknowledged"
+
+# Fixed WALL-CLOCK ack marks (seconds) measured from the FIRST ``create_dispatch`` return
+# (C3 §4.3 "Budget semantics"). +20/+40 are re-creation marks (attempts 2 and 3); +60 is the
+# exhaustion mark. Total ack budget <= 60s, which nests inside READINESS_TIMEOUT_SECONDS=120 by
+# construction, so exhaustion preempts the readiness timeout (60 < 120) without touching
+# ``run_seconds`` or its pad.
+DISPATCH_ACK_MARKS: tuple[float, float, float] = (20.0, 40.0, 60.0)
+
+# Hosted-harness-only opt-in (C3 §4.5 cross-lane gate). The ladder activates ONLY when this
+# environment flag is truthy. The hosted provisioner sets it in the hosted sandbox environment
+# (present only on the hosted path / parallelism runtime context); it is ABSENT on the local lane,
+# where the engine's readiness path stays byte-unchanged (no ladder, no re-dispatch, no new code).
+# TODO(azain): confirm the hosted provisioner threads this flag (or an equivalent parallelism
+# runtime-context signal) through to the guest environment; the engine reads it here the same way
+# it reads the other FI_* worker knobs directly from ``os.environ``.
+_DISPATCH_ACK_ENV = "FI_HOSTED_DISPATCH_ACK"
+
+
+class DispatchUnacknowledgedError(Exception):
+    """Raised by the dispatch-ack ladder at the +60s exhaustion mark (C3 §4.3 step 4).
+
+    Deliberately NOT an :class:`asyncio.TimeoutError`: that path (the engine's readiness-stage
+    handler) maps to ``TestCaseStatus.AGENT_UNAVAILABLE`` -> ``WorldUnavailable`` -> world
+    retirement, the exact outcome C3 §7 decision 2 forbids. The marker rides a structured
+    attribute, never message text, so downstream code selects the receipt code without
+    string-matching ``failure.message``.
+    """
+
+    marker = VOICE_DISPATCH_UNACKNOWLEDGED
+
+    def __init__(
+        self,
+        *,
+        room_name: str,
+        agent_name: str,
+        attempts: int,
+        marks: tuple[float, ...],
+    ) -> None:
+        super().__init__(
+            f"{VOICE_DISPATCH_UNACKNOWLEDGED}: dispatch to agent "
+            f"{agent_name!r} in room {room_name!r} not acknowledged after {attempts} attempt(s)"
+        )
+        self.room_name = room_name
+        self.agent_name = agent_name
+        self.attempts = attempts
+        self.marks = tuple(marks)
+
+
+def _dispatch_ack_enabled() -> bool:
+    """Hosted-harness opt-in gate for the dispatch-ack ladder (C3 §4.5).
+
+    Byte-unchanged local-lane behaviour depends on this returning ``False`` whenever the hosted
+    flag is absent, so the check is deliberately strict (an explicitly truthy value only).
+    """
+    raw = (os.environ.get(_DISPATCH_ACK_ENV) or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _dispatch_agent_name_of(dispatch: Any) -> str | None:
+    """Agent name carried by a listed dispatch object (ListAgentDispatch row).
+
+    TODO(azain): confirm the EU LiveKit ``AgentDispatch`` field name for the target agent; the
+    1.7.1 protobuf uses ``agent_name``. Kept behind this accessor so the field is changed in one
+    place.
+    """
+    return getattr(dispatch, "agent_name", None) or getattr(dispatch, "name", None)
+
+
+def _dispatch_id_of(dispatch: Any) -> str | None:
+    """Server dispatch id used to delete a stale dispatch (DeleteAgentDispatch).
+
+    TODO(azain): confirm the EU LiveKit ``AgentDispatch`` id field; the 1.7.1 protobuf uses ``id``.
+    """
+    return getattr(dispatch, "id", None) or getattr(dispatch, "dispatch_id", None)
+
+
+def _listed_dispatches(response: Any) -> list[Any]:
+    """Normalize a ListAgentDispatch response into a list of dispatch rows.
+
+    TODO(azain): confirm whether the EU server returns a bare list or a wrapper carrying
+    ``.agent_dispatches``; both shapes are accepted here.
+    """
+    if response is None:
+        return []
+    inner = getattr(response, "agent_dispatches", None)
+    if inner is not None:
+        return list(inner)
+    if isinstance(response, (list, tuple)):
+        return list(response)
+    return []
+
+
+async def _run_dispatch_ack_ladder(
+    *,
+    await_join: "Callable[[float], Awaitable[Any]]",
+    list_dispatches: "Callable[[], Awaitable[Any]]",
+    delete_dispatch: "Callable[[Any], Awaitable[None]]",
+    create_dispatch: "Callable[[], Awaitable[None]]",
+    dispatch_name_of: "Callable[[Any], str | None]",
+    agent_name: str,
+    room_name: str,
+    first_dispatch_at: float,
+    marks: tuple[float, ...] = DISPATCH_ACK_MARKS,
+    now: "Callable[[], float]" = time.monotonic,
+    logger: "logging.Logger" = logger,
+) -> Any:
+    """The concurrent dispatch-ack ladder (C3 §4.3), decoupled from LiveKit types for testability.
+
+    ``await_join(timeout)`` waits up to ``timeout`` seconds for the end-to-end join signal and
+    returns the joined target (truthy) or ``None`` on timeout — it is the ladder's ONLY blocking
+    seam and it stops being consulted the instant a join is observed (C3 §4.4: no delete/re-create
+    after the join edge). Marks are FIXED wall-clock offsets from ``first_dispatch_at``; a slow
+    attempt is forfeited at its mark, never extended. Returns the joined target on ack; raises
+    :class:`DispatchUnacknowledgedError` at the +60s mark on exhaustion.
+
+    Invariant (C3 §4.3 step 2): at most ONE outstanding dispatch per (room, agent name). Before any
+    re-create the ladder (a) reconciles a prior attempt's still-in-flight create — possibly
+    outstanding, so it issues NO new dispatch that mark; (b) lists the room's dispatches and
+    delete-firsts any still listed for this agent name; (c) never re-dispatches on a failed list.
+    """
+
+    attempts = 1  # the initial pre-ladder create_dispatch is attempt 1
+    inflight_create: "asyncio.Future[Any] | None" = None
+    leftover: list["asyncio.Future[Any]"] = []
+    try:
+        for idx, mark in enumerate(marks):
+            deadline = first_dispatch_at + mark
+            timeout = deadline - now()
+            join = await await_join(timeout if timeout > 0.0 else 0.0)
+            if join is not None:
+                # Join observed -> stop evaluating marks; never delete/re-create after this edge.
+                return join
+            if idx == len(marks) - 1:
+                # +60s exhaustion mark: abort the readiness wait with the ladder's OWN typed
+                # exception (NOT an asyncio.TimeoutError).
+                raise DispatchUnacknowledgedError(
+                    room_name=room_name,
+                    agent_name=agent_name,
+                    attempts=attempts,
+                    marks=tuple(marks),
+                )
+
+            next_deadline = first_dispatch_at + marks[idx + 1]
+
+            # (a) Reconcile any still-in-flight create from the prior attempt (C3 §4.3 forfeit
+            # rule). It cannot be confirmed-absent cheaply, so treat it as possibly-outstanding
+            # and issue NO new dispatch this mark. The at-most-one-outstanding invariant wins over
+            # the fixed-mark cadence; the clock still advances on schedule.
+            if inflight_create is not None:
+                if not inflight_create.done():
+                    logger.warning(
+                        "dispatch-ack: prior create still in-flight at +%ss mark; skipping "
+                        "re-dispatch to preserve at-most-one-outstanding (room=%s agent=%s)",
+                        mark,
+                        room_name,
+                        agent_name,
+                    )
+                    continue
+                inflight_create = None
+
+            # (b) List the room's dispatches BEFORE any re-create (C3 §4.3 step 1). A failed list
+            # means possibly-outstanding: MUST NOT re-dispatch on it. The call is window-bounded
+            # exactly like the create below (:316-320): a stalled dispatch-API call MUST NOT run
+            # past this attempt's mark, or the whole ladder blocks and no typed exhaustion fires.
+            # A wait_for overrun raises asyncio.TimeoutError, caught here as a possibly-outstanding
+            # list — same handling as any other list error.
+            list_timeout = next_deadline - now()
+            try:
+                listed = _listed_dispatches(
+                    await asyncio.wait_for(
+                        list_dispatches(),
+                        timeout=list_timeout if list_timeout > 0.0 else 0.0,
+                    )
+                )
+            except Exception:  # noqa: BLE001 - any list error/overrun is "possibly-outstanding"
+                logger.warning(
+                    "dispatch-ack: ListAgentDispatch failed or overran its window at +%ss mark; "
+                    "not re-dispatching (room=%s agent=%s)",
+                    mark,
+                    room_name,
+                    agent_name,
+                )
+                continue
+
+            # (c) Delete any stale dispatch still listed for THIS agent name, then re-create. If a
+            # listed dispatch cannot be deleted it remains outstanding, so do NOT create a second.
+            stale = [d for d in listed if dispatch_name_of(d) == agent_name]
+            blocked = False
+            for d in stale:
+                # Window-bounded like the list/create: a stalled delete must not run past this
+                # attempt's mark. A wait_for overrun raises asyncio.TimeoutError, caught here — the
+                # dispatch is then possibly-outstanding, so no re-create this mark (same handling as
+                # any other delete error).
+                delete_timeout = next_deadline - now()
+                try:
+                    await asyncio.wait_for(
+                        delete_dispatch(d),
+                        timeout=delete_timeout if delete_timeout > 0.0 else 0.0,
+                    )
+                except Exception:  # noqa: BLE001 - delete error/overrun -> still outstanding
+                    logger.warning(
+                        "dispatch-ack: DeleteAgentDispatch failed or overran its window; leaving "
+                        "the single outstanding dispatch, no re-create this mark (room=%s agent=%s)",
+                        room_name,
+                        agent_name,
+                    )
+                    blocked = True
+                    break
+            if blocked:
+                continue
+
+            # (d) Create the replacement dispatch, bounded to this attempt's window. A create that
+            # has not returned by the next mark is possibly-outstanding -> reconciled at (a). A
+            # create that fails spends the attempt and folds into the ack budget (C3 §4.3 step 4).
+            attempts += 1
+            create_task = asyncio.ensure_future(create_dispatch())
+            create_timeout = next_deadline - now()
+            done, _ = await asyncio.wait(
+                {create_task}, timeout=create_timeout if create_timeout > 0.0 else 0.0
+            )
+            if create_task not in done:
+                inflight_create = create_task
+                leftover.append(create_task)
+                continue
+            try:
+                create_task.result()
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "dispatch-ack: re-create failed at +%ss mark; attempt spent, folds into the "
+                    "ack budget (room=%s agent=%s)",
+                    mark,
+                    room_name,
+                    agent_name,
+                )
+                continue
+
+        # Defensive: the last mark always returns or raises above.
+        raise DispatchUnacknowledgedError(
+            room_name=room_name,
+            agent_name=agent_name,
+            attempts=attempts,
+            marks=tuple(marks),
+        )
+    finally:
+        for task in leftover:
+            if not task.done():
+                task.cancel()
+        if leftover:
+            await asyncio.gather(*leftover, return_exceptions=True)
+
+
+async def _await_target_audio_with_dispatch_ack(
+    room: "rtc.Room",
+    *,
+    excluded_identities: set[str],
+    target_identity: str | None,
+    readiness_timeout: float,
+    api_client: Any,
+    room_name: str,
+    agent_name: str,
+    metadata: str,
+    first_dispatch_at: float,
+    marks: tuple[float, ...] = DISPATCH_ACK_MARKS,
+    now: "Callable[[], float]" = time.monotonic,
+) -> "_TargetParticipant":
+    """Hosted-lane wrapper: run ``_wait_for_target_audio`` under the concurrent ack ladder.
+
+    The single readiness wait is the ack signal (C3 §4.2: end-to-end join). It is kept alive for
+    at least the full ack budget so a late-but-acked join inside the window is not pre-empted by
+    the readiness wait's own timeout; the ladder ends the wait early at +60s on exhaustion by
+    raising :class:`DispatchUnacknowledgedError`. The wrapper owns cancellation of the readiness
+    task.
+
+    TODO(azain): the join signal consumed here is the engine's existing target-audio readiness
+    edge. Confirm the concrete EU-LiveKit end-to-end signal (participant-joined event vs. poll vs.
+    dispatch job-state) and the participant-identity convention the dispatched agent joins under
+    (C3 §8 items 1/10); an event/push edge is preferred over polling to close the
+    delete-a-delivered-dispatch race.
+    """
+
+    readiness_task: "asyncio.Future[_TargetParticipant]" = asyncio.ensure_future(
+        _wait_for_target_audio(
+            room,
+            excluded_identities=excluded_identities,
+            target_identity=target_identity,
+            # Keep the readiness wait alive across the whole ack budget; the ladder governs the
+            # early +60s cutoff. Hosted-gated, so the local lane is unaffected.
+            timeout=max(readiness_timeout, marks[-1] + 1.0),
+        )
+    )
+
+    def _consume_readiness() -> "_TargetParticipant | None":
+        # Precondition: readiness_task is done. Distinguish its outcome (C3 §4.2): a genuine
+        # readiness TIMEOUT (or a cancellation) means not-joined -> continue the ladder to
+        # ack-exhaustion. ANY OTHER exception is a real readiness CRASH -> RE-RAISE it so it
+        # propagates to the engine's normal error handling (livekit_case_failed) instead of being
+        # swallowed into a not-joined path that mislabels it voice_dispatch_unacknowledged
+        # (retryable infrastructure).
+        if readiness_task.cancelled():
+            return None
+        exc = readiness_task.exception()
+        if exc is not None:
+            if isinstance(exc, asyncio.TimeoutError):
+                return None
+            raise exc
+        return readiness_task.result()
+
+    async def await_join(timeout: float) -> "_TargetParticipant | None":
+        if timeout <= 0.0:
+            if readiness_task.done():
+                return _consume_readiness()
+            return None
+        done, _ = await asyncio.wait({readiness_task}, timeout=timeout)
+        if readiness_task in done:
+            return _consume_readiness()
+        return None
+
+    async def list_dispatches() -> Any:
+        # TODO(azain): confirm the harness LiveKit API key carries ListAgentDispatch grants on EU
+        # and the deployed server version supports it (C3 §4.5 / §8 item 3).
+        return await api_client.agent_dispatch.list_dispatch(
+            api.ListAgentDispatchRequest(room=room_name)
+        )
+
+    async def delete_dispatch(dispatch: Any) -> None:
+        # TODO(azain): confirm DeleteAgentDispatch grants + whether a dropped dispatch lingers in
+        # the list, and the delete-vs-slow-join race semantics (C3 §4.5(a)/(b), §8 items 4/5).
+        dispatch_id = _dispatch_id_of(dispatch)
+        await api_client.agent_dispatch.delete_dispatch(
+            api.DeleteAgentDispatchRequest(dispatch_id=dispatch_id, room=room_name)
+        )
+
+    async def create_dispatch() -> None:
+        await api_client.agent_dispatch.create_dispatch(
+            api.CreateAgentDispatchRequest(
+                agent_name=agent_name,
+                room=room_name,
+                metadata=metadata,
+            )
+        )
+
+    try:
+        return await _run_dispatch_ack_ladder(
+            await_join=await_join,
+            list_dispatches=list_dispatches,
+            delete_dispatch=delete_dispatch,
+            create_dispatch=create_dispatch,
+            dispatch_name_of=_dispatch_agent_name_of,
+            agent_name=agent_name,
+            room_name=room_name,
+            first_dispatch_at=first_dispatch_at,
+            marks=marks,
+            now=now,
+        )
+    finally:
+        if not readiness_task.done():
+            readiness_task.cancel()
+        await asyncio.gather(readiness_task, return_exceptions=True)
 
 
 def _simulator_participant_identity(persona: Persona, test_case_id: str) -> str:
@@ -255,27 +636,41 @@ def _simulator_turn_handling(
     allow_interruptions: bool | None = None,
     min_endpointing_delay: float | None = None,
     max_endpointing_delay: float | None = None,
+    interruption_min_duration: float | None = None,
 ) -> dict[str, object]:
     return {
-        "turn_detection": "vad" if vad is not None else "stt",
-        # A short delay fires inside a sentence, on a comma or a breath, so the caller treats a pause
-        # as the end of the turn, talks over the agent and then repeats itself for want of an answer.
+        # Audio end-of-turn detection uses the words and acoustic delivery rather than treating
+        # every pause as a completed thought. The local model keeps hosted E2B workers independent
+        # from LiveKit Inference and falls back internally if a prediction is unavailable.
+        "turn_detection": (
+            inference.TurnDetector(version="v1-mini") if vad is not None else "stt"
+        ),
         "endpointing": {
-            "mode": "fixed",
-            "min_delay": min_endpointing_delay or 0.9,
-            "max_delay": max_endpointing_delay or 3.0,
+            "mode": "dynamic",
+            "min_delay": (
+                min_endpointing_delay if min_endpointing_delay is not None else 0.3
+            ),
+            "max_delay": (
+                max_endpointing_delay if max_endpointing_delay is not None else 2.5
+            ),
         },
         # A real caller interrupts, but only over something long enough to be worth interrupting.
         "interruption": {
             "enabled": (True if allow_interruptions is None else allow_interruptions),
             "discard_audio_if_uninterruptible": True,
-            "min_duration": 0.6,
+            "min_duration": interruption_min_duration or 0.6,
         },
-        "preemptive_generation": {"enabled": True},
+        # Prepare both words and audio while end-of-turn is being confirmed. LiveKit discards the
+        # speculative work if speech resumes; no unconfirmed audio is played to the target.
+        "preemptive_generation": {"enabled": True, "preemptive_tts": True},
     }
 
 
 class _TestRunnerAgent(Agent):
+    _prompt_opening: PromptOpeningGate | None = None
+
+    _call_over: bool = False
+
     def __init__(
         self,
         persona: Persona,
@@ -289,25 +684,43 @@ class _TestRunnerAgent(Agent):
         )
         super().__init__(**kwargs)
         self._persona = persona
+        self._mood = _CallerMood(persona)
         self._min_turn_messages = min_turn_messages
         self._session_turn_handling = turn_handling
         self._session: AgentSession | None = None
         self._end_requested = asyncio.Event()
         self._end_speech_handle: Any | None = None
+        self._hold_check: asyncio.Task | None = None
+        self._answer_again: asyncio.Task | None = None
+        self._call_over = False
         self._usage_collector = metrics.ModelUsageCollector()
+        self._prompt_opening: PromptOpeningGate | None = None
+
+    async def on_user_turn_completed(self, turn_ctx, new_message) -> None:
+        if self._call_over:
+            if self._session is not None:
+                self._session.history.insert(new_message)
+            raise StopResponse()
+        gate = self._prompt_opening
+        if gate is not None and not gate.accepts(new_message.text_content):
+            logger.info("prompt opening gate: waiting after non-interactive disclosure")
+            raise StopResponse()
 
     @function_tool(
         name="endCall",
         # Nothing quotable and nothing English-specific: wording here comes back out as speech.
         description=(
             "Ends the call. Nothing else ends it and no one else ends it for you. "
-            "Use it once you have nothing further."
+            "Use it in the same turn as your goodbye."
         ),
     )
-    async def end_call(self, ctx: RunContext) -> str:
+    async def end_call(self, ctx: RunContext) -> str | None:
         if self._session is None:
             logger.warning("endCall refused: no session yet")
             return "Continue the conversation before ending the call."
+        if getattr(self._session, "user_state", None) == "speaking":
+            logger.warning("endCall refused: the other side is still speaking")
+            return "Not yet: the other person is still talking. Let them finish, then call endCall again."
         messages = _session_messages(self._session)
         floor, alternation_required = _turn_requirements(self._min_turn_messages)
         below_floor = len(messages) < floor or (
@@ -335,12 +748,22 @@ class _TestRunnerAgent(Agent):
         # the outer runner so it cannot snapshot history in the brief interval
         # before TTS starts and ``session.current_speech`` becomes non-None.
         self._end_speech_handle = ctx.speech_handle
+        self._goodbye_said = bool(_letters(_STAGE_DIRECTION.sub("", self._saying)))
         self._end_requested.set()
-        return "Conversation ended."
+        return None
 
     async def wait_for_end_speech(self) -> None:
         if self._end_speech_handle is not None:
             await self._end_speech_handle
+
+
+    def end_of_call(self) -> None:
+        """Stop replying: whatever the target still says is recorded but no longer answered."""
+        self._call_over = True
+        for task in (getattr(self, "_hold_check", None), getattr(self, "_answer_again", None)):
+            if task is not None and not task.done():
+                task.cancel()
+
 
     @property
     def started_session(self) -> AgentSession | None:
@@ -379,6 +802,32 @@ class _TestRunnerAgent(Agent):
             "metrics_collected",
             lambda event: self._usage_collector.collect(event.metrics),
         )
+        for event_name in (
+            "agent_state_changed",
+            "user_state_changed",
+            "user_input_transcribed",
+            "conversation_item_added",
+            "speech_created",
+            "error",
+        ):
+
+            def record_event(event, name=event_name):
+                item = getattr(event, "item", None)
+                logger.info(
+                    "voice event=%s old=%s new=%s final=%s role=%s interrupted=%s agent=%s user=%s speech_id=%s error_type=%s",
+                    name,
+                    getattr(event, "old_state", None),
+                    getattr(event, "new_state", None),
+                    getattr(event, "is_final", None),
+                    getattr(item, "role", None),
+                    getattr(item, "interrupted", None),
+                    getattr(session, "agent_state", None),
+                    getattr(session, "user_state", None),
+                    getattr(getattr(event, "speech_handle", None), "id", None),
+                    type(getattr(event, "error", None)).__name__,
+                )
+
+            session.on(event_name, record_event)
         default_kinds = [
             rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
             getattr(
@@ -436,17 +885,16 @@ class _TestRunnerAgent(Agent):
             return
 
         try:
-            # 2.0, not the 0.3 this used to default to. Measured in an isolated two-participant
-            # room, the office clip peaks at 119 of 32768 at 0.3, which is below the noise floor of
-            # speech near 15000: the ambience played and nobody could hear it. At 2.0 the same clip
-            # measures 752 to 789 on real calls, which is audible under a voice without masking it.
-            volume = float(os.environ.get("HARNESS_BACKGROUND_NOISE_VOLUME", "2.0"))
+            # Beds are levelled to the office clip first; 7.0 sits them clearly under the caller's voice.
+            volume = float(os.environ.get("HARNESS_BACKGROUND_NOISE_VOLUME", "7.0"))
             clip_source: Any = None
             if source.startswith(("http://", "https://")):
                 clip_source = await asyncio.to_thread(_downloaded_audio, source)
                 if not clip_source:
                     return
                 self._background_noise_file = clip_source
+            elif source and Path(source).is_file():
+                clip_source = source
             elif source:
                 clip_source = getattr(BuiltinAudioClip, source, None)
                 if clip_source is None:
@@ -454,6 +902,8 @@ class _TestRunnerAgent(Agent):
                         "background audio clip %r is not one LiveKit ships", source
                     )
                     return
+            if clip_source is not None:
+                volume *= await _bed_gain(clip_source, source)
             # A player is created even with no ambience clip, because a mailbox tone needs a
             # published track whether or not this scenario also asked for a room.
             player = (
@@ -632,15 +1082,19 @@ class _TestRunnerAgent(Agent):
                 logger.warning("background audio clip not removed: %s", downloaded)
 
     def open_conversation(self) -> None:
+        if self._prompt_opening is not None and self._prompt_opening.pending:
+            return
         if self._session is None:
             raise RuntimeError("simulator_session_not_started")
         if self._voicemail_greeting is not None:
             # A recording has already greeted, and a mailbox does not greet twice: a spoken line on
             # top of the clip is one mailbox answering in two voices.
             return
-        initial_message = self._persona.persona.get("initial_message")
-        if isinstance(initial_message, str) and initial_message.strip():
-            self._session.say(initial_message.strip())
+        opening = self._persona.persona.get("initial_message")
+        if isinstance(opening, str) and opening.strip():
+            # The authored opening is already the text to say. Sending it straight to TTS avoids
+            # an unnecessary LLM round-trip (and prevents the model from paraphrasing it).
+            self._session.say(opening.strip())
             return
         self._session.generate_reply()
 
@@ -652,24 +1106,423 @@ class _TestRunnerAgent(Agent):
         One turn is allowed, not none, because a mailbox without a recording greets through this path.
         Where a recording has already greeted, no turn is allowed at all.
         """
+        if self._call_over:
+            return
+        gate = self._prompt_opening
+        if gate is not None and gate.pending:
+            latest = next(
+                (
+                    item.text_content
+                    for item in reversed(chat_ctx.items)
+                    if getattr(item, "role", None) == "user"
+                ),
+                "",
+            )
+            # Speculative generation may run before on_user_turn_completed. It
+            # may prepare the greeting response, but must never answer a disclosure.
+            if not gate.accepts(latest, completed=False):
+                return
         if _answered_by_voicemail():
             if self._mailbox_greeted or self._voicemail_greeting is not None:
+                logger.info("simulator llm skipped reason=voicemail_already_greeted")
                 return
             self._mailbox_greeted = True
-        async for chunk in super().llm_node(chat_ctx, tools, model_settings):
-            yield chunk
+        # Once a goodbye was said, anything after it narrates the hang-up; a silent hang-up gets one goodbye.
+        if self._end_requested.is_set():
+            if self._goodbye_said:
+                logger.info("simulator llm skipped reason=goodbye_already_said")
+                return
+            self._goodbye_said = True
+        chat_ctx = _with_opening_line(
+            chat_ctx, self._persona.persona.get("initial_message")
+        )
+        if getattr(self, "_mood", None) is not None:
+            chat_ctx = self._mood.brief(chat_ctx)
+        self._saying = ""
+        turn = id(chat_ctx)
+        started = time.monotonic()
+        first_chunk = True
+        state = "completed"
+        logger.info("simulator llm turn started turn=%s", turn)
+        try:
+            async for chunk in _without_hold_marker(
+                super().llm_node(chat_ctx, tools, model_settings),
+                on_hold=self._on_hold,
+                on_unspoken=self._on_unspoken,
+            ):
+                if first_chunk:
+                    logger.info(
+                        "simulator llm first output turn=%s elapsed=%.3f",
+                        turn,
+                        time.monotonic() - started,
+                    )
+                    first_chunk = False
+                self._saying += _chunk_text(chunk) or ""
+                yield chunk
+        except asyncio.CancelledError:
+            state = "cancelled"
+            raise
+        except Exception as exc:
+            state = type(exc).__name__
+            raise
+        finally:
+            logger.info(
+                "simulator llm turn finished turn=%s state=%s elapsed=%.3f output_characters=%s",
+                turn,
+                state,
+                time.monotonic() - started,
+                len(self._saying),
+            )
+
+    _goodbye_said: bool = False
+    _saying: str = ""
+
+    _answered_again_at: int = -1
+
+    def _on_unspoken(self, text: str) -> None:
+        """A reply with no words in it is dropped; the caller answers once instead of going quiet."""
+        logger.warning("simulator reply not spoken: %r", text[:160])
+        session = self._session
+        if session is None or self._call_over or self._end_requested.is_set():
+            logger.info("simulator unspoken recovery skipped reason=session_ended")
+            return
+        heard = len(_session_messages(session))
+        if self._answered_again_at == heard:
+            logger.info(
+                "simulator unspoken recovery skipped reason=already_attempted messages=%s",
+                heard,
+            )
+            return
+        self._answered_again_at = heard
+        self._answer_again = asyncio.get_running_loop().create_task(
+            self._answer_aloud(heard)
+        )
+
+    async def _answer_aloud(self, heard: int) -> None:
+        await asyncio.sleep(0.5)
+        session = self._session
+        if session is None or self._call_over or self._end_requested.is_set():
+            logger.info("simulator unspoken recovery cancelled reason=session_ended")
+            return
+        if len(_session_messages(session)) != heard or _either_side_busy(session):
+            logger.info(
+                "simulator unspoken recovery cancelled heard=%s messages=%s agent=%s user=%s",
+                heard,
+                len(_session_messages(session)),
+                getattr(session, "agent_state", None),
+                getattr(session, "user_state", None),
+            )
+            return
+        logger.info("simulator unspoken recovery generating reply")
+        session.generate_reply(instructions=_ANSWER_ALOUD)
+
+    def _on_hold(self) -> None:
+        if self._session is None or self._call_over:
+            return
+        messages = _session_messages(self._session)
+        # Asked something, the caller is not on hold: silence here is a question left unanswered.
+        if _was_asked(messages):
+            self._on_unspoken("(silent after a question)")
+            return
+        heard = len(messages)
+        logger.info("simulator hold rescue scheduled after %s messages", heard)
+        self._hold_check = asyncio.get_running_loop().create_task(
+            self._still_there(heard)
+        )
+
+    async def _still_there(self, heard: int) -> None:
+        """A person left waiting in silence speaks up once, before the provider times out."""
+        await asyncio.sleep(_HOLD_PATIENCE_SECONDS)
+        session = self._session
+        if session is None or self._call_over or self._end_requested.is_set():
+            logger.info("simulator hold rescue canceled: session ended")
+            return
+        if len(_session_messages(session)) != heard:
+            logger.info("simulator hold rescue canceled: conversation advanced")
+            return
+        if _either_side_busy(session):
+            logger.info(
+                "simulator hold rescue canceled: session busy agent_state=%s user_state=%s",
+                getattr(session, "agent_state", None),
+                getattr(session, "user_state", None),
+            )
+            return
+        logger.info("simulator hold rescue generating check-in")
+        session.generate_reply(instructions=_HOLD_CHECK_IN)
+
+    async def tts_node(self, text: AsyncIterable[str], model_settings: ModelSettings):
+        started = time.monotonic()
+        frames = 0
+        state = "completed"
+        logger.info("simulator tts started")
+        try:
+            async for frame in Agent.default.tts_node(
+                self, _spoken_words(text), model_settings
+            ):
+                if frames == 0:
+                    logger.info(
+                        "simulator tts first frame elapsed=%.3f",
+                        time.monotonic() - started,
+                    )
+                frames += 1
+                yield frame
+        except asyncio.CancelledError:
+            state = "cancelled"
+            raise
+        except Exception as exc:
+            state = type(exc).__name__
+            raise
+        finally:
+            logger.info(
+                "simulator tts finished state=%s elapsed=%.3f frames=%s",
+                state,
+                time.monotonic() - started,
+                frames,
+            )
 
     async def transcription_node(
         self,
         text: AsyncIterable[str | TimedString],
         model_settings: ModelSettings,
     ):
-        async for chunk in text:
+        async for chunk in _spoken_words(text):
             logger.debug(
                 "Simulator transcription chunk",
                 extra={"timed": isinstance(chunk, TimedString)},
             )
             yield chunk
+
+
+def _chunk_text(chunk: Any) -> str | None:
+    """The text a streamed chunk carries, or None for a tool call."""
+    if isinstance(chunk, str):
+        return chunk
+    delta = getattr(chunk, "delta", None)
+    if delta is None:
+        return ""
+    if getattr(delta, "tool_calls", None):
+        return None
+    return getattr(delta, "content", None) or ""
+
+
+_ANSWER_ALOUD = (
+    "Your last reply had no words a person would say. Reply now, out loud and briefly, to what the "
+    "agent just said."
+)
+
+# The caller's first turn is written by the model like any other, so it sounds spoken, not read.
+_OPENING_TURN = (
+    "This is your first turn. Open the way this person naturally would on the phone, with just "
+    "your first request, which is: {opening} Say it in your own words, as it comes out of your "
+    "mouth rather than as a prepared summary: often a hello and the gist, with the rest following "
+    "once the agent is listening or asks. Keep its manner: if it is halting, vague or unfinished, "
+    "say it that way, and keep any exact words or values it contains when you say them. If the "
+    "agent has already spoken and asked you something, answer that briefly first. If all you have "
+    "heard so far is an announcement, such as that the call is recorded, and nobody has greeted "
+    f"you or asked you anything, it is not your turn yet: your whole reply is {HOLD_MARKER}. "
+    "Everything else in your situation waits for its moment."
+)
+
+
+_REFUSAL_CUES = (
+    "unable to", "not able to", "can't", "cannot", "isn't available", "aren't available",
+    "not supported", "don't have a way", "not possible", "i'm afraid",
+)
+_PROGRESS_CUES = ("confirmed", "booked", "all set", "updated", "you're set", "here's how", "is done")
+_NOT_YET = re.compile(r"\bnot\b|n't\b|\bnever\b|\byet\b|\bif\b|\bonce\b|\buntil\b|\bbefore\b|\bwhen\b")
+_MOOD_CAUSES = {
+    "refused": "the agent keeps saying it can't do what you need",
+    "repeated": "the agent just said the same thing again",
+}
+
+
+def _made_progress(lowered: str) -> bool:
+    return any(
+        any(cue in sentence for cue in _PROGRESS_CUES) and not _NOT_YET.search(sentence)
+        for sentence in re.split(r"[.!?]+", lowered)
+    )
+
+
+def _word_set(text: str) -> set[str]:
+    return set(re.findall(r"[a-z']+", text.lower()))
+
+
+class _CallerMood:
+    """Pressure from what the agent actually does, scaled by the caller's compiled policy."""
+
+    def __init__(self, persona: Persona) -> None:
+        policy = persona.behavior_policy
+        self._gain = 0.6 + (policy.interruption_propensity if policy else 0.1)
+        self._recovery = 0.3 + 0.4 * (policy.repair_propensity if policy else 0.5)
+        self._pressure = 0.0
+        self._heard: list[str] = []
+
+    def brief(self, chat_ctx: Any) -> Any:
+        agent = [
+            str(getattr(message, "text_content", "") or "")
+            for message in chat_ctx.messages()
+            if message.role == "user"
+        ]
+        cause = ""
+        for turn in agent[len(self._heard):]:
+            words, lowered = _word_set(turn), turn.lower()
+            rise = 0.0
+            if len(words) > 3 and any(cue in lowered for cue in _REFUSAL_CUES):
+                rise, cause = rise + 0.2, "refused"
+            if len(words) > 5 and any(
+                len(words & _word_set(earlier)) / len(words | _word_set(earlier)) >= 0.6
+                for earlier in self._heard
+            ):
+                rise, cause = rise + 0.25, "repeated"
+            if rise:
+                self._pressure = min(1.0, self._pressure + rise * self._gain)
+            elif self._pressure >= 0.2 and _made_progress(lowered):
+                self._pressure, cause = max(0.0, self._pressure - self._recovery), "progress"
+            self._heard.append(turn)
+        if not cause:
+            return chat_ctx
+        if cause == "progress":
+            line = "The agent has now actually moved things forward, so the edge goes out of your voice."
+        elif self._pressure >= 0.75:
+            line = f"You have had enough: {_MOOD_CAUSES[cause]}. Say so plainly; you may ask for a person."
+        elif self._pressure >= 0.45:
+            line = f"You are frustrated now: {_MOOD_CAUSES[cause]}. It shows in shorter, sharper words."
+        elif self._pressure >= 0.2:
+            line = f"You are getting a little impatient: {_MOOD_CAUSES[cause]}."
+        else:
+            return chat_ctx
+        briefed = chat_ctx.copy()
+        briefed.add_message(role="system", content=f"Where you are now: {line}")
+        return briefed
+
+
+def _with_opening_line(chat_ctx: Any, opening: Any) -> Any:
+    """The context for the caller's reply, told what its first request is if it has not spoken yet."""
+    if not isinstance(opening, str) or not opening.strip():
+        return chat_ctx
+    if any(message.role == "assistant" for message in chat_ctx.messages()):
+        return chat_ctx
+    briefed = chat_ctx.copy()
+    briefed.add_message(
+        role="system", content=_OPENING_TURN.format(opening=opening.strip())
+    )
+    return briefed
+
+
+def _was_asked(messages: list[dict[str, Any]]) -> bool:
+    """Whether the agent's latest turn, heard by the caller as the other speaker, ends on a question."""
+    for message in reversed(messages):
+        if message.get("role") == "user":
+            return str(message.get("content") or "").rstrip().endswith("?")
+        if message.get("role") == "assistant":
+            return False
+    return False
+
+
+def _letters(text: str) -> str:
+    return re.sub(r"[\W_]", "", text.lower())
+
+
+# A reply that is only a stage direction or an echoed empty result, never words a person says.
+_NOT_SPEECH = re.compile(
+    r"\s*(?:\[[^\]]*\]|\*[^*]*\*|\([^)]*\)|none|null|n/?a)\s*[.!]?\s*", re.IGNORECASE
+)
+
+
+def _not_speech(text: str) -> bool:
+    return bool(text.strip()) and _NOT_SPEECH.fullmatch(text) is not None
+
+
+def _may_not_be_speech(text: str) -> bool:
+    """Whether the reply so far could still turn out to be only a stage direction or an empty result."""
+    opened = text.lstrip()[:1]
+    closer = {"[": "]", "*": "*", "(": ")"}.get(opened)
+    if closer and closer not in text.lstrip()[1:]:
+        return True
+    letters = _letters(text)
+    return _not_speech(text) or any(
+        word.startswith(letters) for word in ("none", "null", "na") if letters
+    )
+
+
+# The one bracketed cue the voice renders is kept; see CARTESIA_DELIVERY_CUES.
+_STAGE_DIRECTION = re.compile(r"\[(?!laughter\])[^\]]*\]|\*[^*]*\*", re.IGNORECASE)
+_DELIVERY_MARKUP = re.compile(r"<[^<>]*>|\[laughter\]", re.IGNORECASE)
+
+
+async def _spoken_words(text: AsyncIterable[Any]) -> AsyncIterable[Any]:
+    """The text with any bracketed or starred stage direction removed, however it is chunked."""
+    pending = ""
+    async for chunk in text:
+        if not isinstance(chunk, str) or (
+            not pending and "[" not in chunk and "*" not in chunk
+        ):
+            yield chunk
+            continue
+        pending += chunk
+        open_at = (
+            max(pending.rfind("["), -1)
+            if pending.count("[") > pending.count("]")
+            else -1
+        )
+        if open_at < 0 and pending.count("*") % 2:
+            open_at = pending.rfind("*")
+        ready, pending = (
+            (pending, "") if open_at < 0 else (pending[:open_at], pending[open_at:])
+        )
+        cleaned = _STAGE_DIRECTION.sub("", ready)
+        if cleaned:
+            yield cleaned
+    cleaned = _STAGE_DIRECTION.sub("", pending)
+    if cleaned and not cleaned.lstrip().startswith(("[", "*")):
+        yield cleaned
+
+
+# Under the settled-silence floor, so the caller checks in before a quiet line is taken for the end.
+_HOLD_PATIENCE_SECONDS = 10.0
+_HOLD_CHECK_IN = (
+    "The agent asked you to wait and has said nothing since. Say once, briefly and in your own "
+    "words, that you are still on the line. If it had said it was transferring you or ending the "
+    "call, close the call instead."
+)
+
+
+async def _without_hold_marker(
+    stream: AsyncIterable[Any],
+    on_hold: Callable[[], None] | None = None,
+    on_unspoken: Callable[[str], None] | None = None,
+) -> AsyncIterable[Any]:
+    """Pass the reply through unless all it says is the hold marker, which is dropped unspoken."""
+    marker = _letters(HOLD_MARKER)
+    held: list[Any] = []
+    text = ""
+    holding = True
+    async for chunk in stream:
+        if not holding:
+            yield chunk
+            continue
+        piece = _chunk_text(chunk)
+        held.append(chunk)
+        if piece is not None:
+            text += piece
+            if marker.startswith(_letters(text)) or _may_not_be_speech(text):
+                continue
+        holding = False
+        for item in held:
+            yield item
+        held = []
+    if holding:
+        on_hold_now = _letters(text) == marker
+        silent = on_hold_now or _not_speech(text)
+        for item in held:
+            if not silent or (
+                not isinstance(item, str) and getattr(item, "delta", None) is None
+            ):
+                yield item
+        if on_hold_now and on_hold is not None:
+            on_hold()
+        elif silent and on_unspoken is not None:
+            on_unspoken(text)
 
 
 class LiveKitEngine(BaseEngine):
@@ -1030,6 +1883,21 @@ class LiveKitEngine(BaseEngine):
         # chat context. These are merged into the report so the trailing target
         # turn is never lost.
         captured_target_turns: list[dict[str, Any]] = []
+        # A phone agent may emit a legal recording disclosure as a standalone
+        # utterance before its real greeting. That disclosure proves the line
+        # is alive, but it is not a conversational turn for the simulated
+        # customer to answer. These events let the opening gate suppress the
+        # disclosure and give the agent the same four-second onset window for
+        # its actual greeting.
+        opening_preamble_detected = asyncio.Event()
+        opening_preamble_audio_finished = asyncio.Event()
+        opening_transcription_classified = asyncio.Event()
+        target_after_preamble_started = asyncio.Event()
+        # Created before the early transcription buffer is registered. Native
+        # targets can publish their disclosure while readiness/session setup is
+        # still in progress; that activity must still win the four-second race.
+        target_speech_started = asyncio.Event()
+        target_transcription_sequence = 0
         # agent_first (target greets first): the target can publish its greeting
         # transcription before the main handler is registered post-readiness, and
         # the LiveKit client DROPS a text-stream header that arrives with no
@@ -1039,6 +1907,11 @@ class LiveKitEngine(BaseEngine):
         # unconditional) main handler once the target is selected.
         pending_target_transcriptions: list[tuple["rtc.TextStreamReader", str]] = []
         target_dispatch_deferred = False
+        # C3 dispatch-ack: the agent name and the WALL-CLOCK mark of the first create_dispatch
+        # return, captured when the deferred target dispatch fires so the ack ladder can key its
+        # fixed +20/+40/+60s marks off it. Both stay ``None`` when no deferred dispatch happens.
+        dispatch_agent_name: str | None = None
+        first_dispatch_at: float | None = None
         _MAX_BUFFERED_TARGET_STREAMS = 16
         managed_room_owned = runtime.room_mode == "managed"
         room_connected = False
@@ -1089,6 +1962,7 @@ class LiveKitEngine(BaseEngine):
                 )
                 return
             pending_target_transcriptions.append((reader, pid))
+            target_speech_started.set()
             # Kill the duplicate-response race at the source: the target is
             # speaking, so disable the simulator's STT now — otherwise STT would
             # also transcribe the greeting and emit a second, duplicate reply.
@@ -1342,6 +2216,13 @@ class LiveKitEngine(BaseEngine):
                 session_participant_identity = (
                     effective_target_identity or sip_participant_identity
                 )
+            prompt_opening = (
+                PromptOpeningGate(agent_definition.system_prompt)
+                if conversation_direction == "agent_first"
+                and not _answered_by_voicemail()
+                else None
+            )
+            customer_agent._prompt_opening = prompt_opening
             session = await asyncio.wait_for(
                 customer_agent.start_session(
                     room,
@@ -1350,6 +2231,25 @@ class LiveKitEngine(BaseEngine):
                 ),
                 timeout=connect_timeout,
             )
+
+            # "Agent speaks first" is a four-second race for speech ONSET, not four seconds of
+            # silence after the target finishes. Register before dispatch/readiness so even an
+            # immediate greeting permanently suppresses the simulator's fallback opening.
+            def on_target_state_changed(event: Any) -> None:
+                new_state = getattr(event, "new_state", None)
+                if new_state == "speaking":
+                    if prompt_opening is not None:
+                        prompt_opening.speech_started()
+                    target_speech_started.set()
+                    if opening_preamble_detected.is_set():
+                        target_after_preamble_started.set()
+                    opening_preamble_audio_finished.clear()
+                elif new_state == "listening":
+                    if prompt_opening is not None:
+                        prompt_opening.speech_ended()
+                    opening_preamble_audio_finished.set()
+
+            session.on("user_state_changed", on_target_state_changed)
             if target_dispatch_deferred:
                 # Session + early buffer handler are live; now dispatch the target
                 # so its greeting stream is captured, not dropped.
@@ -1397,6 +2297,8 @@ class LiveKitEngine(BaseEngine):
                         ),
                     )
                     return outcome
+                # C3 §4.3: the ack budget is wall-clock from the FIRST create_dispatch return.
+                first_dispatch_at = time.monotonic()
                 logger.info(
                     "livekit_target_dispatched agent=%s room=%s run=%s case=%s",
                     dispatch_agent_name,
@@ -1574,12 +2476,34 @@ class LiveKitEngine(BaseEngine):
                         ),
                     )
                     return outcome
-            target = await _wait_for_target_audio(
-                room,
-                excluded_identities={simulator_identity, recorder_identity},
-                target_identity=effective_target_identity,
-                timeout=effective_readiness_timeout,
-            )
+            if (
+                _dispatch_ack_enabled()
+                and target_dispatch_deferred
+                and api_client is not None
+                and first_dispatch_at is not None
+                and dispatch_agent_name is not None
+            ):
+                # Hosted lane only (C3 §4.5 opt-in): run the readiness wait under the concurrent
+                # dispatch-ack ladder. On +60s exhaustion this raises DispatchUnacknowledgedError
+                # (NOT an asyncio.TimeoutError), handled below into a structured-marker failure.
+                target = await _await_target_audio_with_dispatch_ack(
+                    room,
+                    excluded_identities={simulator_identity, recorder_identity},
+                    target_identity=effective_target_identity,
+                    readiness_timeout=effective_readiness_timeout,
+                    api_client=api_client,
+                    room_name=room_name,
+                    agent_name=dispatch_agent_name,
+                    metadata=_dispatch_metadata_json(agent_definition),
+                    first_dispatch_at=first_dispatch_at,
+                )
+            else:
+                target = await _wait_for_target_audio(
+                    room,
+                    excluded_identities={simulator_identity, recorder_identity},
+                    target_identity=effective_target_identity,
+                    timeout=effective_readiness_timeout,
+                )
             if (
                 runtime.room_name_verbatim
                 and profile.receives_inbound_call
@@ -1647,7 +2571,7 @@ class LiveKitEngine(BaseEngine):
                 reader: "rtc.TextStreamReader",
                 participant_identity: str,
             ) -> None:
-                nonlocal target_transcription_mode
+                nonlocal target_transcription_mode, target_transcription_sequence
                 attrs = reader.info.attributes or {}
                 transcribed_track_id = attrs.get(ATTRIBUTE_TRANSCRIPTION_TRACK_ID)
                 if transcribed_track_id:
@@ -1655,6 +2579,29 @@ class LiveKitEngine(BaseEngine):
                         return
                 elif str(participant_identity) != target.identity:
                     return
+                # Some target agents publish authoritative text before RoomIO reports their audio
+                # state. That is still proof that the target won the opening race.
+                target_speech_started.set()
+                target_transcription_sequence += 1
+                if prompt_opening is not None:
+                    prompt_opening.stream_started()
+                opening_turn = target_transcription_sequence == 1
+                await_opening_classification = (
+                    not opening_turn and not opening_transcription_classified.is_set()
+                )
+                # Authoritative target transcription disables the simulator's
+                # STT audio input, so a later real greeting may not produce a
+                # ``user_state_changed(speaking)`` event. A stream that opens
+                # only after the first stream was classified as a disclosure is
+                # the real follow-up onset and must cancel the fallback timer.
+                # Concurrently-opened disclosure residue takes the guarded path
+                # above and is classified before it can release the gate.
+                if _is_opening_followup_stream(
+                    opening_turn=opening_turn,
+                    opening_transcription_classified=opening_transcription_classified,
+                    opening_preamble_detected=opening_preamble_detected,
+                ):
+                    target_after_preamble_started.set()
                 # First target transcription means the target is speaking — stop
                 # the redundant simulator STT so it cannot emit duplicate turns.
                 if not target_transcription_mode:
@@ -1667,6 +2614,15 @@ class LiveKitEngine(BaseEngine):
                         session,
                         conversation_ended=conversation_ended,
                         captured_target_turns=captured_target_turns,
+                        opening_turn=(
+                            opening_turn and conversation_direction == "agent_first"
+                        ),
+                        opening_preamble_detected=opening_preamble_detected,
+                        opening_preamble_audio_finished=opening_preamble_audio_finished,
+                        opening_transcription_classified=opening_transcription_classified,
+                        await_opening_classification=await_opening_classification,
+                        opening_followup_started=target_after_preamble_started,
+                        prompt_opening=prompt_opening,
                     )
                 )
                 target_transcription_tasks.add(task)
@@ -1686,9 +2642,14 @@ class LiveKitEngine(BaseEngine):
                 on_target_transcription(buffered_reader, buffered_identity)
 
             opener: asyncio.Task[None] | None = None
+            preamble_opener: asyncio.Task[None] | None = None
             if conversation_direction == "simulator_first" or _answered_by_voicemail():
                 # A mailbox speaks first and needs no watchdog to break a mutual silence.
                 customer_agent.open_conversation()
+            elif prompt_opening is not None:
+                opener = asyncio.create_task(
+                    prompt_opening.wait_then_open(customer_agent.open_conversation)
+                )
             else:
                 # The agent placed this call and should speak first. If it does not, the person
                 # answers rather than both sides waiting for each other.
@@ -1697,6 +2658,16 @@ class LiveKitEngine(BaseEngine):
                         session,
                         customer_agent,
                         timeout_seconds=_OPEN_INSTEAD_AFTER_SECONDS,
+                        target_started=target_speech_started,
+                    )
+                )
+                preamble_opener = asyncio.create_task(
+                    _open_after_opening_preamble(
+                        customer_agent,
+                        timeout_seconds=_OPEN_INSTEAD_AFTER_SECONDS,
+                        preamble_detected=opening_preamble_detected,
+                        preamble_audio_finished=opening_preamble_audio_finished,
+                        target_started=target_after_preamble_started,
                     )
                 )
             try:
@@ -1713,21 +2684,19 @@ class LiveKitEngine(BaseEngine):
             finally:
                 # However the conversation ended, including badly, the watchdog goes with it: a
                 # pending task at loop close is noise in the log of every call.
-                if opener is not None and not opener.done():
-                    opener.cancel()
+                for watcher in (opener, preamble_opener):
+                    if watcher is not None and not watcher.done():
+                        watcher.cancel()
             logger.info(
                 "livekit_conversation_ended stop_reason=%s run=%s case=%s",
                 stop_reason,
                 run_id,
                 test_case_id,
             )
-            # End the call cleanly. First let the party that just spoke commit its
-            # own final turn — a LiveKit turn only lands in history once its TTS
-            # finishes — bounded so we do not wait on the other side. We do NOT
-            # wait for the target's trailing speech: once the conversation has
-            # ended, the target talking on is monologuing into a call the other
-            # side left.
+            # End the call cleanly. First let the simulator commit its own final turn — a
+            # LiveKit turn only lands in history once its TTS finishes.
             conversation_ended.set()
+            customer_agent.end_of_call()
             if stop_reason == "simulator_end_call":
                 wait_for_end_speech = getattr(
                     customer_agent,
@@ -1754,10 +2723,27 @@ class LiveKitEngine(BaseEngine):
                 except Exception:  # noqa: BLE001
                     break
                 await asyncio.sleep(0.2)
-            # Delete the room so the target agent can't keep monologuing into a
-            # dead call (its audio would be recorded but is untranscribable once
-            # the simulator has left) — the recording then ends when the call
-            # actually ends, matching the transcript.
+            session_messages = _session_messages(session)
+            waited = await _await_target_last_words(
+                speaking=lambda: bool(target_transcription_tasks)
+                or getattr(session, "user_state", None) == "speaking",
+                present=lambda: any(
+                    str(participant.identity) == target.identity
+                    for participant in room.remote_participants.values()
+                ),
+                simulator_spoke_last=bool(session_messages)
+                and session_messages[-1]["role"] == "assistant",
+                pending_target_reply=stop_reason
+                in {"timeout", "conversation_stalled", "conversation_silence_timeout"},
+            )
+            logger.info(
+                "target last words waited=%.1fs run=%s case=%s",
+                waited,
+                run_id,
+                test_case_id,
+            )
+            # Then delete the room so the target can't keep monologuing into a call the other
+            # side has left; the recording ends when the call does, matching the transcript.
             if api_client is not None and managed_room_owned:
                 try:
                     await asyncio.wait_for(
@@ -1777,6 +2763,34 @@ class LiveKitEngine(BaseEngine):
                 stop_reason,
                 messages,
                 min_turn_messages=min_turn_messages,
+            )
+        except DispatchUnacknowledgedError as exc:
+            # C3 §4.3 step 4 / §4.5: ack exhaustion is a scenario-level call failure (errored),
+            # NEVER world retirement. The marker rides ``failure.code`` (structured), never the
+            # message. This deliberately BYPASSES the readiness-stage asyncio.TimeoutError handler
+            # below (which maps to AGENT_UNAVAILABLE -> WorldUnavailable -> world retirement).
+            logger.warning(
+                "livekit_dispatch_unacknowledged room=%s agent=%s attempts=%s marks=%s "
+                "run=%s case=%s",
+                exc.room_name,
+                exc.agent_name,
+                exc.attempts,
+                exc.marks,
+                run_id,
+                test_case_id,
+            )
+            outcome = _failure_outcome(
+                TestCaseStatus.FAILED,
+                FailureStage.READINESS,
+                exc.marker,
+                "Target agent dispatch was not acknowledged within the ack budget",
+                retryable=True,
+                details={
+                    "room_name": exc.room_name,
+                    "agent_name": exc.agent_name,
+                    "attempts": str(exc.attempts),
+                    "ack_marks": ",".join(str(m) for m in exc.marks),
+                },
             )
         except asyncio.TimeoutError:
             stage = (
@@ -2208,6 +3222,16 @@ class LiveKitEngine(BaseEngine):
             tts_config=tts_config,
         )
         vad = await asyncio.to_thread(_load_silero_vad_sync)
+        # How long the agent must talk over this caller before it gives way: assertive callers hold on.
+        policy = persona.behavior_policy
+        interruption_min_duration = (
+            round(
+                min(0.9, max(0.45, 0.45 + 0.5 * policy.interruption_propensity + random.uniform(-0.05, 0.05))),
+                2,
+            )
+            if policy is not None
+            else None
+        )
         self._last_simulator_setup = {
             "instructions": instructions,
             "llm_config": llm_config,
@@ -2216,6 +3240,7 @@ class LiveKitEngine(BaseEngine):
             "allow_interruptions": allow_interruptions,
             "min_endpointing_delay": min_endpointing_delay,
             "max_endpointing_delay": max_endpointing_delay,
+            "interruption_min_duration": interruption_min_duration,
             "use_tts_aligned_transcript": use_aligned_transcript,
         }
         agent = _TestRunnerAgent(
@@ -2231,6 +3256,7 @@ class LiveKitEngine(BaseEngine):
                 allow_interruptions=allow_interruptions,
                 min_endpointing_delay=min_endpointing_delay,
                 max_endpointing_delay=max_endpointing_delay,
+                interruption_min_duration=interruption_min_duration,
             ),
             use_tts_aligned_transcript=use_aligned_transcript,
         )
@@ -2278,6 +3304,13 @@ async def _forward_target_transcription(
     *,
     conversation_ended: "asyncio.Event | None" = None,
     captured_target_turns: list[dict[str, Any]] | None = None,
+    opening_turn: bool = False,
+    opening_preamble_detected: asyncio.Event | None = None,
+    opening_preamble_audio_finished: asyncio.Event | None = None,
+    opening_transcription_classified: asyncio.Event | None = None,
+    await_opening_classification: bool = False,
+    opening_followup_started: asyncio.Event | None = None,
+    prompt_opening: PromptOpeningGate | None = None,
 ) -> None:
     # Receiver-side wall clock — same clock domain as the simulator's
     # ChatMessage.metrics, and the target's transcript IO is playback-synced
@@ -2285,9 +3318,13 @@ async def _forward_target_transcription(
     # completion ~= speech end. Timestamps embedded in the stream are the
     # sender's (laptop) clock; skew there would corrupt the derived latencies.
     started_at = time.time()
+    logger.info("target transcription stream started")
     try:
         transcript = (await reader.read_all()).strip()
         stopped_at = time.time()
+        logger.info(
+            "target transcription stream completed characters=%s", len(transcript)
+        )
         if not transcript:
             return
         # Capture the target's turn independently of the simulator session FIRST.
@@ -2303,6 +3340,43 @@ async def _forward_target_transcription(
                     "stopped_speaking_at": stopped_at,
                 }
             )
+        if prompt_opening is not None and not prompt_opening.accepts(transcript):
+            return
+        if opening_turn and prompt_opening is None:
+            if _is_opening_preamble(transcript):
+                logger.info(
+                    "opening legal/recording disclosure suppressed: %r", transcript
+                )
+                if opening_preamble_detected is not None:
+                    opening_preamble_detected.set()
+                if opening_preamble_audio_finished is not None:
+                    # ``read_all`` completes with the target's synchronized
+                    # playback stream. This also covers disclosures buffered
+                    # before the session's audio-state listener existed.
+                    opening_preamble_audio_finished.set()
+                return
+        elif (
+            prompt_opening is None
+            and await_opening_classification
+            and opening_transcription_classified is not None
+        ):
+            # Some phone agents split a synchronized disclosure across two text
+            # streams (observed as the full sentence followed by a stray
+            # ``it.``). Do not let that concurrently-opened tail become the
+            # simulator's first conversational turn.
+            await opening_transcription_classified.wait()
+            if (
+                opening_preamble_detected is not None
+                and opening_preamble_detected.is_set()
+                and _is_opening_preamble_continuation(transcript)
+            ):
+                logger.info(
+                    "opening legal/recording disclosure continuation suppressed: %r",
+                    transcript,
+                )
+                return
+        if opening_followup_started is not None:
+            opening_followup_started.set()
         # Only elicit a simulator response while the conversation is live; once
         # it has ended the target's turn is recorded but the simulator stays
         # silent. The turn MUST travel through ``generate_reply(user_input=...)``:
@@ -2313,7 +3387,9 @@ async def _forward_target_transcription(
         if conversation_ended is None or not conversation_ended.is_set():
             try:
                 session.generate_reply(user_input=transcript)
+                logger.info("target transcription reply scheduled")
             except RuntimeError:
+                logger.warning("target transcription reply rejected by closing session")
                 # Session is already closing; the turn is captured above.
                 pass
             else:
@@ -2329,6 +3405,11 @@ async def _forward_target_transcription(
             "Failed to consume target transcription stream",
             exc_info=redacted_exc_info(exc),
         )
+    finally:
+        if prompt_opening is not None:
+            prompt_opening.stream_ended()
+        if opening_turn and opening_transcription_classified is not None:
+            opening_transcription_classified.set()
 
 
 def _find_target_audio(
@@ -2481,6 +3562,38 @@ def _observed_agent_reply_seconds(messages: list[dict[str, Any]]) -> float:
                     slowest = max(slowest, gap)
         previous = message
     return slowest
+
+
+async def _await_target_last_words(
+    *,
+    speaking: Callable[[], bool],
+    present: Callable[[], bool],
+    simulator_spoke_last: bool,
+    pending_target_reply: bool = False,
+) -> float:
+    """Listen on after the conversation ends until the target has finished its last words.
+
+    Returns once the target has been quiet for the settle time after speaking, has left, or the
+    hard cap is reached. A target that may still owe a reply gets a grace period to start speaking;
+    otherwise nothing is pending and the wait is only the settle check.
+    """
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    deadline = started + _TRAILING_TARGET_WAIT_SECONDS
+    grace_until = started + (
+        _TARGET_REPLY_GRACE_SECONDS if simulator_spoke_last or pending_target_reply else 0.0
+    )
+    heard = False
+    quiet_since = started
+    while loop.time() < deadline and present():
+        now = loop.time()
+        if speaking():
+            heard = True
+            quiet_since = now
+        elif now - quiet_since >= _TARGET_TURN_SETTLE_SECONDS and (heard or now >= grace_until):
+            break
+        await asyncio.sleep(0.2)
+    return loop.time() - started
 
 
 async def _wait_for_conversation_end(
@@ -2762,8 +3875,12 @@ async def _wait_for_conversation_silence(
         floor, _ = _turn_requirements(min_turn_messages)
         # Far enough in for the measured window to beat the fixed one. A third of the floor is a
         # threshold, not a derived figure: enough turns to have timed a reply, well short of done.
-        settled = min_turn_messages > 0 and _turns_from_each_side(messages) >= max(
-            2, floor // 3
+        spoken = [message for message in messages if message["content"]]
+        # After the caller's turn the agent owes a reply; a slower one than any so far is not an ending.
+        settled = (
+            min_turn_messages > 0
+            and spoken[-1]["role"] != _CALLER
+            and _turns_from_each_side(messages) >= max(2, floor // 3)
         )
         effective_quiet = (
             _settled_silence_window(
@@ -2806,6 +3923,52 @@ def _voicemail_tone_style() -> str:
         or _DEFAULT_VOICEMAIL_STYLE
     )
     return style if style in _VOICEMAIL_TONE_BY_STYLE else ""
+
+
+# Clips are recorded at wildly different levels; each is scaled to the office clip's loudness,
+# the level the volume above was tuned against.
+_BED_RMS: dict[str, float] = {}
+
+
+def _rms(pcm: bytes) -> float:
+    samples = array.array("h", pcm)
+    return (
+        math.sqrt(sum(sample * sample for sample in samples) / len(samples))
+        if samples
+        else 0.0
+    )
+
+
+async def _bed_rms(path: str, key: str = "") -> float:
+    """Root-mean-square level of up to twenty seconds of a clip, as the mixer will receive it."""
+    key = key or path
+    if key not in _BED_RMS:
+        chunks, count = [], 0
+        frames = audio_frames_from_file(path)
+        try:
+            async for frame in frames:
+                chunks.append(bytes(frame.data))
+                count += frame.samples_per_channel
+                if count >= _BACKGROUND_MIXER_RATE * 20:
+                    break
+        finally:
+            await frames.aclose()
+        _BED_RMS[key] = await asyncio.to_thread(_rms, b"".join(chunks))
+    return _BED_RMS[key]
+
+
+async def _bed_gain(clip: Any, source: str = "") -> float:
+    """The factor that brings a clip to the office clip's loudness, or 1.0 when either is unreadable."""
+    try:
+        path = clip.path() if isinstance(clip, BuiltinAudioClip) else str(clip)
+        reference = await _bed_rms(
+            BuiltinAudioClip.OFFICE_AMBIENCE.path(), "OFFICE_AMBIENCE"
+        )
+        level = await _bed_rms(path, source)
+    except Exception:
+        logger.warning("background clip level not measured", exc_info=True)
+        return 1.0
+    return reference / level if reference and level else 1.0
 
 
 def _downloaded_audio(source: str) -> str | None:
@@ -2874,25 +4037,161 @@ def _answered_by_voicemail() -> bool:
     return os.environ.get("HARNESS_ANSWERED_BY", "").strip().lower() == "voicemail"
 
 
+def _target_has_started(session: Any) -> bool:
+    """Whether the target has begun the opening turn, even if it has not committed yet."""
+    if getattr(session, "user_state", None) == "speaking":
+        return True
+    return any(
+        message["role"] == _TARGET and message["content"]
+        for message in _session_messages(session)
+    )
+
+
+def _is_opening_preamble(transcript: str) -> bool:
+    """Whether an initial phone utterance is a non-interactive legal disclosure.
+
+    Keep this deliberately narrow: it only runs on the target's first
+    authoritative utterance, and requires both a call/conversation noun and a
+    recording/monitoring term. A normal greeting that happens to mention a
+    recording later in the call is therefore never swallowed.
+    """
+    normalized = " ".join(transcript.casefold().split())
+    if not normalized or "?" in normalized or len(normalized.split()) > 40:
+        return False
+    subject = any(word in normalized for word in ("call", "conversation"))
+    disclosure = any(
+        phrase in normalized
+        for phrase in (
+            "being recorded",
+            "be recorded",
+            "is recorded",
+            "recording this",
+            "being monitored",
+            "be monitored",
+            "is monitored",
+        )
+    )
+    return subject and disclosure
+
+
+def _is_opening_preamble_continuation(transcript: str) -> bool:
+    """Whether a tiny concurrently-opened stream is residue from a disclosure."""
+    normalized = " ".join(transcript.casefold().split()).strip(" .,!;:")
+    if not normalized or "?" in transcript or len(normalized.split()) > 3:
+        return False
+    return all(
+        word
+        in {
+            "it",
+            "this",
+            "call",
+            "conversation",
+            "recorded",
+            "recording",
+            "monitored",
+            "monitoring",
+            "for",
+            "quality",
+            "training",
+            "purposes",
+            "security",
+        }
+        for word in normalized.split()
+    )
+
+
+def _is_opening_followup_stream(
+    *,
+    opening_turn: bool,
+    opening_transcription_classified: asyncio.Event,
+    opening_preamble_detected: asyncio.Event,
+) -> bool:
+    """Whether a newly opened target stream is the post-disclosure greeting."""
+    return (
+        not opening_turn
+        and opening_transcription_classified.is_set()
+        and opening_preamble_detected.is_set()
+    )
+
+
+async def _open_after_opening_preamble(
+    customer_agent: Any,
+    *,
+    timeout_seconds: float,
+    preamble_detected: asyncio.Event,
+    preamble_audio_finished: asyncio.Event | None = None,
+    target_started: asyncio.Event,
+) -> None:
+    """Re-arm the four-second opening race after a legal disclosure.
+
+    Speech onset still wins. Once the real greeting starts, normal LiveKit
+    end-of-turn handling waits for it to finish before generating the reply.
+    """
+    await preamble_detected.wait()
+    # The authoritative text stream can arrive ahead of synchronized audio
+    # playback. Anchor the renewed grace period to the actual speech->listening
+    # transition, otherwise a two-second disclosure consumes half of the four
+    # seconds and the fallback can still collide with a delayed greeting.
+    if preamble_audio_finished is not None:
+        await preamble_audio_finished.wait()
+    try:
+        await asyncio.wait_for(target_started.wait(), timeout=timeout_seconds)
+        return
+    except asyncio.TimeoutError:
+        pass
+    if target_started.is_set():
+        return
+    logger.warning(
+        "no greeting after opening preamble for %ss; the simulated person opens instead",
+        timeout_seconds,
+    )
+    try:
+        customer_agent.open_conversation()
+    except Exception:  # noqa: BLE001 - a call that cannot be opened is the case's own failure
+        logger.warning(
+            "the simulated person could not open after preamble", exc_info=True
+        )
+
+
 async def _open_if_nobody_speaks_first(
     session: AgentSession,
     customer_agent: Any,
     *,
     timeout_seconds: float,
+    target_started: asyncio.Event | None = None,
 ) -> None:
     """Have the simulated person open the conversation when the other side never does.
 
-    Only for a call the agent was supposed to start. It opens exactly the way a simulator-first call
-    does, through ``open_conversation``, so the person's own initial message is used where the
-    persona has one. Returns as soon as anybody speaks, which is the ordinary case.
+    Only for a call the target was supposed to start. The deadline is cancelled at speech onset,
+    not after a transcript commits: a target that begins at 3.9 seconds may speak for as long as
+    needed. Normal end-of-turn handling then decides when the simulator replies.
     """
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout_seconds
-    while loop.time() < deadline:
-        if any(message["content"] for message in _session_messages(session)):
+    if _target_has_started(session):
+        if target_started is not None:
+            target_started.set()
+        return
+
+    if target_started is not None:
+        try:
+            await asyncio.wait_for(target_started.wait(), timeout=timeout_seconds)
             return
-        await asyncio.sleep(0.2)
-    if any(message["content"] for message in _session_messages(session)):
+        except asyncio.TimeoutError:
+            pass
+    else:
+        # Compatibility path for callers without session event wiring. Check the live speech state
+        # frequently; history alone is too late because LiveKit commits a turn after speech ends.
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_seconds
+        while loop.time() < deadline:
+            if _target_has_started(session):
+                return
+            await asyncio.sleep(min(0.02, max(0.0, deadline - loop.time())))
+
+    # Resolve the boundary race in the target's favour. There is intentionally no await between
+    # this final check and opening the simulator, so another coroutine cannot interleave them.
+    if (target_started is not None and target_started.is_set()) or _target_has_started(
+        session
+    ):
         return
     logger.warning(
         "no first turn after %ss; the simulated person opens instead", timeout_seconds
@@ -3024,10 +4323,13 @@ def _canonical_report_messages(session: AgentSession) -> list[dict[str, Any]]:
     role_map = {"assistant": "user", "user": "assistant"}
     messages: list[dict[str, Any]] = []
     for source in _session_messages(session):
+        content = source["content"]
+        if source["role"] == "assistant" and isinstance(content, str):
+            content = " ".join(_DELIVERY_MARKUP.sub(" ", content).split())
         messages.append(
             {
                 "role": role_map.get(source["role"], source["role"]),
-                "content": source["content"],
+                "content": content,
                 "created_at": source.get("created_at"),
                 "started_speaking_at": source.get("started_speaking_at"),
                 "stopped_speaking_at": source.get("stopped_speaking_at"),
@@ -3489,6 +4791,17 @@ def _has_natural_terminal_exchange(messages: list[dict[str, str]]) -> bool:
         "have a great day",
         "have a good day",
         "have a nice day",
+        # Natural customer-side completion language.  Provider agents commonly end
+        # the room immediately after the caller declines anything further, without
+        # producing a separate assistant farewell.  That is a completed transport
+        # whose business correctness belongs to evaluation, not an infrastructure
+        # failure caused solely by the generated minimum-turn floor.
+        "that's everything",
+        "that is everything",
+        "that's all",
+        "that is all",
+        "nothing else",
+        "cheers",
     )
     if any(marker in text for _role, text in tail for marker in farewell_markers):
         return True

@@ -50,6 +50,19 @@ def _load_provider_import_profile(
     secrets_path: Path | None,
     profile_cache_path: Path | None = None,
 ) -> dict[str, object] | None:
+    if (
+        job.agent.mode is ProviderExecutionMode.CONNECT_ONLY
+        and job.agent.connector.strip().lower() == "phone"
+    ):
+        # A dial-in number has no provider API to inspect. The supplied prompt is the only
+        # behavioral source of truth; never pretend we discovered tools or implementation code.
+        return {
+            "provider": "phone",
+            "modality": "voice",
+            "phone_number": str(job.agent.config["phone_number"]),
+            "system_prompt": str(job.agent.config["target_system_prompt"]),
+            "tools": [],
+        }
     inspect_connect_only_provider = (
         job.agent.mode is ProviderExecutionMode.CONNECT_ONLY
         and job.agent.connector.strip().lower() in {"vapi", "retell", "retell_chat"}
@@ -112,6 +125,11 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
         type=Path,
         help="Control-owned sanitized profile reused across authoring retries",
     )
+    parser.add_argument(
+        "--conversation-capabilities",
+        type=Path,
+        help="Conversation capability document for messages delivered to the current stage",
+    )
     args = parser.parse_args(argv)
 
     job = HarnessJob.model_validate(json.loads(args.job.read_text(encoding="utf-8")))
@@ -140,11 +158,18 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
         kind=source_kind,
         out=str(args.output.resolve()),
         count=job.scenario_count,
+        interactive=False,
         model=None,
+        guidance=[],
+        adjustments_path=str(args.adjustments) if args.adjustments else None,
+        conversation_capabilities_path=(
+            str(args.conversation_capabilities)
+            if args.conversation_capabilities
+            else None
+        ),
+        authoring_only=True,
         run_model=None,
         job=job,
-        adjustments_path=str(args.adjustments) if args.adjustments else None,
-        authoring_only=True,
         provider_profile=profile if source_free_provider else None,
     )
     previous_profile_path = os.environ.get(PROVIDER_IMPORT_PROFILE_PATH_ENV)

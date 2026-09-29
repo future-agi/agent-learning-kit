@@ -51,6 +51,7 @@ from .job import (
     HarnessJob,
     HarnessJobStatus,
     HarnessStage,
+    ProviderExecutionMode,
     RepositorySource,
     SourceKind,
     SourceVisibility,
@@ -66,6 +67,7 @@ _CONTROLLER_TOKEN = uuid.uuid4().hex
 class LocalSandboxRequest(BaseModel):
     source_path: str | None = None
     source_id: str | None = None
+    provider_only: bool = False
     github_repository: str | None = None
     github_ref: str | None = None
     github_commit_sha: str | None = None
@@ -75,6 +77,7 @@ class LocalSandboxRequest(BaseModel):
     seed: int | None = None
     agent_name: str | None = None
     connector: str = "auto"
+    connector_mode: ProviderExecutionMode | None = None
     connector_config: dict[str, Any] = Field(default_factory=dict)
     secret_refs: dict[str, SecretRef] = Field(default_factory=dict)
     environment_values: dict[str, SecretStr] = Field(default_factory=dict)
@@ -86,11 +89,19 @@ class LocalSandboxRequest(BaseModel):
         if (
             sum(
                 bool(value)
-                for value in (self.source_path, self.source_id, self.github_repository)
+                for value in (
+                    self.source_path, self.source_id, self.github_repository,
+                    self.provider_only,
+                )
             )
             != 1
         ):
             raise ValueError("exactly_one_source_required")
+        if self.provider_only and (
+            self.connector not in {"retell", "retell_chat", "vapi"}
+            or self.connector_mode is not ProviderExecutionMode.CONNECT_ONLY
+        ):
+            raise ValueError("provider_only_requires_connect_only_provider")
         _validate_environment_values(self.environment_values, self.secret_refs)
         return self
 
@@ -104,6 +115,7 @@ class SandboxPreflightRequest(BaseModel):
     connector_config: dict[str, Any] = Field(default_factory=dict)
     secret_refs: dict[str, SecretRef] = Field(default_factory=dict)
     environment_values: dict[str, SecretStr] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _one_source(self) -> "SandboxPreflightRequest":
@@ -285,7 +297,9 @@ class LocalSandbox:
             secret_ref=SecretRef(
                 manager="mounted",
                 key=internal_key,
-                purpose=f"job-scoped credential file for {name}",
+                # Credential files configure the submitted target process and therefore use
+                # the same Bundle V2 admission purpose as text environment values.
+                purpose="target_provider",
             ),
             size=total,
         )
@@ -460,6 +474,8 @@ class LocalSandbox:
             else None
         )
         identifier = str(uuid.uuid4())
+        if request.provider_only:
+            source = self.jobs_root / identifier / "provider-source"
         run_id = f"harness-{identifier}"
         github_location = (
             _github_location(request.github_repository)
@@ -474,7 +490,10 @@ class LocalSandbox:
             mounted_refs[name] = SecretRef(
                 manager="mounted",
                 key=internal_key,
-                purpose=f"job-scoped environment value for {name}",
+                # Values entered for a run configure the submitted target runtime. Bundle V2
+                # admits secrets by purpose, so a descriptive free-form purpose causes the
+                # certified process provider to drop an otherwise valid value.
+                purpose="target_provider",
             )
             mounted_values[internal_key] = value.get_secret_value()
         claimed_files, secret_file_names = self._claim_secret_files(
@@ -483,7 +502,9 @@ class LocalSandbox:
         mounted_values.update(claimed_files)
         try:
             source_spec = (
-                RepositorySource(
+                RepositorySource(kind=SourceKind.PROVIDER)
+                if request.provider_only
+                else RepositorySource(
                     kind=SourceKind.ARCHIVE,
                     archive_artifact_id=request.source_id,
                 )
@@ -513,6 +534,7 @@ class LocalSandbox:
                 source=source_spec,
                 agent=AgentConnection(
                     connector=request.connector,
+                    mode=request.connector_mode,
                     config=request.connector_config,
                     secret_refs={**request.secret_refs, **mounted_refs},
                 ),
@@ -543,6 +565,9 @@ class LocalSandbox:
             )
             directory = self.jobs_root / identifier
             directory.mkdir()
+            if request.provider_only:
+                assert source is not None
+                source.mkdir()
             _write_json(directory / "job.json", job.model_dump(mode="json"))
             _write_json(
                 directory / "state.json",
@@ -828,6 +853,9 @@ class LocalSandbox:
                     },
                 },
                 scan_paths=_credential_scan_paths(packaging),
+                template_secrets_required=(
+                    request.metadata.get("generic_harness_v1") is not True
+                ),
             )
             return SandboxPreflightResponse(
                 source_kind=(
@@ -936,6 +964,9 @@ class LocalSandbox:
                     secret_refs=job.agent.secret_refs,
                     provided_environment=job.agent.config,
                     scan_paths=_credential_scan_paths(packaging_manifest),
+                    template_secrets_required=(
+                        job.metadata.get("generic_harness_v1") is not True
+                    ),
                 )
                 _write_json(
                     directory / "packaging.json",

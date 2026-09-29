@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -22,13 +23,18 @@ from .chat_call_runner import (
     _conversation_scenario,
     _drive_conversation,
     _duration_ms,
+    _record_text_usage,
     _scenario_document,
     _tool_world,
 )
 from .contract import AgentContract
 from .hosted_scheduler import CallAborted, CallOutcome, Scenario, World
+from .run.conversation import Transcript
 from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime
+from .usage import UsageDenied, UsageUnavailable, simulator_funding
+
+logger = logging.getLogger(__name__)
 
 
 class RetellChatError(RuntimeError):
@@ -299,7 +305,10 @@ class RetellChatCallRunner:
                 config.get("provider_api_base_url") or "https://api.retellai.com"
             ),
         )
-        document = _scenario_document(self._context.bundle_dir, scenario.scenario_key)
+        document = _scenario_document(
+            self._context.bundle_dir,
+            getattr(scenario, "source_scenario_key", None) or scenario.scenario_key,
+        )
         conversation_scenario = _conversation_scenario(document)
         target_world = _tool_world(
             self._context.bundle_dir,
@@ -314,19 +323,49 @@ class RetellChatCallRunner:
             scenario_key=scenario.scenario_key,
             scenario_id=scenario.scenario_id,
         )
+        funding = simulator_funding()
+        if self._context.usage_reporter is not None and funding == "platform":
+            try:
+                await asyncio.to_thread(self._context.usage_reporter.check, "text_call")
+            except UsageDenied as exc:
+                raise CallAborted(
+                    f"text_usage_check_denied: {exc}", code="usage_exhausted"
+                ) from exc
+            except UsageUnavailable as exc:
+                raise CallAborted(
+                    f"text_usage_check_failed: {exc}", code="usage_check_failed"
+                ) from exc
         started = datetime.now(timezone.utc)
+        transcript: Transcript | None = None
+        failure: CallAborted | None = None
         try:
             transcript = await _drive_conversation(
                 target, conversation_scenario, self._contract, self._context.bundle_dir
             )
-        except CallAborted:
+        except CallAborted as exc:
+            failure = exc
             raise
         except Exception as exc:
-            raise CallAborted(
+            wrapped = CallAborted(
                 f"retell_chat_target_failed: {type(exc).__name__}: {exc}"
-            ) from exc
+            )
+            partial = getattr(exc, "partial_transcript", None)
+            if partial is not None:
+                setattr(wrapped, "partial_transcript", partial)
+            failure = wrapped
+            raise wrapped from exc
         finally:
-            await wrapper.aclose()
+            try:
+                await wrapper.aclose()
+            finally:
+                await _record_text_usage(
+                    self._context.usage_reporter,
+                    scenario_key=scenario.scenario_key,
+                    started=started,
+                    funding=funding,
+                    transcript=transcript,
+                    failure=failure,
+                )
         ended = datetime.now(timezone.utc)
         transcript_id = await self._adapter.upload_artifact(
             transcript.artifact(),

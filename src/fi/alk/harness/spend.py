@@ -47,15 +47,12 @@ def record(
     tokens_in: int = 0,
     tokens_out: int = 0,
     tokens_cached: int = 0,
+    tools: dict[str, int] | None = None,
+    refusals: dict[str, int] | None = None,
 ) -> None:
     """Add one session's reported spend. A backend that cannot price a call reports None.
 
-    ``tokens_cached`` is the part of ``tokens_in`` the provider served from its own cache. It is
-    reported rather than discounted, because the table here carries no cache rate and a guessed
-    one would be a made-up figure presented as a price. Carrying the count is what lets anyone
-    reconciling a bill see the size of the overstatement instead of inheriting it silently: two
-    reruns of the same authoring produced byte-identical ledgers four times apart in wall clock,
-    which is what caching looks like when nothing records it.
+    ``tokens_cached`` is the cached part of ``tokens_in``, already priced at the cache rate in ``usd``.
     """
     name = (stage or "stage").strip() or "stage"
     entry = _stages.setdefault(
@@ -69,6 +66,8 @@ def record(
             "tokens_in": 0,
             "tokens_out": 0,
             "tokens_cached": 0,
+            "tools": {},
+            "refusals": {},
         },
     )
     if usd is None:
@@ -80,6 +79,9 @@ def record(
     entry["tokens_in"] += int(tokens_in or 0)
     entry["tokens_out"] += int(tokens_out or 0)
     entry["tokens_cached"] += int(tokens_cached or 0)
+    for field, counted in (("tools", tools), ("refusals", refusals)):
+        for name, times in (counted or {}).items():
+            entry[field][name] = entry[field].get(name, 0) + int(times or 0)
     for model in sorted(models or set()):
         if model not in entry["models"]:
             entry["models"].append(model)
@@ -114,6 +116,8 @@ def snapshot() -> dict[str, Any]:
                         "tokens_in",
                         "tokens_out",
                         "tokens_cached",
+                        "tools",
+                        "refusals",
                     )
                 },
             }

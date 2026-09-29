@@ -54,6 +54,8 @@ class Transcript:
     calls: list[Call] = field(default_factory=list)
     ended: str = ""
     spent_usd: float = 0.0
+    simulator_input_tokens: int = 0
+    simulator_output_tokens: int = 0
 
     def spoken(self) -> str:
         return "\n".join(f"{turn.speaker}: {turn.text}" for turn in self.exchanges)
@@ -159,7 +161,12 @@ def customer_prompt(
     from ..simulator import fill
 
     if written:
-        filled, _missing = fill(written, scenario.slots())
+        filled, missing = fill(written, scenario.slots())
+        if missing:
+            raise RuntimeError(
+                f"the simulator prompt asks for {', '.join(missing)}, which {scenario.name} does "
+                "not supply. An unfilled slot reaches the caller verbatim."
+            )
     else:
         # No simulator prompt was written, which the environment gate refuses for a
         # conversational agent. Kept minimal rather than inventing a character.
@@ -255,10 +262,26 @@ async def converse(
             record("customer", said)
         else:
             transcript.ended = RAN_OUT
+    except Exception as exc:
+        # Preserve simulator usage already consumed before a target/provider failure.  Call
+        # runners attach this partial transcript to the failed usage record instead of silently
+        # dropping a paid attempt that never reached a normal return.
+        transcript.calls = list(target.world.calls) if hasattr(target, "world") else []
+        transcript.spent_usd = target.spent_usd + customer.spent_usd
+        (
+            transcript.simulator_input_tokens,
+            transcript.simulator_output_tokens,
+        ) = getattr(customer, "simulator_tokens", (0, 0))
+        setattr(exc, "partial_transcript", transcript)
+        raise
     finally:
         await customer.__aexit__(None, None, None)
         await target.close()
 
     transcript.calls = list(target.world.calls) if hasattr(target, "world") else []
     transcript.spent_usd = target.spent_usd + customer.spent_usd
+    (
+        transcript.simulator_input_tokens,
+        transcript.simulator_output_tokens,
+    ) = getattr(customer, "simulator_tokens", (0, 0))
     return transcript

@@ -46,7 +46,14 @@ def as_persona(scenario: Scenario, simulator_prompt: str = "") -> Persona:
     # line to recite. Preserve the harness-authored caller rules here: they explicitly keep
     # the simulator in the customer role and stop it from volunteering held-back details.
     # Fall back to the plain scenario instruction for older sessions without a prompt.
-    filled = fill(simulator_prompt, scenario.slots())[0] if simulator_prompt else ""
+    filled = ""
+    if simulator_prompt:
+        filled, missing = fill(simulator_prompt, scenario.slots())
+        if missing:
+            raise RuntimeError(
+                f"the simulator prompt asks for {', '.join(missing)}, which {scenario.name} does "
+                "not supply. An unfilled slot reaches the caller verbatim."
+            )
     persona = (
         scenario.persona.model_dump(exclude_none=True)
         if scenario.persona is not None

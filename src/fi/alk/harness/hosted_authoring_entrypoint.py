@@ -20,9 +20,20 @@ _SECRETS_PATH = Path("/run/futureagi/secrets.json")
 _ADC_PATH = Path("/work/.authoring-credentials/google.json")
 _TARGET_SECRETS_PATH = Path("/run/futureagi/authoring-target-secrets.json")
 _SIMULATOR_SECRETS_PATH = Path("/run/futureagi/simulator-secrets.json")
+_TARGET_CREDENTIAL_NAMES = {"RETELL_API_KEY", "VAPI_API_KEY"}
 _PASSTHROUGH = {
+    "AGENTCC_API_KEY",
+    "AGENTCC_BASE_URL",
     # Not a credential: authoring writes the scenarios, so the switch has to reach it.
     "ALK_VOICEMAIL_SCENARIOS",
+    "ALK_BACKGROUND_NOISE",
+    "ALK_BACKGROUND_NOISE_CATALOG",
+    # Temporary, private scenario-authoring policy for the Uber Guest Booking POC. The exact
+    # target comes from platform deployment configuration, never from customer environment input.
+    "ALK_UBER_GUEST_POC_TARGET_PHONE_NUMBER",
+    "ALK_UBER_GUEST_POC_PIN",
+    "ALK_CLAUDE_GATEWAY_URL",
+    "ALK_CLAUDE_GATEWAY_API_KEY",
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_VERTEX_PROJECT_ID",
     "ANTHROPIC_VERTEX_REGION",
@@ -132,15 +143,40 @@ def _authoring_job_context(forwarded: list[str]) -> tuple[str, str, dict]:
     return "", "", {}
 
 
-
 def main(argv: list[str] | None = None) -> int:
+    # This process authors the environment but never runs the submitted target. Do not let a
+    # launcher-provided parent environment accidentally bypass the target-secrets file boundary.
+    for name in _TARGET_CREDENTIAL_NAMES:
+        os.environ.pop(name, None)
     all_values = _load_values(_SECRETS_PATH)
     values = _platform_simulator_values(all_values)
+    # The launch-time fallback authoring command runs before hosted_entrypoint consumes this
+    # control-plane channel. Read only the allowlisted platform-owned authoring values and leave
+    # the file for hosted_entrypoint to consume and delete. Never copy customer target credentials
+    # here.
+    try:
+        gateway_values = _load_values(_SIMULATOR_SECRETS_PATH)
+    except (OSError, ValueError):
+        gateway_values = {}
+    values.update(
+        {
+            name: gateway_values[name]
+            for name in (
+                "AGENTCC_API_KEY",
+                "AGENTCC_BASE_URL",
+                "ALK_BACKGROUND_NOISE",
+                "ALK_BACKGROUND_NOISE_CATALOG",
+                "ALK_UBER_GUEST_POC_TARGET_PHONE_NUMBER",
+                "ALK_UBER_GUEST_POC_PIN",
+            )
+            if gateway_values.get(name)
+        }
+    )
     _configure_generation_environment(values)
     _configure_observability_environment(all_values)
     target_values = {
         name: all_values[name]
-        for name in ("RETELL_API_KEY", "VAPI_API_KEY")
+        for name in _TARGET_CREDENTIAL_NAMES
         if all_values.get(name)
     }
     forwarded = list(argv) if argv is not None else sys.argv[1:]
@@ -150,6 +186,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         _TARGET_SECRETS_PATH.chmod(0o600)
         forwarded.extend(["--target-secrets", str(_TARGET_SECRETS_PATH)])
+    if "--conversation-capabilities" in forwarded:
+        os.environ["ALK_FOREGROUND_COORDINATOR"] = "1"
     job_id, run_id, telemetry = _authoring_job_context(forwarded)
     if job_id:
         observability.begin(job_id, run_id, telemetry)

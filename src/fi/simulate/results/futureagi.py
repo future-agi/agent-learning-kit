@@ -25,6 +25,7 @@ in ``submission.json`` and returns cleanly — no HTTP is attempted.
 from __future__ import annotations
 
 import hashlib
+import math
 import json
 import logging
 import os
@@ -645,7 +646,7 @@ def _build_result_payload(case) -> dict[str, Any]:
         # usage) into provider_call_data under the normalized ``usage.llm``
         # shape the platform already reads for native voice. This is the
         # agent-under-test's real usage — not the FutureAGI simulator's.
-        target = _target_provider_usage(case)
+        target = target_provider_usage(case)
         if target is not None:
             provider_bucket = dict(provider_call_data.get(target.provider) or {})
             if target.usage:
@@ -1082,12 +1083,21 @@ def _recording_kind(result, path: Path) -> str:
 
 
 _TARGET_PROVIDERS = ("vapi", "retell", "livekit")
+MAX_TARGET_LATENCY_TURNS = 1000
 
 
-class _TargetUsage:
+class TargetUsage:
     """Normalized target-agent usage extracted from one provider's evidence."""
 
-    __slots__ = ("provider", "usage", "cost_cents", "raw")
+    __slots__ = (
+        "provider",
+        "usage",
+        "cost_cents",
+        "raw",
+        "latency",
+        "call_id",
+        "ended_reason",
+    )
 
     def __init__(
         self,
@@ -1095,30 +1105,49 @@ class _TargetUsage:
         usage: dict[str, int] | None,
         cost_cents: int | None,
         raw: dict[str, Any] | None,
+        latency: dict[str, Any] | None = None,
+        call_id: str | None = None,
+        ended_reason: str | None = None,
     ) -> None:
         self.provider = provider
         self.usage = usage
         self.cost_cents = cost_cents
         self.raw = raw
+        self.latency = latency
+        self.call_id = call_id
+        self.ended_reason = ended_reason
 
 
-def _target_provider_usage(case) -> _TargetUsage | None:
+def target_provider_usage(case) -> TargetUsage | None:
     """Pull the target agent's provider-reported usage from case evidence.
 
     Provider-agnostic: dispatches to a per-provider extractor because each
     provider reports cost/tokens in a different shape (Vapi costBreakdown,
     Retell call_cost + llm_token_usage, LiveKit normalized usage). Returns a
-    ``_TargetUsage`` with a normalized ``usage`` (``prompt_tokens`` /
-    ``completion_tokens`` / ``total_tokens``) and ``cost_cents``, or None when
-    no target evidence surfaced usage (e.g. a black-box self-hosted target).
+    ``TargetUsage`` with a normalized ``usage`` (``prompt_tokens`` /
+    ``completion_tokens`` / ``total_tokens``), ``cost_cents`` and ``latency``,
+    or None when no target evidence surfaced any (e.g. a black-box self-hosted
+    target).
+
+    The LiveKit engine attaches the fetched provider summaries to
+    ``result.metadata["evidence"]``; ``case.evidence`` only lists the sources the
+    spec declared, without what they returned. Read both.
     """
-    evidence = getattr(case, "evidence", None) or []
-    for source in evidence:
-        metadata = getattr(source, "metadata", None) or {}
-        provider = metadata.get("provider")
-        if provider not in _TARGET_PROVIDERS:
+    sources: list[Any] = list(getattr(case, "evidence", None) or [])
+    result_metadata = getattr(getattr(case, "result", None), "metadata", None)
+    if isinstance(result_metadata, dict) and isinstance(
+        result_metadata.get("evidence"), list
+    ):
+        sources.extend(result_metadata["evidence"])
+    for source in sources:
+        metadata = (
+            source.get("metadata")
+            if isinstance(source, dict)
+            else getattr(source, "metadata", None)
+        )
+        if not isinstance(metadata, dict):
             continue
-        extractor = _PROVIDER_USAGE_EXTRACTORS.get(provider)
+        extractor = _PROVIDER_USAGE_EXTRACTORS.get(metadata.get("provider"))
         if extractor is None:
             continue
         result = extractor(metadata)
@@ -1127,7 +1156,7 @@ def _target_provider_usage(case) -> _TargetUsage | None:
     return None
 
 
-def _vapi_usage(metadata: dict[str, Any]) -> _TargetUsage | None:
+def _vapi_usage(metadata: dict[str, Any]) -> TargetUsage | None:
     cost = metadata.get("cost") if isinstance(metadata.get("cost"), dict) else {}
     breakdown = (
         cost.get("breakdown") if isinstance(cost.get("breakdown"), dict) else None
@@ -1140,12 +1169,43 @@ def _vapi_usage(metadata: dict[str, Any]) -> _TargetUsage | None:
         )
         usage = _normalized_usage(prompt, completion)
     cost_cents = _dollars_to_cents(cost.get("total"))
-    if usage is None and cost_cents is None:
+    latency = _vapi_latency(metadata.get("latency"))
+    call_id = str(metadata.get("call_id") or "") or None
+    ended_reason = str(metadata.get("ended_reason") or "") or None
+    if (
+        usage is None
+        and cost_cents is None
+        and latency is None
+        and call_id is None
+        and ended_reason is None
+    ):
         return None
-    return _TargetUsage("vapi", usage, cost_cents, breakdown)
+    return TargetUsage(
+        "vapi", usage, cost_cents, breakdown, latency, call_id, ended_reason
+    )
 
 
-def _retell_usage(metadata: dict[str, Any]) -> _TargetUsage | None:
+def _valid_latency_sample(value: float | None) -> bool:
+    return value is not None and math.isfinite(value) and value >= 0
+
+
+def _vapi_latency(performance: Any) -> dict[str, Any] | None:
+    if not isinstance(performance, dict):
+        return None
+    stages = {
+        stage: _coerce_float(performance.get(f"{stage}LatencyAverage"))
+        for stage in ("turn", "model", "voice", "transcriber", "endpointing")
+    }
+    turns = [
+        value
+        for item in performance.get("turnLatencies") or []
+        if isinstance(item, dict)
+        and (value := _coerce_float(item.get("turnLatency"))) is not None
+    ]
+    return _latency(stages, turns)
+
+
+def _retell_usage(metadata: dict[str, Any]) -> TargetUsage | None:
     token_usage = metadata.get("usage")
     usage = None
     if isinstance(token_usage, dict):
@@ -1166,12 +1226,69 @@ def _retell_usage(metadata: dict[str, Any]) -> _TargetUsage | None:
     call_cost = metadata.get("cost") if isinstance(metadata.get("cost"), dict) else {}
     # Retell reports combined_cost already in cents.
     cost_cents = _coerce_int_or_none(call_cost.get("combined_cost"))
-    if usage is None and cost_cents is None:
+    latency = _retell_latency(metadata.get("latency"))
+    call_id = str(metadata.get("call_id") or "") or None
+    ended_reason = str(metadata.get("end_reason") or "") or None
+    if (
+        usage is None
+        and cost_cents is None
+        and latency is None
+        and call_id is None
+        and ended_reason is None
+    ):
         return None
-    return _TargetUsage("retell", usage, cost_cents, call_cost or None)
+    return TargetUsage(
+        "retell", usage, cost_cents, call_cost or None, latency, call_id, ended_reason
+    )
 
 
-def _livekit_usage(metadata: dict[str, Any]) -> _TargetUsage | None:
+def _retell_latency(latency: Any) -> dict[str, Any] | None:
+    """Retell reports each stage as percentiles plus raw ``values``. The mean of
+    ``values`` is what Vapi reports as its average, so both read the same."""
+    if not isinstance(latency, dict):
+        return None
+
+    def samples(stage: str) -> list[float]:
+        block = latency.get(stage)
+        values = block.get("values") if isinstance(block, dict) else None
+        return [
+            value
+            for raw in values or []
+            if (value := _coerce_float(raw)) is not None
+            and _valid_latency_sample(value)
+        ]
+
+    def average(stage: str) -> float | None:
+        values = samples(stage)
+        return sum(values) / len(values) if values else None
+
+    stages = {
+        "turn": average("e2e"),
+        "model": average("llm"),
+        "voice": average("tts"),
+        "transcriber": average("asr"),
+    }
+    return _latency(stages, samples("e2e"))
+
+
+def _latency(
+    stages: dict[str, float | None], turns: list[float]
+) -> dict[str, Any] | None:
+    """One provider-neutral shape in whole milliseconds, bounded to the receipt contract."""
+    reported: dict[str, Any] = {
+        stage: round(value)
+        for stage, value in stages.items()
+        if value is not None and _valid_latency_sample(value)
+    }
+    valid_turns = [round(value) for value in turns if _valid_latency_sample(value)][
+        :MAX_TARGET_LATENCY_TURNS
+    ]
+    if valid_turns:
+        reported["turns"] = valid_turns
+    return reported or None
+
+
+def _livekit_usage(metadata: dict[str, Any]) -> TargetUsage | None:
     # A LiveKit target that reports a normalized usage blob back through the
     # evidence layer (self-hosted worker). Absent for black-box targets.
     usage_blob = metadata.get("usage")
@@ -1188,9 +1305,23 @@ def _livekit_usage(metadata: dict[str, Any]) -> _TargetUsage | None:
         if isinstance(metadata.get("cost"), dict)
         else None
     )
-    if usage is None and cost_cents is None:
+    call_id = str(metadata.get("call_id") or "") or None
+    ended_reason = str(metadata.get("end_reason") or "") or None
+    if (
+        usage is None
+        and cost_cents is None
+        and call_id is None
+        and ended_reason is None
+    ):
         return None
-    return _TargetUsage("livekit", usage, cost_cents, None)
+    return TargetUsage(
+        "livekit",
+        usage,
+        cost_cents,
+        None,
+        call_id=call_id,
+        ended_reason=ended_reason,
+    )
 
 
 _PROVIDER_USAGE_EXTRACTORS = {

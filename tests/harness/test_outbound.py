@@ -61,6 +61,7 @@ from fi.alk.harness.outbound import (
     CapabilitiesError,
     ChannelOutcome,
     ChannelState,
+    DegradeReason,
     EventsClient,
     HostedAttemptSupersededError,
     HostedCapabilities,
@@ -74,6 +75,7 @@ from fi.alk.harness.outbound import (
     OutboundSpool,
     OutboundSpoolError,
     ResultReceiptDraft,
+    TargetLatency,
     ResultsClient,
     RetryPolicy,
     ScenarioStatus,
@@ -745,6 +747,54 @@ def test_parallelism_degraded_effective_must_be_strictly_below_requested() -> No
             OutboundEventType.PARALLELISM_DEGRADED,
             HarnessStage.VALIDATING_ENVIRONMENT,
             {"requested": 3, "effective": 3, "reason": "fixed_port"},
+        )
+
+
+def test_degrade_reason_enum_is_exactly_the_c4_five_members() -> None:
+    # C4 v1.3 §2 (FROZEN): the degrade enum is closed at EXACTLY these five members,
+    # unconditionally. `port_not_consumable` was the former sixth member; C1 v1.3 §4
+    # decision 2 / D28 reclassifies it OUT of the degrade enum to a TERMINAL job failure.
+    # The fixture list here IS C4 §2's table verbatim -- a reviewer changing it without a
+    # matching C4 version bump is a contract violation (§8 cross-repo lockstep).
+    assert {member.value for member in DegradeReason} == {
+        "resource_limited",
+        "literal_local_endpoint",
+        "world_start_failed",
+        "fixed_port",
+        "conformance_gate_failed",
+    }
+    assert "port_not_consumable" not in {member.value for member in DegradeReason}
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "resource_limited",
+        "literal_local_endpoint",
+        "world_start_failed",
+        "fixed_port",
+        "conformance_gate_failed",
+    ],
+)
+def test_parallelism_degraded_accepts_each_of_the_five_reasons(reason: str) -> None:
+    record = _event(
+        OutboundEventType.PARALLELISM_DEGRADED,
+        HarnessStage.VALIDATING_ENVIRONMENT,
+        {"requested": 4, "effective": 2, "reason": reason},
+    )
+    assert record["payload"]["reason"] == reason
+
+
+def test_parallelism_degraded_rejects_port_not_consumable_as_a_degrade_reason() -> None:
+    # D28: `port_not_consumable` is a TERMINAL job failure, never a degrade. The closed
+    # `DegradeReason` enum no longer constructs it, so a `parallelism_degraded` payload
+    # carrying it fails validation -- it cannot enter the degrade / parallelism_degraded
+    # channel at all (it surfaces via the job-failure path instead).
+    with pytest.raises(ValidationError):
+        _event(
+            OutboundEventType.PARALLELISM_DEGRADED,
+            HarnessStage.VALIDATING_ENVIRONMENT,
+            {"requested": 4, "effective": 1, "reason": "port_not_consumable"},
         )
 
 
@@ -1823,6 +1873,7 @@ def test_artifact_budget_tracker_reserved_kinds_always_admitted() -> None:
     # Reserved kinds are counted (for accounting) but never refused, even once over budget.
     assert tracker.admitted_bytes == 1_000_000
     assert tracker.would_admit(ArtifactKind.BUILD, 999, digest="d2")
+    assert tracker.would_admit(ArtifactKind.LOG, 999, digest="d3")
 
 
 def test_artifact_budget_tracker_refuses_non_reserved_once_budget_is_exhausted() -> (
@@ -1833,7 +1884,7 @@ def test_artifact_budget_tracker_refuses_non_reserved_once_budget_is_exhausted()
     tracker.record(ArtifactKind.TRACE, 60, digest="d1")
     assert tracker.would_admit(ArtifactKind.TRACE, 40, digest="d2")
     tracker.record(ArtifactKind.TRACE, 40, digest="d2")
-    assert not tracker.would_admit(ArtifactKind.LOG, 1, digest="d3")
+    assert not tracker.would_admit(ArtifactKind.OTHER, 1, digest="d3")
 
 
 def test_artifact_budget_tracker_duplicate_digest_is_free() -> None:
@@ -1852,17 +1903,17 @@ def test_priority_class_orders_reserved_recordings_other() -> None:
     assert priority_class(ArtifactKind.BUILD) == 0
     assert priority_class(ArtifactKind.TRANSCRIPT) == 0
     assert priority_class(ArtifactKind.TOOL_TRACE) == 0
+    assert priority_class(ArtifactKind.LOG) == 0
     assert priority_class(ArtifactKind.RECORDING_COMBINED) == 1
     assert priority_class(ArtifactKind.RECORDING_STEREO) == 1
     assert priority_class(ArtifactKind.TRACE) == 2
-    assert priority_class(ArtifactKind.LOG) == 2
     assert priority_class(ArtifactKind.OTHER) == 2
 
 
-def test_artifact_budget_tracker_reserves_recording_headroom_from_trace_log_other() -> (
+def test_artifact_budget_tracker_reserves_recording_headroom_from_trace_and_other() -> (
     None
 ):
-    # N16: a non-zero recording_headroom_bytes shrinks what a trace/log/other candidate may
+    # N16: a non-zero recording_headroom_bytes shrinks what a trace/other candidate may
     # consume, leaving room for recordings not yet seen -- default (0) behavior is unaffected
     # (covered by the pre-existing tracker tests above).
     tracker = ArtifactBudgetTracker(max_artifact_bytes=100, recording_headroom_bytes=30)
@@ -1925,6 +1976,45 @@ def test_build_result_receipt_matches_the_contract_shaped_example() -> None:
     ResultReceiptDraft.model_validate(
         receipt
     )  # round-trips through the model unchanged
+
+
+def test_target_latency_normalization_matches_outbound_bounds() -> None:
+    from fi.simulate.results.futureagi import (
+        MAX_TARGET_LATENCY_TURNS,
+        _latency,
+    )
+
+    normalized = _latency(
+        {"turn": -1, "model": 0, "voice": float("nan")},
+        [-1, float("inf"), *range(MAX_TARGET_LATENCY_TURNS + 2)],
+    )
+
+    assert normalized == {
+        "model": 0,
+        "turns": list(range(MAX_TARGET_LATENCY_TURNS)),
+    }
+    TargetLatency.model_validate(normalized)
+    with pytest.raises(ValidationError):
+        TargetLatency(turns=[0] * (MAX_TARGET_LATENCY_TURNS + 1))
+
+
+def test_retell_latency_filters_invalid_samples_before_averaging() -> None:
+    from fi.simulate.results.futureagi import _retell_latency
+
+    assert _retell_latency(
+        {
+            "e2e": {"values": [-100, float("nan"), float("inf"), 1000]},
+            "llm": {"values": [-1, 200]},
+            "tts": {"values": ["invalid", 0]},
+            "asr": {"values": [100]},
+        }
+    ) == {
+        "turn": 1000,
+        "model": 200,
+        "voice": 0,
+        "transcriber": 100,
+        "turns": [1000],
+    }
 
 
 def test_build_skipped_receipt_has_the_exact_contract_shape() -> None:
@@ -2129,7 +2219,7 @@ class FakePlatform:
 
         self.events_to_reject: set[str] = set()
         self.budget_remaining: int | None = None
-        self.reserved_kinds = {"build", "transcript", "tool_trace", "result"}
+        self.reserved_kinds = {"build", "transcript", "tool_trace", "result", "log"}
 
         self.programmed: list[Exception | TransportResponse] = []
         self.crash_after_next_write = False
@@ -3389,8 +3479,17 @@ def test_redact_outbound_text_scrubs_userinfo_and_extra_secrets() -> None:
     )
     assert redact_outbound_text("no secrets here") == "no secrets here"
     assert (
-        redact_outbound_text("token=abc123 leaked", extra_secret_values=("abc123",))
+        redact_outbound_text(
+            "token=abc123def456 leaked", extra_secret_values=("abc123def456",)
+        )
         == "token=*** leaked"
+    )
+    # A short declared value is configuration, not a credential.
+    assert (
+        redact_outbound_text(
+            "the agent confirms consent only", extra_secret_values=("on",)
+        )
+        == "the agent confirms consent only"
     )
 
 
@@ -3560,7 +3659,7 @@ def test_artifacts_client_latches_after_413_and_skips_non_reserved_without_the_t
 
     second_data = b"another non-reserved upload"
     second = client.upload(
-        hashlib.sha256(second_data).hexdigest(), second_data, kind=ArtifactKind.LOG
+        hashlib.sha256(second_data).hexdigest(), second_data, kind=ArtifactKind.OTHER
     )
     assert not second.delivered
     assert (
@@ -3569,9 +3668,9 @@ def test_artifacts_client_latches_after_413_and_skips_non_reserved_without_the_t
     )
     assert len(platform.calls) == calls_after_413  # no new transport call
 
-    reserved_data = b"reserved kind always goes through"
+    reserved_data = b"mandatory terminal log always goes through"
     reserved_digest = hashlib.sha256(reserved_data).hexdigest()
-    third = client.upload(reserved_digest, reserved_data, kind=ArtifactKind.RESULT)
+    third = client.upload(reserved_digest, reserved_data, kind=ArtifactKind.LOG)
     assert third.delivered  # reserved kinds are never latched out
     assert len(platform.calls) == calls_after_413 + 1
 
@@ -3583,7 +3682,7 @@ def test_artifacts_client_413_budget_exceeded_is_never_retried() -> None:
     data = b"too big for the budget"
     digest_hex = hashlib.sha256(data).hexdigest()
 
-    result = client.upload(digest_hex, data, kind=ArtifactKind.LOG)
+    result = client.upload(digest_hex, data, kind=ArtifactKind.TRACE)
     assert not result.delivered
     assert result.error is not None
     assert result.error.outcome is ChannelOutcome.BUDGET_EXCEEDED

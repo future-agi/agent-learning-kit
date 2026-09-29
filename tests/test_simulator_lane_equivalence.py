@@ -156,3 +156,13 @@ def test_a_nested_fixture_phone_reaches_the_persona_metadata():
         tts_provider="cartesia",
     )
     assert scenario.dataset[0].persona["metadata"]["caller_phone"] == "+14155550109"
+
+
+def test_both_lanes_vary_the_caller_by_run(both_specs, monkeypatch):
+    local, hosted = both_specs
+    assert local.scenario.dataset[0].situation == hosted.scenario.dataset[0].situation
+    for name in OVERRIDES:
+        monkeypatch.delenv(name, raising=False)
+    with mock.patch.dict(os.environ, SHARED_ENV, clear=False):
+        situations = {local_build_spec(f"run-{index}").scenario.dataset[0].situation for index in range(6)}
+    assert len(situations) > 1

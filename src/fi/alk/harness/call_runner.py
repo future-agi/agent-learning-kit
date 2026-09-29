@@ -6,7 +6,7 @@ Three sub-systems (world-handle-interface.md, hosted-execution-seams.md v1.15 §
 1. **Placing the call.** The customer agent is already running INSIDE the Daytona sandbox, as a
    world process the bundle's provisioner spawned (`process_runtime.py`) and registered with
    LiveKit cloud under `LIVEKIT_AGENT_NAME=agent-w{WORLD_INDEX}`-style identity. This runner never
-   starts or manages that process. It drives `SimulationRunner` IN-PROCESS with a
+   starts or manages that process. It drives `SimulationRunner` in a supervised subprocess with a
    `SimulationSpec` built by `simulator_voice.simulation_spec`, the same builder the local lane
    uses; only the value lookup differs, resolving from job config and the bundle's scenario
    document rather than `HARNESS_*` env vars. Do not rebuild the spec here: the two lanes drifted
@@ -32,6 +32,7 @@ import atexit
 import asyncio
 import gc
 import json
+import random
 import logging
 import os
 import stat
@@ -46,23 +47,34 @@ from fi.simulate.runtime import (
     SimulationSpec,
     new_run_id,
 )
+from fi.simulate.results.futureagi import target_provider_usage
 from fi.simulate.runtime.report import SimulationReport
 from fi.simulate.runtime.run import TestCaseStatus
 from fi.simulate.runtime.runner import SimulationRunner
 
-from .background_noise import scenario_source
+from .background_noise import place_of, scenario_source
 from .bundle_v2 import EvidenceSeam
 from .hosted_scheduler import CallAborted, CallOutcome
 from .hosted_scheduler import Scenario as HostedScenario
-from .job import ExecutionMode, HarnessJob, ProviderExecutionMode
+from .job import ExecutionMode, FailureDomain, HarnessJob, ProviderExecutionMode
+from .isolated_process import run_json_worker
 from .outbound import ArtifactKind, format_rfc3339_millis
-from .process_runtime import EnvironmentRuntime
+from .process_runtime import EnvironmentRuntime, _allowlisted_ambient_env
+from .usage import (
+    UsageDenied,
+    UsageOutcome,
+    UsageReporter,
+    UsageUnavailable,
+    failure_domain_for_code,
+    simulator_funding,
+)
 from .scenario import DEFAULT_VOICEMAIL_STYLE, voicemail_enabled
 from .voicemail_audio import clip_for
 from .simulator_voice import (
     CLEANUP_TIMEOUT_SECONDS,
     CONNECT_TIMEOUT_SECONDS,
     READINESS_TIMEOUT_SECONDS,
+    SIMULATOR_MODEL_ENV,
     caller_scenario,
     simulation_spec,
     simulator_definition,
@@ -88,7 +100,10 @@ GOOGLE_CLOUD_LOCATION_ALIAS = "GOOGLE_CLOUD_LOCATION"
 GOOGLE_GENAI_USE_VERTEXAI_ALIAS = "GOOGLE_GENAI_USE_VERTEXAI"
 OPENAI_API_KEY_ALIAS = "OPENAI_API_KEY"
 VAPI_API_KEY_ALIAS = "VAPI_API_KEY"
+VAPI_PUBLIC_API_KEY_ALIAS = "VAPI_PUBLIC_API_KEY"
 RETELL_API_KEY_ALIAS = "RETELL_API_KEY"
+SIP_OUTBOUND_TRUNK_ID_ALIAS = "SIP_OUTBOUND_TRUNK_ID"
+SIP_OUTBOUND_FROM_NUMBER_ALIAS = "SIP_OUTBOUND_FROM_NUMBER"
 SIMULATOR_LLM_PROVIDER_ALIAS = "SIMULATOR_LLM_PROVIDER"
 SIMULATOR_LLM_MODEL_ALIAS = "SIMULATOR_LLM_MODEL"
 SIMULATOR_STT_PROVIDER_ALIAS = "SIMULATOR_STT_PROVIDER"
@@ -122,7 +137,7 @@ _SIMULATOR_PLATFORM_ALIAS_MAP = {
     "SIMULATOR_OPENAI_API_KEY": OPENAI_API_KEY_ALIAS,
 }
 
-_DEFAULT_CALL_TIMEOUT_SECONDS = 300.0
+_DEFAULT_CALL_TIMEOUT_SECONDS = 480.0
 
 # sdk_voice.py::build_spec's own phase-overhead constants, reused verbatim so this runner's
 # outer budget composes with the SDK's internal one the same way the local template does.
@@ -189,6 +204,13 @@ def _attributed_stall(case: Any) -> tuple[str, str] | None:
     return None
 
 
+# C3 §4.5: the engine's dispatch-ack ladder marks +60s exhaustion with this structured
+# `failure.code`. Matched here to pass the marker through on `CallAborted.marker` (never
+# string-matched from `failure.message`). Kept as a literal — the engine module that owns it
+# requires the optional `livekit` dependency this runner must import without.
+_VOICE_DISPATCH_UNACKNOWLEDGED = "voice_dispatch_unacknowledged"
+
+
 # --- collaborator seams (named, injectable test boundaries) -----------------------------------
 
 
@@ -229,6 +251,7 @@ class CallRunnerContext:
     attempt_number: int
     source_directory: Path | None = None
     simulator_provider_secret_values: Mapping[str, str] = field(default_factory=dict)
+    usage_reporter: UsageReporter | None = None
 
 
 # --- pre-dial validation -----------------------------------------------------------------------
@@ -314,6 +337,10 @@ def _check_config(
         required.append(VAPI_API_KEY_ALIAS)
     elif connector == "retell":
         required.append(RETELL_API_KEY_ALIAS)
+    if connector == "phone" or (
+        connector in {"vapi", "retell"} and config.get("phone_number")
+    ):
+        required.extend((SIP_OUTBOUND_TRUNK_ID_ALIAS, SIP_OUTBOUND_FROM_NUMBER_ALIAS))
     if "deepgram" in {stt_provider, tts_provider}:
         if not simulator_value(DEEPGRAM_API_KEY_ALIAS):
             required.append(DEEPGRAM_API_KEY_ALIAS)
@@ -323,6 +350,8 @@ def _check_config(
             return livekit_values.get(alias)
         if alias in {VAPI_API_KEY_ALIAS, RETELL_API_KEY_ALIAS}:
             return target_provider_secret_values.get(alias)
+        if alias in {SIP_OUTBOUND_TRUNK_ID_ALIAS, SIP_OUTBOUND_FROM_NUMBER_ALIAS}:
+            return simulator_values.get(alias)
         return simulator_value(alias)
 
     missing_aliases = [alias for alias in required if not credential(alias)]
@@ -415,6 +444,37 @@ def _read_scenario_document(bundle_dir: Path, scenario_key: str) -> dict[str, An
     )
 
 
+# Edits a call actually plays; everything else is as sealed.
+_EDITABLE_FIELDS = ("background_noise",)
+_EDITABLE_PERSONA_FIELDS = (
+    "personality",
+    "communication_style",
+    "accent",
+    "languages",
+    "occupation",
+    "location",
+)
+
+
+def _with_scenario_edits(
+    document: dict[str, Any], metadata: object, scenario_key: str
+) -> dict[str, Any]:
+    """The sealed document with the platform's current edits for this scenario laid over it."""
+    edits = metadata.get("scenario_edits") if isinstance(metadata, Mapping) else None
+    edit = edits.get(scenario_key) if isinstance(edits, Mapping) else None
+    if not isinstance(edit, Mapping):
+        return document
+    merged = dict(document)
+    merged.update({field: edit[field] for field in _EDITABLE_FIELDS if field in edit})
+    persona = edit.get("persona")
+    if isinstance(persona, Mapping):
+        merged["persona"] = {
+            **(merged.get("persona") if isinstance(merged.get("persona"), dict) else {}),
+            **{key: persona[key] for key in _EDITABLE_PERSONA_FIELDS if key in persona},
+        }
+    return merged
+
+
 # --- deterministic room naming (asserted verbatim by tests/harness/test_call_runner.py). WHY this
 # is a PREFIX guarantee, not a full-match one: in managed room_mode, engines/livekit.py::
 # _resolve_room_name appends its own `-{invocation_id}-{test_case_id[-12:]}` suffix unless
@@ -437,12 +497,27 @@ def _duration_ms(started_at: datetime, ended_at: datetime) -> int:
 # value lookup is lane-specific. ---------------------------------------------------------------
 
 
-def _dials_the_person(doc: dict[str, Any]) -> bool:
+def _dials_the_person(
+    doc: Mapping[str, Any], environ: Mapping[str, str] | None = None
+) -> bool:
     """Whether the agent places the call: scenario first, then the environment, then inbound."""
     direction = str(
-        doc.get("call_direction") or os.environ.get(CALL_DIRECTION_ALIAS) or "inbound"
+        doc.get("call_direction")
+        or (os.environ if environ is None else environ).get(CALL_DIRECTION_ALIAS)
+        or "inbound"
     )
     return direction.strip().lower() == "outbound"
+
+
+def _target_speaks_first(
+    doc: Mapping[str, Any],
+    environ: Mapping[str, str],
+    simulator_config: Mapping[str, Any],
+) -> bool:
+    # Only an explicit True overrides the agent's own direction.
+    if simulator_config.get("target_speaks_first") is True:
+        return True
+    return not _dials_the_person(doc, environ)
 
 
 def _build_spec(
@@ -470,6 +545,10 @@ def _build_spec(
 
     simulator = simulator_definition(setting, doc.get("persona"))
     connector = connector.strip().lower()
+    # Match the platform agent-definition inbound-phone path. Provider IDs still
+    # supply authoring context, but the call itself dials the existing number.
+    if connector in {"vapi", "retell"} and simulator_config.get("phone_number"):
+        connector = "phone"
     provider_agent: simulate.AgentDefinition | None = None
     if connector == "vapi":
         if not provider_target_id:
@@ -522,13 +601,29 @@ def _build_spec(
                 "call_id_source": "originator_response",
             },
         )
+    elif connector == "phone":
+        phone_number = str(simulator_config.get("phone_number") or "").strip()
+        if not phone_number:
+            raise ValueError("phone_target_number_unavailable")
+        provider_agent = simulate.AgentDefinition(
+            name="harness-phone-target",
+            system_prompt=str(simulator_config.get("target_system_prompt") or ""),
+            transport={
+                "kind": "sip_outbound",
+                # These come only from the platform simulator channel. A customer config must
+                # never choose the platform trunk or spoof its originating caller ID.
+                "sip_trunk_id": str(environ.get(SIP_OUTBOUND_TRUNK_ID_ALIAS) or ""),
+                "sip_number": str(environ.get(SIP_OUTBOUND_FROM_NUMBER_ALIAS) or ""),
+                "sip_call_to": phone_number,
+            },
+        )
     # A provider-hosted agent owns termination and can legitimately finish an agent-first call
     # after the fifth message: agent greeting, caller request, agent clarification, caller answer,
     # agent confirmation followed by the provider's end-call tool. Requiring the simulator's
     # sixth acknowledgement after Retell/Vapi has already disconnected misclassifies a complete
     # call as infrastructure failure and prevents the tool trace from being graded. Native
     # LiveKit keeps the stricter six-message floor because our simulator owns that hang-up path.
-    min_turn_messages = 5 if connector in {"vapi", "retell"} else 6
+    min_turn_messages = 5 if connector in {"vapi", "retell", "phone"} else 6
     return simulation_spec(
         run_id=run_id,
         room_name=room_name,
@@ -542,10 +637,13 @@ def _build_spec(
             situation=doc["instruction"],
             fixture=doc.get("fixture"),
             tts_provider=simulator.tts.provider,
+            variation=run_id,
         ),
         simulator=simulator,
         # An outbound agent dials; the person answers, so the caller opens.
-        direction="simulator_first" if _dials_the_person(doc) else "agent_first",
+        direction="agent_first"
+        if _target_speaks_first(doc, environ, simulator_config)
+        else "simulator_first",
         max_seconds=call_timeout_seconds,
         min_turn_messages=min_turn_messages,
         # Hosted targets can legitimately spend tens of seconds in a provider call or a tool
@@ -737,6 +835,27 @@ def _collect_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
     return tuple(calls)
 
 
+def _target_metrics(case: Any) -> dict[str, Any] | None:
+    """The agent under test's own usage, cost and latency, as its provider reported them.
+
+    Shares the SDK result path's extraction so hosted and SDK runs report the same numbers.
+    """
+    target = target_provider_usage(case) if case is not None else None
+    if target is None:
+        return None
+    reported = {
+        "usage": target.usage,
+        "cost_cents": target.cost_cents,
+        "latency": target.latency,
+        "provider_call_id": target.call_id,
+        "provider_end_reason": target.ended_reason,
+    }
+    return {
+        "provider": target.provider,
+        **{key: value for key, value in reported.items() if value is not None},
+    }
+
+
 def _collect_provider_tool_calls(case: Any) -> tuple[Call, ...]:
     """Translate provider-reported tool evidence into scheduler calls.
 
@@ -856,7 +975,7 @@ class CallRunnerImpl:
     ) -> None:
         self._adapter = adapter
         self._context = context
-        self._place_call = place_call or _default_place_call
+        self._place_call = place_call
         simulator_secret_values = _canonical_simulator_secrets(
             context.simulator_provider_secret_values
         )
@@ -888,18 +1007,30 @@ class CallRunnerImpl:
                     value = context.target_provider_secret_values.get(alias)
                     if value:
                         simulator_secret_values[alias] = value
-        # WHY: the underlying LiveKit engine reads these directly via `os.environ.get(...)` deep
-        # inside `engines/livekit.py` / `livekit_models.py` -- they are NOT `SimulationSpec`
-        # fields, so there is no other way to hand them over. Exported ONCE here, at construction,
-        # not per-call: the values are job-level (the same secret for every scenario/attempt on
-        # this job) and W>1 means each world's CallRunner.run() executes inside this SAME guest
-        # process but against a per-world sandboxed agent process reached over the network; no
-        # other in-process worker races this job-level environment.
-        target_environ = os.environ if environ is None else environ
+        # Provider libraries read ambient credentials. Supply a private snapshot to
+        # each call subprocess, never export credentials into the parent process.
+        ambient = os.environ if environ is None else environ
+        target_environ = _allowlisted_ambient_env(dict(ambient))
+        allowed = (
+            {
+                value
+                for name, value in globals().items()
+                if name.endswith("_ALIAS") and isinstance(value, str)
+            }
+            | SIMULATOR_MODEL_ENV
+            | {"FI_HOSTED_DISPATCH_ACK", "ALK_VOICEMAIL_SCENARIOS"}
+        )
+        target_environ.update(
+            {key: value for key, value in ambient.items() if key in allowed}
+        )
         connector = _resolve_connector(
             context.job, context.target_provider_secret_values
         )
-        target_aliases = [VAPI_API_KEY_ALIAS, RETELL_API_KEY_ALIAS]
+        target_aliases = [
+            VAPI_API_KEY_ALIAS,
+            VAPI_PUBLIC_API_KEY_ALIAS,
+            RETELL_API_KEY_ALIAS,
+        ]
         if connector == "livekit":
             target_aliases.extend(
                 [LIVEKIT_API_KEY_ALIAS, LIVEKIT_API_SECRET_ALIAS, LIVEKIT_URL_ALIAS]
@@ -927,6 +1058,8 @@ class CallRunnerImpl:
             SIMULATOR_STT_MODEL_ALIAS,
             SIMULATOR_TTS_PROVIDER_ALIAS,
             SIMULATOR_TTS_MODEL_ALIAS,
+            SIP_OUTBOUND_TRUNK_ID_ALIAS,
+            SIP_OUTBOUND_FROM_NUMBER_ALIAS,
             BACKGROUND_NOISE_ALIAS,
             BACKGROUND_NOISE_CATALOG_ALIAS,
             BACKGROUND_NOISE_VOLUME_ALIAS,
@@ -957,7 +1090,7 @@ class CallRunnerImpl:
             context.target_provider_secret_values,
             simulator_secret_values,
         )
-        self._scenario_attempt_counts: dict[str, int] = {}
+        self._scenario_room_counts: dict[str, int] = {}
         self._closed = False
 
     def _cleanup_credentials(self) -> None:
@@ -1007,11 +1140,25 @@ class CallRunnerImpl:
         world: Any | None = None,
     ) -> CallOutcome:
         del world  # Voice tools cross the declared evidence seam; they are not response-carried.
+        call_environ = dict(self._environ)
         if self._missing_config is not None:
             # Pre-dial: dialing never starts, so no partial -- and never `WorldUnavailable` (that
             # code is reserved by the contract for a world-level capability mismatch, not a
             # job-level voice config gap).
             raise CallAborted(self._missing_config.message())
+        if self._context.usage_reporter is not None:
+            try:
+                await asyncio.to_thread(
+                    self._context.usage_reporter.check, "voice_call"
+                )
+            except UsageDenied as exc:
+                raise CallAborted(
+                    f"voice_usage_check_denied: {exc}", code="usage_exhausted"
+                ) from exc
+            except UsageUnavailable as exc:
+                raise CallAborted(
+                    f"voice_usage_check_failed: {exc}", code="usage_check_failed"
+                ) from exc
 
         connector = _resolve_connector(
             self._context.job, self._context.target_provider_secret_values
@@ -1023,22 +1170,22 @@ class CallRunnerImpl:
                 f"not set for world {runtime.world_index}"
             )
 
+        source_key = getattr(scenario, "source_scenario_key", None) or scenario.scenario_key
         try:
-            doc = _read_scenario_document(
-                self._context.bundle_dir, scenario.scenario_key
-            )
+            doc = _read_scenario_document(self._context.bundle_dir, source_key)
         except _ScenarioDocumentUnavailable as exc:
             raise CallAborted(f"voice_scenario_document_unavailable: {exc}") from exc
-
-        scenario_attempt = (
-            self._scenario_attempt_counts.get(scenario.scenario_key, 0) + 1
+        doc = _with_scenario_edits(
+            doc, getattr(self._context.job, "metadata", None), source_key
         )
-        self._scenario_attempt_counts[scenario.scenario_key] = scenario_attempt
+
+        room_count = self._scenario_room_counts.get(scenario.scenario_key, 0) + 1
+        self._scenario_room_counts[scenario.scenario_key] = room_count
         room_name = _room_name(
             job_id=self._context.job.job_id,
             attempt_number=self._context.attempt_number,
             scenario_key=scenario.scenario_key,
-            scenario_attempt=scenario_attempt,
+            scenario_attempt=room_count,
         )
 
         raw_timeout = self._context.job.agent.config.get(CALL_TIMEOUT_CONFIG_KEY)
@@ -1057,15 +1204,26 @@ class CallRunnerImpl:
 
         # The engine reads this from the environment at call time, so it is set per
         # scenario and cleared otherwise rather than leaking into the next call.
+        run_id = new_run_id()
         noise = scenario_source(
             doc.get("background_noise"),
             doc.get("fixture"),
-            seed=str(doc.get("name") or ""),
+            seed=f"{doc.get('name') or ''}|{run_id}",
         )
         if noise:
-            self._environ["HARNESS_BACKGROUND_NOISE"] = noise
+            call_environ["HARNESS_BACKGROUND_NOISE"] = noise
+            call_environ["HARNESS_BACKGROUND_PLACE"] = place_of(noise)
+            base = self._environ.get(BACKGROUND_NOISE_VOLUME_ALIAS) or "7.0"
+            # A scenario about the noise itself is heard loud enough to test it.
+            about_noise = any("nois" in str(level) for level in (doc.get("coverage") or {}).values())
+            spread = random.uniform(1.3, 1.8) if about_noise else random.uniform(0.7, 1.4)
+            try:
+                call_environ[BACKGROUND_NOISE_VOLUME_ALIAS] = f"{float(base) * spread:.2f}"
+            except ValueError:
+                pass
         else:
-            self._environ.pop("HARNESS_BACKGROUND_NOISE", None)
+            call_environ.pop("HARNESS_BACKGROUND_NOISE", None)
+            call_environ.pop("HARNESS_BACKGROUND_PLACE", None)
 
         # Read the same way and for the same reason as the noise source above: the simulator's
         # instructions are built deep inside simulator_definition, which sees the environment and
@@ -1078,31 +1236,31 @@ class CallRunnerImpl:
         direction = (
             str(
                 doc.get("call_direction")
-                or os.environ.get(CALL_DIRECTION_ALIAS)
+                or call_environ.get(CALL_DIRECTION_ALIAS)
                 or "inbound"
             )
             .strip()
             .lower()
         )
         if direction == "outbound":
-            self._environ["HARNESS_CALL_DIRECTION"] = direction
+            call_environ["HARNESS_CALL_DIRECTION"] = direction
             awareness = str(doc.get("caller_awareness") or "").strip().lower()
             if awareness:
-                self._environ["HARNESS_CALLER_AWARENESS"] = awareness
+                call_environ["HARNESS_CALLER_AWARENESS"] = awareness
             else:
-                self._environ.pop("HARNESS_CALLER_AWARENESS", None)
+                call_environ.pop("HARNESS_CALLER_AWARENESS", None)
             # Cleared otherwise, so one voicemail scenario cannot silence the next caller.
             if (
                 voicemail_enabled()
                 and str(doc.get("answered_by") or "").strip().lower() == "voicemail"
             ):
-                self._environ["HARNESS_ANSWERED_BY"] = "voicemail"
+                call_environ["HARNESS_ANSWERED_BY"] = "voicemail"
                 # Which kind of mailbox, which decides the greeting and whether a tone follows it.
                 style = str(doc.get("voicemail_style") or "").strip().lower()
                 if style:
-                    self._environ["HARNESS_VOICEMAIL_STYLE"] = style
+                    call_environ["HARNESS_VOICEMAIL_STYLE"] = style
                 else:
-                    self._environ.pop("HARNESS_VOICEMAIL_STYLE", None)
+                    call_environ.pop("HARNESS_VOICEMAIL_STYLE", None)
                 # A recorded greeting where the catalogue has one for this style AND language. It
                 # replaces the spoken greeting rather than joining it.
                 languages = doc.get("languages") or []
@@ -1111,32 +1269,32 @@ class CallRunnerImpl:
                     str(languages[0]) if languages else "",
                 )
                 if chosen:
-                    self._environ[VOICEMAIL_CLIP_ALIAS] = chosen["source"]
-                    self._environ[VOICEMAIL_CLIP_TONE_ALIAS] = (
+                    call_environ[VOICEMAIL_CLIP_ALIAS] = chosen["source"]
+                    call_environ[VOICEMAIL_CLIP_TONE_ALIAS] = (
                         "1" if chosen["has_tone"] else "0"
                     )
                     if chosen.get("transcript"):
-                        self._environ[VOICEMAIL_CLIP_TEXT_ALIAS] = chosen["transcript"]
+                        call_environ[VOICEMAIL_CLIP_TEXT_ALIAS] = chosen["transcript"]
                     else:
-                        self._environ.pop(VOICEMAIL_CLIP_TEXT_ALIAS, None)
+                        call_environ.pop(VOICEMAIL_CLIP_TEXT_ALIAS, None)
                 else:
-                    self._environ.pop(VOICEMAIL_CLIP_ALIAS, None)
-                    self._environ.pop(VOICEMAIL_CLIP_TONE_ALIAS, None)
-                    self._environ.pop(VOICEMAIL_CLIP_TEXT_ALIAS, None)
+                    call_environ.pop(VOICEMAIL_CLIP_ALIAS, None)
+                    call_environ.pop(VOICEMAIL_CLIP_TONE_ALIAS, None)
+                    call_environ.pop(VOICEMAIL_CLIP_TEXT_ALIAS, None)
             else:
-                self._environ.pop("HARNESS_ANSWERED_BY", None)
-                self._environ.pop("HARNESS_VOICEMAIL_STYLE", None)
-                self._environ.pop(VOICEMAIL_CLIP_ALIAS, None)
-                self._environ.pop(VOICEMAIL_CLIP_TONE_ALIAS, None)
-                self._environ.pop(VOICEMAIL_CLIP_TEXT_ALIAS, None)
+                call_environ.pop("HARNESS_ANSWERED_BY", None)
+                call_environ.pop("HARNESS_VOICEMAIL_STYLE", None)
+                call_environ.pop(VOICEMAIL_CLIP_ALIAS, None)
+                call_environ.pop(VOICEMAIL_CLIP_TONE_ALIAS, None)
+                call_environ.pop(VOICEMAIL_CLIP_TEXT_ALIAS, None)
         else:
-            self._environ.pop("HARNESS_CALL_DIRECTION", None)
-            self._environ.pop("HARNESS_CALLER_AWARENESS", None)
-            self._environ.pop("HARNESS_ANSWERED_BY", None)
-            self._environ.pop("HARNESS_VOICEMAIL_STYLE", None)
-            self._environ.pop(VOICEMAIL_CLIP_ALIAS, None)
-            self._environ.pop(VOICEMAIL_CLIP_TONE_ALIAS, None)
-            self._environ.pop(VOICEMAIL_CLIP_TEXT_ALIAS, None)
+            call_environ.pop("HARNESS_CALL_DIRECTION", None)
+            call_environ.pop("HARNESS_CALLER_AWARENESS", None)
+            call_environ.pop("HARNESS_ANSWERED_BY", None)
+            call_environ.pop("HARNESS_VOICEMAIL_STYLE", None)
+            call_environ.pop(VOICEMAIL_CLIP_ALIAS, None)
+            call_environ.pop(VOICEMAIL_CLIP_TONE_ALIAS, None)
+            call_environ.pop(VOICEMAIL_CLIP_TEXT_ALIAS, None)
 
         provider_target_key = {"vapi": "assistant_id", "retell": "agent_id"}.get(
             connector
@@ -1161,14 +1319,14 @@ class CallRunnerImpl:
             )
 
         spec = _build_spec(
-            run_id=new_run_id(),
+            run_id=run_id,
             room_name=room_name,
             connector=connector,
             agent_name=agent_name,
             provider_target_id=provider_target_id,
             doc=doc,
             simulator_config=self._context.job.agent.config,
-            environ=self._environ,
+            environ=call_environ,
             livekit_url=self._livekit_url,
             call_timeout_seconds=call_timeout_seconds,
             run_seconds=run_seconds,
@@ -1183,10 +1341,25 @@ class CallRunnerImpl:
 
         started_at = datetime.now(timezone.utc)
         outer_timeout = run_seconds + _OUTER_WAIT_FOR_PAD_SECONDS
-        try:
-            report = await asyncio.wait_for(
-                self._place_call(spec), timeout=outer_timeout
+
+        async def place() -> SimulationReport:
+            if self._place_call is not None:
+                return await self._place_call(spec)
+            logger.info(
+                "voice worker dispatch scenario=%s voice_run=%s",
+                scenario.scenario_key,
+                spec.run_id,
             )
+            result = await run_json_worker(
+                "fi.alk.harness.call_worker",
+                spec.model_dump(mode="json"),
+                environ=call_environ,
+                work_directory=self._context.work_directory / "call-workers",
+            )
+            return SimulationReport.model_validate(result)
+
+        try:
+            report = await asyncio.wait_for(place(), timeout=outer_timeout)
         except asyncio.CancelledError:
             raise
         except asyncio.TimeoutError as exc:
@@ -1349,6 +1522,7 @@ class CallRunnerImpl:
                 and case.result.metadata.get("stop_reason")
                 else None
             ),
+            target_metrics=_target_metrics(case),
         )
 
         if case is None:
@@ -1370,6 +1544,24 @@ class CallRunnerImpl:
                 else "agent_unavailable"
             )
             raise WorldUnavailable(f"target agent never joined the room: {reason}")
+
+        async def record_voice_usage(
+            *,
+            outcome: UsageOutcome = "completed",
+            failure_domain: FailureDomain | None = None,
+        ) -> None:
+            if self._context.usage_reporter is None:
+                return
+            await asyncio.to_thread(
+                self._context.usage_reporter.record,
+                action="voice_call",
+                scenario_key=scenario_key,
+                amount=base.duration_ms / 60_000,
+                funding=simulator_funding(self._environ),
+                occurred_at=case_started_at,
+                outcome=outcome,
+                failure_domain=failure_domain,
+            )
 
         # A genuinely silent agent-first call (agent joined, zero conversational turns) reaches
         # the real engine (engines/livekit.py::_conversation_outcome) as FAILED with code
@@ -1399,23 +1591,56 @@ class CallRunnerImpl:
             reason = (
                 case.failure.message if case.failure is not None else case.status.value
             )
+            # C3 §4.5 step 2 (the one narrow call_runner change): the engine's dispatch-ack ladder
+            # surfaces +60s exhaustion via a STRUCTURED marker (`failure.code`), never a substring
+            # of `failure.message`. Pass it through on `CallAborted.marker` so the scheduler's
+            # code-selection branch emits the `voice_dispatch_unacknowledged` receipt code instead
+            # of the generic `call_failed`. No ladder logic lives here.
+            marker = (
+                case.failure.code
+                if case.failure is not None
+                and case.failure.code == _VOICE_DISPATCH_UNACKNOWLEDGED
+                else None
+            )
             attributed = _attributed_stall(case)
             if attributed is not None:
                 code, reason = attributed
+                await record_voice_usage(
+                    outcome="failed",
+                    failure_domain=failure_domain_for_code(code),
+                )
                 raise CallAborted(reason, partial=base, code=code)
             if (
                 case.failure is not None
                 and case.failure.code == "target_agent_tool_failed"
             ):
+                await record_voice_usage(
+                    outcome="failed",
+                    failure_domain=failure_domain_for_code("target_agent_tool_failed"),
+                )
                 raise CallAborted(
                     case.failure.message,
                     partial=base,
                     code="target_agent_tool_failed",
                 )
+            await record_voice_usage(
+                outcome="failed",
+                failure_domain=failure_domain_for_code("voice_call_not_completed"),
+            )
             raise CallAborted(
-                f"voice_call_not_completed: {case.status.value}: {reason}", partial=base
+                f"voice_call_not_completed: {case.status.value}: {reason}",
+                partial=base,
+                marker=marker,
             )
 
+        await record_voice_usage(
+            outcome="failed" if is_silent_agent else "completed",
+            failure_domain=(
+                failure_domain_for_code("simulator_stalled")
+                if is_silent_agent
+                else None
+            ),
+        )
         # Never fabricate calls for a call that produced no conversation -- the scheduler's own
         # coverage guarantee turns an empty `calls` tuple into evidence_missing/simulator
         # regardless of turns (hosted_scheduler.py's own unconditioned-on-turns rule).

@@ -26,7 +26,7 @@ from fi.simulate.simulation.engines.livekit import (
     _voice_max_case_concurrency,
 )
 from fi.simulate.simulation import livekit_models
-from fi.simulate.simulation.models import Persona, Scenario
+from fi.simulate.simulation.models import Persona, PersonaFact, Scenario
 
 
 def _agent(**updates) -> AgentDefinition:
@@ -62,6 +62,86 @@ def _write_wav(path: Path, samples: np.ndarray, sample_rate: int = 8000) -> None
         wav_file.writeframes(samples.astype(np.int16).tobytes())
 
 
+def test_prompt_opening_accepts_rephrased_guest_greeting() -> None:
+    agent = _agent(
+        room_name=None,
+        room_mode="managed",
+        system_prompt="I'm here to help book you a ride. Please share your PIN whenever you're ready to get started.",
+        transport={
+            "kind": "sip_outbound",
+            "sip_trunk_id": "test",
+            "sip_call_to": "+15555550123",
+            "sip_number": "+15555550124",
+        },
+    )
+    gate = livekit.PromptOpeningGate("Greeting: " + agent.system_prompt)
+    assert gate.hint
+    assert not gate.accepts("This Uber call is being recorded.")
+    assert gate.accepts("Hello, what can I do for you?")
+
+
+def test_prompt_opening_blocks_disclosure_and_all_timer_openings_until_greeting() -> (
+    None
+):
+    async def exercise():
+        agent = livekit._TestRunnerAgent(
+            persona=_scenario().dataset[0], instructions="Be a customer."
+        )
+        agent._prompt_opening = livekit.PromptOpeningGate(
+            "Greeting: Ask how to help the caller."
+        )
+        # No session exists: without the gate this would raise or produce speech.
+        agent.open_conversation()
+        for text in (
+            "This Uber call is being recorded.",
+            "it.",
+        ):
+            with pytest.raises(livekit.StopResponse):
+                await agent.on_user_turn_completed(
+                    None, SimpleNamespace(text_content=text)
+                )
+            agent.open_conversation()
+        greeting = "Hi there, how can I help?"
+        assert agent._prompt_opening.accepts(greeting, completed=False)
+        assert agent._prompt_opening.pending  # speculative LLM cannot open the gate
+        await agent.on_user_turn_completed(None, SimpleNamespace(text_content=greeting))
+        assert not agent._prompt_opening.pending
+        # Subsequent ordinary turns require no PIN language.
+        await agent.on_user_turn_completed(
+            None, SimpleNamespace(text_content="Where are you going?")
+        )
+
+    asyncio.run(exercise())
+
+
+def test_prompt_opening_gates_authoritative_streams_without_delaying_greeting() -> None:
+    async def exercise():
+        gate = livekit.PromptOpeningGate("Greeting: Welcome the caller.")
+        session = _FakeReplySession()
+        captured = []
+        for text in (
+            "This Uber call is being recorded.",
+            "it.",
+        ):
+            await livekit._forward_target_transcription(
+                _FakeTranscriptionReader(text),
+                session,
+                prompt_opening=gate,
+                captured_target_turns=captured,
+            )
+        assert session.reply_inputs == []
+        greeting = "Please share your PIN whenever you're ready to get started."
+        await livekit._forward_target_transcription(
+            _FakeTranscriptionReader(greeting),
+            session,
+            prompt_opening=gate,
+        )
+        assert session.reply_inputs == [greeting]
+        assert len(captured) == 2
+
+    asyncio.run(exercise())
+
+
 def test_simulator_identity_carries_fixture_phone_for_repository_agents() -> None:
     persona = Persona(
         persona={
@@ -87,6 +167,50 @@ def test_simulator_identity_preserves_legacy_shape_without_valid_phone() -> None
         livekit._simulator_participant_identity(persona, "case_bbbbbbbbbbbb")
         == "fagi-simulator-bbbbbbbbbbbb"
     )
+
+
+def test_simulator_does_not_override_agent_turn_with_pinned_fact(monkeypatch) -> None:
+    persona = Persona(
+        persona={"name": "Caller"},
+        situation="Book a guest ride.",
+        outcome="The ride is booked.",
+        knowledge=[
+            PersonaFact(
+                key="guest_pin", value=json.dumps("7682"), disclosure="on_request"
+            )
+        ],
+    )
+    item = SimpleNamespace(
+        type="message",
+        role="user",
+        text_content="Your PIN is verified. What is your pickup location?",
+        interrupted=False,
+        created_at=0.0,
+        metrics={},
+    )
+    session = SimpleNamespace(history=SimpleNamespace(items=[]))
+    chat_ctx = SimpleNamespace(messages=lambda: [item])
+    reached: list[str] = []
+
+    async def _base_llm_node(self, chat_ctx, tools, model_settings):
+        reached.append("model")
+        yield "sampled response"
+
+    monkeypatch.setattr(livekit.Agent, "llm_node", _base_llm_node, raising=False)
+    monkeypatch.delenv("HARNESS_ANSWERED_BY", raising=False)
+    agent = livekit._TestRunnerAgent.__new__(livekit._TestRunnerAgent)
+    agent._persona = persona
+    agent._session = session
+    agent._mailbox_greeted = False
+    agent._voicemail_greeting = None
+    agent._end_requested = asyncio.Event()
+    agent._goodbye_said = False
+
+    async def drain():
+        return [chunk async for chunk in agent.llm_node(chat_ctx, [], None)]
+
+    assert asyncio.run(drain()) == ["sampled response"]
+    assert reached == ["model"]
 
 
 def test_managed_room_names_are_unique_per_run_and_case() -> None:
@@ -651,6 +775,26 @@ def test_report_messages_use_target_perspective_roles() -> None:
     ]
 
 
+def test_report_messages_leave_the_caller_s_delivery_cues_unsaid() -> None:
+    session = SimpleNamespace(
+        history=SimpleNamespace(
+            items=[
+                SimpleNamespace(
+                    type="message",
+                    role="assistant",
+                    text_content='<emotion value="frustrated"/>Look, [laughter] I said that. <break time="500ms"/>Fine.',
+                ),
+                SimpleNamespace(type="message", role="user", text_content="Use <b>this</b> link."),
+            ]
+        )
+    )
+
+    assert _role_content(livekit._canonical_report_messages(session)) == [
+        {"role": "user", "content": "Look, I said that. Fine."},
+        {"role": "assistant", "content": "Use <b>this</b> link."},
+    ]
+
+
 def test_report_messages_merge_interrupted_same_role_fragments() -> None:
     session = SimpleNamespace(
         history=SimpleNamespace(
@@ -1099,6 +1243,9 @@ def test_managed_case_dispatches_waits_and_cleans_up(monkeypatch) -> None:
             self.end_requested = asyncio.Event()
             self.end_requested.set()
 
+        def end_of_call(self):
+            pass
+
         async def start_session(self, _room, **_kwargs):
             return FakeSession()
 
@@ -1231,6 +1378,7 @@ def test_simulator_collects_normalized_model_usage(monkeypatch) -> None:
             "model": "gemini-test",
             "input_tokens": 7,
             "input_cached_tokens": 2,
+            "input_cache_creation_tokens": 0,
             "input_audio_tokens": 0,
             "input_cached_audio_tokens": 0,
             "input_text_tokens": 0,
@@ -1240,6 +1388,7 @@ def test_simulator_collects_normalized_model_usage(monkeypatch) -> None:
             "output_tokens": 5,
             "output_audio_tokens": 0,
             "output_text_tokens": 0,
+            "output_reasoning_tokens": 0,
             "session_duration": 0.0,
         }
     ]
@@ -1331,9 +1480,279 @@ def test_end_call_signals_runner_after_minimum_balanced_conversation() -> None:
     result = asyncio.run(agent.end_call(SimpleNamespace(speech_handle=speech_handle)))
     asyncio.run(agent.wait_for_end_speech())
 
-    assert result == "Conversation ended."
+    assert result is None
     assert agent.end_requested.is_set()
     assert speech_handle.waited is True
+
+
+def test_end_call_waits_while_the_other_side_is_still_speaking() -> None:
+    class FakeSession:
+        user_state = "speaking"
+        history = SimpleNamespace(items=[])
+
+    agent = livekit._TestRunnerAgent(
+        persona=_scenario().dataset[0],
+        instructions="Be a customer.",
+        min_turn_messages=0,
+    )
+    agent._session = FakeSession()
+    result = asyncio.run(agent.end_call(SimpleNamespace(speech_handle=None)))
+    assert result.startswith("Not yet: the other person is still talking")
+    assert not agent.end_requested.is_set()
+
+
+def _drain_hold_filter(chunks: list) -> list:
+    async def stream():
+        for chunk in chunks:
+            yield chunk
+
+    async def collect() -> list:
+        return [chunk async for chunk in livekit._without_hold_marker(stream())]
+
+    return asyncio.run(collect())
+
+
+def _text_chunk(content: str) -> SimpleNamespace:
+    return SimpleNamespace(delta=SimpleNamespace(content=content, tool_calls=[]))
+
+
+def test_a_reply_that_is_only_the_hold_marker_is_never_spoken() -> None:
+    usage = SimpleNamespace(delta=None, usage={"tokens": 3})
+    assert _drain_hold_filter([_text_chunk("SIL"), _text_chunk("ENCE."), usage]) == [
+        usage
+    ]
+    assert _drain_hold_filter(["silence"]) == []
+
+
+def test_a_reply_that_is_only_a_stage_direction_or_an_empty_result_is_never_spoken() -> (
+    None
+):
+    for said in (["[Call", " Ended]"], ["None"], ["*hangs up*"], ["N/A."]):
+        assert _drain_hold_filter([_text_chunk(one) for one in said]) == []
+    for said in (["No, that is wrong."], ["Nope."], ["Okay, bye."]):
+        assert [
+            c.delta.content
+            for c in _drain_hold_filter([_text_chunk(one) for one in said])
+        ] == said
+
+
+def test_a_stage_direction_inside_a_reply_is_not_spoken() -> None:
+    async def run(chunks):
+        async def stream():
+            for chunk in chunks:
+                yield chunk
+
+        return "".join([c async for c in livekit._spoken_words(stream())])
+
+    assert (
+        asyncio.run(run(["Okay, thanks. Bye. [Call", " Ended]"])).strip()
+        == "Okay, thanks. Bye."
+    )
+    assert asyncio.run(run(["Sure, *pauses* go ahead."])) == "Sure,  go ahead."
+    assert asyncio.run(run(["Plain words only."])) == "Plain words only."
+    assert (
+        asyncio.run(run(["No, [laugh", "ter] you're kidding."]))
+        == "No, [laughter] you're kidding."
+    )
+
+
+def test_a_caller_is_told_its_first_request_until_it_has_spoken() -> None:
+    from livekit.agents.llm import ChatContext
+
+    greeted = ChatContext()
+    greeted.add_message(role="user", content="This call is recorded. How can I help?")
+    briefed = livekit._with_opening_line(
+        greeted, "I need to download our August invoice."
+    )
+    assert (
+        "I need to download our August invoice." in briefed.messages()[-1].text_content
+    )
+    assert len(greeted.messages()) == 1
+
+    greeted.add_message(role="assistant", content="Hi, I need our August invoice.")
+    assert (
+        livekit._with_opening_line(greeted, "I need to download our August invoice.")
+        is greeted
+    )
+    assert livekit._with_opening_line(ChatContext(), "") is not None
+
+
+def test_a_reply_with_no_words_is_reported_so_the_caller_can_answer_aloud() -> None:
+    dropped: list[str] = []
+    held: list[bool] = []
+
+    async def run(chunks):
+        async def stream():
+            for chunk in chunks:
+                yield chunk
+
+        return [
+            c
+            async for c in livekit._without_hold_marker(
+                stream(), on_hold=lambda: held.append(True), on_unspoken=dropped.append
+            )
+        ]
+
+    assert asyncio.run(run(["None"])) == []
+    assert dropped == ["None"] and held == []
+    asyncio.run(run(["SILENCE"]))
+    assert dropped == ["None"] and held == [True]
+    asyncio.run(run(["Okay, bye."]))
+    assert dropped == ["None"]
+
+
+def test_a_question_from_the_agent_is_not_a_hold() -> None:
+    asked = [
+        {"role": "assistant", "content": "Hi."},
+        {"role": "user", "content": "Does that help?"},
+    ]
+    told = [{"role": "user", "content": "Let me check that for you."}]
+    assert livekit._was_asked(asked)
+    assert not livekit._was_asked(told)
+    assert not livekit._was_asked([{"role": "assistant", "content": "Is it?"}])
+
+
+def test_a_dropped_marker_reports_the_hold_and_an_ordinary_reply_does_not() -> None:
+    held: list[bool] = []
+
+    async def run(chunks):
+        async def stream():
+            for chunk in chunks:
+                yield chunk
+
+        return [
+            c
+            async for c in livekit._without_hold_marker(
+                stream(), on_hold=lambda: held.append(True)
+            )
+        ]
+
+    asyncio.run(run(["SILENCE"]))
+    assert held == [True]
+    asyncio.run(run(["Sure, go ahead."]))
+    assert held == [True]
+
+
+def test_a_caller_left_on_hold_checks_in_once_when_nothing_follows(monkeypatch) -> None:
+    replies: list[str] = []
+
+    class FakeSession:
+        history = SimpleNamespace(
+            items=[
+                SimpleNamespace(
+                    type="message", role="user", text_content="One moment please."
+                )
+            ]
+        )
+        agent_state = "listening"
+        user_state = "listening"
+
+        def generate_reply(self, *, instructions):
+            replies.append(instructions)
+
+    monkeypatch.setattr(livekit, "_HOLD_PATIENCE_SECONDS", 0.01)
+    agent = livekit._TestRunnerAgent(
+        persona=_scenario().dataset[0],
+        instructions="Be a customer.",
+        min_turn_messages=0,
+    )
+    agent._session = FakeSession()
+
+    async def scenario():
+        agent._on_hold()
+        await agent._hold_check
+
+    asyncio.run(scenario())
+    assert len(replies) == 1 and "still on the line" in replies[0]
+
+    replies.clear()
+
+    async def answered():
+        agent._on_hold()
+        agent._session.history.items.append(
+            SimpleNamespace(
+                type="message", role="user", text_content="Thanks for waiting."
+            )
+        )
+        await agent._hold_check
+
+    asyncio.run(answered())
+    assert replies == []
+
+def test_terminal_listening_cancels_pending_caller_replies(monkeypatch) -> None:
+    replies: list[str] = []
+
+    class FakeSession:
+        history = SimpleNamespace(
+            items=[SimpleNamespace(type="message", role="user", text_content="One moment please.")]
+        )
+        agent_state = "listening"
+        user_state = "listening"
+
+        def generate_reply(self, *, instructions):
+            replies.append(instructions)
+
+    monkeypatch.setattr(livekit, "_HOLD_PATIENCE_SECONDS", 0.01)
+    agent = livekit._TestRunnerAgent(
+        persona=_scenario().dataset[0], instructions="Be a customer.", min_turn_messages=0
+    )
+    agent._session = FakeSession()
+
+    async def scenario():
+        agent._on_hold()
+        agent._on_unspoken("(empty model reply)")
+        hold_check = agent._hold_check
+        answer_again = agent._answer_again
+        agent.end_of_call()
+        await asyncio.gather(hold_check, answer_again, return_exceptions=True)
+        await agent._still_there(len(agent._session.history.items))
+        return hold_check, answer_again
+
+    hold_check, answer_again = asyncio.run(scenario())
+    assert hold_check.cancelled()
+    assert answer_again.cancelled()
+    assert replies == []
+
+
+def test_deadline_grace_waits_for_a_delayed_target_confirmation(monkeypatch) -> None:
+    monkeypatch.setattr(livekit, "_TARGET_REPLY_GRACE_SECONDS", 0.4)
+    monkeypatch.setattr(livekit, "_TARGET_TURN_SETTLE_SECONDS", 0.05)
+    monkeypatch.setattr(livekit, "_TRAILING_TARGET_WAIT_SECONDS", 0.5)
+    observed_speech = False
+
+    async def scenario() -> float:
+        started = asyncio.get_running_loop().time()
+
+        def speaking() -> bool:
+            nonlocal observed_speech
+            elapsed = asyncio.get_running_loop().time() - started
+            active = 0.04 <= elapsed < 0.25
+            observed_speech = observed_speech or active
+            return active
+
+        return await livekit._await_target_last_words(
+            speaking=speaking,
+            present=lambda: True,
+            simulator_spoke_last=False,
+            pending_target_reply=True,
+        )
+
+    waited = asyncio.run(scenario())
+    assert observed_speech
+    assert waited >= 0.25
+
+
+
+def test_an_ordinary_reply_passes_whole_and_in_order() -> None:
+    chunks = [_text_chunk("Si"), _text_chunk("lly question, but"), _text_chunk(" why?")]
+    assert _drain_hold_filter(chunks) == chunks
+    call = SimpleNamespace(delta=SimpleNamespace(content="", tool_calls=[object()]))
+    assert _drain_hold_filter([call]) == [call]
+    assert _drain_hold_filter(["Silence is not an answer."]) == [
+        "Silence is not an answer."
+    ]
+    for opening in ("नमस्ते, ", "你好", "مرحبا"):
+        assert not "silence".startswith(livekit._letters(opening))
 
 
 def test_minimum_messages_is_a_floor_not_a_stop_trigger() -> None:
@@ -1533,6 +1952,41 @@ def test_conversation_silence_backstop_does_not_fire_at_message_floor() -> None:
         return done
 
     assert asyncio.run(run()) is False
+
+
+def test_a_slow_reply_to_the_caller_is_not_an_ending(monkeypatch) -> None:
+    """The measured window only knows the replies seen so far, so the agent's first slow lookup
+    after the caller spoke would end the call as stalled."""
+    monkeypatch.setattr(livekit, "_SETTLED_SILENCE_FLOOR_SECONDS", 0.05)
+
+    items = [
+        SimpleNamespace(type="message", role="assistant", text_content="Hi"),
+        SimpleNamespace(type="message", role="user", text_content="Hello"),
+        SimpleNamespace(type="message", role="assistant", text_content="A ride, please."),
+        SimpleNamespace(type="message", role="user", text_content="Where to?"),
+        SimpleNamespace(type="message", role="assistant", text_content="Can you book it?"),
+    ]
+    session = SimpleNamespace(
+        agent_state="listening", user_state="listening", history=SimpleNamespace(items=items)
+    )
+
+    async def run() -> tuple[bool, bool]:
+        task = asyncio.create_task(
+            livekit._wait_for_conversation_silence(
+                session, quiet_seconds=5.0, min_turn_messages=6
+            )
+        )
+        await asyncio.sleep(0.30)
+        awaiting_reply = task.done()
+        items.append(SimpleNamespace(type="message", role="user", text_content="Booked."))
+        await asyncio.sleep(0.30)
+        once_answered = task.done()
+        task.cancel()
+        return awaiting_reply, once_answered
+
+    awaiting_reply, once_answered = asyncio.run(run())
+    assert awaiting_reply is False, "ended the call while the agent owed the caller a reply"
+    assert once_answered is True, "never settled once the agent had answered"
 
 
 def test_our_caller_thinking_is_not_silence(monkeypatch) -> None:
@@ -2227,6 +2681,9 @@ class _FakeCustomerAgent:
     def __init__(self) -> None:
         self.end_requested = asyncio.Event()
         self.end_requested.set()
+
+    def end_of_call(self):
+        pass
 
     async def start_session(self, _room, **_kwargs):
         return _FakeSipSession()
@@ -3035,6 +3492,106 @@ def test_target_transcription_feeds_simulator_llm_context() -> None:
     assert captured[0]["started_speaking_at"] <= captured[0]["stopped_speaking_at"]
 
 
+def test_opening_recording_disclosure_is_captured_but_not_answered() -> None:
+    session = _FakeReplySession()
+    captured: list[dict] = []
+    preamble_detected = asyncio.Event()
+    preamble_audio_finished = asyncio.Event()
+
+    asyncio.run(
+        livekit._forward_target_transcription(
+            _FakeTranscriptionReader("This Uber call is being recorded."),
+            session,
+            conversation_ended=asyncio.Event(),
+            captured_target_turns=captured,
+            opening_turn=True,
+            opening_preamble_detected=preamble_detected,
+            opening_preamble_audio_finished=preamble_audio_finished,
+        )
+    )
+
+    assert preamble_detected.is_set()
+    assert preamble_audio_finished.is_set()
+    assert session.reply_inputs == []
+    assert [c["content"] for c in captured] == ["This Uber call is being recorded."]
+
+
+def test_recording_language_is_not_suppressed_outside_the_opening_turn() -> None:
+    session = _FakeReplySession()
+
+    asyncio.run(
+        livekit._forward_target_transcription(
+            _FakeTranscriptionReader("This call is being recorded."),
+            session,
+            conversation_ended=asyncio.Event(),
+            opening_turn=False,
+        )
+    )
+
+    assert session.reply_inputs == ["This call is being recorded."]
+
+
+def test_concurrent_recording_disclosure_fragment_is_not_answered() -> None:
+    session = _FakeReplySession()
+    preamble_detected = asyncio.Event()
+    opening_classified = asyncio.Event()
+    followup_started = asyncio.Event()
+
+    async def scenario() -> None:
+        first = asyncio.create_task(
+            livekit._forward_target_transcription(
+                _FakeTranscriptionReader("This Uber call is being recorded."),
+                session,
+                conversation_ended=asyncio.Event(),
+                opening_turn=True,
+                opening_preamble_detected=preamble_detected,
+                opening_transcription_classified=opening_classified,
+            )
+        )
+        fragment = asyncio.create_task(
+            livekit._forward_target_transcription(
+                _FakeTranscriptionReader("it."),
+                session,
+                conversation_ended=asyncio.Event(),
+                opening_preamble_detected=preamble_detected,
+                opening_transcription_classified=opening_classified,
+                await_opening_classification=True,
+                opening_followup_started=followup_started,
+            )
+        )
+        await asyncio.gather(first, fragment)
+
+    asyncio.run(scenario())
+
+    assert preamble_detected.is_set()
+    assert opening_classified.is_set()
+    assert not followup_started.is_set()
+    assert session.reply_inputs == []
+
+
+def test_real_greeting_after_recording_disclosure_is_answered() -> None:
+    session = _FakeReplySession()
+    preamble_detected = asyncio.Event()
+    preamble_detected.set()
+    opening_classified = asyncio.Event()
+    opening_classified.set()
+    followup_started = asyncio.Event()
+
+    asyncio.run(
+        livekit._forward_target_transcription(
+            _FakeTranscriptionReader("Hi, how can I help you today?"),
+            session,
+            conversation_ended=asyncio.Event(),
+            opening_preamble_detected=preamble_detected,
+            opening_transcription_classified=opening_classified,
+            opening_followup_started=followup_started,
+        )
+    )
+
+    assert followup_started.is_set()
+    assert session.reply_inputs == ["Hi, how can I help you today?"]
+
+
 def test_target_transcription_after_end_records_without_reply() -> None:
     session = _FakeReplySession()
     ended = asyncio.Event()
@@ -3252,6 +3809,27 @@ def test_short_explicit_farewell_disconnect_is_completed_for_eval() -> None:
         {"role": "assistant", "content": "Hello, what can I help with?"},
         {"role": "user", "content": "Please just hang up."},
         {"role": "assistant", "content": "No problem. Have a great day."},
+    ]
+
+    outcome = livekit._conversation_outcome(
+        "target_disconnected",
+        messages,
+        min_turn_messages=6,
+    )
+
+    assert outcome.status == CaseStatus.COMPLETED
+    assert outcome.failure is None
+    assert outcome.metadata == {
+        "stop_reason": "target_disconnected",
+        "short_terminal_exchange": True,
+    }
+
+
+def test_customer_declines_more_items_before_disconnect_is_completed_for_eval() -> None:
+    messages = [
+        {"role": "user", "content": "Can I get a Happy Meal and two cheeseburgers?"},
+        {"role": "assistant", "content": "Got it. Anything else for you today?"},
+        {"role": "user", "content": "No, that's everything. Cheers!"},
     ]
 
     outcome = livekit._conversation_outcome(
@@ -3501,6 +4079,9 @@ def _order_probe_engine(monkeypatch, calls, *, dispatch_error=None):
             self.end_requested = asyncio.Event()
             self.end_requested.set()
 
+        def end_of_call(self):
+            pass
+
         async def start_session(self, _room, **_kwargs):
             calls.append("start_session")
             return FakeSession()
@@ -3576,20 +4157,35 @@ def test_dispatch_failure_is_typed_preparing_failure(monkeypatch) -> None:
     assert "delete_room" in calls
 
 
-def test_the_caller_waits_long_enough_not_to_talk_over_a_question():
-    """A short delay fires inside a sentence, so the caller treats a pause as the end of the turn,
-    talks over the agent and then repeats itself for want of an answer."""
+def test_the_caller_uses_audio_turn_detection_and_speculative_tts():
+    """Audio EOU avoids fixed-delay interruptions while preemptive TTS removes response startup."""
     from fi.simulate.simulation.engines.livekit import _simulator_turn_handling
 
     handling = _simulator_turn_handling(vad=object())
-    assert handling["endpointing"]["min_delay"] == 0.9
-    assert handling["endpointing"]["max_delay"] == 3.0
+    assert isinstance(handling["turn_detection"], livekit.inference.TurnDetector)
+    assert handling["endpointing"] == {
+        "mode": "dynamic",
+        "min_delay": 0.3,
+        "max_delay": 2.5,
+    }
+    assert handling["preemptive_generation"] == {
+        "enabled": True,
+        "preemptive_tts": True,
+    }
     # Still interruptible, but only over something worth interrupting.
     assert handling["interruption"]["enabled"] is True
     assert handling["interruption"]["min_duration"] == 0.6
-    # An explicit value from the scenario still wins.
-    explicit = _simulator_turn_handling(vad=object(), min_endpointing_delay=0.5)
-    assert explicit["endpointing"]["min_delay"] == 0.5
+    # Explicit scenario values, including zero, still win.
+    explicit = _simulator_turn_handling(
+        vad=object(), min_endpointing_delay=0.0, max_endpointing_delay=1.8
+    )
+    assert explicit["endpointing"]["min_delay"] == 0.0
+    assert explicit["endpointing"]["max_delay"] == 1.8
+
+
+def test_the_caller_falls_back_to_stt_turns_without_vad():
+    handling = livekit._simulator_turn_handling(vad=None)
+    assert handling["turn_detection"] == "stt"
 
 
 def test_the_call_ends_on_the_caller_s_own_goodbye() -> None:
@@ -3759,3 +4355,38 @@ def test_a_one_sided_call_fails_even_when_it_ended_cleanly() -> None:
     assert outcome.status == CaseStatus.FAILED
     assert outcome.failure is not None
     assert outcome.failure.code == "insufficient_conversation"
+
+
+def test_caller_mood_rises_on_refusals_and_repeats_and_eases_on_progress() -> None:
+    from fi.simulate.simulation.models import BehaviorPolicy, Persona
+
+    class _Ctx:
+        def __init__(self, turns):
+            self.items = [SimpleNamespace(role=role, text_content=text) for role, text in turns]
+
+        def messages(self):
+            return list(self.items)
+
+        def copy(self):
+            return _Ctx([(item.role, item.text_content) for item in self.items])
+
+        def add_message(self, *, role, content):
+            self.items.append(SimpleNamespace(role=role, text_content=content))
+
+    persona = Persona(persona={}, situation="", outcome="", behavior_policy=BehaviorPolicy(interruption_propensity=0.2))
+    mood = livekit._CallerMood(persona)
+    refusal = "I'm afraid I can't set up recurring rides through this service today."
+    turns = [("user", refusal)]
+    assert mood.brief(_Ctx(turns)).messages()[-1].text_content == refusal
+    turns += [("assistant", "Could we book them one by one?"), ("user", refusal)]
+    assert "You are frustrated" in mood.brief(_Ctx(turns)).messages()[-1].text_content
+    for not_yet in (
+        "Your ride is not confirmed yet. Please continue to wait.",
+        "Once you share the pickup, it will be booked.",
+    ):
+        turns += [("assistant", "Well?"), ("user", not_yet)]
+        assert mood.brief(_Ctx(turns)).messages()[-1].text_content == not_yet
+    turns += [("assistant", "Fine."), ("user", "Your ride is confirmed for tomorrow at nine.")]
+    assert "edge goes out" in mood.brief(_Ctx(turns)).messages()[-1].text_content
+    turns += [("assistant", "Thanks."), ("user", "Anything else?")]
+    assert mood.brief(_Ctx(turns)).messages()[-1].text_content == "Anything else?"

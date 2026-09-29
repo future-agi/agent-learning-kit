@@ -23,8 +23,10 @@ other's dependencies installed.
 
 from __future__ import annotations
 
+import os
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Awaitable, Callable, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 ToolHandler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 
@@ -92,7 +94,48 @@ def tool_server(
 # session build time rather than silently dropped.
 FILE_TOOLS = ("Read", "Glob", "Grep")
 ASK_TOOL = "AskUserQuestion"
-KNOWN_BUILTINS = (*FILE_TOOLS, ASK_TOOL)
+# Backend-neutral name for running part of a stage in a sub-session.
+DELEGATE_TOOL = "Delegate"
+KNOWN_BUILTINS = (*FILE_TOOLS, ASK_TOOL, DELEGATE_TOOL)
+
+# Ceiling on workers in flight at once.
+MOST_WORKERS_AT_ONCE = int(os.environ.get("ALK_HARNESS_WORKERS_AT_ONCE", "48") or 48)
+
+
+@dataclass
+class WorkerSpec:
+    """A worker the model may run to do part of its stage, in its own session."""
+
+    description: str
+    instructions: str
+    servers: dict[str, ToolServer] = field(default_factory=dict)
+    builtins: tuple[str, ...] = ()
+    max_turns: int = 40
+    # Empty inherits the parent's model.
+    model: str = ""
+
+    def granted(self, parent: "SessionSpec") -> list[str]:
+        """Every tool name this worker may call, falling back to the parent's."""
+        servers = self.servers or parent.servers
+        names = [*(self.builtins or parent.builtins)]
+        for server_name, server in servers.items():
+            names.extend(qualified(server_name, spec.name) for spec in server.tools)
+        return names
+
+
+@dataclass
+class ConversationSession:
+    """Durable provider identity and fresh context for a hosted stage session."""
+
+    app_name: str
+    user_id: str
+    session_id: str
+    event_store: Any = None
+    transcript_store: Any = None
+    resume_session_id: str | None = None
+    config_dir: str | None = None
+    turn_context: dict[str, Any] = field(default_factory=dict)
+    streaming: bool = True
 
 
 @dataclass
@@ -127,6 +170,9 @@ class SessionSpec:
     # own bound: it is working the whole time and has nothing to say while it does, so the
     # default reads honest work as a hang and kills it.
     idle_timeout_seconds: float = 0.0
+    # Workers this session may run, by name.
+    workers: dict[str, WorkerSpec] = field(default_factory=dict)
+    conversation: ConversationSession | None = None
 
     def granted(self) -> list[str]:
         """Every tool name this session may call, qualified the way the model calls it."""
@@ -134,6 +180,13 @@ class SessionSpec:
         for server_name, server in self.servers.items():
             names.extend(qualified(server_name, spec.name) for spec in server.tools)
         return names
+
+    def granted_anywhere(self) -> list[str]:
+        """Every tool name this session or any of its workers may call."""
+        names = list(self.granted())
+        for worker in self.workers.values():
+            names.extend(worker.granted(self))
+        return list(dict.fromkeys(names))
 
     def grant(self, server_name: str, server: ToolServer) -> None:
         """Add a tool server before the session opens."""
@@ -155,6 +208,10 @@ class Say:
     """The model said something."""
 
     text: str
+    partial: bool = False
+    event_id: str = ""
+    invocation_id: str = ""
+    author: str = ""
 
 
 @dataclass
@@ -164,6 +221,9 @@ class Call:
     id: str
     name: str
     arguments: dict[str, Any] = field(default_factory=dict)
+    # Which agent made the call; empty when the backend does not distinguish one.
+    by: str = ""
+    invocation_id: str = ""
 
 
 @dataclass
@@ -181,6 +241,7 @@ class ToolReturned:
     id: str
     text: str
     is_error: bool = False
+    invocation_id: str = ""
 
 
 @dataclass
@@ -216,6 +277,9 @@ class HarnessSession(Protocol):
     async def stop(self) -> None: ...
 
     async def send(self, message: str) -> None: ...
+
+    async def interrupt(self) -> bool: ...
+    async def resume(self, invocation_id: str) -> None: ...
 
     def replies(self) -> AsyncIterator[Any]:
         """Everything the session emits for the message just sent, ending with StageDone."""

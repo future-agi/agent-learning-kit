@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import os
 import re
 import time
@@ -14,15 +16,74 @@ from urllib.parse import urljoin
 from fi.simulate.agent.wrapper import AgentInput
 from fi.simulate.agent.wrappers.http import HTTPAgentWrapper
 
-from .call_runner import ArtifactUploader, CallRunnerContext
+from .call_runner import (
+    ArtifactUploader,
+    CallRunnerContext,
+    _clear_file_tool_calls,
+    _collect_file_tool_calls,
+    _with_scenario_edits,
+)
 from .contract import AgentContract
 from .hosted_scheduler import CallAborted, CallOutcome, Scenario, World
 from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime
 from .run.conversation import TargetConversationEnded, Transcript, converse
 from .scenario import Scenario as ConversationScenario
+from .usage import (
+    UsageDenied,
+    UsageUnavailable,
+    failure_domain_for_code,
+    simulator_funding,
+)
 from .world.runtime import Call, GeneratedWorld
 from .world.stores.postgres import AttachedPostgresStore
+
+logger = logging.getLogger(__name__)
+
+
+async def _record_text_usage(
+    reporter: Any,
+    *,
+    scenario_key: str,
+    started: datetime,
+    funding: str,
+    transcript: Transcript | None,
+    failure: BaseException | None,
+) -> None:
+    if reporter is None:
+        return
+    partial = transcript or getattr(failure, "partial_transcript", None)
+    simulator_tokens = (
+        partial.simulator_input_tokens + partial.simulator_output_tokens
+        if isinstance(partial, Transcript)
+        else 0
+    )
+    completed = transcript is not None
+    try:
+        await asyncio.to_thread(
+            reporter.record,
+            action="text_call",
+            scenario_key=scenario_key,
+            amount=simulator_tokens,
+            funding=funding,
+            occurred_at=started,
+            outcome="completed" if completed else "failed",
+            failure_domain=(
+                None
+                if completed
+                else failure_domain_for_code(getattr(failure, "code", "call_failed"))
+            ),
+        )
+    except Exception:  # noqa: BLE001 - call failure must not hide a metering warning
+        logger.exception(
+            "Could not record hosted text usage for scenario %s",
+            scenario_key,
+        )
+    if simulator_tokens == 0:
+        logger.warning(
+            "Hosted text call produced no simulator tokens for scenario %s",
+            scenario_key,
+        )
 
 
 DEFAULT_CHAT_TARGET_TIMEOUT_SECONDS = 120.0
@@ -419,7 +480,12 @@ class HostedChatCallRunner:
                 "chat_capability_unavailable: target_http endpoint is absent"
             )
 
-        document = _scenario_document(self._context.bundle_dir, scenario.scenario_key)
+        source_key = getattr(scenario, "source_scenario_key", None) or scenario.scenario_key
+        document = _with_scenario_edits(
+            _scenario_document(self._context.bundle_dir, source_key),
+            getattr(self._context.job, "metadata", None),
+            source_key,
+        )
         conversation_scenario = _conversation_scenario(document)
         if not conversation_scenario.instruction.strip():
             raise CallAborted("chat_scenario_invalid: instruction is empty")
@@ -439,13 +505,33 @@ class HostedChatCallRunner:
             ),
             protocol=adapter_protocol,
             include_tools=interface.include_tools,
+            request_template=interface.request_template,
+            response_path=interface.response_path,
+            setup_requests=[
+                item.model_dump(mode="python") for item in interface.setup_requests
+            ],
             timeout=_chat_target_timeout_seconds(),
             metadata={
                 "target": "hosted_repository_runtime",
                 "scenario": scenario.scenario_key,
             },
         )
+        funding = simulator_funding()
+        if self._context.usage_reporter is not None and funding == "platform":
+            try:
+                await asyncio.to_thread(self._context.usage_reporter.check, "text_call")
+            except UsageDenied as exc:
+                raise CallAborted(
+                    f"text_usage_check_denied: {exc}", code="usage_exhausted"
+                ) from exc
+            except UsageUnavailable as exc:
+                raise CallAborted(
+                    f"text_usage_check_failed: {exc}", code="usage_check_failed"
+                ) from exc
         started = datetime.now(timezone.utc)
+        transcript: Transcript | None = None
+        failure: CallAborted | None = None
+        _clear_file_tool_calls(runtime)
         try:
             transcript = await _drive_conversation(
                 _HostedChatTarget(
@@ -459,12 +545,35 @@ class HostedChatCallRunner:
                 self._contract,
                 self._context.bundle_dir,
             )
-        except CallAborted:
+        except CallAborted as exc:
+            failure = exc
             raise
         except Exception as exc:  # noqa: BLE001 - convert target transport failures to call faults
-            raise CallAborted(
-                f"chat_target_failed: {type(exc).__name__}: {exc}"
-            ) from exc
+            wrapped = CallAborted(
+                f"chat_target_failed: {type(exc).__name__}: {exc}",
+                code="target_agent_failed",
+            )
+            partial = getattr(exc, "partial_transcript", None)
+            if partial is not None:
+                setattr(wrapped, "partial_transcript", partial)
+            failure = wrapped
+            raise wrapped from exc
+        finally:
+            await _record_text_usage(
+                self._context.usage_reporter,
+                scenario_key=scenario.scenario_key,
+                started=started,
+                funding=funding,
+                transcript=transcript,
+                failure=failure,
+            )
+
+        # The submitted agent may execute tools entirely inside its Python process instead
+        # of returning tool requests over HTTP. These observed calls belong to the same attempt;
+        # do not replay the tool through the generated world or fabricate evidence from text.
+        traced_calls = _collect_file_tool_calls(runtime)
+        if traced_calls and not transcript.calls:
+            transcript.calls.extend(traced_calls)
 
         ended = datetime.now(timezone.utc)
         transcript_id = await self._adapter.upload_artifact(
