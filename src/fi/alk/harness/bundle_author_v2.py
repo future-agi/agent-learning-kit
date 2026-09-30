@@ -1665,7 +1665,7 @@ def resolve_environment_plan(
                 environment = {**declared_runtime_environment, **environment}
                 environment.setdefault(
                     "LIVEKIT_AGENT_NAME",
-                    "uber-voice-booking-{{JOB_ID}}-w{{WORLD_INDEX}}",
+            "voice-booking-{{JOB_ID}}-w{{WORLD_INDEX}}",
                 )
                 environment.setdefault(
                     "HARNESS_TOOL_TRACE",
