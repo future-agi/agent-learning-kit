@@ -1,6 +1,6 @@
 ---
 name: provision-environment
-description: Stand up the real thing an agent connects to, and prove it, without touching the agent.
+description: Stands up the real service an AI agent connects to and proves it works, without touching the agent. Use when a test run needs the agent's own backing service running before scenarios are executed.
 ---
 
 # Provision the environment

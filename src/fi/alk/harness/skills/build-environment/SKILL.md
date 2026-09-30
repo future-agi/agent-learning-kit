@@ -1,6 +1,6 @@
 ---
 name: build-environment
-description: Build the world an agent is tested in, and everything every scenario shares.
+description: Builds the world an AI agent is tested in and everything its scenarios share, including the sub-goals they are checked on. Use after the agent has been understood and before any scenario is planned or written.
 ---
 
 # Build the environment

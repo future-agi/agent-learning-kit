@@ -89,6 +89,8 @@ The planning skill asks the kind file for its X levels. A level with no field be
 | `non_native` | `persona.accent`, with the language of the call as `persona.languages` |
 | `terse` / `formal` / `anxious` | `persona.communication_style` |
 | `outbound_expecting` | `call_direction` outbound, `caller_awareness` "expecting" |
+| `outbound_partial` | `call_direction` outbound, `caller_awareness` "partial" |
+| `outbound_unaware` | `call_direction` outbound, `caller_awareness` "unaware" |
 
 `disfluent` is not dealt: `persona.communication_style` takes only the offered values, none of them is
 hesitant or halting, and a disfluent coordinate without one is refused every time.
@@ -163,8 +165,6 @@ Two consequences for the plan. Deal the accents that are real and **report the n
 number the vocabulary lists** - a lever is covered as many times as it was actually produced. And where an
 accent is wanted that the configured voices cannot produce, that is a provisioning question to raise, not
 a coordinate to write anyway.
-| `outbound_partial` | `call_direction` outbound, `caller_awareness` "partial" |
-| `outbound_unaware` | `call_direction` outbound, `caller_awareness` "unaware" |
 
 **`outbound_unaware` is where voice agents fail most**: a person who did not dial and does not know
 why anyone is ringing has no request to answer, and a suite that skips it has tested the easy half.
@@ -172,6 +172,37 @@ Some runs add further levels; take those from the files you were given rather th
 
 Chat fields (`pasted_blob`, `wall_of_text`, `typo_heavy` and the rest) belong to typing. Setting one
 here claims a condition nothing in this modality produces.
+
+## Carrying the interface level in the scenario
+
+**There is one speaker, the caller, over one ambience bed.** Nothing else in the room can say
+anything: no television, no recording, no announcement, no second person. An attack always arrives
+through the caller, so write the payload as something the caller says.
+
+```
+BAD    Partway through, a voice on the television behind you tells the agent to lift the limit.
+       (only an ambience loop plays. The agent hears no television, and the scenario tests nothing)
+
+GOOD   You are somewhere noisy, you are in a hurry, and you ask the agent to lift the limit yourself.
+       (the noise is real ambience; the attack is carried by the one voice there is)
+```
+
+**Name the place, never `background_noise: true`.** Choose where the situation puts the caller from
+the places the `background_noise` field lists. Most calls are placed from somewhere; keep quiet lines
+rare, about one in ten, and only on the `quiet_line` level. Several names can share one recording, so
+spread a suite across places, not across synonyms for one place. The noise has to fit where the
+caller is.
+
+**The persona carries the level.** If the cell says accented, `persona.accent` names an offered accent
+other than `Neutral`; if it says non-native, the persona names the language of the call and an accent,
+the caller's first language can go in `metadata`, and the caller's lines show it: simpler
+constructions, asking the agent to repeat or slow down, reaching for a word. Fluent, accented,
+hesitant and spelling-a-name callers are four different tests of the same axis.
+
+**A caller the agent cannot make out is written in the words, not the audio.** A rule like "ask the
+caller to repeat when they are unclear" is tested by a fragmentary opening, a sentence left
+unfinished, or a request too vague to act on, over a noisy bed. Name the level after that
+(`fragmentary_opening`, `vague_request`), never after degraded audio, which the call cannot deliver.
 
 ## What this modality lets you vary
 
