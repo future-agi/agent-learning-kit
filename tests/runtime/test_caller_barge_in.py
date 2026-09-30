@@ -100,6 +100,48 @@ def test_interjection_reuses_existing_caller_audio_output() -> None:
         assert output.frames == [frame]
         assert output.flushed == 1
         assert started == [True]
+        # The caller's own closing turn plays on the same output: closing must not cut it.
+        await adapter.close()
+        assert output.cleared == 0
+
+    asyncio.run(exercise())
+
+
+def test_cancelling_an_interjection_clears_only_that_interjection() -> None:
+    class PlayingOutput:
+        sample_rate = 24000
+
+        def __init__(self):
+            self.cleared = 0
+            self.playing = asyncio.Event()
+
+        async def capture_frame(self, frame):
+            return None
+
+        def flush(self):
+            return None
+
+        async def wait_for_playout(self):
+            self.playing.set()
+            await asyncio.sleep(60)
+
+        def clear_buffer(self):
+            self.cleared += 1
+
+    async def exercise():
+        output = PlayingOutput()
+        adapter = _RoomInterjectionAudio(output)
+        frame = rtc.AudioFrame.create(24000, 1, 240)
+
+        async def on_started():
+            return None
+
+        await adapter.prepare(frame)
+        task = asyncio.create_task(adapter.play([frame], on_started))
+        await output.playing.wait()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        assert output.cleared == 1
         await adapter.close()
         assert output.cleared == 1
 

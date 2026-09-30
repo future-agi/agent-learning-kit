@@ -132,6 +132,7 @@ class _RoomInterjectionAudio:
         self.sample_rate: int | None = None
         self.num_channels: int | None = None
         self._lock = asyncio.Lock()
+        self._playing = False
 
     async def prepare(self, frame: rtc.AudioFrame) -> None:
         async with self._lock:
@@ -152,15 +153,24 @@ class _RoomInterjectionAudio:
         if self.sample_rate is None:
             raise RuntimeError("interjection output not prepared")
         async with self._lock:
-            for index, frame in enumerate(frames):
-                await self.output.capture_frame(frame)
-                if index == 0:
-                    await on_started()
-            self.output.flush()
-            await self.output.wait_for_playout()
+            self._playing = True
+            try:
+                for index, frame in enumerate(frames):
+                    await self.output.capture_frame(frame)
+                    if index == 0:
+                        await on_started()
+                self.output.flush()
+                await self.output.wait_for_playout()
+            except asyncio.CancelledError:
+                self.output.clear_buffer()
+                raise
+            finally:
+                self._playing = False
 
     def clear(self) -> None:
-        self.output.clear_buffer()
+        # The output also carries the caller's own replies; only cut an interjection.
+        if self._playing:
+            self.output.clear_buffer()
 
     async def close(self) -> None:
         self.clear()
