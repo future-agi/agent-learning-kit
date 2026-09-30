@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import argparse
 import asyncio
+from types import SimpleNamespace
 
-from fi.alk.harness.contract import AgentContract
+from fi.alk.harness import cli
 from fi.alk.harness.cli import build_parser
+from fi.alk.harness.contract import AgentContract
 from fi.alk.harness.scenarios import open_stage
 
 from fi.alk.harness.job import (
@@ -98,6 +101,49 @@ def test_scenarios_cli_accepts_the_platform_job_snapshot(tmp_path) -> None:
     )
 
     assert args.job == job_path
+
+
+def test_scenarios_accepts_job_path_and_harness_job(tmp_path, monkeypatch) -> None:
+    job = _job()
+    job_path = tmp_path / "job.json"
+    job_path.write_text(job.model_dump_json(), encoding="utf-8")
+    captured = []
+
+    monkeypatch.setenv(TARGET_PHONE_ENV, TARGET)
+    monkeypatch.setenv(PIN_ENV, "7682")
+    monkeypatch.setattr(cli, "load", lambda _destination: AgentContract(agent="guest"))
+    monkeypatch.setattr(cli, "world_saved", lambda _destination: True)
+    monkeypatch.setattr(cli, "load_written", lambda _destination: [object()])
+    monkeypatch.setattr(cli, "chosen_model", lambda: "test-model")
+
+    def open_scenario_stage(_contract, **kwargs):
+        captured.append(kwargs)
+        return SimpleNamespace(spent_usd=0), None
+
+    async def converse(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(cli, "scenario_stage", open_scenario_stage)
+    monkeypatch.setattr(cli, "_converse", converse)
+
+    for job_input in (job_path, job):
+        result = asyncio.run(
+            cli._scenarios(
+                argparse.Namespace(
+                    name="guest",
+                    out=str(tmp_path),
+                    count=10,
+                    interactive=False,
+                    guidance=[],
+                    job=job_input,
+                )
+            )
+        )
+        assert result == 0
+
+    assert len(captured) == 2
+    assert all(item["job"] == job for item in captured)
+    assert all("caller knows `7682`" in item["authoring_guidance"] for item in captured)
 
 
 def test_policy_is_gated_to_the_exact_phone_target() -> None:

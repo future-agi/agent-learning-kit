@@ -14,6 +14,7 @@ import json
 import os
 import sys
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +34,7 @@ from .run.targets import supported as target_kinds
 from .scenarios import load as load_written
 from .scenarios import open_stage as scenario_stage
 from .scenarios import opening as scenario_opening
-from .session import ARTIFACT, DONE, RESULT, TEXT, TOOL, Event
+from .session import TEXT, Event
 from .sessions import Session, new_id, save as save_session
 from .sources import resolve, supported
 from .understand import load, open_stage, opening
@@ -506,21 +507,25 @@ async def _scenarios(args: argparse.Namespace) -> int:
     )
 
     policy_job = None
-    job_path = getattr(args, "job", None)
-    if job_path is not None and os.environ.get(TARGET_PHONE_ENV, "").strip():
-        try:
-            raw_job = json.loads(Path(job_path).read_text(encoding="utf-8"))
-        except (OSError, ValueError) as exc:
-            print(
-                f"Private guest PIN policy disabled: job could not be read ({type(exc).__name__}).",
-                file=sys.stderr,
-            )
+    job_input = getattr(args, "job", None)
+    if job_input is not None and os.environ.get(TARGET_PHONE_ENV, "").strip():
+        if isinstance(job_input, (str, os.PathLike)):
+            try:
+                raw_job = json.loads(Path(job_input).read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                print(
+                    "Private guest PIN policy disabled: job could not be read "
+                    f"({type(exc).__name__}).",
+                    file=sys.stderr,
+                )
+            else:
+                policy_job = guest_booking_policy_job(raw_job)
         else:
-            policy_job = guest_booking_policy_job(raw_job)
+            # Internal authoring and repair paths already carry the validated HarnessJob.
+            # Do not reinterpret that object as a filesystem path.
+            policy_job = guest_booking_policy_job(job_input)
 
-    poc_guidance = guest_booking_pin_guidance(
-        policy_job, scenario_count=wanted
-    )
+    poc_guidance = guest_booking_pin_guidance(policy_job, scenario_count=wanted)
     guidance = [*(getattr(args, "guidance", None) or [])]
     if poc_guidance:
         guidance.append(poc_guidance)
