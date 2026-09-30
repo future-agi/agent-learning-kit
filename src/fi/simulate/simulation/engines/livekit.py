@@ -56,6 +56,12 @@ except ImportError as exc:
 from datetime import datetime, timezone
 
 from fi.simulate._logging import redacted_exc_info
+from .caller_barge_in import (
+    CallerBargeIn,
+    _RoomInterjectionAudio,
+    caller_language,
+    selected_call_indices,
+)
 from .opening import PromptOpeningGate
 from fi.simulate.agent.definition import (
     AgentDefinition,
@@ -637,6 +643,7 @@ def _simulator_turn_handling(
     min_endpointing_delay: float | None = None,
     max_endpointing_delay: float | None = None,
     interruption_min_duration: float | None = None,
+    preserve_audio_during_barge_in: bool = False,
 ) -> dict[str, object]:
     return {
         # Audio end-of-turn detection uses the words and acoustic delivery rather than treating
@@ -657,7 +664,7 @@ def _simulator_turn_handling(
         # A real caller interrupts, but only over something long enough to be worth interrupting.
         "interruption": {
             "enabled": (True if allow_interruptions is None else allow_interruptions),
-            "discard_audio_if_uninterruptible": True,
+            "discard_audio_if_uninterruptible": not preserve_audio_during_barge_in,
             "min_duration": interruption_min_duration or 0.6,
         },
         # Prepare both words and audio while end-of-turn is being confirmed. LiveKit discards the
@@ -695,6 +702,7 @@ class _TestRunnerAgent(Agent):
         self._call_over = False
         self._usage_collector = metrics.ModelUsageCollector()
         self._prompt_opening: PromptOpeningGate | None = None
+        self._caller_barge_in: CallerBargeIn | None = None
 
     async def on_user_turn_completed(self, turn_ctx, new_message) -> None:
         if self._call_over:
@@ -705,6 +713,17 @@ class _TestRunnerAgent(Agent):
         if gate is not None and not gate.accepts(new_message.text_content):
             logger.info("prompt opening gate: waiting after non-interactive disclosure")
             raise StopResponse()
+        if self._caller_barge_in is not None:
+            self._caller_barge_in.target_ended()
+            await self._caller_barge_in.wait_for_interjection()
+            self._caller_barge_in.dialogue_started()
+            if getattr(self._caller_barge_in, "interjected_current_turn", False):
+                # The caller already spoke over this turn. Let the target react
+                # or continue instead of generating a second, contextless reply.
+                if self._session is not None:
+                    self._session.history.insert(new_message)
+                await _remember_answered_turn(self, new_message)
+                raise StopResponse()
 
     @function_tool(
         name="endCall",
@@ -760,7 +779,10 @@ class _TestRunnerAgent(Agent):
     def end_of_call(self) -> None:
         """Stop replying: whatever the target still says is recorded but no longer answered."""
         self._call_over = True
-        for task in (getattr(self, "_hold_check", None), getattr(self, "_answer_again", None)):
+        for task in (
+            getattr(self, "_hold_check", None),
+            getattr(self, "_answer_again", None),
+        ):
             if task is not None and not task.done():
                 task.cancel()
 
@@ -1257,7 +1279,7 @@ class _TestRunnerAgent(Agent):
         logger.info("simulator tts started")
         try:
             async for frame in Agent.default.tts_node(
-                self, _spoken_words(text), model_settings
+                self, _spoken_words(_without_hold_marker(text)), model_settings
             ):
                 if frames == 0:
                     logger.info(
@@ -1279,13 +1301,12 @@ class _TestRunnerAgent(Agent):
                 time.monotonic() - started,
                 frames,
             )
-
     async def transcription_node(
         self,
         text: AsyncIterable[str | TimedString],
         model_settings: ModelSettings,
     ):
-        async for chunk in _spoken_words(text):
+        async for chunk in _spoken_words(_without_hold_marker(text)):
             logger.debug(
                 "Simulator transcription chunk",
                 extra={"timed": isinstance(chunk, TimedString)},
@@ -1492,7 +1513,7 @@ async def _without_hold_marker(
     on_hold: Callable[[], None] | None = None,
     on_unspoken: Callable[[str], None] | None = None,
 ) -> AsyncIterable[Any]:
-    """Pass the reply through unless all it says is the hold marker, which is dropped unspoken."""
+    """Never send the private hold marker into the spoken caller stream."""
     marker = _letters(HOLD_MARKER)
     held: list[Any] = []
     text = ""
@@ -1508,8 +1529,25 @@ async def _without_hold_marker(
             if marker.startswith(_letters(text)) or _may_not_be_speech(text):
                 continue
         holding = False
-        for item in held:
-            yield item
+        # The model can emit the control word followed by a real answer in a later
+        # chunk. In that case the old all-or-nothing check released the buffered
+        # marker to both TTS and transcription. Keep the answer, not the marker.
+        spoken = re.sub(
+            r"^\s*(?i:SILENCE)\b(?:[.!?:;—-]+[ \t]*|\r?\n[ \t]*|[ \t]+(?=[A-Z]))",
+            "",
+            text,
+            count=1,
+        )
+        if spoken != text:
+            spoken = spoken.lstrip()
+            if spoken:
+                yield spoken
+            for item in held:
+                if not _chunk_text(item):
+                    yield item
+        else:
+            for item in held:
+                yield item
         held = []
     if holding:
         on_hold_now = _letters(text) == marker
@@ -1640,6 +1678,18 @@ class LiveKitEngine(BaseEngine):
             )
         cleanup_timeout = min(cleanup_timeout, _MAX_CLEANUP_TIMEOUT_SECONDS)
         current_run_id = run_id or new_run_id()
+        try:
+            caller_barge_in_rate = float(
+                os.environ.get("HARNESS_CALLER_BARGE_IN_RATE") or "0.4"
+            )
+            selected_barge_in_cases = selected_call_indices(
+                current_run_id, len(scenario.dataset), caller_barge_in_rate
+            )
+        except ValueError:
+            logger.warning(
+                "invalid HARNESS_CALLER_BARGE_IN_RATE; disabling optional caller barge-in"
+            )
+            selected_barge_in_cases = set()
         if recording_case_directory is not None and len(scenario.dataset) != 1:
             raise ValueError(
                 "recording_case_directory requires a single-persona scenario"
@@ -1706,6 +1756,7 @@ class LiveKitEngine(BaseEngine):
                         cleanup_timeout=cleanup_timeout,
                         conversation_direction=conversation_direction,
                         agent_first_silence_timeout_seconds=agent_first_silence_timeout_seconds,
+                        barge_in_selected=index in selected_barge_in_cases,
                     )
                 except asyncio.CancelledError:
                     raise
@@ -1832,6 +1883,7 @@ class LiveKitEngine(BaseEngine):
         cleanup_timeout: float,
         conversation_direction: str,
         agent_first_silence_timeout_seconds: float,
+        barge_in_selected: bool = False,
     ) -> _CaseOutcome:
         # Teardown is a run of independent steps that each used to take the full
         # ``cleanup_timeout``. Ten of them at up to sixty seconds is six hundred seconds of
@@ -1871,6 +1923,7 @@ class LiveKitEngine(BaseEngine):
         target_transcription_mode = False
         target_transcription_handler_registered = False
         target_transcription_tasks: set[asyncio.Task[None]] = set()
+        caller_barge_in: CallerBargeIn | None = None
         # Set the moment the conversation ends. A target transcription stream
         # still in flight at that point is the target's final utterance; it must
         # be recorded into the transcript, but WITHOUT triggering another
@@ -2167,6 +2220,7 @@ class LiveKitEngine(BaseEngine):
                 # `name` is an identity for dispatch, not a label for the caller to hear.
                 agent_name=agent_definition.description,
                 min_turn_messages=min_turn_messages,
+                preserve_audio_during_barge_in=barge_in_selected,
             )
             setup = getattr(self, "_last_simulator_setup", {}) or {}
             _record_simulator_setup(
@@ -2182,6 +2236,7 @@ class LiveKitEngine(BaseEngine):
                     "test_case_id": test_case_id,
                     "run_id": run_id,
                     "conversation_direction": conversation_direction,
+                    "caller_barge_in_selected": barge_in_selected,
                     "allow_interruptions": setup.get("allow_interruptions"),
                     "min_endpointing_delay": setup.get("min_endpointing_delay"),
                     "max_endpointing_delay": setup.get("max_endpointing_delay"),
@@ -2231,6 +2286,31 @@ class LiveKitEngine(BaseEngine):
                 ),
                 timeout=connect_timeout,
             )
+            if barge_in_selected:
+                caller_barge_in = CallerBargeIn(
+                    session=session,
+                    agent=customer_agent,
+                    model=models.llm,
+                    tts=models.tts,
+                    audio_output=_RoomInterjectionAudio(session.room_io.audio_output),
+                    language=caller_language(persona),
+                    seed=f"{run_id}:{test_case_id}",
+                    propensity=(
+                        persona.behavior_policy.interruption_propensity
+                        if persona.behavior_policy is not None
+                        else 0.4
+                    ),
+                )
+                customer_agent._caller_barge_in = caller_barge_in
+                caller_barge_in.start()
+
+                def on_simulator_state_changed(event: Any) -> None:
+                    caller_barge_in.simulator_state_changed(
+                        getattr(event, "new_state", "")
+                    )
+
+                session.on("agent_state_changed", on_simulator_state_changed)
+
 
             # "Agent speaks first" is a four-second race for speech ONSET, not four seconds of
             # silence after the target finishes. Register before dispatch/readiness so even an
@@ -2238,6 +2318,15 @@ class LiveKitEngine(BaseEngine):
             def on_target_state_changed(event: Any) -> None:
                 new_state = getattr(event, "new_state", None)
                 if new_state == "speaking":
+                    if (
+                        caller_barge_in is not None
+                        and not target_transcription_mode
+                        and not conversation_ended.is_set()
+                    ):
+                        # Native targets have no authoritative text stream. If the
+                        # waveform monitor is unavailable, stay conservative: no
+                        # interjection is better than firing 400 ms into a filler.
+                        caller_barge_in.target_started(wait_for_audio=True)
                     if prompt_opening is not None:
                         prompt_opening.speech_started()
                     target_speech_started.set()
@@ -2245,6 +2334,8 @@ class LiveKitEngine(BaseEngine):
                         target_after_preamble_started.set()
                     opening_preamble_audio_finished.clear()
                 elif new_state == "listening":
+                    if caller_barge_in is not None and not target_transcription_mode:
+                        caller_barge_in.target_ended()
                     if prompt_opening is not None:
                         prompt_opening.speech_ended()
                     opening_preamble_audio_finished.set()
@@ -2540,6 +2631,28 @@ class LiveKitEngine(BaseEngine):
                     caller_verification = "unverified"
                 else:
                     caller_verification = "matched"
+            if caller_barge_in is not None:
+                for participant in room.remote_participants.values():
+                    if str(participant.identity) != target.identity:
+                        continue
+                    for publication in participant.track_publications.values():
+                        if str(publication.sid) != target.audio_track_sid:
+                            continue
+                        subscribed_track = getattr(publication, "track", None)
+                        if subscribed_track is not None:
+                            caller_barge_in.attach_target_audio(subscribed_track)
+                        break
+
+                def on_barge_target_track_subscribed(
+                    track: Any, publication: Any, participant: Any
+                ) -> None:
+                    if (
+                        str(participant.identity) == target.identity
+                        and str(publication.sid) == target.audio_track_sid
+                    ):
+                        caller_barge_in.attach_target_audio(track)
+
+                room.on("track_subscribed", on_barge_target_track_subscribed)
             logger.info(
                 "livekit_target_joined identity=%s sid=%s track=%s run=%s case=%s",
                 target.identity,
@@ -2608,6 +2721,8 @@ class LiveKitEngine(BaseEngine):
                     session.input.set_audio_enabled(False)
                     session.clear_user_turn()
                     target_transcription_mode = True
+                if caller_barge_in is not None and not conversation_ended.is_set():
+                    caller_barge_in.target_started(wait_for_text=True)
                 task = asyncio.create_task(
                     _forward_target_transcription(
                         reader,
@@ -2623,6 +2738,7 @@ class LiveKitEngine(BaseEngine):
                         await_opening_classification=await_opening_classification,
                         opening_followup_started=target_after_preamble_started,
                         prompt_opening=prompt_opening,
+                        caller_barge_in=caller_barge_in,
                     )
                 )
                 target_transcription_tasks.add(task)
@@ -2697,6 +2813,8 @@ class LiveKitEngine(BaseEngine):
             # LiveKit turn only lands in history once its TTS finishes.
             conversation_ended.set()
             customer_agent.end_of_call()
+            if caller_barge_in is not None:
+                await caller_barge_in.close()
             if stop_reason == "simulator_end_call":
                 wait_for_end_speech = getattr(
                     customer_agent,
@@ -2848,6 +2966,8 @@ class LiveKitEngine(BaseEngine):
                 details={"exception_type": type(exc).__name__},
             )
         finally:
+            if caller_barge_in is not None:
+                await caller_barge_in.close()
             # The ambience belongs to the caller agent, not the engine. Guarded because teardown
             # must never be the reason a case fails.
             if customer_agent is not None:
@@ -3070,6 +3190,10 @@ class LiveKitEngine(BaseEngine):
                 case_directory=case_directory,
                 sample_rate=recorder_sample_rate,
             )
+            if caller_barge_in is not None:
+                caller_barge_in.measure_audio(
+                    outcome.audio_stereo_path, recorder.recording_started_at
+                )
             if recorder.errors:
                 cleanup_errors.extend(
                     f"recording:{type(error).__name__}" for error in recorder.errors
@@ -3100,6 +3224,15 @@ class LiveKitEngine(BaseEngine):
         outcome.metadata.update(
             {
                 "simulator_participant_identity": simulator_identity,
+                "caller_barge_in": (
+                    caller_barge_in.summary() if caller_barge_in is not None
+                    else {
+                        "selected": False,
+                        "attempted": 0,
+                        "speech_state_overlaps": 0,
+                        "audio_verified_overlaps": None,
+                    }
+                ),
                 "target_participant_identity": (
                     target.identity if target is not None else None
                 ),
@@ -3158,6 +3291,7 @@ class LiveKitEngine(BaseEngine):
         call_type: CallType = "inbound",
         agent_name: str | None = None,
         min_turn_messages: int = 0,
+        preserve_audio_during_barge_in: bool = False,
     ) -> tuple[_TestRunnerAgent, LiveKitModels]:
         customer_prompt = build_voice_simulator_prompt(
             persona,
@@ -3257,6 +3391,7 @@ class LiveKitEngine(BaseEngine):
                 min_endpointing_delay=min_endpointing_delay,
                 max_endpointing_delay=max_endpointing_delay,
                 interruption_min_duration=interruption_min_duration,
+                preserve_audio_during_barge_in=preserve_audio_during_barge_in,
             ),
             use_tts_aligned_transcript=use_aligned_transcript,
         )
@@ -3298,6 +3433,16 @@ async def _wait_for_target_audio(
     return selected
 
 
+async def _remember_answered_turn(agent: Any, message: Any) -> None:
+    """Keep a target turn answered by interjection in the caller model's context."""
+    if agent is None or message is None:
+        return
+    chat_ctx = agent.chat_ctx.copy()
+    if not any(item.id == message.id for item in chat_ctx.items):
+        chat_ctx.insert(message)
+        await agent.update_chat_ctx(chat_ctx)
+
+
 async def _forward_target_transcription(
     reader: "rtc.TextStreamReader",
     session: "AgentSession",
@@ -3311,6 +3456,7 @@ async def _forward_target_transcription(
     await_opening_classification: bool = False,
     opening_followup_started: asyncio.Event | None = None,
     prompt_opening: PromptOpeningGate | None = None,
+    caller_barge_in: CallerBargeIn | None = None,
 ) -> None:
     # Receiver-side wall clock — same clock domain as the simulator's
     # ChatMessage.metrics, and the target's transcript IO is playback-synced
@@ -3320,7 +3466,16 @@ async def _forward_target_transcription(
     started_at = time.time()
     logger.info("target transcription stream started")
     try:
-        transcript = (await reader.read_all()).strip()
+        if caller_barge_in is not None and hasattr(reader, "__aiter__"):
+            chunks: list[str] = []
+            async for chunk in reader:
+                chunks.append(chunk)
+                caller_barge_in.target_text("".join(chunks))
+            transcript = "".join(chunks).strip()
+        else:
+            transcript = (await reader.read_all()).strip()
+        if caller_barge_in is not None:
+            caller_barge_in.target_ended()
         stopped_at = time.time()
         logger.info(
             "target transcription stream completed characters=%s", len(transcript)
@@ -3377,6 +3532,16 @@ async def _forward_target_transcription(
                 return
         if opening_followup_started is not None:
             opening_followup_started.set()
+        if caller_barge_in is not None:
+            caller_barge_in.dialogue_started()
+            await caller_barge_in.wait_for_interjection()
+            if getattr(caller_barge_in, "interjected_current_turn", False):
+                # The direct interjection was the response to this turn.
+                message = session.history.add_message(role="user", content=transcript)
+                await _remember_answered_turn(
+                    getattr(session, "current_agent", None), message
+                )
+                return
         # Only elicit a simulator response while the conversation is live; once
         # it has ended the target's turn is recorded but the simulator stays
         # silent. The turn MUST travel through ``generate_reply(user_input=...)``:
@@ -3406,6 +3571,8 @@ async def _forward_target_transcription(
             exc_info=redacted_exc_info(exc),
         )
     finally:
+        if caller_barge_in is not None:
+            caller_barge_in.target_ended()
         if prompt_opening is not None:
             prompt_opening.stream_ended()
         if opening_turn and opening_transcription_classified is not None:

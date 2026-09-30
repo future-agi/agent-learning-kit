@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from livekit.agents.llm import ChatMessage
 
 pytest.importorskip("livekit")
 
@@ -27,6 +28,12 @@ from fi.simulate.simulation.engines.livekit import (
 )
 from fi.simulate.simulation import livekit_models
 from fi.simulate.simulation.models import Persona, PersonaFact, Scenario
+
+
+@pytest.fixture(autouse=True)
+def _disable_default_caller_barge_in(monkeypatch) -> None:
+    """Legacy engine tests exercise transport behavior, not optional interjections."""
+    monkeypatch.setenv("HARNESS_CALLER_BARGE_IN_RATE", "0")
 
 
 def _agent(**updates) -> AgentDefinition:
@@ -1522,6 +1529,18 @@ def test_a_reply_that_is_only_the_hold_marker_is_never_spoken() -> None:
         usage
     ]
     assert _drain_hold_filter(["silence"]) == []
+
+
+def test_hold_marker_before_a_real_answer_does_not_reach_speech() -> None:
+    usage = SimpleNamespace(delta=None, usage={"tokens": 3})
+    assert _drain_hold_filter(["SIL", "ENCE. Hello, how can I help?", usage]) == [
+        "Hello, how can I help?",
+        usage,
+    ]
+    assert _drain_hold_filter(["SILENCE", "\nI need a ride."]) == [
+        "I need a ride."
+    ]
+    assert _drain_hold_filter(["I need a ride."]) == ["I need a ride."]
 
 
 def test_a_reply_that_is_only_a_stage_direction_or_an_empty_result_is_never_spoken() -> (
@@ -3447,6 +3466,109 @@ class _FakeTranscriptionReader:
         return self._text
 
 
+def test_target_transcription_streams_partial_text_to_barge_gate() -> None:
+    class Reader:
+        def __aiter__(self):
+            async def chunks():
+                yield "We have two pickup "
+                yield "options at the airport for your ride today."
+
+            return chunks()
+
+    class Probe:
+        def __init__(self):
+            self.partials = []
+
+        def target_text(self, partial):
+            self.partials.append(partial)
+
+        def target_ended(self):
+            pass
+
+        def dialogue_started(self):
+            pass
+
+        async def wait_for_interjection(self):
+            pass
+
+    probe = Probe()
+    session = _FakeReplySession()
+    asyncio.run(
+        livekit._forward_target_transcription(
+            Reader(), session, caller_barge_in=probe
+        )
+    )
+    assert probe.partials == [
+        "We have two pickup ",
+        "We have two pickup options at the airport for your ride today.",
+    ]
+    assert session.reply_inputs == [probe.partials[-1]]
+
+
+def test_target_transcription_does_not_generate_a_second_reply_after_barge_in() -> None:
+    class Probe:
+        interjected_current_turn = True
+
+        def target_ended(self):
+            pass
+
+        def dialogue_started(self):
+            pass
+
+        async def wait_for_interjection(self):
+            pass
+
+    session = _FakeReplySession()
+    session.current_agent = livekit._TestRunnerAgent(
+        persona=_scenario().dataset[0], instructions="Be a customer."
+    )
+    asyncio.run(
+        livekit._forward_target_transcription(
+            _FakeTranscriptionReader("I can only help"),
+            session,
+            caller_barge_in=Probe(),
+        )
+    )
+    assert session.reply_inputs == []
+    assert session.history_adds == [("user", "I can only help")]
+    assert [
+        item.text_content
+        for item in session.current_agent.chat_ctx.items
+        if getattr(item, "role", None) == "user"
+    ] == ["I can only help"]
+
+
+def test_audio_target_turn_does_not_generate_a_second_reply_after_barge_in() -> None:
+    class Probe:
+        interjected_current_turn = True
+
+        def target_ended(self):
+            pass
+
+        def dialogue_started(self):
+            pass
+
+        async def wait_for_interjection(self):
+            pass
+
+    async def exercise():
+        agent = livekit._TestRunnerAgent(
+            persona=_scenario().dataset[0], instructions="Be a customer."
+        )
+        seen = []
+        agent._session = SimpleNamespace(
+            history=SimpleNamespace(insert=seen.append)
+        )
+        agent._caller_barge_in = Probe()
+        message = ChatMessage(role="user", content=["I can only help"])
+        with pytest.raises(livekit.StopResponse):
+            await agent.on_user_turn_completed(None, message)
+        assert seen == [message]
+        assert message.id in {item.id for item in agent.chat_ctx.items}
+
+    asyncio.run(exercise())
+
+
 class _FakeReplySession:
     def __init__(self, *, reply_error: Exception | None = None) -> None:
         self.reply_inputs: list[object] = []
@@ -3455,8 +3577,9 @@ class _FakeReplySession:
         session = self
 
         class _History:
-            def add_message(self, *, role: str, content: str) -> None:
+            def add_message(self, *, role: str, content: str) -> ChatMessage:
                 session.history_adds.append((role, content))
+                return ChatMessage(role=role, content=[content])
 
         self.history = _History()
 
@@ -3514,6 +3637,42 @@ def test_opening_recording_disclosure_is_captured_but_not_answered() -> None:
     assert preamble_audio_finished.is_set()
     assert session.reply_inputs == []
     assert [c["content"] for c in captured] == ["This Uber call is being recorded."]
+
+
+def test_barge_in_waits_past_recording_disclosure() -> None:
+    class BargeInProbe:
+        ended = 0
+        started = 0
+
+        def target_ended(self):
+            self.ended += 1
+
+        def dialogue_started(self):
+            self.started += 1
+
+        async def wait_for_interjection(self):
+            return None
+
+    probe = BargeInProbe()
+    session = _FakeReplySession()
+
+    async def exercise():
+        await livekit._forward_target_transcription(
+            _FakeTranscriptionReader("This Uber call is being recorded."),
+            session,
+            opening_turn=True,
+            caller_barge_in=probe,
+        )
+        assert probe.started == 0
+        await livekit._forward_target_transcription(
+            _FakeTranscriptionReader("How can I help you today?"),
+            session,
+            caller_barge_in=probe,
+        )
+
+    asyncio.run(exercise())
+    assert probe.ended == 4  # read completion and finally, once per stream
+    assert probe.started == 1
 
 
 def test_recording_language_is_not_suppressed_outside_the_opening_turn() -> None:
