@@ -8004,7 +8004,12 @@ def test_dropping_every_scenario_needs_an_explicit_everything(tmp_path):
 
     from fi.alk.harness import scenario_tools as module
 
-    root, contract, _catalogue = _built_environment(tmp_path)
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, contract, catalogue = _built_environment(tmp_path)
+    saved = []
+    accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=saved)
+    module.write_scenarios(saved, root, catalogue)
     server, _kept = module.scenario_tools(contract, root, root, wanted=1)
     instance = _instance(server)
 
@@ -8016,7 +8021,10 @@ def test_dropping_every_scenario_needs_an_explicit_everything(tmp_path):
         return answer.isError, answer.content[0].text
 
     refused = asyncio.run(drop({"name": "*"}))
-    accepted = asyncio.run(drop({"name": "*", "everything": True}))
+    by_name = asyncio.run(drop({"name": saved[0].name}))
+    everything = asyncio.run(drop({"name": "*", "everything": True}))
 
     assert refused[0] and "everything=true" in refused[1]
-    assert not accepted[0] and "all scenarios dropped" in accepted[1]
+    assert not by_name[0] and "nothing is saved yet" in by_name[1]
+    assert not everything[0] and "nothing is saved yet" in everything[1]
+    assert [one.name for one in module.load_scenarios(root)] == [saved[0].name]
