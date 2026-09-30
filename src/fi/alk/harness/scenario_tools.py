@@ -339,21 +339,7 @@ def journalled(destination: Path) -> list[Scenario]:
     return list(found.values())
 
 
-def _first_names_on_disk(destination: Path, excluding: str = "") -> set[str]:
-    """Caller first names already saved for this suite, so siblings do not reuse one."""
-    try:
-        return {
-            str(one.persona.name or "").strip().split(" ")[0].lower()
-            for one in load_scenarios(Path(destination))
-            if one.persona is not None and one.persona.name and one.name != excluding
-        } - {""}
-    except Exception:  # noqa: BLE001 - an unreadable suite must not block a submission
-        return set()
-
-
-def _already_in_the_suite(
-    args: dict[str, Any], kept: list[Scenario], elsewhere: set[str] | None = None
-) -> str:
+def _already_in_the_suite(args: dict[str, Any], kept: list[Scenario]) -> str:
     """Why this scenario is one the suite already has, or "" when it is new."""
     name = str(args.get("name") or "").strip()
     coverage = {
@@ -365,15 +351,6 @@ def _already_in_the_suite(
         str(one.get("name") if isinstance(one, dict) else one)
         for one in (args.get("sub_goals") or [])
     }
-    persona = args.get("persona") or {}
-    first = str(persona.get("name") or "").strip().split(" ")[0].lower()
-    # Parallel writers start empty, so only the saved suite shows names a sibling already used.
-    if first and first in (elsewhere or set()):
-        return (
-            f"another scenario in this suite already has a caller named {first.title()!r}. Two "
-            "results under one name cannot be told apart by anybody reading the report, so give "
-            "this caller a name the suite does not have"
-        )
     for one in kept:
         if one.name == name:
             continue
@@ -392,13 +369,6 @@ def _already_in_the_suite(
                     "this scenario proves nothing the suite does not already prove. Move it to a "
                     "cell nothing holds, or give it a different thing to find out: the variation "
                     "that counts is what the caller withholds, not their name or address"
-                )
-        if first and one.persona is not None:
-            if str(one.persona.name or "").strip().split(" ")[0].lower() == first:
-                return (
-                    f"{one.name!r} already has a caller named {first.title()!r}. Two results under "
-                    "one name cannot be told apart by anybody reading the report, so give this "
-                    "caller a name the suite does not have"
                 )
     return ""
 
@@ -1405,9 +1375,7 @@ def scenario_tools(
         strayed = _off_the_grid(args.get("coverage"), target.get("axes"))
         if strayed:
             return _refuse(strayed)
-        twin = _already_in_the_suite(
-            args, kept, _first_names_on_disk(destination, str(args.get("name") or ""))
-        )
+        twin = _already_in_the_suite(args, kept)
         if twin:
             return _refuse(twin)
         if args.get("persona") and args.get("fixture"):
