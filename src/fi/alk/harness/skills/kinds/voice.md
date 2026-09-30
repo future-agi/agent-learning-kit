@@ -274,8 +274,9 @@ tests is fine. One that spends eighteen turns being polite is not.
 
 ## What does not belong in a voice instruction
 
-Never write stage directions. No *sighs*, no [annoyed]. Anything in brackets is read aloud, so the
-caller says the word "annoyed" instead of sounding it. Manner comes from the persona's disposition.
+Never write stage directions or sounds. No *sighs*, no [annoyed], no [cough], no [muffled noise], no
+"garbled". Anything in brackets is read aloud, so the caller says the word instead of making the
+sound, and nothing else in the call can make it. Manner comes from the persona's disposition.
 
 Never tell the caller how they sound. "You speak with a <region> accent", "you have a <region> accent":
 the accent is already a persona field, and it is the voice that delivers it. What the

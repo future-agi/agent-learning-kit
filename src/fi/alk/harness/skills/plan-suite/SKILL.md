@@ -24,9 +24,10 @@ These bind every plan, every brief and every suite you save.
 2. **Every scenario is the whole task, with everything it needs.** Deal the task end to end, and say
    in the brief what the person must hold for it: every value the agent can ask for and whatever
    identifies the thing being acted on.
-3. **Cover the agent before repeating it.** Every task the agent handles MUST get its own scenarios:
-   changing and cancelling something that already exists as well as creating it, looking things up as
-   well as acting. Every flow, rule, required question, disclosure, refusal, escalation and limit in
+3. **Cover the agent before repeating it, and only what it handles.** NEVER add a task the agent's
+   description does not give it. Every task the agent handles MUST get its own scenarios: where it
+   handles them, changing and cancelling something that already exists as well as creating it,
+   looking things up as well as acting. Every flow, rule, required question, disclosure, refusal, escalation and limit in
    the agent's instructions gets at least one scenario, and the risky ones several, before any
    situation is dealt a second time. List the tasks before you deal anything and check the list again
    before you save.
