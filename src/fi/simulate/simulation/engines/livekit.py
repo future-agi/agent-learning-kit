@@ -2590,28 +2590,6 @@ class LiveKitEngine(BaseEngine):
                     target_identity=effective_target_identity,
                     timeout=effective_readiness_timeout,
                 )
-            if caller_barge_in is not None:
-                for participant in room.remote_participants.values():
-                    if str(participant.identity) != target.identity:
-                        continue
-                    for publication in participant.track_publications.values():
-                        if str(publication.sid) != target.audio_track_sid:
-                            continue
-                        subscribed_track = getattr(publication, "track", None)
-                        if subscribed_track is not None:
-                            caller_barge_in.attach_target_audio(subscribed_track)
-                        break
-
-                def on_barge_target_track_subscribed(
-                    track: Any, publication: Any, participant: Any
-                ) -> None:
-                    if (
-                        str(participant.identity) == target.identity
-                        and str(publication.sid) == target.audio_track_sid
-                    ):
-                        caller_barge_in.attach_target_audio(track)
-
-                room.on("track_subscribed", on_barge_target_track_subscribed)
             if (
                 runtime.room_name_verbatim
                 and profile.receives_inbound_call
@@ -2648,6 +2626,28 @@ class LiveKitEngine(BaseEngine):
                     caller_verification = "unverified"
                 else:
                     caller_verification = "matched"
+            if caller_barge_in is not None:
+                for participant in room.remote_participants.values():
+                    if str(participant.identity) != target.identity:
+                        continue
+                    for publication in participant.track_publications.values():
+                        if str(publication.sid) != target.audio_track_sid:
+                            continue
+                        subscribed_track = getattr(publication, "track", None)
+                        if subscribed_track is not None:
+                            caller_barge_in.attach_target_audio(subscribed_track)
+                        break
+
+                def on_barge_target_track_subscribed(
+                    track: Any, publication: Any, participant: Any
+                ) -> None:
+                    if (
+                        str(participant.identity) == target.identity
+                        and str(publication.sid) == target.audio_track_sid
+                    ):
+                        caller_barge_in.attach_target_audio(track)
+
+                room.on("track_subscribed", on_barge_target_track_subscribed)
             logger.info(
                 "livekit_target_joined identity=%s sid=%s track=%s run=%s case=%s",
                 target.identity,

@@ -29,6 +29,12 @@ from fi.simulate.simulation import livekit_models
 from fi.simulate.simulation.models import Persona, PersonaFact, Scenario
 
 
+@pytest.fixture(autouse=True)
+def _disable_default_caller_barge_in(monkeypatch) -> None:
+    """Legacy engine tests exercise transport behavior, not optional interjections."""
+    monkeypatch.setenv("HARNESS_CALLER_BARGE_IN_RATE", "0")
+
+
 def _agent(**updates) -> AgentDefinition:
     values = {
         "name": "support-agent",
