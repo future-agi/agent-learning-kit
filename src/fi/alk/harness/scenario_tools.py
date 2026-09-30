@@ -11,9 +11,7 @@ scenario that clears all three is written out as its own folder of runnable file
 
 from __future__ import annotations
 
-import hashlib
 import json
-import os
 import re
 import logging
 from collections import Counter
@@ -341,12 +339,6 @@ def journalled(destination: Path) -> list[Scenario]:
     return list(found.values())
 
 
-# Largest share of a suite one value of a persona field may take.
-MOST_OF_A_SUITE = 0.34
-# Below this a suite is too small for a share to mean anything.
-FEWEST_FOR_A_SHARE = 8
-
-
 def _first_names_on_disk(destination: Path, excluding: str = "") -> set[str]:
     """Caller first names already saved for this suite, so siblings do not reuse one."""
     try:
@@ -408,62 +400,6 @@ def _already_in_the_suite(
                     "one name cannot be told apart by anybody reading the report, so give this "
                     "caller a name the suite does not have"
                 )
-    return ""
-
-
-_ACCENT_HOMES = {
-    "american": "united states",
-    "australian": "australia",
-    "canadian": "canada",
-    "indian": "india",
-}
-
-
-def accent_at_home(args: dict[str, Any]) -> str:
-    """Why this caller, who sounds like where they are, should be someone from elsewhere, or ""."""
-    persona = args.get("persona")
-    if not isinstance(persona, dict):
-        return ""
-    accent = str(persona.get("accent") or "").strip()
-    location = str(persona.get("location") or "").strip()
-    language = str(persona.get("language") or persona.get("languages") or "english").lower()
-    if "english" not in language or _ACCENT_HOMES.get(accent.lower()) != location.lower():
-        return ""
-    if accent.lower() in str(args.get("instruction") or "").lower():
-        return ""
-    seed = int(hashlib.sha256(str(persona.get("name") or args.get("name") or "").encode()).hexdigest()[:8], 16)
-    if seed % 5 >= 2:
-        return ""
-    return (
-        f"This caller has a {accent} accent and is calling from {location}, and too many callers "
-        "sound like the place they are in. Keep the situation and the location as they are, and "
-        "make the caller someone who moved or is visiting: an accent from another country, with a "
-        "name, languages and background that fit that accent."
-    )
-
-
-def crowded_field(kept: list[Scenario], candidate: Any, wanted: int) -> str:
-    """Which persona field this scenario would push past its share of the suite, if any."""
-    if wanted < FEWEST_FOR_A_SHARE or candidate is None:
-        return ""
-    ceiling = max(2, int(wanted * MOST_OF_A_SUITE))
-    for field in ("location", "accent", "language"):
-        value = str(getattr(candidate, field, "") or "").strip().lower()
-        if not value:
-            continue
-        held = sum(
-            1
-            for one in kept
-            if one.persona
-            and str(getattr(one.persona, field, "") or "").strip().lower() == value
-        )
-        if held >= ceiling:
-            return (
-                f"{held} of the {len(kept)} scenarios written so far already use "
-                f"{field}={value!r}, and a suite of {wanted} may not put more than {ceiling} on "
-                f"one. Choose a different {field}; for accent or language, pick a person whose name, "
-                "languages and accent agree with it. The situation can stay."
-            )
     return ""
 
 
@@ -573,21 +509,6 @@ def _grid_off_the_framework(axes: dict[str, list[str]]) -> str:
     return " ".join(said)
 
 
-# Mandatory overlays, exempt from the adversarial share cap.
-ALWAYS_WORTH_AN_ATTACK = frozenset(
-    {"destructive", "minor_vulnerable", "emergency_crisis", "privacy_pii"}
-)
-
-
-# Axes that exist only because an overlay does, and the levels that mean "there is no overlay".
-_OVERLAY_DERIVED = frozenset({"overlay_intensity", "overlay_vector"})
-_STRUCTURAL_ABSENCE = frozenset({"absent", "none"})
-
-
-def _MOST_ADVERSARIAL(wanted: int) -> int:
-    return max(1, round(wanted * float(os.environ.get("ALK_ADVERSARIAL_SHARE", "0.10"))))
-
-
 # A scenario naming none of these and carrying no overlay is a plain control.
 _NAMES_A_DIFFICULTY = re.compile(
     r"\b(refus|correct|contradict|mishear|misheard|disagree|withhold|changes? (their )?mind"
@@ -647,73 +568,6 @@ def _a_second_plain_control(scenario: Scenario, kept: list[Scenario]) -> str:
             "in your own words, what the caller or the world does here that the control does not; "
             "a stock phrase that does not describe this call is not a difficulty. If nothing does, "
             "this task already has its control: write a different task level, or stop"
-        )
-    return ""
-
-
-def _over_its_share(
-    coverage: Any, grid: dict[str, list[str]] | None, kept: list[Scenario], wanted: int
-) -> str:
-    """Why this coordinate is a level the suite already has enough of, or "" when it is not."""
-    if not grid or wanted < 12 or not isinstance(coverage, dict):
-        return ""
-    share = max(1, (wanted + 2) // 3)
-    # Overlay is capped on its adversarial share, not per level: `none` is the ground, not a sample.
-    carrying = sum(
-        1
-        for one in kept
-        if str((one.coverage or {}).get("overlay") or "none")
-        not in ALWAYS_WORTH_AN_ATTACK | {"none"}
-    )
-    asked = str(coverage.get("overlay") or "none")
-    # Each dealt overlay level is owed one scenario; only a repeat counts against the share.
-    dealt = [
-        level_name(one)
-        for one in ((grid or {}).get("overlay") or [])
-        if level_name(one) != "none"
-    ]
-    already_on_this_level = sum(
-        1 for one in kept if str((one.coverage or {}).get("overlay") or "none") == asked
-    )
-    if (
-        asked != "none"
-        and asked not in ALWAYS_WORTH_AN_ATTACK
-        and already_on_this_level >= 1
-        and carrying >= max(_MOST_ADVERSARIAL(wanted), len(dealt))
-    ):
-        return (
-            f"{carrying} of {wanted} already carry an overlay, which is the whole adversarial share "
-            "of this suite. The agent's ordinary traffic is what it mostly meets, so the rest of the "
-            "suite is plain: write this cell with overlay 'none', or a task level nothing has "
-            "covered plainly yet"
-        )
-    for axis, levels in grid.items():
-        if axis == "overlay":
-            # Capped above, on the share of the suite rather than per level.
-            continue
-        mine = level_name(coverage.get(axis) or coverage.get(level_name(axis)) or "")
-        if not mine or len(levels) < 3:
-            continue
-        if axis in _OVERLAY_DERIVED and mine in _STRUCTURAL_ABSENCE:
-            # No overlay means no intensity or vector, so these levels are not a sample.
-            continue
-        counted: Counter[str] = Counter(
-            level_name((one.coverage or {}).get(axis, "")) for one in kept
-        )
-        if counted.get(mine, 0) < share:
-            continue
-        thin = [
-            one
-            for one in levels
-            if counted.get(level_name(one), 0) < share and level_name(one) != mine
-        ]
-        if not thin:
-            continue
-        return (
-            f"{axis} is already at {counted[mine]} of {wanted} on {mine!r}, which is its whole share "
-            f"of this suite. A level past a third stops being a sample and becomes the suite, and the "
-            f"next scenario there proves nothing the earlier ones did not. Write one of these instead: "
-            + ", ".join(sorted(thin)[:8])
         )
     return ""
 
@@ -1600,11 +1454,6 @@ def scenario_tools(
         strayed = _off_the_grid(args.get("coverage"), target.get("axes"))
         if strayed:
             return _refuse(strayed)
-        crowded_level = _over_its_share(
-            args.get("coverage"), target.get("axes"), kept, cap()
-        )
-        if crowded_level:
-            return _refuse(crowded_level)
         # A capability is worth proving once. Everything past the control has to be hard.
         try:
             second_control = _a_second_plain_control(Scenario.model_validate(args), kept)
@@ -1617,16 +1466,6 @@ def scenario_tools(
         )
         if twin:
             return _refuse(twin)
-        if cap() and target.get("people") != "alike":
-            crowded = crowded_field(
-                kept, Scenario.model_validate(args).persona, cap()
-            ) if args.get("persona") else ""
-            if crowded:
-                return _refuse(crowded)
-        if _is_spoken(contract) and target.get("people") != "alike":
-            at_home = accent_at_home(args)
-            if at_home:
-                return _refuse(at_home)
         if args.get("persona") and args.get("fixture"):
             try:
                 stranger = persona_off_the_record(

@@ -2554,25 +2554,6 @@ def test_a_broken_proof_says_so_instead_of_blaming_setup() -> None:
     assert "the world is not ready" in both.why()
 
 
-def test_a_level_past_a_third_of_the_suite_is_refused_while_somewhere_thinner_exists() -> None:
-    from fi.alk.harness.scenario import Scenario
-    from fi.alk.harness.scenario_tools import _over_its_share
-
-    grid = {"task": ["book_ride", "cancel_ride", "check_status"]}
-    booked = [
-        Scenario(name=f"b{one}", coverage={"task": "book_ride"}) for one in range(7)
-    ]
-
-    said = _over_its_share({"task": "book_ride"}, grid, booked, 20)
-    assert "whole share" in said and "cancel_ride" in said
-    assert _over_its_share({"task": "cancel_ride"}, grid, booked, 20) == ""
-    assert _over_its_share({"task": "book_ride"}, grid, booked, 8) == ""
-    everywhere = booked + [
-        Scenario(name=f"c{one}", coverage={"task": "cancel_ride"}) for one in range(7)
-    ] + [Scenario(name=f"s{one}", coverage={"task": "check_status"}) for one in range(7)]
-    assert _over_its_share({"task": "book_ride"}, grid, everywhere, 20) == ""
-
-
 def test_the_grid_has_to_be_the_frameworks_axes() -> None:
     from fi.alk.harness.scenario_tools import CANONICAL_AXES, _grid_off_the_framework
 
@@ -2631,31 +2612,6 @@ def test_an_instruction_naming_a_record_the_world_lacks_is_refused() -> None:
 
     bare = SimpleNamespace(state=lambda: {"notes": [{"text": "hello"}]})
     assert _identifiers_the_instruction_invents(invented, bare) == []
-
-def test_a_suite_without_overlays_is_not_refused_by_the_intensity_share() -> None:
-    from fi.alk.harness.scenario import Scenario
-    from fi.alk.harness.scenario_tools import _over_its_share
-
-    grid = {
-        "overlay": ["none", "prompt_injection", "social_engineering"],
-        "overlay_intensity": ["absent", "subtle", "overt"],
-        "task": ["book", "cancel", "status"],
-    }
-    kept = [
-        Scenario(
-            name=f"plain{n}",
-            coverage={"overlay": "none", "overlay_intensity": "absent", "task": "book"},
-            sub_goals=["booked"],
-        )
-        for n in range(30)
-    ]
-    plain = {"overlay": "none", "overlay_intensity": "absent", "task": "cancel"}
-    assert _over_its_share(plain, grid, kept, 50) == ""
-
-    assert "task is already at" in _over_its_share(
-        {"overlay": "none", "overlay_intensity": "absent", "task": "book"}, grid, kept, 50
-    )
-
 
 def test_coverage_counts_a_planned_level_however_its_separators_are_spelled():
     from collections import Counter
