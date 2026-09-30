@@ -17,6 +17,7 @@ TRACK_TIMEOUT_SECONDS = 30.0
 WATCHDOG_TIMEOUT_SECONDS = 60.0
 PROVIDER_READY_BUFFER_FRAMES = 3000
 PROVIDER_AUDIO_TIMEOUT_SECONDS = 120.0
+PROVIDER_PLAYOUT_TIMEOUT_SECONDS = 5.0
 PROVIDER_QUEUE_MAX_CHUNKS = 200
 
 
@@ -111,16 +112,18 @@ class LiveKitAudioBridge:
             asyncio.create_task(self._wait_for_room_disconnect()),
         }
         try:
-            done, pending = await asyncio.wait(
+            done, _pending = await asyncio.wait(
                 tasks, return_when=asyncio.FIRST_COMPLETED
             )
-            for task in pending:
-                task.cancel()
-            await asyncio.gather(*pending, return_exceptions=True)
             for task in done:
                 await task
         finally:
+            logger.info("voice_bridge_draining media_tasks=%d", len(tasks))
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
             await self.aclose()
+            logger.info("voice_bridge_closed")
 
     async def aclose(self) -> None:
         async with self._close_lock:
@@ -130,7 +133,12 @@ class LiveKitAudioBridge:
             try:
                 await self._connector.disconnect()
             finally:
-                await self._room.disconnect()
+                try:
+                    await self._room.disconnect()
+                finally:
+                    if self._audio_source is not None:
+                        await self._audio_source.aclose()
+                        self._audio_source = None
 
     def _latch_preexisting_track(self) -> None:
         if self._track_future is None or self._track_future.done():
@@ -159,18 +167,22 @@ class LiveKitAudioBridge:
             silence.cancel()
             await asyncio.gather(silence, return_exceptions=True)
         buffered_frames: list[tuple[bytes, int]] = []
-        async for event in rtc.AudioStream(track):
-            frame = event.frame
-            self._last_audio_at = time.monotonic()
-            frame_data = frame.data.tobytes()
-            if not self._connector.is_agent_ready:
-                if len(buffered_frames) < PROVIDER_READY_BUFFER_FRAMES:
-                    buffered_frames.append((frame_data, frame.sample_rate))
-                continue
-            for buffered_data, buffered_rate in buffered_frames:
-                await self._connector.send_audio(buffered_data, buffered_rate)
-            buffered_frames.clear()
-            await self._connector.send_audio(frame_data, frame.sample_rate)
+        stream = rtc.AudioStream(track)
+        try:
+            async for event in stream:
+                frame = event.frame
+                self._last_audio_at = time.monotonic()
+                frame_data = frame.data.tobytes()
+                if not self._connector.is_agent_ready:
+                    if len(buffered_frames) < PROVIDER_READY_BUFFER_FRAMES:
+                        buffered_frames.append((frame_data, frame.sample_rate))
+                    continue
+                for buffered_data, buffered_rate in buffered_frames:
+                    await self._connector.send_audio(buffered_data, buffered_rate)
+                buffered_frames.clear()
+                await self._connector.send_audio(frame_data, frame.sample_rate)
+        finally:
+            await stream.aclose()
 
     async def _provider_to_room(self) -> None:
         if self._audio_source is None:
@@ -222,6 +234,10 @@ class LiveKitAudioBridge:
                         samples_per_channel=len(pcm) // 2,
                     )
                 )
+            await asyncio.wait_for(
+                self._audio_source.wait_for_playout(),
+                timeout=PROVIDER_PLAYOUT_TIMEOUT_SECONDS,
+            )
         finally:
             pump.cancel()
             await asyncio.gather(pump, return_exceptions=True)

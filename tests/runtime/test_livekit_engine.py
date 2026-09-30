@@ -2742,8 +2742,12 @@ def _install_engine_fakes(monkeypatch, calls, target_identity="target-agent"):
                     request.sip_call_to,
                     request.room_name,
                     request.participant_identity,
-                    request.wait_until_answered,
                 )
+            )
+            room.remote_participants[request.participant_identity] = SimpleNamespace(
+                identity=request.participant_identity,
+                attributes={"sip.callStatus": "active"},
+                track_publications={},
             )
 
     class _Room:
@@ -2811,7 +2815,6 @@ def test_sip_outbound_dials_per_case_room_and_identity(monkeypatch) -> None:
     assert all(call[1] == "ST_test" for call in dials)
     assert all(call[2] == "+12068956991" for call in dials)
     assert all(call[3] == "+14155551234" for call in dials)
-    assert all(call[6] is True for call in dials)
     for result in report.results:
         assert result.metadata["status"] == CaseStatus.COMPLETED.value
 
@@ -2951,6 +2954,9 @@ def test_sip_inbound_timeout_yields_typed_no_participant(monkeypatch) -> None:
                 return session
 
             def open_conversation(self):
+                pass
+
+            def end_of_call(self):
                 pass
 
         return _Agent(), None
@@ -3465,6 +3471,9 @@ class _FakeTranscriptionReader:
     async def read_all(self) -> str:
         return self._text
 
+    def close(self) -> None:
+        pass
+
 
 def test_target_transcription_streams_partial_text_to_barge_gate() -> None:
     class Reader:
@@ -3474,6 +3483,9 @@ def test_target_transcription_streams_partial_text_to_barge_gate() -> None:
                 yield "options at the airport for your ride today."
 
             return chunks()
+
+        def close(self):
+            pass
 
     class Probe:
         def __init__(self):
@@ -4314,6 +4326,114 @@ def test_dispatch_failure_is_typed_preparing_failure(monkeypatch) -> None:
     assert metadata["failure"]["code"] == "livekit_dispatch_failed"
     assert metadata["failure"]["stage"] == "preparing"
     assert "delete_room" in calls
+
+
+@pytest.mark.parametrize(
+    "ending", ["hangup", "engine_error", "close_timeout", "native", "native_error"]
+)
+def test_terminal_transcript_preserves_evidence_and_reports_incomplete_capture(
+    monkeypatch, ending,
+) -> None:
+    engine = _order_probe_engine(monkeypatch, [])
+    closing = "You're welcome. Have a great day."
+    handlers = {}
+    room = livekit.rtc.Room()
+    room.register_text_stream_handler = lambda topic, handler: handlers.update({topic: handler})
+    monkeypatch.setattr(livekit.rtc, "Room", lambda: room)
+
+    class History:
+        def __init__(self):
+            self.items = [
+                SimpleNamespace(type="message", role="user", text_content="How can I help?"),
+                SimpleNamespace(type="message", role="assistant", text_content="No thanks. Goodbye."),
+            ]
+
+        def add_message(self, *, role, content):
+            self.items.append(SimpleNamespace(type="message", role=role, text_content=content))
+
+    class Session:
+        def __init__(self):
+            self.history = History()
+            self.current_speech = None
+            self.input = SimpleNamespace(set_audio_enabled=lambda enabled: None)
+
+        def on(self, event, callback):
+            pass
+
+        def clear_user_turn(self):
+            pass
+
+        async def aclose(self):
+            if ending == "close_timeout":
+                await asyncio.Event().wait()
+            if ending not in {"native", "native_error"}:
+                self.history.add_message(role="user", content=closing)
+
+    class Caller:
+        def end_of_call(self):
+            pass
+
+        def open_conversation(self):
+            raise AssertionError("No new caller speech after the target hangs up")
+
+        async def start_session(self, room, **kwargs):
+            return Session()
+
+        async def _stop_background_audio(self):
+            pass
+
+    class Reader(_FakeTranscriptionReader):
+        async def read_all(self):
+            await asyncio.sleep(0)
+            if ending == "native_error":
+                raise ConnectionError("Stream ended without a final transcript")
+            return self._text
+
+    async def create_caller(*args, **kwargs):
+        return Caller(), None
+
+    async def target_hung_up(*args, **kwargs):
+        if ending == "engine_error":
+            raise RuntimeError("Connection failed while monitoring the call")
+        if ending in {"native", "native_error"}:
+            handlers[livekit.TOPIC_TRANSCRIPTION](Reader(closing), "target-agent")
+        room.remote_participants.clear()
+        return "target_disconnected"
+
+    monkeypatch.setattr(engine, "_create_customer_agent", create_caller)
+    monkeypatch.setattr(livekit, "_wait_for_conversation_end", target_hung_up)
+    monkeypatch.setattr(livekit, "_TARGET_TURN_SETTLE_SECONDS", 0.0)
+    monkeypatch.setattr(livekit, "_SESSION_CLEANUP_TIMEOUT_SECONDS", 0.01)
+    report = asyncio.run(
+        engine.run(
+            agent_definition=_agent(
+                room_mode="managed",
+                agent_name="registered-agent",
+                target_participant_identity="target-agent",
+            ),
+            scenario=_scenario(),
+            run_id="run_hangup_final_transcript",
+            conversation_direction="agent_first",
+            min_turn_messages=6,
+        )
+    )
+    result = report.results[0]
+    assert "How can I help?" in result.transcript
+    assert "No thanks. Goodbye." in result.transcript
+    if ending in {"close_timeout", "native_error"}:
+        assert result.metadata["status"] == CaseStatus.FAILED.value
+        assert result.metadata["failure"]["stage"] == "finalizing"
+        assert result.metadata["transcript_finalization_status"] == "incomplete"
+    else:
+        assert result.messages[-1]["role"] == "assistant"
+        assert result.messages[-1]["content"] == closing
+        assert closing in result.transcript
+        assert result.metadata["transcript_finalization_status"] == "completed"
+        if ending == "engine_error":
+            assert result.metadata["status"] == CaseStatus.FAILED.value
+            assert result.metadata["failure"]["code"] == "livekit_case_failed"
+        else:
+            assert result.metadata["status"] == CaseStatus.COMPLETED.value
 
 
 def test_the_caller_uses_audio_turn_detection_and_speculative_tts():

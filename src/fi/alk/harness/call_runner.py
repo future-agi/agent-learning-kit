@@ -1599,6 +1599,20 @@ class CallRunnerImpl:
             reason = (
                 case.failure.message if case.failure is not None else case.status.value
             )
+            if case.failure is not None:
+                safe_details = {
+                    key: value
+                    for key, value in (case.failure.details or {}).items()
+                    if key in {
+                        "operation", "exception_type", "provider_code", "http_status",
+                        "sip_status_code", "stop_reason", "turn_count", "minimum_turn_count",
+                    }
+                }
+                logger.warning(
+                    "voice_call_failed run=%s case=%s code=%s stage=%s details=%s",
+                    report.run_id, case.test_case_id, case.failure.code,
+                    case.failure.stage.value, json.dumps(safe_details, sort_keys=True),
+                )
             # C3 §4.5 step 2 (the one narrow call_runner change): the engine's dispatch-ack ladder
             # surfaces +60s exhaustion via a STRUCTURED marker (`failure.code`), never a substring
             # of `failure.message`. Pass it through on `CallAborted.marker` so the scheduler's

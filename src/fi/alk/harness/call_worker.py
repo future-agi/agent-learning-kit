@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import faulthandler
 import logging
 import os
 import sys
@@ -11,6 +12,8 @@ from .isolated_process import run_worker
 
 
 async def main() -> None:
+    faulthandler.enable()
+    os.environ.setdefault("RUST_BACKTRACE", "1")
     from fi.simulate.runtime import SimulationSpec
 
     from .call_runner import _default_place_call
@@ -27,7 +30,7 @@ async def main() -> None:
     fd = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w") as stream:
         stream.write(report.model_dump_json())
-    logging.getLogger(__name__).info("voice worker completed")
+    logging.getLogger(__name__).info("voice worker result written")
 
 
 if __name__ == "__main__":
