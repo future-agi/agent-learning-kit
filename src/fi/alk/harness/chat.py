@@ -24,6 +24,7 @@ from . import understand as understand_stage
 from .backends import SessionSpec
 from .config import artifact_dir
 from .contract import AgentContract
+from .job import HarnessJob
 from .run import stage as run_stage
 from .session import Stage
 from .sources import AgentSource, resolve
@@ -65,6 +66,7 @@ class Conversation:
     _found: dict[str, Any] = field(default_factory=dict)
     configure_stage: Callable[[str, SessionSpec], SessionSpec] | None = None
     control_only: bool = False
+    job: HarnessJob | None = None
     spent_usd: float = 0.0
 
     def __post_init__(self) -> None:
@@ -190,7 +192,8 @@ class Conversation:
             wanted = written or self.wanted
             # Chat is where "add five" comes from, so only here may aim_for raise the cap.
             self.stage, _ = scenario_stage.open_stage(
-                contract, out=self.out, wanted=wanted, ask=self.ask, can_grow=True
+                contract, out=self.out, wanted=wanted, ask=self.ask, can_grow=True,
+                job=self.job,
             )
             opening = scenario_stage.opening(contract, wanted, written)
         self._prepare_stage(stage_name)
@@ -430,6 +433,7 @@ def open_conversation(
     workspace: Path | None = None,
     configure_stage: Callable[[str, SessionSpec], SessionSpec] | None = None,
     control_only: bool = False,
+    job: HarnessJob | None = None,
 ) -> Conversation:
     source = resolve(kind, name=name, root=path) if name and path else None
     return Conversation(
@@ -440,6 +444,7 @@ def open_conversation(
         workspace=workspace,
         configure_stage=configure_stage,
         control_only=control_only,
+        job=job,
     )
 
 

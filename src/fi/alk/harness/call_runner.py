@@ -113,6 +113,7 @@ SIMULATOR_TTS_MODEL_ALIAS = "SIMULATOR_TTS_MODEL"
 BACKGROUND_NOISE_ALIAS = "ALK_BACKGROUND_NOISE"
 BACKGROUND_NOISE_CATALOG_ALIAS = "ALK_BACKGROUND_NOISE_CATALOG"
 BACKGROUND_NOISE_VOLUME_ALIAS = "HARNESS_BACKGROUND_NOISE_VOLUME"
+CALLER_BARGE_IN_RATE_ALIAS = "HARNESS_CALLER_BARGE_IN_RATE"
 CALL_DIRECTION_ALIAS = "ALK_CALL_DIRECTION"
 VOICEMAIL_CLIP_ALIAS = "HARNESS_VOICEMAIL_CLIP"
 VOICEMAIL_CLIP_TONE_ALIAS = "HARNESS_VOICEMAIL_CLIP_HAS_TONE"
@@ -823,6 +824,7 @@ def _collect_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
             arguments = {}
         is_error = bool(record.get("is_error", False))
         output = record.get("output")
+        raw_at = record.get("at")
         calls.append(
             Call(
                 name=name,
@@ -830,6 +832,7 @@ def _collect_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
                 result=None if is_error else output,
                 ok=not is_error,
                 error=str(output) if is_error and output is not None else None,
+                at=float(raw_at) if isinstance(raw_at, (int, float)) else 0.0,
             )
         )
     return tuple(calls)
@@ -1063,6 +1066,7 @@ class CallRunnerImpl:
             BACKGROUND_NOISE_ALIAS,
             BACKGROUND_NOISE_CATALOG_ALIAS,
             BACKGROUND_NOISE_VOLUME_ALIAS,
+            CALLER_BARGE_IN_RATE_ALIAS,
         ):
             value = simulator_secret_values.get(alias)
             if value:
@@ -1469,12 +1473,18 @@ class CallRunnerImpl:
         if case is not None and case.result is not None:
             result = case.result
             if result.transcript:
+                transcript_document = {
+                    "schema_version": "futureagi.call-transcript.v1",
+                    "transcript": result.transcript,
+                    "messages": result.messages,
+                }
+                recording_offset_ms = result.metadata.get("recording_offset_ms")
+                if isinstance(recording_offset_ms, (int, float)):
+                    transcript_document["recording_offset_ms"] = int(
+                        recording_offset_ms
+                    )
                 transcript_payload = json.dumps(
-                    {
-                        "schema_version": "futureagi.call-transcript.v1",
-                        "transcript": result.transcript,
-                        "messages": result.messages,
-                    },
+                    transcript_document,
                     sort_keys=True,
                     default=str,
                 ).encode("utf-8")
@@ -1591,6 +1601,20 @@ class CallRunnerImpl:
             reason = (
                 case.failure.message if case.failure is not None else case.status.value
             )
+            if case.failure is not None:
+                safe_details = {
+                    key: value
+                    for key, value in (case.failure.details or {}).items()
+                    if key in {
+                        "operation", "exception_type", "provider_code", "http_status",
+                        "sip_status_code", "stop_reason", "turn_count", "minimum_turn_count",
+                    }
+                }
+                logger.warning(
+                    "voice_call_failed run=%s case=%s code=%s stage=%s details=%s",
+                    report.run_id, case.test_case_id, case.failure.code,
+                    case.failure.stage.value, json.dumps(safe_details, sort_keys=True),
+                )
             # C3 §4.5 step 2 (the one narrow call_runner change): the engine's dispatch-ack ladder
             # surfaces +60s exhaustion via a STRUCTURED marker (`failure.code`), never a substring
             # of `failure.message`. Pass it through on `CallAborted.marker` so the scheduler's

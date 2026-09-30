@@ -364,6 +364,8 @@ def _extract_tool_calls(messages: list[Any]) -> list[dict[str, Any]]:
             ]
         if not isinstance(tool_calls, list):
             continue
+        # Vapi stamps each message with epoch milliseconds.
+        at = entry.get("time")
         for call in tool_calls:
             if isinstance(call, dict):
                 function = call.get("function") or {}
@@ -376,6 +378,7 @@ def _extract_tool_calls(messages: list[Any]) -> list[dict[str, Any]]:
                             "arguments": function.get("arguments")
                             or call.get("parameters")
                             or call.get("arguments"),
+                            "at": at / 1000 if isinstance(at, (int, float)) else None,
                         }.items()
                         if value is not None
                     }

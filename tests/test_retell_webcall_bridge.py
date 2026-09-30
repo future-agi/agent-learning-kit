@@ -6,9 +6,18 @@ from types import SimpleNamespace
 import pytest
 
 from fi.simulate.agent.definition import RetellTargetConfig
+from fi.simulate.simulation.bridge import livekit as bridge_livekit
 from fi.simulate.simulation.bridge import retell
 from fi.simulate.simulation.bridge.connector import ConnectorConfig
 from fi.simulate.simulation.bridge.retell import RetellWebCallConnector
+
+
+class _AudioSource:
+    def __init__(self):
+        self.closed = False
+
+    async def aclose(self):
+        self.closed = True
 
 
 class _Response:
@@ -76,7 +85,7 @@ def test_retell_webcall_connector_creates_and_joins_call(monkeypatch) -> None:
     monkeypatch.setattr(retell.aiohttp, "ClientSession", lambda: session)
     monkeypatch.setattr(retell.rtc, "Room", lambda: room)
     monkeypatch.setattr(retell.rtc, "RemoteAudioTrack", _RemoteAudioTrack)
-    monkeypatch.setattr(retell.rtc, "AudioSource", lambda *_args: SimpleNamespace())
+    monkeypatch.setattr(retell.rtc, "AudioSource", lambda *_args: _AudioSource())
     monkeypatch.setattr(
         retell.rtc.LocalAudioTrack,
         "create_audio_track",
@@ -152,7 +161,7 @@ def test_unrelated_participant_disconnect_does_not_end_agent_audio(monkeypatch) 
     monkeypatch.setattr(retell.aiohttp, "ClientSession", lambda: session)
     monkeypatch.setattr(retell.rtc, "Room", lambda: room)
     monkeypatch.setattr(retell.rtc, "RemoteAudioTrack", _RemoteAudioTrack)
-    monkeypatch.setattr(retell.rtc, "AudioSource", lambda *_args: SimpleNamespace())
+    monkeypatch.setattr(retell.rtc, "AudioSource", lambda *_args: _AudioSource())
     monkeypatch.setattr(
         retell.rtc.LocalAudioTrack,
         "create_audio_track",
@@ -180,3 +189,120 @@ def test_unrelated_participant_disconnect_does_not_end_agent_audio(monkeypatch) 
     room.handlers["participant_disconnected"](SimpleNamespace(identity="retell-agent"))
     assert connector._agent_disconnected.is_set() is True
     asyncio.run(connector.disconnect())
+
+
+@pytest.mark.parametrize("side", ["provider", "room"])
+def test_cancelled_audio_receiver_stops_its_native_stream(monkeypatch, side):
+    stream_started = asyncio.Event()
+    stopped = asyncio.Event()
+    streams = []
+
+    class Stream:
+        def __init__(self, track):
+            self.producer = asyncio.create_task(stopped.wait())
+            streams.append(self)
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            stream_started.set()
+            await asyncio.Event().wait()
+
+        async def aclose(self):
+            stopped.set()
+            await self.producer
+
+    monkeypatch.setattr(retell.rtc, "AudioStream", Stream)
+    monkeypatch.setattr(retell.rtc, "Room", _Room)
+
+    async def run():
+        connector = RetellWebCallConnector(
+            ConnectorConfig(api_key="key", assistant_id="agent", api_url="https://retell.example")
+        )
+        connector._connected = True
+        connector._track_future = asyncio.get_running_loop().create_future()
+        connector._track_future.set_result(object())
+        if side == "provider":
+            async def receive():
+                async for _ in connector.recv_audio():
+                    pass
+            task = asyncio.create_task(receive())
+        else:
+            bridge = bridge_livekit.LiveKitAudioBridge(
+                url="ws://localhost", api_key="key", api_secret="secret",
+                room_name="room", identity="bridge", connector=connector,
+            )
+            bridge._track_future = connector._track_future
+            task = asyncio.create_task(bridge._room_to_provider())
+        await stream_started.wait()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        try:
+            assert streams[0].producer.done(), "Native audio subscription outlived its receiver"
+        finally:
+            await streams[0].aclose()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("side", ["provider", "room"])
+def test_disconnect_closes_audio_source_even_when_remote_close_fails(monkeypatch, side):
+    monkeypatch.setattr(retell.rtc, "Room", _Room)
+
+    async def failing_disconnect():
+        raise ConnectionError("Remote connection is already gone")
+
+    async def run():
+        source = _AudioSource()
+        connector = RetellWebCallConnector(
+            ConnectorConfig(api_key="key", assistant_id="agent", api_url="https://retell.example")
+        )
+        if side == "provider":
+            connector._room = _Room()
+            connector._room.disconnect = failing_disconnect
+            connector._audio_source = source
+            close = connector.disconnect
+        else:
+            connector.disconnect = failing_disconnect
+            bridge = bridge_livekit.LiveKitAudioBridge(
+                url="ws://localhost", api_key="key", api_secret="secret",
+                room_name="room", identity="bridge", connector=connector,
+            )
+            bridge._audio_source = source
+            close = bridge.aclose
+        with pytest.raises(ConnectionError):
+            await close()
+        assert source.closed, "Owned native audio source survived a failed disconnect"
+
+    asyncio.run(run())
+
+
+def test_cancelling_bridge_run_reaps_all_media_tasks(monkeypatch):
+    monkeypatch.setattr(retell.rtc, "Room", _Room)
+    tasks = []
+    ready = asyncio.Event()
+
+    async def media():
+        tasks.append(asyncio.current_task())
+        if len(tasks) == 4:
+            ready.set()
+        await asyncio.Event().wait()
+
+    async def run():
+        connector = RetellWebCallConnector(
+            ConnectorConfig(api_key="key", assistant_id="agent", api_url="https://retell.example")
+        )
+        bridge = bridge_livekit.LiveKitAudioBridge(
+            url="ws://localhost", api_key="key", api_secret="secret",
+            room_name="room", identity="bridge", connector=connector,
+        )
+        for name in ("_room_to_provider", "_provider_to_room", "_watchdog", "_wait_for_room_disconnect"):
+            setattr(bridge, name, media)
+        task = asyncio.create_task(bridge.run())
+        await ready.wait()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        assert all(t.done() for t in tasks), "Bridge returned while native media tasks were alive"
+
+    asyncio.run(run())

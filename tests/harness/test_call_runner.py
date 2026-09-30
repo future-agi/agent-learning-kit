@@ -482,6 +482,15 @@ def test_google_api_key_alone_satisfies_the_llm_credential_check(
     assert runner._missing_config is None
 
 
+def test_platform_barge_in_rate_reaches_call_subprocess(tmp_path: Path) -> None:
+    _job_obj, context = _context(
+        tmp_path=tmp_path,
+        simulator_secrets={"HARNESS_CALLER_BARGE_IN_RATE": "0.2"},
+    )
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, environ={})
+    assert runner._environ["HARNESS_CALLER_BARGE_IN_RATE"] == "0.2"
+
+
 def test_missing_livekit_url_config_aborts_pre_dial(tmp_path: Path) -> None:
     _job_obj, context = _context(tmp_path=tmp_path, config={})
     runner = cr.CallRunnerImpl(FakeAdapter(), context)
