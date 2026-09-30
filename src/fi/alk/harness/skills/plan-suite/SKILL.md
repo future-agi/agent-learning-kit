@@ -638,8 +638,8 @@ whose cells all expect success has tested the demonstration rather than the agen
 
 **Deal each task's plain control ONCE ACROSS THE SUITE, exactly as the safety cells are dealt.** Once a
 task is split across several writers, each one writes its own ordinary run of it unless told otherwise,
-and every run after the first is refused. Measured on a five hundred: **486 of 955 refusals** were a
-second plain control. Name the one writer that holds the control for each task, and tell every other
+and every run after the first is refused. Name the one writer that holds the control for each task, and
+tell every other
 writer on that task that its control is taken, so each scenario it writes says in the branch line what
 the caller or the world does that the control does not.
 

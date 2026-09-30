@@ -98,6 +98,19 @@ getting stronger. Keep exactly one plain path per task level as the control; eve
 carry something that can go wrong. The control is yours only if your brief says so: otherwise another
 writer holds it, and every scenario you write on that task says in its branch line what goes wrong.
 
+**Say what goes wrong as something that happens, not as a label.** A branch line is read to decide
+whether the scenario is the task's plain control. "Premature affirmation", "digression" or "multi-slot
+opening" name a kind without saying what happens, so the scenario reads as ordinary and is refused as a
+second control. Write the event: the caller corrects a digit, refuses, insists, contradicts themselves,
+repeats, withholds, changes their mind, interrupts, is unclear or confused, hesitates or goes quiet; or
+the world declines, fails, is unavailable, invalid, denied, blocked, wrong or does not match.
+
+```
+BAD    branch: premature affirmation during the read-back
+GOOD   branch: the caller confirms before the agent finishes reading the details back, so the agent
+               must stop and ask again instead of taking the early yes
+```
+
 **Name the capability before writing the instruction.** One sentence: what could a competent agent
 get wrong here, and what would the wrong answer look like? If the honest answer is "nothing much",
 stop and write a different scenario. `tests` is that sentence. Two scenarios whose `tests` lines
