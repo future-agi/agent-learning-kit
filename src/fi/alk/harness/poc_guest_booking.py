@@ -11,6 +11,7 @@ intercept live caller turns.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from collections.abc import Mapping
@@ -34,6 +35,7 @@ _CASES: tuple[tuple[str, int], ...] = (
     ("missing", 5),
     ("wrong_then_correct", 5),
 )
+logger = logging.getLogger(__name__)
 
 
 def _case_counts(total: int) -> dict[str, int]:
@@ -67,22 +69,96 @@ def _active_pin(job: HarnessJob | None, values: Mapping[str, str]) -> str | None
     return pin if _PIN.fullmatch(pin) else None
 
 
+def guest_booking_policy_job(
+    raw_job: HarnessJob | Mapping[str, object] | None,
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> HarnessJob | None:
+    """Validate a job only when the private phone-target policy could apply.
+
+    Hosted chat accepts some platform payloads that the standalone SDK schema may reject. Those
+    payloads must keep working for every ordinary target, so inspect the connector and target
+    before model validation and fail open (policy disabled) if the matching POC payload is stale.
+    """
+    values = os.environ if environ is None else environ
+    target = str(values.get(TARGET_PHONE_ENV) or "").strip()
+    pin = str(values.get(PIN_ENV) or "").strip()
+    if not _E164.fullmatch(target) or not _PIN.fullmatch(pin):
+        return None
+    if isinstance(raw_job, HarnessJob):
+        return raw_job if _active_pin(raw_job, values) is not None else None
+    if not isinstance(raw_job, Mapping):
+        return None
+    agent = raw_job.get("agent")
+    if not isinstance(agent, Mapping):
+        return None
+    config = agent.get("config")
+    if (
+        str(agent.get("connector") or "").strip().lower() != "phone"
+        or not isinstance(config, Mapping)
+        or str(config.get("phone_number") or "").strip() != target
+    ):
+        return None
+    try:
+        job = HarnessJob.model_validate(raw_job)
+    except ValueError as exc:
+        logger.warning(
+            "private guest PIN policy disabled for an incompatible matching job: %s",
+            type(exc).__name__,
+        )
+        return None
+    return job if _active_pin(job, values) is not None else None
+
+
 def _mentions_pin(value: object, pin: str) -> bool:
     """Find numeric or spoken PINs without mistaking a formatted phone number for one."""
     text = json.dumps(value, ensure_ascii=False, default=str)
-    # Phone-shaped values are context, not a caller's four-digit PIN.
-    text = re.sub(r"(?<!\w)(?:\+?\d[\d\s().-]{8,}\d)(?!\w)", " ", text)
-    tokens = re.findall(r"\d|[a-z]+", text.lower())
-    digits = [_DIGIT_WORDS.get(token, token) for token in tokens]
-    for index in range(len(digits) - 3):
+    # Phone-shaped values are context, not a caller's four-digit PIN. Count digits rather than
+    # punctuation width so a short number padded with spaces is not mistaken for a phone number.
+    text = re.sub(
+        r"(?<!\w)\+?\d[\d\s().-]*\d(?!\w)",
+        lambda match: (
+            " "
+            if sum(char.isdigit() for char in match.group()) >= 10
+            else match.group()
+        ),
+        text,
+    )
+    tokens = list(re.finditer(r"\d|[a-z]+", text.lower()))
+    digits = [_DIGIT_WORDS.get(match.group(), match.group()) for match in tokens]
+    for index in range(len(tokens) - 3):
         if "".join(digits[index : index + 4]) == pin:
-            # Adjacent digits are one longer number, not an isolated PIN.
-            if index and digits[index - 1].isdigit():
+            # Only an immediately touching numeric character makes this part of a longer number.
+            # A digit word or a separated number before/after the PIN is independent context.
+            if (
+                index
+                and tokens[index - 1].group().isdigit()
+                and tokens[index].group().isdigit()
+                and tokens[index - 1].end() == tokens[index].start()
+            ):
                 continue
-            if index + 4 < len(digits) and digits[index + 4].isdigit():
+            if (
+                index + 4 < len(tokens)
+                and tokens[index + 3].group().isdigit()
+                and tokens[index + 4].group().isdigit()
+                and tokens[index + 3].end() == tokens[index + 4].start()
+            ):
                 continue
             return True
     return False
+
+
+def _pin_value(value: object) -> str | None:
+    if isinstance(value, str):
+        candidate = value.strip()
+        return candidate if _PIN.fullmatch(candidate) else None
+    if isinstance(value, int) and not isinstance(value, bool) and 1000 <= value <= 9999:
+        return str(value)
+    return None
+
+
+def _has_value(fixture: Mapping[str, object], key: str) -> bool:
+    return key in fixture and fixture.get(key) not in (None, "")
 
 
 def guest_booking_pin_scenario_problem(
@@ -112,28 +188,26 @@ def guest_booking_pin_scenario_problem(
             "PIN anywhere, including in a negated instruction. Remove it entirely and say "
             "'another PIN' without naming it."
         )
-    if case == "missing" and any(key in fixture for key in _PIN_FIELDS):
+    if case == "missing" and any(_has_value(fixture, key) for key in _PIN_FIELDS):
         return (
             "Not kept. A missing-PIN scenario must not supply any PIN in its fixture."
         )
     if case == "valid" and (
-        fixture.get("guest_pin") != pin
-        or any(key in fixture for key in _PIN_FIELDS[1:])
+        _pin_value(fixture.get("guest_pin")) != pin
+        or any(_has_value(fixture, key) for key in _PIN_FIELDS[1:])
     ):
         return "Not kept. A valid-PIN scenario must supply the configured PIN in fixture.guest_pin."
     if case == "wrong" and not (
-        isinstance(fixture.get("guest_pin"), str)
-        and _PIN.fullmatch(fixture["guest_pin"])
-        and fixture["guest_pin"] != pin
-        and not any(key in fixture for key in _PIN_FIELDS[1:])
+        (wrong_pin := _pin_value(fixture.get("guest_pin"))) is not None
+        and wrong_pin != pin
+        and not any(_has_value(fixture, key) for key in _PIN_FIELDS[1:])
     ):
         return "Not kept. A wrong-PIN scenario must supply a different four-digit fixture.guest_pin."
     if case == "wrong_then_correct" and not (
-        isinstance(fixture.get("initial_guest_pin"), str)
-        and _PIN.fullmatch(fixture["initial_guest_pin"])
-        and fixture["initial_guest_pin"] != pin
-        and fixture.get("corrected_guest_pin") == pin
-        and "guest_pin" not in fixture
+        (initial_pin := _pin_value(fixture.get("initial_guest_pin"))) is not None
+        and initial_pin != pin
+        and _pin_value(fixture.get("corrected_guest_pin")) == pin
+        and not _has_value(fixture, "guest_pin")
     ):
         return "Not kept. Supply an incorrect initial_guest_pin and the configured corrected_guest_pin."
     return ""
@@ -192,6 +266,7 @@ and fixture, not in a scripted list of lines for the caller to recite.
 __all__ = [
     "PIN_ENV",
     "TARGET_PHONE_ENV",
+    "guest_booking_policy_job",
     "guest_booking_pin_guidance",
     "guest_booking_pin_scenario_problem",
 ]

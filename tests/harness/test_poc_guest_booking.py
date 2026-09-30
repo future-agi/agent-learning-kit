@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 
 from fi.alk.harness.contract import AgentContract
+from fi.alk.harness.cli import build_parser
 from fi.alk.harness.scenarios import open_stage
 
 from fi.alk.harness.job import (
@@ -17,6 +18,7 @@ from fi.alk.harness.poc_guest_booking import (
     PIN_ENV,
     TARGET_PHONE_ENV,
     guest_booking_pin_guidance,
+    guest_booking_policy_job,
     guest_booking_pin_scenario_problem,
 )
 
@@ -50,6 +52,52 @@ def _job(*, phone_number: str = TARGET, connector: str = "phone") -> HarnessJob:
 
 def test_policy_is_disabled_without_private_target_configuration() -> None:
     assert guest_booking_pin_guidance(_job(), scenario_count=200, environ={}) == ""
+
+
+def test_policy_job_does_not_validate_unrelated_chat_payloads() -> None:
+    invalid_generic_job = {
+        "agent": {"connector": "phone", "config": {"phone_number": "+15557654321"}},
+        "runtime": {"parallelism": 20, "cpu_units": 1},
+    }
+
+    assert (
+        guest_booking_policy_job(
+            invalid_generic_job,
+            environ={TARGET_PHONE_ENV: TARGET, PIN_ENV: "7682"},
+        )
+        is None
+    )
+
+
+def test_policy_job_validates_only_the_matching_phone_target() -> None:
+    values = {TARGET_PHONE_ENV: TARGET, PIN_ENV: "7682"}
+
+    assert (
+        guest_booking_policy_job(_job().model_dump(mode="json"), environ=values)
+        == _job()
+    )
+    invalid_matching_job = _job().model_dump(mode="json")
+    invalid_matching_job["schema_version"] = "futureagi.harness-job.unsupported"
+    assert guest_booking_policy_job(invalid_matching_job, environ=values) is None
+
+
+def test_scenarios_cli_accepts_the_platform_job_snapshot(tmp_path) -> None:
+    job_path = tmp_path / "job.json"
+
+    args = build_parser().parse_args(
+        [
+            "scenarios",
+            "--name",
+            "guest",
+            "--out",
+            str(tmp_path),
+            "--job",
+            str(job_path),
+            "--once",
+        ]
+    )
+
+    assert args.job == job_path
 
 
 def test_policy_is_gated_to_the_exact_phone_target() -> None:
@@ -150,6 +198,43 @@ def test_wrong_pin_guard_catches_spoken_and_spaced_pin() -> None:
             },
             environ={TARGET_PHONE_ENV: TARGET, PIN_ENV: "7682"},
         ), mention
+
+
+def test_wrong_pin_guard_catches_pin_next_to_words_and_other_numbers() -> None:
+    for mention in (
+        "the real one 7682",
+        "7682 one more time",
+        "4821 7682",
+        "4821 - 7682",
+    ):
+        assert guest_booking_pin_scenario_problem(
+            _job(),
+            {
+                "instruction": mention,
+                "fixture": {"guest_pin_case": "wrong", "guest_pin": "4821"},
+            },
+            environ={TARGET_PHONE_ENV: TARGET, PIN_ENV: "7682"},
+        ), mention
+
+
+def test_guard_accepts_integer_pin_and_ignores_empty_other_pin_fields() -> None:
+    values = {TARGET_PHONE_ENV: TARGET, PIN_ENV: "7682"}
+
+    assert (
+        guest_booking_pin_scenario_problem(
+            _job(),
+            {
+                "fixture": {
+                    "guest_pin_case": "valid",
+                    "guest_pin": 7682,
+                    "initial_guest_pin": None,
+                    "corrected_guest_pin": "",
+                }
+            },
+            environ=values,
+        )
+        == ""
+    )
 
 
 def test_guard_requires_label_and_consistent_fixture_values() -> None:

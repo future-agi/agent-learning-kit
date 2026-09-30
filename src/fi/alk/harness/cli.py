@@ -499,10 +499,27 @@ async def _scenarios(args: argparse.Namespace) -> int:
     # secret channel and is gated against the exact submitted phone target. Keep it in the model's
     # authoring brief: saved scenarios should be authored with natural PIN behavior, never rewritten
     # mechanically after generation or intercepted while a call is running.
-    from .poc_guest_booking import guest_booking_pin_guidance
+    from .poc_guest_booking import (
+        TARGET_PHONE_ENV,
+        guest_booking_pin_guidance,
+        guest_booking_policy_job,
+    )
+
+    policy_job = None
+    job_path = getattr(args, "job", None)
+    if job_path is not None and os.environ.get(TARGET_PHONE_ENV, "").strip():
+        try:
+            raw_job = json.loads(Path(job_path).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            print(
+                f"Private guest PIN policy disabled: job could not be read ({type(exc).__name__}).",
+                file=sys.stderr,
+            )
+        else:
+            policy_job = guest_booking_policy_job(raw_job)
 
     poc_guidance = guest_booking_pin_guidance(
-        getattr(args, "job", None), scenario_count=wanted
+        policy_job, scenario_count=wanted
     )
     guidance = [*(getattr(args, "guidance", None) or [])]
     if poc_guidance:
@@ -521,7 +538,7 @@ async def _scenarios(args: argparse.Namespace) -> int:
         wanted=wanted,
         ask=permission_gate(_ask_operator) if args.interactive else None,
         authoring_guidance=poc_guidance,
-        job=getattr(args, "job", None),
+        job=policy_job,
     )
     await _converse(
         stage,
@@ -1413,6 +1430,7 @@ def build_parser() -> argparse.ArgumentParser:
             "while preserving existing validated work"
         ),
     )
+    scenarios.add_argument("--job", type=Path, default=None, help=argparse.SUPPRESS)
     scenarios.set_defaults(run=_scenarios, interactive=True)
 
     live = sub.add_parser(

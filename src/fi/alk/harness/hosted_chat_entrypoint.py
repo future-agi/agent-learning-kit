@@ -146,7 +146,7 @@ class HostedChatRuntime:
         metadata = self.job.get("metadata") or {}
         name = str(metadata.get("agent_name") or self.job.get("name") or "agent")
         if not self._control_only():
-            from .job import HarnessJob
+            from .poc_guest_booking import guest_booking_policy_job
 
             return open_conversation(
                 name=name,
@@ -158,14 +158,7 @@ class HostedChatRuntime:
                 ask=self._ask,
                 configure_stage=self._configure_stage,
                 control_only=False,
-                job=(
-                    HarnessJob.model_validate(self.job)
-                    if all(
-                        key in self.job
-                        for key in ("job_id", "run_id", "execution", "source", "agent")
-                    )
-                    else None
-                ),
+                job=guest_booking_policy_job(self.job),
             )
         identity = self.client.capabilities.identity
         spec = SessionSpec(
