@@ -824,6 +824,7 @@ def _collect_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
             arguments = {}
         is_error = bool(record.get("is_error", False))
         output = record.get("output")
+        raw_at = record.get("at")
         calls.append(
             Call(
                 name=name,
@@ -831,6 +832,7 @@ def _collect_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
                 result=None if is_error else output,
                 ok=not is_error,
                 error=str(output) if is_error and output is not None else None,
+                at=float(raw_at) if isinstance(raw_at, (int, float)) else 0.0,
             )
         )
     return tuple(calls)
