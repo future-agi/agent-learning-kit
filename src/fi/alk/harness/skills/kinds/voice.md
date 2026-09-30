@@ -79,18 +79,19 @@ overt injections has tested the easy half.
 
 ## Background noise: on nearly every call
 
-Real callers ring from somewhere: a street, a car, an office, a shop, a kitchen. **Every voice
-scenario MUST carry a background noise bed unless the scenario is specifically about a clear line.**
-Quiet lines are very rare, a handful in a large suite, and each one needs its own reason. Noise is
+Real callers ring from somewhere: a street, a car, an office, a shop, a kitchen. **Most voice
+scenarios MUST carry a background noise bed.** Quiet lines are rare, and each one has a reason in the
+situation. Noise is
 independent of every other lever: an accented caller, a hesitant caller, an attacker and a caller
 correcting themselves all call from somewhere too, so they carry noise as well.
 
 - Pick the place from the situation, then the matching value from the places the `background_noise`
   field lists. The noise MUST fit where the caller says they are.
 - Spread a suite across the places on offer; never let one place, or silence, dominate.
-- The bed is one continuous ambience. NEVER build a scenario on a timed or triggered sound: a cough at a
-  particular moment, a television or radio line, an announcement, a second voice, a door, stepping
-  away from the phone. None of these is produced, so the scenario tests nothing.
+- The bed is one continuous ambience, at one level, for the whole call. NEVER build a scenario on a timed
+  or triggered sound (a cough at a particular moment, a television or radio line, an announcement, a
+  second voice, a door), on noise that drowns the caller out, or on the caller moving somewhere
+  quieter or louder partway through. None of these is produced, so the scenario tests nothing.
 
 ```
 BAD    background_noise: false   (a caller asking to change an order, no reason given for silence)
@@ -100,13 +101,37 @@ GOOD   The caller is on a busy street and gives the reference while walking; the
        under the whole call.
 ```
 
+## What one voice over one noise bed can never do
+
+Plan and write only what the call can deliver. These are NEVER planned, as a disposition, an
+interaction level or an instruction:
+
+- **Talking over the agent.** The caller speaks only once the agent has stopped; an instruction to cut
+  in arrives as an ordinary reply after the agent finished.
+- **A voice that degrades.** Mumbled, cut-off, drowned-out or silent speech is never produced; the
+  caller's words always arrive clean. Put unclear speech in the words themselves: a fragment, a
+  sentence left unfinished, a detail given out of order.
+- **A changing room.** The noise bed does not change mid-call, so the caller cannot step outside, roll
+  up a window or find a quiet corner.
+- **The agent's systems failing.** The caller cannot make a lookup, a price or a service fail, and an
+  instruction that says it happens changes nothing the agent sees.
+
+## The persons on a voice call
+
+A caller's voice is chosen from their accent and the language they speak, so the person has to hang
+together: the name, the accent and the language are one believable person, and where they are calling
+from can differ when the situation makes it believable (someone travelling, someone who moved). Spread
+a suite across the accents the voice catalogue can really produce and across languages: the ones the
+agent supports, and at least one it must turn away. Vary ages, genders and temperaments as well; a
+suite of one kind of caller has tested one caller.
+
 ## The levels this modality deals, and the field each one lands in
 
 The planning skill asks the kind file for its X levels. A level with no field behind it is a label.
 
 | Level | Where it lands |
 |---|---|
-| `quiet_line` | `background_noise` false; very rare, only when the scenario is about a clear line |
+| `quiet_line` | `background_noise` false; rare |
 | `noisy_line` | `background_noise`, the string naming the place, one of those the brief and the field list |
 | `accented` | `persona.accent`, and a noise bed like any other call |
 | `non_native` | `persona.accent`, with the language of the call as `persona.languages`, and a noise bed |
