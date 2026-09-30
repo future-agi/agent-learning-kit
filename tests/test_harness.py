@@ -7995,3 +7995,28 @@ def test_a_live_target_is_not_asked_to_seed_what_the_caller_is_told():
 
     assert not any("to say back" in problem for problem in live)
     assert any("to say back" in problem for problem in owned)
+
+
+def test_dropping_every_scenario_needs_an_explicit_everything(tmp_path):
+    import asyncio
+
+    from mcp.types import CallToolRequestParams
+
+    from fi.alk.harness import scenario_tools as module
+
+    root, contract, _catalogue = _built_environment(tmp_path)
+    server, _kept = module.scenario_tools(contract, root, root, wanted=1)
+    instance = _instance(server)
+
+    async def drop(arguments):
+        handler = _request_handler(instance, "tools/call")
+        answer = await handler.handler(
+            None, CallToolRequestParams(name="drop_scenario", arguments=arguments)
+        )
+        return answer.isError, answer.content[0].text
+
+    refused = asyncio.run(drop({"name": "*"}))
+    accepted = asyncio.run(drop({"name": "*", "everything": True}))
+
+    assert refused[0] and "everything=true" in refused[1]
+    assert not accepted[0] and "all scenarios dropped" in accepted[1]
