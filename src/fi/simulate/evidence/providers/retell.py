@@ -251,7 +251,7 @@ class RetellEvidenceSource:
         started_ms = payload.get("start_timestamp")
         if isinstance(started_ms, (int, float)):
             for call in tool_calls:
-                if call["at"]:
+                if isinstance(call["at"], (int, float)):
                     call["at"] = started_ms / 1000 + call["at"]
         messages = _extract_retell_messages(transcript_events)
         cost = payload.get("call_cost") or {}
@@ -354,7 +354,7 @@ def _extract_retell_tool_calls(events: list[Any]) -> list[dict[str, Any]]:
             "arguments": coerce_json(arguments),
             "result": None,
             "ok": True,
-            "at": entry.get("time_sec") or 0,
+            "at": entry.get("time_sec"),
         }
         calls.append(call)
         if call_id:

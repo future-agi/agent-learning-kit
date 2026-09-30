@@ -253,18 +253,39 @@ def _install_declared_python_tools() -> None:
         return
     function_names = {function for _, function in declared}
     active = threading.local()
+    import dis
+    import inspect
+
+    suspendable = (
+        inspect.CO_COROUTINE | inspect.CO_GENERATOR | inspect.CO_ASYNC_GENERATOR
+    )
+    # frame id -> (frame, entry time). Holding the frame keeps its id from being
+    # reused while an entry for it is still open.
+    entries: dict[int, tuple[Any, float]] = {}
 
     def profile(frame: Any, event: str, value: Any) -> None:
         if getattr(active, "busy", False):
             return
-        if frame.f_code.co_name not in function_names:
+        code = frame.f_code
+        if code.co_name not in function_names:
             return
         if event == "call":
-            active.__dict__.setdefault("started", {})[id(frame)] = time.time()
+            # A coroutine re-enters its frame on every resume after an await; the
+            # tool ran from its first entry, so keep that time.
+            entry = entries.get(id(frame))
+            if entry is None or entry[0] is not frame:
+                entries[id(frame)] = (frame, time.time())
             return
         if event != "return":
             return
-        started = active.__dict__.get("started", {}).pop(id(frame), time.time())
+        # A coroutine also "returns" at every await; only a real return ends it.
+        finished = not code.co_flags & suspendable or dis.opname[
+            code.co_code[frame.f_lasti]
+        ].startswith("RETURN")
+        entry = (
+            entries.pop(id(frame), None) if finished else entries.get(id(frame))
+        )
+        started = entry[1] if entry is not None else time.time()
         filename = frame.f_code.co_filename.replace("\\", "/")
         key = next(
             (
