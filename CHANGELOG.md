@@ -31,6 +31,11 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
   tasks on cancellation, and drain queued playback before closing a provider call.
 - Voice diagnostics include sanitized SIP error codes, transcript-finalization
   and cleanup results, isolated-worker exit status, and native crash backtraces.
+- Outbound SIP calls no longer block on `wait_until_answered`. LiveKit v1.9.11
+  retried that request with 3s/5s/7s deadlines, cancelling and redialing a
+  ringing call so people and slow lines could never answer; the engine now
+  waits for `sip.callStatus == "active"` in the room within the answer
+  deadline and reports a rejected call's reason (e.g. `user_unavailable`).
 
 ## v1.0.0-rc.1 — 2026-06-10
 

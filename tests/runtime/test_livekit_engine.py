@@ -2742,8 +2742,12 @@ def _install_engine_fakes(monkeypatch, calls, target_identity="target-agent"):
                     request.sip_call_to,
                     request.room_name,
                     request.participant_identity,
-                    request.wait_until_answered,
                 )
+            )
+            room.remote_participants[request.participant_identity] = SimpleNamespace(
+                identity=request.participant_identity,
+                attributes={"sip.callStatus": "active"},
+                track_publications={},
             )
 
     class _Room:
@@ -2811,7 +2815,6 @@ def test_sip_outbound_dials_per_case_room_and_identity(monkeypatch) -> None:
     assert all(call[1] == "ST_test" for call in dials)
     assert all(call[2] == "+12068956991" for call in dials)
     assert all(call[3] == "+14155551234" for call in dials)
-    assert all(call[6] is True for call in dials)
     for result in report.results:
         assert result.metadata["status"] == CaseStatus.COMPLETED.value
 

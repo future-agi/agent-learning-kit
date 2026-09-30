@@ -2469,16 +2469,20 @@ class LiveKitEngine(BaseEngine):
                         },
                     )
                     await asyncio.wait_for(
-                        api_client.sip.create_sip_participant(
+                        _dial_sip_participant(
+                            api_client,
+                            room,
                             api.CreateSIPParticipantRequest(
                                 sip_trunk_id=transport.sip_trunk_id,
                                 sip_number=transport.sip_number,
                                 sip_call_to=transport.sip_call_to,
                                 room_name=room_name,
                                 participant_identity=sip_participant_identity,
-                                wait_until_answered=True,
                                 play_ringtone=True,
-                            )
+                                ringing_timeout={
+                                    "seconds": math.ceil(sip_answer_timeout)
+                                },
+                            ),
                         ),
                         timeout=sip_answer_timeout,
                     )
@@ -5339,6 +5343,69 @@ def _remove_room_listener(room: rtc.Room, event: str, listener) -> None:
         room.off(event, listener)
     except (AttributeError, ValueError):
         logger.debug("LiveKit listener was already removed", extra={"event": event})
+
+
+class SIPCallEndedError(Exception):
+    """The dialed SIP participant left the room before the call was answered."""
+
+    def __init__(self, disconnect_reason: str) -> None:
+        super().__init__(disconnect_reason)
+        # Surfaces through _safe_provider_error_details as provider_code, e.g.
+        # user_unavailable for SIP 480 and user_rejected for SIP 486.
+        self.code = disconnect_reason.lower()
+
+
+async def _dial_sip_participant(
+    api_client: api.LiveKitAPI,
+    room: rtc.Room,
+    request: api.CreateSIPParticipantRequest,
+) -> None:
+    """Place an outbound SIP call and return once the callee answers.
+
+    ``wait_until_answered`` is deliberately not used: LiveKit servers whose
+    internal SIP RPC client retries (v1.9.11 uses 3s, 5s and 7s attempt
+    deadlines) cancel the ringing INVITE and redial, so a person or a slow line
+    never gets long enough to answer. The SIP participant joins the room while
+    dialing and reports ``sip.callStatus == "active"`` once answered.
+    """
+    identity = request.participant_identity
+    settled = asyncio.Event()
+    ended_reason: list[str] = []
+
+    def check_answered(participant) -> None:
+        if (
+            participant.identity == identity
+            and participant.attributes.get("sip.callStatus") == "active"
+        ):
+            settled.set()
+
+    def on_attributes_changed(_changed, participant) -> None:
+        check_answered(participant)
+
+    def on_disconnected(participant) -> None:
+        if participant.identity == identity and not settled.is_set():
+            ended_reason.append(
+                rtc.DisconnectReason.Name(participant.disconnect_reason or 0)
+            )
+            settled.set()
+
+    listeners = (
+        ("participant_connected", check_answered),
+        ("participant_attributes_changed", on_attributes_changed),
+        ("participant_disconnected", on_disconnected),
+    )
+    for event, listener in listeners:
+        room.on(event, listener)
+    try:
+        await api_client.sip.create_sip_participant(request)
+        for participant in list(room.remote_participants.values()):
+            check_answered(participant)
+        await settled.wait()
+    finally:
+        for event, listener in listeners:
+            _remove_room_listener(room, event, listener)
+    if ended_reason:
+        raise SIPCallEndedError(ended_reason[0])
 
 
 async def _close_agent_session(session: AgentSession, *, timeout: float) -> None:
