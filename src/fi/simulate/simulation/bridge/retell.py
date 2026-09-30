@@ -165,15 +165,33 @@ class RetellWebCallConnector(ProviderConnector):
         except asyncio.TimeoutError as exc:
             self._connected = False
             raise RuntimeError("retell_webcall_agent_track_timeout") from exc
-        async for event in rtc.AudioStream(track):
-            frame = event.frame
-            yield frame.data.tobytes(), frame.sample_rate
-        self._connected = False
+        stream = rtc.AudioStream(track)
+
+        async def close_on_disconnect():
+            await self._agent_disconnected.wait()
+            await stream.aclose()
+
+        disconnect = asyncio.create_task(close_on_disconnect())
+        try:
+            async for event in stream:
+                frame = event.frame
+                yield frame.data.tobytes(), frame.sample_rate
+        finally:
+            self._connected = False
+            disconnect.cancel()
+            await asyncio.gather(disconnect, return_exceptions=True)
+            await stream.aclose()
+            logger.info("retell_audio_stream_closed call_id=%s", self._call_id)
 
     async def disconnect(self) -> None:
         self._connected = False
-        if self._room:
-            await self._room.disconnect()
+        try:
+            if self._room:
+                await self._room.disconnect()
+        finally:
+            if self._audio_source is not None:
+                await self._audio_source.aclose()
+                self._audio_source = None
 
     @property
     def is_connected(self) -> bool:
