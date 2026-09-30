@@ -9,6 +9,7 @@ import numpy as np
 
 from fi.simulate.simulation.engines.caller_barge_in import (
     CallerBargeIn,
+    _RoomInterjectionAudio,
     _unsafe_candidate,
     caller_language,
     selected_call_indices,
@@ -63,6 +64,46 @@ class _Output:
 
     async def close(self):
         self.closed = True
+
+
+def test_interjection_reuses_existing_caller_audio_output() -> None:
+    class ExistingOutput:
+        sample_rate = 24000
+
+        def __init__(self):
+            self.frames = []
+            self.flushed = 0
+            self.cleared = 0
+
+        async def capture_frame(self, frame):
+            self.frames.append(frame)
+
+        def flush(self):
+            self.flushed += 1
+
+        async def wait_for_playout(self):
+            return None
+
+        def clear_buffer(self):
+            self.cleared += 1
+
+    async def exercise():
+        output = ExistingOutput()
+        adapter = _RoomInterjectionAudio(output)
+        frame = rtc.AudioFrame.create(24000, 1, 240)
+        started = []
+        async def on_started():
+            started.append(True)
+
+        await adapter.prepare(frame)
+        await adapter.play([frame], on_started)
+        assert output.frames == [frame]
+        assert output.flushed == 1
+        assert started == [True]
+        await adapter.close()
+        assert output.cleared == 1
+
+    asyncio.run(exercise())
 
 
 class _ModelStream:
@@ -246,9 +287,9 @@ def test_multiple_barge_ins_are_generated_from_live_context() -> None:
         controller.target_ended()
         await controller.wait_for_interjection()
         assert controller.interjected_current_turn
-        controller.events[-1]["speech_state_overlap"] = False
-        assert controller.interjected_current_turn  # played late still counts as caller turn
-        controller.events[-1]["speech_state_overlap"] = True
+        controller.events[-1]["stopped_at"] = time.time() - 2
+        assert not controller.interjected_current_turn  # target spoke past a backchannel
+        controller.events[-1]["stopped_at"] = time.time()
         assert session.history.items[0].metrics["started_speaking_at"] > 0
         assert (
             session.history.items[0].metrics["stopped_speaking_at"]

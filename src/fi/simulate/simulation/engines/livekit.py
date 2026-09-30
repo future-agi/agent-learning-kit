@@ -722,6 +722,7 @@ class _TestRunnerAgent(Agent):
                 # or continue instead of generating a second, contextless reply.
                 if self._session is not None:
                     self._session.history.insert(new_message)
+                await _remember_answered_turn(self, new_message)
                 raise StopResponse()
 
     @function_tool(
@@ -1532,13 +1533,13 @@ async def _without_hold_marker(
         # chunk. In that case the old all-or-nothing check released the buffered
         # marker to both TTS and transcription. Keep the answer, not the marker.
         spoken = re.sub(
-            r"^\s*SILENCE\b(?:[.!?:;—-]+[ \t]*|\r?\n[ \t]*)",
+            r"^\s*(?i:SILENCE)\b(?:[.!?:;—-]+[ \t]*|\r?\n[ \t]*|[ \t]+(?=[A-Z]))",
             "",
             text,
             count=1,
-            flags=re.I,
         )
         if spoken != text:
+            spoken = spoken.lstrip()
             if spoken:
                 yield spoken
             for item in held:
@@ -1684,8 +1685,11 @@ class LiveKitEngine(BaseEngine):
             selected_barge_in_cases = selected_call_indices(
                 current_run_id, len(scenario.dataset), caller_barge_in_rate
             )
-        except ValueError as exc:
-            raise ValueError("HARNESS_CALLER_BARGE_IN_RATE must be between 0 and 1") from exc
+        except ValueError:
+            logger.warning(
+                "invalid HARNESS_CALLER_BARGE_IN_RATE; disabling optional caller barge-in"
+            )
+            selected_barge_in_cases = set()
         if recording_case_directory is not None and len(scenario.dataset) != 1:
             raise ValueError(
                 "recording_case_directory requires a single-persona scenario"
@@ -2288,7 +2292,7 @@ class LiveKitEngine(BaseEngine):
                     agent=customer_agent,
                     model=models.llm,
                     tts=models.tts,
-                    audio_output=_RoomInterjectionAudio(room),
+                    audio_output=_RoomInterjectionAudio(session.room_io.audio_output),
                     language=caller_language(persona),
                     seed=f"{run_id}:{test_case_id}",
                     propensity=(
@@ -2319,9 +2323,10 @@ class LiveKitEngine(BaseEngine):
                         and not target_transcription_mode
                         and not conversation_ended.is_set()
                     ):
-                        caller_barge_in.target_started(
-                            wait_for_audio=caller_barge_in.audio_gate_enabled
-                        )
+                        # Native targets have no authoritative text stream. If the
+                        # waveform monitor is unavailable, stay conservative: no
+                        # interjection is better than firing 400 ms into a filler.
+                        caller_barge_in.target_started(wait_for_audio=True)
                     if prompt_opening is not None:
                         prompt_opening.speech_started()
                     target_speech_started.set()
@@ -3428,6 +3433,16 @@ async def _wait_for_target_audio(
     return selected
 
 
+async def _remember_answered_turn(agent: Any, message: Any) -> None:
+    """Keep a target turn answered by interjection in the caller model's context."""
+    if agent is None or message is None:
+        return
+    chat_ctx = agent.chat_ctx.copy()
+    if not any(item.id == message.id for item in chat_ctx.items):
+        chat_ctx.insert(message)
+        await agent.update_chat_ctx(chat_ctx)
+
+
 async def _forward_target_transcription(
     reader: "rtc.TextStreamReader",
     session: "AgentSession",
@@ -3522,7 +3537,10 @@ async def _forward_target_transcription(
             await caller_barge_in.wait_for_interjection()
             if getattr(caller_barge_in, "interjected_current_turn", False):
                 # The direct interjection was the response to this turn.
-                session.history.add_message(role="user", content=transcript)
+                message = session.history.add_message(role="user", content=transcript)
+                await _remember_answered_turn(
+                    getattr(session, "current_agent", None), message
+                )
                 return
         # Only elicit a simulator response while the conversation is live; once
         # it has ended the target's turn is recorded but the simulator stays

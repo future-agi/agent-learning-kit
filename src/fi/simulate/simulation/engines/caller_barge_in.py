@@ -125,60 +125,45 @@ def caller_language(persona: Any) -> str | None:
 
 
 class _RoomInterjectionAudio:
-    """An independent mic track so interjections never occupy a reply speech handle."""
+    """Write interjections through the caller's existing RoomIO microphone track."""
 
-    def __init__(self, room: rtc.Room):
-        self.room = room
-        self.source: rtc.AudioSource | None = None
-        self.track_sid: str | None = None
+    def __init__(self, output: Any):
+        self.output = output
+        self.sample_rate: int | None = None
+        self.num_channels: int | None = None
         self._lock = asyncio.Lock()
 
     async def prepare(self, frame: rtc.AudioFrame) -> None:
         async with self._lock:
-            if self.source is not None:
+            if self.sample_rate is not None:
                 if (
-                    frame.sample_rate != self.source.sample_rate
-                    or frame.num_channels != self.source.num_channels
+                    frame.sample_rate != self.sample_rate
+                    or frame.num_channels != self.num_channels
                 ):
                     raise ValueError("interjection TTS format changed within call")
                 return
-            source = rtc.AudioSource(
-                frame.sample_rate, frame.num_channels, queue_size_ms=250
-            )
-            track = rtc.LocalAudioTrack.create_audio_track(
-                "caller-interjection", source
-            )
-            publication = await self.room.local_participant.publish_track(
-                track,
-                rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE),
-            )
-            self.source = source
-            self.track_sid = str(publication.sid)
+            expected = getattr(self.output, "sample_rate", None)
+            if expected is not None and frame.sample_rate != expected:
+                raise ValueError("interjection TTS sample rate differs from caller output")
+            self.sample_rate = frame.sample_rate
+            self.num_channels = frame.num_channels
 
     async def play(self, frames: list[rtc.AudioFrame], on_started: Any) -> None:
-        source = self.source
-        if source is None:
-            raise RuntimeError("interjection track not prepared")
-        for index, frame in enumerate(frames):
-            await source.capture_frame(frame)
-            if index == 0:
-                await on_started()
-        await source.wait_for_playout()
+        if self.sample_rate is None:
+            raise RuntimeError("interjection output not prepared")
+        async with self._lock:
+            for index, frame in enumerate(frames):
+                await self.output.capture_frame(frame)
+                if index == 0:
+                    await on_started()
+            self.output.flush()
+            await self.output.wait_for_playout()
 
     def clear(self) -> None:
-        if self.source is not None:
-            self.source.clear_queue()
+        self.output.clear_buffer()
 
     async def close(self) -> None:
         self.clear()
-        if self.track_sid is not None:
-            try:
-                await self.room.local_participant.unpublish_track(self.track_sid)
-            except Exception as exc:
-                logger.warning(
-                    "caller interjection track cleanup failed: %s", type(exc).__name__
-                )
-            self.track_sid = None
 
 
 class CallerBargeIn:
@@ -481,9 +466,14 @@ class CallerBargeIn:
         The overlap flag is diagnostic only: if playback began just after the
         target stopped, it is still a caller turn and must not be duplicated.
         """
+        now = time.time()
         return any(
             event.get("target_turn") == self._turn_index
             and event.get("attempted_at") is not None
+            and (
+                event.get("stopped_at") is None
+                or now - float(event["stopped_at"]) <= 1.25
+            )
             for event in self.events
         )
 

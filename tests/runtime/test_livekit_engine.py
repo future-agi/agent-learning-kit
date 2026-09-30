@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from livekit.agents.llm import ChatMessage
 
 pytest.importorskip("livekit")
 
@@ -3518,6 +3519,9 @@ def test_target_transcription_does_not_generate_a_second_reply_after_barge_in() 
             pass
 
     session = _FakeReplySession()
+    session.current_agent = livekit._TestRunnerAgent(
+        persona=_scenario().dataset[0], instructions="Be a customer."
+    )
     asyncio.run(
         livekit._forward_target_transcription(
             _FakeTranscriptionReader("I can only help"),
@@ -3527,6 +3531,11 @@ def test_target_transcription_does_not_generate_a_second_reply_after_barge_in() 
     )
     assert session.reply_inputs == []
     assert session.history_adds == [("user", "I can only help")]
+    assert [
+        item.text_content
+        for item in session.current_agent.chat_ctx.items
+        if getattr(item, "role", None) == "user"
+    ] == ["I can only help"]
 
 
 def test_audio_target_turn_does_not_generate_a_second_reply_after_barge_in() -> None:
@@ -3551,10 +3560,11 @@ def test_audio_target_turn_does_not_generate_a_second_reply_after_barge_in() -> 
             history=SimpleNamespace(insert=seen.append)
         )
         agent._caller_barge_in = Probe()
-        message = SimpleNamespace(text_content="I can only help")
+        message = ChatMessage(role="user", content=["I can only help"])
         with pytest.raises(livekit.StopResponse):
             await agent.on_user_turn_completed(None, message)
         assert seen == [message]
+        assert message.id in {item.id for item in agent.chat_ctx.items}
 
     asyncio.run(exercise())
 
@@ -3567,8 +3577,9 @@ class _FakeReplySession:
         session = self
 
         class _History:
-            def add_message(self, *, role: str, content: str) -> None:
+            def add_message(self, *, role: str, content: str) -> ChatMessage:
                 session.history_adds.append((role, content))
+                return ChatMessage(role=role, content=[content])
 
         self.history = _History()
 
