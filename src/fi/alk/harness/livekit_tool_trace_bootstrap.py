@@ -29,6 +29,7 @@ import os
 from collections.abc import Mapping
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +52,8 @@ def _record(event: Any) -> None:
                 "is_error": bool(
                     output is not None and getattr(output, "is_error", False)
                 ),
+                # Epoch seconds when the model issued the call; places it in the transcript.
+                "at": getattr(call, "created_at", None),
             }
         )
     if not records:
@@ -254,8 +257,14 @@ def _install_declared_python_tools() -> None:
     def profile(frame: Any, event: str, value: Any) -> None:
         if getattr(active, "busy", False):
             return
-        if event != "return" or frame.f_code.co_name not in function_names:
+        if frame.f_code.co_name not in function_names:
             return
+        if event == "call":
+            active.__dict__.setdefault("started", {})[id(frame)] = time.time()
+            return
+        if event != "return":
+            return
+        started = active.__dict__.get("started", {}).pop(id(frame), time.time())
         filename = frame.f_code.co_filename.replace("\\", "/")
         key = next(
             (
@@ -285,6 +294,7 @@ def _install_declared_python_tools() -> None:
                             "arguments": arguments,
                             "output": value,
                             "is_error": False,
+                            "at": started,
                         },
                         default=str,
                         sort_keys=True,

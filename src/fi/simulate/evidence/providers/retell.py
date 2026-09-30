@@ -246,6 +246,13 @@ class RetellEvidenceSource:
         assert self._context is not None
         transcript_events = payload.get("transcript_with_tool_calls") or []
         tool_calls = _extract_retell_tool_calls(transcript_events)
+        # Retell's `time_sec` is relative to the call start; every other tool trace
+        # carries epoch seconds, which is what places a call in the transcript.
+        started_ms = payload.get("start_timestamp")
+        if isinstance(started_ms, (int, float)):
+            for call in tool_calls:
+                if call["at"]:
+                    call["at"] = started_ms / 1000 + call["at"]
         messages = _extract_retell_messages(transcript_events)
         cost = payload.get("call_cost") or {}
         metadata: dict[str, Any] = {
