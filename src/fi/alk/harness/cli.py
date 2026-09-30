@@ -495,7 +495,7 @@ async def _scenarios(args: argparse.Namespace) -> int:
     existing = len(load_written(destination))
     wanted = args.count or existing or 10
 
-    # The Uber Guest Booking POC policy is supplied only through the platform-owned simulator
+    # The guest-booking POC policy is supplied only through the platform-owned simulator
     # secret channel and is gated against the exact submitted phone target. Keep it in the model's
     # authoring brief: saved scenarios should be authored with natural PIN behavior, never rewritten
     # mechanically after generation or intercepted while a call is running.
@@ -521,6 +521,7 @@ async def _scenarios(args: argparse.Namespace) -> int:
         wanted=wanted,
         ask=permission_gate(_ask_operator) if args.interactive else None,
         authoring_guidance=poc_guidance,
+        job=getattr(args, "job", None),
     )
     await _converse(
         stage,

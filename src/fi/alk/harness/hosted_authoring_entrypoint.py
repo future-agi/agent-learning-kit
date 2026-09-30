@@ -15,6 +15,7 @@ from pathlib import Path
 
 from . import observability
 from .authoring_entrypoint import main as authoring_main
+from .poc_guest_booking import PIN_ENV, TARGET_PHONE_ENV
 
 _SECRETS_PATH = Path("/run/futureagi/secrets.json")
 _ADC_PATH = Path("/work/.authoring-credentials/google.json")
@@ -30,8 +31,8 @@ _PASSTHROUGH = {
     "ALK_BACKGROUND_NOISE_CATALOG",
     # Temporary, private guest-booking scenario policy. The exact
     # target comes from platform deployment configuration, never from customer environment input.
-    "ALK_CAB_GUEST_POC_TARGET_PHONE_NUMBER",
-    "ALK_CAB_GUEST_POC_PIN",
+    TARGET_PHONE_ENV,
+    PIN_ENV,
     "ALK_CLAUDE_GATEWAY_URL",
     "ALK_CLAUDE_GATEWAY_API_KEY",
     "ANTHROPIC_API_KEY",
@@ -166,8 +167,8 @@ def main(argv: list[str] | None = None) -> int:
                 "AGENTCC_BASE_URL",
                 "ALK_BACKGROUND_NOISE",
                 "ALK_BACKGROUND_NOISE_CATALOG",
-                "ALK_CAB_GUEST_POC_TARGET_PHONE_NUMBER",
-                "ALK_CAB_GUEST_POC_PIN",
+                TARGET_PHONE_ENV,
+                PIN_ENV,
             )
             if gateway_values.get(name)
         }

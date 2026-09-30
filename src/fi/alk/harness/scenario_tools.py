@@ -18,7 +18,7 @@ import re
 import logging
 from collections import Counter
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .backends import tool, tool_server
 
@@ -39,8 +39,6 @@ from .catalogue import (
     without_delivery_overlay,
 )
 from .contract import CALL_DIRECTIONS, AgentContract
-from .job import HarnessJob
-from .poc_guest_booking import guest_booking_pin_scenario_problem
 from .folder import (
     INDEX,
     SCENARIOS,
@@ -1118,6 +1116,7 @@ def scenario_tools(
     start_from: list[Scenario] | None = None,
     rename_on_collision: bool | None = None,
     can_grow: bool = False,
+    scenario_problem: Callable[[dict[str, Any]], str] | None = None,
 ) -> tuple[Any, list[Scenario]]:
     """A server for writing scenarios against one built environment.
 
@@ -1142,12 +1141,6 @@ def scenario_tools(
     catalogue = load_catalogue(destination)
     simulator_prompt = load_simulator_prompt(destination)
     target = {"count": wanted}
-    try:
-        guest_poc_job = HarnessJob.model_validate_json(
-            (destination / "job.json").read_text(encoding="utf-8")
-        )
-    except (OSError, ValueError):
-        guest_poc_job = None
 
     def cap() -> int:
         return int(target["count"] or 0) if can_grow else wanted
@@ -1598,9 +1591,10 @@ def scenario_tools(
                 )
             return as_given or _err(said)
 
-        pin_problem = guest_booking_pin_scenario_problem(guest_poc_job, args)
-        if pin_problem:
-            return _refuse(pin_problem)
+        if scenario_problem:
+            problem = scenario_problem(args)
+            if problem:
+                return _refuse(problem)
 
         # Cheap label checks run before the gates, since proving is expensive.
         strayed = _off_the_grid(args.get("coverage"), target.get("axes"))
@@ -1669,7 +1663,9 @@ def scenario_tools(
         )
         if not result.get("is_error"):
             exploration["since_submit"] = 0
-            refused.pop((str(args.get("name") or ""), 0), None)
+            name = str(args.get("name") or "")
+            for key in [key for key in refused if key[0] == name]:
+                refused.pop(key, None)
             return result
         said = str((result.get("content") or [{}])[0].get("text") or "")
         if said.startswith("Not kept"):

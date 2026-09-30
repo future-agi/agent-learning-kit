@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+
+from fi.alk.harness.contract import AgentContract
+from fi.alk.harness.scenarios import open_stage
+
 from fi.alk.harness.job import (
     AgentConnection,
     ExecutionMode,
@@ -57,9 +62,9 @@ def test_policy_is_gated_to_the_exact_phone_target() -> None:
     assert guidance == ""
 
 
-def test_policy_authors_exact_500_scenario_mix_with_default_pin() -> None:
+def test_policy_authors_exact_500_scenario_mix_with_configured_pin() -> None:
     guidance = guest_booking_pin_guidance(
-        _job(), scenario_count=500, environ={TARGET_PHONE_ENV: TARGET}
+        _job(), scenario_count=500, environ={TARGET_PHONE_ENV: TARGET, PIN_ENV: "7682"}
     )
 
     assert "`valid`: 400 scenarios (80%)" in guidance
@@ -85,6 +90,12 @@ def test_policy_accepts_private_pin_override_and_rejects_invalid_pin() -> None:
 
     assert "caller knows `1234`" in overridden
     assert invalid == ""
+    assert (
+        guest_booking_pin_guidance(
+            _job(), scenario_count=20, environ={TARGET_PHONE_ENV: TARGET, PIN_ENV: ""}
+        )
+        == ""
+    )
 
 
 def test_ten_scenario_brief_uses_exact_integer_mix() -> None:
@@ -116,14 +127,61 @@ def test_wrong_pin_scenario_cannot_name_valid_pin_even_to_forbid_it() -> None:
 
 
 def test_wrong_pin_scenario_without_valid_pin_is_accepted() -> None:
-    assert guest_booking_pin_scenario_problem(
-        _job(),
+    assert (
+        guest_booking_pin_scenario_problem(
+            _job(),
+            {
+                "instruction": "Speak 4821 when asked; you do not know another PIN.",
+                "fixture": {"guest_pin_case": "wrong", "guest_pin": "4821"},
+            },
+            environ={TARGET_PHONE_ENV: TARGET, PIN_ENV: "7682"},
+        )
+        == ""
+    )
+
+
+def test_wrong_pin_guard_catches_spoken_and_spaced_pin() -> None:
+    for mention in ("7 6 8 2", "seven six eight two", "PIN—7682", "PIN…7682"):
+        assert guest_booking_pin_scenario_problem(
+            _job(),
+            {
+                "instruction": f"Do not say {mention}.",
+                "fixture": {"guest_pin_case": "wrong", "guest_pin": "4821"},
+            },
+            environ={TARGET_PHONE_ENV: TARGET, PIN_ENV: "7682"},
+        ), mention
+
+
+def test_guard_requires_label_and_consistent_fixture_values() -> None:
+    values = {TARGET_PHONE_ENV: TARGET, PIN_ENV: "7682"}
+    for fixture in (
+        {},
+        {"guest_pin_case": ["wrong"], "guest_pin": "4821"},
+        {"guest_pin_case": "valid", "guest_pin": "4821"},
+        {"guest_pin_case": "wrong", "guest_pin": "7682"},
         {
-            "instruction": "Speak 4821 when asked; you do not know another PIN.",
-            "fixture": {"guest_pin_case": "wrong", "guest_pin": "4821"},
+            "guest_pin_case": "wrong_then_correct",
+            "initial_guest_pin": "7682",
+            "corrected_guest_pin": "4821",
         },
-        environ={TARGET_PHONE_ENV: TARGET, PIN_ENV: "7682"},
-    ) == ""
+    ):
+        assert guest_booking_pin_scenario_problem(
+            _job(), {"fixture": fixture}, environ=values
+        ), fixture
+
+
+def test_formatted_phone_number_is_not_treated_as_pin() -> None:
+    assert (
+        guest_booking_pin_scenario_problem(
+            _job(),
+            {
+                "instruction": "Call from (415) 555-7682 and use another PIN.",
+                "fixture": {"guest_pin_case": "wrong", "guest_pin": "4821"},
+            },
+            environ={TARGET_PHONE_ENV: TARGET, PIN_ENV: "7682"},
+        )
+        == ""
+    )
 
 
 def test_missing_pin_scenario_cannot_hide_valid_pin_in_persona() -> None:
@@ -138,11 +196,17 @@ def test_missing_pin_scenario_cannot_hide_valid_pin_in_persona() -> None:
 
 
 def test_guest_pin_scenario_guard_does_not_affect_other_phone_targets() -> None:
-    assert guest_booking_pin_scenario_problem(
-        _job(phone_number="+15557654321"),
-        {"instruction": "Do not guess 7682", "fixture": {"guest_pin_case": "wrong"}},
-        environ={TARGET_PHONE_ENV: TARGET, PIN_ENV: "7682"},
-    ) == ""
+    assert (
+        guest_booking_pin_scenario_problem(
+            _job(phone_number="+15557654321"),
+            {
+                "instruction": "Do not guess 7682",
+                "fixture": {"guest_pin_case": "wrong"},
+            },
+            environ={TARGET_PHONE_ENV: TARGET, PIN_ENV: "7682"},
+        )
+        == ""
+    )
 
 
 def test_policy_is_not_applied_to_other_connector_types() -> None:
@@ -154,3 +218,35 @@ def test_policy_is_not_applied_to_other_connector_types() -> None:
         )
         == ""
     )
+
+
+def test_submit_scenario_refuses_pin_leak_through_authoring_stage(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        "fi.alk.harness.scenarios.world_summary", lambda _path: "test world"
+    )
+    monkeypatch.setenv(TARGET_PHONE_ENV, TARGET)
+    monkeypatch.setenv(PIN_ENV, "7682")
+    monkeypatch.setattr("fi.alk.harness.scenarios.HANDS_OUT_ABOVE", 2)
+    (tmp_path / "job.json").write_text(_job().model_dump_json(), encoding="utf-8")
+    job = HarnessJob.model_validate_json((tmp_path / "job.json").read_text())
+    stage, _ = open_stage(
+        AgentContract(agent="phone-agent", modality="voice"),
+        out=tmp_path,
+        wanted=1,
+        job=job,
+    )
+    server = stage._spec.servers["scenarios"]
+    submit = next(spec for spec in server.tools if spec.name == "submit_scenario")
+    result = asyncio.run(
+        submit.handler(
+            {
+                "name": "wrong-pin",
+                "instruction": "Do not speak 7682",
+                "fixture": {"guest_pin_case": "wrong", "guest_pin": "4821"},
+            }
+        )
+    )
+    assert result.get("is_error")
+    assert "must not contain the configured valid PIN" in result["content"][0]["text"]
