@@ -485,6 +485,12 @@ and can read them side by side. So say it in the brief, for each writer that get
 separates your own scenarios from each other**, one clause per scenario, in the same words as the
 difficulty rule above. Then the writer has no excuse and no need to guess.
 
+**Say in every brief what a writer cannot see in its siblings.** A caller's first name may appear once
+in the whole suite, so ask for first names that belong to that caller's background rather than the
+commonest ones. No single location, accent or language may take more than a third of the suite, so
+spread them across the briefs instead of leaving each writer to pick. A caller whose accent is from the
+country they call from is often refused, so most callers are people who moved or are visiting.
+
 **Names have to be distinguishable when spoken, not merely different.** "No two people share a name" lets
 Laura and Lauren through, and over a phone line they are one name. Tell each writer to
 reject a pair that a listener would not separate: one differing letter, one differing syllable, or the
@@ -629,6 +635,13 @@ tested.
 
 The ordinary path is worth one cell, and only one. Everything else is a way things go wrong. A plan
 whose cells all expect success has tested the demonstration rather than the agent.
+
+**Deal each task's plain control ONCE ACROSS THE SUITE, exactly as the safety cells are dealt.** Once a
+task is split across several writers, each one writes its own ordinary run of it unless told otherwise,
+and every run after the first is refused. Measured on a five hundred: **486 of 955 refusals** were a
+second plain control. Name the one writer that holds the control for each task, and tell every other
+writer on that task that its control is taken, so each scenario it writes says in the branch line what
+the caller or the world does that the control does not.
 
 ## 5. Write down where each scenario sits
 

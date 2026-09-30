@@ -87,9 +87,11 @@ The planning skill asks the kind file for its X levels. A level with no field be
 | `noisy_line` | `background_noise`, the string naming the place, one of those the brief and the field list |
 | `accented` | `persona.accent` |
 | `non_native` | `persona.accent`, with the language of the call as `persona.languages` |
-| `disfluent` | `persona.communication_style`, with both values seeded where one is corrected aloud |
 | `terse` / `formal` / `anxious` | `persona.communication_style` |
 | `outbound_expecting` | `call_direction` outbound, `caller_awareness` "expecting" |
+
+`disfluent` is not dealt: `persona.communication_style` takes only the offered values, none of them is
+hesitant or halting, and a disfluent coordinate without one is refused every time.
 
 Two ways this table gets read wrongly, both measured on a fresh hundred.
 

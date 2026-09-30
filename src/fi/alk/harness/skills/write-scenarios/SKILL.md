@@ -95,7 +95,8 @@ the failure it catches, or it is not earning what it cost to write and run.
 **A request the agent can satisfy by doing the obvious thing is not a scenario.** Call, ask for the
 thing, get it, hang up: every agent passes, nothing is learned, and the suite gets longer without
 getting stronger. Keep exactly one plain path per task level as the control; everything else must
-carry something that can go wrong.
+carry something that can go wrong. The control is yours only if your brief says so: otherwise another
+writer holds it, and every scenario you write on that task says in its branch line what goes wrong.
 
 **Name the capability before writing the instruction.** One sentence: what could a competent agent
 get wrong here, and what would the wrong answer look like? If the honest answer is "nothing much",
@@ -800,21 +801,20 @@ Level names such as `quiet_line` belong to the suite, never to the words the cal
 
 **The coordinate is a claim about the call, so the persona has to carry it.** `interface` is not a
 label you attach afterwards; it says what the agent actually hears. If the cell says the caller is
-accented, the persona's accent field has to name one, and `Neutral` is not one. If it says disfluent,
-the persona's speaking style has to be disfluent and the way you write the caller's lines has to be
-disfluent too. If it says the line is noisy, the scenario needs a noise bed, not `background_noise:
+accented, the persona's accent field has to name one, and `Neutral` is not one. Disfluent is not a
+level you can deliver: the speaking style takes only the offered values and none of them is hesitant,
+so a disfluent coordinate is always refused. If it says the line is noisy, the scenario needs a noise bed, not `background_noise:
 false`. Measured across every suite on disk: **18 of 104 scenarios carrying an `interface` level did
 not deliver it**, including one named `..._wav_disfluent` whose persona style reads "simple and
 clear".
 
 ```
-BAD    interface: disfluent          persona: communication_style "simple and clear"
-       (the coordinate reports a speech condition the call never had, and the agent
+BAD    interface: accented           persona: accent "Neutral"
+       (the coordinate reports a voice condition the call never had, and the agent
         was never asked to handle one)
 
-GOOD   interface: disfluent          persona: communication_style "halting, restarts
-                                     sentences, repeats a word before moving on"
-       (and the caller's own lines are written that way, not just described)
+GOOD   interface: accented           persona: accent "Indian", location "Canada"
+       (and the caller's own lines are written the way that person speaks)
 ```
 
 There cannot be a mismatch between the cell, the persona and the words the caller actually says.
