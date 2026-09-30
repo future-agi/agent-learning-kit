@@ -133,7 +133,9 @@ interaction level or an instruction:
 
 A caller's voice is chosen from their accent and the language they speak, so the person has to hang
 together: the name, the accent and the language are one believable person, and where they are calling
-from can differ when the situation makes it believable (someone travelling, someone who moved). Spread
+from can differ when the situation makes it believable (someone travelling, someone who moved). A
+caller who speaks a language the agent does not serve has a name, an accent and a home that fit that
+language, and the language itself is their difficulty. Spread
 a suite across the accents the voice catalogue can really produce and across languages: the ones the
 agent supports, and at least one it must turn away. Vary ages, genders and temperaments as well; a
 suite of one kind of caller has tested one caller.

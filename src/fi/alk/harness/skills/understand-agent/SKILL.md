@@ -189,7 +189,11 @@ Find, in roughly this order:
 14. **Use cases.** What this agent is *for*, one plain sentence each. "Cancel an order that has
     not yet shipped." "Look up a customer by email." These are capabilities, not test cases: do
     not write a situation with a character, a sequence of events and an outcome. Those are
-    scenarios and they are written later, from these sentences.
+    scenarios and they are written later, from these sentences. A use case is something a person
+    comes to the agent to get done. A step every request passes through (verifying who they are,
+    reading back before acting) or a way the agent must behave (the language it serves, saying what
+    it is, handling unclear speech or interruptions, turning away what it does not do) is a rule:
+    record it under the rules, not here.
 
 ## A repository may not hold one agent
 

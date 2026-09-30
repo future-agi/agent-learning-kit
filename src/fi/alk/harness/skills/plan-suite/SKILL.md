@@ -97,9 +97,12 @@ are, hand the work out, then collect and save once at the end.
 
 ## 1. Find the tasks
 
-The tasks are the agent's own stated use cases, one to one. Where the contract lists its use cases,
-that list is the task axis; where it does not, read them out of the agent's description: every kind of
-request it says it handles. Write the list down before counting anything, and never add to it.
+The tasks are the agent's own stated use cases that a person comes to get done, one to one. Where the
+contract lists its use cases, start from that list; where it does not, read them out of the agent's
+description: every kind of request it says it handles. A listed use case that is a step or a rule
+(verifying the person, reading back before acting, handling unclear speech, disclosing what the agent
+is, turning requests away) is not a task: it is tested inside the tasks. Write the list down before
+counting anything, and never add to it.
 
 **The operations are a lens, never a grid to fill.** Every request a person makes reads, writes or
 manages the process:
@@ -115,12 +118,14 @@ and your list missed. An operation the agent does not state is a gap: write it i
 it no scenarios. A person reaching past the agent's limits is already covered by the `out_of_scope`
 overlay.
 
-Name each task for the use case it comes from, `update an address`, `explain a fee`. Never name one
+Name each task level from its use case's own main verb and object, in snake case: "Reset a forgotten
+password" is `reset_password`. The same agent then gets the same names on every run. Never name one
 for a person.
 
 **Steps are never tasks.** Identifying or verifying the person, a greeting, a language check, a
 question about the agent itself: each is a step of whatever the person called to get done, tested as a
-difficulty inside that task and tagged with it. A step is a task only when the person's whole goal is
+difficulty inside that task and tagged with it: a person who called to get something done and
+stumbles at the check is tagged with what they called for. A step is a task only when the person's whole goal is
 that operation, such as resetting a lost credential, and such calls are few.
 
 **A use case the channel cannot render is noted, never dealt.** When a stated use case depends on
@@ -268,7 +273,7 @@ on one and nothing in its place on the other, which is precisely that failure.
 
 | axis | question | where its levels come from |
 |---|---|---|
-| `task` | what needs doing | step 1: the agent's stated use cases, one level each, written `operation-object` |
+| `task` | what needs doing | step 1: the agent's stated use cases, one level each, named from the use case's own words |
 | `counterparty` | who the agent is serving | the vector below, projected to the profiles this agent must treat differently |
 | `disposition` | how the person behaves, and any world state that changes the right answer; never the overlay restated | the vector below, plus step 2b's states as levels |
 | `interface` | through what medium, under what conditions | **the kind file for this modality** |
@@ -320,10 +325,10 @@ completed on a link, an email confirmed, a form filled on a website: the person 
 the scenario runs, and nothing in the world records it. Name the level after what the agent must
 handle (`no_payment_method`, `card_declined`), never after a completion only the person could make.
 
-**`task` levels are `operation-object`, not verb phrases**, one for each stated use case:
-`update-address`, `explain-fee`. Written that way every level traces to a sentence in the agent's
-description, and the report can say which stated use cases were tested and which operations the agent
-does not offer.
+**`task` levels are the use cases' own names**, one for each stated use case, from its main verb and
+object: `reset_password`, `explain_fee`. Written that way every level traces to a sentence in the
+agent's description, the names hold from one run to the next, and the report can say which stated use
+cases were tested and which operations the agent does not offer.
 
 ### Counterparty and disposition are vectors, never labels
 

@@ -2572,20 +2572,6 @@ def test_the_grid_has_to_be_the_frameworks_axes() -> None:
     assert "Missing: interaction" in _grid_off_the_framework(short)
 
 
-def test_task_levels_have_to_be_operation_object() -> None:
-    from fi.alk.harness.scenario_tools import CANONICAL_AXES, _grid_off_the_framework
-
-    grid = {axis: ["one"] for axis in CANONICAL_AXES}
-    grid["task"] = ["create-ride", "cancel-ride", "retrieve-booking-status"]
-    assert _grid_off_the_framework(grid) == ""
-
-    grid["task"] = ["book_ride_cash", "cancel-ride"]
-    said = _grid_off_the_framework(grid)
-    assert "book_ride_cash" in said
-    assert "cancel-ride" not in said.split("These are not:")[1]
-    assert "authenticate" in said and "handoff" in said
-
-
 def test_an_instruction_naming_a_record_the_world_lacks_is_refused() -> None:
     from types import SimpleNamespace
 

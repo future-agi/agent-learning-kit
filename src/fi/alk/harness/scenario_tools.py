@@ -399,44 +399,6 @@ _LEVELS_MISTAKEN_FOR_AXES = {
 }
 
 
-# Closed set: every task is one of these applied to something the agent owns.
-OPERATIONS = (
-    "retrieve",
-    "compare",
-    "explain",
-    "diagnose",
-    "create",
-    "update",
-    "cancel",
-    "execute",
-    "configure",
-    "authenticate",
-    "navigate",
-    "handoff",
-)
-
-
-def _tasks_not_operation_object(levels: list[str]) -> str:
-    """Why these task levels are not `operation-object`, or "" when they are."""
-    astray = [
-        one
-        for one in levels
-        if level_name(one).split("_")[0] not in OPERATIONS
-    ]
-    if not astray:
-        return ""
-    return (
-        "task levels are one of the twelve operations applied to one of this agent's own objects, "
-        "written operation-object: cancel-ride, retrieve-booking-status, authenticate-payment-method. "
-        "These are not: " + ", ".join(sorted(astray)[:8]) + ". The twelve are "
-        + ", ".join(OPERATIONS)
-        + ". Two things go wrong when a level is a phrase instead: the coverage denominator stops "
-        "being the crossing, so nobody can say which cells were never tested, and the phrase usually "
-        "smuggles in a level of another axis, `book_ride_cash` carries a payment state that belongs "
-        "to disposition."
-    )
-
-
 def _grid_off_the_framework(axes: dict[str, list[str]]) -> str:
     """Why this grid is not the framework's axes, or "" when it is."""
     if not axes:
@@ -445,14 +407,7 @@ def _grid_off_the_framework(axes: dict[str, list[str]]) -> str:
     missing = [axis for axis in CANONICAL_AXES if axis not in declared]
     invented = sorted(axis for axis in declared if axis not in CANONICAL_AXES)
     if not missing and not invented:
-        return _tasks_not_operation_object(
-            [
-                str(one)
-                for axis, levels in axes.items()
-                if level_name(axis) == "task"
-                for one in (levels or [])
-            ]
-        )
+        return ""
     said = [
         "a scenario is a coordinate over the same axes for every agent, and this grid is not those "
         "axes. They are: " + ", ".join(CANONICAL_AXES) + "."
@@ -1531,8 +1486,8 @@ def scenario_tools(
         "three axes only one writer had ever heard of. A denominator built from that says nothing. "
         "Declare the grid here and deal each cell in its brief.\n\n"
         "The grid is always these eight axes, whatever the agent: **task** what needs doing, "
-        "written `operation-object` from the twelve operations crossed with this agent's own "
-        "objects; **counterparty** who is being served; **disposition** the state they and the "
+        "one level for each use case the agent states, named from that use case's own words; "
+        "**counterparty** who is being served; **disposition** the state they and the "
         "world are in that changes the right answer; **interface** the conditions the session "
         "runs under; **interaction** the shape of the exchange; **overlay** what is deliberately "
         "making it hard, from the closed list; **overlay_vector** where that adversarial content "
