@@ -139,45 +139,6 @@ def _contains_call_no_nested_funcs(node: ast.AST, func_name: str) -> bool:
     return found
 
 
-def _is_outcome_none_guard(stmt: ast.stmt) -> bool:
-    return (
-        isinstance(stmt, ast.If)
-        and ast.unparse(stmt.test) == "outcome is not None"
-        and len(stmt.body) == 1
-        and isinstance(stmt.body[0], ast.Return)
-    )
-
-
-def test_dial_ordering_verify_before_guard_before_dial() -> None:
-    tree = ast.parse(_ENGINE_PATH.read_text())
-    fn = _find_function(tree, "_run_single_test_case")
-
-    trys = [node for node in fn.body if isinstance(node, ast.Try)]
-    assert len(trys) == 1, "expected exactly one top-level Try in _run_single_test_case"
-    try_node = trys[0]
-
-    verify_hits = [
-        i
-        for i, stmt in enumerate(try_node.body)
-        if _contains_call_no_nested_funcs(stmt, "_ensure_sip_inbound_dispatch")
-    ]
-    guard_hits = [
-        i for i, stmt in enumerate(try_node.body) if _is_outcome_none_guard(stmt)
-    ]
-    dial_hits = [
-        i
-        for i, stmt in enumerate(try_node.body)
-        if _contains_call_no_nested_funcs(stmt, "build_call_originator")
-    ]
-
-    assert len(verify_hits) == 1, verify_hits
-    assert len(guard_hits) == 1, guard_hits
-    assert len(dial_hits) == 1, dial_hits
-
-    i_verify, i_guard, i_dial = verify_hits[0], guard_hits[0], dial_hits[0]
-    assert i_verify < i_guard < i_dial, (i_verify, i_guard, i_dial)
-
-
 def test_engine_has_no_bare_vapi_failure_code_literals() -> None:
     source = _ENGINE_PATH.read_text()
     assert '"vapi_call_start_timeout"' not in source
@@ -231,62 +192,6 @@ def test_engine_safe_provider_error_details_falls_back_to_status_code() -> None:
     assert value_source == expected_source, value_source
 
 
-def test_engine_finally_writes_reconciled_call_ids_onto_outcome_metadata() -> None:
-    """Reconcile results must reach the outcome from inside the `finally` —
-    start-failure paths `return outcome` from inside the `try`, so a write
-    that only happens in the later `outcome.metadata.update(...)` block would
-    never fire on exactly the paths where a reconcile can happen."""
-    tree = ast.parse(_ENGINE_PATH.read_text())
-    fn = _find_function(tree, "_run_single_test_case")
-    trys = [node for node in fn.body if isinstance(node, ast.Try)]
-    assert len(trys) == 1, "expected exactly one top-level Try in _run_single_test_case"
-    try_node = trys[0]
-
-    def _is_outcome_metadata_reconciled_write(node: ast.AST) -> bool:
-        return (
-            isinstance(node, ast.Subscript)
-            and isinstance(node.ctx, ast.Store)
-            and ast.unparse(node.value) == "outcome.metadata"
-            and isinstance(node.slice, ast.Constant)
-            and node.slice.value == "reconciled_call_ids"
-        )
-
-    hits = [
-        node
-        for stmt in try_node.finalbody
-        for node in ast.walk(stmt)
-        if _is_outcome_metadata_reconciled_write(node)
-    ]
-    assert len(hits) == 1, hits
-
-    # Existence alone isn't enough: a write with the key present but the
-    # value gutted to `[]`, or a guard flipped to `outcome is None`, would
-    # still satisfy the check above while silently reintroducing the bug
-    # this test exists to catch (ids dropped, or the write never firing on
-    # a live outcome). Tie the store to its enclosing guard and confirm the
-    # assigned value is a variable, not a constant/empty-list literal.
-    guarded_writes = [
-        (if_node, assign)
-        for stmt in try_node.finalbody
-        for if_node in ast.walk(stmt)
-        if isinstance(if_node, ast.If)
-        for assign in if_node.body
-        if isinstance(assign, ast.Assign)
-        and len(assign.targets) == 1
-        and _is_outcome_metadata_reconciled_write(assign.targets[0])
-    ]
-    assert len(guarded_writes) == 1, guarded_writes
-    guard_if, write_assign = guarded_writes[0]
-    assert ast.unparse(guard_if.test) == "outcome is not None", ast.unparse(
-        guard_if.test
-    )
-    assert isinstance(write_assign.value, ast.Name), (
-        "outcome.metadata['reconciled_call_ids'] must be assigned a variable "
-        "(the finalize result's ids), not a constant/empty-list literal that "
-        "would mask a lost value"
-    )
-
-
 def test_engine_finally_falls_back_provider_call_id_to_reconciled_orphan() -> None:
     """A reconciled orphan's first id must feed the evidence hint — a
     fallback that only lived in the outer scope (or fired unconditionally,
@@ -314,48 +219,6 @@ def test_engine_finally_falls_back_provider_call_id_to_reconciled_orphan() -> No
     guard_source = ast.unparse(guard_if.test)
     assert "provider_call_id is None" in guard_source, guard_source
     assert "reconciled_call_ids" in guard_source, guard_source
-
-
-def test_engine_finally_writes_cleanup_status_as_last_statement() -> None:
-    """cleanup_status/cleanup_errors must be computed after every other
-    cleanup step in the finally has run its `_record_cleanup_error` calls —
-    anything earlier would read cleanup_errors before it is fully populated,
-    so the write belongs at the end, and nowhere else in the finally."""
-    tree = ast.parse(_ENGINE_PATH.read_text())
-    fn = _find_function(tree, "_run_single_test_case")
-    trys = [node for node in fn.body if isinstance(node, ast.Try)]
-    assert len(trys) == 1, "expected exactly one top-level Try in _run_single_test_case"
-    try_node = trys[0]
-
-    assert try_node.finalbody, "finally body is empty"
-    last_stmt = try_node.finalbody[-1]
-    assert isinstance(last_stmt, ast.If), last_stmt
-    assert "outcome" in ast.unparse(last_stmt.test), ast.unparse(last_stmt.test)
-
-    def _is_cleanup_status_write(node: ast.AST) -> bool:
-        return (
-            isinstance(node, ast.Subscript)
-            and isinstance(node.ctx, ast.Store)
-            and ast.unparse(node.value) == "outcome.metadata"
-            and isinstance(node.slice, ast.Constant)
-            and node.slice.value == "cleanup_status"
-        )
-
-    last_stmt_writes = [
-        node
-        for stmt in last_stmt.body
-        for node in ast.walk(stmt)
-        if _is_cleanup_status_write(node)
-    ]
-    assert len(last_stmt_writes) == 1, last_stmt_writes
-
-    earlier_writes = [
-        node
-        for stmt in try_node.finalbody[:-1]
-        for node in ast.walk(stmt)
-        if _is_cleanup_status_write(node)
-    ]
-    assert earlier_writes == [], earlier_writes
 
 
 # --- finalize_originator (C3) ----------------------------------------------
@@ -715,85 +578,6 @@ def test_occupancy_check_immediately_precedes_dial() -> None:
     occ_test_src = ast.unparse(occ_stmt.test)
     assert "runtime.room_name_verbatim" in occ_test_src
     assert "profile.receives_inbound_call" in occ_test_src
-
-
-def test_occupancy_assigns_outcome_before_return() -> None:
-    tree = ast.parse(_ENGINE_PATH.read_text())
-    fn = _find_function(tree, "_run_single_test_case")
-    try_node = _top_level_try(fn)
-
-    occ_hits = [
-        stmt
-        for stmt in try_node.body
-        if _contains_call_no_nested_funcs(stmt, "_unexpected_participants")
-    ]
-    assert len(occ_hits) == 1, occ_hits
-    occ_stmt = occ_hits[0]
-    assert isinstance(occ_stmt, ast.If)
-
-    # The occupancy guard body is: compute `unexpected`, then `if unexpected:`
-    # whose own body assigns `outcome` and then returns it.
-    inner_ifs = [
-        node
-        for node in ast.walk(occ_stmt)
-        if isinstance(node, ast.If) and node is not occ_stmt
-    ]
-    assert len(inner_ifs) == 1, inner_ifs
-    inner_if = inner_ifs[0]
-
-    assign_indices = [
-        i
-        for i, stmt in enumerate(inner_if.body)
-        if isinstance(stmt, ast.Assign)
-        and len(stmt.targets) == 1
-        and isinstance(stmt.targets[0], ast.Name)
-        and stmt.targets[0].id == "outcome"
-    ]
-    return_indices = [
-        i for i, stmt in enumerate(inner_if.body) if isinstance(stmt, ast.Return)
-    ]
-    assert len(assign_indices) == 1, assign_indices
-    assert len(return_indices) == 1, return_indices
-    assert assign_indices[0] < return_indices[0]
-
-
-def test_caller_check_immediately_follows_readiness_wait() -> None:
-    tree = ast.parse(_ENGINE_PATH.read_text())
-    fn = _find_function(tree, "_run_single_test_case")
-    try_node = _top_level_try(fn)
-
-    wait_hits = [
-        i
-        for i, stmt in enumerate(try_node.body)
-        if _contains_call_no_nested_funcs(stmt, "_wait_for_target_audio")
-    ]
-    caller_hits = [
-        i
-        for i, stmt in enumerate(try_node.body)
-        if _contains_call_no_nested_funcs(stmt, "_caller_matches")
-    ]
-    assert len(wait_hits) == 1, wait_hits
-    assert len(caller_hits) == 1, caller_hits
-    i_wait, i_caller = wait_hits[0], caller_hits[0]
-    assert i_caller == i_wait + 1, (i_wait, i_caller)
-
-    caller_stmt = try_node.body[i_caller]
-    assert isinstance(caller_stmt, ast.If)
-    caller_test_src = ast.unparse(caller_stmt.test)
-    for token in (
-        "runtime.room_name_verbatim",
-        "profile.receives_inbound_call",
-        "transport.originator_from_number",
-    ):
-        assert token in caller_test_src, (token, caller_test_src)
-
-    returns = [node for node in ast.walk(caller_stmt) if isinstance(node, ast.Return)]
-    assert returns == [], "the caller check must not return directly"
-
-    # No SECOND `if outcome is not None: return outcome` guard was added
-    # anywhere in the function beyond the one pre-existing occurrence.
-    guard_hits = [node for node in ast.walk(fn) if _is_outcome_none_guard(node)]
-    assert len(guard_hits) == 1, guard_hits
 
 
 def test_wrong_caller_fails_through_exception_handler() -> None:

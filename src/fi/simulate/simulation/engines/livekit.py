@@ -610,6 +610,10 @@ class _CaseOutcome:
     provider_artifacts: list[ArtifactManifestEntry] = field(default_factory=list)
 
 
+class _PreparationFailed(Exception):
+    """Stop preparation without bypassing evidence finalization and cleanup."""
+
+
 def _dispatch_metadata_json(agent_definition) -> str:
     """Metadata for the target agent's LiveKit dispatch.
 
@@ -1969,7 +1973,9 @@ class LiveKitEngine(BaseEngine):
         managed_room_owned = runtime.room_mode == "managed"
         room_connected = False
         cleanup_errors: list[str] = []
+        transcription_errors: list[str] = []
         outcome: _CaseOutcome | None = None
+        stop_reason: str | None = None
         sip_dispatch_rule_id: str | None = None
         sip_dispatch_rule_created = False
         call_originator: CallOriginator | None = None
@@ -2007,12 +2013,15 @@ class LiveKitEngine(BaseEngine):
             nonlocal target_transcription_mode
             pid = str(participant_identity)
             if pid in (simulator_identity, recorder_identity):
+                reader.close()
                 return
             if len(pending_target_transcriptions) >= _MAX_BUFFERED_TARGET_STREAMS:
                 logger.warning(
                     "target_transcription_buffer_full: dropping stream (buffered=%d)",
                     len(pending_target_transcriptions),
                 )
+                reader.close()
+                transcription_errors.append("target_transcription_buffer_full")
                 return
             pending_target_transcriptions.append((reader, pid))
             target_speech_started.set()
@@ -2021,7 +2030,11 @@ class LiveKitEngine(BaseEngine):
             # also transcribe the greeting and emit a second, duplicate reply.
             # Dispatch is deferred until after ``session.start()``, so a buffered
             # stream implies a live session.
-            if not target_transcription_mode and session is not None:
+            if (
+                not target_transcription_mode
+                and session is not None
+                and not conversation_ended.is_set()
+            ):
                 session.input.set_audio_enabled(False)
                 session.clear_user_turn()
                 target_transcription_mode = True
@@ -2163,7 +2176,7 @@ class LiveKitEngine(BaseEngine):
                             ),
                         )
             if outcome is not None:
-                return outcome
+                raise _PreparationFailed
             # The target resolves who is calling from participant attributes or metadata.
             # Without the persona's number every scenario looks like the same demo rider and
             # the agent looks up the wrong account, which reads as an agent bug.
@@ -2367,7 +2380,7 @@ class LiveKitEngine(BaseEngine):
                         "Target agent dispatch exceeded its deadline",
                         retryable=True,
                     )
-                    return outcome
+                    raise _PreparationFailed
                 except Exception as exc:
                     logger.warning(
                         "LiveKit target dispatch failed",
@@ -2387,7 +2400,7 @@ class LiveKitEngine(BaseEngine):
                             exc, operation="agent_dispatch"
                         ),
                     )
-                    return outcome
+                    raise _PreparationFailed
                 # C3 §4.3: the ack budget is wall-clock from the FIRST create_dispatch return.
                 first_dispatch_at = time.monotonic()
                 logger.info(
@@ -2424,7 +2437,7 @@ class LiveKitEngine(BaseEngine):
                         "Provider web call creation exceeded its deadline",
                         retryable=True,
                     )
-                    return outcome
+                    raise _PreparationFailed
                 except Exception as exc:
                     logger.warning(
                         "Provider web bridge creation failed",
@@ -2444,7 +2457,7 @@ class LiveKitEngine(BaseEngine):
                             exc, operation="web_bridge_start"
                         ),
                     )
-                    return outcome
+                    raise _PreparationFailed
             if profile.places_outbound_call and api_client is not None:
                 try:
                     logger.info(
@@ -2477,10 +2490,16 @@ class LiveKitEngine(BaseEngine):
                         "Outbound SIP call was not answered before the deadline",
                         retryable=True,
                     )
-                    return outcome
+                    raise _PreparationFailed
                 except Exception as exc:
+                    provider_error_details = _safe_provider_error_details(
+                        exc, operation="sip_dial"
+                    )
                     logger.warning(
-                        "SIP dial failed",
+                        "sip_outbound_failed details=%s run=%s case=%s",
+                        json.dumps(provider_error_details, sort_keys=True),
+                        run_id,
+                        test_case_id,
                         exc_info=redacted_exc_info(exc),
                         extra={
                             "run_id": run_id,
@@ -2493,9 +2512,9 @@ class LiveKitEngine(BaseEngine):
                         FailureStage.PREPARING,
                         "sip_dial_failed",
                         "Failed to dial the SIP participant",
-                        details=_safe_provider_error_details(exc, operation="sip_dial"),
+                        details=provider_error_details,
                     )
-                    return outcome
+                    raise _PreparationFailed
             if profile.receives_inbound_call:
                 logger.info(
                     "sip_inbound_ready",
@@ -2530,7 +2549,7 @@ class LiveKitEngine(BaseEngine):
                         "Another participant was already in the leased simulator room before the call was placed",
                         retryable=True,
                     )
-                    return outcome
+                    raise _PreparationFailed
             if transport.inbound_call_originator is not None:
                 name = transport.inbound_call_originator
                 try:
@@ -2547,7 +2566,7 @@ class LiveKitEngine(BaseEngine):
                         f"{name.capitalize()} call creation exceeded its deadline",
                         retryable=True,
                     )
-                    return outcome
+                    raise _PreparationFailed
                 except Exception as exc:
                     logger.warning(
                         f"{name.capitalize()} call creation failed",
@@ -2566,7 +2585,7 @@ class LiveKitEngine(BaseEngine):
                             exc, operation=f"{name}_call_start"
                         ),
                     )
-                    return outcome
+                    raise _PreparationFailed
             if (
                 _dispatch_ack_enabled()
                 and target_dispatch_deferred
@@ -2689,8 +2708,10 @@ class LiveKitEngine(BaseEngine):
                 transcribed_track_id = attrs.get(ATTRIBUTE_TRANSCRIPTION_TRACK_ID)
                 if transcribed_track_id:
                     if transcribed_track_id != target.audio_track_sid:
+                        reader.close()
                         return
                 elif str(participant_identity) != target.identity:
+                    reader.close()
                     return
                 # Some target agents publish authoritative text before RoomIO reports their audio
                 # state. That is still proof that the target won the opening race.
@@ -2718,8 +2739,9 @@ class LiveKitEngine(BaseEngine):
                 # First target transcription means the target is speaking — stop
                 # the redundant simulator STT so it cannot emit duplicate turns.
                 if not target_transcription_mode:
-                    session.input.set_audio_enabled(False)
-                    session.clear_user_turn()
+                    if not conversation_ended.is_set():
+                        session.input.set_audio_enabled(False)
+                        session.clear_user_turn()
                     target_transcription_mode = True
                 if caller_barge_in is not None and not conversation_ended.is_set():
                     caller_barge_in.target_started(wait_for_text=True)
@@ -2729,6 +2751,7 @@ class LiveKitEngine(BaseEngine):
                         session,
                         conversation_ended=conversation_ended,
                         captured_target_turns=captured_target_turns,
+                        transcription_errors=transcription_errors,
                         opening_turn=(
                             opening_turn and conversation_direction == "agent_first"
                         ),
@@ -2860,28 +2883,8 @@ class LiveKitEngine(BaseEngine):
                 run_id,
                 test_case_id,
             )
-            # Then delete the room so the target can't keep monologuing into a call the other
-            # side has left; the recording ends when the call does, matching the transcript.
-            if api_client is not None and managed_room_owned:
-                try:
-                    await asyncio.wait_for(
-                        api_client.room.delete_room(
-                            api.DeleteRoomRequest(room=room_name)
-                        ),
-                        timeout=_cleanup_budget(),
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning(
-                        "LiveKit room delete on conversation end failed",
-                        exc_info=redacted_exc_info(exc),
-                    )
-            messages = _canonical_report_messages(session)
-            messages = _merge_captured_target_turns(messages, captured_target_turns)
-            outcome = _conversation_outcome(
-                stop_reason,
-                messages,
-                min_turn_messages=min_turn_messages,
-            )
+        except _PreparationFailed:
+            pass
         except DispatchUnacknowledgedError as exc:
             # C3 §4.3 step 4 / §4.5: ack exhaustion is a scenario-level call failure (errored),
             # NEVER world retirement. The marker rides ``failure.code`` (structured), never the
@@ -2966,47 +2969,35 @@ class LiveKitEngine(BaseEngine):
                 details={"exception_type": type(exc).__name__},
             )
         finally:
+            conversation_ended.set()
+            logger.info(
+                "voice_finalization_started stop_reason=%s native_streams=%d run=%s case=%s",
+                stop_reason, len(target_transcription_tasks), run_id, test_case_id,
+            )
             if caller_barge_in is not None:
                 await caller_barge_in.close()
-            # The ambience belongs to the caller agent, not the engine. Guarded because teardown
-            # must never be the reason a case fails.
             if customer_agent is not None:
+                customer_agent.end_of_call()
+            # Stop the media source before flushing its final transcription.
+            if api_client is not None and managed_room_owned:
                 try:
-                    # Bounded like every other teardown step. Closing the ambience player unpublishes
-                    # its track, and when the room's signal client has already died, that wait never
-                    # returns: the SDK loops on resume and restart while this await sits here, and the
-                    # case never completes, so the whole run is discarded on its deadline with a
-                    # finished conversation inside it. Measured: two calls ended on endCall at 15 and
-                    # 17 messages and both reported 570004ms and no test case.
                     await asyncio.wait_for(
-                        customer_agent._stop_background_audio(),
-                        timeout=_cleanup_budget(
-                            _BACKGROUND_AUDIO_CLEANUP_TIMEOUT_SECONDS
+                        api_client.room.delete_room(
+                            api.DeleteRoomRequest(room=room_name)
                         ),
-                    )
-                except Exception:
-                    logger.warning("background audio not closed cleanly", exc_info=True)
-            if target_transcription_handler_registered:
-                room.unregister_text_stream_handler(TOPIC_TRANSCRIPTION)
-            pending_target_transcriptions.clear()
-            pending_transcriptions = list(target_transcription_tasks)
-            for pending in pending_transcriptions:
-                pending.cancel()
-            if pending_transcriptions:
-                # Cancelled above, but a task blocked reading a stream whose connection is gone does
-                # not observe the cancellation, so this is bounded too.
-                try:
-                    await asyncio.wait_for(
-                        asyncio.gather(*pending_transcriptions, return_exceptions=True),
                         timeout=_cleanup_budget(),
                     )
-                except Exception as exc:  # noqa: BLE001 - teardown never fails a case
-                    logger.warning("transcription tasks did not stop cleanly: %s", exc)
+                except Exception as exc:  # noqa: BLE001 - independent cleanup must continue
+                    if not _is_not_found(exc):
+                        _record_cleanup_error(
+                            cleanup_errors, exc, "room_end", run_id, test_case_id
+                        )
             session_to_close = session or (
                 getattr(customer_agent, "started_session", None)
                 if customer_agent is not None
                 else None
             )
+            # Flush STT before unrelated teardown can consume the shared cleanup budget.
             if session_to_close is not None:
                 try:
                     await _close_agent_session(
@@ -3014,12 +3005,51 @@ class LiveKitEngine(BaseEngine):
                         timeout=_cleanup_budget(_SESSION_CLEANUP_TIMEOUT_SECONDS),
                     )
                 except Exception as exc:
+                    transcription_errors.append(f"session_close:{type(exc).__name__}")
                     _record_cleanup_error(
-                        cleanup_errors,
-                        exc,
-                        "session_close",
-                        run_id,
-                        test_case_id,
+                        cleanup_errors, exc, "session_close", run_id, test_case_id
+                    )
+            # Native transcripts can complete while the SDK session is draining.
+            # Consume every accepted stream before sealing the transcript.
+            if target_transcription_tasks:
+                loop = asyncio.get_running_loop()
+                deadline = loop.time() + _cleanup_budget(_FINAL_TURN_COMMIT_WAIT_SECONDS)
+                while target_transcription_tasks:
+                    done, pending = await asyncio.wait(
+                        tuple(target_transcription_tasks),
+                        timeout=max(0.0, deadline - loop.time()),
+                    )
+                    target_transcription_tasks.difference_update(done)
+                    if pending and not done:
+                        transcription_errors.append("target_transcription_timeout")
+                        break
+            if target_transcription_handler_registered:
+                room.unregister_text_stream_handler(TOPIC_TRANSCRIPTION)
+            for reader, _identity in pending_target_transcriptions:
+                reader.close()
+            pending_target_transcriptions.clear()
+            pending_transcriptions = list(target_transcription_tasks)
+            for pending in pending_transcriptions:
+                pending.cancel()
+            if pending_transcriptions:
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(*pending_transcriptions, return_exceptions=True),
+                        timeout=_cleanup_budget(),
+                    )
+                except Exception as exc:  # noqa: BLE001 - independent cleanup must continue
+                    _record_cleanup_error(
+                        cleanup_errors, exc, "transcription_cancel", run_id, test_case_id
+                    )
+            if customer_agent is not None:
+                try:
+                    await asyncio.wait_for(
+                        customer_agent._stop_background_audio(),
+                        timeout=_cleanup_budget(_BACKGROUND_AUDIO_CLEANUP_TIMEOUT_SECONDS),
+                    )
+                except Exception as exc:  # noqa: BLE001 - independent cleanup must continue
+                    _record_cleanup_error(
+                        cleanup_errors, exc, "background_audio_close", run_id, test_case_id
                     )
             if models is not None:
                 try:
@@ -3099,15 +3129,6 @@ class LiveKitEngine(BaseEngine):
                         # evidence fetches its record instead of reporting
                         # "not matched" after searching nothing.
                         provider_call_id = reconciled_call_ids[0]
-                    # Written here too (not only in the metadata.update below)
-                    # because a start-failure path returns from inside the try,
-                    # bypassing that block entirely.
-                    if outcome is not None:
-                        outcome.metadata["reconciled_call_ids"] = reconciled_call_ids
-                        if finalize_result.termination_source:
-                            outcome.metadata["provider_termination_source"] = (
-                                finalize_result.termination_source
-                            )
                 except Exception as exc:
                     _record_cleanup_error(
                         cleanup_errors,
@@ -3163,21 +3184,42 @@ class LiveKitEngine(BaseEngine):
                         run_id,
                         test_case_id,
                     )
-            # Written here too (not only in the metadata.update below) because a
-            # pre-dial return (e.g. the occupancy check) exits from inside the
-            # try, bypassing that block entirely.
-            if outcome is not None and outcome.metadata.get("cleanup_status") is None:
-                outcome.metadata["cleanup_status"] = (
-                    "failed" if cleanup_errors else "completed"
-                )
-                outcome.metadata["cleanup_errors"] = cleanup_errors
+        messages = (
+            _canonical_report_messages(session_to_close)
+            if session_to_close is not None
+            else []
+        )
+        messages = _merge_captured_target_turns(messages, captured_target_turns)
         if outcome is None:
-            outcome = _failure_outcome(
-                TestCaseStatus.FAILED,
-                FailureStage.FINALIZING,
-                "livekit_outcome_missing",
-                "LiveKit test case ended without an outcome",
-            )
+            if transcription_errors:
+                outcome = _failure_outcome(
+                    TestCaseStatus.FAILED,
+                    FailureStage.FINALIZING,
+                    "transcript_finalization_failed",
+                    "The final call transcript could not be completely captured",
+                    retryable=True,
+                )
+            elif stop_reason is not None:
+                outcome = _conversation_outcome(
+                    stop_reason, messages, min_turn_messages=min_turn_messages
+                )
+            else:
+                outcome = _failure_outcome(
+                    TestCaseStatus.FAILED,
+                    FailureStage.FINALIZING,
+                    "livekit_outcome_missing",
+                    "LiveKit test case ended without an outcome",
+                )
+        # Failed calls keep their evidence and original failure, too.
+        outcome.messages = messages
+        outcome.transcript = "\n".join(
+            f"{message['role']}: {message['content']}" for message in messages
+        )
+        outcome.metadata["transcript_finalization_status"] = (
+            "incomplete" if transcription_errors else
+            "completed" if session_to_close is not None else "not_started"
+        )
+        outcome.metadata["transcript_finalization_errors"] = transcription_errors
         if recorder is not None:
             _attach_recordings(
                 outcome,
@@ -3273,11 +3315,18 @@ class LiveKitEngine(BaseEngine):
                 ),
             }
         )
+        if provider_termination_source:
+            outcome.metadata["provider_termination_source"] = provider_termination_source
         logger.info(
-            "livekit_case_outcome status=%s stop_reason=%s failure=%s run=%s case=%s",
+            "livekit_case_outcome status=%s stop_reason=%s failure=%s transcript_status=%s turns=%d transcript_errors=%s cleanup_status=%s cleanup_errors=%s run=%s case=%s",
             outcome.status.value,
-            outcome.metadata.get("stop_reason"),
+            outcome.metadata.get("stop_reason", stop_reason),
             outcome.failure.code if outcome.failure is not None else None,
+            outcome.metadata["transcript_finalization_status"],
+            len(outcome.messages),
+            transcription_errors,
+            outcome.metadata.get("cleanup_status"),
+            cleanup_errors,
             run_id,
             test_case_id,
         )
@@ -3449,6 +3498,7 @@ async def _forward_target_transcription(
     *,
     conversation_ended: "asyncio.Event | None" = None,
     captured_target_turns: list[dict[str, Any]] | None = None,
+    transcription_errors: list[str] | None = None,
     opening_turn: bool = False,
     opening_preamble_detected: asyncio.Event | None = None,
     opening_preamble_audio_finished: asyncio.Event | None = None,
@@ -3565,7 +3615,13 @@ async def _forward_target_transcription(
             session.history.add_message(role="user", content=transcript)
         except Exception:  # noqa: BLE001
             pass
+    except asyncio.CancelledError:
+        if transcription_errors is not None:
+            transcription_errors.append("target_transcription_cancelled")
+        raise
     except Exception as exc:  # noqa: BLE001
+        if transcription_errors is not None:
+            transcription_errors.append(f"target_transcription:{type(exc).__name__}")
         logger.warning(
             "Failed to consume target transcription stream",
             exc_info=redacted_exc_info(exc),
@@ -3573,6 +3629,7 @@ async def _forward_target_transcription(
     finally:
         if caller_barge_in is not None:
             caller_barge_in.target_ended()
+        reader.close()
         if prompt_opening is not None:
             prompt_opening.stream_ended()
         if opening_turn and opening_transcription_classified is not None:
@@ -5357,32 +5414,32 @@ def _safe_provider_error_details(
     """
 
     code = getattr(exc, "code", None)
-    if code is not None:
-        code_value = getattr(code, "value", None)
-        if code_value is None and not isinstance(code, (str, int)):
-            code_value = str(code)
-        else:
-            code_value = code_value if code_value is not None else code
-    else:
-        code_value = None
+    code_value = getattr(code, "value", code)
     status = getattr(exc, "status", None) or getattr(exc, "status_code", None)
     details: dict[str, object] = {
         "operation": operation,
         "exception_type": type(exc).__name__,
     }
-    if code_value is not None:
+    if isinstance(code_value, (str, int)) and re.fullmatch(
+        r"[a-z_]{1,64}|[0-9]{3}", str(code_value)
+    ):
         details["provider_code"] = code_value
     if status is not None:
         try:
-            details["http_status"] = int(status)
+            http_status = int(status)
         except (TypeError, ValueError):
-            details["http_status"] = str(status)
+            http_status = None
+        if http_status is not None and 100 <= http_status <= 599:
+            details["http_status"] = http_status
     metadata = getattr(exc, "metadata", None)
     if isinstance(metadata, dict):
-        for key in ("sip_status_code", "sip_status", "sip-code"):
-            value = metadata.get(key)
-            if value is not None:
-                details["sip_status_code"] = str(value)
+        for key in ("sip_status_code", "sip-code"):
+            try:
+                sip_status = int(metadata.get(key))
+            except (TypeError, ValueError):
+                continue
+            if 100 <= sip_status <= 699:
+                details["sip_status_code"] = str(sip_status)
                 break
     return details
 
