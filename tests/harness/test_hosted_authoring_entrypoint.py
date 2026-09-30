@@ -34,8 +34,6 @@ def test_fallback_authoring_reads_gateway_key_without_deleting_control_channel(
             {
                 "AGENTCC_API_KEY": "platform-key",
                 "AGENTCC_BASE_URL": "https://gateway.example.test",
-                "ALK_UBER_GUEST_POC_TARGET_PHONE_NUMBER": "+15551234567",
-                "ALK_UBER_GUEST_POC_PIN": "7682",
                 "ALK_CAB_GUEST_POC_TARGET_PHONE_NUMBER": "+15551234567",
                 "ALK_CAB_GUEST_POC_PIN": "7682",
                 "RETELL_API_KEY": "must-not-be-forwarded",
@@ -55,11 +53,6 @@ def test_fallback_authoring_reads_gateway_key_without_deleting_control_channel(
     assert entrypoint.main([]) == 0
     assert entrypoint.os.environ["AGENTCC_API_KEY"] == "platform-key"
     assert entrypoint.os.environ["AGENTCC_BASE_URL"] == "https://gateway.example.test"
-    assert (
-        entrypoint.os.environ["ALK_UBER_GUEST_POC_TARGET_PHONE_NUMBER"]
-        == "+15551234567"
-    )
-    assert entrypoint.os.environ["ALK_UBER_GUEST_POC_PIN"] == "7682"
     assert (
         entrypoint.os.environ["ALK_CAB_GUEST_POC_TARGET_PHONE_NUMBER"]
         == "+15551234567"

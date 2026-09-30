@@ -28,10 +28,8 @@ _PASSTHROUGH = {
     "ALK_VOICEMAIL_SCENARIOS",
     "ALK_BACKGROUND_NOISE",
     "ALK_BACKGROUND_NOISE_CATALOG",
-    # Temporary, private scenario-authoring policy for the Uber Guest Booking POC. The exact
+    # Temporary, private guest-booking scenario policy. The exact
     # target comes from platform deployment configuration, never from customer environment input.
-    "ALK_UBER_GUEST_POC_TARGET_PHONE_NUMBER",
-    "ALK_UBER_GUEST_POC_PIN",
     "ALK_CAB_GUEST_POC_TARGET_PHONE_NUMBER",
     "ALK_CAB_GUEST_POC_PIN",
     "ALK_CLAUDE_GATEWAY_URL",
@@ -168,8 +166,6 @@ def main(argv: list[str] | None = None) -> int:
                 "AGENTCC_BASE_URL",
                 "ALK_BACKGROUND_NOISE",
                 "ALK_BACKGROUND_NOISE_CATALOG",
-                "ALK_UBER_GUEST_POC_TARGET_PHONE_NUMBER",
-                "ALK_UBER_GUEST_POC_PIN",
                 "ALK_CAB_GUEST_POC_TARGET_PHONE_NUMBER",
                 "ALK_CAB_GUEST_POC_PIN",
             )

@@ -1,4 +1,4 @@
-"""Temporary authoring policy for the Uber Guest Booking POC.
+"""Temporary authoring policy for a guest-booking phone POC.
 
 The policy is deliberately opt-in through a platform-owned target number.  A customer job can
 name a phone target, but it cannot activate this policy unless that target exactly matches the
@@ -18,10 +18,8 @@ from collections.abc import Mapping
 
 from .job import HarnessJob, ProviderExecutionMode
 
-TARGET_PHONE_ENV = "ALK_UBER_GUEST_POC_TARGET_PHONE_NUMBER"
-PIN_ENV = "ALK_UBER_GUEST_POC_PIN"
-CAB_TARGET_PHONE_ENV = "ALK_CAB_GUEST_POC_TARGET_PHONE_NUMBER"
-CAB_PIN_ENV = "ALK_CAB_GUEST_POC_PIN"
+TARGET_PHONE_ENV = "ALK_CAB_GUEST_POC_TARGET_PHONE_NUMBER"
+PIN_ENV = "ALK_CAB_GUEST_POC_PIN"
 DEFAULT_PIN = "7682"
 
 _E164 = re.compile(r"^\+[1-9]\d{7,14}$")
@@ -48,18 +46,10 @@ def _case_counts(total: int) -> dict[str, int]:
     return counts
 
 
-def _deployment_value(values: Mapping[str, str], canonical: str, legacy: str) -> str:
-    canonical_value = str(values.get(canonical) or "").strip()
-    legacy_value = str(values.get(legacy) or "").strip()
-    if canonical_value and legacy_value and canonical_value != legacy_value:
-        raise ValueError(f"Conflicting deployment values for {canonical} and {legacy}")
-    return canonical_value or legacy_value
-
-
 def _active_pin(job: HarnessJob | None, values: Mapping[str, str]) -> str | None:
     if job is None:
         return None
-    configured_target = _deployment_value(values, CAB_TARGET_PHONE_ENV, TARGET_PHONE_ENV)
+    configured_target = str(values.get(TARGET_PHONE_ENV) or "").strip()
     if not _E164.fullmatch(configured_target):
         return None
     if job.agent.connector.strip().lower() != "phone":
@@ -69,7 +59,7 @@ def _active_pin(job: HarnessJob | None, values: Mapping[str, str]) -> str | None
     submitted_target = str(job.agent.config.get("phone_number") or "").strip()
     if submitted_target != configured_target:
         return None
-    pin = _deployment_value(values, CAB_PIN_ENV, PIN_ENV) or DEFAULT_PIN
+    pin = str(values.get(PIN_ENV) or DEFAULT_PIN).strip()
     return pin if _PIN.fullmatch(pin) else None
 
 
@@ -118,7 +108,7 @@ def guest_booking_pin_guidance(
 
     counts = _case_counts(scenario_count)
     return f"""
-## Temporary Uber Guest Booking POC: caller PIN behavior
+## Temporary guest-booking POC: caller PIN behavior
 
 This private policy applies to this target only. Treat PIN behavior as an orthogonal caller fact,
 not as the subject of every scenario: preserve broad coverage of the agent prompt and let the
@@ -155,8 +145,6 @@ and fixture, not in a scripted list of lines for the caller to recite.
 
 
 __all__ = [
-    "CAB_PIN_ENV",
-    "CAB_TARGET_PHONE_ENV",
     "DEFAULT_PIN",
     "PIN_ENV",
     "TARGET_PHONE_ENV",
