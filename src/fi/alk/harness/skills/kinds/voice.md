@@ -7,8 +7,8 @@ description: What a scenario has to account for when the person reaches the agen
 # Writing scenarios for a voice agent
 
 A voice agent is reached by a person speaking, in real time, who cannot see anything. That person
-answers several questions in one breath, corrects themselves mid-sentence, mishears a digit, talks
-over a confirmation, and sometimes goes silent. Every requirement below follows from one of those
+answers several questions in one breath, corrects themselves mid-sentence, mishears a digit, and
+calls from somewhere with sound around them. Every requirement below follows from one of those
 facts, and none of them replaces the general requirements a scenario has to meet.
 
 Whether the agent placed this call or answered it changes how the person is written. The contract
@@ -77,16 +77,39 @@ background audio someone else is producing. Not pasted text, not a hidden elemen
 modalities that have a screen. The intensity is the planner's to deal, subtle or overt, and a suite of
 overt injections has tested the easy half.
 
+## Background noise: on nearly every call
+
+Real callers ring from somewhere: a street, a car, an office, a shop, a kitchen. **Every voice
+scenario MUST carry a background noise bed unless the scenario is specifically about a clear line.**
+Quiet lines are very rare, a handful in a large suite, and each one needs its own reason. Noise is
+independent of every other lever: an accented caller, a hesitant caller, an attacker and a caller
+correcting themselves all call from somewhere too, so they carry noise as well.
+
+- Pick the place from the situation, then the matching value from the places the `background_noise`
+  field lists. The noise MUST fit where the caller says they are.
+- Spread a suite across the places on offer; never let one place, or silence, dominate.
+- The bed is one continuous ambience. NEVER build a scenario on a timed or triggered sound: a cough at a
+  particular moment, a television or radio line, an announcement, a second voice, a door, stepping
+  away from the phone. None of these is produced, so the scenario tests nothing.
+
+```
+BAD    background_noise: false   (a caller asking to change an order, no reason given for silence)
+GOOD   background_noise: "street"   (the caller says they are walking to the station)
+BAD    "A loudspeaker announces a platform change just as you give your reference."
+GOOD   The caller is on a busy street and gives the reference while walking; the noise bed runs
+       under the whole call.
+```
+
 ## The levels this modality deals, and the field each one lands in
 
 The planning skill asks the kind file for its X levels. A level with no field behind it is a label.
 
 | Level | Where it lands |
 |---|---|
-| `quiet_line` | `background_noise` false, the control a noisy scenario is measured against; rare, about one call in ten |
+| `quiet_line` | `background_noise` false; very rare, only when the scenario is about a clear line |
 | `noisy_line` | `background_noise`, the string naming the place, one of those the brief and the field list |
-| `accented` | `persona.accent` |
-| `non_native` | `persona.accent`, with the language of the call as `persona.languages` |
+| `accented` | `persona.accent`, and a noise bed like any other call |
+| `non_native` | `persona.accent`, with the language of the call as `persona.languages`, and a noise bed |
 | `terse` / `formal` / `anxious` | `persona.communication_style` |
 | `outbound_expecting` | `call_direction` outbound, `caller_awareness` "expecting" |
 | `outbound_partial` | `call_direction` outbound, `caller_awareness` "partial" |
@@ -136,11 +159,9 @@ What you almost certainly mean is the correction level, and it already exists: t
 mind, corrects an address, switches product after the quote. That is genuinely hard for an agent and the
 call delivers it in full. Refused at submit.
 
-**`quiet_line` means the bed is OFF, and it is the only level that means that.** Sixteen scenarios in
-fifty-two carried `quiet_line` with the noise bed switched on. The coordinate then reports that the agent
-managed on a clear line when it never had one, and every noisy scenario in the suite loses the control it
-was supposed to be measured against. Noise is not a sensible default to leave on: on this level it is the
-thing being ruled out.
+**`quiet_line` means the bed is OFF, and it is the only level that means that.** Every other level,
+including accented and non-native callers, keeps a noise bed. A quiet line that carries noise claims a
+clear line the call never had.
 
 **An accent counts only if this deployment's voices actually differ on it.** `accented` lands in
 `persona.accent`, and that field chooses a voice from the catalogue configured for the run. Accents the
@@ -190,10 +211,8 @@ GOOD   You are somewhere noisy, you are in a hurry, and you ask the agent to lif
 ```
 
 **Name the place, never `background_noise: true`.** Choose where the situation puts the caller from
-the places the `background_noise` field lists. Most calls are placed from somewhere; keep quiet lines
-rare, about one in ten, and only on the `quiet_line` level. Several names can share one recording, so
-spread a suite across places, not across synonyms for one place. The noise has to fit where the
-caller is.
+the places the `background_noise` field lists, as set out under "Background noise" above. Several names
+can share one recording, so spread a suite across places, not across synonyms for one place.
 
 **The persona carries the level.** If the cell says accented, `persona.accent` names an offered accent
 other than `Neutral`; if it says non-native, the persona names the language of the call and an accent,
@@ -203,14 +222,15 @@ hesitant and spelling-a-name callers are four different tests of the same axis.
 
 **A caller the agent cannot make out is written in the words, not the audio.** A rule like "ask the
 caller to repeat when they are unclear" is tested by a fragmentary opening, a sentence left
-unfinished, or a request too vague to act on, over a noisy bed. Name the level after that
-(`fragmentary_opening`, `vague_request`), never after degraded audio, which the call cannot deliver.
+unfinished, a detail given out of order, or a request too vague to act on, over a noisy bed. Name the
+level after that (`fragmentary_opening`, `vague_request`), never after degraded audio or a sound in
+the room, which the call cannot deliver. Such a scenario still carries a real task the caller wants
+done; unclear speech is the difficulty riding on it, not the whole call.
 
 ## What this modality lets you vary
 
-`background_noise` is per scenario, not a suite setting. Choose it from the situation rather than
-sprinkling it: a caller in a vehicle, a caller in an office, a caller in a crowd. A quiet scenario is
-the control that makes a noisy one mean something, so a suite needs both.
+`background_noise` is per scenario, not a suite setting. Choose it from the situation: a caller in a
+vehicle, a caller in an office, a caller in a crowd. Nearly every scenario has one.
 
 Accent and language belong to who the caller is, and they change what the agent's transcription has
 to survive. They are dealt across the suite; take the one you are given unless the scenario genuinely
