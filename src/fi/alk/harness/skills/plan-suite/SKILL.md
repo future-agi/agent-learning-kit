@@ -289,8 +289,9 @@ limits become the task and disposition levels, and dispositions are what the cal
 withholds, never a record's state. The tool-failure rule below does not apply: nothing on the agent's
 side can fail, so NEVER deal a level in which a lookup, a system or a service fails.
 
-**Skip any rule the simulated person cannot trigger on this channel.** The kind file for this agent
-says what the channel can and cannot carry. A rule whose situation the channel cannot produce is real,
+**Skip any rule the simulated person cannot trigger on this channel, even when the agent's own
+instructions name it.** The kind file for this agent says what the channel can and cannot carry, and
+what it says cannot be delivered is never planned, whatever the agent's rules mention. A rule whose situation the channel cannot produce is real,
 but no scenario can test it: declare no level for it. Where part of such a rule can be carried by what
 the person says, test that part, and name the level after what is said, not after the condition the
 channel cannot produce.
@@ -468,6 +469,13 @@ came back near-identical, and most of them had independently picked *a reference
 a landmark name to geocode. The cells were distinct, the difficulties were not. **The brief must say
 which one**: this scenario carries the correction after commitment, that one carries two facts that
 disagree, the next one the answer to a question nobody asked. Spread them the way you spread accents.
+
+**Deal each difficulty once per task.** Repeating the same difficulty on the same task with another
+person, place or wording is a perturbation, and a suite carries only a few of those in total. A family
+of scenarios whose only difficulty is one and the same is one test, however many rows it fills.
+
+**Tag the task the person pursues.** A step or a variation inside the task (an identity check, a
+question on the way) never becomes the task tag.
 
 **Deal each writer a distinct DIFFICULTY, not just a distinct cell.** A cell is a coordinate; two
 scenarios can sit on the same coordinate and still be the same test, sharing a task, an overlay, their
@@ -908,7 +916,10 @@ carry. A few deliberate crossings, a
 second-generation caller or a married name, are real people too; deal them as their own profile.
 
 Across the suite the people should be the people who really reach this agent: every language it
-supports and at least one it must turn away, several backgrounds, ages and temperaments. A suite where
+supports and at least one it must turn away, several backgrounds, ages and temperaments, and the
+different kinds of person the agent serves (a first-time user, someone acting for another, an older
+person, a professional) rather than one kind with a few exceptions. Where the kind file offers a set of
+accents or voices, spread the suite across all of them rather than leaning on one or two. A suite where
 most people share one background and one language has tested one person many times.
 
 **Deal the person's surroundings in the same brief** where the kind file says the channel carries
@@ -941,9 +952,9 @@ came back one short, a branch every writer assumed somebody else had, or a write
 instead of testing, survives unnoticed. Brief another round for whatever fails.
 
 **Keep the review short and do not churn.** Read, then fix only what is really wrong, through
-writers. A scenario is replaced at most once. NEVER put different content under an existing name: a
-replacement that tests something else gets a new name that says what it tests, and the old one is
-dropped. The mix of tasks and overlays is settled when you deal it, never by rewriting scenarios at the
+writers. A scenario is replaced at most once. NEVER put different content under an existing name: to
+remove a scenario, drop it; a replacement that tests something else is submitted under a new name
+that says what it tests. The mix of tasks and overlays is settled when you deal it, never by rewriting scenarios at the
 end.
 
 **Then call `suite_progress` one last time, immediately before saving.** It names the overlay
