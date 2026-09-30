@@ -110,6 +110,12 @@ interaction level or an instruction:
   in arrives as an ordinary reply after the agent finished. When the agent's own rules are about
   interruptions or consent given too early, test them with words: the caller agrees or says "just do
   it" in their own turn before the agent has asked, never during the agent's turn.
+
+  ```
+  BAD    When the agent starts reading the summary back, cut in with "fine, place it".
+  GOOD   As soon as you have given your details, say "that's everything, just place it", before
+         the agent has read anything back.
+  ```
 - **A voice that degrades.** Mumbled, cut-off, drowned-out or silent speech is never produced; the
   caller's words always arrive clean. Put unclear speech in the words themselves: a fragment, a
   sentence left unfinished, a detail given out of order.
