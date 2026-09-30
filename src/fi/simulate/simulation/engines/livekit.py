@@ -1940,6 +1940,10 @@ class LiveKitEngine(BaseEngine):
         # chat context. These are merged into the report so the trailing target
         # turn is never lost.
         captured_target_turns: list[dict[str, Any]] = []
+        # Bridged targets reach the simulator only through its STT. A segment that
+        # turns final while the session closes is never committed to its history,
+        # so the final segments are kept here to restore that trailing text.
+        target_stt_finals: list[str] = []
         # A phone agent may emit a legal recording disclosure as a standalone
         # utterance before its real greeting. That disclosure proves the line
         # is alive, but it is not a conversational turn for the simulated
@@ -2354,6 +2358,13 @@ class LiveKitEngine(BaseEngine):
                     opening_preamble_audio_finished.set()
 
             session.on("user_state_changed", on_target_state_changed)
+
+            def on_target_transcribed(event: Any) -> None:
+                text = (getattr(event, "transcript", "") or "").strip()
+                if getattr(event, "is_final", False) and text and not target_transcription_mode:
+                    target_stt_finals.append(text)
+
+            session.on("user_input_transcribed", on_target_transcribed)
             if target_dispatch_deferred:
                 # Session + early buffer handler are live; now dispatch the target
                 # so its greeting stream is captured, not dropped.
@@ -3194,6 +3205,8 @@ class LiveKitEngine(BaseEngine):
             else []
         )
         messages = _merge_captured_target_turns(messages, captured_target_turns)
+        if not target_transcription_mode:
+            messages = _append_uncommitted_stt_tail(messages, target_stt_finals)
         if outcome is None:
             if transcription_errors:
                 outcome = _failure_outcome(
@@ -4671,6 +4684,61 @@ def _merge_captured_target_turns(
             }
         )
         assistant_texts.append(text)
+    return merged
+
+
+def _append_uncommitted_stt_tail(
+    messages: list[dict[str, Any]], final_segments: list[str]
+) -> list[dict[str, Any]]:
+    """Append the target's final STT segments that no committed turn contains.
+
+    The simulator's STT commits each target turn as the concatenation of its final
+    segments. A segment that turns final while the session is closing starts a turn
+    that never ends, so livekit-agents never commits it and the target's last words
+    vanish. Only the segments left after every committed target word is matched in
+    order are appended; any divergence leaves the transcript untouched.
+    """
+
+    def words(text: str) -> list[str]:
+        return re.findall(r"[\w']+", text.lower())
+
+    committed = [
+        word
+        for message in messages
+        if message.get("role") == "assistant"
+        for word in words(message.get("content") or "")
+    ]
+    covered = 0
+    for index, segment in enumerate(final_segments):
+        if covered == len(committed):
+            tail = " ".join(final_segments[index:])
+            break
+        expected = words(segment)
+        if committed[covered : covered + len(expected)] != expected:
+            return messages
+        covered += len(expected)
+    else:
+        return messages
+    logger.info(
+        "target_stt_tail_restored segments=%d words=%d",
+        len(final_segments) - index,
+        len(words(tail)),
+    )
+    merged = list(messages)
+    if merged and merged[-1].get("role") == "assistant":
+        merged[-1] = {**merged[-1], "content": f"{merged[-1]['content']} {tail}".strip()}
+    else:
+        merged.append(
+            {
+                "role": "assistant",
+                "content": tail,
+                "created_at": None,
+                "started_speaking_at": None,
+                "stopped_speaking_at": None,
+                "interrupted": False,
+                "e2e_latency": None,
+            }
+        )
     return merged
 
 
