@@ -11,6 +11,7 @@ persona's facts.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from collections.abc import Mapping
@@ -19,6 +20,8 @@ from .job import HarnessJob, ProviderExecutionMode
 
 TARGET_PHONE_ENV = "ALK_UBER_GUEST_POC_TARGET_PHONE_NUMBER"
 PIN_ENV = "ALK_UBER_GUEST_POC_PIN"
+CAB_TARGET_PHONE_ENV = "ALK_CAB_GUEST_POC_TARGET_PHONE_NUMBER"
+CAB_PIN_ENV = "ALK_CAB_GUEST_POC_PIN"
 DEFAULT_PIN = "7682"
 
 _E164 = re.compile(r"^\+[1-9]\d{7,14}$")
@@ -45,6 +48,62 @@ def _case_counts(total: int) -> dict[str, int]:
     return counts
 
 
+def _deployment_value(values: Mapping[str, str], canonical: str, legacy: str) -> str:
+    canonical_value = str(values.get(canonical) or "").strip()
+    legacy_value = str(values.get(legacy) or "").strip()
+    if canonical_value and legacy_value and canonical_value != legacy_value:
+        raise ValueError(f"Conflicting deployment values for {canonical} and {legacy}")
+    return canonical_value or legacy_value
+
+
+def _active_pin(job: HarnessJob | None, values: Mapping[str, str]) -> str | None:
+    if job is None:
+        return None
+    configured_target = _deployment_value(values, CAB_TARGET_PHONE_ENV, TARGET_PHONE_ENV)
+    if not _E164.fullmatch(configured_target):
+        return None
+    if job.agent.connector.strip().lower() != "phone":
+        return None
+    if job.agent.mode is not ProviderExecutionMode.CONNECT_ONLY:
+        return None
+    submitted_target = str(job.agent.config.get("phone_number") or "").strip()
+    if submitted_target != configured_target:
+        return None
+    pin = _deployment_value(values, CAB_PIN_ENV, PIN_ENV) or DEFAULT_PIN
+    return pin if _PIN.fullmatch(pin) else None
+
+
+def guest_booking_pin_scenario_problem(
+    job: HarnessJob | None,
+    scenario: Mapping[str, object],
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> str:
+    """Reject POC scenarios that reveal the valid PIN to wrong/missing callers."""
+    pin = _active_pin(job, os.environ if environ is None else environ)
+    if pin is None:
+        return ""
+    fixture = scenario.get("fixture")
+    if not isinstance(fixture, dict):
+        return ""
+    case = fixture.get("guest_pin_case")
+    if case not in {"wrong", "missing"}:
+        return ""
+    # Scan the whole scenario, not just `instruction`: persona text, variables and fixture
+    # values can also become caller context. Match a standalone PIN, not digits inside a phone.
+    if re.search(rf"(?<!\d){re.escape(pin)}(?!\d)", json.dumps(scenario)):
+        return (
+            "Not kept. A wrong/missing-PIN scenario must not contain the configured valid "
+            "PIN anywhere, including in a negated instruction. Remove it entirely and say "
+            "'another PIN' without naming it."
+        )
+    if case == "missing" and any(
+        key in fixture for key in ("guest_pin", "initial_guest_pin", "corrected_guest_pin")
+    ):
+        return "Not kept. A missing-PIN scenario must not supply any PIN in its fixture."
+    return ""
+
+
 def guest_booking_pin_guidance(
     job: HarnessJob | None,
     *,
@@ -52,24 +111,9 @@ def guest_booking_pin_guidance(
     environ: Mapping[str, str] | None = None,
 ) -> str:
     """Return the POC-only scenario brief, or an empty string when the target does not match."""
-    if job is None:
-        return ""
     values = os.environ if environ is None else environ
-    configured_target = str(values.get(TARGET_PHONE_ENV) or "").strip()
-    if not _E164.fullmatch(configured_target):
-        return ""
-    if job.agent.connector.strip().lower() != "phone":
-        return ""
-    if job.agent.mode is not ProviderExecutionMode.CONNECT_ONLY:
-        return ""
-    submitted_target = str(job.agent.config.get("phone_number") or "").strip()
-    if submitted_target != configured_target:
-        return ""
-
-    pin = str(values.get(PIN_ENV) or DEFAULT_PIN).strip()
-    if not _PIN.fullmatch(pin):
-        # A malformed private deployment setting must fail closed rather than leaking a partial
-        # credential into authored caller facts.
+    pin = _active_pin(job, values)
+    if pin is None:
         return ""
 
     counts = _case_counts(scenario_count)
@@ -83,9 +127,12 @@ primary ride-booking or robustness flow continue after the PIN exchange.
 Across the complete saved suite of {scenario_count} scenarios, author exactly this allocation:
 - `valid`: {counts["valid"]} scenarios ({_CASES[0][1]}%). The caller knows `{pin}`.
 - `wrong`: {counts["wrong"]} scenarios ({_CASES[1][1]}%). The caller supplies one plausible but
-  incorrect four-digit PIN and must not later invent the valid PIN.
+  incorrect four-digit PIN and must not later invent the valid PIN. Do not put the valid PIN in
+  this scenario's instruction, persona, fixture, variables, checks or any other field, even in
+  a negative sentence like "do not guess [the valid PIN]"; say "another PIN" instead.
 - `missing`: {counts["missing"]} scenarios ({_CASES[2][1]}%). The caller does not know the PIN and
-  says so naturally when asked; it must not infer one from any phone number.
+  says so naturally when asked; it must not infer one from any phone number. Do not put the valid
+  PIN anywhere in this scenario either.
 - `wrong_then_correct`: {counts["wrong_then_correct"]} scenarios ({_CASES[3][1]}%). The caller first
   supplies a plausible incorrect four-digit PIN, then supplies `{pin}` only after the agent rejects
   it or explicitly asks the caller to try again.
@@ -108,8 +155,11 @@ and fixture, not in a scripted list of lines for the caller to recite.
 
 
 __all__ = [
+    "CAB_PIN_ENV",
+    "CAB_TARGET_PHONE_ENV",
     "DEFAULT_PIN",
     "PIN_ENV",
     "TARGET_PHONE_ENV",
     "guest_booking_pin_guidance",
+    "guest_booking_pin_scenario_problem",
 ]

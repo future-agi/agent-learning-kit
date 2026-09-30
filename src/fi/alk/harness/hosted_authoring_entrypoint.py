@@ -32,6 +32,8 @@ _PASSTHROUGH = {
     # target comes from platform deployment configuration, never from customer environment input.
     "ALK_UBER_GUEST_POC_TARGET_PHONE_NUMBER",
     "ALK_UBER_GUEST_POC_PIN",
+    "ALK_CAB_GUEST_POC_TARGET_PHONE_NUMBER",
+    "ALK_CAB_GUEST_POC_PIN",
     "ALK_CLAUDE_GATEWAY_URL",
     "ALK_CLAUDE_GATEWAY_API_KEY",
     "ANTHROPIC_API_KEY",
@@ -168,6 +170,8 @@ def main(argv: list[str] | None = None) -> int:
                 "ALK_BACKGROUND_NOISE_CATALOG",
                 "ALK_UBER_GUEST_POC_TARGET_PHONE_NUMBER",
                 "ALK_UBER_GUEST_POC_PIN",
+                "ALK_CAB_GUEST_POC_TARGET_PHONE_NUMBER",
+                "ALK_CAB_GUEST_POC_PIN",
             )
             if gateway_values.get(name)
         }

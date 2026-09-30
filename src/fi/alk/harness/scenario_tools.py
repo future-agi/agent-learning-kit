@@ -39,6 +39,8 @@ from .catalogue import (
     without_delivery_overlay,
 )
 from .contract import CALL_DIRECTIONS, AgentContract
+from .job import HarnessJob
+from .poc_guest_booking import guest_booking_pin_scenario_problem
 from .folder import (
     INDEX,
     SCENARIOS,
@@ -1140,6 +1142,12 @@ def scenario_tools(
     catalogue = load_catalogue(destination)
     simulator_prompt = load_simulator_prompt(destination)
     target = {"count": wanted}
+    try:
+        guest_poc_job = HarnessJob.model_validate_json(
+            (destination / "job.json").read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        guest_poc_job = None
 
     def cap() -> int:
         return int(target["count"] or 0) if can_grow else wanted
@@ -1589,6 +1597,10 @@ def scenario_tools(
                     "this cell, or place it on a level the call actually has."
                 )
             return as_given or _err(said)
+
+        pin_problem = guest_booking_pin_scenario_problem(guest_poc_job, args)
+        if pin_problem:
+            return _refuse(pin_problem)
 
         # Cheap label checks run before the gates, since proving is expensive.
         strayed = _off_the_grid(args.get("coverage"), target.get("axes"))
