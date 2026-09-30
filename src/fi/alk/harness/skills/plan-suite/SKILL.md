@@ -678,7 +678,7 @@ demonstration rather than the agent.
 **Deal each task's baseline ONCE ACROSS THE SUITE, exactly as the safety cells are dealt, and even the
 baseline carries one real difficulty.** The baseline is the mildest hard case the task has, never a
 recital of the steps. Once a task is split across several writers, each one writes its own baseline
-unless told otherwise, and every one after the first is refused. Name the one writer that holds the
+unless told otherwise, and every one after the first repeats it. Name the one writer that holds the
 baseline for each task, and tell every other writer on that task that it is taken, so each scenario it
 writes says in the branch line what the person or the world does that the baseline does not.
 
@@ -836,37 +836,33 @@ Between ten and twenty, judge it on how rich the cells are.
 When you delegate, delegate the writing entirely. Splitting a suite and then writing half of it
 yourself gives you the overhead of both.
 
-**Work in rounds, not in one fan-out.** A round is:
+**Keep writers busy, not rounds tidy.** Writers briefed in the same turn run together, and your
+next turn starts when the last of them reports. Throughput is how many are working at once and how
+evenly their slices end, so:
 
-1. Pick the cells that are still empty and group them into slices of **about fifteen to twenty
-   scenarios**. A writer reads the world once and then writes its whole slice, so that reading is
-   paid once per writer: slices of three or four spend most of their turns re-reading what the
-   last writer already read.
-2. Brief one writer per slice. Three to five in the first round is the useful size; twelve is the
-   ceiling and more than that are refused until a slot frees, which wastes the turn that asked.
-   Writers briefed in the same turn run at the same time.
-3. Each writer submits its scenarios itself and comes back with a report saying what it wrote and
-   what it could not.
-4. Call `suite_progress`. It names what is still empty without returning a single scenario body, so
-   it costs the same on a suite of a thousand as on a suite of ten. **This is how you check a
-   round, once per round.** Do not read the scenarios back to see what a writer did: a writer's
-   report says what it wrote, `suite_progress` says what that left empty, and a scenario body is
-   several thousand tokens that you then carry for the rest of the stage.
-5. Decide the next round from that: refill the cells that came back short, cover the ones nobody has
-   reached, and stop when the count is met.
+1. **Start wide.** While a lot remains, brief as many writers in one turn as run at once, each with a
+   slice of about fifteen to twenty scenarios. A writer reads the world once and then writes its whole
+   slice, so slices of three or four spend most of their turns re-reading.
+2. **Keep slices even.** The turn lasts as long as its slowest writer, so give no writer a slice much
+   larger or harder than the others. One writer stuck on refusals with a big slice leaves the rest idle.
+3. **Brief the next turn at once.** When a turn's writers report, call `suite_progress` and brief the
+   next writers for what is still empty in the same turn. Do not stop to read scenarios back: a
+   writer's report says what it wrote, and `suite_progress` names what is empty without returning a
+   single scenario body, so it costs the same at any suite size. Brief only what it shows as empty, so
+   nothing is covered twice.
+4. **Finish wide too.** Near the end, split what remains across several writers in small, distinct
+   slices rather than handing it all to one. The last cells are usually the hardest, and one writer
+   working through them alone is where a large suite slows to a crawl.
+5. **Stop when the count is met.**
 
-Rounds are what make a large suite finish. A writer that misreads its brief is caught in the next
-round rather than at the end; the suite stays inside a budget you can watch; and the same loop that
-writes fifty in one or two rounds writes a thousand in fourteen without changing shape. Track rounds
-rather than scenarios: the suite size only decides how many rounds there are.
+A writer that misreads its brief is caught the next time you check progress, and the same loop writes
+fifty or a thousand without changing shape.
 
 **A writer has about a hundred turns of its own.** That is enough to read the world, write fifteen
 to twenty scenarios and report. One that runs out says so and stops; whatever it did not reach is
 still empty, `suite_progress` will show it, and the next round hands it to a fresh writer. So a
 writer that misjudges its slice costs one round, never the suite.
 
-Do not brief the next round before the current one reports. You would be guessing at what is still
-empty, and two writers would cover the same cell.
 
 ## 8. Hand each writer its part
 

@@ -509,18 +509,6 @@ def _grid_off_the_framework(axes: dict[str, list[str]]) -> str:
     return " ".join(said)
 
 
-# A scenario naming none of these and carrying no overlay is a plain control.
-_NAMES_A_DIFFICULTY = re.compile(
-    r"\b(refus|correct|contradict|mishear|misheard|disagree|withhold|changes? (their )?mind"
-    r"|interrupt|instead of|wrong|mistake|mismatch|does not match|insist|pushe?s? back"
-    r"|repeats?|unclear|ambigu|confus|silen|hesitat|goes quiet|steps away"
-    r"|declin|unavailable|fail|error|expired|invalid|denied|blocked|suspend"
-    r"|sounds? like|swapped|no referent|not serviceable|geocodes? to nothing"
-    r"|disclos|surge|waive|policy|before (completing|booking|proceeding)|must (confirm|verify))\b",
-    re.IGNORECASE,
-)
-
-
 # A planner's name for a kind of difficulty, pasted ahead of the branch instead of describing it.
 _KIND_LABEL = re.compile(
     r"^\s*(?:two facts that disagree|a reference with no referent|a value that sounds like another"
@@ -533,43 +521,6 @@ _KIND_LABEL = re.compile(
 def _without_kind_label(branch: str) -> str:
     rest = _KIND_LABEL.sub("", branch or "", count=1)
     return rest[:1].upper() + rest[1:] if rest and rest != branch else branch
-
-
-def _a_second_plain_control(scenario: Scenario, kept: list[Scenario]) -> str:
-    """Why this scenario is the suite's second plain run of the same task, or ""."""
-    coverage = scenario.coverage or {}
-    if str(coverage.get("overlay") or "none") != "none":
-        return ""
-    said = " ".join(
-        str(getattr(scenario, name, "") or "") for name in ("instruction", "branch", "tests")
-    )
-    if _NAMES_A_DIFFICULTY.search(said):
-        return ""
-    task = str(coverage.get("task") or "")
-    if not task:
-        return ""
-    for one in kept:
-        if one.name == scenario.name:
-            continue
-        other = one.coverage or {}
-        if str(other.get("task") or "") != task:
-            continue
-        if str(other.get("overlay") or "none") != "none":
-            continue
-        theirs = " ".join(
-            str(getattr(one, name, "") or "") for name in ("instruction", "branch", "tests")
-        )
-        if _NAMES_A_DIFFICULTY.search(theirs):
-            continue
-        return (
-            f"{one.name} is already this suite's plain control for {task}: the caller asks for the "
-            "ordinary thing, gives the ordinary answers and gets the ordinary result. Proving the "
-            "capability twice proves nothing. If this call really is harder, say in the branch line, "
-            "in your own words, what the caller or the world does here that the control does not; "
-            "a stock phrase that does not describe this call is not a difficulty. If nothing does, "
-            "this task already has its control: write a different task level, or stop"
-        )
-    return ""
 
 
 def _off_the_grid(coverage: Any, grid: dict[str, list[str]] | None) -> str:
@@ -1454,13 +1405,6 @@ def scenario_tools(
         strayed = _off_the_grid(args.get("coverage"), target.get("axes"))
         if strayed:
             return _refuse(strayed)
-        # A capability is worth proving once. Everything past the control has to be hard.
-        try:
-            second_control = _a_second_plain_control(Scenario.model_validate(args), kept)
-        except Exception:  # noqa: BLE001 - a malformed scenario is the validator's to report
-            second_control = ""
-        if second_control:
-            return _refuse(second_control)
         twin = _already_in_the_suite(
             args, kept, _first_names_on_disk(destination, str(args.get("name") or ""))
         )

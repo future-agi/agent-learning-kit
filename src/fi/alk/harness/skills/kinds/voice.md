@@ -93,7 +93,7 @@ The planning skill asks the kind file for its X levels. A level with no field be
 | `outbound_unaware` | `call_direction` outbound, `caller_awareness` "unaware" |
 
 `disfluent` is not dealt: `persona.communication_style` takes only the offered values, none of them is
-hesitant or halting, and a disfluent coordinate without one is refused every time.
+hesitant or halting, so a disfluent coordinate can never be delivered.
 
 Two ways this table gets read wrongly, both measured on a fresh hundred.
 
@@ -103,7 +103,7 @@ gets a place picked by the scenario's name, which may not fit the situation. Any
 that is not one of those is not produced: a station announcement, an alarm, a crowd that argues, a
 voice behind the caller. Those are a second speaker under another name, and there is no second
 speaker. If the situation needs the caller to know something the room told them, have the caller say
-it. Refused at submit.
+it.
 
 **The caller's own voice is synthesised clean, every line.** The engine has a rate, an accent and an
 emotion; it has no impairment and the line never degrades. Slurred, garbled, mumbled, muffled or
@@ -120,7 +120,7 @@ sentence arrives perfectly articulated.
 
 The same holds anywhere the difficulty is carried by how a line sounds rather than by what it says: if
 you cannot point to the setting that produces it - `speech_rate`, the accent, the emotion, the noise bed -
-the call will not deliver it. Put the difficulty in the words. Refused at submit.
+the call will not deliver it. Put the difficulty in the words.
 
 **Barge-in is not something this runtime can do, so do not write it.** The caller is a voice session
 whose turn-taking waits for silence: it speaks once it has heard the agent stop, and the only interruption
