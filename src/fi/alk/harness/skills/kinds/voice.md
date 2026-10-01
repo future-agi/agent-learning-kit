@@ -148,7 +148,7 @@ The planning skill asks the kind file for its X levels. A level with no field be
 
 | Level | Where it lands |
 |---|---|
-| `quiet_line` | `background_noise` false; rare |
+| `quiet_line` | `background_noise` false; rare, a handful of scenarios across the whole suite, never an even share beside the noisy levels |
 | `noisy_line` | `background_noise`, the string naming the place, one of those the brief and the field list |
 | `accented` | `persona.accent`, and a noise bed like any other call |
 | `non_native` | `persona.accent`, with the language of the call as `persona.languages`, and a noise bed |
