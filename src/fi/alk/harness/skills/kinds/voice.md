@@ -68,12 +68,12 @@ here.
 | what competing signal exists | the ambience bed behind the caller, and nothing else the call can render |
 | how state is exposed | audio only: nothing can be shown, every value has to be said and heard back |
 
-**Interaction, this modality's tempo.** Single request or multi-turn; fresh or resumed; a correction
-after the agent has committed; and the one that is specific to a call, a long silence the agent has to
-handle without abandoning the caller.
+**Interaction, this modality's tempo.** A correction after the agent has committed, a request that
+grows or changes partway through, several needs in one call. Taking turns
+and confirming is how every call runs, so it is never a level, and a single plain request is rare.
 
-**Overlay vector, where adversarial content arrives on a call.** Spoken by the caller, or carried in
-background audio someone else is producing. Not pasted text, not a hidden element: those belong to
+**Overlay vector, where adversarial content arrives on a call.** Spoken by the caller; nothing else
+in the call can speak. Not pasted text, not a hidden element: those belong to
 modalities that have a screen. An injection on a call is spoken the way a person talks: they ask the
 agent to set its rules aside or to tell them what it was told, in their own words and for their own
 reasons, the way they would ask anyone for a favour. On a call, overt means the person asks openly

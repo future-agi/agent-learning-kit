@@ -26,7 +26,8 @@ These bind every plan, every brief and every suite you save.
    in the brief what the person must hold for it: every value the agent can ask for and whatever
    identifies the thing being acted on.
 3. **Cover the agent before repeating it, and only what it handles.** The tasks are the agent's
-   stated use cases, one to one. NEVER add one it does not state: an agent that creates something
+   stated use cases that a person comes to get done, one to one; a listed step or agent-wide rule is
+   tested inside them (requirement 5), never a task. NEVER add one it does not state: an agent that creates something
    has not been given changing, cancelling or checking it unless its description says so. Every
    stated use case MUST get its own scenarios. Every flow, rule, required question, disclosure, refusal, escalation and limit in
    the agent's instructions gets at least one scenario, and the risky ones several, before any
@@ -297,7 +298,7 @@ on one and nothing in its place on the other, which is precisely that failure.
 
 | axis | question | where its levels come from |
 |---|---|---|
-| `task` | what needs doing | step 1: the agent's stated use cases, one level each, named from the use case's own words |
+| `task` | what needs doing | step 1: the agent's stated use cases a person comes to get done, one level each, named from the use case's own words; a listed step or rule is never a level |
 | `counterparty` | who the agent is serving | the vector below, projected to the profiles this agent must treat differently |
 | `disposition` | how the person behaves, and any world state that changes the right answer; never the overlay restated | the vector below, plus step 2b's states as levels |
 | `interface` | through what medium, under what conditions | **the kind file for this modality** |
@@ -400,7 +401,10 @@ Interaction is the shape of the exchange, and the kind file gives its tempo: sin
 multi-turn, fresh or resumed, a correction after the agent has committed, and what the modality does to
 timing - long pauses on a call, bursts and send-before-finish in a chat. The kind file also says which
 levels it can really deliver and how often each should appear; some are rare by design. Follow its
-proportions rather than spreading every level evenly.
+proportions rather than spreading every level evenly. Taking turns, giving the details and confirming
+is how every call runs, so it is never a level: each interaction level is a shape that changes how the
+call goes (a correction after the agent has committed, a request that grows or changes mid-call,
+several needs in one call), and most scenarios carry one.
 
 ### Overlay carries three things, and they are three axes
 
