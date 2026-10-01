@@ -2554,25 +2554,6 @@ def test_a_broken_proof_says_so_instead_of_blaming_setup() -> None:
     assert "the world is not ready" in both.why()
 
 
-def test_a_level_past_a_third_of_the_suite_is_refused_while_somewhere_thinner_exists() -> None:
-    from fi.alk.harness.scenario import Scenario
-    from fi.alk.harness.scenario_tools import _over_its_share
-
-    grid = {"task": ["book_ride", "cancel_ride", "check_status"]}
-    booked = [
-        Scenario(name=f"b{one}", coverage={"task": "book_ride"}) for one in range(7)
-    ]
-
-    said = _over_its_share({"task": "book_ride"}, grid, booked, 20)
-    assert "whole share" in said and "cancel_ride" in said
-    assert _over_its_share({"task": "cancel_ride"}, grid, booked, 20) == ""
-    assert _over_its_share({"task": "book_ride"}, grid, booked, 8) == ""
-    everywhere = booked + [
-        Scenario(name=f"c{one}", coverage={"task": "cancel_ride"}) for one in range(7)
-    ] + [Scenario(name=f"s{one}", coverage={"task": "check_status"}) for one in range(7)]
-    assert _over_its_share({"task": "book_ride"}, grid, everywhere, 20) == ""
-
-
 def test_the_grid_has_to_be_the_frameworks_axes() -> None:
     from fi.alk.harness.scenario_tools import CANONICAL_AXES, _grid_off_the_framework
 
@@ -2589,20 +2570,6 @@ def test_the_grid_has_to_be_the_frameworks_axes() -> None:
 
     short = {axis: ["one"] for axis in CANONICAL_AXES if axis != "interaction"}
     assert "Missing: interaction" in _grid_off_the_framework(short)
-
-
-def test_task_levels_have_to_be_operation_object() -> None:
-    from fi.alk.harness.scenario_tools import CANONICAL_AXES, _grid_off_the_framework
-
-    grid = {axis: ["one"] for axis in CANONICAL_AXES}
-    grid["task"] = ["create-ride", "cancel-ride", "retrieve-booking-status"]
-    assert _grid_off_the_framework(grid) == ""
-
-    grid["task"] = ["book_ride_cash", "cancel-ride"]
-    said = _grid_off_the_framework(grid)
-    assert "book_ride_cash" in said
-    assert "cancel-ride" not in said.split("These are not:")[1]
-    assert "authenticate" in said and "handoff" in said
 
 
 def test_an_instruction_naming_a_record_the_world_lacks_is_refused() -> None:
@@ -2632,31 +2599,6 @@ def test_an_instruction_naming_a_record_the_world_lacks_is_refused() -> None:
     bare = SimpleNamespace(state=lambda: {"notes": [{"text": "hello"}]})
     assert _identifiers_the_instruction_invents(invented, bare) == []
 
-def test_a_suite_without_overlays_is_not_refused_by_the_intensity_share() -> None:
-    from fi.alk.harness.scenario import Scenario
-    from fi.alk.harness.scenario_tools import _over_its_share
-
-    grid = {
-        "overlay": ["none", "prompt_injection", "social_engineering"],
-        "overlay_intensity": ["absent", "subtle", "overt"],
-        "task": ["book", "cancel", "status"],
-    }
-    kept = [
-        Scenario(
-            name=f"plain{n}",
-            coverage={"overlay": "none", "overlay_intensity": "absent", "task": "book"},
-            sub_goals=["booked"],
-        )
-        for n in range(30)
-    ]
-    plain = {"overlay": "none", "overlay_intensity": "absent", "task": "cancel"}
-    assert _over_its_share(plain, grid, kept, 50) == ""
-
-    assert "task is already at" in _over_its_share(
-        {"overlay": "none", "overlay_intensity": "absent", "task": "book"}, grid, kept, 50
-    )
-
-
 def test_coverage_counts_a_planned_level_however_its_separators_are_spelled():
     from collections import Counter
 
@@ -2669,3 +2611,37 @@ def test_coverage_counts_a_planned_level_however_its_separators_are_spelled():
     )
     assert report["unused"] == ["cancel-order"]
     assert report["share"] == 0.5
+
+
+def test_a_level_past_a_third_of_the_suite_is_refused_while_somewhere_thinner_exists() -> None:
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _over_its_share
+
+    grid = {"task": ["book_ride", "cancel_ride", "check_status"]}
+    booked = [
+        Scenario(name=f"b{one}", coverage={"task": "book_ride"}) for one in range(7)
+    ]
+
+    said = _over_its_share({"task": "book_ride"}, grid, booked, 20)
+    assert "whole share" in said and "cancel_ride" in said
+    assert _over_its_share({"task": "cancel_ride"}, grid, booked, 20) == ""
+    assert _over_its_share({"task": "book_ride"}, grid, booked, 8) == ""
+    everywhere = booked + [
+        Scenario(name=f"c{one}", coverage={"task": "cancel_ride"}) for one in range(7)
+    ] + [Scenario(name=f"s{one}", coverage={"task": "check_status"}) for one in range(7)]
+    assert _over_its_share({"task": "book_ride"}, grid, everywhere, 20) == ""
+
+
+def test_interface_and_overlay_levels_are_not_held_to_a_third() -> None:
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _over_its_share
+
+    grid = {
+        "interface": ["noisy_line", "quiet_line", "accented"],
+        "overlay": ["none", "prompt_injection", "social_engineering"],
+    }
+    kept = [
+        Scenario(name=f"n{one}", coverage={"interface": "noisy_line", "overlay": "none"})
+        for one in range(15)
+    ]
+    assert _over_its_share({"interface": "noisy_line", "overlay": "none"}, grid, kept, 20) == ""

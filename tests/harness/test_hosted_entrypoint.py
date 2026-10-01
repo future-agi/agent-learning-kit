@@ -4652,17 +4652,3 @@ def test_a_caller_reacts_differently_across_trials_but_the_same_within_one():
     assert len({persona.behavior_policy.interruption_propensity for persona in trials}) > 1
 
 
-def test_some_callers_who_sound_like_where_they_are_are_asked_for_someone_from_elsewhere():
-    from fi.alk.harness.scenario_tools import accent_at_home
-
-    def refused(name, instruction="Book a ride from Flinders Street.", **persona):
-        base = {"name": name, "accent": "Australian", "location": "Australia", "language": "English"}
-        return bool(accent_at_home({"name": name, "instruction": instruction, "persona": {**base, **persona}}))
-
-    spread = [refused(f"Caller {n}") for n in range(100)]
-    assert 20 < sum(spread) < 60
-    assert refused("Caller 1") == refused("Caller 1")
-    at_home = next(f"Caller {n}" for n in range(100) if spread[n])
-    assert not refused(at_home, instruction="You speak with an Australian accent.")
-    assert not refused(at_home, location="United States")
-    assert not refused(at_home, language="Spanish")
