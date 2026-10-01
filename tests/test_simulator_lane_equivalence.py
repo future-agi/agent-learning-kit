@@ -164,7 +164,11 @@ def test_fixture_fact_reaches_the_final_voice_prompt_without_entering_situation(
         name="guest-pin",
         persona={"name": "Noor"},
         situation="Book a ride after identity verification.",
-        fixture={"origin": "generated", "guest_pin": "7682"},
+        fixture={
+            "origin": "generated",
+            "guest_pin_case": "valid",
+            "guest_pin": "7682",
+        },
         tts_provider="cartesia",
     )
     caller = scenario.dataset[0]
@@ -174,6 +178,7 @@ def test_fixture_fact_reaches_the_final_voice_prompt_without_entering_situation(
     assert "Internal field: `guest_pin`" in prompt
     assert "Exact value: \"7682\"" in prompt
     assert "Do not volunteer it" in prompt
+    assert "guest_pin_case" not in prompt
 
 
 def test_both_lanes_vary_the_caller_by_run(both_specs, monkeypatch):

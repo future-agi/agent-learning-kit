@@ -1063,7 +1063,9 @@ def caller_scenario(
             "disclosure": "on_request",
         }
         for key, value in fixture.items()
-        if key != "origin"
+        # Origins and ``*_case`` values classify the fixture for the harness. They are control
+        # metadata, not facts the simulated caller can know or disclose.
+        if key != "origin" and not str(key).endswith("_case")
     ]
     return simulate.Scenario(
         name=name or "harness-voice",
