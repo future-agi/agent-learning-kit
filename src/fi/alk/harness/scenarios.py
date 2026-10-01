@@ -159,8 +159,8 @@ def writer_worker(
                 "  - a distinct, ordinary, real person and real places: a common full name no "
                 "other scenario uses, fitting their accent and language, and nothing famous or "
                 "fictional, the accent chosen first and the name from that accent's background, so "
-                "a name no offered accent fits is the wrong name, and a neutral accent only for a "
-                "name with no particular background; the accents your brief names, and "
+                "a name no offered accent fits is the wrong name, and Neutral only for a caller "
+                "speaking a language that has no offered accent; the accents your brief names, and "
                 "where it names none, a spread across "
                 "every offered accent rather than one default; every address in the situation is "
                 "a real place in the persona's location, where they are calling from, and nothing "
@@ -687,8 +687,9 @@ def callers_for(index: int, wanted: int, slice_name: str = "", spoken: bool = Tr
             "handling, so do not give them all the same accent unless a scenario truly requires it. "
             "Each caller is one ordinary, believable person, never a celebrity's or a fictional "
             "character's name: choose the accent, languages and name together, so the accent comes "
-            "with a name and background that make it plausible. A caller whose language has no "
-            "offered accent is Neutral."
+            "with a name and background that make it plausible. Neutral is not an accent to "
+            "spread, even where it appears above: it is only for a caller speaking a language "
+            "that has no offered accent, never for an English speaker, whatever their name."
         )
         said += (
             " Where each caller is calling from is where their situation happens, and every "

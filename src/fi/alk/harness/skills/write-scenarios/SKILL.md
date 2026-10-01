@@ -125,7 +125,8 @@ else it gets right.
    lists). One family name, never hyphenated or double-barrelled. If the full name belongs to anyone
    you have heard of, change the family name. The name, the way they speak and the language they use
    come from one background: choose the accent from those offered first, then a name from that
-   accent's background, so a name no offered accent fits is the wrong name. The persona's
+   accent's background, so a name no offered accent fits is the wrong name. Neutral is only for a
+   caller speaking a language that has no offered accent. The persona's
    `location` is where they are calling from right now, and
    every place and address in the situation MUST be a real, ordinary one in that location, a plain
    street and a plain number, never copied from the agent's own description or its examples. Where
