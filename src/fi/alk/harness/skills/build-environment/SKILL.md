@@ -586,8 +586,10 @@ Every sub-goal, coded or judged:
 - **Is the only one for its behaviour.** Two entries asserting the same thing under different names
   count one behaviour twice; name it once and share it.
 - **Is about a situation this channel can actually produce.** The kind file for this agent says what
-  the channel can and cannot carry. A rule whose situation the channel never sets up is real, but a
-  sub-goal for it can only pass for nothing. Write none.
+  the channel can and cannot carry; on a voice call the caller is one synthesised voice over one
+  ambience bed, taking turns, so unclear, cut-off or silent audio, a second speaker, being
+  interrupted, keypad input or anything on a screen is never set up. A rule whose situation the
+  channel never sets up is real, but a sub-goal for it can only pass for nothing. Write none.
 - **Names a behaviour, never a label.** "Spoken delivery", "subtle pressure", "overt demand" and
   "clean baseline" are ways a scenario is described, not things an agent does; nothing can fail them.
   Nor is "accurate" a behaviour a judge can see (see above).

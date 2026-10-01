@@ -32,6 +32,8 @@ often; each is cheaper to avoid while writing than to fix after a refusal.
 |---|---|---|
 | `... already occupies this cell and asserts the same sub-goals` | Same coordinate, same checks: the same test twice. | Deal it a different difficulty, a different cell, or a check that only this scenario can fail. |
 | `coverage puts <axis> at ..., which is not a level the plan deals` | The level was invented rather than copied from the brief. | Copy every coverage value from your brief, spelled as dealt. |
+| `... already has a caller named ...` | Two people in the suite share a first name, so their results cannot be told apart. | Check the names your brief and your earlier submissions list, and choose a first name no other scenario uses. |
+| `... may not put more than ... on one` | One location, accent or language already holds its share of the suite. | Choose a different one, with a name and language that fit it; the situation can stay. |
 | `the coordinate claims a condition the call does not carry` | A level the persona fields do not deliver. | Set the persona field the kind file names for that level, or choose a level the scenario really carries. |
 
 ## What no check catches, and a reviewer will
@@ -47,4 +49,3 @@ Nothing refuses these; the hard requirements and "Before you submit" are how you
 | The person is told to say a value that nothing seeds. | Seed it in `setup_code`, or give the person a value the world already holds. |
 | The situation needs something the channel cannot carry. | Put the difficulty in what the person says; the kind file lists what the channel carries. |
 | Placeholder people, places or references. | Use ordinary, real-sounding values that fit the person and the world. |
-| Two people in the suite share a full name. | Check the names your brief and your earlier submissions list, and choose one no other scenario uses. |
