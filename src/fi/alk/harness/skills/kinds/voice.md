@@ -97,6 +97,9 @@ walk-through, and no sub-goal or test line is about the agent coping with the be
   or triggered sound (a cough at a particular moment, a television or radio line, an announcement, a
   second voice, a door), on noise that drowns the caller out, or on the caller moving somewhere
   quieter or louder partway through. None of these is produced, so the scenario tests nothing.
+- Say where the caller is, never what can be heard there. The bed is a recording of the place, so a
+  television, music, people talking nearby, an alarm or an announcement named in the situation is a
+  sound the call never plays, even as steady background.
 
 ```
 BAD    background_noise: false   (a caller asking to change an order, no reason given for silence)
