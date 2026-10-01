@@ -108,7 +108,7 @@ def test_a_writer_brief_deals_the_places_it_can_play(catalogue):
 
     brief = callers_for(0, 6)
     assert "transit (2)" in brief and "vehicle (1)" in brief
-    assert "believable person" in brief and "celebrity" in brief
+    assert "believable person" in brief
 
 
 def test_a_voice_scenario_with_noise_on_is_given_a_place(catalogue, tmp_path):

@@ -1,6 +1,6 @@
 ---
 name: build-environment
-description: Build the world an agent is tested in, and everything every scenario shares.
+description: Builds the world an AI agent is tested in and everything its scenarios share, including the sub-goals they are checked on. Use after the agent has been understood and before any scenario is planned or written.
 ---
 
 # Build the environment
@@ -585,10 +585,11 @@ Every sub-goal, coded or judged:
   to its backend" or "made no tool call" is not a claim anything can check.
 - **Is the only one for its behaviour.** Two entries asserting the same thing under different names
   count one behaviour twice; name it once and share it.
-- **Is about a situation a call can actually produce.** The caller is one synthesised voice over one
-  ambience bed, taking turns. An instruction about unclear, cut-off or silent audio, a second speaker,
-  being interrupted, keypad input or anything on a screen is real, but no call will ever set it up,
-  so a sub-goal for it can only pass for nothing. Write none.
+- **Is about a situation this channel can actually produce.** The kind file for this agent says what
+  the channel can and cannot carry; on a voice call the caller is one synthesised voice over one
+  ambience bed, taking turns, so unclear, cut-off or silent audio, a second speaker, being
+  interrupted, keypad input or anything on a screen is never set up. A rule whose situation the
+  channel never sets up is real, but a sub-goal for it can only pass for nothing. Write none.
 - **Names a behaviour, never a label.** "Spoken delivery", "subtle pressure", "overt demand" and
   "clean baseline" are ways a scenario is described, not things an agent does; nothing can fail them.
   Nor is "accurate" a behaviour a judge can see (see above).
