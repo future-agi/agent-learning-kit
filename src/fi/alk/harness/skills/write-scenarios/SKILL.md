@@ -192,8 +192,8 @@ the baseline is still the whole task with one real difficulty, the mildest the t
 recital of its steps. Otherwise another writer holds it, and every scenario you write on that task
 says in its branch line what goes wrong.
 
-**Say what goes wrong as something that happens, not as a label.** A branch line is read to decide
-whether the scenario is the task's plain control. "Premature affirmation", "digression" or "multi-slot
+**Say what goes wrong as something that happens, not as a label.** A branch line is read to see
+what this scenario tests that no other does. "Premature affirmation", "digression" or "multi-slot
 opening" name a kind without saying what happens, so the scenario reads as ordinary, a second
 baseline that tests nothing new. Write the event: the caller corrects a digit, refuses, insists, contradicts themselves,
 repeats, withholds, changes their mind, interrupts, is unclear or confused, hesitates or goes quiet; or
@@ -643,8 +643,8 @@ Three of these are enforced by validation. Eight are your judgement, and no chec
 **What is not a scenario.** A person asks for the ordinary thing, the agent does it, both are polite,
 it ends. Nothing was withheld, nothing contradicted, no rule was pressed, no state had to carry, and
 any working agent passes. That is a demonstration. It costs a real run and real money and returns no
-information about the agent. One scenario covers the ordinary path for a whole suite; everything else
-has to earn its place by being able to fail. A detailed question asked plainly and answered is the same
+information about the agent. No scenario is only the ordinary path; every one has to earn its place by
+being able to fail. A detailed question asked plainly and answered is the same
 thing, however specialised the question: give the caller a wrong assumption, a missing fact, a
 correction, a constraint that conflicts with the rules, or a reason to push, and the question becomes
 a test.
