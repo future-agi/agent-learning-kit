@@ -2611,3 +2611,37 @@ def test_coverage_counts_a_planned_level_however_its_separators_are_spelled():
     )
     assert report["unused"] == ["cancel-order"]
     assert report["share"] == 0.5
+
+
+def test_a_level_past_a_third_of_the_suite_is_refused_while_somewhere_thinner_exists() -> None:
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _over_its_share
+
+    grid = {"task": ["book_ride", "cancel_ride", "check_status"]}
+    booked = [
+        Scenario(name=f"b{one}", coverage={"task": "book_ride"}) for one in range(7)
+    ]
+
+    said = _over_its_share({"task": "book_ride"}, grid, booked, 20)
+    assert "whole share" in said and "cancel_ride" in said
+    assert _over_its_share({"task": "cancel_ride"}, grid, booked, 20) == ""
+    assert _over_its_share({"task": "book_ride"}, grid, booked, 8) == ""
+    everywhere = booked + [
+        Scenario(name=f"c{one}", coverage={"task": "cancel_ride"}) for one in range(7)
+    ] + [Scenario(name=f"s{one}", coverage={"task": "check_status"}) for one in range(7)]
+    assert _over_its_share({"task": "book_ride"}, grid, everywhere, 20) == ""
+
+
+def test_interface_and_overlay_levels_are_not_held_to_a_third() -> None:
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _over_its_share
+
+    grid = {
+        "interface": ["noisy_line", "quiet_line", "accented"],
+        "overlay": ["none", "prompt_injection", "social_engineering"],
+    }
+    kept = [
+        Scenario(name=f"n{one}", coverage={"interface": "noisy_line", "overlay": "none"})
+        for one in range(15)
+    ]
+    assert _over_its_share({"interface": "noisy_line", "overlay": "none"}, grid, kept, 20) == ""

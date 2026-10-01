@@ -434,6 +434,44 @@ def crowded_field(kept: list[Scenario], candidate: Any, wanted: int) -> str:
     return ""
 
 
+# Axes whose rare levels are rare by design, so a third is no ceiling for them.
+_NOT_SHARED = frozenset({"interface", "overlay", "overlay_vector", "overlay_intensity"})
+
+
+def _over_its_share(
+    coverage: Any, grid: dict[str, list[str]] | None, kept: list[Scenario], wanted: int
+) -> str:
+    """Why this coordinate is a level the suite already has enough of, or "" when it is not."""
+    if not grid or wanted < 12 or not isinstance(coverage, dict):
+        return ""
+    share = max(1, (wanted + 2) // 3)
+    for axis, levels in grid.items():
+        if level_name(axis) in _NOT_SHARED:
+            continue
+        mine = level_name(coverage.get(axis) or coverage.get(level_name(axis)) or "")
+        if not mine or len(levels) < 3:
+            continue
+        counted: Counter[str] = Counter(
+            level_name((one.coverage or {}).get(axis, "")) for one in kept
+        )
+        if counted.get(mine, 0) < share:
+            continue
+        thin = [
+            one
+            for one in levels
+            if counted.get(level_name(one), 0) < share and level_name(one) != mine
+        ]
+        if not thin:
+            continue
+        return (
+            f"{axis} is already at {counted[mine]} of {wanted} on {mine!r}, which is its whole share "
+            f"of this suite. A level past a third stops being a sample and becomes the suite, and the "
+            f"next scenario there proves nothing the earlier ones did not. Write one of these instead: "
+            + ", ".join(sorted(thin)[:8])
+        )
+    return ""
+
+
 # Fixed for every agent; what each level contains lives in `plan-suite/SKILL.md`.
 CANONICAL_AXES = (
     "task",
@@ -1391,6 +1429,11 @@ def scenario_tools(
         strayed = _off_the_grid(args.get("coverage"), target.get("axes"))
         if strayed:
             return _refuse(strayed)
+        crowded_level = _over_its_share(
+            args.get("coverage"), target.get("axes"), kept, cap()
+        )
+        if crowded_level:
+            return _refuse(crowded_level)
         twin = _already_in_the_suite(
             args, kept, _first_names_on_disk(destination, str(args.get("name") or ""))
         )
