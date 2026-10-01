@@ -41,10 +41,8 @@ else it gets right.
 1. **It tests something. A scripted walk-through is NEVER a scenario.** The person pursues a whole
    task while something makes it hard for the agent: it has to find something out, hold a line under
    pressure, resolve a conflict or an ambiguity, carry state across turns, or resist being misled. If
-   the agent can pass by following the obvious steps, write something else. A question about how the
-   product works, or one step every call passes through, is not a task on its own: the person asks
-   because they are in the middle of something that depends on the answer, and the scenario carries
-   that thing to its end.
+   the agent can pass by following the obvious steps, write something else. A person asking a
+   question has a reason of their own for needing the answer.
 
    ```
    GOOD   You want to freeze your gym membership for two months while you recover from an

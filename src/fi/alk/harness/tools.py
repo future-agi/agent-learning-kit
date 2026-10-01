@@ -405,14 +405,10 @@ def contract_tools(
                 "real_use_cases": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "What a person comes to this agent to get done, one plain "
-                    "sentence each. These are capabilities, not test cases: 'cancel an order that "
-                    "has not shipped', not a narrated situation with a customer, a name and an "
-                    "outcome. Never a step every request passes through (verifying who they are, "
-                    "choosing between options read out, reading back before acting) or a way the "
-                    "agent must behave on any request (saying what it is, the language it serves, "
-                    "handling unclear speech, turning away what it does not do): those go in "
-                    "hard_constraints. Scenarios are written later, from these.",
+                    "description": "What this agent is for, one plain sentence each. These are "
+                    "capabilities, not test cases: 'cancel an order that has not shipped', not "
+                    "a narrated situation with a customer, a name and an outcome. Scenarios are "
+                    "written later, from these.",
                 },
                 "notes": {
                     "type": "string",
