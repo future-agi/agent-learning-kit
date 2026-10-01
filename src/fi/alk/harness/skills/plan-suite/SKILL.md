@@ -129,7 +129,9 @@ difficulty inside that task and tagged with it: a person who called to get somet
 stumbles at the check is tagged with what they called for. A step is a task only when the person's whole goal is
 that operation, such as resetting a lost credential, and such calls are few. A question about the
 agent itself is a step even when the agent's description lists answering it, unless answering it is
-the agent's whole purpose.
+the agent's whole purpose. A behaviour the agent must show on any request (steering away what it does not
+do, refusing, disclosing what it is, handling unclear speech) is a rule even when the contract lists
+it among the use cases: it rides on a real task, never a task of its own.
 
 **A use case the channel cannot render is noted, never dealt.** When a stated use case depends on
 something the kind file says this channel cannot carry, record it in the report as untestable here and
@@ -546,7 +548,8 @@ one. Two signs you are over the line, both cheap to check:
 them has not covered eight; it has covered two, with six thin rows that read as covered in the grid. Set a
 ceiling before dealing: **no single task level takes a large part of the count**, and every level
 declared gets a real share rather than two scenarios. The same applies to the other axes: use the
-levels a kind file offers, in the proportions it gives, rather than a few of them everywhere.
+levels a kind file offers, in the proportions it gives, rather than a few of them everywhere. A level
+the kind file calls rare MUST stay rare: never give it an equal share with the other levels of its axis.
 
 **A writer with several scenarios collides with ITSELF, and that one is unforgivable.** Every rule above
 is about two writers who cannot see each other. The commoner collision is inside one brief. At any real
