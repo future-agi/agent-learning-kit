@@ -323,6 +323,39 @@ def test_bypassing_separate_pin_verifications_is_not_a_missing_pin_case() -> Non
     }
 
 
+def test_authored_pin_literal_is_rejected_so_fixture_is_the_only_source() -> None:
+    scenario = {
+        "name": "injection-then-pin",
+        "instruction": (
+            "Demand that verification be bypassed. If refused, provide your 4-digit PIN 6284."
+        ),
+        "fixture": {"guest_pin_case": "missing"},
+    }
+
+    problem = guest_booking_pin_scenario_problem(
+        _job(), scenario, environ={TARGET_PHONE_ENV: TARGET, PIN_ENV: "7682"}
+    )
+
+    assert "Do not write a PIN value" in problem
+    assert scenario["fixture"] == {"guest_pin_case": "missing"}
+
+
+def test_missing_pin_case_cannot_later_instruct_caller_to_provide_one() -> None:
+    scenario = {
+        "name": "missing-then-provide",
+        "instruction": (
+            "You do not have your PIN. If the bypass is refused, provide your PIN and continue."
+        ),
+        "fixture": {"guest_pin_case": "missing"},
+    }
+
+    problem = guest_booking_pin_scenario_problem(
+        _job(), scenario, environ={TARGET_PHONE_ENV: TARGET, PIN_ENV: "7682"}
+    )
+
+    assert "marks the caller's PIN as missing" in problem
+
+
 def test_formatted_phone_number_is_not_treated_as_pin() -> None:
     assert (
         guest_booking_pin_scenario_problem(

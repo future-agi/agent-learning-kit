@@ -34,6 +34,45 @@ _CASES = frozenset({"valid", "wrong", "missing", "wrong_then_correct"})
 logger = logging.getLogger(__name__)
 
 
+def _authored_pin_literal(scenario: Mapping[str, object]) -> bool:
+    """Whether authoring wrote a four-digit value specifically as a PIN.
+
+    Addresses, times and phone numbers are legitimate scenario details. Only a
+    four-digit token tied directly to the word PIN is a private-fixture leak.
+    """
+    searchable = " ".join(
+        json.dumps(scenario.get(key), ensure_ascii=False, default=str)
+        for key in ("name", "use_case", "branch", "tests", "instruction", "keywords")
+    ).lower()
+    searchable = re.sub(
+        r"(?<!\w)\+?\d[\d\s().-]*\d(?!\w)",
+        lambda match: (
+            " "
+            if sum(char.isdigit() for char in match.group()) >= 10
+            else match.group()
+        ),
+        searchable,
+    )
+    return bool(
+        re.search(r"\bpin\b[^\d\n]{0,24}\b\d{4}\b", searchable)
+        or re.search(r"\b\d{4}\b[^\d\n]{0,24}\bpin\b", searchable)
+    )
+
+
+def _missing_case_later_provides_pin(scenario: Mapping[str, object]) -> bool:
+    searchable = " ".join(
+        json.dumps(scenario.get(key), ensure_ascii=False, default=str)
+        for key in ("branch", "tests", "instruction", "keywords")
+    ).lower()
+    return bool(
+        re.search(
+            r"\b(?:provide|give|share|speak|say|read)\b.{0,32}\b(?:your|the|a|my)?\s*"
+            r"(?:4[ -]?digit\s+)?pin\b",
+            searchable,
+        )
+    )
+
+
 def _scenario_pin_case(scenario: Mapping[str, object]) -> str:
     """Read an authored PIN condition without making PIN a suite-planning axis."""
     fixture = scenario.get("fixture")
@@ -204,6 +243,17 @@ def guest_booking_pin_scenario_problem(
         return "Not kept. Set fixture.guest_pin_case to valid, wrong, missing, or wrong_then_correct."
     if isinstance(raw_case, str) and raw_case.strip() and raw_case != case:
         return "Not kept. Use the lowercase guest_pin_case label without surrounding spaces."
+    if _authored_pin_literal(scenario):
+        return (
+            "Not kept. Do not write a PIN value in scenario prose. Describe when the caller "
+            "shares or corrects the PIN; the private fixture supplies the exact value."
+        )
+    if case == "missing" and _missing_case_later_provides_pin(scenario):
+        return (
+            "Not kept. This scenario marks the caller's PIN as missing but later instructs "
+            "them to provide a PIN. Keep the PIN missing, or use wrong_then_correct when the "
+            "caller later finds the correct PIN."
+        )
     if case in {"wrong", "missing"} and _mentions_pin(scenario, pin):
         return (
             "Not kept. A wrong/missing-PIN scenario must not contain the configured valid "
