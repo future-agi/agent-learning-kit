@@ -51,3 +51,39 @@ When moving an existing surface:
    repository as the source path.
 5. Update public docs/examples to use `agent-learning-kit`.
 6. Only then simplify or hide the older engine-level surface.
+# Automatic E2B templates
+
+The `E2B template` GitHub Actions workflow builds and certifies the hosted runtime
+on every push to `main`, including merges. It can also be rerun manually with
+**Actions → E2B template → Run workflow**, selecting `main`. Pull requests that
+change runtime inputs run credential-free validation only.
+
+One-time setup: add the E2B team's API key as the repository Actions secret
+`E2B_API_KEY`. The workflow uses `GITHUB_TOKEN` with `packages: write` to push to
+`ghcr.io/future-agi/agent-learning-kit/alk-hosted-runtime`, and supplies that
+short-lived credential to the E2B builder for the image import. No Docker Hub
+credential is needed. Organization policy must permit the repository to create
+GHCR packages; if the package already exists, grant this repository Actions access
+in its package settings. See GitHub's
+[Container registry documentation](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry).
+
+The workflow runs `scripts/e2b-template.py` against the checked-out commit. It builds
+`Dockerfile.hosted` for Linux amd64, pushes a uniquely tagged image, imports its
+immutable digest into `alk-hosted-<12-character commit SHA>`, and certifies the
+capabilities in `hosted-snapshot/catalog.json` in a temporary sandbox. The existing
+publisher defaults apply: 4 CPUs, 8192 MB RAM, and at least 10 GB verified disk.
+The publisher cleans up its certification sandbox when the check finishes.
+
+A successful run exposes the immutable `template-name:build-id` reference in the
+job summary and saves `e2b-template-release.json` as a 90-day workflow artifact.
+That file includes the source commit, image digest, resource sizes, and certification
+results. A failed certification fails the job and produces no certified release
+artifact; its image/template may already exist, so use only successful releases.
+Download the artifact and set the platform's `ALK_E2B_TEMPLATE_REFERENCE` to its
+`template_reference` when deploying. This workflow creates the templates; it does
+not change platform deployment configuration or move a production alias.
+
+Each commit has its own concurrency group, so a newer merge does not cancel or
+replace an older commit's publication. Reruns of the same commit are serialized.
+Reruns create a new image tag and E2B build; always use the immutable reference
+from the desired run.
