@@ -58,9 +58,13 @@ class BehaviorPolicy(BaseModel):
 
 
 class PersonaFact(BaseModel):
-    """Layer 4 — retrievable knowledge store (2603.19313: retrieved, not
-    prompt-stuffed). Goals are NOT here: the Scenario owns the task
-    (2601.15290 separation)."""
+    """Layer 4 — private scenario knowledge with an explicit disclosure policy.
+
+    Chat retrieves these facts on demand. Voice has no retrieval tool, so the
+    selected scenario's facts are placed in its private model context with the
+    same disclosure policy. Goals are NOT here: the Scenario owns the task
+    (2601.15290 separation).
+    """
     key: str
     value: str
     disclosure: Literal["volunteer", "on_request", "withhold"] = "on_request"
