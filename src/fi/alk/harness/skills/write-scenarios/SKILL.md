@@ -537,7 +537,8 @@ yourself first. If an honest answer is the wrong one, fix the scenario before `s
 
 1. Is this a whole task, or only one step of one?
 2. Does the person have everything the task needs, including what identifies the thing being acted
-   on? Would the agent really act on only what the person gives here?
+   on? Would the agent really act on only what the person gives here? If the scenario is about one
+   step but the person also wants the task done, can the call carry on past that step?
 3. If the agent handles the hard moment well, is there still a real task left to judge?
 4. Could this actually happen, to a real person, on this channel? Is every excuse and detail
    physically possible?
