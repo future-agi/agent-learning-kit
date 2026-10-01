@@ -197,9 +197,7 @@ the failure it catches, or it is not earning what it cost to write and run.
 
 **A request the agent can satisfy by doing the obvious thing is not a scenario.** Call, ask for the
 thing, get it, hang up: every agent passes, nothing is learned, and the suite gets longer without
-getting stronger. Every scenario carries something that can go wrong. If your brief says you hold a task's baseline,
-the baseline is still the whole task with one real difficulty, the mildest the task has, never a
-recital of its steps. Otherwise another writer holds it, and every scenario you write on that task
+getting stronger. Every scenario carries something that can go wrong, and every scenario you write
 says in its branch line what goes wrong.
 
 **Say what goes wrong as something that happens, not as a label.** A branch line is read to see
@@ -887,11 +885,11 @@ GOOD   You are fairly sure the freeze is free. If you are told otherwise, you wa
        before you agree to anything, and you will not pay for months you cannot use.
 ```
 
-**Write the branch where the agent gets it wrong or cannot answer.** A caller told only what to do
-when the answer is right accepts anything, including a false answer or "I don't have that", and the
-call ends as if it went well. Say what this person does when the agent confirms something untrue,
-answers a different question, or says it cannot help: push back once, ask where else to go, or insist
-on the part that matters to them.
+**Give the person what they will not let go of.** A caller told only what to do when the answer is
+right accepts anything, including a false answer or "I don't have that", and the call ends as if it
+went well. Write what matters to this person and what they know to be true, not how they answer the
+agent; then whatever the agent says, a wrong, evasive or empty answer meets someone who still wants
+that thing and reacts the way they would.
 
 **The opening line carries the first request only.** `persona.initial_message` is what the caller
 opens with; anything the instruction holds back for later, a correction, a detail the agent must draw
@@ -1328,10 +1326,10 @@ These are the shapes that break agents, and they are what a suite should mostly 
 - **The caller repeats themselves as if unheard**, or answers a question that was not asked.
 
 **A plain run of the task is not a scenario.** A person who asks for the ordinary thing, gives the
-ordinary answers and gets the ordinary result tests nothing a mediocre agent would fail. A task's
-baseline, where your brief gives you one, still carries one real difficulty. Measured across four suites: 35 of 93 scenarios carried neither an overlay nor a single
-difficulty, and one suite spent 4 of its scenarios on the same plain request. Every scenario past the
-control must name, in its own branch line, the one thing that makes it hard.
+ordinary answers and gets the ordinary result tests nothing a mediocre agent would fail. Measured
+across four suites: 35 of 93 scenarios carried neither an overlay nor a single difficulty, and one
+suite spent 4 of its scenarios on the same plain request. Every scenario must name, in its own branch
+line, the one thing that makes it hard.
 
 Two rules on top of them. **Difficulty is not incorrectness**: the situation must be one a real
 person could genuinely be in, unless being wrong is precisely what is being tested. And **hard means
