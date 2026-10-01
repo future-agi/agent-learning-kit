@@ -86,7 +86,9 @@ Real callers ring from somewhere: a street, a car, an office, a shop, a kitchen.
 scenarios MUST carry a background noise bed.** Quiet lines are rare, and each one has a reason in the
 situation. Noise is
 independent of every other lever: an accented caller, a hesitant caller, an attacker and a caller
-correcting themselves all call from somewhere too, so they carry noise as well.
+correcting themselves all call from somewhere too, so they carry noise as well. The noise is the
+setting, never the scenario's difficulty: a call whose only twist is where it is made is a
+walk-through, and no sub-goal or test line is about the agent coping with the bed.
 
 - Pick the place from the situation, then the matching value from the places the `background_noise`
   field lists. The noise MUST fit where the caller says they are.

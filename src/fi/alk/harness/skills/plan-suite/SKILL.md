@@ -12,8 +12,9 @@ These bind every plan, every brief and every suite you save.
 1. **Plan tests, never walk-throughs.** Every scenario you deal has a person pursuing a whole task
    while something makes it hard for the agent: it has to find something out, hold a line under
    pressure, resolve a conflict or an ambiguity, carry state across turns, or resist being misled. A
-   cell whose scenario would be "give each value when asked, confirm, finish" MUST NOT be dealt. There
-   are no control or baseline scenarios: every task's scenarios each carry a real difficulty.
+   cell whose scenario would be "give each value when asked, confirm, finish" MUST NOT be dealt, and
+   the same call with only a different person, place or surroundings is that walk-through again.
+   There are no control or baseline scenarios: every task's scenarios each carry a real difficulty.
 
    ```
    GOOD   change a standing order | the customer believes a discount still applies that ended
@@ -943,8 +944,8 @@ most people share one background and one language has tested one person many tim
 **Deal the person's surroundings in the same brief** where the kind file says the channel carries
 them, and spread them across writers the way you spread profiles.
 
-**Every name comes from its person:** a given name and a family name both met every day among people
-of that profile's background. No two people in the suite share a
+**Every name comes from its person:** a given name and a family name both common among people of
+that profile's background, never famous, historical or fictional. No two people in the suite share a
 full name: keep the list of names writers report and pass it on in every later brief.
 
 Two signs the sizing is wrong: every slice holds one or two scenarios, which means you listed
