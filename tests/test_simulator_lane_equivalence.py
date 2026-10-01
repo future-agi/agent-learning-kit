@@ -17,6 +17,7 @@ import pytest
 from fi.alk.harness.call_runner import _build_spec
 from fi.alk.harness.simulator_voice import caller_scenario, fixture_caller_phone
 from fi.alk.harness.run.sdk_voice import build_spec as local_build_spec
+from fi.simulate.simulation.voice_prompt import build_voice_simulator_prompt
 
 PERSONA = {
     "name": "Noor",
@@ -156,6 +157,23 @@ def test_a_nested_fixture_phone_reaches_the_persona_metadata():
         tts_provider="cartesia",
     )
     assert scenario.dataset[0].persona["metadata"]["caller_phone"] == "+14155550109"
+
+
+def test_fixture_fact_reaches_the_final_voice_prompt_without_entering_situation():
+    scenario = caller_scenario(
+        name="guest-pin",
+        persona={"name": "Noor"},
+        situation="Book a ride after identity verification.",
+        fixture={"origin": "generated", "guest_pin": "7682"},
+        tts_provider="cartesia",
+    )
+    caller = scenario.dataset[0]
+
+    assert "7682" not in caller.situation
+    prompt = build_voice_simulator_prompt(caller, call_type="inbound")
+    assert "Internal field: `guest_pin`" in prompt
+    assert "Exact value: \"7682\"" in prompt
+    assert "Do not volunteer it" in prompt
 
 
 def test_both_lanes_vary_the_caller_by_run(both_specs, monkeypatch):
