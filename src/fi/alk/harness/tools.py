@@ -407,8 +407,9 @@ def contract_tools(
                     "items": {"type": "string"},
                     "description": "What this agent is for, one plain sentence each. These are "
                     "capabilities, not test cases: 'cancel an order that has not shipped', not "
-                    "a narrated situation with a customer, a name and an outcome. Scenarios are "
-                    "written later, from these.",
+                    "a narrated situation with a customer, a name and an outcome. Each one is "
+                    "something the agent's own text says it does, never stretched from a passing "
+                    "word or a tool name. Scenarios are written later, from these.",
                 },
                 "notes": {
                     "type": "string",
