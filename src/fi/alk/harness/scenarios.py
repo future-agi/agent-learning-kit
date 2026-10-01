@@ -271,7 +271,12 @@ def open_stage(
                 voicemail="on" if voicemail_enabled() else "off",
                 conversational="yes" if contract.conversational else "no",
             )
-            + f"\n\nPlan the grid first, then decide how to cut it. You choose how many "
+            + "\n\nBefore you brief anyone, check your plan against what reviewers reject most: every "
+            "attack kind several times, spread across the tasks; most callers behaving in a way the "
+            "agent has to handle, a fully cooperative caller and a single plain request being rare; "
+            "a quiet line rare; and every brief telling its writer to write people who react in "
+            "character, never lines that answer what the agent is expected to say.\n\n"
+            + f"Plan the grid first, then decide how to cut it. You choose how many "
             f"scenarios each writer gets and how many writers the suite needs; you have read the "
             f"grid and know which cells are rich and which are thin, and an even split sizes a "
             f"use case with one real branch the same as one with six.\n\n"
