@@ -10,6 +10,7 @@ intercept live caller turns.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -29,27 +30,60 @@ _DIGIT_WORDS = {
         ("zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine")
     )
 }
-_CASES: tuple[tuple[str, int], ...] = (
-    ("valid", 80),
-    ("wrong", 10),
-    ("missing", 5),
-    ("wrong_then_correct", 5),
-)
+_CASES = frozenset({"valid", "wrong", "missing", "wrong_then_correct"})
 logger = logging.getLogger(__name__)
 
 
-def _case_counts(total: int) -> dict[str, int]:
-    """Allocate integer counts with largest remainders; exact for multiples of twenty."""
-    total = max(int(total), 0)
-    counts = {name: total * percent // 100 for name, percent in _CASES}
-    remaining = total - sum(counts.values())
-    remainders = sorted(
-        _CASES,
-        key=lambda item: (-(total * item[1] % 100), -item[1]),
+def _scenario_pin_case(scenario: Mapping[str, object]) -> str:
+    """Read an authored PIN condition without making PIN a suite-planning axis."""
+    fixture = scenario.get("fixture")
+    raw = fixture.get("guest_pin_case") if isinstance(fixture, Mapping) else None
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip().lower()
+
+    searchable = " ".join(
+        json.dumps(scenario.get(key), ensure_ascii=False, default=str)
+        for key in ("name", "use_case", "branch", "tests", "instruction", "keywords")
+    ).lower()
+    compact = searchable.replace("-", " ").replace("_", " ")
+    wrong = bool(
+        re.search(r"\b(?:wrong|incorrect|invalid)\b.{0,24}\bpin\b", compact)
+        or re.search(r"\bpin\b.{0,24}\b(?:wrong|incorrect|invalid)\b", compact)
     )
-    for name, _percent in remainders[:remaining]:
-        counts[name] += 1
-    return counts
+    corrected = bool(
+        re.search(r"\b(?:correct|corrected|correction|retry|second attempt)\b", compact)
+    )
+    if wrong and corrected:
+        return "wrong_then_correct"
+    missing = bool(
+        re.search(
+            r"\b(?:missing|forgot|forgotten|unknown|no|does not know|doesn't know|"
+            r"cannot find|can't find)\b.{0,28}\bpin\b",
+            compact,
+        )
+        or re.search(
+            r"\bwithout\b\s+(?:(?:a|the|my|their|guest|4[ -]?digit)\s+){0,2}\bpin\b",
+            compact,
+        )
+        or re.search(
+            r"\bpin\b.{0,28}\b(?:missing|forgot|forgotten|unknown|unavailable|not known)\b",
+            compact,
+        )
+    )
+    if missing:
+        return "missing"
+    if wrong:
+        return "wrong"
+    return "valid"
+
+
+def _wrong_pin(pin: str, scenario: Mapping[str, object]) -> str:
+    """Choose a stable plausible wrong PIN without exposing or deriving from the real one."""
+    seed = str(scenario.get("name") or scenario.get("instruction") or "guest-pin")
+    candidate = 1000 + int(hashlib.sha256(seed.encode()).hexdigest()[:8], 16) % 9000
+    if str(candidate) == pin:
+        candidate = 1000 + (candidate - 999) % 9000
+    return str(candidate)
 
 
 def _active_pin(job: HarnessJob | None, values: Mapping[str, str]) -> str | None:
@@ -148,39 +182,27 @@ def _mentions_pin(value: object, pin: str) -> bool:
     return False
 
 
-def _pin_value(value: object) -> str | None:
-    if isinstance(value, str):
-        candidate = value.strip()
-        return candidate if _PIN.fullmatch(candidate) else None
-    if isinstance(value, int) and not isinstance(value, bool) and 1000 <= value <= 9999:
-        return str(value)
-    return None
-
-
-def _has_value(fixture: Mapping[str, object], key: str) -> bool:
-    return key in fixture and fixture.get(key) not in (None, "")
-
-
 def guest_booking_pin_scenario_problem(
     job: HarnessJob | None,
     scenario: Mapping[str, object],
     *,
     environ: Mapping[str, str] | None = None,
 ) -> str:
-    """Reject POC scenarios that reveal the valid PIN to wrong/missing callers."""
+    """Attach private PIN facts without changing what scenarios the suite contains."""
     pin = _active_pin(job, os.environ if environ is None else environ)
     if pin is None:
         return ""
+    if not isinstance(scenario, dict):
+        return "Not kept. The private PIN policy requires a scenario object."
     fixture = scenario.get("fixture")
     if not isinstance(fixture, dict):
-        return (
-            "Not kept. The private PIN policy requires a fixture with guest_pin_case."
-        )
+        fixture = {}
+        scenario["fixture"] = fixture
     raw_case = fixture.get("guest_pin_case")
-    case = raw_case.strip().lower() if isinstance(raw_case, str) else ""
-    if case not in {name for name, _ in _CASES}:
+    case = _scenario_pin_case(scenario)
+    if case not in _CASES:
         return "Not kept. Set fixture.guest_pin_case to valid, wrong, missing, or wrong_then_correct."
-    if raw_case != case:
+    if isinstance(raw_case, str) and raw_case.strip() and raw_case != case:
         return "Not kept. Use the lowercase guest_pin_case label without surrounding spaces."
     if case in {"wrong", "missing"} and _mentions_pin(scenario, pin):
         return (
@@ -188,28 +210,16 @@ def guest_booking_pin_scenario_problem(
             "PIN anywhere, including in a negated instruction. Remove it entirely and say "
             "'another PIN' without naming it."
         )
-    if case == "missing" and any(_has_value(fixture, key) for key in _PIN_FIELDS):
-        return (
-            "Not kept. A missing-PIN scenario must not supply any PIN in its fixture."
-        )
-    if case == "valid" and (
-        _pin_value(fixture.get("guest_pin")) != pin
-        or any(_has_value(fixture, key) for key in _PIN_FIELDS[1:])
-    ):
-        return "Not kept. A valid-PIN scenario must supply the configured PIN in fixture.guest_pin."
-    if case == "wrong" and not (
-        (wrong_pin := _pin_value(fixture.get("guest_pin"))) is not None
-        and wrong_pin != pin
-        and not any(_has_value(fixture, key) for key in _PIN_FIELDS[1:])
-    ):
-        return "Not kept. A wrong-PIN scenario must supply a different four-digit fixture.guest_pin."
-    if case == "wrong_then_correct" and not (
-        (initial_pin := _pin_value(fixture.get("initial_guest_pin"))) is not None
-        and initial_pin != pin
-        and _pin_value(fixture.get("corrected_guest_pin")) == pin
-        and not _has_value(fixture, "guest_pin")
-    ):
-        return "Not kept. Supply an incorrect initial_guest_pin and the configured corrected_guest_pin."
+    for key in _PIN_FIELDS:
+        fixture.pop(key, None)
+    fixture["guest_pin_case"] = case
+    if case == "valid":
+        fixture["guest_pin"] = pin
+    elif case == "wrong":
+        fixture["guest_pin"] = _wrong_pin(pin, scenario)
+    elif case == "wrong_then_correct":
+        fixture["initial_guest_pin"] = _wrong_pin(pin, scenario)
+        fixture["corrected_guest_pin"] = pin
     return ""
 
 
@@ -225,41 +235,21 @@ def guest_booking_pin_guidance(
     if pin is None:
         return ""
 
-    counts = _case_counts(scenario_count)
-    return f"""
+    return """
 ## Temporary guest-booking POC: caller PIN behavior
 
-This private policy applies to this target only. Treat PIN behavior as an orthogonal caller fact,
-not as the subject of every scenario: preserve broad coverage of the agent prompt and let the
-primary ride-booking or robustness flow continue after the PIN exchange.
+This private policy supplies caller credentials; it is not a scenario category or coverage axis.
+Plan and write the same natural distribution of ride-booking, feature, language, audio and
+robustness scenarios you would write if this policy did not exist. Do not add, remove, rename,
+rewrite or rebalance scenarios to achieve a PIN quota, and do not make PIN the primary subject of
+an otherwise unrelated scenario.
 
-Across the complete saved suite of {scenario_count} scenarios, author exactly this allocation:
-- `valid`: {counts["valid"]} scenarios ({_CASES[0][1]}%). The caller knows `{pin}`.
-- `wrong`: {counts["wrong"]} scenarios ({_CASES[1][1]}%). The caller supplies one plausible but
-  incorrect four-digit PIN and must not later invent the valid PIN. Do not put the valid PIN in
-  this scenario's instruction, persona, fixture, variables, checks or any other field, even in
-  a negative sentence like "do not guess [the valid PIN]"; say "another PIN" instead.
-- `missing`: {counts["missing"]} scenarios ({_CASES[2][1]}%). The caller does not know the PIN and
-  says so naturally when asked; it must not infer one from any phone number. Do not put the valid
-  PIN anywhere in this scenario either.
-- `wrong_then_correct`: {counts["wrong_then_correct"]} scenarios ({_CASES[3][1]}%). The caller first
-  supplies a plausible incorrect four-digit PIN, then supplies `{pin}` only after the agent rejects
-  it or explicitly asks the caller to try again.
-
-Before dispatching scenario writers, allocate these exact case totals across their slices and put
-each slice's local case counts in that writer's brief. The slice allocations must sum to the suite
-totals above. A writer follows its local allocation and reports the case count it actually authored;
-it must not try to create the whole-suite totals inside its own slice.
-
-Every scenario must declare its case in `fixture.guest_pin_case`. Put the applicable PIN fact(s) in
-the fixture as `guest_pin`, or as `initial_guest_pin` and `corrected_guest_pin`; do not put a PIN in
-the fixture for `missing`. Incorrect values must be four digits and must not equal `{pin}`.
-
-The simulated caller must never volunteer a PIN before the agent asks. Once a PIN has been heard
-and the conversation advances, do not repeat it on unrelated turns. A valid-PIN scenario should say
-`{pin}` once on the first explicit request, repeating it only if the agent clearly says it did not
-hear it or explicitly requests it again. These rules belong in the scenario's natural circumstance
-and fixture, not in a scripted list of lines for the caller to recite.
+Only when a scenario independently concerns a caller whose PIN is wrong, missing, or corrected
+after rejection, mark `fixture.guest_pin_case` as `wrong`, `missing`, or `wrong_then_correct`.
+Otherwise omit that field. Do not invent or write PIN values: the platform attaches the appropriate
+private fact after submission. The simulated caller reveals that fact only when the agent asks and
+does not repeat it after the conversation advances unless the agent says it was not heard or asks
+again explicitly.
 """.strip()
 
 

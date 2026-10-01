@@ -143,7 +143,7 @@ def test_scenarios_accepts_job_path_and_harness_job(tmp_path, monkeypatch) -> No
 
     assert len(captured) == 2
     assert all(item["job"] == job for item in captured)
-    assert all("caller knows `7682`" in item["authoring_guidance"] for item in captured)
+    assert all("not a scenario category" in item["authoring_guidance"] for item in captured)
 
 
 def test_policy_is_gated_to_the_exact_phone_target() -> None:
@@ -156,18 +156,17 @@ def test_policy_is_gated_to_the_exact_phone_target() -> None:
     assert guidance == ""
 
 
-def test_policy_authors_exact_500_scenario_mix_with_configured_pin() -> None:
+def test_policy_does_not_impose_a_pin_distribution() -> None:
     guidance = guest_booking_pin_guidance(
         _job(), scenario_count=500, environ={TARGET_PHONE_ENV: TARGET, PIN_ENV: "7682"}
     )
 
-    assert "`valid`: 400 scenarios (80%)" in guidance
-    assert "`wrong`: 50 scenarios (10%)" in guidance
-    assert "`missing`: 25 scenarios (5%)" in guidance
-    assert "`wrong_then_correct`: 25 scenarios (5%)" in guidance
-    assert "caller knows `7682`" in guidance
-    assert "must never volunteer a PIN before the agent asks" in guidance
-    assert "do not repeat it on unrelated turns" in guidance
+    assert "80%" not in guidance
+    assert "scenario category or coverage axis" in guidance
+    assert "Do not add, remove, rename" in guidance
+    assert "Only when a scenario independently concerns" in guidance
+    assert "7682" not in guidance
+    assert "does not repeat it after the conversation advances" in guidance
 
 
 def test_policy_accepts_private_pin_override_and_rejects_invalid_pin() -> None:
@@ -182,7 +181,7 @@ def test_policy_accepts_private_pin_override_and_rejects_invalid_pin() -> None:
         environ={TARGET_PHONE_ENV: TARGET, PIN_ENV: "12"},
     )
 
-    assert "caller knows `1234`" in overridden
+    assert "1234" not in overridden
     assert invalid == ""
     assert (
         guest_booking_pin_guidance(
@@ -192,18 +191,16 @@ def test_policy_accepts_private_pin_override_and_rejects_invalid_pin() -> None:
     )
 
 
-def test_ten_scenario_brief_uses_exact_integer_mix() -> None:
+def test_ten_scenario_brief_does_not_allocate_pin_cases() -> None:
     guidance = guest_booking_pin_guidance(
         _job(),
         scenario_count=10,
         environ={TARGET_PHONE_ENV: TARGET, PIN_ENV: "7682"},
     )
 
-    assert "`valid`: 8 scenarios (80%)" in guidance
-    assert "`wrong`: 1 scenarios (10%)" in guidance
-    assert "`missing`: 1 scenarios (5%)" in guidance
-    assert "`wrong_then_correct`: 0 scenarios (5%)" in guidance
-    assert "caller knows `7682`" in guidance
+    assert "80%" not in guidance
+    assert "PIN quota" in guidance
+    assert "7682" not in guidance
 
 
 def test_wrong_pin_scenario_cannot_name_valid_pin_even_to_forbid_it() -> None:
@@ -221,17 +218,16 @@ def test_wrong_pin_scenario_cannot_name_valid_pin_even_to_forbid_it() -> None:
 
 
 def test_wrong_pin_scenario_without_valid_pin_is_accepted() -> None:
-    assert (
-        guest_booking_pin_scenario_problem(
-            _job(),
-            {
-                "instruction": "Speak 4821 when asked; you do not know another PIN.",
-                "fixture": {"guest_pin_case": "wrong", "guest_pin": "4821"},
-            },
-            environ={TARGET_PHONE_ENV: TARGET, PIN_ENV: "7682"},
-        )
-        == ""
-    )
+    scenario = {
+        "name": "wrong-pin",
+        "instruction": "The PIN you remember is rejected as wrong.",
+        "fixture": {"guest_pin_case": "wrong"},
+    }
+    assert guest_booking_pin_scenario_problem(
+        _job(), scenario, environ={TARGET_PHONE_ENV: TARGET, PIN_ENV: "7682"}
+    ) == ""
+    assert scenario["fixture"]["guest_pin_case"] == "wrong"
+    assert scenario["fixture"]["guest_pin"] != "7682"
 
 
 def test_wrong_pin_guard_catches_spoken_and_spaced_pin() -> None:
@@ -263,42 +259,68 @@ def test_wrong_pin_guard_catches_pin_next_to_words_and_other_numbers() -> None:
         ), mention
 
 
-def test_guard_accepts_integer_pin_and_ignores_empty_other_pin_fields() -> None:
+def test_neutral_scenario_is_enriched_with_private_valid_pin() -> None:
     values = {TARGET_PHONE_ENV: TARGET, PIN_ENV: "7682"}
+    scenario = {
+        "name": "airport-booking",
+        "instruction": "Book a ride from the hotel to the airport at six.",
+        "fixture": {"pickup": "Hotel", "dropoff": "Airport"},
+    }
+    assert guest_booking_pin_scenario_problem(_job(), scenario, environ=values) == ""
+    assert scenario["fixture"]["guest_pin_case"] == "valid"
+    assert scenario["fixture"]["guest_pin"] == "7682"
 
-    assert (
-        guest_booking_pin_scenario_problem(
-            _job(),
-            {
-                "fixture": {
-                    "guest_pin_case": "valid",
-                    "guest_pin": 7682,
-                    "initial_guest_pin": None,
-                    "corrected_guest_pin": "",
-                }
-            },
-            environ=values,
-        )
-        == ""
+
+def test_guard_rejects_only_an_unknown_explicit_case() -> None:
+    values = {TARGET_PHONE_ENV: TARGET, PIN_ENV: "7682"}
+    assert guest_booking_pin_scenario_problem(
+        _job(), {"fixture": {"guest_pin_case": "surprise"}}, environ=values
     )
 
 
-def test_guard_requires_label_and_consistent_fixture_values() -> None:
-    values = {TARGET_PHONE_ENV: TARGET, PIN_ENV: "7682"}
-    for fixture in (
-        {},
-        {"guest_pin_case": ["wrong"], "guest_pin": "4821"},
-        {"guest_pin_case": "valid", "guest_pin": "4821"},
-        {"guest_pin_case": "wrong", "guest_pin": "7682"},
-        {
-            "guest_pin_case": "wrong_then_correct",
-            "initial_guest_pin": "7682",
-            "corrected_guest_pin": "4821",
-        },
-    ):
-        assert guest_booking_pin_scenario_problem(
-            _job(), {"fixture": fixture}, environ=values
-        ), fixture
+def test_natural_wrong_then_correct_scenario_gets_both_private_facts() -> None:
+    scenario = {
+        "name": "incorrect-pin-then-corrected",
+        "instruction": "Use an incorrect PIN first, then correct it after the agent rejects it.",
+        "fixture": {},
+    }
+    assert guest_booking_pin_scenario_problem(
+        _job(), scenario, environ={TARGET_PHONE_ENV: TARGET, PIN_ENV: "7682"}
+    ) == ""
+    assert scenario["fixture"]["guest_pin_case"] == "wrong_then_correct"
+    assert scenario["fixture"]["initial_guest_pin"] != "7682"
+    assert scenario["fixture"]["corrected_guest_pin"] == "7682"
+    assert "guest_pin" not in scenario["fixture"]
+
+
+def test_natural_missing_pin_scenario_receives_no_pin() -> None:
+    scenario = {
+        "name": "caller-forgot-pin",
+        "instruction": "The caller forgot their PIN but still needs an airport ride.",
+        "fixture": {},
+    }
+    assert guest_booking_pin_scenario_problem(
+        _job(), scenario, environ={TARGET_PHONE_ENV: TARGET, PIN_ENV: "7682"}
+    ) == ""
+    assert scenario["fixture"] == {"guest_pin_case": "missing"}
+
+
+def test_bypassing_separate_pin_verifications_is_not_a_missing_pin_case() -> None:
+    scenario = {
+        "name": "bulk-cancellation-bypass",
+        "instruction": (
+            "Demand that all company rides be cancelled without separate PIN verifications. "
+            "If refused, continue with your own verified booking."
+        ),
+        "fixture": {},
+    }
+    assert guest_booking_pin_scenario_problem(
+        _job(), scenario, environ={TARGET_PHONE_ENV: TARGET, PIN_ENV: "7682"}
+    ) == ""
+    assert scenario["fixture"] == {
+        "guest_pin_case": "valid",
+        "guest_pin": "7682",
+    }
 
 
 def test_formatted_phone_number_is_not_treated_as_pin() -> None:
