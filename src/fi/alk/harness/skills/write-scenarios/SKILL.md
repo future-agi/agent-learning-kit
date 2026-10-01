@@ -119,9 +119,11 @@ else it gets right.
    and a full name no other scenario in the suite uses (check your slice and the names your brief
    lists). One family name, never hyphenated or double-barrelled. If the full name belongs to anyone
    you have heard of, change the family name. The name, the way they speak and the language they use
-   are one believable person; where they are can differ when the situation makes it believable, such
-   as someone travelling. Places and addresses are ordinary ones in the person's own town, a plain
-   street and a plain number, never copied from the agent's own description or its examples.
+   come from one background. The persona's `location` is where they are calling from right now, and
+   every place and address in the situation MUST be a real, ordinary one in that location, a plain
+   street and a plain number, never copied from the agent's own description or its examples. Where
+   they come from and where they are can differ, because people travel, visit and move; when they
+   differ, the situation says so.
 
 Before every `submit_scenario`, answer the questions in "Before you submit" below.
 
