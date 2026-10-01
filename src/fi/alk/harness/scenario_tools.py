@@ -339,7 +339,27 @@ def journalled(destination: Path) -> list[Scenario]:
     return list(found.values())
 
 
-def _already_in_the_suite(args: dict[str, Any], kept: list[Scenario]) -> str:
+# Largest share of a suite one value of a persona field may take.
+MOST_OF_A_SUITE = 0.34
+# Below this a suite is too small for a share to mean anything.
+FEWEST_FOR_A_SHARE = 8
+
+
+def _first_names_on_disk(destination: Path, excluding: str = "") -> set[str]:
+    """Caller first names already saved for this suite, so siblings do not reuse one."""
+    try:
+        return {
+            str(one.persona.name or "").strip().split(" ")[0].lower()
+            for one in load_scenarios(Path(destination))
+            if one.persona is not None and one.persona.name and one.name != excluding
+        } - {""}
+    except Exception:  # noqa: BLE001 - an unreadable suite must not block a submission
+        return set()
+
+
+def _already_in_the_suite(
+    args: dict[str, Any], kept: list[Scenario], elsewhere: set[str] | None = None
+) -> str:
     """Why this scenario is one the suite already has, or "" when it is new."""
     name = str(args.get("name") or "").strip()
     coverage = {
@@ -351,6 +371,15 @@ def _already_in_the_suite(args: dict[str, Any], kept: list[Scenario]) -> str:
         str(one.get("name") if isinstance(one, dict) else one)
         for one in (args.get("sub_goals") or [])
     }
+    persona = args.get("persona") or {}
+    first = str(persona.get("name") or "").strip().split(" ")[0].lower()
+    # Parallel writers start empty, so only the saved suite shows names a sibling already used.
+    if first and first in (elsewhere or set()):
+        return (
+            f"another scenario in this suite already has a caller named {first.title()!r}. Two "
+            "results under one name cannot be told apart by anybody reading the report, so give "
+            "this caller a name the suite does not have"
+        )
     for one in kept:
         if one.name == name:
             continue
@@ -370,6 +399,38 @@ def _already_in_the_suite(args: dict[str, Any], kept: list[Scenario]) -> str:
                     "cell nothing holds, or give it a different thing to find out: the variation "
                     "that counts is what the caller withholds, not their name or address"
                 )
+        if first and one.persona is not None:
+            if str(one.persona.name or "").strip().split(" ")[0].lower() == first:
+                return (
+                    f"{one.name!r} already has a caller named {first.title()!r}. Two results under "
+                    "one name cannot be told apart by anybody reading the report, so give this "
+                    "caller a name the suite does not have"
+                )
+    return ""
+
+
+def crowded_field(kept: list[Scenario], candidate: Any, wanted: int) -> str:
+    """Which persona field this scenario would push past its share of the suite, if any."""
+    if wanted < FEWEST_FOR_A_SHARE or candidate is None:
+        return ""
+    ceiling = max(2, int(wanted * MOST_OF_A_SUITE))
+    for field in ("location", "accent", "language"):
+        value = str(getattr(candidate, field, "") or "").strip().lower()
+        if not value:
+            continue
+        held = sum(
+            1
+            for one in kept
+            if one.persona
+            and str(getattr(one.persona, field, "") or "").strip().lower() == value
+        )
+        if held >= ceiling:
+            return (
+                f"{held} of the {len(kept)} scenarios written so far already use "
+                f"{field}={value!r}, and a suite of {wanted} may not put more than {ceiling} on "
+                f"one. Choose a different {field}; for accent or language, pick a person whose name, "
+                "languages and accent agree with it. The situation can stay."
+            )
     return ""
 
 
@@ -1330,9 +1391,17 @@ def scenario_tools(
         strayed = _off_the_grid(args.get("coverage"), target.get("axes"))
         if strayed:
             return _refuse(strayed)
-        twin = _already_in_the_suite(args, kept)
+        twin = _already_in_the_suite(
+            args, kept, _first_names_on_disk(destination, str(args.get("name") or ""))
+        )
         if twin:
             return _refuse(twin)
+        if cap() and target.get("people") != "alike":
+            crowded = crowded_field(
+                kept, Scenario.model_validate(args).persona, cap()
+            ) if args.get("persona") else ""
+            if crowded:
+                return _refuse(crowded)
         if args.get("persona") and args.get("fixture"):
             try:
                 stranger = persona_off_the_record(
