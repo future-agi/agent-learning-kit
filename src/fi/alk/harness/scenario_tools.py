@@ -1491,7 +1491,7 @@ def scenario_tools(
         "**counterparty** who is being served; **disposition** how the person behaves (hurried, "
         "confused, persistent, sceptical, changing their mind) or a world state that changes the "
         "right answer, never a plain or standard level and never a fact the person simply holds; "
-        "**interface** the conditions the session runs under; **interaction** the shape of the "
+        "**interface** the conditions the session runs under, where a level the kind file calls rare stays rare; **interaction** the shape of the "
         "exchange, a single plain request being the rare case; **overlay** what is deliberately "
         "making it hard, from the closed list; **overlay_vector** where that adversarial content "
         "arrives; **overlay_intensity** absent, subtle or overt. The levels are yours and come "
