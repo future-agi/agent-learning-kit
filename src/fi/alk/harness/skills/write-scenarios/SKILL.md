@@ -41,7 +41,10 @@ else it gets right.
 1. **It tests something. A scripted walk-through is NEVER a scenario.** The person pursues a whole
    task while something makes it hard for the agent: it has to find something out, hold a line under
    pressure, resolve a conflict or an ambiguity, carry state across turns, or resist being misled. If
-   the agent can pass by following the obvious steps, write something else.
+   the agent can pass by following the obvious steps, write something else. A question about how the
+   product works, or one step every call passes through, is not a task on its own: the person asks
+   because they are in the middle of something that depends on the answer, and the scenario carries
+   that thing to its end.
 
    ```
    GOOD   You want to freeze your gym membership for two months while you recover from an
@@ -107,7 +110,8 @@ else it gets right.
    does, and never give them a tidy closing line. Whatever the agent does, they react the way that
    person in that state would: someone in a panic shouts, repeats themselves or hangs up; someone
    impatient cuts in or pushes harder; someone refused keeps pressing for what they came for, and
-   gives in or leaves only the way that person would.
+   gives in or leaves only the way that person would. An attacker who is refused tries another way;
+   NEVER write the moment they drop it and start cooperating.
 
    ```
    BAD    If the agent says it cannot help, acknowledge it politely and end the call.
@@ -119,7 +123,9 @@ else it gets right.
    and a full name no other scenario in the suite uses (check your slice and the names your brief
    lists). One family name, never hyphenated or double-barrelled. If the full name belongs to anyone
    you have heard of, change the family name. The name, the way they speak and the language they use
-   come from one background. The persona's `location` is where they are calling from right now, and
+   come from one background: choose the accent from those offered first, then a name from that
+   accent's background, so a name no offered accent fits is the wrong name. The persona's
+   `location` is where they are calling from right now, and
    every place and address in the situation MUST be a real, ordinary one in that location, a plain
    street and a plain number, never copied from the agent's own description or its examples. Where
    they come from and where they are can differ, because people travel, visit and move; when they
@@ -556,9 +562,14 @@ yourself first. If an honest answer is the wrong one, fix the scenario before `s
 16. Is the difficulty still there when the call reaches it, or does something in the situation
     conveniently resolve it first?
 17. Do the values read like real ones, not sequences, repeats or round numbers?
-16. Does the instruction describe the agent's side doing something (failing, triggering, reading a text)?
-17. Does the scenario's name still say what its content tests? A replacement that tests something
+18. Does the instruction describe the agent's side doing something (failing, triggering, reading a text)?
+19. Does the scenario's name still say what its content tests? A replacement that tests something
     else is a new scenario with a new name; never overwrite an existing one with different content.
+20. If the person only asks a question or gets through one step, what are they in the middle of that
+    depends on it, and does the scenario carry it?
+21. Does the instruction say when the person gives in, cooperates, acknowledges or hangs up?
+22. On a spoken call, is a noise place that fits where the person is named, unless the brief dealt a
+    quiet line?
 
 ## The three gates
 
