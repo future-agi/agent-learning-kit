@@ -111,7 +111,8 @@ else it gets right.
    person in that state would: someone in a panic shouts, repeats themselves or hangs up; someone
    impatient cuts in or pushes harder; someone refused keeps pressing for what they came for, and
    gives in or leaves only the way that person would. An attacker who is refused tries another way;
-   NEVER write the moment they drop it and start cooperating.
+   NEVER write the moment they drop it and start cooperating, or the point after which they hand
+   over what was asked: whether they ever give way is theirs to decide in the moment.
 
    ```
    BAD    If the agent says it cannot help, acknowledge it politely and end the call.
