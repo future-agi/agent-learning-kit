@@ -554,6 +554,9 @@ yourself first. If an honest answer is the wrong one, fix the scenario before `s
 13. After the hard moment, does the person still pursue a real goal to its end?
 14. Is the person's full name unused elsewhere in the suite, ordinary, and not fictional or famous?
 15. Do the name, the way of speaking and the language fit one believable person?
+16. Is the difficulty still there when the call reaches it, or does something in the situation
+    conveniently resolve it first?
+17. Do the values read like real ones, not sequences, repeats or round numbers?
 16. Does the instruction describe the agent's side doing something (failing, triggering, reading a text)?
 17. Does the scenario's name still say what its content tests? A replacement that tests something
     else is a new scenario with a new name; never overwrite an existing one with different content.
