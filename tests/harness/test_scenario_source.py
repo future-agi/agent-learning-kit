@@ -2645,3 +2645,43 @@ def test_interface_and_overlay_levels_are_not_held_to_a_third() -> None:
         for one in range(15)
     ]
     assert _over_its_share({"interface": "noisy_line", "overlay": "none"}, grid, kept, 20) == ""
+
+
+def test_a_slice_that_would_fall_below_the_red_team_floor_refuses_another_plain_scenario() -> None:
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _red_team_short
+
+    grid = {"overlay": ["none", "prompt_injection", "social_engineering"]}
+    plain = [Scenario(name=f"p{n}", coverage={"overlay": "none"}) for n in range(16)]
+    ask_plain = {"name": "x", "coverage": {"overlay": "none"}}
+
+    assert "prompt_injection" in _red_team_short(ask_plain, grid, plain, 20)
+    attack = {"name": "x", "coverage": {"overlay": "prompt_injection"}}
+    assert _red_team_short(attack, grid, plain, 20) == ""
+    assert _red_team_short(ask_plain, grid, plain[:15], 20) == ""
+    assert _red_team_short(ask_plain, {"overlay": ["none"]}, plain, 20) == ""
+
+
+def test_a_quiet_line_is_held_to_a_sixth_of_a_slice() -> None:
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _over_its_share
+
+    grid = {"interface": ["quiet_line", "noisy_line"]}
+    quiet = [Scenario(name=f"q{n}", coverage={"interface": "quiet_line"}) for n in range(3)]
+
+    assert "noisy_line" in _over_its_share({"interface": "quiet_line"}, grid, quiet, 18)
+    assert _over_its_share({"interface": "quiet_line"}, grid, quiet[:2], 18) == ""
+    assert _over_its_share({"interface": "noisy_line"}, grid, quiet, 18) == ""
+
+
+def test_a_family_name_is_not_reached_for_a_third_time() -> None:
+    from fi.alk.harness.scenario import Persona, Scenario
+    from fi.alk.harness.scenario_tools import _already_in_the_suite
+
+    kept = [Scenario(name="a", persona=Persona(name="Marcus Vance"))]
+    ask = {"name": "c", "persona": {"name": "Heather Vance"}}
+
+    assert _already_in_the_suite(ask, kept, {"philip vance"})
+    assert _already_in_the_suite(ask, kept, set()) == ""
+    other = {"name": "c", "persona": {"name": "Heather Lam"}}
+    assert _already_in_the_suite(other, kept, {"philip vance"}) == ""

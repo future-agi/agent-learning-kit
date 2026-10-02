@@ -292,8 +292,8 @@ def test_a_caller_outside_the_accented_language_meets_an_accented_level_without_
     assert "accent not set" in _condition_the_call_lacks(english)
 
 
-def test_a_language_outside_the_multilingual_transcriber_is_transcribed_in_its_own() -> None:
+def test_a_language_outside_the_multilingual_transcriber_still_hears_the_agent() -> None:
     from fi.alk.harness.simulator_voice import persona_stt_language
 
     assert persona_stt_language({"languages": ["French"]}) == "multi"
-    assert persona_stt_language({"languages": ["ko"]}) == "ko"
+    assert persona_stt_language({"languages": ["ko"]}) == "multi"

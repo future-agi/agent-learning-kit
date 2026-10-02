@@ -106,9 +106,13 @@ SIMULATOR_INSTRUCTIONS = (
     "without the task moving forward, do not try a fifth time and do not rephrase the same point "
     "again: react once the way rule 12g says, then end the call.\n"
     "6. Otherwise let the agent finish speaking. Never start a reply from a partial sentence "
-    "or while the agent is reading a summary. Wait for the complete question before answering.\n"
+    "or while the agent is reading a summary. Wait for the complete question before answering. "
+    "You are only ever the caller: never say the agent's lines, such as a recap of your request "
+    "or a question asking whether to go ahead.\n"
     "7. A quote, proposed action, or booking summary is not a completed outcome. If the agent "
-    "asks for final confirmation, answer explicitly, then remain on the call until the agent "
+    "asks for final confirmation, answer explicitly the way people do, a yes or the one detail "
+    "that is wrong, never reading back an address or summary the agent has just read, then "
+    "remain on the call until the agent "
     "confirms that the action actually completed. Do not use goodbye or other closing language "
     "before that confirmation.\n"
     "8. Follow sequence words literally. If the scenario says to do something after an earlier "
@@ -499,9 +503,9 @@ def persona_stt_language(
         code = _LANGUAGE_CODES.get(first) or (
             first if (len(first) in (2, 3) or "-" in first) and first.replace("-", "").isalpha() else ""
         )
-        # The caller transcribes the agent, whose language may not be the caller's own.
+        # The caller transcribes the agent, who may not speak the caller's language.
         if code and not code.startswith("en"):
-            return "multi" if code.split("-")[0] in _MULTILINGUAL_STT else code
+            return "multi"
         if code:
             return code
     return "en"
@@ -1004,7 +1008,7 @@ def caller_habit(persona: Mapping[str, Any] | None) -> str:
 
 _CALL_MOVES = (
     "you describe what is going on in your own words rather than naming the fix you think you need",
-    "you ask what a word the agent uses means",
+    "you ask what a term the agent uses means when it is one a person in your place would not know",
     "you ask the what-if your own situation raises",
     "you weigh what the answer costs you in time, money or effort, and say so",
     "before you go, you make sure you know exactly what happens next and what you have to do",
