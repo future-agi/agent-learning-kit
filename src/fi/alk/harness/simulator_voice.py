@@ -61,9 +61,6 @@ _TEMPERAMENTS = (
     (("reserved", "passive"), (0.25, 0.5, 0.6)),
 )
 
-# Languages transcribed with Deepgram's multilingual model rather than a single language code.
-_MULTILINGUAL_STT = ("ar", "es")
-
 # Written as separate numbered rules rather than one paragraph. These arrive late in a long
 # prompt, and a rule buried mid-sentence there does not survive: a caller ignored the loop rule
 # for four turns while it was the tail of a compound sentence.
@@ -503,9 +500,9 @@ def persona_stt_language(
         code = _LANGUAGE_CODES.get(first) or (
             first if (len(first) in (2, 3) or "-" in first) and first.replace("-", "").isalpha() else ""
         )
-        # The caller transcribes the agent, who may not speak the caller's language.
+        # The caller transcribes the agent, who may answer in English or the caller's language.
         if code and not code.startswith("en"):
-            return "multi"
+            return "multi" if code.split("-")[0] in _MULTILINGUAL_STT else code
         if code:
             return code
     return "en"

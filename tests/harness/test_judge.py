@@ -292,8 +292,13 @@ def test_a_caller_outside_the_accented_language_meets_an_accented_level_without_
     assert "accent not set" in _condition_the_call_lacks(english)
 
 
-def test_a_language_outside_the_multilingual_transcriber_still_hears_the_agent() -> None:
-    from fi.alk.harness.simulator_voice import persona_stt_language
+def test_the_caller_transcribes_multilingually_only_where_the_model_covers_the_language() -> None:
+    from fi.alk.harness.simulator_voice import persona_stt_language, transcriber_for
 
+    assert persona_stt_language({"languages": ["English"]}) == "en-US"
     assert persona_stt_language({"languages": ["French"]}) == "multi"
-    assert persona_stt_language({"languages": ["ko"]}) == "multi"
+    assert persona_stt_language({"languages": ["Spanish"]}) == "multi"
+    assert persona_stt_language({"languages": ["Arabic"]}) == "ar"
+    assert persona_stt_language({"languages": ["ko"]}) == "ko"
+    assert transcriber_for(persona_stt_language({"languages": ["Hindi"]})) == ("deepgram", "nova-3", "multi")
+    assert transcriber_for(persona_stt_language({"languages": ["Arabic"]})) == ("deepgram", "nova-3", "ar")
