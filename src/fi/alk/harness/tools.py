@@ -246,6 +246,13 @@ def contract_tools(
                     "simulated person is briefed: someone who did not dial has no opening request "
                     "to make.",
                 },
+                "agent_languages": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Voice only: the languages the agent's own instructions say it "
+                    "speaks, for example ['English'] for 'respond in English only'. Leave empty when "
+                    "its instructions do not say. The simulated caller's transcriber follows it.",
+                },
                 "conversational": {
                     "type": "boolean",
                     "description": "True if a person talks with it turn by turn. False for an "

@@ -481,13 +481,23 @@ def transcriber_for(language: str) -> tuple[str, str, str]:
 _MULTILINGUAL_STT = frozenset({"en", "es", "fr", "de", "hi", "ru", "pt", "ja", "it", "nl"})
 
 
+def _agent_language_codes(agent_languages: str) -> set[str]:
+    """Base codes of the agent's declared languages, or none unless every one is a known language."""
+    names = [one.strip().lower() for one in (agent_languages or "").split(",") if one.strip()]
+    codes = [_LANGUAGE_CODES.get(name) for name in names]
+    if not codes or not all(codes):
+        return set()
+    return {code.split("-")[0] for code in codes}
+
+
 def persona_stt_language(
-    persona: Mapping[str, object] | None, override: str = ""
+    persona: Mapping[str, object] | None, override: str = "", agent_languages: str = ""
 ) -> str:
     """The STT language for one caller, from the persona's languages.
 
     An explicit override always wins. Otherwise the persona's first language is used, so a caller
-    who speaks Hindi is transcribed as Hindi rather than forced to English.
+    who speaks Hindi is transcribed as Hindi rather than forced to English. When the agent declares
+    languages that exclude the caller's, the agent will answer in its own, so it is heard as multi.
     """
     if override and override.strip():
         return override.strip()
@@ -502,7 +512,11 @@ def persona_stt_language(
         )
         # The caller transcribes the agent, who may answer in English or the caller's language.
         if code and not code.startswith("en"):
-            return "multi" if code.split("-")[0] in _MULTILINGUAL_STT else code
+            base = code.split("-")[0]
+            agent = _agent_language_codes(agent_languages)
+            if base in _MULTILINGUAL_STT or (agent and base not in agent):
+                return "multi"
+            return code
         if code:
             return code
     return "en"
@@ -834,7 +848,9 @@ def simulator_definition(
     stt_override = (get("SIMULATOR_STT_PROVIDER") or "").strip()
     _, tts_provider = voice_providers(get)
     language = persona_stt_language(
-        dict(persona or {}), (get("SIMULATOR_STT_LANGUAGE") or "").strip()
+        dict(persona or {}),
+        (get("SIMULATOR_STT_LANGUAGE") or "").strip(),
+        (get("ALK_AGENT_LANGUAGES") or "").strip(),
     )
     stt_default_provider, stt_model, stt_language = transcriber_for(language)
     stt_provider = stt_override or stt_default_provider

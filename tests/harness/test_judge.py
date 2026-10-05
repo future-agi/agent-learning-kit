@@ -302,3 +302,29 @@ def test_the_caller_transcribes_multilingually_only_where_the_model_covers_the_l
     assert persona_stt_language({"languages": ["ko"]}) == "ko"
     assert transcriber_for(persona_stt_language({"languages": ["Hindi"]})) == ("deepgram", "nova-3", "multi")
     assert transcriber_for(persona_stt_language({"languages": ["Arabic"]})) == ("deepgram", "nova-3", "ar")
+
+
+def test_an_agent_that_does_not_speak_the_callers_language_is_heard_multilingually() -> None:
+    from fi.alk.harness.simulator_voice import persona_stt_language
+
+    arabic = {"languages": ["Arabic"]}
+    assert persona_stt_language(arabic, agent_languages="English") == "multi"
+    assert persona_stt_language(arabic, agent_languages="Arabic,English") == "ar"
+    assert persona_stt_language(arabic, agent_languages="") == "ar"
+    # An unrecognised value leaves the caller's own language in place rather than guessing.
+    assert persona_stt_language(arabic, agent_languages="English,Klingon") == "ar"
+    assert persona_stt_language({"languages": ["Spanish"]}, agent_languages="Spanish") == "multi"
+    assert persona_stt_language({"languages": ["English"]}, agent_languages="Arabic") == "en-US"
+
+
+def test_the_agents_declared_languages_reach_the_call_environment(tmp_path) -> None:
+    import json
+
+    from fi.alk.harness import call_runner
+    from fi.alk.harness.hosted_entrypoint import _bundle_contract_list
+
+    (tmp_path / "contract.json").write_text(json.dumps({"agent_languages": ["English", " ", "Arabic"]}))
+    assert _bundle_contract_list(tmp_path, "agent_languages") == ["English", "Arabic"]
+    assert _bundle_contract_list(tmp_path, "missing") == []
+    # The call runner forwards only *_ALIAS environment names to the call process.
+    assert call_runner.AGENT_LANGUAGES_ALIAS == "ALK_AGENT_LANGUAGES"

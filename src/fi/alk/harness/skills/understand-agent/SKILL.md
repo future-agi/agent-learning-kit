@@ -94,7 +94,9 @@ Find, in roughly this order:
    than inferred from its tools. An agent told it **placed** this call ("you placed this call",
    "this is us calling about", greeting a person who was not expecting it) is `outbound`. An agent
    people dial into ("callers dial in", "thanks for calling") is `inbound`. Record it as
-   `call_direction`, and leave it out for chat, which a person always starts.
+   `call_direction`, and leave it out for chat, which a person always starts. Record the languages
+   its instructions say it speaks as `agent_languages` ("English only" is `["English"]`), and leave
+   it empty when they do not say.
 
    This is not who speaks first: an outbound agent usually still greets. It decides how the
    simulated person is briefed, and briefing someone who did not dial as though they had an errand
