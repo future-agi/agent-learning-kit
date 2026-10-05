@@ -1276,7 +1276,8 @@ def scenario_tools(
                 "name": {
                     "type": "string",
                     "description": "Short identifier, lower case with hyphens or underscores. "
-                    "It becomes this scenario's folder name.",
+                    "It becomes this scenario's folder name. It says what this scenario tests and "
+                    "carries, without a counter or an invented code, PIN or reference.",
                 },
                 "use_case": {
                     "type": "string",
