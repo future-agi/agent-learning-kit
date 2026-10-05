@@ -2685,3 +2685,58 @@ def test_a_family_name_is_not_reached_for_a_third_time() -> None:
     assert _already_in_the_suite(ask, kept, set()) == ""
     other = {"name": "c", "persona": {"name": "Heather Lam"}}
     assert _already_in_the_suite(other, kept, {"philip vance"}) == ""
+
+
+def test_callers_are_told_apart_by_full_name_not_first_name() -> None:
+    from fi.alk.harness.scenario import Persona, Scenario
+    from fi.alk.harness.scenario_tools import _already_in_the_suite
+
+    kept = [Scenario(name="a", persona=Persona(name="Maria Lopez"))]
+
+    assert _already_in_the_suite({"name": "b", "persona": {"name": "Maria Chen"}}, kept, set()) == ""
+    assert "Maria Lopez" in _already_in_the_suite(
+        {"name": "b", "persona": {"name": "  maria   LOPEZ "}}, kept, set()
+    )
+    assert _already_in_the_suite({"name": "b", "persona": {"name": "Maria Lopez"}}, [], {"maria lopez"})
+
+
+def test_the_red_team_floor_leaves_a_tiny_slice_alone() -> None:
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _red_team_short
+
+    grid = {"overlay": ["none", "prompt_injection"]}
+    plain = [Scenario(name=f"p{n}", coverage={"overlay": "none"}) for n in range(2)]
+
+    assert _red_team_short({"name": "x", "coverage": {"overlay": "none"}}, grid, plain, 3) == ""
+    assert _red_team_short({"name": "x"}, grid, plain, 20) == ""
+
+
+def test_the_run_specific_policy_reaches_writers_and_planner_before_their_checklists(tmp_path: Path) -> None:
+    from fi.alk.harness import scenarios as stage
+    from fi.alk.harness.backends import ToolServer, ToolSpec
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.scenario_tools import TOOL_NAMES
+
+    async def handler(args):
+        return {"content": "ok"}
+
+    server = ToolServer(
+        name="scenarios",
+        version="1",
+        tools=[ToolSpec(name=n, description=n, input_schema={}, handler=handler) for n in TOOL_NAMES],
+    )
+    policy = "POLICY-MARKER"
+    with mock.patch.object(stage, "world_summary", lambda _: "w"), mock.patch.object(
+        stage, "load_skill", lambda *a, **k: "s"
+    ), mock.patch.object(stage, "discovered_skills", lambda **k: ""):
+        writer = stage.writer_worker(
+            AgentContract(agent="a"), tmp_path, server, budget=40, authoring_guidance=policy
+        )[stage.WRITER].instructions
+        planner, _ = stage.open_stage(
+            AgentContract(agent="a"), out=tmp_path / "suite", wanted=20, authoring_guidance=policy
+        )
+    said = planner._spec.system_prompt
+
+    assert writer.index(policy) < writer.index("a scenario coherent in itself")
+    assert said.index(policy) < said.index("Before you brief anyone")
+
