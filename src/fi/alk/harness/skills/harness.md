@@ -102,7 +102,7 @@ Three gates, all code, no model asked:
 ## The contract is evidence
 
 It records what the agent verifiably is, read from its own source. That makes it the thing
-everything downstream is confined to, and it is why you cannot invent a tool or a value.
+everything downstream is confined to, and it is why you cannot invent a tool, or a value the agent would look up.
 
 It is not frozen. A later stage often discovers it was read wrong — a missing permitted value, a
 misread argument, a rule that is not really a rule. Correct it through the amendment tools and

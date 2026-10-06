@@ -1003,6 +1003,7 @@ async def validate_and_repair(
                     count=job.scenario_count,
                     interactive=False,
                     guidance=[guidance],
+                    job=job,
                 )
             )
 

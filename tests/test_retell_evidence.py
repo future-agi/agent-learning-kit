@@ -59,7 +59,7 @@ def test_retell_tool_evidence_pairs_invocation_and_result() -> None:
             "arguments": {},
             "result": None,
             "ok": True,
-            "at": 0,
+            "at": None,
         },
     ]
 

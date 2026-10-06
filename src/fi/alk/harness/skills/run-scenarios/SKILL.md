@@ -1,6 +1,6 @@
 ---
 name: run-scenarios
-description: Run the validated scenarios against the agent and say what the results mean.
+description: Runs validated scenarios against an AI agent and explains what the results mean. Use once a suite has been saved and validated and the agent is reachable.
 ---
 
 # Run the scenarios

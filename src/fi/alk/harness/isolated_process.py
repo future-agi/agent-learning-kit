@@ -139,6 +139,10 @@ async def run_json_worker(
                 raise asyncio.CancelledError
             await process.communicate(json.dumps(payload).encode())
             if process.returncode != 0:
+                logging.getLogger(__name__).error(
+                    "isolated_worker_failed module=%s exit_status=%s result_present=%s",
+                    module, process.returncode, result_path.is_file(),
+                )
                 raise IsolatedWorkerError(
                     f"isolated worker exited with status {process.returncode}"
                 )
