@@ -1,6 +1,6 @@
 ---
 name: understand-agent
-description: Read an AI agent's source and write down what is verifiably true about it.
+description: Reads an AI agent's source or definition and records what is verifiably true about it: its tools, rules, data and use cases. Use first, before any world is built or scenario planned.
 ---
 
 # Understand the agent

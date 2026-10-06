@@ -26,6 +26,7 @@ try:
         BackgroundAudioPlayer,
         RunContext,
         StopResponse,
+        ToolResult,
         function_tool,
         inference,
         metrics,
@@ -734,7 +735,7 @@ class _TestRunnerAgent(Agent):
         # Nothing quotable and nothing English-specific: wording here comes back out as speech.
         description=(
             "Ends the call. Nothing else ends it and no one else ends it for you. "
-            "Use it in the same turn as your goodbye."
+            "Use it only in the same turn as your goodbye, never in a turn that asks something."
         ),
     )
     async def end_call(self, ctx: RunContext) -> str | None:
@@ -744,6 +745,14 @@ class _TestRunnerAgent(Agent):
         if getattr(self._session, "user_state", None) == "speaking":
             logger.warning("endCall refused: the other side is still speaking")
             return "Not yet: the other person is still talking. Let them finish, then call endCall again."
+        if _asks_question(self._saying):
+            # A caller that asks and hangs up in the same breath never hears the answer.
+            logger.warning("endCall refused: this turn asks a question")
+            # No extra reply: the question was already spoken, the caller should now listen.
+            return ToolResult(
+                "Not yet: you just asked a question. Wait for the answer, then decide.",
+                reply_required=False,
+            )
         messages = _session_messages(self._session)
         floor, alternation_required = _turn_requirements(self._min_turn_messages)
         below_floor = len(messages) < floor or (
@@ -1446,6 +1455,11 @@ def _was_asked(messages: list[dict[str, Any]]) -> bool:
 
 def _letters(text: str) -> str:
     return re.sub(r"[\W_]", "", text.lower())
+
+
+def _asks_question(saying: str) -> bool:
+    """Whether the caller's current turn asks something, in Latin, Arabic or CJK punctuation."""
+    return bool(re.search(r"[?？؟]", _STAGE_DIRECTION.sub("", saying)))
 
 
 # A reply that is only a stage direction or an echoed empty result, never words a person says.

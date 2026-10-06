@@ -498,8 +498,9 @@ async def _scenarios(args: argparse.Namespace) -> int:
 
     # The guest-booking POC policy is supplied only through the platform-owned simulator
     # secret channel and is gated against the exact submitted phone target. Keep it in the model's
-    # authoring brief: saved scenarios should be authored with natural PIN behavior, never rewritten
-    # mechanically after generation or intercepted while a call is running.
+    # authoring brief: saved scenarios should be authored with natural PIN behavior. The scenario
+    # gate attaches only private fixture facts after selection; it never rewrites scenario intent
+    # or intercepts a live caller turn.
     from .poc_guest_booking import (
         TARGET_PHONE_ENV,
         guest_booking_pin_guidance,

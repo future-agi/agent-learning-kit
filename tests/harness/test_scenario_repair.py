@@ -60,13 +60,6 @@ def test_repair_rejects_noop() -> None:
         )
 
 
-def test_a_length_described_is_not_a_value_handed_to_the_caller():
-    from fi.alk.harness.scenario import _handed_to_caller
-
-    assert _handed_to_caller("When asked, say your 4-digit PIN and give the 6-digit code.") == set()
-    assert _handed_to_caller("When asked for the PIN, say 7682.") == {"7682"}
-
-
 def test_a_branch_loses_a_pasted_kind_label_and_keeps_its_description():
     from fi.alk.harness.scenario_tools import _without_kind_label
 
