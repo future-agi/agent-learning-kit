@@ -1316,6 +1316,49 @@ def test_bundle_uses_widest_numeric_type_from_language_union(tmp_path: Path) -> 
     assert '"score" double precision' in compiled_world
 
 
+def test_bundle_preserves_container_shape_from_descriptive_contract(
+    tmp_path: Path,
+) -> None:
+    authoring = _authoring(tmp_path)
+    (authoring / "contract.json").write_text(
+        json.dumps(
+            {
+                "modality": "chat",
+                "data_schema": {
+                    "clients": {
+                        "holdings": (
+                            "list of dicts with ticker (str), qty (int), "
+                            "cost_basis (float)"
+                        )
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    database = sqlite3.connect(authoring / "world.sqlite")
+    try:
+        database.execute("CREATE TABLE clients (holdings TEXT)")
+        database.execute(
+            "INSERT INTO clients VALUES (?)",
+            ('[{"ticker":"NVDA","qty":2,"cost_basis":100.5}]',),
+        )
+        database.commit()
+    finally:
+        database.close()
+
+    compiled_world = _sqlite_sql(
+        authoring / "world.sqlite",
+        contract_declarations=_contract_column_declarations(
+            json.loads((authoring / "contract.json").read_text(encoding="utf-8"))
+        ),
+    )
+
+    assert '"holdings" jsonb' in compiled_world
+    assert '"cost_basis": 100.5' in compiled_world
+    assert '"ticker": "NVDA"' in compiled_world
+
+
 def test_adopted_source_schema_applies_defaults_for_authored_nulls(
     tmp_path: Path,
 ) -> None:
