@@ -289,8 +289,8 @@ def guest_booking_pin_guidance(
 ## Temporary guest-booking POC: caller PIN behavior
 
 This private policy supplies caller credentials; it is not a scenario category or coverage axis.
-Plan and write the same natural distribution of ride-booking, feature, language, audio and
-robustness scenarios you would write if this policy did not exist. Do not add, remove, rename,
+Plan and write the same natural distribution of ride-booking, feature, language, audio,
+robustness and red-teaming scenarios you would write if this policy did not exist. Do not add, remove, rename,
 rewrite or rebalance scenarios to achieve a PIN quota, and do not make PIN the primary subject of
 an otherwise unrelated scenario.
 
