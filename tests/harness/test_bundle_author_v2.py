@@ -12,6 +12,7 @@ from fi.alk.harness.bundle_author_v2 import (
     BundleAuthorError,
     _compile_source_tool_handlers,
     _contract_column_declarations,
+    _contract_sql_type,
     _sqlite_sql,
     author_bundle_v2,
     resolve_environment_plan,
@@ -1314,6 +1315,19 @@ def test_bundle_uses_widest_numeric_type_from_language_union(tmp_path: Path) -> 
     )
 
     assert '"score" double precision' in compiled_world
+
+
+@pytest.mark.parametrize(
+    ("declaration", "expected"),
+    [
+        ("bool, whether the rider is on the block list", "boolean"),
+        ("number of items in the cart list", "double precision"),
+    ],
+)
+def test_contract_scalar_type_ignores_container_words_in_prose(
+    declaration: str, expected: str
+) -> None:
+    assert _contract_sql_type(declaration) == expected
 
 
 def test_bundle_preserves_container_shape_from_descriptive_contract(

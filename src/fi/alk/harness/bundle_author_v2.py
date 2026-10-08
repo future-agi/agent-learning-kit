@@ -424,7 +424,7 @@ def _contract_sql_type(declaration: str) -> str | None:
         if tokens & {"STR", "STRING"}:
             return "text"
     patterns = (
-        (r"^BOOLEAN\b", "boolean"),
+        (r"^(?:BOOL|BOOLEAN)\b", "boolean"),
         (r"^(?:BIGINT|INTEGER|INT|SMALLINT)\b", "bigint"),
         (r"^(?:DOUBLE PRECISION|REAL|FLOAT)\b", "double precision"),
         (
@@ -444,9 +444,9 @@ def _contract_sql_type(declaration: str) -> str | None:
     # Application contracts often use language-level unions instead of SQL
     # declarations. Interpret the whole declaration as a type set, with the wider
     # compatible representation winning independently of token order.
-    if tokens & {"DICT", "MAPPING", "OBJECT", "JSON", "ANY"}:
+    if re.match(r"^(?:DICT|MAPPING|OBJECT|JSON|ANY)\b", normalized):
         return "jsonb"
-    if tokens & {"LIST", "ARRAY", "TUPLE", "SET"}:
+    if re.match(r"^(?:LIST|ARRAY|TUPLE|SET)\b", normalized):
         # Without a proven homogeneous leaf type, JSONB preserves the value shape.
         return "jsonb"
     if tokens & {"FLOAT", "NUMBER", "DECIMAL", "DOUBLE"}:
