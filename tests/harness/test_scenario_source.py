@@ -2672,6 +2672,8 @@ def test_a_quiet_line_is_held_to_a_sixth_of_a_slice() -> None:
     assert "noisy_line" in _over_its_share({"interface": "quiet_line"}, grid, quiet, 18)
     assert _over_its_share({"interface": "quiet_line"}, grid, quiet[:2], 18) == ""
     assert _over_its_share({"interface": "noisy_line"}, grid, quiet, 18) == ""
+    # Resubmitting one already held replaces it, so the count stays where it is.
+    assert _over_its_share({"interface": "quiet_line"}, grid, quiet, 18, "q0") == ""
 
 
 def test_a_family_name_is_not_reached_for_a_third_time() -> None:
@@ -2685,6 +2687,17 @@ def test_a_family_name_is_not_reached_for_a_third_time() -> None:
     assert _already_in_the_suite(ask, kept, set()) == ""
     other = {"name": "c", "persona": {"name": "Heather Lam"}}
     assert _already_in_the_suite(other, kept, {"philip vance"}) == ""
+
+
+def test_names_a_sibling_writer_journalled_count_as_taken(tmp_path) -> None:
+    from fi.alk.harness.scenario import Persona, Scenario
+    from fi.alk.harness.scenario_tools import _first_names_on_disk, journal_scenario
+
+    journal_scenario(Scenario(name="a", persona=Persona(name="Marcus Vance")), tmp_path)
+    journal_scenario(Scenario(name="b", persona=Persona(name="Philip Vance")), tmp_path)
+
+    assert _first_names_on_disk(tmp_path) == {"marcus vance", "philip vance"}
+    assert _first_names_on_disk(tmp_path, "b") == {"marcus vance"}
 
 
 def test_callers_are_told_apart_by_full_name_not_first_name() -> None:

@@ -347,11 +347,11 @@ FEWEST_FOR_A_SHARE = 8
 
 
 def _first_names_on_disk(destination: Path, excluding: str = "") -> set[str]:
-    """Caller full names already saved for this suite, so siblings do not reuse one."""
+    """Caller full names already saved or journalled for this suite, so siblings do not reuse one."""
     try:
         return {
             " ".join(str(one.persona.name or "").lower().split())
-            for one in load_scenarios(Path(destination))
+            for one in [*load_scenarios(Path(destination)), *journalled(Path(destination))]
             if one.persona is not None and one.persona.name and one.name != excluding
         } - {""}
     except Exception:  # noqa: BLE001 - an unreadable suite must not block a submission
@@ -488,7 +488,11 @@ def _red_team_short(
 
 
 def _over_its_share(
-    coverage: Any, grid: dict[str, list[str]] | None, kept: list[Scenario], wanted: int
+    coverage: Any,
+    grid: dict[str, list[str]] | None,
+    kept: list[Scenario],
+    wanted: int,
+    name: str = "",
 ) -> str:
     """Why this coordinate is a level the suite already has enough of, or "" when it is not."""
     if not grid or wanted < 12 or not isinstance(coverage, dict):
@@ -503,7 +507,7 @@ def _over_its_share(
             continue
         share = max(1, wanted // 6) if quiet else max(1, (wanted + 2) // 3)
         counted: Counter[str] = Counter(
-            level_name((one.coverage or {}).get(axis, "")) for one in kept
+            level_name((one.coverage or {}).get(axis, "")) for one in kept if one.name != name
         )
         if counted.get(mine, 0) < share:
             continue
@@ -1490,7 +1494,7 @@ def scenario_tools(
         if strayed:
             return _refuse(strayed)
         crowded_level = _over_its_share(
-            args.get("coverage"), target.get("axes"), kept, cap()
+            args.get("coverage"), target.get("axes"), kept, cap(), str(args.get("name") or "")
         )
         if crowded_level:
             return _refuse(crowded_level)
