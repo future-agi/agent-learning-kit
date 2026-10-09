@@ -196,10 +196,15 @@ def _cartesia_tts(
     # come from a set validated against the live API rather than from the plugin's types.
     speed = config.speed
     emotion = config.emotion
+    volume = config.volume
     # The only record of what the simulator actually sounded like: call_metadata reports a constant
     # speed and voice name whatever it was given.
     logger.info(
-        "cartesia_tts voice=%s speed=%s emotion=%s", voice, speed, emotion or None
+        "cartesia_tts voice=%s speed=%s emotion=%s volume=%s",
+        voice,
+        speed,
+        emotion or None,
+        volume,
     )
     return cartesia.TTS(
         api_key=_required_env("CARTESIA_API_KEY"),
@@ -212,6 +217,7 @@ def _cartesia_tts(
         voice=voice,
         **({"speed": float(speed)} if isinstance(speed, (int, float)) else {}),
         **({"emotion": list(emotion)} if emotion else {}),
+        **({"volume": float(volume)} if isinstance(volume, (int, float)) else {}),
     )
 
 

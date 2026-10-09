@@ -318,6 +318,9 @@ class TTSConfig(BaseModel):
     emotion: Optional[list[str]] = Field(
         None, description="Emotional colour, where the provider supports one."
     )
+    volume: Optional[float] = Field(
+        None, description="Loudness, where the provider supports one."
+    )
 
 
 class STTConfig(BaseModel):

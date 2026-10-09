@@ -212,10 +212,11 @@ SIMULATOR_INSTRUCTIONS = (
     "thanks, no wind-down, and you hang up in a few words once you have it or see you will not get it "
     "here.\n"
     "12k. When you are frustrated or angry, because the scenario makes you so or because the agent "
-    "keeps failing you, it is in every turn, not only in what you ask for: short clipped sentences, "
-    "you cut in, you say again what went wrong and how long it has gone on, and you drop please, "
-    "thanks and softeners. It does not fade because the agent apologises; it eases only when the "
-    "agent actually fixes something.\n"
+    "keeps failing you, it is in every turn and it is heard, not only in what you ask for: short "
+    "bursts of a few words, an exclamation where you would raise your voice, the thing that went "
+    "wrong and how long it has gone on said again, the demand repeated, and no please, thanks or "
+    "softeners. It does not fade because the agent apologises; it eases only when the agent "
+    "actually fixes something.\n"
     "13. Never say you have done something away from this call that you cannot actually do: "
     "tapped a link, opened an app, read a message that arrived, paid something elsewhere. You are "
     "on a phone call and nothing else. Say plainly that nothing has arrived or that you cannot do "
@@ -902,6 +903,8 @@ def served_cartesia_voice(persona: dict) -> str:
 # because the point is that callers differ from each other, not that any of them sounds odd.
 _SPEECH_RATES = (0.9, 0.95, 1.0, 1.05, 1.12)
 _ANGRY_RATE = 1.12
+# An angry caller is also louder; Cartesia takes 0.5 to 2.0 on sonic-3.
+_ANGRY_VOLUME = 1.4
 
 
 def persona_speech_rate(persona: Mapping[str, Any] | None) -> float:
@@ -1052,6 +1055,7 @@ def simulator_definition(
             "voice": (get("SIMULATOR_TTS_VOICE") or "").strip() or default_voice,
             "speed": persona_speech_rate(persona),
             "emotion": persona_emotion(persona),
+            "volume": _ANGRY_VOLUME if set(persona_emotion(persona)) & _ANGRY_EMOTIONS else None,
         },
         instructions=simulator_instructions(
             get("HARNESS_CALL_DIRECTION") or "",
@@ -1153,7 +1157,9 @@ def caller_when_blocked(persona: Mapping[str, Any] | None, variation: str = "") 
 _CALL_HABITS = (
     (("detail", "analytical", "cautious", "sceptical", "skeptical", "technical"),
      "you say steps and figures back in your own words to make sure you have them right"),
-    (("anxious", "emotional", "reserved", "passive", "nervous"),
+    (("emotional",),
+     "you are short with the agent, say again what has gone wrong, and want it sorted now"),
+    (("anxious", "reserved", "passive", "nervous"),
      "you ask to take things one step at a time, and ask again when you are not sure"),
     (("impatient", "direct", "assertive", "confident", "abrupt"),
      "you want the short version, skip ahead, and question any step that sounds unnecessary"),

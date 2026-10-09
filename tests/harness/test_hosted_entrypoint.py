@@ -4561,6 +4561,23 @@ def test_every_fallback_voice_is_the_callers_gender():
             assert set(_cartesia_voice_candidates(persona)) <= by_gender[gender], persona
 
 
+def test_an_angry_caller_is_louder_and_a_calm_one_keeps_the_default(monkeypatch):
+    from fi.alk.harness.simulator_voice import simulator_definition
+
+    monkeypatch.setenv("CARTESIA_API_KEY", "not-a-real-key")
+    angry = simulator_definition(lambda name: "", {"name": "Dana Price", "personality": "Emotional"})
+    calm = simulator_definition(lambda name: "", {"name": "Dana Price", "personality": "Friendly and cooperative"})
+    assert angry.tts.volume == 1.4
+    assert calm.tts.volume is None
+
+
+def test_an_emotional_caller_does_not_ask_to_go_one_step_at_a_time():
+    from fi.alk.harness.simulator_voice import caller_habit
+
+    assert "one step at a time" not in caller_habit({"personality": "Emotional"})
+    assert "one step at a time" in caller_habit({"personality": "Anxious"})
+
+
 def test_age_and_anger_voices_apply_only_where_the_catalog_has_them():
     from fi.alk.harness.simulator_voice import _CARTESIA_AGE_VOICES, cartesia_voice_for
 
