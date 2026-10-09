@@ -2,8 +2,8 @@
 # pyproject version is new, build and certify the E2B template, then open a
 # pull request in future-agi/deployment pinning that template.
 # SDK release: bump `version` in pyproject.toml + `uv lock`, merge, approve the
-# `pypi` environment deployment.
-# Setup (secrets, PyPI publisher): DEVELOPMENT.md, "Release pipeline".
+# `pypi` deployment. Template: approve the `e2b-template` deployment.
+# Setup (secrets, approvers, PyPI publisher): DEVELOPMENT.md, "Release pipeline".
 name: Release
 
 on:
@@ -161,6 +161,7 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    environment: e2b-template
     permissions:
       contents: read
       packages: write

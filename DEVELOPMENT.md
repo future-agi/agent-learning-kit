@@ -56,9 +56,9 @@ When moving an existing surface:
 One GitHub Actions workflow, `Release` (`.github/workflows/publish-pypi.yml`), runs
 on every push to `main`, including merges. It publishes the SDK to PyPI, builds and
 certifies the hosted E2B template, and opens a pull request in `future-agi/deployment`
-that pins the new template. The SDK and the template run side by side; neither waits
-for the other. Pull requests that change the release inputs run credential-free
-validation only.
+that pins the new template. The SDK upload and the template build each wait for their
+own approval and run side by side; neither waits for the other. Pull requests that
+change the release inputs run credential-free validation only.
 
 Keep the file name `publish-pypi.yml`. PyPI accepts uploads only from the trusted
 publisher registered for this repository, that workflow file name, and the `pypi`
@@ -71,7 +71,11 @@ One-time setup:
   secrets of the release bot GitHub App, shared with this repository. The app must
   be installed on `future-agi/deployment` with write access to contents and pull
   requests.
-- The PyPI trusted publisher above, and reviewers on the `pypi` environment.
+- The PyPI trusted publisher above.
+- Two environments, each with required reviewers and deployments limited to `main`:
+  `pypi` for the SDK upload and `e2b-template` for the template build. An
+  environment without reviewers approves itself, so keep reviewers on both. Do not
+  reuse `pypi` for other jobs: PyPI trusts uploads from that environment.
 - GHCR: the workflow uses `GITHUB_TOKEN` with `packages: write` to push to
   `ghcr.io/future-agi/agent-learning-kit/alk-hosted-runtime`, and supplies that
   short-lived credential to the E2B builder for the image import. No Docker Hub
@@ -87,6 +91,10 @@ To release: bump `version`, run `uv lock`, merge, then approve the `pypi` enviro
 deployment. The upload runs on pushes only, never on a manual run.
 
 ## E2B template
+
+The template build starts only after a reviewer approves the `e2b-template`
+environment deployment for that run; the one approval also covers the deployment
+pull request that follows. A run nobody approves builds nothing.
 
 The workflow runs `scripts/e2b-template.py` against the checked-out commit. It builds
 `Dockerfile.hosted` for Linux amd64, pushes a uniquely tagged image, imports its
@@ -105,11 +113,12 @@ Each commit has its own concurrency group, so a newer merge does not cancel or
 replace an older commit's publication. Reruns of the same commit are serialized.
 Reruns create a new image tag and E2B build; always use the immutable reference
 from the desired run. To build a template without a merge, use
-**Actions → Release → Run workflow** and select `main`.
+**Actions → Release → Run workflow**, select `main`, and approve the deployment.
 
 ## Deployment pull request
 
-After a template is certified, the workflow opens a pull request against `main` of
+After a template is certified, the workflow opens a pull request, with no further
+approval, against `main` of
 `future-agi/deployment` as `futureagi-release-bot`, on the branch
 `chore/harness-pin-<template name>`. `scripts/bump_deployment_values.py` edits
 `us/gcp/deployment/values.yaml` and `eu/gcp/deployment/values.yaml`: every

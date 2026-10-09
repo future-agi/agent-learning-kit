@@ -62,6 +62,14 @@ def test_sdk_jobs_run_on_push_only():
     }
 
 
+def test_uploads_and_template_builds_wait_for_approval():
+    gated = {
+        name: job["environment"] for name, job in JOBS.items() if "environment" in job
+    }
+    # Separate groups: PyPI trusts uploads from any job that runs in `pypi`.
+    assert gated == {"sdk-publish": "pypi", "template-publish": "e2b-template"}
+
+
 def test_template_and_sdk_do_not_wait_for_each_other():
     assert _needs("template-publish") == {"validate"}
     assert _needs("deployment-bump").isdisjoint(SDK_JOBS)
