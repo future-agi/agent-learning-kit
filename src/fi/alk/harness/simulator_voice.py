@@ -920,7 +920,7 @@ def persona_speech_rate(persona: Mapping[str, Any] | None) -> float:
 _CARTESIA_EMOTION_NAMES = frozenset({"anger", "positivity", "surprise", "sadness", "curiosity"})
 _CARTESIA_EMOTION_LEVELS = frozenset({"lowest", "low", "high", "highest"})
 _CARTESIA_NAMED_EMOTIONS = frozenset({"agitated", "outraged"})
-# Callers these voice as angry: a voice recorded angry, at a quicker pace.
+# Emotions voiced with a voice recorded angry, at a quicker pace.
 _ANGRY_EMOTIONS = frozenset({"outraged"})
 
 # What a personality sounds like, as a baseline colour for the whole call. A caller's feeling really
