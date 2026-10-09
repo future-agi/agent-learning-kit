@@ -4471,7 +4471,7 @@ def test_every_emotion_we_can_emit_is_one_cartesia_accepts():
         persona_emotion,
     )
 
-    assert _CARTESIA_NAMED_EMOTIONS == {"agitated", "outraged"}
+    assert _CARTESIA_NAMED_EMOTIONS == {"outraged"}
     for _words, emotion in _PERSONALITY_EMOTION:
         if emotion in _CARTESIA_NAMED_EMOTIONS:
             continue
@@ -4489,10 +4489,10 @@ def test_an_angry_caller_is_voiced_angry_and_an_impatient_one_agitated():
 
     assert persona_emotion({"personality": "Frustrated and short"}) == ["outraged"]
     assert persona_emotion({"personality": "Furious"}) == ["outraged"]
-    assert persona_emotion({"personality": "Impatient and direct"}) == ["agitated"]
+    assert persona_emotion({"personality": "Impatient and direct"}) == ["outraged"]
+    assert persona_emotion({"personality": "Emotional"}) == ["outraged"]
     assert persona_speech_rate({"name": "Priya Sundaram", "personality": "Frustrated"}) >= 1.12
-    calm = persona_speech_rate({"name": "Priya Sundaram"})
-    assert persona_speech_rate({"name": "Priya Sundaram", "personality": "Impatient"}) == calm
+    assert persona_speech_rate({"name": "Priya Sundaram", "personality": "Emotional"}) >= 1.12
 
 
 def test_a_callers_voice_follows_their_age_group_and_gender():
@@ -4629,7 +4629,7 @@ def test_two_personalities_do_not_share_one_emotional_register():
     assert persona_emotion({"personality": "Professional and formal"}) == [
         "positivity:low"
     ]
-    assert persona_emotion({"personality": "Impatient and abrupt"}) == ["agitated"]
+    assert persona_emotion({"personality": "Impatient and abrupt"}) == ["outraged"]
     assert persona_emotion({"personality": "Curious and sceptical"}) == [
         "curiosity:high"
     ]

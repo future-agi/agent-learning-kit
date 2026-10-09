@@ -211,6 +211,11 @@ SIMULATOR_INSTRUCTIONS = (
     "for a step that does not get you there. Rules 6, 9, 12g and 12i do not hold you: no please, no "
     "thanks, no wind-down, and you hang up in a few words once you have it or see you will not get it "
     "here.\n"
+    "12k. When you are frustrated or angry, because the scenario makes you so or because the agent "
+    "keeps failing you, it is in every turn, not only in what you ask for: short clipped sentences, "
+    "you cut in, you say again what went wrong and how long it has gone on, and you drop please, "
+    "thanks and softeners. It does not fade because the agent apologises; it eases only when the "
+    "agent actually fixes something.\n"
     "13. Never say you have done something away from this call that you cannot actually do: "
     "tapped a link, opened an app, read a message that arrived, paid something elsewhere. You are "
     "on a phone call and nothing else. Say plainly that nothing has arrived or that you cannot do "
@@ -919,7 +924,7 @@ def persona_speech_rate(persona: Mapping[str, Any] | None) -> float:
 # name and level separately with HTTP 400, so nothing outside this set is ever sent.
 _CARTESIA_EMOTION_NAMES = frozenset({"anger", "positivity", "surprise", "sadness", "curiosity"})
 _CARTESIA_EMOTION_LEVELS = frozenset({"lowest", "low", "high", "highest"})
-_CARTESIA_NAMED_EMOTIONS = frozenset({"agitated", "outraged"})
+_CARTESIA_NAMED_EMOTIONS = frozenset({"outraged"})
 # Emotions voiced with a voice recorded angry, at a quicker pace.
 _ANGRY_EMOTIONS = frozenset({"outraged"})
 
@@ -930,7 +935,7 @@ _ANGRY_EMOTIONS = frozenset({"outraged"})
 _PERSONALITY_EMOTION = (
     (("furious", "livid", "irate", "hostile", "enraged"), "outraged"),
     (("irritated", "annoyed", "frustrated", "angry"), "outraged"),
-    (("impatient", "abrupt"), "agitated"),
+    (("impatient", "abrupt", "emotional"), "outraged"),
     (("warm", "friendly", "cheerful", "enthusiastic", "chatty", "upbeat"), "positivity:high"),
     (("professional", "formal", "businesslike", "efficient"), "positivity:low"),
     (("curious", "inquisitive", "questioning", "sceptical", "skeptical"), "curiosity:high"),
@@ -1240,8 +1245,9 @@ def caller_scenario(
             simulate.Persona(
                 persona=persona,
                 situation=f"{situation}\n\nIf rule 12g's push gets you nowhere, "
-                f"{caller_when_blocked(persona, variation)}. On a call, {caller_habit(persona)}. "
-                f"Somewhere in this call, where it fits, "
+                f"{caller_when_blocked(persona, variation)}. On a call, {caller_habit(persona)}, unless "
+                f"you are upset or the situation is urgent, when you act on a clear instruction at "
+                f"once. Somewhere in this call, where it fits and the situation allows, "
                 f"{'; and '.join(caller_moves(persona, name, variation))}.",
                 outcome=outcome,
                 knowledge=knowledge,
