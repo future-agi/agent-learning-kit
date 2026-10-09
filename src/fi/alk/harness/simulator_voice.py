@@ -862,9 +862,9 @@ def persona_speech_rate(persona: Mapping[str, Any] | None) -> float:
 # name and level separately with HTTP 400, so nothing outside this set is ever sent.
 _CARTESIA_EMOTION_NAMES = frozenset({"anger", "positivity", "surprise", "sadness", "curiosity"})
 _CARTESIA_EMOTION_LEVELS = frozenset({"lowest", "low", "high", "highest"})
-_CARTESIA_NAMED_EMOTIONS = frozenset({"agitated", "angry", "outraged"})
+_CARTESIA_NAMED_EMOTIONS = frozenset({"agitated", "outraged"})
 # Callers these voice as angry: a voice recorded angry, at a quicker pace.
-_ANGRY_EMOTIONS = frozenset({"angry", "outraged"})
+_ANGRY_EMOTIONS = frozenset({"outraged"})
 
 # What a personality sounds like, as a baseline colour for the whole call. A caller's feeling really
 # moves during a call and this control does not, so it is a starting register rather than an arc:
@@ -872,7 +872,7 @@ _ANGRY_EMOTIONS = frozenset({"angry", "outraged"})
 # control at all, which is the provider default and the behaviour before this existed.
 _PERSONALITY_EMOTION = (
     (("furious", "livid", "irate", "hostile", "enraged"), "outraged"),
-    (("irritated", "annoyed", "frustrated", "angry"), "angry"),
+    (("irritated", "annoyed", "frustrated", "angry"), "outraged"),
     (("impatient", "abrupt"), "agitated"),
     (("warm", "friendly", "cheerful", "enthusiastic", "chatty", "upbeat"), "positivity:high"),
     (("professional", "formal", "businesslike", "efficient"), "positivity:low"),

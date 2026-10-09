@@ -4471,7 +4471,7 @@ def test_every_emotion_we_can_emit_is_one_cartesia_accepts():
         persona_emotion,
     )
 
-    assert _CARTESIA_NAMED_EMOTIONS == {"agitated", "angry", "outraged"}
+    assert _CARTESIA_NAMED_EMOTIONS == {"agitated", "outraged"}
     for _words, emotion in _PERSONALITY_EMOTION:
         if emotion in _CARTESIA_NAMED_EMOTIONS:
             continue
@@ -4487,7 +4487,7 @@ def test_every_emotion_we_can_emit_is_one_cartesia_accepts():
 def test_an_angry_caller_is_voiced_angry_and_an_impatient_one_agitated():
     from fi.alk.harness.simulator_voice import persona_emotion, persona_speech_rate
 
-    assert persona_emotion({"personality": "Frustrated and short"}) == ["angry"]
+    assert persona_emotion({"personality": "Frustrated and short"}) == ["outraged"]
     assert persona_emotion({"personality": "Furious"}) == ["outraged"]
     assert persona_emotion({"personality": "Impatient and direct"}) == ["agitated"]
     assert persona_speech_rate({"name": "Priya Sundaram", "personality": "Frustrated"}) >= 1.12
