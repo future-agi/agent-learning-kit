@@ -4462,42 +4462,69 @@ def test_the_delivery_a_persona_was_rendered_with_is_recoverable_from_the_log(
 
 
 def test_every_emotion_we_can_emit_is_one_cartesia_accepts():
-    """Established against the live sonic-3 API: it validates the emotion NAME and the LEVEL
-    separately and rejects either being wrong with HTTP 400, so a bad value fails the call rather
-    than being ignored. The plugin's own TTSVoiceEmotion vocabulary ("Neutral", "Frustrated",
-    "Tired") is rejected outright, which is why nothing here is taken from the plugin's types."""
+    """A level form ("positivity:high") or one of sonic-3's named emotions; nothing invented."""
     from fi.alk.harness.simulator_voice import (
         _CARTESIA_EMOTION_LEVELS,
         _CARTESIA_EMOTION_NAMES,
+        _CARTESIA_NAMED_EMOTIONS,
         _PERSONALITY_EMOTION,
         persona_emotion,
     )
 
-    assert _CARTESIA_EMOTION_NAMES == {
-        "anger",
-        "positivity",
-        "surprise",
-        "sadness",
-        "curiosity",
-    }, "fear and disgust are rejected by the API; do not add them without re-testing"
-    assert _CARTESIA_EMOTION_LEVELS == {"lowest", "low", "high", "highest"}
-
+    assert _CARTESIA_NAMED_EMOTIONS == {"agitated", "angry", "outraged"}
     for _words, emotion in _PERSONALITY_EMOTION:
+        if emotion in _CARTESIA_NAMED_EMOTIONS:
+            continue
         name, _, level = emotion.partition(":")
         assert name in _CARTESIA_EMOTION_NAMES, emotion
         assert level in _CARTESIA_EMOTION_LEVELS, emotion
 
-    # And nothing unrecognised invents one.
     assert persona_emotion({"personality": "Something nobody mapped"}) == []
     assert persona_emotion({}) == []
     assert persona_emotion(None) == []
 
 
-def test_an_impatient_caller_is_voiced_with_anger_not_formality():
-    from fi.alk.harness.simulator_voice import persona_emotion
+def test_an_angry_caller_is_voiced_angry_and_an_impatient_one_agitated():
+    from fi.alk.harness.simulator_voice import persona_emotion, persona_speech_rate
 
-    assert persona_emotion({"personality": "Impatient and direct"}) == ["anger:low"]
-    assert persona_emotion({"personality": "Furious"}) == ["anger:high"]
+    assert persona_emotion({"personality": "Frustrated and short"}) == ["angry"]
+    assert persona_emotion({"personality": "Furious"}) == ["outraged"]
+    assert persona_emotion({"personality": "Impatient and direct"}) == ["agitated"]
+    assert persona_speech_rate({"name": "Priya Sundaram", "personality": "Frustrated"}) >= 1.12
+    calm = persona_speech_rate({"name": "Priya Sundaram"})
+    assert persona_speech_rate({"name": "Priya Sundaram", "personality": "Impatient"}) == calm
+
+
+def test_a_callers_voice_follows_their_age_group_and_gender():
+    from fi.alk.harness.simulator_voice import _CARTESIA_AGE_VOICES, cartesia_voice_for
+
+    for age_group, band in (("13-17", "young"), ("18-25", "young"), ("50-60", "mature"), ("60+", "elderly")):
+        for gender in ("female", "male"):
+            persona = {"name": "Alex Morgan", "gender": gender, "age_group": age_group, "accent": "American"}
+            assert cartesia_voice_for(persona) in _CARTESIA_AGE_VOICES[band][gender], (age_group, gender)
+
+    middle = {"name": "Alex Morgan", "gender": "male", "age_group": "40-50", "accent": "American"}
+    assert all(cartesia_voice_for(middle) not in voices["male"] for voices in _CARTESIA_AGE_VOICES.values())
+
+
+def test_an_angry_caller_gets_a_voice_recorded_angry_unless_elderly():
+    from fi.alk.harness.simulator_voice import _CARTESIA_AGE_VOICES, cartesia_voice_for
+
+    angry = {"name": "Alex Morgan", "gender": "female", "age_group": "32-40", "accent": "Canadian", "personality": "Frustrated"}
+    assert cartesia_voice_for(angry) in _CARTESIA_AGE_VOICES["angry"]["female"]
+    older = {**angry, "gender": "male", "age_group": "60+"}
+    assert cartesia_voice_for(older) in _CARTESIA_AGE_VOICES["elderly"]["male"]
+
+
+def test_age_and_anger_voices_apply_only_where_the_catalog_has_them():
+    from fi.alk.harness.simulator_voice import _CARTESIA_AGE_VOICES, cartesia_voice_for
+
+    every = {one for band in _CARTESIA_AGE_VOICES.values() for voices in band.values() for one in voices}
+    for persona in (
+        {"name": "Alex Morgan", "gender": "male", "age_group": "60+", "accent": "British"},
+        {"name": "Lucia Gomez", "gender": "female", "age_group": "60+", "languages": ["Spanish"], "personality": "Frustrated"},
+    ):
+        assert cartesia_voice_for(persona) not in every, persona
 
 
 def test_a_caller_takes_a_refusal_the_same_way_every_run():
@@ -4557,7 +4584,7 @@ def test_two_personalities_do_not_share_one_emotional_register():
     assert persona_emotion({"personality": "Professional and formal"}) == [
         "positivity:low"
     ]
-    assert persona_emotion({"personality": "Impatient and abrupt"}) == ["anger:low"]
+    assert persona_emotion({"personality": "Impatient and abrupt"}) == ["agitated"]
     assert persona_emotion({"personality": "Curious and sceptical"}) == [
         "curiosity:high"
     ]

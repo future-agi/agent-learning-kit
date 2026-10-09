@@ -10,6 +10,7 @@ import hashlib
 import json
 import logging
 import random
+import re
 from collections.abc import Callable, Mapping
 from functools import lru_cache
 from pathlib import Path
@@ -721,6 +722,82 @@ _CARTESIA_EMOTION_VOICES = {
 }
 _CARTESIA_EMOTION_VOICE_ACCENTS = frozenset({"", "american", "canadian", "neutral"})
 
+# English voices by the age their Cartesia description gives, and voices recorded angry. Ages 32 to
+# 49 keep the general catalog; no Cartesia voice sounds under 18, so teenagers get young adults.
+_CARTESIA_AGE_VOICES = {
+    "young": {
+        "female": (
+            "9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
+            "f786b574-daa5-4673-aa0c-cbe3e8534c02",
+            "e8e5fffb-252c-436d-b842-8879b84445b6",
+            "8d8ce8c9-44a4-46c4-b10f-9a927b99a853",
+            "5abd2130-146a-41b1-bcdb-974ea8e19f56",
+            "c9440d34-5641-427b-bbb7-80ef7462576d",
+        ),
+        "male": (
+            "630ed21c-2c5c-41cf-9d82-10a7fd668370",
+            "87286a8d-7ea7-4235-a41a-dd9fa6630feb",
+            "86e30c1d-714b-4074-a1f2-1cb6b552fb49",
+            "9fa83ce3-c3a8-4523-accc-173904582ced",
+            "4df027cb-2920-4a1f-8c34-f21529d5c3fe",
+            "5ee9feff-1265-424a-9d7f-8e4d431a12c7",
+        ),
+    },
+    "mature": {
+        "female": (
+            "8634bd27-0acf-4056-b014-4fea0385ed9e",
+            "3d9b50f9-10c5-4026-9ae1-c4a698f67fc5",
+            "ea93f57f-7c71-4d79-aeaa-0a39b150f6ca",
+            "01eaafa9-308a-4276-a017-6ab0cf061b1f",
+            "af346552-54bf-4c2b-a4d4-9d2820f51b6c",
+        ),
+        "male": (
+            "0ad65e7f-006c-47cf-bd31-52279d487913",
+            "dcddf1f4-b114-4b5d-9158-895cbba0e406",
+            "aec42b73-8c46-4528-a377-537b5ecb8e7b",
+            "bbee10a8-4f08-4c5c-8282-e69299115055",
+            "b9cf5ec3-eaa4-46a5-a5b2-b0d0f22395a2",
+        ),
+    },
+    "elderly": {
+        "female": (
+            "c8605446-247c-4d39-acd4-8f4c28aa363c",
+            "a2364c9d-1fe3-4553-9eff-100c4fe5ffc8",
+            "e5a6cd18-d552-4192-9533-82a08cac8f23",
+            "bf0a246a-8642-498a-9950-80c35e9276b5",
+        ),
+        "male": (
+            "c45bc5ec-dc68-4feb-8829-6e6b2748095d",
+            "c99d36f3-5ffd-4253-803a-535c1bc9c306",
+            "0ad65e7f-006c-47cf-bd31-52279d487913",
+            "aec42b73-8c46-4528-a377-537b5ecb8e7b",
+        ),
+    },
+    "angry": {
+        "female": ("04bfd756-4fd4-42c2-9ccf-37f647c5bf54",),
+        "male": (
+            "0b32066b-2bcc-44b9-89ab-0223a09d1606",
+            "61001bc6-9064-40a4-b8b2-29178e0fa558",
+            "7c8ba972-4960-4c43-bea0-8178e2205696",
+        ),
+    },
+}
+
+
+def _age_band(persona: Mapping[str, Any]) -> str:
+    """The voice band for the age group's lower bound ("13-17", "50-60", "60+"), or "" for none."""
+    digits = re.match(r"\s*(\d+)", str(persona.get("age_group") or ""))
+    if not digits:
+        return ""
+    youngest = int(digits.group(1))
+    if youngest >= 60:
+        return "elderly"
+    if youngest >= 50:
+        return "mature"
+    if youngest < 32:
+        return "young"
+    return ""
+
 
 def cartesia_voice_for(persona: dict) -> str:
     """A stable Cartesia voice id for one caller, chosen by accent/language and gender.
@@ -742,7 +819,12 @@ def cartesia_voice_for(persona: dict) -> str:
     )
     if not voices:
         return CARTESIA_DEFAULT_VOICE
-    if key == "en" and _norm(persona.get("accent")) in _CARTESIA_EMOTION_VOICE_ACCENTS:
+    band = _age_band(persona)
+    if band != "elderly" and set(persona_emotion(persona)) & _ANGRY_EMOTIONS:
+        band = "angry"
+    if key == "en" and _norm(persona.get("accent")) in _CARTESIA_EMOTION_VOICE_ACCENTS and band:
+        voices = list(_CARTESIA_AGE_VOICES[band][gender])
+    elif key == "en" and _norm(persona.get("accent")) in _CARTESIA_EMOTION_VOICE_ACCENTS:
         voices = list(voices) + [
             voice for voice in _CARTESIA_EMOTION_VOICES.get(gender, ()) if voice not in voices
         ]
@@ -757,6 +839,7 @@ def cartesia_voice_for(persona: dict) -> str:
 # scenario incomparable. Cartesia documents 0.6 to 2.0 for sonic-3; this stays close to natural
 # because the point is that callers differ from each other, not that any of them sounds odd.
 _SPEECH_RATES = (0.9, 0.95, 1.0, 1.05, 1.12)
+_ANGRY_RATE = 1.12
 
 
 def persona_speech_rate(persona: Mapping[str, Any] | None) -> float:
@@ -768,23 +851,29 @@ def persona_speech_rate(persona: Mapping[str, Any] | None) -> float:
     if not isinstance(persona, Mapping):
         return 1.0
     name = str(persona.get("name") or "").strip()
-    if not name:
-        return 1.0
-    return _SPEECH_RATES[sum(ord(character) for character in name) % len(_SPEECH_RATES)]
+    rate = _SPEECH_RATES[sum(ord(character) for character in name) % len(_SPEECH_RATES)] if name else 1.0
+    # Anger is quick: a frustrated caller never drawls.
+    if set(persona_emotion(persona)) & _ANGRY_EMOTIONS:
+        return max(rate, _ANGRY_RATE)
+    return rate
 
 
 # The only emotion names and levels sonic-3 accepts, established against the live API. It rejects
 # name and level separately with HTTP 400, so nothing outside this set is ever sent.
 _CARTESIA_EMOTION_NAMES = frozenset({"anger", "positivity", "surprise", "sadness", "curiosity"})
 _CARTESIA_EMOTION_LEVELS = frozenset({"lowest", "low", "high", "highest"})
+_CARTESIA_NAMED_EMOTIONS = frozenset({"agitated", "angry", "outraged"})
+# Callers these voice as angry: a voice recorded angry, at a quicker pace.
+_ANGRY_EMOTIONS = frozenset({"angry", "outraged"})
 
 # What a personality sounds like, as a baseline colour for the whole call. A caller's feeling really
 # moves during a call and this control does not, so it is a starting register rather than an arc:
 # two personas that read the same on paper stop sounding identical. Anything unrecognised gets no
 # control at all, which is the provider default and the behaviour before this existed.
 _PERSONALITY_EMOTION = (
-    (("furious", "livid", "irate", "hostile", "enraged"), "anger:high"),
-    (("irritated", "annoyed", "frustrated", "angry", "impatient", "abrupt"), "anger:low"),
+    (("furious", "livid", "irate", "hostile", "enraged"), "outraged"),
+    (("irritated", "annoyed", "frustrated", "angry"), "angry"),
+    (("impatient", "abrupt"), "agitated"),
     (("warm", "friendly", "cheerful", "enthusiastic", "chatty", "upbeat"), "positivity:high"),
     (("professional", "formal", "businesslike", "efficient"), "positivity:low"),
     (("curious", "inquisitive", "questioning", "sceptical", "skeptical"), "curiosity:high"),
@@ -801,7 +890,9 @@ def persona_emotion(persona: Mapping[str, Any] | None) -> list[str]:
         for words, emotion in _PERSONALITY_EMOTION:
             if any(word in described for word in words):
                 name, _, level = emotion.partition(":")
-                if name in _CARTESIA_EMOTION_NAMES and level in _CARTESIA_EMOTION_LEVELS:
+                if emotion in _CARTESIA_NAMED_EMOTIONS or (
+                    name in _CARTESIA_EMOTION_NAMES and level in _CARTESIA_EMOTION_LEVELS
+                ):
                     return [emotion]
     return []
 
