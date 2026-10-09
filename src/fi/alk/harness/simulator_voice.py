@@ -9,8 +9,11 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import random
 import re
+import urllib.error
+import urllib.request
 from collections.abc import Callable, Mapping
 from functools import lru_cache
 from pathlib import Path
@@ -30,6 +33,11 @@ from fi.simulate.runtime import (
 logger = logging.getLogger(__name__)
 
 CARTESIA_DEFAULT_VOICE = "f786b574-daa5-4673-aa0c-cbe3e8534c02"
+# The last voice tried for each gender, so a caller never falls back to the other one.
+_CARTESIA_DEFAULT_VOICES = {
+    "female": CARTESIA_DEFAULT_VOICE,
+    "male": "630ed21c-2c5c-41cf-9d82-10a7fd668370",
+}
 
 CONNECT_TIMEOUT_SECONDS = 60.0
 READINESS_TIMEOUT_SECONDS = 120.0
@@ -799,12 +807,8 @@ def _age_band(persona: Mapping[str, Any]) -> str:
     return ""
 
 
-def cartesia_voice_for(persona: dict) -> str:
-    """A stable Cartesia voice id for one caller, chosen by accent/language and gender.
-
-    Deterministic by persona name so a caller keeps its voice across runs while a suite still
-    spreads voices. Falls back across gender and to English when a long-tail language lacks one.
-    """
+def _cartesia_voice_candidates(persona: dict) -> list[str]:
+    """This caller's Cartesia voices in the order to try: their own first, then its neighbours."""
     gender = _norm(persona.get("gender"))
     if gender not in ("male", "female"):
         gender = "female"
@@ -817,11 +821,16 @@ def cartesia_voice_for(persona: dict) -> str:
         or (catalog.get("en") or {}).get(gender)
         or []
     )
+    fallback = [
+        *((catalog.get("en") or {}).get(gender) or [])[:_VOICE_TRIES],
+        _CARTESIA_DEFAULT_VOICES[gender],
+    ]
     if not voices:
-        return CARTESIA_DEFAULT_VOICE
+        return fallback
     band = _age_band(persona)
     if band != "elderly" and set(persona_emotion(persona)) & _ANGRY_EMOTIONS:
         band = "angry"
+    general = list(voices)
     if key == "en" and _norm(persona.get("accent")) in _CARTESIA_EMOTION_VOICE_ACCENTS and band:
         voices = list(_CARTESIA_AGE_VOICES[band][gender])
     elif key == "en" and _norm(persona.get("accent")) in _CARTESIA_EMOTION_VOICE_ACCENTS:
@@ -831,7 +840,55 @@ def cartesia_voice_for(persona: dict) -> str:
     index = sum(ord(character) for character in str(persona.get("name") or "")) % len(
         voices
     )
-    return voices[index]
+    ordered = voices[index:] + voices[:index]
+    return [*dict.fromkeys([*ordered, *general, *fallback[:-1]]), fallback[-1]]
+
+
+def cartesia_voice_for(persona: dict) -> str:
+    """A stable Cartesia voice id for one caller, chosen by accent/language, gender and age group.
+
+    Deterministic by persona name so a caller keeps its voice across runs while a suite still
+    spreads voices. Falls back across gender and to English when a long-tail language lacks one.
+    """
+    return _cartesia_voice_candidates(persona)[0]
+
+
+# Voices tried before settling for the default when Cartesia says they are gone.
+_VOICE_TRIES = 5
+
+
+@lru_cache(maxsize=256)
+def _cartesia_voice_served(voice: str) -> bool | None:
+    """Whether Cartesia still serves this voice: False when it says not, None when it cannot say."""
+    key = (os.environ.get("CARTESIA_API_KEY") or "").strip()
+    if not key:
+        return None
+    request = urllib.request.Request(
+        f"https://api.cartesia.ai/voices/{voice}",
+        headers={"X-API-Key": key, "Cartesia-Version": "2025-04-16"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=3) as response:
+            return response.status == 200
+    except urllib.error.HTTPError as refused:
+        return False if refused.code in (400, 404, 410) else None
+    except Exception:  # noqa: BLE001 - an unreachable check never holds up a call
+        return None
+
+
+def served_cartesia_voice(persona: dict) -> str:
+    """This caller's voice, or the next one Cartesia still serves when it has removed theirs."""
+    candidates = _cartesia_voice_candidates(persona)
+    last = candidates[-1]
+    for voice in [*candidates[:_VOICE_TRIES], *candidates[-_VOICE_TRIES - 1 :]]:
+        if _cartesia_voice_served(voice) is not False:
+            if voice != candidates[0]:
+                logger.warning(
+                    "cartesia_voice_unavailable", extra={"voice": candidates[0], "using": voice}
+                )
+            return voice
+    logger.warning("cartesia_voice_unavailable", extra={"voice": candidates[0], "using": last})
+    return last
 
 
 # How fast this person talks. Derived from the persona rather than randomised, so a rerun of the
@@ -1154,7 +1211,7 @@ def caller_scenario(
     # A voice from the persona's accent/language, so callers in one suite sound different.
     if not persona.get("voice") and not persona.get("voice_id"):
         if provider == "cartesia":
-            persona["voice"] = cartesia_voice_for(persona)
+            persona["voice"] = served_cartesia_voice(persona)
         elif provider == "deepgram":
             persona["voice"] = aura_voice_for(persona)
     fixture = fixture if isinstance(fixture, Mapping) else {}

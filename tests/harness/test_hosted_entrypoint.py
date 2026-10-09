@@ -4516,6 +4516,51 @@ def test_an_angry_caller_gets_a_voice_recorded_angry_unless_elderly():
     assert cartesia_voice_for(older) in _CARTESIA_AGE_VOICES["elderly"]["male"]
 
 
+def test_a_voice_cartesia_no_longer_serves_falls_back_to_the_next(monkeypatch):
+    from fi.alk.harness import simulator_voice
+    from fi.alk.harness.simulator_voice import (
+        _CARTESIA_DEFAULT_VOICES,
+        _cartesia_voice_candidates,
+        served_cartesia_voice,
+    )
+
+    persona = {"name": "Alex Morgan", "gender": "male", "age_group": "60+", "accent": "American"}
+    first, second = _cartesia_voice_candidates(persona)[:2]
+
+    monkeypatch.setattr(simulator_voice, "_cartesia_voice_served", lambda voice: voice != first)
+    assert served_cartesia_voice(persona) == second
+
+    monkeypatch.setattr(simulator_voice, "_cartesia_voice_served", lambda voice: False)
+    assert served_cartesia_voice(persona) == _CARTESIA_DEFAULT_VOICES["male"]
+    assert served_cartesia_voice({**persona, "gender": "female"}) == _CARTESIA_DEFAULT_VOICES["female"]
+
+    # A check that cannot reach Cartesia keeps the caller's own voice.
+    monkeypatch.setattr(simulator_voice, "_cartesia_voice_served", lambda voice: None)
+    assert served_cartesia_voice(persona) == first
+
+
+def test_every_fallback_voice_is_the_callers_gender():
+    import json
+    from pathlib import Path
+
+    from fi.alk.harness import simulator_voice
+    from fi.alk.harness.simulator_voice import _cartesia_catalog, _cartesia_voice_candidates
+
+    catalog = _cartesia_catalog()
+    by_gender = {g: {one for lang in catalog.values() for one in lang.get(g, [])} for g in ("female", "male")}
+    for gender in ("female", "male"):
+        by_gender[gender] |= {simulator_voice._CARTESIA_DEFAULT_VOICES[gender]}
+        for band in simulator_voice._CARTESIA_AGE_VOICES.values():
+            by_gender[gender] |= set(band[gender])
+        by_gender[gender] |= set(simulator_voice._CARTESIA_EMOTION_VOICES.get(gender, ()))
+        for persona in (
+            {"name": "Alex Morgan", "gender": gender, "age_group": "60+", "accent": "American"},
+            {"name": "Alex Morgan", "gender": gender, "personality": "Frustrated", "accent": "Neutral"},
+            {"name": "Lucia Gomez", "gender": gender, "languages": ["Spanish"]},
+        ):
+            assert set(_cartesia_voice_candidates(persona)) <= by_gender[gender], persona
+
+
 def test_age_and_anger_voices_apply_only_where_the_catalog_has_them():
     from fi.alk.harness.simulator_voice import _CARTESIA_AGE_VOICES, cartesia_voice_for
 
