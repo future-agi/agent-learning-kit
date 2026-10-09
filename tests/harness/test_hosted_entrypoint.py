@@ -4633,7 +4633,8 @@ def test_an_older_caller_hears_their_own_language_first_then_an_english_voice_of
     assert voice(gender="female", languages=["Hindi"]) in local["hi"]["mature"]["female"]
     assert voice(gender="male", accent="British") in local["british"]["elderly"]["male"]
     assert voice(gender="male", languages=["Hindi"]) in _CARTESIA_AGE_VOICES["elderly"]["male"]
-    assert voice(gender="female", languages=["Tamil"]) in _CARTESIA_AGE_VOICES["elderly"]["female"]
+    assert voice(gender="female", languages=["Japanese"]) in _CARTESIA_AGE_VOICES["elderly"]["female"]
+    assert voice(gender="female", languages=["Tamil"]) not in _CARTESIA_AGE_VOICES["elderly"]["female"]
     assert voice(gender="female", accent="British") in _CARTESIA_AGE_VOICES["elderly"]["female"]
     assert voice(gender="female", languages=["Spanish"], age_group="18-25") in local["es"]["young"]["female"]
 

@@ -961,6 +961,46 @@ def _age_band(persona: Mapping[str, Any]) -> str:
     return ""
 
 
+# Languages an English voice speaks as clearly as a native one; elsewhere an older caller keeps a
+# native voice.
+_CARTESIA_CROSS_LINGUAL_LANGS = frozenset(
+    {
+        "ar",
+        "bg",
+        "cs",
+        "da",
+        "de",
+        "fi",
+        "fr",
+        "gu",
+        "hi",
+        "hr",
+        "hu",
+        "id",
+        "it",
+        "ja",
+        "kn",
+        "ko",
+        "ms",
+        "nl",
+        "no",
+        "pa",
+        "pl",
+        "pt",
+        "ro",
+        "ru",
+        "sk",
+        "sv",
+        "te",
+        "th",
+        "tl",
+        "tr",
+        "uk",
+        "vi",
+    }
+)
+
+
 def _cartesia_voice_candidates(persona: dict) -> list[str]:
     """This caller's Cartesia voices in the order to try: their own first, then its neighbours."""
     gender = _norm(persona.get("gender"))
@@ -1005,14 +1045,14 @@ def _cartesia_voice_candidates(persona: dict) -> list[str]:
         )
     elif age:
         # In the caller's language or accent first; an older caller with none there gets an English
-        # voice of their age, which Cartesia speaks in the caller's language.
+        # voice of their age where Cartesia speaks that language well in an English voice.
         local = _CARTESIA_LOCAL_AGE_VOICES.get(accent if key == "en" else key, {})
         voices = [
             voice
             for nearest in _CARTESIA_LOCAL_AGE_ORDER[age]
             for voice in rotated(local.get(nearest, {}).get(gender, ()))
         ]
-        if age != "young":
+        if age != "young" and (key == "en" or key in _CARTESIA_CROSS_LINGUAL_LANGS):
             voices += rotated(_CARTESIA_AGE_VOICES[age][gender])
         voices = voices or rotated(general)
     else:
