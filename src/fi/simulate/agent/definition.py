@@ -321,6 +321,9 @@ class TTSConfig(BaseModel):
     volume: Optional[float] = Field(
         None, description="Loudness, where the provider supports one."
     )
+    language: Optional[str] = Field(
+        None, description="Language code the voice speaks, where the provider takes one."
+    )
 
 
 class STTConfig(BaseModel):

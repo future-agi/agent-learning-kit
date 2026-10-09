@@ -200,11 +200,12 @@ def _cartesia_tts(
     # The only record of what the simulator actually sounded like: call_metadata reports a constant
     # speed and voice name whatever it was given.
     logger.info(
-        "cartesia_tts voice=%s speed=%s emotion=%s volume=%s",
+        "cartesia_tts voice=%s speed=%s emotion=%s volume=%s language=%s",
         voice,
         speed,
         emotion or None,
         volume,
+        config.language,
     )
     return cartesia.TTS(
         api_key=_required_env("CARTESIA_API_KEY"),
@@ -218,6 +219,7 @@ def _cartesia_tts(
         **({"speed": float(speed)} if isinstance(speed, (int, float)) else {}),
         **({"emotion": list(emotion)} if emotion else {}),
         **({"volume": float(volume)} if isinstance(volume, (int, float)) else {}),
+        **({"language": config.language} if config.language else {}),
     )
 
 

@@ -4540,8 +4540,6 @@ def test_a_voice_cartesia_no_longer_serves_falls_back_to_the_next(monkeypatch):
 
 
 def test_every_fallback_voice_is_the_callers_gender():
-    import json
-    from pathlib import Path
 
     from fi.alk.harness import simulator_voice
     from fi.alk.harness.simulator_voice import _cartesia_catalog, _cartesia_voice_candidates
@@ -4578,15 +4576,101 @@ def test_an_emotional_caller_does_not_ask_to_go_one_step_at_a_time():
     assert "one step at a time" in caller_habit({"personality": "Anxious"})
 
 
-def test_age_and_anger_voices_apply_only_where_the_catalog_has_them():
+def test_anger_voices_apply_only_to_american_english():
     from fi.alk.harness.simulator_voice import _CARTESIA_AGE_VOICES, cartesia_voice_for
 
-    every = {one for band in _CARTESIA_AGE_VOICES.values() for voices in band.values() for one in voices}
+    angry = {one for voices in _CARTESIA_AGE_VOICES["angry"].values() for one in voices}
     for persona in (
-        {"name": "Alex Morgan", "gender": "male", "age_group": "60+", "accent": "British"},
-        {"name": "Lucia Gomez", "gender": "female", "age_group": "60+", "languages": ["Spanish"], "personality": "Frustrated"},
+        {"name": "Alex Morgan", "gender": "male", "age_group": "32-40", "accent": "British", "personality": "Frustrated"},
+        {"name": "Lucia Gomez", "gender": "female", "age_group": "40-50", "languages": ["Spanish"], "personality": "Frustrated"},
     ):
-        assert cartesia_voice_for(persona) not in every, persona
+        assert cartesia_voice_for(persona) not in angry, persona
+
+
+def _callers_in_every_language_and_accent(age_group):
+    from fi.alk.harness.simulator_voice import _cartesia_catalog
+
+    for gender in ("female", "male"):
+        for name in ("Alex Morgan", "Priya Nair", "Lucia Gomez", "Hans Weber", "Mei Lin"):
+            for language in _cartesia_catalog():
+                for personality in ("Friendly and cooperative", "Frustrated"):
+                    yield {"name": name, "gender": gender, "age_group": age_group, "languages": [language], "personality": personality}
+            for accent in ("American", "British", "Australian", "Indian English", "Indian", "Southern", "Irish"):
+                yield {"name": name, "gender": gender, "age_group": age_group, "accent": accent}
+
+
+def test_an_older_caller_never_gets_a_young_voice_in_any_language():
+    from fi.alk.harness.simulator_voice import _cartesia_voice_ages, _cartesia_voice_candidates
+
+    ages = _cartesia_voice_ages()
+    for age_group in ("50-60", "60+"):
+        for persona in _callers_in_every_language_and_accent(age_group):
+            # Only the last resort, served when Cartesia reports every other voice gone, is exempt.
+            assert all(ages.get(one) != "young" for one in _cartesia_voice_candidates(persona)[:-1]), persona
+
+
+def test_a_young_caller_never_gets_an_older_voice_in_any_language():
+    from fi.alk.harness.simulator_voice import _cartesia_voice_ages, _cartesia_voice_candidates
+
+    ages = _cartesia_voice_ages()
+    for age_group in ("13-17", "18-25", "25-32"):
+        for persona in _callers_in_every_language_and_accent(age_group):
+            assert all(ages.get(one) != "older" for one in _cartesia_voice_candidates(persona)), persona
+
+
+def test_an_older_caller_hears_their_own_language_first_then_an_english_voice_of_their_age():
+    from fi.alk.harness.simulator_voice import (
+        _CARTESIA_AGE_VOICES,
+        _CARTESIA_LOCAL_AGE_VOICES,
+        cartesia_voice_for,
+    )
+
+    def voice(**persona):
+        return cartesia_voice_for({"name": "Alex Morgan", "age_group": "60+", **persona})
+
+    local = _CARTESIA_LOCAL_AGE_VOICES
+    assert voice(gender="female", languages=["Spanish"]) in local["es"]["elderly"]["female"]
+    assert voice(gender="female", languages=["Hindi"]) in local["hi"]["mature"]["female"]
+    assert voice(gender="male", accent="British") in local["british"]["elderly"]["male"]
+    assert voice(gender="male", languages=["Hindi"]) in _CARTESIA_AGE_VOICES["elderly"]["male"]
+    assert voice(gender="female", languages=["Tamil"]) in _CARTESIA_AGE_VOICES["elderly"]["female"]
+    assert voice(gender="female", accent="British") in _CARTESIA_AGE_VOICES["elderly"]["female"]
+    assert voice(gender="female", languages=["Spanish"], age_group="18-25") in local["es"]["young"]["female"]
+
+
+def test_the_american_age_pools_pick_as_before():
+    from fi.alk.harness.simulator_voice import _CARTESIA_AGE_VOICES, cartesia_voice_for
+
+    for age_group, band in (("18-25", "young"), ("50-60", "mature"), ("60+", "elderly")):
+        for gender in ("female", "male"):
+            for name in ("Alex Morgan", "Priya Nair", "Lucia Gomez", "Hans Weber"):
+                pool = _CARTESIA_AGE_VOICES[band][gender]
+                expected = pool[sum(map(ord, name)) % len(pool)]
+                persona = {"name": name, "gender": gender, "age_group": age_group, "accent": "American"}
+                assert cartesia_voice_for(persona) == expected, persona
+
+
+def test_the_callers_voice_speaks_their_language(monkeypatch):
+    from types import SimpleNamespace
+
+    from fi.alk.harness.simulator_voice import simulator_definition
+    from fi.simulate.agent.definition import TTSConfig
+    from fi.simulate.simulation import livekit_models
+
+    monkeypatch.setenv("CARTESIA_API_KEY", "not-a-real-key")
+    language = {
+        str(languages): simulator_definition(lambda name: "", {"name": "Dana Price", "languages": languages}).tts.language
+        for languages in (["Hindi"], ["Spanish", "English"], ["English"], ["Klingon"], [])
+    }
+    assert language == {"['Hindi']": "hi", "['Spanish', 'English']": "es", "['English']": "en", "['Klingon']": None, "[]": None}
+
+    captured = {}
+    monkeypatch.setattr(livekit_models, "_import_plugin", lambda name: SimpleNamespace(TTS=lambda **kw: captured.update(kw)))
+    livekit_models._cartesia_tts(TTSConfig(provider="cartesia", model="sonic-3", voice="abc", language="ta"), None)
+    assert captured["language"] == "ta"
+    captured.clear()
+    livekit_models._cartesia_tts(TTSConfig(provider="cartesia", model="sonic-3", voice="abc"), None)
+    assert "language" not in captured
 
 
 def test_a_caller_takes_a_refusal_the_same_way_every_run():

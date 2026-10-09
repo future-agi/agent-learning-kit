@@ -720,6 +720,13 @@ def _cartesia_lang_key(persona: dict) -> str:
     return "en"
 
 
+def persona_tts_language(persona: Mapping[str, Any] | None) -> str:
+    """The language the caller's voice speaks, from their first language; "" leaves the default."""
+    language = _persona_language_name(dict(persona or {}))
+    code = _CARTESIA_LANGUAGE_TO_LANG.get(language) or language
+    return code if code in _CARTESIA_SUPPORTED_LANGS else ""
+
+
 _CARTESIA_EMOTION_VOICES = {
     "female": (
         "26403c37-80c1-4a1a-8692-540551ca2ae5",
@@ -798,6 +805,147 @@ _CARTESIA_AGE_VOICES = {
 }
 
 
+# Voices outside American English whose Cartesia description gives an age, by language or by
+# English accent. A caller of that language or accent tries these before the English age pools.
+_CARTESIA_LOCAL_AGE_VOICES: dict[str, dict[str, dict[str, tuple[str, ...]]]] = {
+    "es": {
+        "elderly": {
+            "female": ("dbaa1a0d-e004-442d-866f-5431b18d8d54",),
+            "male": ("7b001dff-b8b2-4da7-92e4-5c794798effa",),
+        },
+        "mature": {
+            "female": (
+                "b503f001-80b8-49d3-8666-8d7700fc5ca2",
+                "fb936dd1-66ea-43a0-86bd-18a6203dcda2",
+                "ae823354-f9be-4aef-8543-f569644136b4",
+            ),
+            "male": ("948196a7-fe02-417b-9b6d-c45ee0803565",),
+        },
+        "young": {
+            "female": ("ad8eee76-d702-4a1f-a1bd-7596755ae4c9",),
+            "male": (
+                "9ebc775b-c579-4c31-b37c-2306cbe9cc91",
+                "399002e9-7f7d-42d4-a6a8-9b91bd809b9d",
+            ),
+        },
+    },
+    "de": {
+        "elderly": {"male": ("d42fc8d7-efdd-44df-bb2e-a6e093601917",)},
+        "young": {"female": ("de07efe3-b309-418b-bdca-42827223efd2",)},
+    },
+    "fr": {
+        "mature": {
+            "male": ("2d693a9c-fc75-4313-aefb-c9cfaa17dd83", "5deeaea9-c3cf-4288-82ec-22d8f04eb158")
+        },
+        "young": {
+            "female": (
+                "2f8e82c4-cb94-4e6d-8b6a-29bf58ceb60a",
+                "c9115185-0086-4cf4-bfdd-0d36425db387",
+                "735287ee-ce91-4b08-8de4-63315c5ba1fb",
+                "187d1cc5-a771-4ccd-9110-9df8c4e39499",
+            )
+        },
+    },
+    "hi": {
+        "mature": {"female": ("56e35e2d-6eb6-4226-ab8b-9776515a7094",)},
+        "young": {
+            "female": ("faf0731e-dfb9-4cfc-8119-259a79b27e12",),
+            "male": ("791d5162-d5eb-40f0-8189-f19db44611d8",),
+        },
+    },
+    "it": {"elderly": {"male": ("88b329db-85d7-47cc-a5c5-98225a756721",)}},
+    "pl": {"elderly": {"male": ("887149a8-4616-42ad-b2ce-c3819176f45d",)}},
+    "ar": {"elderly": {"male": ("db873303-3a70-4d9d-867a-0d70a6377195",)}},
+    "el": {
+        "mature": {
+            "female": ("50849023-76e9-46c7-af52-9ec39888a165",),
+            "male": ("b45eba5b-2215-4da7-9c7c-121c95ed7b81",),
+        }
+    },
+    "kn": {"mature": {"male": ("6baae46d-1226-45b5-a976-c7f9b797aae2",)}},
+    "ro": {"mature": {"male": ("3f64ef99-d87b-4b51-b217-df7351f7886a",)}},
+    "ms": {"mature": {"male": ("8281db18-6ac5-47bb-91a8-ce23a1f1d951",)}},
+    "gu": {
+        "young": {
+            "female": ("4590a461-bc68-4a50-8d14-ac04f5923d22",),
+            "male": ("91925fe5-42ee-4ebe-96c1-c84b12a85a32",),
+        }
+    },
+    "ja": {
+        "young": {
+            "female": ("c7eafe22-8b71-40cd-850b-c5a3bbd8f8d2",),
+            "male": ("49e02441-83ea-4c77-bda8-79fdd7f07e92",),
+        }
+    },
+    "nl": {"young": {"female": ("de075c71-b2dd-4723-848d-ea9aa9cd010b",)}},
+    "pt": {
+        "young": {
+            "female": ("2f4d204f-a5dc-4196-81bc-155986b76ab6",),
+            "male": ("b0f46533-d4bb-493f-a26f-a99e1f2e86e3",),
+        }
+    },
+    "tl": {"young": {"male": ("c4cbcb7d-d9fa-4eac-b547-46831718ef58",)}},
+    "zh": {
+        "young": {
+            "female": ("7a5d4663-88ae-47b7-808e-8f9b9ee4127b",),
+            "male": ("c59c247b-6aa9-4ab6-91f9-9eabea7dc69e",),
+        }
+    },
+    "british": {
+        "elderly": {
+            "male": (
+                "c45bc5ec-dc68-4feb-8829-6e6b2748095d",
+                "c99d36f3-5ffd-4253-803a-535c1bc9c306",
+                "34d923aa-c3b5-4f21-aac7-2c1f12730d4b",
+            )
+        },
+        "mature": {
+            "male": (
+                "0ad65e7f-006c-47cf-bd31-52279d487913",
+                "dcddf1f4-b114-4b5d-9158-895cbba0e406",
+                "f114a467-c40a-4db8-964d-aaba89cd08fa",
+            )
+        },
+        "young": {
+            "female": ("71a7ad14-091c-4e8e-a314-022ece01c121",),
+            "male": (
+                "1463a4e1-56a1-4b41-b257-728d56e93605",
+                "4f7f1324-1853-48a6-b294-4e78e8036a83",
+                "ee7ea9f8-c0c1-498c-9279-764d6b56d189",
+            ),
+        },
+    },
+    "australian": {
+        "mature": {"female": ("8985388c-1332-4ce7-8d55-789628aa3df4",)},
+        "young": {
+            "male": ("da4a4eff-3b7e-4846-8f70-f075ff61222c", "41f3c367-e0a8-4a85-89e0-c27bae9c9b6d")
+        },
+    },
+    "indian english": {
+        "elderly": {"male": ("39d518b7-fd0b-4676-9b8b-29d64ff31e12",)},
+        "mature": {"female": ("f8f5f1b2-f02d-4d8e-a40d-fd850a487b3d",)},
+        "young": {"female": ("3b554273-4299-48b9-9aaf-eefd438e3941",)},
+    },
+}
+# The age bands an aged caller tries in-language, nearest first.
+_CARTESIA_LOCAL_AGE_ORDER = {
+    "elderly": ("elderly", "mature"),
+    "mature": ("mature", "elderly"),
+    "young": ("young",),
+}
+
+
+@lru_cache(maxsize=1)
+def _cartesia_voice_ages() -> dict[str, str]:
+    """Each voice's age from its Cartesia description: "young", "older", or absent when unstated."""
+    path = Path(__file__).parent / "run" / "data" / "voice_ages.json"
+    try:
+        ages = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {voice: age for age, voices in ages.items() for voice in voices}
+
+
 def _age_band(persona: Mapping[str, Any]) -> str:
     """The voice band for the age group's lower bound ("13-17", "50-60", "60+"), or "" for none."""
     digits = re.match(r"\s*(\d+)", str(persona.get("age_group") or ""))
@@ -833,21 +981,47 @@ def _cartesia_voice_candidates(persona: dict) -> list[str]:
     ]
     if not voices:
         return fallback
-    band = _age_band(persona)
+    age = _age_band(persona)
+    band = age
     if band != "elderly" and set(persona_emotion(persona)) & _ANGRY_EMOTIONS:
         band = "angry"
     general = list(voices)
-    if key == "en" and _norm(persona.get("accent")) in _CARTESIA_EMOTION_VOICE_ACCENTS and band:
-        voices = list(_CARTESIA_AGE_VOICES[band][gender])
-    elif key == "en" and _norm(persona.get("accent")) in _CARTESIA_EMOTION_VOICE_ACCENTS:
-        voices = list(voices) + [
-            voice for voice in _CARTESIA_EMOTION_VOICES.get(gender, ()) if voice not in voices
+    accent = _norm(persona.get("accent"))
+    american = key == "en" and accent in _CARTESIA_EMOTION_VOICE_ACCENTS
+
+    def rotated(pool) -> list[str]:
+        pool = list(pool)
+        if not pool:
+            return pool
+        index = sum(ord(character) for character in str(persona.get("name") or "")) % len(pool)
+        return pool[index:] + pool[:index]
+
+    if american and band:
+        voices = rotated(_CARTESIA_AGE_VOICES[band][gender])
+    elif american:
+        voices = rotated(
+            list(voices)
+            + [voice for voice in _CARTESIA_EMOTION_VOICES.get(gender, ()) if voice not in voices]
+        )
+    elif age:
+        # In the caller's language or accent first; an older caller with none there gets an English
+        # voice of their age, which Cartesia speaks in the caller's language.
+        local = _CARTESIA_LOCAL_AGE_VOICES.get(accent if key == "en" else key, {})
+        voices = [
+            voice
+            for nearest in _CARTESIA_LOCAL_AGE_ORDER[age]
+            for voice in rotated(local.get(nearest, {}).get(gender, ()))
         ]
-    index = sum(ord(character) for character in str(persona.get("name") or "")) % len(
-        voices
-    )
-    ordered = voices[index:] + voices[:index]
-    return [*dict.fromkeys([*ordered, *general, *fallback[:-1]]), fallback[-1]]
+        if age != "young":
+            voices += rotated(_CARTESIA_AGE_VOICES[age][gender])
+        voices = voices or rotated(general)
+    else:
+        voices = rotated(voices)
+    candidates = list(dict.fromkeys([*voices, *general, *fallback[:-1]]))
+    # Never a voice described younger than an older caller, or older than a young one.
+    unwanted = {"elderly": "young", "mature": "young", "young": "older"}.get(age)
+    ages = _cartesia_voice_ages()
+    return [*(voice for voice in candidates if not unwanted or ages.get(voice) != unwanted), fallback[-1]]
 
 
 def cartesia_voice_for(persona: dict) -> str:
@@ -1056,6 +1230,7 @@ def simulator_definition(
             "speed": persona_speech_rate(persona),
             "emotion": persona_emotion(persona),
             "volume": _ANGRY_VOLUME if set(persona_emotion(persona)) & _ANGRY_EMOTIONS else None,
+            "language": persona_tts_language(persona) or None,
         },
         instructions=simulator_instructions(
             get("HARNESS_CALL_DIRECTION") or "",
@@ -1355,6 +1530,7 @@ __all__ = [
     "fixture_caller_phone",
     "cartesia_voice_for",
     "persona_stt_language",
+    "persona_tts_language",
     "simulation_spec",
     "simulator_definition",
     "transcriber_for",
