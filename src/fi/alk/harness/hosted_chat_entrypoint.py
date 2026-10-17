@@ -27,13 +27,14 @@ from .authoring_entrypoint import _load_provider_import_profile, agent_source_ki
 from .understand import PROVIDER_IMPORT_PROFILE_PATH_ENV
 from .chat_policy import EffectiveChatPolicy, apply_chat_policy, load_chat_policy
 from .hosted_conversation import (
+    _UNAVAILABLE_BUDGET_SECONDS,
     ConversationClient,
     ConversationTransportError,
     PlatformSessionStore,
     load_conversation_capabilities,
 )
 from .tools import schema
-from .session import ARTIFACT, DONE, RESULT, TEXT, TOOL, Event, Stage
+from .session import ARTIFACT, DONE, RESULT, STAGE_IDLE_TIMEOUT_SECONDS, TEXT, TOOL, Event, Stage
 
 _NUMBERS = {"type": "array", "items": {"type": "integer"}}
 _RANGES = {
@@ -71,6 +72,10 @@ _NEEDS_CONFIRMATION = frozenset(
     }
 )
 _CONFIRM = "Yes, make this change"
+_RUN_FINISHED = frozenset({"completed", "failed", "canceled"})
+_RUN_POLL_SECONDS = 20.0
+# A wait, with its last poll and that poll's retries, ends before the turn would be stopped for being idle.
+_RUN_WAIT_SECONDS = max(0.0, STAGE_IDLE_TIMEOUT_SECONDS - _RUN_POLL_SECONDS - _UNAVAILABLE_BUDGET_SECONDS - 30)
 # What the environment is made of, for telling whether anything is left unsaved.
 _PUBLISHED_PARTS = (
     "scenarios",
@@ -258,6 +263,7 @@ class HostedChatRuntime:
             )
         self.transcript_store = PlatformSessionStore(client)
         self.stopping = asyncio.Event()
+        self._from_platform = False
         self._turn_acknowledged_through = 0
         self._tool_names: dict[str, str] = {}
         self._checkpoint_lock = asyncio.Lock()
@@ -453,6 +459,23 @@ class HostedChatRuntime:
         handler = spec.handler
 
         async def guarded(args: dict[str, Any]) -> Any:
+            if self._from_platform:
+                if spec.name in ("drop_scenarios", "drop_scenario") or (
+                    spec.name == "submit_scenario" and self._changes_situation(args)
+                ):
+                    return {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Not done: during the build and its check a scenario keeps the "
+                                "situation it tests. Correct its answer key (solution, fixed values, "
+                                "sub-goals, setup) for that same situation; if the agent fails it, that "
+                                "is the agent's fault: report it in your summary.",
+                            }
+                        ],
+                        "is_error": True,
+                    }
+                return await handler(args)
             if spec.name == "submit_scenario" and not self._changes_meaning(args):
                 return await handler(args)
             if spec.name == "add_sub_goal" and not self._replaces_sub_goal(args):
@@ -461,7 +484,7 @@ class HostedChatRuntime:
                 spec.name,
                 {
                     "question": f"Confirm this change: {spec.name} "
-                    + json.dumps(args, sort_keys=True, default=str)[:600],
+                    + json.dumps(args, sort_keys=True, default=str, indent=1),
                     "options": [_CONFIRM, "No"],
                 },
                 None,
@@ -483,6 +506,18 @@ class HostedChatRuntime:
             }
 
         return replace(spec, handler=guarded)
+
+    def _changes_situation(self, args: dict[str, Any]) -> bool:
+        """Whether a submission changes what an existing scenario tests, not how it is graded."""
+        path = self.workspace / "scenarios" / str(args.get("name") or "") / "scenario.json"
+        try:
+            held = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return False
+        return any(
+            field in args and args.get(field) != held.get(field)
+            for field in ("use_case", "branch", "tests", "coverage")
+        )
 
     def _replaces_sub_goal(self, args: dict[str, Any]) -> bool:
         from .catalogue import load_catalogue
@@ -564,19 +599,36 @@ class HostedChatRuntime:
             "read_runs",
             "The environment's runs, newest first, or with `run_id` one run's calls: each "
             "scenario's number and name, pass or fail, every sub-goal with whether it held and "
-            "why, turns, duration and how the call ended.",
-            schema({"run_id": str, "limit": int}, []),
+            "why, turns, duration and how the call ended. `wait` with a `run_id` holds until "
+            "that run has finished or a few minutes have passed; a run still going says so, and "
+            "you wait on it again.",
+            schema({"run_id": str, "limit": int, "wait": bool}, []),
         )
         async def read_runs(args: dict[str, Any]) -> dict[str, Any]:
-            return await call(
-                self.client.runs(str(args.get("run_id") or ""), int(args.get("limit") or 10))
-            )
+            run_id, limit = str(args.get("run_id") or ""), int(args.get("limit") or 10)
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + _RUN_WAIT_SECONDS
+            try:
+                result = await self.client.runs(run_id, limit)
+                while (
+                    args.get("wait")
+                    and run_id
+                    and result.get("state") not in _RUN_FINISHED | {None}
+                    and loop.time() < deadline
+                    and not self.stopping.is_set()
+                ):
+                    await asyncio.sleep(min(_RUN_POLL_SECONDS, deadline - loop.time()))
+                    result = await self.client.runs(run_id, limit)
+            except ConversationTransportError as exc:
+                return text(str(exc), error=True)
+            return text(result)
 
         @tool(
             "run_scenarios",
             "Start a run of the numbered scenarios against the agent, each played `repeats` times "
             "(1 to 20). Every call costs time and money: confirm the numbers and repeats with the "
-            "person first unless they said exactly what to run. Unsaved changes are saved first.",
+            "person first unless they said exactly what to run or this is your check of a finished "
+            "build. Unsaved changes are saved first.",
             schema({"numbers": _NUMBERS, "ranges": _RANGES, "repeats": int}, []),
         )
         async def run_scenarios(args: dict[str, Any]) -> dict[str, Any]:
@@ -1078,6 +1130,8 @@ class HostedChatRuntime:
                 acknowledge_through=sequence,
             )
             return
+        # The build and its check are sent by the platform; nobody is there to answer during them.
+        self._from_platform = bool(payload.get("from_platform"))
 
         journal = self._read_journal()
         state = str(journal.get(message_id) or "")
@@ -1480,6 +1534,16 @@ class HostedChatRuntime:
     async def _ask(
         self, _tool_name: str, payload: dict[str, Any], _context: Any
     ) -> Any:
+        if self._from_platform:
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Nobody answers during the build or its check. Decide it yourself from "
+                        "the agent and the contract, and say what you decided in your summary.",
+                    }
+                ]
+            }
         asked = [one for one in payload.get("questions") or [] if isinstance(one, dict)]
         question = str(
             payload.get("question")
