@@ -7,6 +7,12 @@ All notable release changes for Agent Learning Kit are tracked here.
 Post-rc.1 increments on the release branch. Each one adds gates on top of the
 66 proved at rc.1; the rc.1 entry below is historical and unchanged.
 
+- Sub-actors on voice calls: a background voice that speaks up as soon as its line is ready, which the
+  simulated user hears too, someone who takes the phone and hands it back, and the simulated user's own
+  phone menu on calls the agent places. Each line is written from the conversation so far, and each voice
+  is connected when the call starts; per-sub-actor and call-wide limits keep the simulated user in charge,
+  and each call records whether every sub-actor was triggered, delivered or dropped, why, and how long
+  each line took to be ready.
 - Sub-actors, behind `HARNESS_SUB_ACTORS` (off by default): an environment keeps a list of people on
   the simulated user's side (`sub_actors.json`), a scenario includes them with its own instruction and
   trigger, and a sub-goal can name the one it is about. Scenarios and catalogues without them are
