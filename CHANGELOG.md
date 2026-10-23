@@ -7,6 +7,9 @@ All notable release changes for Agent Learning Kit are tracked here.
 Post-rc.1 increments on the release branch. Each one adds gates on top of the
 66 proved at rc.1; the rc.1 entry below is historical and unchanged.
 
+- Sub-actors in the builder chat: adding or dropping one from the environment's list, or changing which
+  scenarios include one, waits for the person's yes, and an automatic repair cannot change a scenario's
+  sub-actors.
 - Sub-goal results say which of pass, fail, not applicable or inconclusive they are (`verdict`, alongside
   `held`). A sub-goal about a sub-actor reads not applicable when it never triggered and inconclusive when
   it was triggered but did not take part, with the reason; a scenario with sub-actors is skipped with
