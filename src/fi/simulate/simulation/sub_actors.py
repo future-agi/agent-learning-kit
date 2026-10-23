@@ -76,6 +76,11 @@ TRIGGER_ABOUT: dict[str, str] = {
 TRIGGERS = tuple(TRIGGER_ABOUT)
 
 
+def someone_else(name: str) -> str:
+    """How a sub-actor's turn is labelled wherever grading reads a conversation."""
+    return f"{name or 'Someone else'} (not the customer)"
+
+
 def with_others(situation: str, actors: list[dict[str, Any]]) -> str:
     """The person's situation, saying who else is there and what the person does around them."""
     told = [

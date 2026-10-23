@@ -7,6 +7,9 @@ All notable release changes for Agent Learning Kit are tracked here.
 Post-rc.1 increments on the release branch. Each one adds gates on top of the
 66 proved at rc.1; the rc.1 entry below is historical and unchanged.
 
+- Sub-actors in chats: a second participant writes after its trigger, from the conversation so far; the
+  agent receives it as its own named message, or at the start of the simulated user's next message where
+  a target cannot take one, and the simulated user sees it too.
 - Sub-actors on voice calls: a background voice that speaks up as soon as its line is ready, which the
   simulated user hears too, someone who takes the phone and hands it back, and the simulated user's own
   phone menu on calls the agent places. Each line is written from the conversation so far, and each voice

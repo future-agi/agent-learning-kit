@@ -12,9 +12,19 @@ All three are recorded, because how a conversation ended is often the finding.
 from __future__ import annotations
 
 import json
+import logging
+import secrets
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
+
+from fi.simulate.simulation.sub_actors import (
+    Cast,
+    Moment,
+    line_brief,
+    someone_else,
+    with_others,
+)
 
 from ..backends import SessionSpec
 
@@ -24,6 +34,8 @@ from ..scenario import Scenario
 from ..session import Stage
 from ..world.runtime import Call
 from .targets import Target
+
+logger = logging.getLogger(__name__)
 
 DONE = "[DONE]"
 STUCK = "[STUCK]"
@@ -48,6 +60,21 @@ class Exchange:
     # Epoch seconds when the turn was delivered, on the same clock as `Call.at`, so a tool call
     # the agent made before replying sorts between the customer's turn and the reply.
     at: float = 0.0
+    # A sub-actor's turn: who it was, so it is never read as the person's or the agent's.
+    name: str = ""
+    sub_actor: str = ""
+
+    def message(self, role: str, *, timed: bool = False) -> dict[str, Any]:
+        when = {"at": self.at} if timed and self.at else {}
+        if self.speaker != "sub_actor":
+            return {"role": role, "content": self.text, **when}
+        return {
+            "role": "sub_actor",
+            "name": self.name,
+            "sub_actor": self.sub_actor,
+            "content": self.text,
+            **when,
+        }
 
 
 @dataclass
@@ -60,17 +87,21 @@ class Transcript:
     spent_usd: float = 0.0
     simulator_input_tokens: int = 0
     simulator_output_tokens: int = 0
+    # Per sub-actor: whether it was triggered, how many messages reached the agent, why any were dropped.
+    sub_actors: list[dict[str, Any]] = field(default_factory=list)
 
     def spoken(self) -> str:
-        return "\n".join(f"{turn.speaker}: {turn.text}" for turn in self.exchanges)
+        return "\n".join(
+            f"{someone_else(turn.name)}: {turn.text}"
+            if turn.speaker == "sub_actor"
+            else f"{turn.speaker}: {turn.text}"
+            for turn in self.exchanges
+        )
 
     def canonical_messages(self) -> list[dict[str, str]]:
         """The turns in the role convention the judge reads: `user` said it, `assistant` answered."""
         return [
-            {
-                "role": "assistant" if turn.speaker == "agent" else "user",
-                "content": turn.text,
-            }
+            turn.message("assistant" if turn.speaker == "agent" else "user")
             for turn in self.exchanges
         ]
 
@@ -81,16 +112,14 @@ class Transcript:
                 {
                     "transcript": self.spoken(),
                     "messages": [
-                        {
-                            "role": "user"
-                            if turn.speaker == "customer"
-                            else "assistant",
-                            "content": turn.text,
-                            **({"at": turn.at} if turn.at else {}),
-                        }
+                        turn.message(
+                            "user" if turn.speaker == "customer" else "assistant",
+                            timed=True,
+                        )
                         for turn in self.exchanges
                     ],
                     "ended": self.ended,
+                    **({"sub_actors": self.sub_actors} if self.sub_actors else {}),
                 },
                 sort_keys=True,
             )
@@ -190,6 +219,96 @@ def customer_prompt(
     )
 
 
+class _ChatSubActors:
+    """The scenario's chat participants besides the person, within the call's limits."""
+
+    def __init__(
+        self, scenario: Scenario, world_root: Any, model: str | None, seed: str
+    ) -> None:
+        from ..sub_actor import load_sub_actors, sub_actors_enabled
+
+        listing = (
+            load_sub_actors(world_root)
+            if world_root and scenario.sub_actors and sub_actors_enabled()
+            else None
+        )
+        self.actors = [
+            {
+                **actor.model_dump(exclude_none=True),
+                "instruction": one.instruction,
+                "trigger": one.trigger.model_dump(),
+            }
+            for one in scenario.sub_actors
+            if listing
+            and (actor := listing.get(one.id)) is not None
+            and actor.channel == "thread_message"
+        ]
+        self.cast = Cast(self.actors, seed)
+        self.situation = scenario.instruction
+        self.language = (
+            ", ".join(scenario.persona.languages) if scenario.persona else ""
+        )
+        self.model = model
+        self.said: dict[str, list[str]] = {}
+
+    async def after_agent(
+        self, turns: int, reply: str, tools_called: list[str], conversation: list[str]
+    ) -> list[Exchange]:
+        """The messages the sub-actors write after this agent turn."""
+        self.cast.entering(
+            Moment(agent_turns=turns, last_text=reply, tools_called=tools_called)
+        )
+        written = []
+        for actor in self.actors:
+            if not self.cast.may_speak(actor, turns):
+                continue
+            try:
+                text = await self._write(actor, conversation)
+            except Exception as exc:  # noqa: BLE001 - a quiet participant is a weaker test, never a failed call
+                self.cast.dropped(actor, f"message failed: {type(exc).__name__}")
+                self.cast.finish(actor)
+                continue
+            if not text:
+                self.cast.finish(actor, "nothing more to say")
+                continue
+            now = time.time()
+            self.said.setdefault(str(actor["id"]), []).append(text)
+            self.cast.delivered(actor, text, turns, now, now)
+            written.append(
+                Exchange(
+                    "sub_actor",
+                    text,
+                    now,
+                    name=str(actor.get("name") or ""),
+                    sub_actor=str(actor["id"]),
+                )
+            )
+        if written:
+            self.cast.took_turn()
+        return written
+
+    async def _write(self, actor: dict[str, Any], conversation: list[str]) -> str:
+        brief = line_brief(
+            actor,
+            situation=self.situation,
+            said=self.said.get(str(actor["id"]), []),
+            conversation=conversation,
+            language=self.language,
+        )
+        async with Stage(
+            SessionSpec(
+                system_prompt=brief
+                + "\n\nWrite your next message, short, as yourself. Output only the message, "
+                "or nothing at all when you have nothing more to say.",
+                max_turns=1,
+                model=chosen_model(self.model),
+                gated=False,
+            ),
+            name="sub-actor",
+        ) as stage:
+            return (await stage.say("Write it now.")).text.strip()
+
+
 async def converse(
     target: Target,
     scenario: Scenario,
@@ -198,11 +317,19 @@ async def converse(
     world_root: Any = None,
     model: str | None = None,
     on_exchange: Callable[[Exchange], Any] | None = None,
+    seed: str = "",
 ) -> Transcript:
     """Run one scenario as a conversation and return what happened."""
     transcript = Transcript()
     from ..simulator import load_simulator_prompt
 
+    others = _ChatSubActors(scenario, world_root, model, seed or secrets.token_hex(8))
+    # What the person may fall back to saying: their own situation, never the note about the others.
+    situation = scenario.instruction
+    if others.actors:
+        scenario = scenario.model_copy(
+            update={"instruction": with_others(scenario.instruction, others.actors)}
+        )
     customer = Stage(
         SessionSpec(
             system_prompt=customer_prompt(
@@ -219,11 +346,13 @@ async def converse(
         name="customer",
     )
 
-    def record(speaker: str, text: str) -> None:
-        exchange = Exchange(speaker, text, time.time())
+    def keep(exchange: Exchange) -> None:
         transcript.exchanges.append(exchange)
         if on_exchange:
             on_exchange(exchange)
+
+    def record(speaker: str, text: str) -> None:
+        keep(Exchange(speaker, text, time.time()))
 
     await target.open()
     await customer.__aenter__()
@@ -232,7 +361,7 @@ async def converse(
         # the caller ("orders two burgers and asks for..."), so speaking it verbatim would hand
         # the agent a stage direction instead of a person.
         opening = await customer.say(OPENING)
-        said = opening.text.strip() or scenario.instruction
+        said = opening.text.strip() or situation
         if _answered_as_the_agent(said):
             # The opening turn is the one with no conversation behind it, and a model asked to
             # speak into that gap will sometimes take the other part: it offers to look something
@@ -240,19 +369,46 @@ async def converse(
             # that has nothing to do with the agent. The instruction is the fallback, because a
             # blunt version of the right question tests more than a fluent version of the wrong
             # one.
-            said = scenario.instruction
+            said = situation
         record("customer", said)
+        # Messages from a sub-actor that the target cannot take with a sender name: they reach it at
+        # the start of the person's next message.
+        waiting = ""
         for _turn in range(max(1, scenario.max_turns)):
             try:
-                reply = await target.say(said)
+                reply = await target.say(
+                    "\n\n".join(part for part in (waiting, said) if part)
+                )
             except TargetConversationEnded as ended:
                 if ended.final_message:
                     record("agent", ended.final_message)
                 transcript.ended = FINISHED
                 break
+            waiting = ""
             record("agent", reply or "(said nothing)")
 
-            turn = await customer.say(reply or "(no response)")
+            heard = []
+            tools = [
+                call.name
+                for call in getattr(getattr(target, "world", None), "calls", [])
+            ]
+            speakers = {"customer": "The person", "agent": "The agent"}
+            conversation = [
+                f"{speakers.get(one.speaker) or one.name}: {one.text}"
+                for one in transcript.exchanges
+            ]
+            for entered in await others.after_agent(
+                _turn + 1, reply or "", tools, conversation
+            ):
+                keep(entered)
+                heard.append(f"[{entered.name}]: {entered.text}")
+                interject = getattr(target, "interject", None)
+                if callable(interject):
+                    interject(entered.name, entered.text)
+            if heard and not callable(getattr(target, "interject", None)):
+                waiting = "\n\n".join(heard)
+            # The chat is shared: the person sees the other participant's messages too.
+            turn = await customer.say("\n\n".join([reply or "(no response)", *heard]))
             said = turn.text.strip()
             if DONE in said or STUCK in said:
                 transcript.ended = GAVE_UP if STUCK in said else FINISHED
@@ -280,6 +436,8 @@ async def converse(
         setattr(exc, "partial_transcript", transcript)
         raise
     finally:
+        others.cast.hang_up()
+        transcript.sub_actors = others.cast.summary() if others.actors else []
         await customer.__aexit__(None, None, None)
         await target.close()
 

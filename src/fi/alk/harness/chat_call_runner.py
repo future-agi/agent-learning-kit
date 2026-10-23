@@ -310,6 +310,14 @@ class _HostedChatTarget:
     async def open(self) -> None:
         return
 
+    def interject(self, name: str, text: str) -> None:
+        """A second participant's message, its own message before the person's next one. The name is in the
+        content as well, since an agent's own code may drop the sender field."""
+        label = re.sub(r"[^A-Za-z0-9_-]", "_", name)[:64] or "participant"
+        self._messages.append(
+            {"role": "user", "name": label, "content": f"[{name}]: {text}"}
+        )
+
     async def say(self, utterance: str) -> str:
         self._messages.append({"role": "user", "content": utterance})
         for continuation in range(8):
@@ -606,7 +614,9 @@ class HostedChatCallRunner:
             )
         return CallOutcome(
             calls=calls,
-            turns=len(transcript.exchanges),
+            turns=sum(
+                1 for turn in transcript.exchanges if turn.speaker != "sub_actor"
+            ),
             started_at=format_rfc3339_millis(started),
             ended_at=format_rfc3339_millis(ended),
             duration_ms=_duration_ms(started, ended),
