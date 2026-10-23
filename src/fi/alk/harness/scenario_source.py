@@ -253,6 +253,7 @@ class _CompiledSubGoal:
     judged: str
     check: Callable[..., object]
     what: str = ""
+    sub_actor: str = ""
     both: bool = False
     compares: str = ""
 
@@ -279,6 +280,8 @@ class _CompiledScenario:
     # One correct way through the call: handed to reference checks and shown to the judge.
     solution: tuple[dict[str, Any], ...] = ()
     call_execution_id: str | None = None
+    # The ids of the sub-actors the scenario includes; it is skipped while sub-actors are off.
+    sub_actors: tuple[str, ...] = ()
 
 
 def _read_text(path: Path, *, label: str) -> str:
@@ -430,6 +433,7 @@ def _load_catalogue_claims(bundle_dir: Path) -> dict[str, dict[str, str]]:
         claims[entry["name"]] = {
             "what": str(entry.get("what") or ""),
             "judged": str(entry.get("judged") or ""),
+            "sub_actor": str(entry.get("sub_actor") or ""),
             "contract": goal.contract(),
             "both": "yes" if goal.both else "",
         }
@@ -558,6 +562,9 @@ def _load_one(
         ready=ready,
         presented=_presented(body, scenario_key=scenario_key),
         solution=tuple(solution),
+        sub_actors=tuple(
+            str((one or {}).get("id") or "") for one in body.get("sub_actors") or []
+        ),
     )
 
 
@@ -590,6 +597,7 @@ def _with_claims(
             if goal.judged or combined(goal)
             else goal.judged,
             what=claims[goal.name].get("what", "") or goal.what,
+            sub_actor=claims[goal.name].get("sub_actor", "") or goal.sub_actor,
             both=combined(goal),
             compares=claims[goal.name].get("contract", "") or goal.compares,
         )

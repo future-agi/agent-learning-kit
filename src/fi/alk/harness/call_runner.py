@@ -41,7 +41,7 @@ import tempfile
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Mapping, Protocol
+from typing import Any, Awaitable, Callable, Mapping, Protocol, Sequence
 
 from fi import agentcc, simulate
 from fi.simulate.runtime import (
@@ -1537,6 +1537,7 @@ class CallRunnerImpl:
                 runtime=runtime,
                 scenario_key=scenario.scenario_key,
                 started_at=started_at,
+                sub_actors=voices,
             )
         except (CallAborted, WorldUnavailable):
             # `_translate_report`'s own typed control-flow (non-completed status, no test case,
@@ -1567,8 +1568,12 @@ class CallRunnerImpl:
         runtime: EnvironmentRuntime,
         scenario_key: str,
         started_at: datetime,
+        sub_actors: Sequence[dict[str, Any]] = (),
     ) -> CallOutcome:
         case = report.test_cases[0] if report.test_cases else None
+        took_part = (
+            case.result.metadata if case is not None and case.result is not None else {}
+        )
         case_started_at = (
             case.started_at
             if case is not None and case.started_at is not None
@@ -1641,6 +1646,13 @@ class CallRunnerImpl:
                     "transcript": result.transcript,
                     "messages": result.messages,
                 }
+                if sub_actors:
+                    # The run keeps who its sub-actors were and what happened, so a later edit never changes it.
+                    transcript_document["sub_actors"] = {
+                        "resolved": sub_actors,
+                        "summary": took_part.get("sub_actors") or [],
+                        "events": took_part.get("sub_actor_events") or [],
+                    }
                 recording_offset_ms = result.metadata.get("recording_offset_ms")
                 if isinstance(recording_offset_ms, (int, float)):
                     transcript_document["recording_offset_ms"] = int(
@@ -1697,6 +1709,7 @@ class CallRunnerImpl:
                 else None
             ),
             target_metrics=_target_metrics(case),
+            sub_actors=tuple(took_part.get("sub_actors") or ()),
         )
 
         if case is None:

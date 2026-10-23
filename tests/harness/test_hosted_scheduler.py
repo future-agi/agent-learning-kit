@@ -4367,9 +4367,9 @@ def test_a_sub_goal_settled_by_both_fails_when_either_fails(monkeypatch) -> None
         FakeSubGoal("confirmed", lambda w, c: "ignored for a judged-only sub-goal", judged="judge"),
     ]
     receipt, _ = _two_judged(monkeypatch, _all, goals=goals)
-    held = {g.name: (g.held, g.reason) for g in receipt.sub_goals}
-    assert held["saved_feedback"] == (False, "no feedback row saved_feedback said right")
-    assert held["confirmed"] == (True, "confirmed said right")
+    held = {g.name: (g.held, g.reason, g.verdict) for g in receipt.sub_goals}
+    assert held["saved_feedback"] == (False, "no feedback row saved_feedback said right", "fail")
+    assert held["confirmed"] == (True, "confirmed said right", "pass")
     assert receipt.status == "failed"
 
 
@@ -4569,3 +4569,98 @@ def test_call_file_written_before_setup_and_removed_after_each_scenario(
         await pool.close()
 
     asyncio.run(scenario())
+
+
+def test_a_sub_goal_about_a_sub_actor_reads_from_whether_it_took_part_in_the_call(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+
+    async def scenario() -> list[hs.SubGoalResult]:
+        outbound = FakeOutbound()
+        pool, _ = _pool(1, outbound=outbound)
+        await pool.start()
+        outcome = replace(
+            _call_outcome(),
+            sub_actors=(
+                {
+                    "sub_actor": "friend",
+                    "name": "Rowan",
+                    "triggered": False,
+                    "delivered": 0,
+                    "dropped": [],
+                },
+            ),
+        )
+        about = FakeSubGoal(
+            "noticed", lambda w, c: "the agent did not check with the customer"
+        )
+        about.sub_actor = "friend"
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=FakeCallRunner({"s1": outcome}),
+            outbound=outbound,
+            job_seed=1,
+        )
+        scenarios = [
+            FakeScenario(
+                "s1",
+                "id-1",
+                sub_goals=[about, FakeSubGoal("done", lambda w, c: None)],
+                requires_tool_evidence=False,
+            )
+        ]
+        result = await asyncio.wait_for(scheduler.run(scenarios), timeout=5.0)
+        await pool.close()
+        return list(result.receipts[0].sub_goals)
+
+    results = asyncio.run(scenario())
+    assert [(one.name, one.verdict) for one in results] == [
+        ("noticed", "not_applicable"),
+        ("done", "pass"),
+    ]
+    assert (
+        results[0].reason == "Not applicable: Rowan's trigger never fired in this call."
+    )
+
+
+def test_a_scenario_with_sub_actors_is_never_run_while_they_are_off_and_says_why(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("HARNESS_SUB_ACTORS", raising=False)
+
+    async def scenario() -> tuple[hs.RunResult, FakeCallRunner]:
+        outbound = FakeOutbound()
+        pool, _ = _pool(1, outbound=outbound)
+        await pool.start()
+        runner = FakeCallRunner({"plain": _call_outcome()})
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=runner,
+            outbound=outbound,
+            job_seed=1,
+        )
+        with_one = FakeScenario(
+            "with-one", "id-1", sub_goals=[FakeSubGoal("g", lambda w, c: None)]
+        )
+        with_one.sub_actors = ("friend",)
+        plain = FakeScenario(
+            "plain",
+            "id-2",
+            sub_goals=[FakeSubGoal("g", lambda w, c: None)],
+            requires_tool_evidence=False,
+        )
+        result = await asyncio.wait_for(scheduler.run([with_one, plain]), timeout=5.0)
+        await pool.close()
+        return result, runner
+
+    result, runner = asyncio.run(scenario())
+    assert [call[0] for call in runner.calls] == ["plain"]
+    skipped, ran = result.receipts
+    assert (skipped.status, skipped.reason) == (
+        "skipped",
+        "sub-actors are switched off",
+    )
+    assert ran.status == "passed" and ran.reason is None

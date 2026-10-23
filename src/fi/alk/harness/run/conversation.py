@@ -87,8 +87,8 @@ class Transcript:
     spent_usd: float = 0.0
     simulator_input_tokens: int = 0
     simulator_output_tokens: int = 0
-    # Per sub-actor: whether it was triggered, how many messages reached the agent, why any were dropped.
-    sub_actors: list[dict[str, Any]] = field(default_factory=list)
+    # Who the call's sub-actors were, what happened to each, and in what order.
+    sub_actors: dict[str, Any] = field(default_factory=dict)
 
     def spoken(self) -> str:
         return "\n".join(
@@ -437,7 +437,12 @@ async def converse(
         raise
     finally:
         others.cast.hang_up()
-        transcript.sub_actors = others.cast.summary() if others.actors else []
+        if others.actors:
+            transcript.sub_actors = {
+                "resolved": others.actors,
+                "summary": others.cast.summary(),
+                "events": others.cast.events,
+            }
         await customer.__aexit__(None, None, None)
         await target.close()
 

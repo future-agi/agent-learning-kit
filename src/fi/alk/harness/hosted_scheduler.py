@@ -39,14 +39,16 @@ import re
 import threading
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol, Sequence
 
 from . import observability
 from .job import FailureDomain, HarnessStage
+from .sub_actor import sub_actors_enabled
 from .checks import reference_of, takes_reference
 from .joint_judge import OFF_SCRIPT
+from .judge import INCONCLUSIVE, NOT_APPLICABLE
 from .judge import judge_sub_goal as _judge
 from .outbound import (
     HostedAttemptSupersededError,
@@ -243,6 +245,8 @@ class CallOutcome:
     target_metrics: dict[str, Any] | None = None
     # A local path the judge can play; the artifacts above are ids the sandbox cannot read back.
     recording: str | None = None
+    # Per sub-actor in the call: whether it was triggered, how much it delivered, and why any was dropped.
+    sub_actors: tuple[dict[str, Any], ...] = ()
 
 
 class CallAborted(RuntimeError):
@@ -312,6 +316,18 @@ class SubGoalResult:
     held: bool | None
     reason: str | None
     judged: bool
+    # pass, fail, not_applicable or inconclusive; `held` stays as older readers know it. Always
+    # derived from held and reason, so a result changed with `replace` can never disagree with it.
+    verdict: str | None = field(default=None, init=False)
+
+    def __post_init__(self) -> None:
+        reason = self.reason or ""
+        if reason.startswith(NOT_APPLICABLE):
+            object.__setattr__(self, "verdict", "not_applicable")
+        elif reason.startswith(INCONCLUSIVE):
+            object.__setattr__(self, "verdict", "inconclusive")
+        elif self.held is not None:
+            object.__setattr__(self, "verdict", "pass" if self.held else "fail")
 
 
 @dataclass(frozen=True)
@@ -354,6 +370,8 @@ class ResultReceipt:
     evaluations: tuple[Evaluation, ...]
     call: CallSummary | None
     failure: ReceiptFailure | None
+    # Why a scenario was skipped, when it was skipped for a reason rather than never reached.
+    reason: str | None = None
 
 
 # --- outbound (this module's own minimal sink; see the module docstring's decoupling note) ----
@@ -1469,6 +1487,32 @@ class RunResult:
     fenced: BaseException | None = None
 
 
+def _switched_off(scenario: Scenario) -> bool:
+    """A scenario with sub-actors while they are off: running it without them would look like a normal
+    result for a test that never happened."""
+    return bool(getattr(scenario, "sub_actors", ())) and not sub_actors_enabled()
+
+
+def _sub_actor_absent(
+    goal: Any, summary: Sequence[dict[str, Any]]
+) -> SubGoalResult | None:
+    """A sub-goal about a sub-actor that never triggered is not applicable; one that was triggered but
+    delivered nothing cannot be decided. Otherwise the sub-goal is graded as usual."""
+    sub_actor = str(getattr(goal, "sub_actor", "") or "")
+    if not sub_actor:
+        return None
+    seen = next((one for one in summary if one.get("sub_actor") == sub_actor), {})
+    who = str(seen.get("name") or sub_actor)
+    if not seen.get("triggered"):
+        reason = f"{NOT_APPLICABLE}{who}'s trigger never fired in this call."
+        return SubGoalResult(goal.name, True, reason, goal.judged != "")
+    if not seen.get("delivered"):
+        why = ", ".join(seen.get("dropped") or ()) or "nothing reached the agent"
+        reason = f"{INCONCLUSIVE}{who} was triggered but did not take part: {why}."
+        return SubGoalResult(goal.name, None, reason, goal.judged != "")
+    return None
+
+
 def _skipped_receipt(scenario: Scenario) -> ResultReceipt:
     # Exact body per outbound-channels.md Channel 2, "skipped receipt body (exact)".
     return ResultReceipt(
@@ -1481,6 +1525,7 @@ def _skipped_receipt(scenario: Scenario) -> ResultReceipt:
         evaluations=(),
         call=None,
         failure=None,
+        reason="sub-actors are switched off" if _switched_off(scenario) else None,
     )
 
 
@@ -1665,6 +1710,8 @@ class HostedScheduler:
                     or self._pool.fenced is not None
                     or self._cancel_requested()
                 ):
+                    return
+                if _switched_off(scenario):
                     return
                 context = _ScenarioContext()
                 try:
@@ -2208,6 +2255,10 @@ class HostedScheduler:
         check_handle = world.read_only()
         broken_failure: ReceiptFailure | None = None
         for goal in scenario.sub_goals:
+            absent = _sub_actor_absent(goal, call_outcome.sub_actors)
+            if absent is not None:
+                sub_goal_results.append(absent)
+                continue
             if broken_failure is not None:
                 sub_goal_results.append(
                     SubGoalResult(

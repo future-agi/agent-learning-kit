@@ -622,4 +622,5 @@ class HostedChatCallRunner:
             duration_ms=_duration_ms(started, ended),
             transcript_artifact=transcript_id,
             messages=tuple(transcript.canonical_messages()),
+            sub_actors=tuple(transcript.sub_actors.get("summary") or ()),
         )

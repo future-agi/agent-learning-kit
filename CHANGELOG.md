@@ -7,6 +7,11 @@ All notable release changes for Agent Learning Kit are tracked here.
 Post-rc.1 increments on the release branch. Each one adds gates on top of the
 66 proved at rc.1; the rc.1 entry below is historical and unchanged.
 
+- Sub-goal results say which of pass, fail, not applicable or inconclusive they are (`verdict`, alongside
+  `held`). A sub-goal about a sub-actor reads not applicable when it never triggered and inconclusive when
+  it was triggered but did not take part, with the reason; a scenario with sub-actors is skipped with
+  that reason while they are switched off; the judge reads sub-actor turns as someone other than the
+  customer. Each call's transcript keeps who its sub-actors were and what happened to each.
 - Sub-actors in chats: a second participant writes after its trigger, from the conversation so far; the
   agent receives it as its own named message, or at the start of the simulated user's next message where
   a target cannot take one, and the simulated user sees it too.

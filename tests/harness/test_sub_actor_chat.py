@@ -134,7 +134,8 @@ def test_a_participant_writes_after_its_trigger_and_both_the_agent_and_the_perso
         "content": "Add a second one for me",
         "at": transcript.exchanges[4].at,
     }
-    assert body["sub_actors"] == [
+    record = body["sub_actors"]
+    assert record["summary"] == [
         {
             "sub_actor": "friend",
             "name": "Rowan",
@@ -142,6 +143,14 @@ def test_a_participant_writes_after_its_trigger_and_both_the_agent_and_the_perso
             "delivered": 1,
             "dropped": [],
         }
+    ]
+    assert [(one["id"], one["instruction"]) for one in record["resolved"]] == [
+        ("friend", "You want a second item.")
+    ]
+    assert [event["kind"] for event in record["events"]] == [
+        "triggered",
+        "delivered",
+        "finished",
     ]
 
 
@@ -171,7 +180,7 @@ def test_a_message_that_fails_is_recorded_with_the_reason_and_the_chat_goes_on(
         target.heard == []
         and [one.speaker for one in transcript.exchanges].count("sub_actor") == 0
     )
-    assert transcript.sub_actors == [
+    assert transcript.sub_actors["summary"] == [
         {
             "sub_actor": "friend",
             "name": "Rowan",
@@ -204,7 +213,7 @@ def test_a_participant_writes_at_most_its_limit_and_one_never_triggered_reads_so
         writes=["unused"],
         trigger={"kind": "mid_journey", "turn": 5},
     )
-    assert never.sub_actors == [
+    assert never.sub_actors["summary"] == [
         {
             "sub_actor": "friend",
             "name": "Rowan",
@@ -223,7 +232,7 @@ def test_with_the_switch_off_nobody_else_enters_the_chat(tmp_path, monkeypatch):
         writes=["unused"],
         on=False,
     )
-    assert target.heard == [] and transcript.sub_actors == []
+    assert target.heard == [] and transcript.sub_actors == {}
     assert "is in this chat with you" not in _Stage.briefs["customer"][0]
     assert "sub_actors" not in json.loads(transcript.artifact())
 
