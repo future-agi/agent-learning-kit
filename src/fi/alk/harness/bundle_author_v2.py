@@ -29,6 +29,7 @@ import yaml
 
 from .bundle import CapabilityProtocol
 from .catalogue import CATALOGUE
+from .sub_actor import SUB_ACTORS_FILE
 from .bundle_v2 import (
     BUNDLE_V2_MANIFEST,
     BUNDLE_V2_SCHEMA_VERSION,
@@ -2093,6 +2094,15 @@ def _copy_chat_authoring(authoring: Path, staging: Path) -> list[str]:
     return adopted
 
 
+def _copy_sub_actor_list(authoring: Path, staging: Path) -> list[str]:
+    """Put the environment's sub-actors beside the scenarios that include them; none, nothing."""
+    listing = authoring / SUB_ACTORS_FILE
+    if not listing.is_file():
+        return []
+    shutil.copy2(listing, staging / SUB_ACTORS_FILE)
+    return [SUB_ACTORS_FILE]
+
+
 def _compile_source_tool_handlers(contract: dict[str, Any], staging: Path) -> list[str]:
     """Seal bindings for caller-executed tools that live in the submitted source.
 
@@ -2375,6 +2385,7 @@ def author_bundle_v2(
     try:
         _copy_scenarios(authoring_root, temporary, count=job.scenario_count)
         adopted_catalogue = _copy_sub_goal_catalogue(authoring_root, temporary)
+        adopted_catalogue += _copy_sub_actor_list(authoring_root, temporary)
         adopted_chat_files = _copy_chat_authoring(authoring_root, temporary)
         if "contract.json" in adopted_chat_files and contract_body:
             (temporary / "contract.json").write_text(

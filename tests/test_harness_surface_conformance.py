@@ -145,7 +145,7 @@ def sub_goal_schema(server) -> dict:
 
 @pytest.mark.parametrize("build_server", ["provision", "world"])
 def test_add_sub_goal_agrees_with_the_sub_goal_model(
-    build_server: str, tmp_path
+    build_server: str, tmp_path, monkeypatch
 ) -> None:
     """A schema that promises a boolean for a field the model stores as a string means the
     stage cannot add a sub-goal at all -- it is rejected on every attempt, whichever it sends.
@@ -153,6 +153,8 @@ def test_add_sub_goal_agrees_with_the_sub_goal_model(
     Worse for ``judged`` specifically, which is not a flag: it is the sentence saying what a
     model has to decide and why code cannot. Typed as a boolean, the reason has nowhere to go.
     """
+    # With sub-actors on, every field of the model is offered.
+    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
     contract = AgentContract(agent="a")
     server = (
         provision_tools(contract, tmp_path)[0]
@@ -175,3 +177,24 @@ def test_add_sub_goal_agrees_with_the_sub_goal_model(
 def test_judged_is_a_reason_not_a_flag() -> None:
     """Asserted on the model itself, since both schemas are checked against it."""
     assert SubGoal.model_fields["judged"].annotation is str
+
+
+def test_the_provision_stage_names_a_sub_goal_s_sub_actor_only_from_the_list(
+    tmp_path, monkeypatch
+) -> None:
+    from fi.alk.harness.sub_actor import SubActor, SubActorList, save_sub_actors
+
+    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+    save_sub_actors(
+        tmp_path,
+        SubActorList(
+            sub_actors=[SubActor(id="friend", name="Rowan", channel="audio_mix")]
+        ),
+    )
+    server = provision_tools(AgentContract(agent="a"), tmp_path)[0]
+    add = next(one for one in server.tools if one.name == "add_sub_goal").handler
+    goal = {"name": "noticed", "what": "checked with the customer", "judged": "x"}
+    refused = asyncio.run(add({**goal, "sub_actor": "stranger"}))
+    added = asyncio.run(add({**goal, "sub_actor": "friend"}))
+    assert refused.get("is_error") and "not on the environment's list" in str(refused)
+    assert "not on the environment's list" not in str(added)

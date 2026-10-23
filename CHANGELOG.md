@@ -7,6 +7,10 @@ All notable release changes for Agent Learning Kit are tracked here.
 Post-rc.1 increments on the release branch. Each one adds gates on top of the
 66 proved at rc.1; the rc.1 entry below is historical and unchanged.
 
+- Sub-actors, behind `HARNESS_SUB_ACTORS` (off by default): an environment keeps a list of people on
+  the simulated user's side (`sub_actors.json`), a scenario includes them with its own instruction and
+  trigger, and a sub-goal can name the one it is about. Scenarios and catalogues without them are
+  written as before.
 - Runtime validation checks scenarios on one database lane per CPU by default, capped by the
   sandbox's cgroup CPU quota, instead of a fixed 16; `ALK_VALIDATION_DB_LANES` still overrides it.
 - Docs corpus: the full `docs/` tree (quickstarts, per-track guides, framework

@@ -637,6 +637,33 @@ What is being tested is the recovery, and that is what the checks have to say:
 A check that only asserts the tool was called proves nothing here: the tool was always going to be
 called. Assert on what the world looks like afterwards and on what the caller was told.
 
+### When someone else is in the scene
+
+Only when the environment lists sub-actors. A coordinate whose level is named for a sub-actor includes
+that sub-actor in `sub_actors`, with two things written for this scenario:
+
+- `instruction`: who they are here and what they do, written to them like a situation text ("You are
+  with <the person>. You want <something other than what they ask for> and say so once the agent
+  <does what the person asked>"). Give them a part, never the person's goal: the person still pursues it and gives
+  every value the agent asks for, and a sub-actor never confirms or chooses for them.
+- `trigger`: when they enter. `always`, `mid_journey` after the agent's turn N, `on_tool` on the Nth call
+  of one of the agent's tools that runs in the world, `on_keyword` when one of its words is in the
+  agent's latest turn, or `probability` with chance `p`. Pick a moment the conversation reaches before
+  the person could be done: an early turn, 2 to 4, or the tool or word the moment depends on. A phone
+  menu answers the call, so it uses `always`, and only where the agent places the call.
+
+A sub-actor is in a scenario for one of two reasons. As a complication, the scenario is still about the
+person's task and the sub-actor makes it harder; its usual sub-goals grade it and none names the
+sub-actor. As the thing being tested, the scenario checks how the agent treats the sub-actor, and that
+sub-goal names it with `sub_actor`, so a call they never entered reads as not applicable instead of
+failing the agent.
+
+The answer key is the correct behaviour with the sub-actor present, and nothing in it depends on what
+the sub-actor says: a request from someone who is not the person being served is not that person's
+request, so the solution never acts on it. Where the world can show it, name a sub-goal whose check
+finds that nothing the sub-actor asked for was done. The run tells the person who else is there; the
+person's instruction does not repeat it. Most scenarios include none.
+
 ## The tools, and the order to use them
 
 | Tool | What it does |

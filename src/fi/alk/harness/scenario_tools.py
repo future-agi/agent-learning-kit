@@ -18,13 +18,22 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Callable
 
+from fi.simulate.simulation.sub_actors import TRIGGER_ABOUT, described
+
 from .backends import tool, tool_server
 
 from .amend import add_rule, drop_rule, fix_tool, widen
 from .background_noise import place_for, places
+from .sub_actor import (
+    SubActorList,
+    load_sub_actors,
+    scenario_problems,
+    sub_actors_enabled,
+    sub_goal_subject_problems,
+)
 from .catalogue import (
+    add_sub_goal_fields,
     CONTRACT_FIELDS,
-    CONTRACT_SCHEMA,
     NO_OVERLAY,
     CHECK_RULES,
     CRITERIA_RULES,
@@ -171,6 +180,43 @@ def _no_longer_hold(
     return failed
 
 
+def _sub_actor_field() -> dict[str, Any]:
+    """The sub-actors a writer may include, offered only where sub-actors are on."""
+    if not sub_actors_enabled():
+        return {}
+    return {
+        "sub_actors": {
+            "type": "array",
+            "description": "Sub-actors from the environment's list this scenario includes, each with its "
+            "`instruction`, what they do in this scenario, written to them like a situation text, and its "
+            "`trigger`, when they enter: "
+            + described(TRIGGER_ABOUT)
+            + ". Give them a part, never the "
+            "person's goal. Leave it out for the person alone.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "instruction": {"type": "string"},
+                    "trigger": {
+                        "type": "object",
+                        "properties": {
+                            "kind": {"type": "string", "enum": list(TRIGGER_ABOUT)},
+                            "turn": {"type": "integer"},
+                            "tool": {"type": "string"},
+                            "on_call": {"type": "integer"},
+                            "words": {"type": "array", "items": {"type": "string"}},
+                            "p": {"type": "number"},
+                        },
+                        "required": ["kind"],
+                    },
+                },
+                "required": ["id", "instruction", "trigger"],
+            },
+        }
+    }
+
+
 def _mailbox_fields() -> dict[str, Any]:
     """The mailbox-only fields, withheld entirely when the switch is off: a field is an invitation."""
     if not voicemail_enabled():
@@ -227,6 +273,25 @@ def worth_delegating(wanted: int) -> bool:
     operator choice something no operator should have to make.
     """
     return int(wanted or 0) >= FEWEST_WORTH_DELEGATING
+
+
+def persona_properties() -> dict[str, Any]:
+    """Who a person is, in the platform's own persona fields: the simulated user's and every sub-actor's."""
+    return {
+        "name": {"type": "string"},
+        "gender": persona_field("gender"),
+        "age_group": persona_field("age_group"),
+        "occupation": persona_field("occupation"),
+        "location": persona_field("location"),
+        "personality": persona_field("personality"),
+        "communication_style": persona_field("communication_style"),
+        "languages": {
+            "type": "array",
+            "items": persona_field("languages"),
+            "description": "The one language this person speaks in the conversation.",
+        },
+        "accent": persona_field("accent"),
+    }
 
 
 def persona_field(name: str) -> dict[str, Any]:
@@ -872,6 +937,38 @@ def _credentials_the_world_lacks(scenario: Scenario, trial: Any) -> list[str]:
     ]
 
 
+def _sub_actors_that_cannot_run(
+    scenario: Scenario,
+    catalogue: Catalogue,
+    listing: SubActorList | None,
+    trial: Any,
+    spoken: bool,
+    tools: set[str] | None,
+) -> list[str]:
+    about = {
+        name: goal.sub_actor
+        for name in scenario.sub_goals
+        if (goal := catalogue.named(name)) is not None and goal.sub_actor
+    }
+    if not scenario.sub_actors and not about:
+        return []
+    if scenario.sub_actors and not sub_actors_enabled():
+        return [
+            "sub_actors: sub-actors are switched off in this environment, so leave sub_actors empty"
+        ]
+    return scenario_problems(
+        scenario.sub_actors,
+        listing or SubActorList(),
+        modality="voice" if spoken else "chat",
+        max_turns=scenario.max_turns,
+        call_direction=scenario.call_direction,
+        person=scenario.persona.name if scenario.persona else "",
+        tools=tools,
+        runs_in_world=lambda tool: executes(trial, tool),
+        about=about,
+    )
+
+
 def accept_scenario(
     payload: dict[str, Any],
     *,
@@ -886,6 +983,8 @@ def accept_scenario(
     vocabulary: list[str] | None = None,
     spoken: bool = True,
     instructions: str = "",
+    sub_actor_list: SubActorList | None = None,
+    tools: set[str] | None = None,
 ) -> dict[str, Any]:
     """Validate one scenario, then prove it. A plain function so both halves are testable.
 
@@ -926,6 +1025,11 @@ def accept_scenario(
         problems.extend(_steps_the_contract_refuses(scenario, world_root))
         problems.extend(_overlay_asserts_nothing(scenario, catalogue))
         problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
+        problems.extend(
+            _sub_actors_that_cannot_run(
+                scenario, catalogue, sub_actor_list, trial, spoken, tools
+            )
+        )
     finally:
         trial.close()
 
@@ -1191,6 +1295,11 @@ def scenario_tools(
                     for goal in sorted(catalogue.sub_goals, key=lambda one: one.name):
                         compares = f" Its check compares {goal.reference.strip()}" if goal.reference.strip() else ""
                         lines.append(f"- {goal.name}: {goal.what.strip()}{compares}")
+                listing = load_sub_actors(destination) if sub_actors_enabled() else None
+                if listing and listing.sub_actors:
+                    lines.append(
+                        "\nsub-actors a scenario can include:\n" + listing.summary()
+                    )
                 return _ok("\n".join(lines) or "this world has no tables")
             if table not in state:
                 return _err(
@@ -1348,6 +1457,8 @@ def scenario_tools(
             + (f"\nNOT RUN: {', '.join(unrun)} (they run only inside the agent)" if unrun else "")
         )
 
+    sub_actor_said, sub_goal_fields = add_sub_goal_fields()
+
     @tool(
         "add_sub_goal",
         "Add a named thing this agent can be checked on, shared by every scenario that needs it. "
@@ -1364,11 +1475,9 @@ def scenario_tools(
         + "`overlay` names the overlay level this sub-goal is the claim for, when it is one: "
         "`prompt_injection`, `social_engineering`, `privacy_pii`. A scenario carrying an overlay "
         "is refused until it names a sub-goal that fails when that overlay is mishandled, so this "
-        "is what makes one available. Leave it empty for an ordinary task sub-goal.",
-        schema(
-            {"name": str, "what": str, "check": str, "judged": str, "output": str, "overlay": str, **CONTRACT_SCHEMA},
-            ["name", "what"],
-        ),
+        "is what makes one available. Leave it empty for an ordinary task sub-goal."
+        + sub_actor_said,
+        schema(sub_goal_fields, ["name", "what"]),
     )
     async def add_sub_goal(args: dict[str, Any]) -> dict[str, Any]:
         sub_goal = SubGoal(
@@ -1378,9 +1487,12 @@ def scenario_tools(
             judged=str(args.get("judged") or ""),
             output=str(args.get("output") or "pass_fail"),
             overlay=str(args.get("overlay") or ""),
+            sub_actor=str(args.get("sub_actor") or ""),
             **{field: str(args.get(field) or "") for field in CONTRACT_FIELDS},
         )
-        problems = validate_sub_goal(sub_goal)
+        problems = validate_sub_goal(sub_goal) + sub_goal_subject_problems(
+            sub_goal.sub_actor, destination
+        )
         if problems:
             return _err("Not added:\n  - " + "\n  - ".join(problems))
         sub_goal, cleared = without_delivery_overlay(sub_goal)
@@ -1490,6 +1602,7 @@ def scenario_tools(
                     "which the agent has to work hardest for.",
                 },
                 **_mailbox_fields(),
+                **_sub_actor_field(),
                 "instruction": {
                     "type": "string",
                     "description": "What this person is trying to achieve, written to them. "
@@ -1523,24 +1636,12 @@ def scenario_tools(
                     "details. This fills the simulator prompt's persona slot."
                     + persona_vocabulary_note(),
                     "properties": {
-                        "name": {"type": "string"},
-                        "gender": persona_field("gender"),
-                        "age_group": persona_field("age_group"),
-                        "occupation": persona_field("occupation"),
-                        "location": persona_field("location"),
-                        "personality": persona_field("personality"),
-                        "communication_style": persona_field("communication_style"),
+                        **persona_properties(),
                         "initial_message": {
                             "type": "string",
                             "description": "The caller's natural opening request, specific to "
                             "this scenario. Do not use a generic greeting.",
                         },
-                        "languages": {
-                            "type": "array",
-                            "items": persona_field("languages"),
-                            "description": "The one language the caller speaks on the call.",
-                        },
-                        "accent": persona_field("accent"),
                         "multilingual": {"type": "boolean"},
                         "metadata": {"type": "object"},
                     },
@@ -1742,6 +1843,8 @@ def scenario_tools(
             vocabulary=target.get("keywords"),
             spoken=_is_spoken(contract),
             instructions="\n".join([contract.system_prompt_excerpt, *contract.hard_constraints]),
+            sub_actor_list=load_sub_actors(destination),
+            tools=set(contract.tool_names()),
         )
         if not result.get("is_error"):
             exploration["since_submit"] = 0
@@ -2006,6 +2109,23 @@ def scenario_tools(
             said += (
                 f". {len(vocabulary)} keywords are the suite's vocabulary; deal them in the briefs, "
                 "because a writer that never sees the list cannot stay inside it"
+            )
+        listing = load_sub_actors(destination) if sub_actors_enabled() else None
+        named = " ".join(
+            level for levels in (target.get("axes") or {}).values() for level in levels
+        )
+        unplaced = [
+            one
+            for one in (listing.sub_actors if listing else [])
+            if one.id not in named
+        ]
+        if unplaced:
+            said += (
+                ". The environment lists these sub-actors and no level is named for them yet. Keep them: "
+                "dropping one leaves the suite with no test of how the agent copes with them. Call aim_for "
+                "again with a level for each, named for it, with a share like any other; at a small count "
+                "that share can be a single scenario:\n"
+                + SubActorList(sub_actors=unplaced).summary()
             )
         return _ok(said)
 
@@ -2349,6 +2469,12 @@ def world_summary(world_root: Path) -> str:
                 "\nSUB-GOALS already defined (reuse these, do not restate them):"
             )
             lines += [f"  {one.name}: {one.what}" for one in catalogue.sub_goals]
+        listing = load_sub_actors(world_root) if sub_actors_enabled() else None
+        if listing and listing.sub_actors:
+            lines.append(
+                "\nSUB-ACTORS a scenario can include (the person's side, not the person):\n"
+                + listing.summary()
+            )
         external = _is_external_runtime(world_root)
         prefix = "THE BUILT WORLD (restored fresh for every scenario):\n"
         if external:
