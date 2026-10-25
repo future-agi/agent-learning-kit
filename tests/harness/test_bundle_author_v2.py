@@ -1767,6 +1767,41 @@ INSERT INTO riders VALUES (gen_random_uuid());
     assert "INSERT INTO" not in sql
 
 
+def test_documented_readme_schema_skips_alternative_for_existing_tables(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "README.md").write_text(
+        """# Local setup
+
+```sql
+CREATE TABLE tickets (id BIGINT PRIMARY KEY);
+```
+
+# Cloud deployment
+
+```sql
+CREATE EXTENSION IF NOT EXISTS cloud_only_extension;
+CREATE TABLE tickets (id BIGINT PRIMARY KEY, embedding vector(768));
+```
+
+```sql
+ALTER TABLE tickets ADD COLUMN cloud_only_value vector(768);
+```
+""",
+        encoding="utf-8",
+    )
+
+    sql = "\n".join(
+        artifact.sql for artifact in _source_schema_artifacts(source)
+    )
+
+    assert sql.count("CREATE TABLE tickets") == 1
+    assert "cloud_only_extension" not in sql
+    assert "cloud_only_value" not in sql
+
+
 def test_docker_python_respects_project_requires_python(tmp_path: Path) -> None:
     (tmp_path / "Dockerfile").write_text(
         "FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim\n",

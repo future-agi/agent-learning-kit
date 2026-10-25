@@ -762,9 +762,9 @@ def _documented_ddl_statements(sql: str) -> list[str]:
 def _documented_source_schemas(source: Path) -> list[_SourceSchemaArtifact]:
     """Use the first README's SQL fences without adopting duplicate alternatives.
 
-    This is source-owned executable evidence, not model-authored schema.  Taking the first
-    The first declaration of each table wins. This supports one fence per table without combining
-    alternative local and cloud recipes that redeclare the same table.
+    This is source-owned executable evidence, not model-authored schema. The first declaration
+    of each table wins, so separate-table fences work without combining alternative local and
+    cloud recipes that redeclare the same table.
     """
 
     for readme in sorted(source.glob("README*.md")):
@@ -776,6 +776,14 @@ def _documented_source_schemas(source: Path) -> list[_SourceSchemaArtifact]:
             start=1,
         ):
             statements = _documented_ddl_statements(match.group(1))
+            tables = {
+                table_match.group(1).strip('"').lower()
+                for statement in statements
+                if (table_match := _CREATED_TABLE.match(statement))
+            }
+            if tables and tables <= declared_tables:
+                # A repeated table starts an alternative recipe; later ALTERs belong to it.
+                break
             accepted: list[str] = []
             for statement in statements:
                 table_match = _CREATED_TABLE.match(statement)
