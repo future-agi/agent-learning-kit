@@ -67,7 +67,9 @@ def test_stage_scopes_setup_admission_to_repository_sources(
 
     monkeypatch.setattr(understand, "contract_tools", contract_tools)
     monkeypatch.setattr(
-        understand, "read_only_session", lambda **kwargs: SimpleNamespace()
+        understand,
+        "read_only_session",
+        lambda **kwargs: SimpleNamespace(builtins=(), workers={}),
     )
     monkeypatch.setattr(understand, "Stage", lambda *args, **kwargs: object())
     monkeypatch.setattr(understand, "load_skill", lambda _: "")
