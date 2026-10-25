@@ -370,6 +370,80 @@ def test_generic_validation_applies_typed_world_patch_transactionally(
     )
 
 
+def test_a_repair_world_sqlite_cannot_hold_fails_with_the_validation_error(
+    tmp_path,
+) -> None:
+    source_root = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source_root.mkdir()
+    authoring.mkdir()
+    (source_root / "agent.py").write_text("agent", encoding="utf-8")
+    source_model = SourceModel.create(
+        source_digest="sha256:" + "a" * 64,
+        engine="postgres",
+        tables=(
+            SourceTable(
+                name="accounts",
+                columns=(
+                    SourceColumn(
+                        name="id",
+                        logical_type=LogicalType.INTEGER,
+                        native_type="integer",
+                        nullable=False,
+                        has_default=False,
+                    ),
+                ),
+            ),
+        ),
+    )
+    path = authoring / "world.sqlite"
+    with sqlite3.connect(path) as database:
+        database.execute("CREATE TABLE accounts (id INTEGER CHECK (id IS NULL))")
+        database.execute("INSERT INTO accounts VALUES (NULL)")
+        world = import_sqlite_world(database, source_model, validate=False).world
+    before = path.read_bytes()
+    store = GenericHarnessArtifactStore(authoring / "generic-harness")
+    store.write_source_model(source_model)
+    store.write_world_ir(world)
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.VALIDATING_ENVIRONMENT,
+        component="world_ir",
+        code="required_value_missing",
+        message="accounts.id is missing",
+    )
+
+    async def validate(*args):
+        raise RuntimeValidationError("environment", "invalid", diagnostics=(diagnostic,))
+
+    async def repair(*args):
+        return WorldIRRepairPatch.create(
+            base_world_ir_hash=world.fingerprint,
+            operations=(
+                RepairPatchOperation(
+                    op=RepairPatchOp.SET_VALUE,
+                    table="accounts",
+                    row_identity=world.tables[0].rows[0].identity,
+                    column="id",
+                    value=WorldValue.present(LogicalType.INTEGER, 1),
+                    reason="required_value_missing",
+                    evidence_refs=("source-model:accounts.id",),
+                ),
+            ),
+        )
+
+    job = SimpleNamespace(metadata={"generic_harness_v1": True})
+    with pytest.raises(RuntimeValidationError, match="invalid"):
+        asyncio.run(
+            validate_and_repair(
+                job, source_root, authoring, validate=validate, repair=repair
+            )
+        )
+
+    assert path.read_bytes() == before
+    assert store.read_world_ir() == world
+    assert store.read_repair_history().results[0].outcome.value == "failed"
+
+
 @pytest.mark.parametrize("repair", ["a_value_sqlite_changes", "a_null_over_a_default"])
 def test_a_repair_world_sqlite_cannot_hold_is_rejected_and_writes_nothing(
     tmp_path, repair

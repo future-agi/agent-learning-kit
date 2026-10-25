@@ -1261,6 +1261,7 @@ async def validate_and_repair(
                 repair_result = await repair(repair_phase, guidance)
                 if repair_phase == "environment":
                     from .repair_patch import (
+                        RepairPatchRejected,
                         WorldIRRepairPatch,
                         apply_world_ir_repair_patch,
                     )
@@ -1275,30 +1276,38 @@ async def validate_and_repair(
                         artifacts.write_repair_patch(
                             repair_result, sequence=decision.sequence
                         )
-                        repaired_world = _stored_in_world(
-                            authoring,
-                            apply_world_ir_repair_patch(
-                                world_ir,
+                        try:
+                            repaired_world = _stored_in_world(
+                                authoring,
+                                apply_world_ir_repair_patch(
+                                    world_ir,
+                                    source_model,
+                                    repair_result,
+                                    allowed_reason_codes={
+                                        item.code for item in diagnostics
+                                    },
+                                ),
                                 source_model,
-                                repair_result,
-                                allowed_reason_codes={
-                                    item.code for item in diagnostics
-                                },
-                            ),
-                            source_model,
-                        )
-                        artifacts.write_world_ir(repaired_world)
-                        still_broken = _invariants_the_ir_still_breaks(
-                            repaired_world, authoring
-                        )
-                        if still_broken:
+                            )
+                        except RepairPatchRejected as rejected:
                             print(
-                                "runtime validation: patch did not close the invariants, "
-                                "repairing again without rebuilding: "
-                                + "; ".join(still_broken)[:400],
+                                f"runtime validation: repair rejected: {rejected}",
                                 flush=True,
                             )
-                        status = 0
+                            status = 1
+                        else:
+                            artifacts.write_world_ir(repaired_world)
+                            still_broken = _invariants_the_ir_still_breaks(
+                                repaired_world, authoring
+                            )
+                            if still_broken:
+                                print(
+                                    "runtime validation: patch did not close the "
+                                    "invariants, repairing again without rebuilding: "
+                                    + "; ".join(still_broken)[:400],
+                                    flush=True,
+                                )
+                            status = 0
                     elif isinstance(repair_result, RuntimePlanPatch):
                         apply_runtime_plan_patch(
                             source,
