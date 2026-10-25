@@ -611,9 +611,6 @@ def test_a_world_check_edit_cites_the_agents_source_and_is_reported(tmp_path):
     assert not _call(server, "add_world_check", cited).get("is_error")
     assert added == [cited]
     assert held == {"unsaved": True, "checks": {"menu": "db/seed.sql"}}
-    assert {"source_path", "source_quote"} <= set(
-        server.tools[0].input_schema["required"]
-    )
 
     held["unsaved"] = False
     result = nudge.report_update(
@@ -625,6 +622,63 @@ def test_a_world_check_edit_cites_the_agents_source_and_is_reported(tmp_path):
     )
     assert result["passed"]
     assert "world checks changed: menu (cites db/seed.sql)" in result["warnings"]
+
+
+@pytest.mark.parametrize("no_source", ["empty", "absent"])
+def test_a_world_check_edit_without_a_source_to_cite_is_kept_uncited(
+    tmp_path, no_source
+):
+    # A provider or remote agent's sandbox holds an empty source folder.
+    root = _cart(tmp_path / "work")
+    source = tmp_path / "source"
+    if no_source == "empty":
+        source.mkdir()
+    added: list[dict] = []
+
+    @tool("add_world_check", "Add one check.", {})
+    async def add_world_check(args: dict) -> dict:
+        added.append(args)
+        return {"content": []}
+
+    held: dict = {}
+    server = nudge.track_world(
+        tool_server(name="world", tools=[add_world_check]),
+        held,
+        source if no_source == "empty" else None,
+    )
+    check = {"name": "menu", "code": "def check(world): return None"}
+
+    assert not _call(server, "add_world_check", check).get("is_error")
+    assert added == [check]
+    assert held == {"unsaved": True, "checks": {"menu": ""}}
+
+    held["unsaved"] = False
+    result = nudge.report_update(
+        root,
+        nudge={"nudge_id": "n1", "stage": "environment"},
+        changed=True,
+        notes="",
+        world=held,
+    )
+    assert result["passed"]
+    assert "world checks changed: menu (uncited: no source)" in result["warnings"]
+
+
+def test_a_source_holding_any_file_still_refuses_an_uncited_world_check(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "seeds.rb").write_text("Menu.create!(id: 'fries')\n")
+
+    @tool("add_world_check", "Add one check.", {})
+    async def add_world_check(args: dict) -> dict:
+        return {"content": []}
+
+    server = nudge.track_world(
+        tool_server(name="world", tools=[add_world_check]), {}, source
+    )
+
+    said = _call(server, "add_world_check", {"name": "menu", "code": "x"})
+    assert said["is_error"]
 
 
 _BOOKINGS_EMPTY = (

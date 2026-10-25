@@ -822,17 +822,22 @@ def cite_world_checks(
     one: ToolSpec, held: dict[str, Any], source: Path | None
 ) -> ToolSpec:
     """``add_world_check`` that refuses an edit not citing the agent's source, and records the
-    cited file in ``held["checks"]`` (environment nudge turns)."""
+    cited file in ``held["checks"]`` (environment nudge turns). An agent with no source here
+    (a provider or remote agent) has nothing to cite: its edits are kept uncited."""
     add = one.handler
 
     async def cited(args: dict[str, Any]) -> dict[str, Any]:
-        said = citation_refusal(args, source)
+        # A provider or remote agent's sandbox holds an empty source folder.
+        citable = source is not None and any(
+            path.is_file() for path in Path(source).rglob("*")
+        )
+        said = citation_refusal(args, source) if citable else ""
         if said:
             return _err(said)
         result = await add(args)
         if not result.get("is_error"):
-            held.setdefault("checks", {})[str(args.get("name") or "")] = str(
-                args.get("source_path") or ""
+            held.setdefault("checks", {})[str(args.get("name") or "")] = (
+                str(args.get("source_path") or "") if citable else ""
             )
         return result
 
@@ -841,7 +846,8 @@ def cite_world_checks(
         handler=cited,
         description=one.description
         + " In a rebuild, only to follow the agent's changed source: `source_path` is the "
-        "file, `source_quote` a line of it (20+ characters), such as the new seed row.",
+        "file, `source_quote` a line of it (20+ characters), such as the new seed row. "
+        "Without the agent's source here, leave both out.",
         input_schema=schema(
             {
                 "name": str,
@@ -850,7 +856,7 @@ def cite_world_checks(
                 "source_path": str,
                 "source_quote": str,
             },
-            ["name", "code", "source_path", "source_quote"],
+            ["name", "code"],
         ),
     )
 
@@ -914,7 +920,7 @@ def track_world(
 ) -> ToolServer:
     """The same world server, recording in ``held["unsaved"]`` whether a world change has been
     made since the last successful save_world (environment nudge turns). A world check edit
-    has to cite ``source``, the agent's source."""
+    has to cite ``source``, the agent's source, when it holds any file."""
     tools = []
     for one in server.tools:
         if one.name == "add_world_check":
