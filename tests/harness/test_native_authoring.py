@@ -92,6 +92,18 @@ def test_native_proof_is_deferred_and_never_executes_reference(tmp_path):
     assert not result.get("is_error"), result
     assert "DEFERRED" in result["content"][0]["text"]
     assert kept[0].solution == scenario.solution
+    missing_reference = scenario.model_copy(
+        update={"name": "lookup-without-reference", "solution": []}
+    )
+    rejected = accept_scenario(
+        missing_reference.model_dump(),
+        world_root=tmp_path,
+        catalogue=catalogue,
+        kept=kept,
+        spoken=False,
+    )
+    assert rejected.get("is_error")
+    assert "solution" in rejected["content"][0]["text"]
     bad = scenario.model_copy(
         update={"setup_code": "def setup(world):\n    world.put('fake', {})\n"}
     )
