@@ -8132,7 +8132,6 @@ def test_dropping_every_scenario_needs_an_explicit_everything(tmp_path):
     assert not everything[0] and "nothing is saved yet" in everything[1]
     assert [one.name for one in module.load_scenarios(root)] == [saved[0].name]
 
-
 @pytest.mark.parametrize("store", ["filesystem", "none", ""])
 def test_runtime_tools_without_record_store_do_not_require_synthetic_tables(
     tmp_path, store
