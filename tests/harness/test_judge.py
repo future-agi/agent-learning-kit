@@ -744,10 +744,40 @@ def test_the_contract_records_the_agents_languages_and_older_contracts_still_loa
     ]
 
 
+def test_native_judge_exposes_capabilities_without_private_endpoints_or_sql() -> None:
+    import random
+    from fi.alk.harness.world.observation import ObservationWorld
+
+    world = ObservationWorld(
+        0,
+        random.Random(1),
+        {
+            "chat": "http://private-internal-host:8080",
+            "history": "http://another-private-host:9090",
+        },
+    )
+    world.set_headers("chat", {"Authorization": "Bearer private-session-credential"})
+    evidence = judge_module.CallEvidence(
+        world.read_only(),
+        [{"role": "assistant", "content": "The record was not found."}],
+        None,
+        "native",
+    )
+    tools = {one.name: one for one in evidence.tools()}
+
+    assert set(tools) == {"inspect_world", "read_transcript"}
+    inspected = asyncio.run(tools["inspect_world"].handler({}))["content"][0]["text"]
+    assert json.loads(inspected)["capabilities"] == ["chat", "history"]
+    assert "private-internal-host" not in inspected
+    assert "private-session-credential" not in inspected
+    transcript = asyncio.run(tools["read_transcript"].handler({}))["content"][0]["text"]
+    assert "Agent: The record was not found." in transcript
+
+
 def test_native_judge_inspects_public_capabilities_and_actual_evidence(monkeypatch):
-    import json
     import random
     from types import SimpleNamespace
+
     from fi.alk.harness.world.observation import ObservationWorld
 
     world = ObservationWorld(
