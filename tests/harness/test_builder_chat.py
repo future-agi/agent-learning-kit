@@ -188,6 +188,31 @@ def test_a_rejected_publish_is_never_reported_as_done(tmp_path, monkeypatch):
     assert not (tmp_path / ".futureagi-authoring-basis.json").exists()
 
 
+def test_a_failed_reseal_ends_the_turn_failed_with_nothing_to_land(
+    tmp_path, monkeypatch
+):
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    runtime.conversation = EditingConversation(tmp_path, writes=True)
+    runtime._published_fingerprint()
+
+    def fails(root):
+        raise RuntimeError("seed import failed")
+
+    monkeypatch.setattr("fi.alk.harness.bundle_author_v2.reseal_scenarios", fails)
+
+    _turn(runtime, {"content": "edit the world"})
+
+    assert client.published == []
+    reply = next(e for e in client.events if e["kind"] == "assistant_message")
+    assert "These changes were NOT saved" in reply["payload"]["text"]
+    assert reply["payload"]["error"] == "reseal_failed"
+    kinds = [event["kind"] for event in client.events]
+    assert "checkpoint_committed" not in kinds
+    assert client.events[-1]["kind"] == "turn_completed"
+    assert client.events[-1]["payload"]["outcome"] == "failed"
+
+
 def test_read_only_tools_skip_the_workspace_checkpoint(tmp_path, monkeypatch):
     client = BuilderClient()
     runtime = _runtime(tmp_path, client, monkeypatch)

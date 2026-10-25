@@ -871,19 +871,20 @@ class HostedChatRuntime:
             self._write_dotfile(_PUBLISHED, {"fingerprint": self._environment_fingerprint()})
         return result
 
-    async def _publish_if_changed(self) -> str:
-        """A line for the reply when the turn left changes the model did not save itself."""
+    async def _publish_if_changed(self) -> tuple[str, bool]:
+        """A line for the reply when the turn left changes the model did not save itself,
+        and whether they could not be sealed for runs."""
         if self._control_only():
             # While building, the build's own sealing publishes; there is nothing to save yet.
-            return ""
+            return "", False
         if self._environment_fingerprint() == self._published_fingerprint():
-            return ""
+            return "", False
         result = await self._save_changes()
         if not result.get("applied"):
             return (
                 "These changes were NOT saved to the environment: "
                 f"{result.get('message') or result.get('code') or 'unknown reason'}."
-            )
+            ), result.get("code") == "reseal_failed"
 
         def named(rows: list[dict[str, Any]]) -> str:
             return ", ".join(f"#{one.get('number')} {one.get('name')}" for one in rows)
@@ -897,7 +898,7 @@ class HostedChatRuntime:
             "Saved to the environment: "
             + ("; ".join(parts) or "no scenario changed")
             + f". It now has {result.get('scenario_count')} scenarios."
-        )
+        ), False
 
     async def _selection_note(self, payload: dict[str, Any]) -> str:
         ids = [str(one) for one in payload.get("scenario_ids") or [] if str(one)]
@@ -1360,26 +1361,13 @@ class HostedChatRuntime:
             traceback.print_exc()
             await queue.put(None)
             await pump
-            message = f"I couldn't complete that turn: {type(exc).__name__}."
-            await self.client.emit(
-                "assistant_message",
-                message_id=assistant_message_id,
-                stage=self.conversation.stage_name,
-                invocation_id=invocation_id,
-                payload={"text": message, "error": type(exc).__name__},
-            )
-            self._journal_unsuccessful(journal, message_id)
-            await self._checkpoint()
-            await self.client.emit(
-                "turn_completed",
-                stage=self.conversation.stage_name,
-                invocation_id=invocation_id,
-                payload={
-                    "command_message_id": message_id,
-                    "outcome": "failed",
-                    **self._turn_usage(),
-                },
-                acknowledge_through=self._turn_acknowledged_through,
+            await self._fail_turn(
+                journal,
+                message_id,
+                assistant_message_id,
+                invocation_id,
+                f"I couldn't complete that turn: {type(exc).__name__}.",
+                type(exc).__name__,
             )
             return
 
@@ -1432,32 +1420,32 @@ class HostedChatRuntime:
             return
         if turn_failures:
             detail = turn_failures[-1] or "the model turn failed"
-            message = f"I couldn't complete that turn: {detail[:400]}"
-            await self.client.emit(
-                "assistant_message",
-                message_id=assistant_message_id,
-                stage=self.conversation.stage_name,
-                invocation_id=invocation_id,
-                payload={"text": message, "error": "stage_failed"},
-            )
-            self._journal_unsuccessful(journal, message_id)
-            await self._checkpoint()
-            await self.client.emit(
-                "turn_completed",
-                stage=self.conversation.stage_name,
-                invocation_id=invocation_id,
-                payload={
-                    "command_message_id": message_id,
-                    "outcome": "failed",
-                    **self._turn_usage(),
-                },
-                acknowledge_through=self._turn_acknowledged_through,
+            await self._fail_turn(
+                journal,
+                message_id,
+                assistant_message_id,
+                invocation_id,
+                f"I couldn't complete that turn: {detail[:400]}",
+                "stage_failed",
             )
             return
         final_text = "".join(emitted_text).strip()
-        saved = await self._publish_if_changed()
+        saved, unsealed = await self._publish_if_changed()
         if saved:
             final_text = f"{final_text}\n\n{saved}".strip()
+        if unsealed:
+            # Changes no run could replay are not promoted with this turn.
+            await self._fail_turn(
+                journal,
+                message_id,
+                assistant_message_id,
+                invocation_id,
+                final_text,
+                "reseal_failed",
+            )
+            if self._restart_after_turn:
+                self.stopping.set()
+            return
         if self._last_health and not self._last_health.startswith("Healthy") and not self._control_only():
             problems = [line for line in self._last_health.splitlines() if line.strip()]
             final_text = (
@@ -1497,6 +1485,37 @@ class HostedChatRuntime:
         )
         if self._restart_after_turn:
             self.stopping.set()
+
+    async def _fail_turn(
+        self,
+        journal: dict[str, str],
+        message_id: str,
+        assistant_message_id: str,
+        invocation_id: str,
+        text: str,
+        error: str,
+    ) -> None:
+        """Say why and end the turn failed: its checkpoint is not promoted."""
+        await self.client.emit(
+            "assistant_message",
+            message_id=assistant_message_id,
+            stage=self.conversation.stage_name,
+            invocation_id=invocation_id,
+            payload={"text": text, "error": error},
+        )
+        self._journal_unsuccessful(journal, message_id)
+        await self._checkpoint()
+        await self.client.emit(
+            "turn_completed",
+            stage=self.conversation.stage_name,
+            invocation_id=invocation_id,
+            payload={
+                "command_message_id": message_id,
+                "outcome": "failed",
+                **self._turn_usage(),
+            },
+            acknowledge_through=self._turn_acknowledged_through,
+        )
 
     async def _turn_until_interrupted(
         self,

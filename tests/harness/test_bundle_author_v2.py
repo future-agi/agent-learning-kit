@@ -10,6 +10,7 @@ import pytest
 
 from fi.alk.harness.bundle_author_v2 import (
     BundleAuthorError,
+    _carries_world,
     _compile_source_tool_handlers,
     _contract_column_declarations,
     _contract_sql_type,
@@ -17,6 +18,7 @@ from fi.alk.harness.bundle_author_v2 import (
     author_bundle_v2,
     reseal_scenarios,
     resolve_environment_plan,
+    sealed_from,
 )
 from fi.alk.harness.authoring_runtime_validation import _artifact_digest
 from fi.alk.harness.bundle_v2 import load_bundle_v2
@@ -2987,3 +2989,78 @@ def test_a_changed_world_reaches_the_sealed_seed_on_reseal(
             labels = database.execute("SELECT label FROM places").fetchall()
         assert labels == [("renamed",)]
     assert reseal_scenarios(authoring) == digest
+
+
+# The platform pins the same digest for the same files (test_harness_versioning_reseal.py).
+GOLDEN_SEALED_FROM = (
+    "sha256:402ed05450abe6c943865dd538ebd78e94d15c7e7a15d9b6a934e51cf4d26d3e"
+)
+
+
+def test_sealed_from_digests_only_the_reseal_inputs(tmp_path: Path) -> None:
+    folder = tmp_path / "scenarios" / "r\u00e9servation"
+    (folder / "__pycache__").mkdir(parents=True)
+    (folder / "scenario.json").write_bytes(b'{"name": "r"}')
+    (folder / "__pycache__" / "x.pyc").write_bytes(b"x")
+    for skipped in ("outbound-spool", "telemetry"):
+        (folder / skipped).mkdir()
+        (folder / skipped / "x.json").write_bytes(b"x")
+    nested = tmp_path / "scenarios" / "nested" / "deeper"
+    nested.mkdir(parents=True)
+    (nested / "ready.py").write_bytes(b"def ready(world): ...")
+    (tmp_path / "contract.json").write_bytes(b"{}")
+    (tmp_path / "sub_goals.json").write_bytes(b"[]")
+    (tmp_path / "world.sqlite").write_bytes(b"world")
+    (tmp_path / "simulator_prompt.md").write_bytes(b"not carried")
+
+    assert sealed_from(tmp_path) == GOLDEN_SEALED_FROM
+
+
+@pytest.mark.parametrize("ir_seed", [True, False])
+def test_a_bundle_keeps_the_stamp_of_the_world_it_was_sealed_from(
+    tmp_path: Path, ir_seed: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, authoring, _, bundle, _ = _places(tmp_path, ir_seed=ir_seed)
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("UPDATE places SET label = 'first' WHERE id = 'home'")
+    reseal_scenarios(authoring)
+    stamp = load_bundle_v2(bundle).metadata["sealed_from"]
+    assert stamp == sealed_from(authoring)
+    preflight_bundle(bundle, load_bundle_v2(bundle), parallelism=1, secret_refs={})
+
+    # A later world edit whose reseal fails leaves the bundle stamped for the first.
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("UPDATE places SET label = 'second' WHERE id = 'home'")
+
+    def fails(*_args: object) -> None:
+        raise RuntimeError("reseal failed")
+
+    monkeypatch.setattr("fi.alk.harness.bundle_author_v2._reseeded", fails)
+    with pytest.raises(RuntimeError):
+        reseal_scenarios(authoring)
+    assert load_bundle_v2(bundle).metadata["sealed_from"] == stamp
+    assert sealed_from(authoring) != stamp
+
+
+@pytest.mark.parametrize(
+    ("seed", "carried"),
+    [
+        (("world.sqlite",), True),
+        (("world-ir.json", "source-model.json"), True),
+        (("world-ir.json",), False),
+        (("world.sql",), False),
+    ],
+)
+def test_a_bundle_is_stamped_only_when_a_reseal_carries_its_world(
+    tmp_path: Path, seed: tuple[str, ...], carried: bool
+) -> None:
+    authoring, staging = tmp_path / "authoring", tmp_path / "staging"
+    (staging / "seed").mkdir(parents=True)
+    authoring.mkdir()
+    for name in seed:
+        (staging / "seed" / name).write_bytes(b"built")
+    assert _carries_world(authoring, staging) is True
+
+    (authoring / "world.sqlite").write_bytes(b"edited")
+
+    assert _carries_world(authoring, staging) is carried

@@ -2672,7 +2672,17 @@ def reseal_scenarios(authoring: str | Path) -> str | None:
             shutil.copy2(authoring_root / "contract.json", staging / "contract.json")
         seed = _reseeded(manifest, authoring_root, staging)
         world_changed = seed is not manifest.seed
-        resealed = manifest.model_copy(update={"files": _files(staging), "seed": seed})
+        metadata = {
+            key: value
+            for key, value in manifest.metadata.items()
+            if key != "sealed_from"
+        }
+        if _carries_world(authoring_root, staging):
+            # Unstamped, the platform never replays this bundle for an edit.
+            metadata["sealed_from"] = sealed_from(authoring_root)
+        resealed = manifest.model_copy(
+            update={"files": _files(staging), "seed": seed, "metadata": metadata}
+        )
         resealed = resealed.model_copy(update={"digest": seal_bundle_v2(resealed)})
         (staging / BUNDLE_V2_MANIFEST).write_text(
             json.dumps(resealed.model_dump(mode="json"), indent=2, sort_keys=True) + "\n",
@@ -2692,6 +2702,45 @@ def reseal_scenarios(authoring: str | Path) -> str | None:
             authoring_root, bundle_digest=resealed.digest, count=count, world_changed=world_changed
         )
     return resealed.digest
+
+
+# What a reseal carries from the authoring folders into the bundle.
+RESEAL_INPUTS = ("contract.json", CATALOGUE, "world.sqlite")
+
+
+def sealed_from(authoring: Path) -> str:
+    """A digest of the authoring files a reseal carries, as the platform reads them from a
+    checkpoint of the same folder, so it can tell which content a bundle was sealed from."""
+    from .hosted_conversation import _canonical_digest
+
+    held: dict[str, str] = {}
+    for path in [
+        *(authoring / "scenarios").rglob("*"),
+        *(authoring / n for n in RESEAL_INPUTS),
+    ]:
+        relative = path.relative_to(authoring)
+        if path.is_symlink() or not path.is_file():
+            continue
+        if any(
+            part in {"__pycache__", "outbound-spool", "telemetry"}
+            for part in relative.parts
+        ):
+            continue
+        held[relative.as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return _canonical_digest(held)
+
+
+def _carries_world(authoring: Path, staging: Path) -> bool:
+    """Whether a reseal can carry the authoring world.sqlite into this bundle's seed."""
+    seed = staging / "seed"
+    return (
+        not (authoring / "world.sqlite").is_file()
+        or (seed / "world.sqlite").is_file()
+        or (
+            (seed / "world-ir.json").is_file()
+            and (seed / "source-model.json").is_file()
+        )
+    )
 
 
 def _reseeded(manifest: EnvironmentBundleV2, authoring: Path, staging: Path) -> Seed:
