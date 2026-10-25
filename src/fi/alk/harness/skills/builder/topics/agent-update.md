@@ -25,16 +25,19 @@ decided in the notes.
   rebuilt in its own turn after this one lands.
 - There is no running world and no credentials here. Do not try to run the agent's tools; the
   checks are static.
-- For every tool the agent gained, add a sub-goal whose check names the tool, so the suite stage
-  adds a scenario for what it lets the caller do. `report_update` fails a new tool no sub-goal
-  checks.
+- For every tool the agent gained, add a sub-goal that checks what the tool lets the person using
+  the agent do, so the suite stage adds a scenario for it. `report_update` warns about a new tool
+  no sub-goal names; check that one covers it, by name or by its effect.
 - Change the world's data with `seed` or `change_data`, and keep it with `save_world`.
-- When the agent's seed changes, reproduce its new rows and values; never drop one to keep a world
-  check passing. Rewrite a world check that pins the old seed with `add_world_check` under its
-  own name, citing the seed file and quoting the new row.
-- The world holds every row of the agent's current seed, including in-flight ones such as an
-  active booking or an open order, even when the facts do not list that row as changed. A world
-  check that keeps such a table empty pins the old seed: rewrite it the same way.
+- The agent's seed is the starting data its source ships, for example seed SQL. When it changes,
+  reproduce its new rows and values; never drop one to keep a world check passing. Rewrite a
+  world check that pins the old seed with `add_world_check` under its own name, citing the seed
+  file and quoting the new row. When the agent's source is not here, there is nothing to cite:
+  rewrite it from the facts, and the report lists it as uncited.
+- The world holds every row of the agent's current seed, including in-flight ones such as work
+  already in progress when the agent starts, even when the facts do not list that row as
+  changed. A world check that keeps such a table empty pins the old seed: rewrite it the same
+  way.
 - Source-data invariants (`source-data-invariants.json`) are SQL checks that every run makes on
   the seeded world. When the agent's seed changes, revise or drop each one that pins the old seed
   with `revise_invariant`, citing the seed file and quoting the new row. When the agent's seed

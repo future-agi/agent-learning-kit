@@ -837,7 +837,7 @@ def test_the_world_reproduces_in_flight_seed_rows_the_facts_do_not_list():
         )
 
     update = said("builder", "topics", "agent-update.md")
-    assert "including in-flight ones such as an active booking" in update
+    assert "including in-flight ones such as work already in progress" in update
     assert "even when the facts do not list that row as changed" in update
     assert "A world check that keeps such a table empty pins the old seed" in update
     for skill in ("build-environment", "provision-environment"):

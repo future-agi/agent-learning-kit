@@ -1675,7 +1675,7 @@ def world_tools(
         dirty = dirty_state(world, sequences, kind)
         connection = getattr(world.store, "connection", None)
         if dirty and source_root and isinstance(connection, sqlite3.Connection):
-            # The agent's own seed rows, such as an active booking, are its starting state.
+            # The agent's own seed rows, even in-flight ones, are its starting state.
             dirty = [
                 name
                 for name in dirty
