@@ -75,8 +75,9 @@ JUDGE_METHOD = """
 How to decide:
 1. Read the criteria.
 2. Read the evidence. Read the conversation for what was said, the actions for what the agent did,
-   and inspect the records when the criteria are about what changed. The records are PostgreSQL;
-   use inspect_world to discover them rather than guessing names. When listen is offered, listen
+   and inspect the records when the criteria are about what changed. Use inspect_world to discover
+   what the environment supports. Only query records when a query tool is available; never invent
+   records or infer unobserved state from capability names. When listen is offered, listen
    to the recording: it is the fullest record of what was said. Use the transcript where it is
    unclear, and judge from the transcript and the actions when it cannot be heard.
 3. Establish whether the sub-goal's situation arose. If it did not, work out why from the evidence:
@@ -202,7 +203,7 @@ class CallEvidence:
         @tool(
             "inspect_world",
             (
-                "The native environment's declared capabilities and evidence limits."
+                "The native environment's declared capabilities and evidence limits; no database state."
                 if native
                 else "The world's tables: without a name, every table and its row count; with one, its rows."
             ),
@@ -215,8 +216,8 @@ class CallEvidence:
                         {
                             "kind": "native_observation",
                             "capabilities": list(self.world.capabilities),
-                            "state_access": "No local database or SQL query is available to the judge.",
-                            "evidence": "Use recorded actions and results plus the transcript and recording.",
+                            "state_access": "No local database or SQL query is available to the judge. Capability names are not state evidence.",
+                            "evidence": "Use recorded actions and their results, and read_transcript for the captured conversation.",
                         }
                     )
                 )

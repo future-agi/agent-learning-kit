@@ -34,6 +34,7 @@ from ..catalogue import (
     SUB_GOAL_RULES,
     already_claimed,
     SubGoal,
+    catalogue_problems,
     load_catalogue,
     save_catalogue,
     compares_to_a_value,
