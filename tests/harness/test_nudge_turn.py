@@ -1,5 +1,6 @@
 import asyncio
 import json
+from functools import partial
 from pathlib import Path
 
 import pytest
@@ -456,38 +457,42 @@ def _add_tool_sub_goal(root: Path, name: str, tool_name: str) -> None:
     save_catalogue(catalogue, root)
 
 
-def test_a_tool_added_in_the_turn_that_no_sub_goal_checks_is_reported(tmp_path):
+_UNNAMED = "tool saved_places was added and no sub-goal names it: check one covers it"
+
+
+def test_a_tool_added_in_the_turn_that_no_sub_goal_names_is_a_warning(tmp_path):
+    # A sub-goal may check the tool by its effect alone, so naming it is not a gate.
     root = _cart(tmp_path)
     server = nudge.nudge_server(root, {"nudge_id": "n1", "stage": "environment"})
     _add_tool(root, "saved_places")
     _set_manifest(root, tools=["add", "lst", "saved_places"])
-
-    said = _call(server, "report_update", {"changed": True, "notes": "fits"})
-
-    assert said.get("is_error")
-    written = json.loads((root / nudge.NUDGE_RESULT).read_text(encoding="utf-8"))
-    assert [(one["item"], one["kind"]) for one in written["checks"]["problems"]] == [
-        ("saved_places", "tool")
-    ]
-
-
-def test_a_tool_added_in_the_turn_with_a_sub_goal_naming_it_passes(tmp_path):
-    root = _cart(tmp_path)
-    server = nudge.nudge_server(root, {"nudge_id": "n1", "stage": "environment"})
-    _add_tool(root, "saved_places")
-    _set_manifest(root, tools=["add", "lst", "saved_places"])
-    # A longer name that contains it is not a mention.
-    _add_tool_sub_goal(root, "other", "saved_places_v2")
-    assert nudge.environment_gate(root, {"add", "lst"})[0] == [
-        nudge._problem(
-            "saved_places", "tool", "added in this rebuild; no sub-goal checks it"
-        )
-    ]
-    _add_tool_sub_goal(root, "used-saved-places", "saved_places")
 
     said = _call(server, "report_update", {"changed": True, "notes": "fits"})
 
     assert not said.get("is_error"), said
+    written = json.loads((root / nudge.NUDGE_RESULT).read_text(encoding="utf-8"))
+    assert written["checks"]["passed"] and written["checks"]["problems"] == []
+    assert _UNNAMED in written["checks"]["warnings"]
+
+
+def test_a_tool_added_in_the_turn_with_a_sub_goal_naming_it_is_not_warned(tmp_path):
+    root = _cart(tmp_path)
+    _add_tool(root, "saved_places")
+    _set_manifest(root, tools=["add", "lst", "saved_places"])
+    # A longer name that contains it is not a mention.
+    _add_tool_sub_goal(root, "other", "saved_places_v2")
+    report = partial(
+        nudge.report_update,
+        root,
+        nudge={"nudge_id": "n1", "stage": "environment"},
+        changed=True,
+        notes="",
+        started_with={"add", "lst"},
+    )
+    assert _UNNAMED in report()["warnings"]
+    _add_tool_sub_goal(root, "used-saved-places", "saved_places")
+
+    assert _UNNAMED not in report()["warnings"]
 
 
 def test_a_renamed_tool_with_its_sub_goals_updated_or_a_removed_tool_passes(tmp_path):

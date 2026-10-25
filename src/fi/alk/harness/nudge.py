@@ -265,7 +265,8 @@ def _contract_tools(workspace: Path) -> set[str]:
 
 
 def _untested_tools(added: set[str], catalogue: Catalogue) -> list[str]:
-    """The added tools no sub-goal's check or criteria name."""
+    """The added tools no sub-goal's check or criteria name. A sub-goal may check a tool by
+    its effect alone, so this only prompts a look."""
     texts = [f"{one.check}\n{one.judged}" for one in catalogue.sub_goals]
     return sorted(
         name
@@ -274,13 +275,10 @@ def _untested_tools(added: set[str], catalogue: Catalogue) -> list[str]:
     )
 
 
-def environment_gate(
-    workspace: Path, started_with: set[str] | None = None
-) -> tuple[list[dict], list[str]]:
+def environment_gate(workspace: Path) -> tuple[list[dict], list[str]]:
     """Static checks of the environment piece: (problems, not_checked).
 
-    A contract tool the saved world has no handler for is a problem. ``started_with`` is the
-    contract's tools when the turn began; a tool added since that nothing tests is a problem.
+    A contract tool the saved world has no handler for is a problem.
     """
     workspace = Path(workspace)
     problems: list[dict] = []
@@ -352,11 +350,6 @@ def environment_gate(
                 "contract tool has no handler; save_world has not saved a world with it",
             )
             for name in sorted(contract.tool_names() - covered)
-        )
-    if contract is not None and started_with is not None:
-        problems.extend(
-            _problem(name, "tool", "added in this rebuild; no sub-goal checks it")
-            for name in _untested_tools(contract.tool_names() - started_with, catalogue)
         )
     return problems, not_checked
 
@@ -680,7 +673,7 @@ def report_update(
     warnings: list[str] = []
     left_out: list[dict] = []
     if stage == ENVIRONMENT:
-        problems, not_checked = environment_gate(workspace, started_with)
+        problems, not_checked = environment_gate(workspace)
         if "world" not in not_checked:
             broken, unrun = invariant_problems(workspace, source)
             problems += broken
@@ -698,11 +691,22 @@ def report_update(
             warnings = source_review_stale(source, workspace)
             problems.extend(seed_row_problems(workspace, source))
         warnings.extend(drop_stale_tool_references(workspace))
+        if started_with is not None:
+            try:
+                catalogue = load_catalogue(workspace)
+            except (OSError, ValueError):
+                catalogue = Catalogue()  # environment_gate reports it
+            warnings.extend(
+                f"tool {name} was added and no sub-goal names it: check one covers it"
+                for name in _untested_tools(
+                    _contract_tools(workspace) - started_with, catalogue
+                )
+            )
         if world and world.get("checks"):
             warnings.append(
                 "world checks changed: "
                 + ", ".join(
-                    f"{name} (cites {path})"
+                    f"{name} (cites {path})" if path else f"{name} (uncited: no source)"
                     for name, path in sorted(world["checks"].items())
                 )
             )

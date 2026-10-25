@@ -967,11 +967,11 @@ def test_a_tool_added_without_saving_the_world_fails_the_report(
 
     result = client.results[-1]
     assert result["checks"]["passed"] is False
-    # The turn added it, so it also needs a sub-goal checking it.
     assert [(one["item"], one["kind"]) for one in result["checks"]["problems"]] == [
-        ("send_otp", "world"),
-        ("send_otp", "tool"),
+        ("send_otp", "world")
     ]
+    # The turn added it and no sub-goal names it: a prompt to look, not a gate.
+    assert any("tool send_otp was added" in one for one in result["checks"]["warnings"])
 
 
 def test_world_changes_fail_the_report_until_the_world_is_saved(tmp_path, monkeypatch):
