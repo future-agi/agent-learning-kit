@@ -346,7 +346,7 @@ def test_a_world_written_back_imports_to_the_same_world() -> None:
     assert values(stored) == values(edited)
 
 
-def test_a_repair_writes_only_what_it_changes_and_lets_defaults_apply() -> None:
+def test_a_repair_writes_only_what_it_changes_and_leaves_absent_values_null() -> None:
     source = SourceModel.create(
         source_digest="sha256:" + "a" * 64,
         engine="postgres",
@@ -364,8 +364,7 @@ def test_a_repair_writes_only_what_it_changes_and_lets_defaults_apply() -> None:
     )
     connection = sqlite3.connect(":memory:")
     connection.execute(
-        "CREATE TABLE users (id TEXT PRIMARY KEY, active, "
-        "made TEXT NOT NULL DEFAULT 'now')"
+        "CREATE TABLE users (id TEXT PRIMARY KEY, active, made TEXT DEFAULT 'now')"
     )
     connection.execute("INSERT INTO users VALUES ('a', 'true', 'then')")
     connection.execute("INSERT INTO users VALUES ('b', 'true', 'then')")
@@ -420,14 +419,15 @@ def test_a_repair_writes_only_what_it_changes_and_lets_defaults_apply() -> None:
     assert connection.execute("SELECT * FROM users ORDER BY id").fetchall() == [
         ("a", 0, "then"),
         ("b", "true", "then"),
-        ("c", 1, "now"),
+        ("c", 1, None),
     ]
 
 
-def test_a_default_only_sqlite_has_does_not_count_as_the_world() -> None:
+@pytest.mark.parametrize("default", [None, "'y'"])
+def test_a_default_only_sqlite_has_does_not_count_as_the_world(default) -> None:
     source = _source(
         _column("id", LogicalType.STRING),
-        _column("note", LogicalType.STRING, nullable=True),
+        _column("note", LogicalType.STRING, nullable=True, default=default),
     )
     connection = sqlite3.connect(":memory:")
     connection.execute(
@@ -454,6 +454,40 @@ def test_a_default_only_sqlite_has_does_not_count_as_the_world() -> None:
 
     write_sqlite_world(connection, added, source)
 
-    # The source has no default, so a run seeds NULL; SQLite filled 'x'.
+    # Stored as NULL, which reads back absent, so a run seeds what the source does.
+    assert connection.execute("SELECT note FROM users").fetchall() == [(None,)]
+    stored = import_sqlite_world(connection, source).world
+    assert world_holds(stored, added, source)
+    connection.execute("UPDATE users SET note = 'x'")
     stored = import_sqlite_world(connection, source).world
     assert not world_holds(stored, added, source)
+
+
+def test_a_serial_column_sqlite_numbers_as_its_rowid_holds() -> None:
+    source = _source(
+        _column("id", LogicalType.STRING),
+        _column("seq", LogicalType.INTEGER, default="nextval('users_seq'::regclass)"),
+    )
+    connection = sqlite3.connect(":memory:")
+    connection.execute("CREATE TABLE users (id TEXT UNIQUE, seq INTEGER PRIMARY KEY)")
+    world = import_sqlite_world(connection, source).world
+    added = WorldIR.create(
+        source_model_fingerprint=world.source_model_fingerprint,
+        tables=(
+            WorldTable(
+                source_name="users",
+                rows=(
+                    WorldRow(
+                        identity="b",
+                        values={"id": WorldValue.present(LogicalType.STRING, "b")},
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    write_sqlite_world(connection, added, source)
+
+    assert connection.execute("SELECT id, seq FROM users").fetchall() == [("b", 1)]
+    stored = import_sqlite_world(connection, source).world
+    assert world_holds(stored, added, source)

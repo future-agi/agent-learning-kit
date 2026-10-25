@@ -446,9 +446,10 @@ def write_sqlite_world(
 ) -> bool:
     """Write the rows where a World IR differs from what a SQLite world imports to.
 
-    Changed values are updated in place and new rows inserted with their present values
-    only, so defaults apply and untouched rows stay as stored. Rows the IR lacks are
-    kept. Returns whether anything was written; commits nothing.
+    Changed values are updated in place and new rows inserted with absent values as
+    NULL, which reads back absent (a rowid key takes the next number), so the source's
+    defaults apply rather than SQLite's. Untouched rows stay as stored and rows the IR
+    lacks are kept. Returns whether anything was written; commits nothing.
     """
     tables = {table.name: table for table in source.tables}
     held = {
@@ -485,18 +486,15 @@ def write_sqlite_world(
         for row in changes:
             old = current.get(row.identity)
             if old is None:
-                # Absent values are the database's to fill; a null is written as one.
                 values = {
-                    column: _stored(value)
-                    for column, value in row.values.items()
-                    if value.state is not ValueState.ABSENT and column in columns
+                    column.name: _stored(row.values.get(column.name))
+                    for column in tables[name].columns
+                    if column.name in columns
                 }
                 connection.execute(
                     f"INSERT INTO {_identifier(name)} "
                     f"({', '.join(_identifier(column) for column in values)}) "
-                    f"VALUES ({', '.join('?' for _ in values)})"
-                    if values
-                    else f"INSERT INTO {_identifier(name)} DEFAULT VALUES",
+                    f"VALUES ({', '.join('?' for _ in values)})",
                     tuple(values.values()),
                 )
                 continue
@@ -516,8 +514,9 @@ def write_sqlite_world(
 
 def world_holds(stored: WorldIR, world: WorldIR, source: SourceModel) -> bool:
     """Whether a stored world seeds what a World IR does: its rows, with every value
-    it sets. A value left absent may be filled only where the source has a default; an
-    explicit null there cannot be stored, since SQLite's NULL reads back as absent.
+    it sets. A value left absent must read back absent, except an integer with a source
+    default, which a rowid key numbers; an explicit null where the source has a default
+    cannot be stored, since SQLite's NULL reads back as absent.
     """
     columns = {
         table.name: {column.name: column for column in table.columns}
@@ -543,7 +542,10 @@ def world_holds(stored: WorldIR, world: WorldIR, source: SourceModel) -> bool:
                         return False
                 elif value.state is ValueState.NULL and column.has_default:
                     return False
-                elif not column.has_default:
+                elif (
+                    not column.has_default
+                    or column.logical_type is not LogicalType.INTEGER
+                ):
                     wanted[name] = None
 
             def holds(one: WorldRow) -> bool:

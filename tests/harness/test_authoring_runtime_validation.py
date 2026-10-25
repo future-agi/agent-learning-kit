@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from fi.alk.harness.bundle_author_v2 import world_ir_is_imported
+from fi.alk.harness.compile.postgres import compile_postgres
 from fi.alk.harness.world_import.sqlite import import_sqlite_world
 from fi.alk.harness.authoring_runtime_validation import (
     _fallback_diagnostic,
@@ -435,6 +436,155 @@ def test_a_repair_world_sqlite_cannot_hold_is_rejected_and_writes_nothing(
         _stored_in_world(tmp_path, repaired, source_model)
 
     assert path.read_bytes() == before
+
+
+def _users_with_a_role_default(
+    id_default: str | None, role_default: str
+) -> SourceModel:
+    return SourceModel.create(
+        source_digest="sha256:" + "a" * 64,
+        engine="postgres",
+        tables=(
+            SourceTable(
+                name="users",
+                columns=(
+                    SourceColumn(
+                        name="id",
+                        logical_type=LogicalType.INTEGER
+                        if id_default
+                        else LogicalType.STRING,
+                        native_type="integer" if id_default else "text",
+                        nullable=False,
+                        has_default=id_default is not None,
+                        default_expression=id_default,
+                    ),
+                    SourceColumn(
+                        name="role",
+                        logical_type=LogicalType.STRING,
+                        native_type="text",
+                        nullable=False,
+                        has_default=True,
+                        default_expression=role_default,
+                    ),
+                ),
+                primary_key=("id",),
+            ),
+        ),
+    )
+
+
+def _with_a_row_added(world: WorldIR, values: dict[str, WorldValue]) -> WorldIR:
+    [table] = world.tables
+    return WorldIR.create(
+        source_model_fingerprint=world.source_model_fingerprint,
+        tables=(
+            WorldTable(
+                source_name=table.source_name,
+                rows=tuple(
+                    sorted(
+                        (*table.rows, WorldRow(identity="added", values=values)),
+                        key=lambda row: row.identity,
+                    )
+                ),
+            ),
+        ),
+    )
+
+
+def _seeded_columns(source_model: SourceModel, world: WorldIR) -> list[tuple]:
+    return sorted(
+        operation.columns
+        for operation in compile_postgres(source_model, world).operations
+        if operation.table == "users"
+    )
+
+
+@pytest.mark.parametrize(
+    ("source_default", "sqlite_default"),
+    [("'user'::text", "'admin'"), ("now()", "CURRENT_TIMESTAMP")],
+)
+@pytest.mark.parametrize("left_out", [False, True])
+def test_a_repaired_row_keeps_the_source_default_for_a_value_left_absent(
+    tmp_path, source_default, sqlite_default, left_out
+) -> None:
+    source_model = _users_with_a_role_default(None, source_default)
+    path = tmp_path / "world.sqlite"
+    with sqlite3.connect(path) as database:
+        database.execute(
+            "CREATE TABLE users (id TEXT PRIMARY KEY, "
+            f"role TEXT DEFAULT {sqlite_default})"
+        )
+        database.execute("INSERT INTO users VALUES ('u1', 'staff')")
+        world = import_sqlite_world(database, source_model).world
+    values = {"id": WorldValue.present(LogicalType.STRING, "u2")}
+    if not left_out:
+        values["role"] = WorldValue.absent()
+    repaired = _with_a_row_added(world, values)
+
+    stored = _stored_in_world(tmp_path, repaired, source_model)
+
+    # The seed still leaves role to the source's default, not SQLite's.
+    assert _seeded_columns(source_model, stored) == [("id",), ("id", "role")]
+    assert _seeded_columns(source_model, stored) == _seeded_columns(
+        source_model, repaired
+    )
+    with sqlite3.connect(path) as database:
+        assert database.execute(
+            "SELECT role FROM users WHERE id = 'u2'"
+        ).fetchall() == [(None,)]
+
+
+def test_a_repaired_row_sqlite_must_fill_with_its_own_default_is_rejected(
+    tmp_path,
+) -> None:
+    source_model = _users_with_a_role_default(None, "'user'::text")
+    path = tmp_path / "world.sqlite"
+    with sqlite3.connect(path) as database:
+        database.execute(
+            "CREATE TABLE users (id TEXT PRIMARY KEY, "
+            "role TEXT NOT NULL DEFAULT 'admin')"
+        )
+        database.execute("INSERT INTO users VALUES ('u1', 'staff')")
+        world = import_sqlite_world(database, source_model).world
+    before = path.read_bytes()
+    repaired = _with_a_row_added(
+        world,
+        {
+            "id": WorldValue.present(LogicalType.STRING, "u2"),
+            "role": WorldValue.absent(),
+        },
+    )
+
+    with pytest.raises(RepairPatchRejected, match="repair_patch_not_storable"):
+        _stored_in_world(tmp_path, repaired, source_model)
+
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("autoincrement", ["", " AUTOINCREMENT"])
+def test_a_repaired_row_left_without_its_serial_key_takes_the_next_rowid(
+    tmp_path, autoincrement
+) -> None:
+    source_model = _users_with_a_role_default(
+        "nextval('users_id_seq'::regclass)", "'user'::text"
+    )
+    path = tmp_path / "world.sqlite"
+    with sqlite3.connect(path) as database:
+        database.execute(
+            f"CREATE TABLE users (id INTEGER PRIMARY KEY{autoincrement}, role TEXT)"
+        )
+        database.execute("INSERT INTO users VALUES (1, 'staff')")
+        world = import_sqlite_world(database, source_model).world
+    repaired = _with_a_row_added(
+        world, {"role": WorldValue.present(LogicalType.STRING, "admin")}
+    )
+
+    stored = _stored_in_world(tmp_path, repaired, source_model)
+
+    assert sorted(
+        (row.values["id"].value, row.values["role"].value)
+        for row in stored.tables[0].rows
+    ) == [(1, "staff"), (2, "admin")]
 
 
 def test_generic_validation_rejects_unchanged_compiler_failure(tmp_path) -> None:
