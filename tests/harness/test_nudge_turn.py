@@ -915,6 +915,44 @@ def test_a_dropped_scenario_is_left_out(tmp_path):
     ]
 
 
+def test_texts_the_platform_masks_keep_a_value_whole_past_its_500_cap(tmp_path):
+    value = "FAKE-CREDENTIAL-1234567890abcdef"
+    root = _suite(tmp_path, "adds-a-big-mac")
+    record_unprovable(root, "dropped-last-week", "w" * 480 + value)
+
+    left_out = nudge.suite_gate(root, set())[2]
+
+    assert value in left_out[0]["why"]
+    assert value in nudge._problem("i", "k", "y" * 480 + value)["message"]
+    assert value in nudge._failed(RuntimeError("y" * 480 + value))
+    assert len(nudge._failed(RuntimeError("y" * 5000))) == nudge._TEXT_MAX
+
+
+def test_the_result_keeps_only_what_the_platform_reads(tmp_path):
+    many = 60
+    nudge.write_result(
+        tmp_path,
+        nudge_id="n-1",
+        stage="suite",
+        changed=True,
+        notes="",
+        problems=[{"item": "i", "kind": "k", "message": "m"}] * many,
+        warnings=["w"] * many,
+        not_checked=["c"] * many,
+        left_out=[{"key": "k", "why": "w"}] * many,
+    )
+
+    written = json.loads((tmp_path / nudge.NUDGE_RESULT).read_text())
+    checks = written["checks"]
+    assert checks["passed"] is False
+    assert {
+        len(checks["problems"]),
+        len(checks["warnings"]),
+        len(checks["not_checked"]),
+        len(written["left_out"]),
+    } == {50}
+
+
 def _add_sub_goal(root: Path, name: str) -> None:
     catalogue = load_catalogue(root)
     catalogue.sub_goals.append(

@@ -138,7 +138,11 @@ READ_ONLY_TOOLS = frozenset(
     }
 )
 _WORLD_JSON = (MANIFEST, STATE, SAVED, InProcessStore.FILE, "environment.json")
-_TEXT_MAX = 500
+# The platform's PROBLEM_TEXT_MAX (500) plus the longest value: it masks whole values,
+# then cuts, so a value cut short here could not be masked there.
+_TEXT_MAX = 4000
+# The platform reads this many of each list (PROBLEMS_MAX); the rest only grows the file.
+_LISTED_MAX = 50
 
 
 def _problem(item: str, kind: str, message: str) -> dict[str, str]:
@@ -638,11 +642,11 @@ def write_result(
         "notes": notes,
         "checks": {
             "passed": not problems,
-            "problems": problems,
-            "warnings": warnings,
-            "not_checked": not_checked,
+            "problems": problems[:_LISTED_MAX],
+            "warnings": warnings[:_LISTED_MAX],
+            "not_checked": not_checked[:_LISTED_MAX],
         },
-        "left_out": left_out,
+        "left_out": left_out[:_LISTED_MAX],
     }
     target = Path(workspace) / NUDGE_RESULT
     temporary = target.with_name(target.name + ".tmp")
