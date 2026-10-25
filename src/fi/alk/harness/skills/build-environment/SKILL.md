@@ -714,6 +714,23 @@ Every sub-goal, coded or judged:
   not say Pass or Fail.
 - **A check that takes `reference` without a contract** saying where each compared value comes from.
 
+Check the *identity* the agent acted on, not just that it acted. If the caller is Corwin and the
+agent looked up a record, assert whose record it was. An agent that proceeds against the wrong row
+must not pass merely because it called the expected tool.
+
+Reading an argument is not the same as checking it:
+
+```python
+# Weak: any non-empty reason passes.
+reason = xfers[0].arguments.get("reason")
+if not reason or not isinstance(reason, str) or not reason.strip():
+    return f"no reason given: {reason!r}"
+
+# Strong: compare the value with the scenario or world truth.
+if xfers[0].arguments.get("policy_id") != world.state()["policies"][0]["id"]:
+    return f"transferred with policy {xfers[0].arguments.get('policy_id')!r}, caller holds another"
+```
+
 Every scenario's proof then plays the scenario's solution, any other ways its writer declared, an
 agent that gets every fixed value right but chooses everything else itself, and an agent that gets one
 fixed value wrong at a time. A check that fails a correct agent is refused as too strict; a fixed
