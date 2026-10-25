@@ -275,8 +275,11 @@ class CallEvidence:
                 self.audio = "asked"
             return _say("The recording follows.")
 
-        world_tools = [inspect_world] if native else [inspect_world, query_world]
-        return [*world_tools, read_transcript] + ([listen] if self.recording else [])
+        tools = [inspect_world]
+        if not native:
+            tools.append(query_world)
+        tools.append(read_transcript)
+        return tools + ([listen] if self.recording else [])
 
     def verdict_problem(self, args: dict[str, Any]) -> str | None:
         """Why this `decide` call cannot be accepted, or None when it is a complete, informed verdict."""

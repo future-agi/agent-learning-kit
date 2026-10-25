@@ -733,9 +733,9 @@ def _repair_progress(event: Event) -> None:
 _BEHAVIOR_KEYS = frozenset({
     "model", "provider", "provideroptions", "modeloptions", "agent", "agentid",
     "profile", "config", "configfile", "cwd", "directory", "project", "prefix",
-    "system", "systemprompt", "instructions",
-    "baseurl", "apibase", "apiurl", "endpoint", "apikey", "accesstoken",
-    "tools", "toolchoice", "temperature", "topp", "maxtokens",
+    "system", "systemprompt", "instructions", "baseurl", "apibase", "apiurl",
+    "endpoint", "apikey", "accesstoken", "tools", "toolchoice", "temperature",
+    "topp", "maxtokens",
 })
 
 
@@ -750,8 +750,11 @@ def _request_behavior(value, path=()):
             result[path] = value
         for key, child in value.items():
             location = (*path, key)
-            if (_behavior_key(key) in _BEHAVIOR_KEYS and location != ("model",)
-                    and not (key == "tools" and child == "{{tools}}")):
+            if (
+                _behavior_key(key) in _BEHAVIOR_KEYS
+                and location != ("model",)
+                and not (key == "tools" and child == "{{tools}}")
+            ):
                 result[location] = child
             result.update(_request_behavior(child, location))
     elif isinstance(value, list):
@@ -924,7 +927,6 @@ def _validate_ingress_repair(root, contract, runtime, evidence_files):
                 or not _runtime_template_names(after.request_template) & conversation_names
                 or not canonical_values(after.request_template)):
             raise ValueError("runtime_repair_ingress_conversation_required")
-
 
 def _tool_mapping_terms(interface) -> set[str]:
     mapping = interface.completed_tools or interface.completed_tool_events

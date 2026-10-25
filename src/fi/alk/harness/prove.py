@@ -577,7 +577,6 @@ def prove(
                 "native fixture setup requires ready(world) to verify actual API state"
             )
         return proof
-
     reference = reference_of(scenario.solution)
     if not checks:
         # Every sub-goal is judged on the call itself, so the gates that still mean something are
