@@ -1014,6 +1014,8 @@ def accept_scenario(
             )
             problems.extend(_credentials_the_world_lacks(scenario, trial))
             problems.extend(_identifiers_the_instruction_invents(scenario, trial))
+            problems.extend(_fixed_sources_that_do_not_hold(scenario, trial, instructions))
+            problems.extend(_steps_the_contract_refuses(scenario, world_root))
             problems.extend(_overlay_asserts_nothing(scenario, catalogue))
             problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
         finally:
