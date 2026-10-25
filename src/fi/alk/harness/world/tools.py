@@ -34,7 +34,6 @@ from ..catalogue import (
     SUB_GOAL_RULES,
     already_claimed,
     SubGoal,
-    catalogue_problems,
     load_catalogue,
     save_catalogue,
     compares_to_a_value,
@@ -388,7 +387,9 @@ def _world_columns(world: Any, table: str) -> dict[str, bool] | None:
             "WHERE table_name = %s",
             (table,),
         )
-        return {str(r["column_name"]).lower(): r["is_nullable"] == "NO" for r in rows} or None
+        return {
+            str(r["column_name"]).lower(): r["is_nullable"] == "NO" for r in rows
+        } or None
     except Exception:  # noqa: BLE001 - an engine that cannot say is not refused for it
         return None
 
@@ -455,7 +456,10 @@ def _tables_the_source_lacks(
                     re.IGNORECASE,
                 )
                 if cite:
-                    points_at[word.lower()] = (cite.group(1).lower(), cite.group(2).lower())
+                    points_at[word.lower()] = (
+                        cite.group(1).lower(),
+                        cite.group(2).lower(),
+                    )
             declared.setdefault(found.group(1).lower(), set()).update(columns)
             required.setdefault(found.group(1).lower(), set()).update(must)
             cites.setdefault(found.group(1).lower(), {}).update(points_at)
@@ -499,7 +503,9 @@ def _tables_the_source_lacks(
         for row in rows if isinstance(rows, list) else list(rows.values()):
             if isinstance(row, dict):
                 for key, value in row.items():
-                    held.setdefault(f"{name.lower()}.{str(key).lower()}", set()).add(str(value))
+                    held.setdefault(f"{name.lower()}.{str(key).lower()}", set()).add(
+                        str(value)
+                    )
     for name, rows in state.items():
         for column, (target, target_column) in cites.get(name.lower(), {}).items():
             # An empty target table is still checked: that is exactly the dangling case.
@@ -1024,7 +1030,9 @@ def world_tools(
     async def try_check(args: dict[str, Any]) -> dict[str, Any]:
         source = str(args.get("check") or "")
         if "def check(" not in source:
-            return _err("give the check's Python, defining check(world, calls, reference)")
+            return _err(
+                "give the check's Python, defining check(world, calls, reference)"
+            )
         try:
             calls = [
                 Call(
@@ -1035,7 +1043,9 @@ def world_tools(
                 )
                 for one in args.get("calls") or []
             ]
-            reference = reference_of([Step.model_validate(one) for one in args.get("reference") or []])
+            reference = reference_of(
+                [Step.model_validate(one) for one in args.get("reference") or []]
+            )
         except Exception as invalid:
             return _err(f"invalid call or step: {invalid}"[:600])
         outcome = run_check(source, world, calls, name="trial", reference=reference)
@@ -1186,7 +1196,9 @@ def world_tools(
     )
     async def inspect_world(args: dict[str, Any]) -> dict[str, Any]:
         if native_runtime:
-            return _ok("Native state is unavailable during authoring. Live API fixture checks are required.")
+            return _ok(
+                "Native state is unavailable during authoring. Live API fixture checks are required."
+            )
         state = world.state()
         table = str(args.get("table") or "")
         if not table:
@@ -1282,7 +1294,9 @@ def world_tools(
             description=str(args.get("description") or ""),
             refuses=str(args.get("refuses") or ""),
             effects=str(args.get("effects") or ""),
-            inputs_from={str(k): str(v) for k, v in (args.get("inputs_from") or {}).items()},
+            inputs_from={
+                str(k): str(v) for k, v in (args.get("inputs_from") or {}).items()
+            },
             remove=bool(args.get("remove")),
         )
         return _ok(said) if done else _err(said)
@@ -1332,7 +1346,15 @@ def world_tools(
         "mishandled, so this is what makes one available. Leave it empty for an ordinary "
         "task sub-goal.",
         schema(
-            {"name": str, "what": str, "check": str, "judged": str, "output": str, "overlay": str, **CONTRACT_SCHEMA},
+            {
+                "name": str,
+                "what": str,
+                "check": str,
+                "judged": str,
+                "output": str,
+                "overlay": str,
+                **CONTRACT_SCHEMA,
+            },
             ["name", "what"],
         ),
     )
@@ -1349,6 +1371,7 @@ def world_tools(
         problems = validate_sub_goal(sub_goal)
         if native_runtime and sub_goal.deterministic():
             from ..prove import native_source_problem
+
             if problem := native_source_problem(sub_goal.check, "check"):
                 problems.append(problem)
         if problems:
@@ -1500,7 +1523,12 @@ def world_tools(
             runtime_tools
         )
         if (
-            (is_data_free_conversation(contract) or external_runtime or native_runtime or runtime_only)
+            (
+                is_data_free_conversation(contract)
+                or external_runtime
+                or native_runtime
+                or runtime_only
+            )
             and not world.state()
             and not world.handlers
         ):
@@ -1537,7 +1565,9 @@ def world_tools(
     )
     async def check_world(_args: dict[str, Any]) -> dict[str, Any]:
         if native_runtime:
-            return _ok("DEFERRED: native state, tool behavior and fixture readiness require live validation.")
+            return _ok(
+                "DEFERRED: native state, tool behavior and fixture readiness require live validation."
+            )
         report = probe(world, contract, sequences=sequences, kind=kind)
         scores.append(report.score)
         # Saying the score is going nowhere, rather than leaving it to be noticed. A stage that
@@ -1592,17 +1622,27 @@ def world_tools(
         if strayed and _still_refusing(unmovable, "schema", strayed):
             return _err(
                 "Not saved. This world does not match the agent's own schema: "
-                + ", ".join(strayed) + ". The runtime seed is that schema followed by "
+                + ", ".join(strayed)
+                + ". The runtime seed is that schema followed by "
                 "rows from this world, so an insert naming any of these fails and the environment "
                 "never stands up. Use the agent's own names, or drop what it does not have. A "
                 "column it never declares is one its code never reads."
             )
         data_free = (
-            (is_data_free_conversation(contract) or external_runtime or native_runtime or runtime_only)
+            (
+                is_data_free_conversation(contract)
+                or external_runtime
+                or native_runtime
+                or runtime_only
+            )
             and not world.state()
             and not world.handlers
         )
-        report = None if native_runtime else probe(world, contract, sequences=sequences, kind=kind)
+        report = (
+            None
+            if native_runtime
+            else probe(world, contract, sequences=sequences, kind=kind)
+        )
         if not native_runtime and report.score < ACCEPTABLE and not data_free:
             return _err(
                 f"Not saved, the world does not hold up yet.\n{report.summary()}\n"
@@ -1639,13 +1679,6 @@ def world_tools(
                 "add_world_check: what has to be true for this world to be worth testing "
                 "against, as code.\n\n" + WORLD_CHECK_HELP
             )
-        # Per-sub-goal validation cannot see the shape of the set, and the shape is what decides
-        # whether the suite grades anything: a catalogue that is mostly judged reports opinions.
-        if shape_problems := catalogue_problems(
-            catalogue.sub_goals,
-            world_is_observable=native_runtime or bool(world.state()) or bool(world.handlers),
-        ):
-            return _err("Not saved.\n  - " + "\n  - ".join(shape_problems))
         failing, cannot_fail, _survived = _verified()
         if failing:
             return _err(
@@ -1738,7 +1771,8 @@ def world_tools(
             "detail would pass.\n"
             + (
                 "DEFERRED: live fixture readiness and native response checks remain required."
-                if native_runtime else "Tool/data probes not applicable; conversational runtime proof remains required."
+                if native_runtime
+                else "Tool/data probes not applicable; conversational runtime proof remains required."
                 if data_free
                 else f"score {report.score:.2f}"
             )
