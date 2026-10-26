@@ -533,15 +533,18 @@ class HostedChatRuntime:
         """
         from .scenario_tools import edited, load_scenarios
 
-        key = str(args.get("scenario_key") or "")
+        scenario_key = str(args.get("scenario_key") or "")
         target = next(
-            (one for one in load_scenarios(self.workspace) if key and one.scenario_key == key),
+            (
+                one
+                for one in load_scenarios(self.workspace)
+                if scenario_key and one.scenario_key == scenario_key
+            ),
             None,
         )
         name = str(args.get("name") or "") if target is None else target.name
         sent = args.get("persona") or {}
-        if target is not None:
-            args = edited(target, args)
+        change = args if target is None else edited(target, args)
         path = self.workspace / "scenarios" / name / "scenario.json"
         try:
             held = json.loads(path.read_text(encoding="utf-8"))
@@ -551,15 +554,15 @@ class HostedChatRuntime:
 
         try:
             saved_now = Scenario.model_validate(held).model_dump()
-            submitted = Scenario.model_validate({**held, **args}).model_dump()
+            submitted = Scenario.model_validate({**held, **change}).model_dump()
         except ValueError:
-            saved_now, submitted = held, {**held, **args}
+            saved_now, submitted = held, {**held, **change}
         if any(
-            field in args and submitted.get(field) != saved_now.get(field)
+            field in change and submitted.get(field) != saved_now.get(field)
             for field in fields
         ):
             return True
-        persona, before = args.get("persona") or {}, held.get("persona") or {}
+        persona, before = change.get("persona") or {}, held.get("persona") or {}
         if whole_persona:
             from .scenario import Persona
 
@@ -571,8 +574,8 @@ class HostedChatRuntime:
             except ValueError:  # an unreadable persona is never a safe unattended change
                 return True
         return any(
-            key in sent and persona.get(key) != before.get(key)
-            for key in ("name", "gender", "age_group")
+            field in sent and persona.get(field) != before.get(field)
+            for field in ("name", "gender", "age_group")
         )
 
     def _builder_platform_server(self):

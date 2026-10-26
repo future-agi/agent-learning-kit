@@ -930,7 +930,8 @@ def merged(written: list[list[Scenario]]) -> list[Scenario]:
                     update={"name": f"{stem}-{suffix}", "scenario_key": ""}
                 )
                 logger.info("renamed a duplicate folder name to %s", one.name)
-            if one.scenario_key in keys and batch is not written[0]:
+            # A key names one scenario, so a repeat, even one already saved, gets its own.
+            if one.scenario_key and one.scenario_key in keys:
                 one = one.model_copy(
                     update={"scenario_key": unused_key(one.scenario_key, keys)}
                 )
