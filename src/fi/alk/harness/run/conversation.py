@@ -12,7 +12,6 @@ All three are recorded, because how a conversation ended is often the finding.
 from __future__ import annotations
 
 import json
-import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -126,53 +125,39 @@ class Transcript:
 # system prompt about an agent, and asked to speak with nothing preceding it, will sometimes reply
 # as the agent instead of to it.
 OPENING = (
-    "The conversation is starting and you speak first. You are the person making contact, not "
-    "the agent being contacted. Say what you came to say, in your own words, and nothing else. "
-    "Do not offer to look anything up, do not answer on their behalf, and do not greet them and "
-    "wait: say the thing you actually want."
+    "The conversation is starting and you speak first. You are the caller: the person making "
+    "contact, not the agent being contacted. What you write now are your first words to the "
+    "agent, in the language you speak. Say what you came to say, in your own words, and nothing "
+    "else. Do not offer to look anything up, do not answer on their behalf, and do not greet them "
+    "and wait: say the thing you actually want."
 )
 
 # When an opening line is not sent, the person is told so, because their own session keeps every
 # line they wrote: the next one has to follow from what the agent actually heard, which is nothing.
 _UNSENT = (
-    "That line was not sent: it was empty, or it spoke as the agent instead of to them, so the "
-    "agent has heard nothing yet. "
+    "That line was not sent: it was empty, or it repeated the description of your situation "
+    "instead of saying something to the agent, so the agent has heard nothing yet. "
 )
 # The second try asks again for what they came to say; the last asks only for the greeting a person
 # opens with, in the language they speak, so the request comes after the agent's reply.
 _RETRY = (
     _UNSENT
-    + "You are the person making contact. Say what you came to say, in your own words."
+    + "You are the caller. Say what you came to say to the agent, in your own words."
 )
 _GREET = (
     _UNSENT
     + "Open as a person does: say only a short greeting, in the language you speak."
 )
 
-# How an opening turn reads when the part has been swapped: it starts by offering help instead of
-# asking for it, after at most a greeting, and the offer is aimed at the other person ("for you",
-# "your", "that"). So a person who says "Let me check my email" or quotes what a website told them
-# keeps their line.
-_AS_THE_AGENT = re.compile(
-    r"^\W*(?:(?:hi|hello|hey|sure|of course|certainly|absolutely|okay|ok|great)\W+)*"
-    r"(?:let me (?:check|look|find|pull|see if|get)\b(?=.*\bfor you\b|\s+(?:that|this|it|into|up|your)\b)"
-    r"|i(?:'d| would) be happy to (?:help|look|check)"
-    r"|i can help you with"
-    r"|how (?:can|may) i (?:help|assist)(?:\s+you\b|\s*[?.!,]|\s*$)"
-    r"|what would you like to know"
-    r"|i(?:'ll| will) (?:look|check) (?:that|this|it|into))"
-)
 
-
-def _answered_as_the_agent(said: str) -> bool:
-    """Whether the opening line is the agent's part rather than the person's."""
-    return bool(_AS_THE_AGENT.search(said.strip().lower()))
-
-
-def _opening_line(said: str) -> str:
-    """The line the agent hears, or "" when it is not one: empty, only an end marker, or the agent's part."""
+def _opening_line(said: str, instruction: str) -> str:
+    """The line the agent hears, or "" when it is not one: empty, only an end marker, or the
+    scenario's own instruction handed back instead of the person's words."""
     line = said.replace(DONE, "").replace(STUCK, "").strip()
-    return "" if _answered_as_the_agent(line) else line
+    written = " ".join(instruction.split()).casefold()
+    if written and written in " ".join(line.split()).casefold():
+        return ""
+    return line
 
 
 def customer_prompt(
@@ -252,11 +237,11 @@ async def converse(
         # The customer opens, in its own words. The scenario's instruction is written *about*
         # the caller ("orders two burgers and asks for..."), so speaking it verbatim would hand
         # the agent a stage direction instead of a person.
-        said = _opening_line((await customer.say(OPENING)).text)
+        said = _opening_line((await customer.say(OPENING)).text, scenario.instruction)
         for again in (_RETRY, _GREET):
             if said:
                 break
-            said = _opening_line((await customer.say(again)).text)
+            said = _opening_line((await customer.say(again)).text, scenario.instruction)
         # Only when every ask came back unusable does the run open with a line the person did not
         # write; they are told it with the agent's reply, so their session matches what was said.
         opened_for_them = not said

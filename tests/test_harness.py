@@ -6309,56 +6309,37 @@ def test_a_mutation_that_does_not_land_accuses_nobody():
     assert blind(survived) == []
 
 
-def test_an_opening_line_in_the_agents_voice_is_recognised():
-    """The opening turn is the one with no conversation behind it, and a model asked to speak into
-    that gap sometimes takes the other part.
+def test_an_opening_is_checked_by_shape_only():
+    """The opening is refused only for what can be checked without reading meaning into it: nothing
+    to say, only an end marker, or the scenario's own instruction handed back (the TH-8765 bug).
+    Which part the caller plays is set by the OPENING guidance, not by matching phrases."""
+    from fi.alk.harness.run.conversation import OPENING, _opening_line
 
-    Both of these are real opening lines from a run: the agent then replied that no question had
-    been asked, and the scenario failed for a reason that had nothing to do with the agent.
-    """
-    from fi.alk.harness.run.conversation import OPENING, _answered_as_the_agent
+    instruction = "You contact support. You open by asking about your order."
+    assert _opening_line("", instruction) == ""
+    assert _opening_line("   \n\t", instruction) == ""
+    assert _opening_line("[DONE]", instruction) == ""
+    assert _opening_line("[STUCK]", instruction) == ""
+    assert _opening_line(instruction, instruction) == ""
+    assert _opening_line("  you CONTACT support.  You open by\nasking about your order. ", instruction) == ""
+    assert _opening_line(f"Hi! {instruction}", instruction) == ""
+    # Anything a person could say is sent as written, in any language or script.
+    assert _opening_line("Hi, where is my order? [DONE]", instruction) == "Hi, where is my order?"
+    assert _opening_line("Let me explain, my order never came", instruction) == (
+        "Let me explain, my order never came"
+    )
+    assert _opening_line("Merhaba, siparişim gelmedi.", instruction) == "Merhaba, siparişim gelmedi."
+    assert _opening_line("你好，我的订单还没到。", instruction) == "你好，我的订单还没到。"
+    # With no instruction there is nothing to compare against, and nothing is refused for it.
+    assert _opening_line("Where is my order?", "") == "Where is my order?"
 
-    assert _answered_as_the_agent(
-        "Sure! Let me find the database and make that update for you."
-    )
-    assert _answered_as_the_agent(
-        "I'd be happy to look that up! Let me check the database."
-    )
-    assert _answered_as_the_agent("What would you like to know about the database?")
-
-    # What a person actually says, which must survive untouched.
-    assert not _answered_as_the_agent("How many of your customers are based in Canada?")
-    assert not _answered_as_the_agent(
-        "I want all track prices changed to 0.99 for the promotion, can you update them?"
-    )
-    assert not _answered_as_the_agent(
-        "Which genre has the highest average listener rating?"
-    )
-    # A person who starts by explaining or checks their own details keeps their line.
-    assert not _answered_as_the_agent("Hi, let me explain, my order never came")
-    assert not _answered_as_the_agent("Let me explain what happened with my booking.")
-    assert not _answered_as_the_agent("I'll check my card, the number ends in 4417.")
-    assert not _answered_as_the_agent("Merhaba, siparişim gelmedi.")
-    assert _answered_as_the_agent("Okay, let me pull up your account.")
-    # Only the start of the line is read: a person quoting what they were told keeps their line.
-    assert not _answered_as_the_agent(
-        "The website said 'how can I help you' and then crashed, so I'm calling."
-    )
-    assert not _answered_as_the_agent("مرحبا، طلبي لم يصل بعد")
-    assert not _answered_as_the_agent("你好，我的订单还没到。")
-    assert _answered_as_the_agent("Hi! How can I help you today?")
-    assert _answered_as_the_agent("How can I help?")
-    assert _answered_as_the_agent("Let me look that up.")
-    assert not _answered_as_the_agent("How can I help my daughter get a refund?")
-    assert not _answered_as_the_agent("Let me check my email for the order number.")
-    assert not _answered_as_the_agent("Let me see if I have the receipt here.")
-
-    # And the instruction that produces the opening says which part to play.
+    # The guidance says which part to play and in which language.
     assert "you speak first" in OPENING
-    assert "not \nthe agent being contacted" in OPENING or "not the agent" in OPENING
+    assert "You are the caller" in OPENING and "not the agent being contacted" in OPENING
+    assert "in the language you speak" in OPENING
 
 
-AGENTLIKE = "Sure! Let me look that up for you."
+ECHOED = "You contact support. You open by asking about your order."
 
 
 def _open_a_conversation(monkeypatch, openings, replies=("Done.",)):
@@ -6413,11 +6394,11 @@ def _open_a_conversation(monkeypatch, openings, replies=("Done.",)):
     [
         (["Hi, where is my order?"], "Hi, where is my order?"),
         (["", "Hi, where is my order?"], "Hi, where is my order?"),
-        ([AGENTLIKE, "Hi, where is my order?"], "Hi, where is my order?"),
-        ([AGENTLIKE, AGENTLIKE, "Hi there."], "Hi there."),
+        ([ECHOED, "Hi, where is my order?"], "Hi, where is my order?"),
+        ([ECHOED, ECHOED, "Hi there."], "Hi there."),
         (["", "", "Merhaba."], "Merhaba."),
         (["", "", ""], "Hello."),
-        ([AGENTLIKE, AGENTLIKE, AGENTLIKE], "Hello."),
+        ([ECHOED, ECHOED, ECHOED], "Hello."),
     ],
 )
 def test_an_unusable_opening_is_corrected_then_a_greeting_and_the_instruction_is_never_sent(
@@ -6444,7 +6425,7 @@ LONG = "My order " + "never arrived and " * 180 + "I want a refund."
         (["Hi, where is my order? [DONE]"], "Hi, where is my order?"),
         (["مرحبا، طلبي لم يصل بعد"], "مرحبا، طلبي لم يصل بعد"),
         (["", "", "你好"], "你好"),
-        ([AGENTLIKE, AGENTLIKE, "नमस्ते"], "नमस्ते"),
+        ([ECHOED, "[STUCK]", "नमस्ते"], "नमस्ते"),
         ([LONG], LONG.strip()),
         (
             ["The website said 'how can I help you' and then crashed."],
@@ -6462,7 +6443,7 @@ def test_openings_in_any_script_or_shape_reach_the_agent_as_the_person_wrote_the
 def test_after_a_corrected_opening_the_next_turn_is_only_the_agents_reply(monkeypatch):
     caller_saw, agent_heard = _open_a_conversation(
         monkeypatch,
-        [AGENTLIKE, "Hi, where is my order?", "Thanks. [DONE]"],
+        [ECHOED, "Hi, where is my order?", "Thanks. [DONE]"],
         replies=("Let me check.",),
     )
     from fi.alk.harness.run.conversation import OPENING, _RETRY
