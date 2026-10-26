@@ -2146,6 +2146,109 @@ def _compile_source_tool_handlers(contract: dict[str, Any], staging: Path) -> li
     return written
 
 
+_LANGCHAIN_TOOL_METHODS = frozenset({"invoke", "ainvoke"})
+
+
+def _is_langchain_module(name: str) -> bool:
+    return name in {"langchain", "langchain_core"} or name.startswith(
+        ("langchain.", "langchain_core.")
+    )
+
+
+def _langchain_tool_functions(tree: ast.Module) -> set[str]:
+    decorator_names: set[str] = set()
+    module_names = {"langchain", "langchain_core"}
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom) and _is_langchain_module(node.module or ""):
+            for alias in node.names:
+                if alias.name == "tool":
+                    decorator_names.add(alias.asname or alias.name)
+                elif alias.name == "tools":
+                    module_names.add(alias.asname or alias.name)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if _is_langchain_module(alias.name):
+                    module_names.add(alias.asname or alias.name.split(".", 1)[0])
+
+    functions: set[str] = set()
+    for node in tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for decorator in node.decorator_list:
+            target = decorator.func if isinstance(decorator, ast.Call) else decorator
+            name = ast.unparse(target)
+            if name in decorator_names or (
+                name.endswith(".tool") and name.split(".", 1)[0] in module_names
+            ):
+                functions.add(node.name)
+                break
+    return functions
+
+
+def _observable_trace_callable(source: Path, entry: ToolEntry) -> str:
+    if entry.mode != "import":
+        return entry.callable
+    parts = entry.callable.rsplit(".", 1)
+    if len(parts) != 2 or parts[1] not in _LANGCHAIN_TOOL_METHODS:
+        return entry.callable
+    function = parts[0]
+    if not function.isidentifier() or not all(
+        part.isidentifier() for part in entry.module.split(".")
+    ):
+        return entry.callable
+
+    module = Path(*entry.module.split("."))
+    paths = []
+    for base in (source, source / "src"):
+        path = base / module.with_suffix(".py")
+        if path.is_file() and path.resolve().is_relative_to(source):
+            paths.append(path)
+    trees: list[ast.Module] = []
+    for path in paths:
+        try:
+            trees.append(ast.parse(path.read_text(encoding="utf-8")))
+        except (OSError, UnicodeError, SyntaxError):
+            continue
+    if any(function in _langchain_tool_functions(tree) for tree in trees):
+        return function
+
+    defined_functions = {
+        node.name
+        for tree in trees
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    if function in defined_functions:
+        raise BundleAuthorError(
+            f"contract_tool_trace_unobservable: {entry.tool}: callable "
+            f"{entry.callable!r} invokes a wrapper outside {entry.module!r}; "
+            f"name the observable source function or provide its framework decorator"
+        )
+    return entry.callable
+
+
+def _trace_bindings(contract: dict[str, Any], source: Path) -> list[dict[str, str]]:
+    bindings: list[dict[str, str]] = []
+    for raw in contract.get("tool_entrypoints", []):
+        if not isinstance(raw, dict):
+            continue
+        entry = ToolEntry.model_validate(raw)
+        if (
+            entry.mode not in {"import", "construct"}
+            or not entry.module
+            or not entry.callable
+        ):
+            continue
+        bindings.append(
+            {
+                "name": entry.tool,
+                "module": entry.module,
+                "callable": _observable_trace_callable(source, entry),
+            }
+        )
+    return bindings
+
+
 def _files(root: Path) -> list[BundleFileV2]:
     records: list[BundleFileV2] = []
     for path in sorted(root.rglob("*")):
@@ -2296,13 +2399,11 @@ def author_bundle_v2(
     # callable boundaries inside the target Python process; the trace is observational and
     # never replays the tool. The same mechanism works for any Python framework with an
     # importable callable recorded during source understanding.
-    trace_bindings = [
-        {"name": entry.tool, "module": entry.module, "callable": entry.callable}
-        for raw in contract_body.get("tool_entrypoints", [])
-        if isinstance(raw, dict)
-        for entry in [ToolEntry.model_validate(raw)]
-        if entry.mode in {"import", "construct"} and entry.module and entry.callable
-    ]
+    trace_bindings = (
+        _trace_bindings(contract_body, source_root)
+        if contract_modality == "chat"
+        else []
+    )
     if contract_modality == "chat" and trace_bindings:
         plan = replace(
             plan,
