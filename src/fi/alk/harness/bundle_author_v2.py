@@ -63,6 +63,7 @@ from .process_preflight import preflight_bundle
 from .provision import source_fingerprint
 from .provider_lifecycle import ProviderRepositoryManifest, load_provider_manifest
 from .provider_import import ProviderImportSpec
+from .python_tool_trace import TraceBindingError, trace_bindings
 from .world.tools import _binding
 
 
@@ -2292,18 +2293,34 @@ def author_bundle_v2(
         contract_interface_kind=contract_interface_kind,
         contract_runtime=(runtime if isinstance(runtime, dict) else None),
     )
+    control_process = next(
+        (
+            process
+            for process in plan.processes
+            if isinstance(process, SourceProcess)
+            and process.name == plan.control_service
+            and process.source_origin == "repository"
+        ),
+        None,
+    )
+    trace_component = (
+        (source_root / control_process.working_directory).resolve()
+        if control_process is not None
+        else source_root
+    )
     # In-process framework tools do not cross the HTTP tool proxy. Trace only source-declared
     # callable boundaries inside the target Python process; the trace is observational and
     # never replays the tool. The same mechanism works for any Python framework with an
     # importable callable recorded during source understanding.
-    trace_bindings = [
-        {"name": entry.tool, "module": entry.module, "callable": entry.callable}
-        for raw in contract_body.get("tool_entrypoints", [])
-        if isinstance(raw, dict)
-        for entry in [ToolEntry.model_validate(raw)]
-        if entry.mode in {"import", "construct"} and entry.module and entry.callable
-    ]
-    if contract_modality == "chat" and trace_bindings:
+    try:
+        python_trace_bindings = (
+            trace_bindings(contract_body, source_root, trace_component)
+            if contract_modality == "chat"
+            else []
+        )
+    except TraceBindingError as exc:
+        raise BundleAuthorError(str(exc)) from exc
+    if contract_modality == "chat" and python_trace_bindings:
         plan = replace(
             plan,
             processes=tuple(
@@ -2312,7 +2329,9 @@ def author_bundle_v2(
                         "environment": {
                             **process.environment,
                             "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
-                            "ALK_TOOL_TRACE_BINDINGS": json.dumps(trace_bindings),
+                            "ALK_TOOL_TRACE_BINDINGS": json.dumps(
+                                python_trace_bindings
+                            ),
                         }
                     }
                 )
