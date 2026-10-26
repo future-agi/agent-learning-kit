@@ -7,6 +7,10 @@ All notable release changes for Agent Learning Kit are tracked here.
 Post-rc.1 increments on the release branch. Each one adds gates on top of the
 66 proved at rc.1; the rc.1 entry below is historical and unchanged.
 
+- Builder chat: `edit_scenario` changes a kept scenario by its key with only the fields that change
+  (`clear` resets a field), keeping its key, number, place and history; a rename alone is not
+  proved again. A new scenario never takes a key the environment has used, a dropped scenario's
+  included, and a repeated saved key is repaired so each scenario keeps its own.
 - Runtime validation checks scenarios on one database lane per CPU by default, capped by the
   sandbox's cgroup CPU quota, instead of a fixed 16; `ALK_VALIDATION_DB_LANES` still overrides it.
 - Docs corpus: the full `docs/` tree (quickstarts, per-track guides, framework

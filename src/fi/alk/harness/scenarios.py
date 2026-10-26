@@ -40,7 +40,7 @@ from .config import (
 from .contract import AgentContract
 from .job import HarnessJob
 from .poc_guest_booking import guest_booking_pin_guidance, guest_booking_pin_scenario_problem
-from .scenario import Scenario, unused_key, voicemail_enabled
+from .scenario import Scenario, used_keys, voicemail_enabled, with_unique_keys
 from .scenario_tools import (
     SCENARIO_SERVER,
     TOOL_NAMES,
@@ -906,7 +906,9 @@ async def _write_slice(
     return list(kept)
 
 
-def merged(written: list[list[Scenario]]) -> list[Scenario]:
+def merged(
+    written: list[list[Scenario]], used: set[str] | None = None
+) -> list[Scenario]:
     """One suite out of several writers, with folder-name collisions renamed rather than dropped.
 
     Asking for twenty scenarios has to return twenty. Two scenarios may legitimately share a use
@@ -919,7 +921,6 @@ def merged(written: list[list[Scenario]]) -> list[Scenario]:
     """
     suite: list[Scenario] = []
     taken: set[str] = set()
-    keys: set[str] = set()
     for batch in written:
         for one in batch:
             if one.name in taken:
@@ -930,15 +931,10 @@ def merged(written: list[list[Scenario]]) -> list[Scenario]:
                     update={"name": f"{stem}-{suffix}", "scenario_key": ""}
                 )
                 logger.info("renamed a duplicate folder name to %s", one.name)
-            # A key names one scenario, so a repeat, even one already saved, gets its own.
-            if one.scenario_key and one.scenario_key in keys:
-                one = one.model_copy(
-                    update={"scenario_key": unused_key(one.scenario_key, keys)}
-                )
             taken.add(one.name)
-            keys.add(one.scenario_key)
             suite.append(one)
-    return suite
+    # A key names one scenario, so a repeat, even one already saved, gets its own.
+    return with_unique_keys(suite, used)
 
 
 def _suite_summary(suite: list[Scenario]) -> str:
@@ -1138,7 +1134,7 @@ async def write_in_parallel(
         *(guarded(one, allocation, index) for index, one in enumerate(allocation)),
         return_exceptions=False,
     )
-    proved = merged([load_scenarios(destination), *written])
+    proved = merged([load_scenarios(destination), *written], used_keys(destination))
     # What a writer proved but never handed back, because its session died after proving it. Matched
     # by name so a scenario already in hand is not added twice under a numbered name.
     recovered = [
@@ -1154,7 +1150,7 @@ async def write_in_parallel(
         )
         if on_event:
             on_event({"type": "recovered", "kept": len(recovered)})
-    suite = merged([proved, recovered])
+    suite = merged([proved, recovered], used_keys(destination))
 
     # Read the whole thing and fill what nobody covered. Bounded, because a reviewer asked
     # twice will always find something smaller to say.
@@ -1189,7 +1185,7 @@ async def write_in_parallel(
             return_exceptions=False,
         )
         before = len(suite)
-        suite = merged([suite, *more])
+        suite = merged([suite, *more], used_keys(destination))
         allocation = [*allocation, *missing]
         if len(suite) == before:
             break

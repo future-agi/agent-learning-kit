@@ -254,6 +254,15 @@ class HostedChatRuntime:
         self.workspace = workspace
         self.source = source
         self.job = job
+        from .scenario import used_keys
+
+        # Every key the environment has given a scenario, a dropped one's included, so a new
+        # scenario never takes one and inherits another's row and run history.
+        used_keys(workspace).update(
+            str(key)
+            for key in (job.get("metadata") or {}).get("used_scenario_keys") or ()
+            if key
+        )
         backend = resolve()
         self.backend_name = backend.name
         self.event_store: Any = None
@@ -513,7 +522,9 @@ class HostedChatRuntime:
     def _changes_situation(self, args: dict[str, Any]) -> bool:
         """Whether a submission changes what an existing scenario tests, not how it is graded."""
         return self._changes(
-            args, ("instruction", "use_case", "branch", "tests", "coverage", "fixture"), whole_persona=True
+            args,
+            ("instruction", "use_case", "branch", "tests", "coverage", "fixture"),
+            whole_persona=True,
         )
 
     def _replaces_sub_goal(self, args: dict[str, Any]) -> bool:
@@ -543,7 +554,14 @@ class HostedChatRuntime:
             None,
         )
         name = str(args.get("name") or "") if target is None else target.name
-        sent = args.get("persona") or {}
+        # What the submission names, a field it clears included.
+        cleared = [str(path) for path in args.get("clear") or ()]
+        named = set(args) | {path.split(".")[0] for path in cleared}
+        sent = set(args.get("persona") or {}) | {
+            path.split(".", 1)[1] for path in cleared if path.startswith("persona.")
+        }
+        if "persona" in cleared:
+            sent |= {"name", "gender", "age_group"}
         change = args if target is None else edited(target, args)
         path = self.workspace / "scenarios" / name / "scenario.json"
         try:
@@ -554,11 +572,13 @@ class HostedChatRuntime:
 
         try:
             saved_now = Scenario.model_validate(held).model_dump()
-            submitted = Scenario.model_validate({**held, **change}).model_dump()
+            submitted = Scenario.model_validate(
+                change if target is not None else {**held, **change}
+            ).model_dump()
         except ValueError:
             saved_now, submitted = held, {**held, **change}
         if any(
-            field in change and submitted.get(field) != saved_now.get(field)
+            field in named and submitted.get(field) != saved_now.get(field)
             for field in fields
         ):
             return True
@@ -594,9 +614,9 @@ class HostedChatRuntime:
             "Read the environment's scenarios exactly as the Scenarios tab shows them, with each "
             "one's tab number. Returns total_scenarios (the whole suite), matching (how many fit "
             "what you asked) and one page of rows. Narrow with any of: `numbers` (tab numbers, "
-            "e.g. [12, 250, 499]), `ranges` (e.g. [{\"from\": 3, \"to\": 7}]), `names`, `search` (every word must match a "
+            'e.g. [12, 250, 499]), `ranges` (e.g. [{"from": 3, "to": 7}]), `names`, `search` (every word must match a '
             "scenario's name, situation, use case or branch), `filters` (field to a list of "
-            "values, e.g. {\"persona.accent\": [\"Indian\"]}; fields: use_case, persona.name, "
+            'values, e.g. {"persona.accent": ["Indian"]}; fields: use_case, persona.name, '
             "persona.accent, persona.languages, persona.age_group, persona.gender, "
             "persona.location, persona.personality, persona.communication_style, "
             "background_noise, coverage.overlay, coverage.overlay_intensity, coverage.task, "

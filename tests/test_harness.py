@@ -8107,7 +8107,7 @@ def test_a_new_name_alone_is_applied_without_proving_the_scenario_again(
     assert [one.name for one in kept] == ["siparis-tekrari", "orders-again"]
 
 
-def test_an_edit_clears_a_field_given_as_null_and_merges_nested_mappings():
+def test_an_edit_clears_what_clear_names_and_merges_nested_mappings():
     from fi.alk.harness.scenario import Scenario
     from fi.alk.harness.scenario_tools import edited
 
@@ -8127,7 +8127,7 @@ def test_an_edit_clears_a_field_given_as_null_and_merges_nested_mappings():
     )
     change = edited(
         held,
-        {"persona": {"accent": None}, "fixture": {"order": {"size": "small"}}},
+        {"clear": ["persona.accent"], "fixture": {"order": {"size": "small"}}},
     )
     after = Scenario.model_validate(change)
     assert (
@@ -8163,6 +8163,240 @@ def test_a_writer_s_rename_never_brings_the_old_name_back_from_the_journal(tmp_p
     assert [(one.name, one.scenario_key) for one in journalled(root)] == [
         ("renamed-first", key)
     ]
+
+
+def _edit_tools(tmp_path, **options):
+    from fi.alk.harness.scenario_tools import scenario_tools
+
+    root, contract, catalogue = _built_environment(tmp_path)
+    server, kept = scenario_tools(contract, root, root, wanted=4, **options)
+    return root, catalogue, kept, {one.name: one for one in server.tools}
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        {"scenario_key": "k", "persona": {"name": "Meera Iyer"}},
+        {"scenario_key": "k", "clear": ["persona.accent", "fixture", "sub_goals"]},
+        {"scenario_key": "k", "name": "renamed"},
+    ],
+)
+def test_the_edits_edit_scenario_describes_pass_its_schema_on_both_backends(
+    tmp_path, args
+):
+    import jsonschema
+    from claude_agent_sdk import SdkMcpTool, _build_input_schema
+
+    from fi.alk.harness.backends.claude import _gateway_compatible_schema
+
+    *_, tools = _edit_tools(tmp_path)
+    spec = tools["edit_scenario"]
+    sent = _build_input_schema(
+        SdkMcpTool(
+            name=spec.name,
+            description="",
+            input_schema=spec.input_schema,
+            handler=spec.handler,
+        )
+    )
+    jsonschema.validate(instance=args, schema=sent)
+    jsonschema.validate(
+        instance=args, schema=_gateway_compatible_schema(spec.input_schema)
+    )
+
+
+def test_a_writer_s_edit_by_key_replaces_its_scenario_rather_than_copying_it(tmp_path):
+    import asyncio
+
+    _root, _catalogue, kept, tools = _edit_tools(
+        tmp_path, can_save=False, start_from=[]
+    )
+    assert not asyncio.run(tools["submit_scenario"].handler(_delta())).get("is_error")
+    key = kept[0].scenario_key
+    said = asyncio.run(
+        tools["edit_scenario"].handler(
+            {"scenario_key": key, "instruction": "Order a single Big Mac."}
+        )
+    )
+    assert not said.get("is_error"), said
+    assert [(one.name, one.scenario_key) for one in kept] == [("adds-a-big-mac", key)]
+
+
+def test_a_new_scenario_never_takes_a_key_the_environment_has_used(tmp_path):
+    import asyncio
+
+    from fi.alk.harness.scenario import used_keys
+
+    root, _catalogue, kept, tools = _edit_tools(tmp_path)
+    # The platform's keys, a dropped scenario's among them.
+    used_keys(root).add("adds-a-big-mac")
+    assert not asyncio.run(tools["submit_scenario"].handler(_delta())).get("is_error")
+    assert kept[0].scenario_key == "adds-a-big-mac-2"
+
+
+def test_a_scenario_dropped_in_the_chat_never_lends_its_key_to_a_new_one(tmp_path):
+    import asyncio
+
+    _root, _catalogue, kept, tools = _edit_tools(tmp_path)
+    assert not asyncio.run(tools["submit_scenario"].handler(_delta())).get("is_error")
+    dropped = kept[0].scenario_key
+    assert not asyncio.run(
+        tools["drop_scenario"].handler({"name": "adds-a-big-mac"})
+    ).get("is_error")
+    assert not asyncio.run(
+        tools["submit_scenario"].handler(_delta(instruction="Order two Big Macs."))
+    ).get("is_error")
+    assert kept[0].scenario_key not in ("", dropped)
+
+
+def test_repeated_saved_keys_are_repaired_when_the_suite_is_opened(tmp_path):
+    import asyncio
+
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import (
+        load_scenarios,
+        scenario_tools,
+        write_scenarios,
+    )
+
+    root, contract, catalogue = _built_environment(tmp_path)
+    first = Scenario.model_validate({**_delta(name="first"), "scenario_key": "k"})
+    second = Scenario.model_validate({**_delta(name="second"), "scenario_key": "k"})
+    write_scenarios([first, second], root, catalogue)
+    server, kept = scenario_tools(contract, root, root, wanted=2)
+    assert [(one.name, one.scenario_key) for one in load_scenarios(root)] == [
+        ("first", "k"),
+        ("second", "k-2"),
+    ]
+    edit = next(one for one in server.tools if one.name == "edit_scenario")
+    said = asyncio.run(edit.handler({"scenario_key": "k-2", "name": "second-renamed"}))
+    assert not said.get("is_error"), said
+    assert [(one.name, one.scenario_key) for one in kept] == [
+        ("first", "k"),
+        ("second-renamed", "k-2"),
+    ]
+
+
+def test_merging_never_moves_a_repeat_onto_a_key_another_scenario_holds():
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenarios import merged
+
+    def one(name, key=""):
+        return Scenario.model_validate(
+            {"name": name, "instruction": "x", "scenario_key": key}
+        )
+
+    suite = merged([[one("a", "k"), one("b", "k"), one("c", "k-2")]])
+    assert [(s.name, s.scenario_key) for s in suite] == [
+        ("a", "k"),
+        ("b", "k-3"),
+        ("c", "k-2"),
+    ]
+    assert [(s.name, s.scenario_key) for s in merged([suite])] == [
+        (s.name, s.scenario_key) for s in suite
+    ]
+    renamed = merged([[one("other", "x-2")], [one("x")], [one("x")]])
+    keys = [s.scenario_key for s in renamed]
+    assert len(set(keys)) == len(keys)
+
+
+def test_a_writer_s_rename_leaves_a_sibling_s_scenario_of_that_name_in_the_journal(
+    tmp_path,
+):
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import journal_scenario, journalled
+
+    root, *_ = _built_environment(tmp_path)
+    mine = Scenario.model_validate(_delta(name="shared-name", instruction="Order two."))
+    sibling = Scenario.model_validate(_delta(name="shared-name"))
+    journal_scenario(mine, root)
+    journal_scenario(sibling, root)
+    journal_scenario(
+        mine.model_copy(update={"name": "mine-renamed"}), root, replaces=mine
+    )
+    assert sorted(one.name for one in journalled(root)) == [
+        "mine-renamed",
+        "shared-name",
+    ]
+
+
+def test_a_writer_s_rename_by_edit_scenario_is_journalled(tmp_path):
+    import asyncio
+
+    from fi.alk.harness.scenario_tools import journalled
+
+    root, _catalogue, kept, tools = _edit_tools(tmp_path, can_save=False, start_from=[])
+    assert not asyncio.run(tools["submit_scenario"].handler(_delta())).get("is_error")
+    key = kept[0].scenario_key
+    said = asyncio.run(
+        tools["edit_scenario"].handler({"scenario_key": key, "name": "renamed"})
+    )
+    assert not said.get("is_error"), said
+    assert [(one.name, one.scenario_key) for one in journalled(root)] == [
+        ("renamed", key)
+    ]
+
+
+def test_a_case_only_rename_keeps_the_scenario_on_disk(tmp_path):
+    import asyncio
+
+    from fi.alk.harness.scenario_tools import load_scenarios
+
+    root, _catalogue, kept, tools = _edit_tools(tmp_path)
+    assert not asyncio.run(tools["submit_scenario"].handler(_delta())).get("is_error")
+    key = kept[0].scenario_key
+    said = asyncio.run(
+        tools["edit_scenario"].handler({"scenario_key": key, "name": "Adds-A-Big-Mac"})
+    )
+    assert not said.get("is_error"), said
+    assert [one.name for one in load_scenarios(root)] == ["Adds-A-Big-Mac"]
+
+
+def test_renaming_a_scenario_to_its_own_name_changes_nothing(tmp_path, monkeypatch):
+    import asyncio
+
+    from fi.alk.harness import scenario_tools as tools_module
+
+    _root, _catalogue, kept, tools = _edit_tools(tmp_path)
+    assert not asyncio.run(tools["submit_scenario"].handler(_delta())).get("is_error")
+    monkeypatch.setattr(
+        tools_module, "prove", lambda *a, **k: (_ for _ in ()).throw(AssertionError)
+    )
+    said = asyncio.run(
+        tools["edit_scenario"].handler(
+            {"scenario_key": kept[0].scenario_key, "name": "adds-a-big-mac"}
+        )
+    )
+    assert not said.get("is_error"), said
+
+
+def test_an_edit_onto_a_taken_name_is_refused_before_anything_is_proved(
+    tmp_path, monkeypatch
+):
+    import asyncio
+
+    from fi.alk.harness import scenario_tools as tools_module
+
+    _root, _catalogue, kept, tools = _edit_tools(tmp_path)
+    for name in ("adds-a-big-mac", "orders-again"):
+        assert not asyncio.run(
+            tools["submit_scenario"].handler(
+                _delta(name=name, instruction=f"Order {name}")
+            )
+        ).get("is_error")
+    monkeypatch.setattr(
+        tools_module, "prove", lambda *a, **k: (_ for _ in ()).throw(AssertionError)
+    )
+    said = asyncio.run(
+        tools["edit_scenario"].handler(
+            {
+                "scenario_key": kept[1].scenario_key,
+                "name": "adds-a-big-mac",
+                "instruction": "Order one",
+            }
+        )
+    )
+    assert said.get("is_error") and "already named" in said["content"][0]["text"]
 
 
 def test_a_redeclared_grid_only_ever_grows(tmp_path):

@@ -68,6 +68,8 @@ from .scenario import (
     _pinned_identity,
     _slug,
     unused_key,
+    used_keys,
+    with_unique_keys,
     _QUIET_INTERFACE,
     unpinned_callers,
     crowded_cells,
@@ -305,9 +307,15 @@ def _forget_dropped(scenarios: list[Scenario], destination: Path) -> None:
     if not root.exists():
         return
     keeping = {one.name for one in scenarios}
+    folded = {name.casefold(): name for name in keeping}
     for folder in root.iterdir():
-        if folder.is_dir() and folder.name not in keeping:
-            shutil.rmtree(folder)
+        if not folder.is_dir() or folder.name in keeping:
+            continue
+        # On a case-insensitive disk a case-only rename is still this folder.
+        kept_as = root / folded.get(folder.name.casefold(), folder.name)
+        if kept_as != folder and kept_as.exists() and kept_as.samefile(folder):
+            continue
+        shutil.rmtree(folder)
 
 
 def load_scenarios(destination: Path) -> list[Scenario]:
@@ -322,7 +330,9 @@ def load_scenarios(destination: Path) -> list[Scenario]:
 JOURNAL = "written.jsonl"
 
 
-def journal_scenario(scenario: Scenario, destination: Path, replaces: str = "") -> None:
+def journal_scenario(
+    scenario: Scenario, destination: Path, replaces: Scenario | None = None
+) -> None:
     """Append one proved scenario to the journal, which is the only record a dead writer leaves.
 
     A delegated writer cannot write folders: saving the suite deletes every folder it does not know
@@ -336,10 +346,10 @@ def journal_scenario(scenario: Scenario, destination: Path, replaces: str = "") 
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as journal:
             # A rename drops the old name first, so recovering the journal never brings it back.
-            if replaces:
-                journal.write(
-                    json.dumps({"dropped": replaces}, ensure_ascii=False) + "\n"
-                )
+            # It names the entry it replaces, so a sibling's scenario of that name is untouched.
+            if replaces is not None:
+                dropped = {"dropped": replaces.name, "was": replaces.model_dump()}
+                journal.write(json.dumps(dropped, ensure_ascii=False) + "\n")
             journal.write(json.dumps(scenario.model_dump(), ensure_ascii=False) + "\n")
     except Exception as broke:  # noqa: BLE001 - a scenario is never lost over bookkeeping
         logger.warning("could not journal %s: %s", scenario.name, broke)
@@ -360,8 +370,11 @@ def journalled(destination: Path) -> list[Scenario]:
             continue
         try:
             entry = json.loads(line)
-            if isinstance(entry, dict) and set(entry) == {"dropped"}:
-                found.pop(str(entry["dropped"]), None)
+            if isinstance(entry, dict) and set(entry) == {"dropped", "was"}:
+                name = str(entry["dropped"])
+                was = Scenario.model_validate(entry["was"]).model_dump()
+                if name in found and found[name].model_dump() == was:
+                    del found[name]
                 continue
             one = Scenario.model_validate(entry)
         except Exception:  # noqa: BLE001 - a half-written line is expected while writers run
@@ -852,8 +865,8 @@ def _fixed_sources_that_do_not_hold(scenario: Scenario, trial: Any, instructions
     return [
         "these fixed values are not where their source says: "
         + "; ".join(wrong)
-        + '. Write each source as `caller: ...` (the value is in what the caller says), `record: ...` '
-        '(the world holds it) or `rule: "<the rule\'s own words>"` (quoted from the agent\'s '
+        + ". Write each source as `caller: ...` (the value is in what the caller says), `record: ...` "
+        "(the world holds it) or `rule: \"<the rule's own words>\"` (quoted from the agent's "
         "instructions and containing the value). A value none of these gives is the agent's choice; "
         "take it out of `fixed`"
     ]
@@ -884,8 +897,9 @@ def _credentials_the_world_lacks(scenario: Scenario, trial: Any) -> list[str]:
 
 
 def edited(held: Scenario, change: dict[str, Any]) -> dict[str, Any]:
-    """``held`` with ``change`` applied: a field it names is replaced, a mapping such as the persona
-    changes only the entries it names, at any depth, and ``None`` clears a field back to its default.
+    """``held`` with ``change`` applied: a field it names is replaced, and a mapping such as the
+    persona changes only the entries it names, at any depth. Each field ``clear`` names, a persona
+    field as ``persona.accent``, goes back to its default.
     """
 
     def apply(saved: dict[str, Any], given: dict[str, Any]) -> dict[str, Any]:
@@ -899,38 +913,18 @@ def edited(held: Scenario, change: dict[str, Any]) -> dict[str, Any]:
                 out[field] = value
         return out
 
-    return apply(held.model_dump(exclude_none=True), change)
-
-
-def rename_scenario(
-    held: Scenario,
-    name: str,
-    *,
-    kept: list[Scenario],
-    world_root: Path,
-    catalogue: Catalogue,
-    persist: bool = True,
-) -> dict[str, Any]:
-    """Give a kept scenario a new name without proving it again: what it tests, its key, its place
-    in the suite and its proof are all unchanged, so the gates have nothing new to check."""
-    try:
-        renamed = Scenario.model_validate({**held.model_dump(), "name": name})
-    except ValueError as invalid:
-        return _err(f"Not renamed. {invalid}"[:600])
-    if any(one.name == renamed.name for one in kept if one is not held):
-        return _err(
-            f"Not renamed. Another scenario is already named {renamed.name}; choose another name."
-        )
-    spot = next(index for index, one in enumerate(kept) if one is held)
-    kept[spot] = renamed
-    if persist:
-        write_scenarios(kept, world_root, catalogue)
-    else:
-        journal_scenario(renamed, world_root, replaces=held.name)
-    return _ok(
-        f"{held.name} renamed to {renamed.name}. Nothing it tests changed, so it was not proved "
-        "again."
+    result = apply(
+        held.model_dump(exclude_none=True),
+        {field: value for field, value in change.items() if field != "clear"},
     )
+    for path in change.get("clear") or ():
+        *parents, last = str(path).split(".")
+        node: Any = result
+        for part in parents:
+            node = node.get(part) if isinstance(node, dict) else None
+        if isinstance(node, dict):
+            node.pop(last, None)
+    return result
 
 
 def accept_scenario(
@@ -947,8 +941,14 @@ def accept_scenario(
     vocabulary: list[str] | None = None,
     spoken: bool = True,
     instructions: str = "",
+    used: set[str] | None = None,
+    renaming: bool = False,
 ) -> dict[str, Any]:
     """Validate one scenario, then prove it. A plain function so both halves are testable.
+
+    ``renaming`` keeps a proved scenario under a new name without proving it again: what it tests
+    is unchanged. ``used`` is every key the environment has given a scenario, so a new one never
+    takes a dropped scenario's key and inherits its run history.
 
     ``persist`` is off for a writer that shares the destination with siblings: writing the suite
     removes every folder not in the writer's own list, so persisting here would delete whatever
@@ -968,46 +968,52 @@ def accept_scenario(
             place_for(scenario.name, scenario.fixture, scenario.instruction) or True
         )
 
-    # Read against the world this scenario actually runs in, so a setup that creates the table
-    # a check reads is not reported as referring to something that does not exist.
-    trial, _applied, _ready = prepared(scenario, world_root)
-    try:
-        problems = validate_scenario(
-            scenario,
-            catalogue,
-            trial.state(),
-            simulator_prompt,
-            allow_empty_solution=allow_empty_solution,
-            spoken=spoken,
-        )
-        problems.extend(contract_sequence_problems(scenario, hard_constraints or []))
-        problems.extend(_credentials_the_world_lacks(scenario, trial))
-        problems.extend(_identifiers_the_instruction_invents(scenario, trial))
-        problems.extend(_fixed_sources_that_do_not_hold(scenario, trial, instructions))
-        problems.extend(_steps_the_contract_refuses(scenario, world_root))
-        problems.extend(_overlay_asserts_nothing(scenario, catalogue))
-        problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
-    finally:
-        trial.close()
+    proof = None
+    if not renaming:
+        # Read against the world this scenario actually runs in, so a setup that creates the table
+        # a check reads is not reported as referring to something that does not exist.
+        trial, _applied, _ready = prepared(scenario, world_root)
+        try:
+            problems = validate_scenario(
+                scenario,
+                catalogue,
+                trial.state(),
+                simulator_prompt,
+                allow_empty_solution=allow_empty_solution,
+                spoken=spoken,
+            )
+            problems.extend(
+                contract_sequence_problems(scenario, hard_constraints or [])
+            )
+            problems.extend(_credentials_the_world_lacks(scenario, trial))
+            problems.extend(_identifiers_the_instruction_invents(scenario, trial))
+            problems.extend(
+                _fixed_sources_that_do_not_hold(scenario, trial, instructions)
+            )
+            problems.extend(_steps_the_contract_refuses(scenario, world_root))
+            problems.extend(_overlay_asserts_nothing(scenario, catalogue))
+            problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
+        finally:
+            trial.close()
 
-    if problems:
-        return _err(
-            "Not kept. Fix these and submit again:\n  - " + "\n  - ".join(problems)
-        )
+        if problems:
+            return _err(
+                "Not kept. Fix these and submit again:\n  - " + "\n  - ".join(problems)
+            )
 
-    proof = prove(scenario, catalogue, world_root)
-    if not proof.holds:
-        said = f"Not kept. {proof.why()}"
-        # Code written against the wrong collection shape is the commonest way setup, ready and a
-        # check fail here, and the exception alone does not say which collections are mappings and
-        # which are lists. The world is asked, so the answer names them.
-        if "attribute" in said.lower() or "not subscriptable" in said.lower():
-            world = restore(world_root)
-            try:
-                said += f"\n\n{world.shapes()}"
-            finally:
-                world.close()
-        return _err(said)
+        proof = prove(scenario, catalogue, world_root)
+        if not proof.holds:
+            said = f"Not kept. {proof.why()}"
+            # Code written against the wrong collection shape is the commonest way setup, ready and a
+            # check fail here, and the exception alone does not say which collections are mappings and
+            # which are lists. The world is asked, so the answer names them.
+            if "attribute" in said.lower() or "not subscriptable" in said.lower():
+                world = restore(world_root)
+                try:
+                    said += f"\n\n{world.shapes()}"
+                finally:
+                    world.close()
+            return _err(said)
 
     # The scenario this one replaces: the one whose key it carries, else the one with its name. It
     # keeps that key, so a rename is the same scenario under a new name, not a new one.
@@ -1025,20 +1031,29 @@ def accept_scenario(
             )
         renamed_from = previous.name
         del kept[spot]
+    keys = {one.scenario_key for one in kept} | (used or set())
     if previous is not None:
         scenario.scenario_key = previous.scenario_key
     else:
         scenario.scenario_key = unused_key(
-            _slug(scenario.name) if named else scenario.scenario_key,
-            {one.scenario_key for one in kept},
+            _slug(scenario.name) if named else scenario.scenario_key, keys
         )
+    if used is not None:
+        used.add(scenario.scenario_key)
     replaced = any(one.name == scenario.name for one in kept)
-    if replaced and rename_on_collision:
+    # An edit names its scenario by key, so it replaces that one; only a new submission that
+    # repeats a name is kept beside it under a numbered name.
+    if replaced and rename_on_collision and not (named and previous is not None):
         taken = {one.name for one in kept}
         stem, suffix = scenario.name, 2
         while f"{stem}-{suffix}" in taken:
             suffix += 1
-        scenario = scenario.model_copy(update={"name": f"{stem}-{suffix}", "scenario_key": ""})
+        renamed = f"{stem}-{suffix}"
+        scenario = scenario.model_copy(
+            update={"name": renamed, "scenario_key": unused_key(_slug(renamed), keys)}
+        )
+        if used is not None:
+            used.add(scenario.scenario_key)
         replaced = False
         spot = None
     else:
@@ -1069,12 +1084,16 @@ def accept_scenario(
     else:
         # A writer sharing the destination cannot write folders, so the journal is where its proved
         # work survives the session that proved it.
-        journal_scenario(scenario, world_root, replaces=renamed_from)
+        journal_scenario(
+            scenario, world_root, replaces=previous if renamed_from else None
+        )
     # Say what the proof did not cover. On a lane where the target's tools have no endpoints, every
     # solution step is recorded without running, so "all three gates pass" is true and misleading:
     # the checks were exercised, the solution was not.
     unproved = (
-        "\nNOT PROVED: "
+        ""
+        if proof is None
+        else "\nNOT PROVED: "
         + f"{len(proof.assumed)} of {len(scenario.solution)} solution steps were recorded without "
         "running, because these tools have no endpoint in this environment: "
         + ", ".join(proof.assumed)
@@ -1084,7 +1103,9 @@ def accept_scenario(
         else ""
     )
     proof_summary = (
-        "The world is ready for it, and its sub-goals will be judged from the call: the "
+        "Nothing it tests changed, so it was not proved again."
+        if proof is None
+        else "The world is ready for it, and its sub-goals will be judged from the call: the "
         "recording, the transcript, every action with its arguments and the records left."
         if proof.judged_only
         else "All three gates pass: the world is ready for it, the reference solution passes "
@@ -1242,6 +1263,13 @@ def scenario_tools(
     catalogue = load_catalogue(destination)
     simulator_prompt = load_simulator_prompt(destination)
     target = {"count": wanted}
+    # Keys this environment has given out, a dropped scenario's included: never given to a new one.
+    used = used_keys(destination)
+    unique = with_unique_keys(kept, used)
+    if can_save and start_from is None and unique != kept:
+        write_scenarios(unique, destination, catalogue)
+    kept[:] = unique
+    used.update(one.scenario_key for one in kept)
 
     def cap() -> int:
         return int(target["count"] or 0) if can_grow else wanted
@@ -1742,8 +1770,8 @@ def scenario_tools(
                     "type": "object",
                     "additionalProperties": {"type": "string"},
                     "description": "Where this scenario sits on the axes the plan varied, one "
-                    "value per axis, for example {\"task\": \"book_ride\", \"overlay\": "
-                    "\"interruption\"}. Copy it from your brief. It is what lets the suite "
+                    'value per axis, for example {"task": "book_ride", "overlay": '
+                    '"interruption"}. Copy it from your brief. It is what lets the suite '
                     "report how much of the space was tested; it never reaches the caller.",
                 },
             },
@@ -1845,7 +1873,10 @@ def scenario_tools(
             rename_on_collision=rename_on_collision,
             vocabulary=target.get("keywords"),
             spoken=_is_spoken(contract),
-            instructions="\n".join([contract.system_prompt_excerpt, *contract.hard_constraints]),
+            instructions="\n".join(
+                [contract.system_prompt_excerpt, *contract.hard_constraints]
+            ),
+            used=used,
         )
         if not result.get("is_error"):
             exploration["since_submit"] = 0
@@ -2371,13 +2402,29 @@ def scenario_tools(
             )
         return _ok(said)
 
+    def optional(schema: Any) -> Any:
+        """``schema`` with nothing required at any depth, so an edit sends only what changes."""
+        if isinstance(schema, list):
+            return [optional(item) for item in schema]
+        if not isinstance(schema, dict):
+            return schema
+        return {
+            key: optional(value) for key, value in schema.items() if key != "required"
+        }
+
     edit_schema = {
         **submit_scenario.input_schema,
         "properties": {
-            **submit_scenario.input_schema["properties"],
+            **optional(submit_scenario.input_schema["properties"]),
             "scenario_key": {
                 "type": "string",
                 "description": "The scenario's key, read from it.",
+            },
+            "clear": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Fields to set back to their default, a persona field as "
+                "`persona.accent`.",
             },
         },
         "required": ["scenario_key"],
@@ -2386,9 +2433,10 @@ def scenario_tools(
     @tool(
         "edit_scenario",
         "Change a kept scenario: give its `scenario_key` and only what changes, such as a new "
-        "`name` or the persona fields that change; `null` clears a field. Everything else keeps "
-        "its saved value, and the scenario keeps its key, number, place and history. A new name "
-        "alone is applied as it is; any other change is checked exactly like `submit_scenario`.",
+        "`name` or the persona fields that change; name a field in `clear` to set it back to its "
+        "default. Everything else keeps its saved value, and the scenario keeps its key, number, "
+        "place and history. A new name alone is applied as it is; any other change is checked "
+        "exactly like `submit_scenario`.",
         edit_schema,
     )
     async def edit_scenario(args: dict[str, Any]) -> dict[str, Any]:
@@ -2402,17 +2450,29 @@ def scenario_tools(
             field: value for field, value in args.items() if field != "scenario_key"
         }
         name = str(change.get("name") or "").strip()
-        if set(change) == {"name"} and name and name != held.name:
-            result = rename_scenario(
-                held,
-                name,
-                kept=kept,
-                world_root=world_root,
-                catalogue=catalogue,
-                persist=can_save,
+        if (
+            set(change) != {"name"}
+            and name
+            and name != held.name
+            and any(one.name == name for one in kept)
+        ):
+            return _err(
+                f"Not changed. Another scenario is already named {name}; choose another name."
             )
-            if not result.get("is_error"):
-                return result
+        if set(change) == {"name"} and name == held.name:
+            return _ok(f"Nothing changed: {held.name} already has that name.")
+        if set(change) != {"name"}:
+            return await submit_scenario.handler(edited(held, args))
+        result = accept_scenario(
+            {**held.model_dump(), "name": name},
+            world_root=world_root,
+            catalogue=catalogue,
+            kept=kept,
+            persist=can_save,
+            used=used,
+            renaming=True,
+        )
+        if result.get("is_error"):
             said = str((result.get("content") or [{}])[0].get("text") or "")
             seen = _count_refusal(refused, held.name, said)
             if seen >= _REFUSALS_BEFORE_MOVING_ON:
@@ -2420,8 +2480,7 @@ def scenario_tools(
                     f"{said}\n\nThis is refusal {seen} of this rename for the same reason, so "
                     "asking again will not work. Keep the current name or choose another one."
                 )
-            return result
-        return await submit_scenario.handler(edited(held, args))
+        return result
 
     server = tool_server(
         name=SCENARIO_SERVER,
