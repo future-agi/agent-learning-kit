@@ -1549,12 +1549,14 @@ def test_execution_manifest_selects_and_expands_trials_without_reauthoring() -> 
                 "scenario_key": "a",
                 "scenario_id": "platform-a",
                 "trial_index": 1,
+                "call_execution_id": "call-1",
             },
             {
                 "execution_key": "a-trial-2",
                 "scenario_key": "a",
                 "scenario_id": "platform-a",
                 "trial_index": 2,
+                "call_execution_id": "call-2",
             },
         ],
     )
@@ -1567,6 +1569,7 @@ def test_execution_manifest_selects_and_expands_trials_without_reauthoring() -> 
         "platform-a",
         "platform-a",
     ]
+    assert [scenario.call_execution_id for scenario in selected] == ["call-1", "call-2"]
     assert selected[0].setup is authored[0].setup
     assert selected[1].ready is authored[0].ready
 
@@ -2770,3 +2773,25 @@ def test_a_level_the_person_asked_for_is_not_held_to_its_share() -> None:
     assert "whole share" in _over_its_share(
         {"interface": "quiet_line"}, grid, quiet, 25, asked={"interface": ["accented"]}
     )
+
+
+def test_a_coded_sub_goal_marked_both_carries_its_criteria_and_a_legacy_one_stays_code_only():
+    from fi.alk.harness.scenario_source import _CompiledScenario, _CompiledSubGoal, _with_claims
+
+    def check(world, calls):
+        return None
+
+    scenario = _CompiledScenario(
+        scenario_key="k",
+        scenario_id="",
+        sub_goals=(_CompiledSubGoal(name="saved", judged="", check=check), _CompiledSubGoal(name="legacy", judged="", check=check)),
+        setup=lambda world: None,
+        ready=lambda world: None,
+    )
+    claims = {
+        "saved": {"what": "w", "judged": "Pass when: it says what was reported", "both": "yes", "contract": "Reference: c"},
+        "legacy": {"what": "w", "judged": "Pass when: x", "both": ""},
+    }
+    saved, legacy = _with_claims(scenario, claims).sub_goals
+    assert saved.both and saved.judged == "Pass when: it says what was reported" and saved.compares == "Reference: c"
+    assert not legacy.both and legacy.judged == ""

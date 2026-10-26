@@ -39,13 +39,15 @@ import re
 import threading
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol, Sequence
 
 from . import observability
 from .job import FailureDomain, HarnessStage
-from .judge import judge as _judge
+from .checks import reference_of, takes_reference
+from .joint_judge import OFF_SCRIPT
+from .judge import judge_sub_goal as _judge
 from .outbound import (
     HostedAttemptSupersededError,
     HostedChannelFailedError,
@@ -56,6 +58,7 @@ from .process_runtime import (
     EnvironmentRuntime,
     ProcessRuntimeError,
     RuntimeState,
+    simulation_call_file,
 )
 
 from .world.errors import (
@@ -198,6 +201,9 @@ class SubGoal(Protocol):
 
 
 JudgeFn = Callable[..., Awaitable[tuple[bool | None, str]]]
+JointJudgeFn = Callable[..., Awaitable[dict[str, tuple[bool | None, str]]]]
+# By default all of a call's judged sub-goals are judged in one conversation; "separate" judges each in its own.
+JUDGE_MODE_ENV = "ALK_JUDGE_MODE"
 
 
 class Scenario(Protocol):
@@ -210,6 +216,7 @@ class Scenario(Protocol):
     # conversation scenarios (for example, refusing an unsafe request) legitimately produce no
     # world calls and must still reach their judged checks.
     requires_tool_evidence: bool
+    call_execution_id: str | None
 
     def setup(self, world: World) -> object: ...
 
@@ -234,6 +241,8 @@ class CallOutcome:
     # The agent under test's own provider-reported usage, cost and latency; `None` when its
     # provider reports none (a black-box LiveKit or phone target).
     target_metrics: dict[str, Any] | None = None
+    # A local path the judge can play; the artifacts above are ids the sandbox cannot read back.
+    recording: str | None = None
 
 
 class CallAborted(RuntimeError):
@@ -388,6 +397,7 @@ _CODE_DOMAIN: dict[str, FailureDomain] = {
     "ready_broken": FailureDomain.SIMULATOR,
     "check_broken": FailureDomain.SIMULATOR,
     "judge_undecided": FailureDomain.SIMULATOR,
+    "caller_off_script": FailureDomain.SIMULATOR,
     "evidence_missing": FailureDomain.SIMULATOR,
     "world_usage": FailureDomain.SIMULATOR,
     "world_unavailable": FailureDomain.ENVIRONMENT,
@@ -677,6 +687,8 @@ async def _invoke(
             }
             if len(args) > 1:
                 payload["calls"] = [asdict(call) for call in args[1]]
+            if len(args) > 2:
+                payload["reference"] = args[2]
             result = await run_json_worker(
                 "fi.alk.harness.phase_worker",
                 payload,
@@ -919,6 +931,9 @@ class WorldPool:
         self._teardown_task: asyncio.Task[None] | None = None  # the shared, retry-safe
         # teardown -- see close()'s own comment for why idempotency lives here now, not on
         # `_closed`.
+
+    def call_file(self, world_index: int) -> Path:
+        return simulation_call_file(self._work_directory, world_index)
 
     @property
     def effective_size(self) -> int:
@@ -1469,6 +1484,31 @@ def _skipped_receipt(scenario: Scenario) -> ResultReceipt:
     )
 
 
+def _write_call_file(path: Path, call_execution_id: str | None) -> Path | None:
+    _remove_call_file(path)
+    if not call_execution_id:
+        return None
+    staged = path.with_name(f".{path.name}.tmp")
+    try:
+        staged.unlink(missing_ok=True)
+        staged.write_text(call_execution_id, encoding="utf-8")
+        staged.chmod(0o444)
+        os.replace(staged, path)
+    except OSError as exc:
+        logger.warning("simulation call file not written: %s", type(exc).__name__)
+        return None
+    return path
+
+
+def _remove_call_file(path: Path | None) -> None:
+    if path is None:
+        return
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as exc:
+        logger.warning("simulation call file not removed: %s", type(exc).__name__)
+
+
 def _unjudged(sub_goals: Sequence[SubGoal]) -> tuple[SubGoalResult, ...]:
     return tuple(
         # R11: outbound-channels.md pins `judged` as `SubGoal.judged != ""`, not `bool(...)` —
@@ -1554,6 +1594,7 @@ class HostedScheduler:
         job_seed: int,
         cancel_requested: Callable[[], bool] | None = None,
         judge: JudgeFn | None = None,
+        joint_judge: JointJudgeFn | None = None,
     ) -> None:
         self._pool = pool
         self._world_factory = world_factory
@@ -1565,10 +1606,33 @@ class HostedScheduler:
         # model call. Resolved here rather than as a default argument, which would bind at import
         # and ignore both injection and patching.
         self._judge = judge or _judge
+        self._joint_judge = joint_judge
         # Calls may run in parallel, but provider-backed judge sessions share one gateway lane.
         # Keep each scenario's batch together so concurrent worlds cannot invalidate both verdicts.
         self._judge_batch_lock = asyncio.Lock()
         self._executor: ThreadPoolExecutor | None = None
+
+    async def _judge_jointly(
+        self,
+        goals: Sequence[Any],
+        world: Any,
+        calls: Sequence[Any],
+        call_outcome: Any,
+        offered: dict[str, Any],
+    ) -> tuple[dict[str, Any], str]:
+        """The verdicts one conversation reached for a call's judged sub-goals, by name, and any
+        report that the customer left their side. Sub-goals it left out are judged each alone."""
+        if self._joint_judge is None or os.environ.get(JUDGE_MODE_ENV, "").strip().lower() == "separate":
+            return {}, ""
+        try:
+            accepted = inspect.signature(self._joint_judge).parameters
+            context = {name: value for name, value in offered.items() if name in accepted}
+            decided = await self._joint_judge(goals, world, calls, messages=call_outcome.messages, **context)
+            off_script = str(decided.get(OFF_SCRIPT, (None, ""))[1] or "")
+        except Exception as exc:  # noqa: BLE001 - a failed shared judge falls back, never errors the call
+            logger.warning("judging %d sub-goals together failed, judging each alone: %r", len(goals), exc)
+            return {}, ""
+        return {goal.name: decided[goal.name] for goal in goals if goal.name in decided}, off_script
 
     async def run(self, scenarios: Sequence[Scenario]) -> RunResult:
         results: list[ResultReceipt | None] = [None] * len(scenarios)
@@ -1843,30 +1907,37 @@ class HostedScheduler:
 
             rng = random.Random(self._job_seed + scenario_index)
             outcome: ResultReceipt | _Retry
+            call_file = _write_call_file(
+                self._pool.call_file(world_index),
+                getattr(scenario, "call_execution_id", None),
+            )
             try:
-                world = await self._world_factory.create(runtime, rng=rng)
-            except Exception as exc:  # noqa: BLE001
-                # B3: `world_factory.create()` failing (e.g. a PostgresStore connect failure) is
-                # the same shape as a mid-scenario `WorldUnavailable` — the world is unusable, not
-                # the scenario code. Deliberately narrow to just this call: `_execute()` has its
-                # own exhaustive internal exception handling (`_run_phase`/`_invoke`), so anything
-                # that still escapes it is a genuine scheduler bug and belongs in `driver_crashed`
-                # (via `worker()`'s `BaseException` catch), not swallowed into `world_unavailable`.
-                outcome = _Retry(
-                    _failure("world_unavailable", f"{type(exc).__name__}: {exc}"),
-                    sub_goals=_unjudged(scenario.sub_goals),
-                    call=None,
-                    mark_unhealthy=True,
-                )
-            else:
-                outcome = await self._execute(
-                    scenario,
-                    world,
-                    runtime,
-                    world_index,
-                    attempt=attempt,
-                    context=context,
-                )
+                try:
+                    world = await self._world_factory.create(runtime, rng=rng)
+                except Exception as exc:  # noqa: BLE001
+                    # B3: `world_factory.create()` failing (e.g. a PostgresStore connect failure) is
+                    # the same shape as a mid-scenario `WorldUnavailable` — the world is unusable, not
+                    # the scenario code. Deliberately narrow to just this call: `_execute()` has its
+                    # own exhaustive internal exception handling (`_run_phase`/`_invoke`), so anything
+                    # that still escapes it is a genuine scheduler bug and belongs in `driver_crashed`
+                    # (via `worker()`'s `BaseException` catch), not swallowed into `world_unavailable`.
+                    outcome = _Retry(
+                        _failure("world_unavailable", f"{type(exc).__name__}: {exc}"),
+                        sub_goals=_unjudged(scenario.sub_goals),
+                        call=None,
+                        mark_unhealthy=True,
+                    )
+                else:
+                    outcome = await self._execute(
+                        scenario,
+                        world,
+                        runtime,
+                        world_index,
+                        attempt=attempt,
+                        context=context,
+                    )
+            finally:
+                _remove_call_file(call_file)
 
             if isinstance(outcome, _Retry):
                 # R6: `mark_unhealthy()` itself emits `world_unhealthy` now (every demotion path
@@ -2132,6 +2203,8 @@ class HostedScheduler:
 
         sub_goal_results: list[SubGoalResult] = []
         judged_pending: list[tuple[int, Any]] = []
+        off_script = ""
+        checked: dict[int, _Verdict] = {}
         check_handle = world.read_only()
         broken_failure: ReceiptFailure | None = None
         for goal in scenario.sub_goals:
@@ -2146,6 +2219,7 @@ class HostedScheduler:
                 goal.check,
                 check_handle,
                 calls,
+                *((reference_of(getattr(scenario, "solution", None) or ()),) if takes_reference(goal.check) else ()),
                 timeout=CHECK_TIMEOUT_SECONDS,
                 phase="check",
                 executor=self._executor,
@@ -2167,16 +2241,9 @@ class HostedScheduler:
                     )
                 )
                 continue
-            if goal.judged:
-                # A judged sub-goal has no code to settle it: a model decides, here, while the
-                # world the call left behind is still alive. Collected and run together below.
-                judged_pending.append((len(sub_goal_results), goal))
-                sub_goal_results.append(
-                    SubGoalResult(name=goal.name, held=None, reason=None, judged=True)
-                )
-                continue
             verdict = _classify_check(outcome.value)
-            if verdict.broken:
+            both = bool(goal.judged) and getattr(goal, "both", False)
+            if verdict.broken and (both or not goal.judged):
                 broken_failure = _failure(
                     "check_broken", f"{goal.name}: check() returned {outcome.value!r}"
                 )
@@ -2184,6 +2251,16 @@ class HostedScheduler:
                     SubGoalResult(
                         name=goal.name, held=None, reason=None, judged=goal.judged != ""
                     )
+                )
+                continue
+            if goal.judged:
+                # A judged sub-goal has no code to settle it: a model decides, here, while the
+                # world the call left behind is still alive. Collected and run together below.
+                if both:
+                    checked[len(sub_goal_results)] = verdict
+                judged_pending.append((len(sub_goal_results), goal))
+                sub_goal_results.append(
+                    SubGoalResult(name=goal.name, held=None, reason=None, judged=True)
                 )
                 continue
             sub_goal_results.append(
@@ -2195,18 +2272,20 @@ class HostedScheduler:
                 )
             )
 
-        if judged_pending:
+        # A call with no words, no actions and no recording leaves its judged sub-goals undecided, never guessed.
+        if judged_pending and (calls or call_outcome.messages or call_outcome.recording):
             # A scenario's judged sub-goals can run together, but judge batches from parallel
             # worlds must not overlap on the shared provider session.
             async with self._judge_batch_lock:
+                offered = {"scenario": scenario, "recording": call_outcome.recording}
+                joint_verdicts, off_script = await self._judge_jointly(
+                    [goal for _, goal in judged_pending], check_handle, calls, call_outcome, offered
+                )
                 try:
-                    context = (
-                        {"scenario": scenario}
-                        if "scenario" in inspect.signature(self._judge).parameters
-                        else {}
-                    )
+                    accepted = inspect.signature(self._judge).parameters
                 except (TypeError, ValueError):
-                    context = {}
+                    accepted = {}
+                context = {name: value for name, value in offered.items() if name in accepted}
 
                 async def _settle(goal: Any) -> Any:
                     # Awaited, not called inline: calling an injected judge whose signature does
@@ -2221,11 +2300,11 @@ class HostedScheduler:
                         **context,
                     )
 
-                verdicts = await asyncio.gather(
-                    *(_settle(goal) for _, goal in judged_pending),
-                    return_exceptions=True,
-                )
-            for (slot, goal), outcome in zip(judged_pending, verdicts):
+                alone = [goal for _, goal in judged_pending if goal.name not in joint_verdicts]
+                settled = await asyncio.gather(*(_settle(goal) for goal in alone), return_exceptions=True)
+                verdicts = {**joint_verdicts, **{goal.name: outcome for goal, outcome in zip(alone, settled)}}
+            for slot, goal in judged_pending:
+                outcome = verdicts[goal.name]
                 if isinstance(outcome, BaseException):
                     logger.warning("judge could not run for %s: %r", goal.name, outcome)
                     held, why = None, ""
@@ -2246,6 +2325,14 @@ class HostedScheduler:
                     name=goal.name, held=held, reason=why, judged=True
                 )
 
+        for slot, verdict in checked.items():
+            if not verdict.held:
+                judged = sub_goal_results[slot]
+                reason = " ".join(
+                    filter(None, [_sub_goal_reason(scenario.sub_goals[slot], verdict), judged.reason or None])
+                )
+                sub_goal_results[slot] = replace(judged, held=False, reason=reason or None)
+
         if broken_failure is not None:
             return self._fault(
                 scenario,
@@ -2254,6 +2341,16 @@ class HostedScheduler:
                 broken_failure,
                 sub_goals=tuple(sub_goal_results),
                 call=self._call_summary(call_outcome),
+            )
+        if off_script:
+            return self._fault(
+                scenario,
+                world_index,
+                attempt,
+                _failure("caller_off_script", off_script),
+                sub_goals=tuple(sub_goal_results),
+                call=self._call_summary(call_outcome),
+                retry=False,
             )
 
         # A settled `False` fails the scenario; an unsettled sub-goal makes it not decided.

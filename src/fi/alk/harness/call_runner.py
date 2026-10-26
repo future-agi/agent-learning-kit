@@ -28,6 +28,7 @@ Three sub-systems (world-handle-interface.md, hosted-execution-seams.md v1.15 §
 
 from __future__ import annotations
 
+import ast
 import atexit
 import asyncio
 import gc
@@ -343,7 +344,10 @@ def _check_config(
         connector in {"vapi", "retell"} and config.get("phone_number")
     ):
         required.extend((SIP_OUTBOUND_TRUNK_ID_ALIAS, SIP_OUTBOUND_FROM_NUMBER_ALIAS))
-    if "deepgram" in {stt_provider, tts_provider}:
+    # Through the gateway the model and speech vendors are reached on the gateway's credentials,
+    # not the caller's.
+    direct = agentcc.gateway() is None
+    if direct and "deepgram" in {stt_provider, tts_provider}:
         if not simulator_value(DEEPGRAM_API_KEY_ALIAS):
             required.append(DEEPGRAM_API_KEY_ALIAS)
 
@@ -358,8 +362,6 @@ def _check_config(
 
     missing_aliases = [alias for alias in required if not credential(alias)]
 
-    # Through the gateway the model is reached on the gateway's credentials, not the caller's.
-    direct = agentcc.gateway() is None
     if direct and llm_provider == "google":
         has_api_key = bool(
             simulator_value(GEMINI_API_KEY_ALIAS)
@@ -649,6 +651,7 @@ def _build_spec(
             fixture=doc.get("fixture"),
             tts_provider=simulator.tts.provider,
             variation=run_id,
+            cartesia_key=setting("CARTESIA_API_KEY"),
         ),
         simulator=simulator,
         # An outbound agent dials; the person answers, so the caller opens.
@@ -764,13 +767,7 @@ def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
         if not isinstance(arguments, dict):
             arguments = {}
         ok = bool(record.get("ok", True))
-        raw_result = record.get("result")
-        if isinstance(raw_result, str):
-            result: Any = _truncate(raw_result)
-        else:
-            # Already parsed JSON (dict/list/etc, psycopg's own jsonb decoding) -- per
-            # world-handle-interface.md, only the STRING form is truncated at 2000 chars.
-            result = raw_result
+        result = _structured(record.get("result"))
         error = _truncate(str(record.get("error") or ""))
         raw_at = record.get("at")
         at = float(raw_at) if isinstance(raw_at, (int, float)) else 0.0
@@ -805,11 +802,19 @@ def _clear_file_tool_calls(runtime: EnvironmentRuntime) -> None:
         )
 
 
+# Marks lines written by livekit_tool_trace_bootstrap._record. That module is copied into the
+# agent's interpreter as a standalone sitecustomize, so it cannot import this constant.
+_LIVEKIT_HOOK_SOURCE = "livekit"
+_MISSING = object()
+
+
 def _collect_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
     path = _tool_trace_file(runtime)
     if path is None or not path.is_file():
         return ()
     calls: list[Call] = []
+    # Agent-written calls not yet timed by the hook line for the same call.
+    untimed: list[Call] = []
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:
@@ -835,16 +840,45 @@ def _collect_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
         is_error = bool(record.get("is_error", False))
         output = record.get("output")
         raw_at = record.get("at")
-        calls.append(
-            Call(
-                name=name,
-                arguments=arguments,
-                result=None if is_error else output,
-                ok=not is_error,
-                error=str(output) if is_error and output is not None else None,
-                at=float(raw_at) if isinstance(raw_at, (int, float)) else 0.0,
-            )
+        call = Call(
+            name=name,
+            arguments=arguments,
+            result=None if is_error else _structured(output),
+            ok=not is_error,
+            error=str(output) if is_error and output is not None else None,
+            at=float(raw_at) if isinstance(raw_at, (int, float)) else 0.0,
         )
+        if record.get("source") != _LIVEKIT_HOOK_SOURCE:
+            calls.append(call)
+            if not call.at:
+                untimed.append(call)
+            continue
+        # An agent implementing HARNESS_AGENT_TOOL_TRACE writes its own line while the tool
+        # runs: the arguments it executed with and the structured result, but no time. The hook
+        # writes the same call after the step, with the model's arguments, a stringified output
+        # and when the model issued it. Keep the agent's evidence and take the hook's time.
+        # A name alone does not identify the call: LiveKit rejects malformed arguments without
+        # running the tool, so a batch can hold a failed hook line with no agent line next to a
+        # same-name success. Pair only when the outcome agrees and every argument the model
+        # sent is one the agent executed with (agents may add their own, e.g. a booking ref).
+        written = next(
+            (
+                pending
+                for pending in untimed
+                if pending.name == name
+                and pending.ok == call.ok
+                and all(
+                    pending.arguments.get(key, _MISSING) == value
+                    for key, value in call.arguments.items()
+                )
+            ),
+            None,
+        )
+        if written is None:
+            calls.append(call)
+            continue
+        untimed.remove(written)
+        written.at = call.at
     return tuple(calls)
 
 
@@ -918,7 +952,7 @@ def _collect_provider_tool_calls(case: Any) -> tuple[Call, ...]:
                 Call(
                     name=name,
                     arguments=arguments,
-                    result=raw.get("result") if ok else None,
+                    result=_structured(raw.get("result")) if ok else None,
                     ok=ok,
                     error=str(raw.get("error") or ""),
                     refused=not ok,
@@ -926,6 +960,22 @@ def _collect_provider_tool_calls(case: Any) -> tuple[Call, ...]:
                 )
             )
     return tuple(calls)
+
+
+def _structured(value: Any) -> Any:
+    """A tool result that arrives as the text of a dict or list is read back into one, so checks see one shape."""
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if text[:1] in ("{", "["):
+        for parse in (json.loads, ast.literal_eval):
+            try:
+                parsed = parse(text)
+            except (ValueError, SyntaxError, MemoryError, RecursionError):
+                continue
+            if isinstance(parsed, (dict, list)):
+                return parsed
+    return _truncate(value)
 
 
 def _truncate(value: str, *, limit: int = _RESULT_TRUNCATE_CHARS) -> str:
@@ -1336,7 +1386,9 @@ class CallRunnerImpl:
                 else None
             )
 
-        spec = _build_spec(
+        # Off the event loop: choosing the caller's voice may ask Cartesia over HTTP.
+        spec = await asyncio.to_thread(
+            _build_spec,
             run_id=run_id,
             room_name=room_name,
             connector=connector,
@@ -1448,6 +1500,7 @@ class CallRunnerImpl:
 
         transcript_artifact: str | None = None
         recording_artifacts: list[str] = []
+        recording: str | None = None
         # Evidence belongs to the call attempt, not only to successful calls.  Collect it before
         # interpreting the simulator status so a timeout/agent failure still carries the exact
         # tool activity in its partial receipt.  Previously the early CallAborted below discarded
@@ -1486,6 +1539,8 @@ class CallRunnerImpl:
             )
         if case is not None and case.result is not None:
             result = case.result
+            combined = result.audio_combined_path
+            recording = combined if combined and Path(combined).is_file() else None
             if result.transcript:
                 transcript_document = {
                     "schema_version": "futureagi.call-transcript.v1",
@@ -1534,6 +1589,7 @@ class CallRunnerImpl:
             duration_ms=_duration_ms(case_started_at, ended_at),
             transcript_artifact=transcript_artifact,
             recording_artifacts=tuple(recording_artifacts),
+            recording=recording,
             messages=tuple(
                 case.result.messages or ()
                 if case is not None and case.result is not None

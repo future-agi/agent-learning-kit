@@ -27,9 +27,14 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Sequence
 
+from pydantic import ValidationError
+
+from .. import __version__ as _sdk_version
+from ..providers.agent import build_authored_agent
 from . import outbound as ob
-from .catalogue import CATALOGUE
-from .job import FailureDomain
+from .catalogue import CATALOGUE, SubGoal
+from .contract import AgentContract
+from .job import FailureDomain, SourceKind
 
 if TYPE_CHECKING:
     from .hosted_entrypoint import ScenariosClient
@@ -246,8 +251,10 @@ class _CompiledSubGoal:
 
     name: str
     judged: str
-    check: Callable[[Any, Any], object]
+    check: Callable[..., object]
     what: str = ""
+    both: bool = False
+    compares: str = ""
 
 
 @dataclass(frozen=True)
@@ -269,6 +276,9 @@ class _CompiledScenario:
     # scenario file beside it. Presentation only: nothing in the scheduler looks at it.
     presented: dict[str, Any] = field(default_factory=dict)
     source_scenario_key: str | None = None
+    # One correct way through the call: handed to reference checks and shown to the judge.
+    solution: tuple[dict[str, Any], ...] = ()
+    call_execution_id: str | None = None
 
 
 def _read_text(path: Path, *, label: str) -> str:
@@ -412,9 +422,16 @@ def _load_catalogue_claims(bundle_dir: Path) -> dict[str, dict[str, str]]:
     for entry in entries:
         if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
             continue
+        try:
+            goal = SubGoal.model_validate(entry)
+        except ValidationError as exc:
+            logger.warning("sub-goal %s has an invalid check contract: %s", entry["name"], exc)
+            goal = SubGoal(name=entry["name"])
         claims[entry["name"]] = {
             "what": str(entry.get("what") or ""),
             "judged": str(entry.get("judged") or ""),
+            "contract": goal.contract(),
+            "both": "yes" if goal.both else "",
         }
     return claims
 
@@ -540,6 +557,7 @@ def _load_one(
         setup=setup,
         ready=ready,
         presented=_presented(body, scenario_key=scenario_key),
+        solution=tuple(solution),
     )
 
 
@@ -560,13 +578,20 @@ def _with_claims(
     """
     if not claims:
         return scenario
+
+    def combined(goal: _CompiledSubGoal) -> bool:
+        claim = claims[goal.name]
+        return bool(claim.get("both")) and not goal.judged and bool(claim.get("judged"))
+
     restored = tuple(
         replace(
             goal,
             judged=(claims[goal.name].get("judged") or goal.judged)
-            if goal.judged
+            if goal.judged or combined(goal)
             else goal.judged,
             what=claims[goal.name].get("what", "") or goal.what,
+            both=combined(goal),
+            compares=claims[goal.name].get("contract", "") or goal.compares,
         )
         if goal.name in claims
         else goal
@@ -683,6 +708,24 @@ class BundleScenarioSource:
         chosen_evals, agent_prompt, modality = _chosen_evals_and_prompt(bundle_dir)
         run_name = _derive_run_name(job, bundle_dir)
         agent_name = _derive_agent_name(job, bundle_dir)
+        authored_agent = None
+        source_kind = getattr(getattr(job, "source", None), "kind", None)
+        if source_kind in (SourceKind.GITHUB, SourceKind.ARCHIVE):
+            try:
+                contract_file = bundle_dir / "contract.json"
+                contract = AgentContract.model_validate(
+                    json.loads(contract_file.read_text(encoding="utf-8"))
+                ).model_dump(mode="json")
+                authored_agent = {
+                    "sdk_version": _sdk_version,
+                    "agent": build_authored_agent(contract),
+                }
+            except Exception as exc:
+                logger.warning(
+                    "authored agent not built: class=%s code=%s",
+                    type(exc).__name__,
+                    getattr(exc, "code", ""),
+                )
         registered = await register_with_platform(
             scenarios_client,
             scenarios,
@@ -691,6 +734,7 @@ class BundleScenarioSource:
             chosen_evals=chosen_evals,
             agent_prompt=agent_prompt,
             modality=modality,
+            agent=authored_agent,
         )
         return sampled_for_calling(registered)
 
@@ -733,6 +777,7 @@ def _scenarios_for_execution_manifest(
                 scenario_key=execution_key,
                 source_scenario_key=source_key,
                 scenario_id=scenario_id,
+                call_execution_id=str(entry.get("call_execution_id") or "") or None,
             )
         )
     if not selected:
@@ -836,6 +881,7 @@ def _provision_payload(
     modality: str = "",
     *,
     agent_name: str = "",
+    agent: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """`HarnessScenarioProvisionSerializer`/`HarnessProvisionPersonaSerializer`
     (futureagi/simulate/serializers/hosted_harness.py): `operation`, `name` and `personas` are
@@ -865,6 +911,8 @@ def _provision_payload(
         payload["agent_prompt"] = agent_prompt
     if modality:
         payload["modality"] = modality
+    if agent is not None:
+        payload["agent"] = agent
     return payload
 
 
@@ -939,6 +987,7 @@ async def register_with_platform(
     chosen_evals: Sequence[str] = (),
     agent_prompt: str = "",
     modality: str = "",
+    agent: dict[str, Any] | None = None,
 ) -> Sequence[_CompiledScenario]:
     """Provision the authored suite and attach platform identities without executing it.
 
@@ -955,6 +1004,7 @@ async def register_with_platform(
             agent_prompt,
             modality,
             agent_name=agent_name,
+            agent=agent,
         ),
     )
     run_test_id = provision_result.get("run_test_id")

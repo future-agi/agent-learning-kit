@@ -23,7 +23,6 @@ from .backends import FILE_TOOLS, SessionSpec, ToolServer, ToolSpec, tool, tool_
 from .builder import _err, _ok, scenario_problems
 from .catalogue import (
     Catalogue,
-    catalogue_problems,
     load_catalogue,
     save_catalogue,
     unused_sub_goals,
@@ -330,14 +329,6 @@ def environment_gate(workspace: Path) -> tuple[list[dict], list[str]]:
         if (workspace / MANIFEST).is_file() and not world
         else {}
     )
-    problems.extend(
-        _problem("sub_goals.json", "sub_goal", said)
-        for said in catalogue_problems(
-            catalogue.sub_goals,
-            world_is_observable=bool(manifest.get("tables"))
-            or bool(manifest.get("tools")),
-        )
-    )
     if contract is not None and (manifest.get("tables") or manifest.get("tools")):
         covered = {
             *(manifest.get("tools") or []),
@@ -398,12 +389,7 @@ def suite_gate(
                 problems.append(_problem(key, "scenario", why))
             continue
         try:
-            proof = prove(
-                scenario,
-                catalogue,
-                workspace,
-                allow_judged_only_with_state=not scenario.solution,
-            )
+            proof = prove(scenario, catalogue, workspace)
         except Exception as exc:  # noqa: BLE001 - a scenario that cannot be proved is the finding
             record_unprovable(workspace, key, type(exc).__name__)
             holds, why = False, type(exc).__name__

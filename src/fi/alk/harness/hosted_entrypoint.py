@@ -26,6 +26,7 @@ import json
 import logging
 import os
 import random
+import re
 import signal
 import time
 import uuid
@@ -67,7 +68,8 @@ from .process_runtime import (
     fixed_sandbox_user_resolver,
     RuntimeEndpoint,
 )
-from .judge import judge as _judge_sub_goal
+from .judge import judge_sub_goal as _judge_sub_goal
+from .joint_judge import judge_sub_goals_jointly as _judge_sub_goals_jointly
 from .scenario_source import (
     BundleScenarioSource,
     ScenarioDocumentInvalid,
@@ -190,6 +192,7 @@ _SIMULATOR_SECRET_ALIASES = frozenset(
         "ALK_VOICEMAIL_SCENARIOS",
         "ALK_HARNESS_MODEL",
         "ALK_HARNESS_THINKING",
+        "ALK_JUDGE_MODE",
         "AGENTCC_API_KEY",
         "AGENTCC_BASE_URL",
         "ALK_VERTEX_LOCATION",
@@ -718,18 +721,21 @@ def _agent_instructions(job: Any, bundle_dir: Path) -> str:
     config = getattr(getattr(job, "agent", None), "config", None) or {}
     prompt = str(config.get("target_system_prompt") or "").strip()
     if prompt:
-        parts.append(prompt[:12000])
+        parts.append(prompt)
     try:
         body = json.loads((bundle_dir / "contract.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         body = {}
     if isinstance(body, dict):
+        excerpt = str(body.get("system_prompt_excerpt") or "").strip()
+        if excerpt and not prompt:
+            parts.append(excerpt)
         summary = str(body.get("one_liner") or "").strip()
         rules = [str(rule).strip() for rule in body.get("hard_constraints") or [] if str(rule).strip()]
         if summary:
             parts.append(f"Summary: {summary}")
         if rules:
-            parts.append("Rules:\n- " + "\n- ".join(rules[:30]))
+            parts.append("Rules:\n- " + "\n- ".join(rules))
     return "\n\n".join(parts)
 
 
@@ -816,6 +822,18 @@ class ScenarioPreallocationError(RuntimeError):
         super().__init__(
             "scenario pre-allocation failed" if error is None else error.message
         )
+
+
+_AGENT_FIELD = re.compile(r"(?<!\w)agent(?!\w)")
+
+
+def _names_agent_field(error: ob.ChannelError | None) -> bool:
+    return (
+        error is not None
+        and error.status_code == 400
+        and isinstance(error.message, str)
+        and _AGENT_FIELD.search(error.message) is not None
+    )
 
 
 class ScenariosClient:
@@ -951,7 +969,16 @@ class ScenariosClient:
     def provision(
         self, payload: dict[str, Any], *, deadline: float | None = None
     ) -> dict[str, Any]:
-        return self._post(self._provision_path, payload, deadline=deadline)
+        try:
+            return self._post(self._provision_path, payload, deadline=deadline)
+        except ScenarioPreallocationError as exc:
+            if "agent" not in payload or not _names_agent_field(exc.error):
+                raise
+            logger.warning(
+                "provision refused the agent field: class=%s", type(exc).__name__
+            )
+        without_agent = {key: value for key, value in payload.items() if key != "agent"}
+        return self._post(self._provision_path, without_agent, deadline=deadline)
 
     def begin(
         self, payload: dict[str, Any], *, deadline: float | None = None
@@ -2693,6 +2720,9 @@ async def run_job(
             cancel_requested=cancel_requested,
             judge=functools.partial(
                 _judge_sub_goal, agent_instructions=_agent_instructions(job, bundle_dir)
+            ),
+            joint_judge=functools.partial(
+                _judge_sub_goals_jointly, agent_instructions=_agent_instructions(job, bundle_dir)
             ),
         )
         result: RunResult = await scheduler.run(scenarios)
