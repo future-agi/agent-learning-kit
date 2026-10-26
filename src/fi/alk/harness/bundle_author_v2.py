@@ -2155,10 +2155,42 @@ def _is_langchain_module(name: str) -> bool:
     )
 
 
-def _langchain_tool_functions(tree: ast.Module) -> set[str]:
+def _module_statements(tree: ast.Module) -> list[ast.stmt]:
+    statements: list[ast.stmt] = []
+    pending = list(reversed(tree.body))
+    while pending:
+        node = pending.pop()
+        statements.append(node)
+        nested: list[ast.stmt] = []
+        if isinstance(node, ast.If):
+            nested = [*node.body, *node.orelse]
+        elif isinstance(node, ast.Try):
+            nested = [
+                *node.body,
+                *(item for handler in node.handlers for item in handler.body),
+                *node.orelse,
+                *node.finalbody,
+            ]
+        pending.extend(reversed(nested))
+    return statements
+
+
+def _is_langchain_tool_reference(
+    target: ast.expr, decorator_names: set[str], module_names: set[str]
+) -> bool:
+    while isinstance(target, ast.Call):
+        target = target.func
+    name = ast.unparse(target)
+    return name in decorator_names or (
+        name.endswith(".tool") and name.split(".", 1)[0] in module_names
+    )
+
+
+def _langchain_tool_targets(tree: ast.Module) -> dict[str, str]:
+    statements = _module_statements(tree)
     decorator_names: set[str] = set()
     module_names = {"langchain", "langchain_core"}
-    for node in tree.body:
+    for node in statements:
         if isinstance(node, ast.ImportFrom) and _is_langchain_module(node.module or ""):
             for alias in node.names:
                 if alias.name == "tool":
@@ -2170,65 +2202,184 @@ def _langchain_tool_functions(tree: ast.Module) -> set[str]:
                 if _is_langchain_module(alias.name):
                     module_names.add(alias.asname or alias.name.split(".", 1)[0])
 
-    functions: set[str] = set()
-    for node in tree.body:
+    functions = {
+        node.name
+        for node in statements
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    tools: dict[str, str] = {}
+    for node in statements:
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         for decorator in node.decorator_list:
             target = decorator.func if isinstance(decorator, ast.Call) else decorator
-            name = ast.unparse(target)
-            if name in decorator_names or (
-                name.endswith(".tool") and name.split(".", 1)[0] in module_names
+            if _is_langchain_tool_reference(
+                target, decorator_names, module_names
             ):
-                functions.add(node.name)
+                tools[node.name] = node.name
                 break
-    return functions
+
+    for node in statements:
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        value = node.value
+        if not isinstance(value, ast.Call) or not _is_langchain_tool_reference(
+            value.func, decorator_names, module_names
+        ):
+            continue
+        assigned = [target.id for target in targets if isinstance(target, ast.Name)]
+        wrapped = next(
+            (
+                candidate.id
+                for candidate in [*value.args, *(item.value for item in value.keywords)]
+                if isinstance(candidate, ast.Name) and candidate.id in functions
+            ),
+            None,
+        )
+        if wrapped is not None:
+            tools.update({name: wrapped for name in assigned})
+    return tools
 
 
-def _observable_trace_callable(source: Path, entry: ToolEntry) -> str:
+def _trace_source_roots(contract: dict[str, Any], source: Path) -> tuple[Path, ...]:
+    runtime = contract.get("runtime")
+    workdir = str(runtime.get("workdir") or "") if isinstance(runtime, dict) else ""
+    configured = workdir.strip()
+    component = (
+        (source / configured).resolve()
+        if configured not in {"", ".", "/"}
+        else source
+    )
+    if not component.is_relative_to(source) or not component.is_dir():
+        raise BundleAuthorError(f"runtime_workdir_invalid: {workdir or '.'}")
+    roots = (component, component / "src", source, source / "src")
+    return tuple(dict.fromkeys(root.resolve() for root in roots if root.is_dir()))
+
+
+def _module_tree(
+    roots: tuple[Path, ...], module_name: str
+) -> tuple[ast.Module, bool] | None:
+    module = Path(*module_name.split("."))
+    for root in roots:
+        candidates = (
+            (root / module.with_suffix(".py"), False),
+            (root / module / "__init__.py", True),
+        )
+        for path, is_package in candidates:
+            if not path.is_file() or not path.resolve().is_relative_to(root):
+                continue
+            try:
+                return ast.parse(path.read_text(encoding="utf-8")), is_package
+            except (OSError, UnicodeError, SyntaxError):
+                return None
+    return None
+
+
+def _relative_module(
+    current: str, imported: str | None, level: int, *, is_package: bool
+) -> str:
+    if level == 0:
+        return imported or ""
+    package = current.split(".") if is_package else current.split(".")[:-1]
+    keep = len(package) - level + 1
+    if keep < 0:
+        return ""
+    parts = [*package[:keep], *((imported or "").split(".") if imported else [])]
+    return ".".join(part for part in parts if part)
+
+
+def _reexported_name(
+    tree: ast.Module, module_name: str, name: str, *, is_package: bool
+) -> tuple[str, str] | None:
+    for node in _module_statements(tree):
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        for alias in node.names:
+            if (alias.asname or alias.name) != name or alias.name == "*":
+                continue
+            imported_module = _relative_module(
+                module_name, node.module, node.level, is_package=is_package
+            )
+            if imported_module:
+                return imported_module, alias.name
+    return None
+
+
+def _owns_tool_method(tree: ast.Module, name: str, method: str) -> bool:
+    statements = _module_statements(tree)
+    classes = {
+        node.name: node
+        for node in statements
+        if isinstance(node, ast.ClassDef)
+    }
+    candidates = {name}
+    for node in statements:
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        if not any(isinstance(target, ast.Name) and target.id == name for target in targets):
+            continue
+        value = node.value
+        if isinstance(value, ast.Call) and isinstance(value.func, ast.Name):
+            candidates.add(value.func.id)
+    return any(
+        any(
+            isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and item.name == method
+            for item in classes[candidate].body
+        )
+        for candidate in candidates
+        if candidate in classes
+    )
+
+
+def _unobservable_trace_binding(entry: ToolEntry) -> BundleAuthorError:
+    return BundleAuthorError(
+        f"contract_tool_trace_unobservable: {entry.tool}: callable "
+        f"{entry.callable!r} does not identify a source function or source-owned method"
+    )
+
+
+def _observable_trace_binding(
+    roots: tuple[Path, ...], entry: ToolEntry
+) -> tuple[str, str]:
     if entry.mode != "import":
-        return entry.callable
+        return entry.module, entry.callable
     parts = entry.callable.rsplit(".", 1)
     if len(parts) != 2 or parts[1] not in _LANGCHAIN_TOOL_METHODS:
-        return entry.callable
-    function = parts[0]
-    if not function.isidentifier() or not all(
+        return entry.module, entry.callable
+    bound_name, method = parts
+    if not bound_name.isidentifier() or not all(
         part.isidentifier() for part in entry.module.split(".")
     ):
-        return entry.callable
+        raise _unobservable_trace_binding(entry)
 
-    module = Path(*entry.module.split("."))
-    paths = []
-    for base in (source, source / "src"):
-        path = base / module.with_suffix(".py")
-        if path.is_file() and path.resolve().is_relative_to(source):
-            paths.append(path)
-    trees: list[ast.Module] = []
-    for path in paths:
-        try:
-            trees.append(ast.parse(path.read_text(encoding="utf-8")))
-        except (OSError, UnicodeError, SyntaxError):
-            continue
-    if any(function in _langchain_tool_functions(tree) for tree in trees):
-        return function
-
-    defined_functions = {
-        node.name
-        for tree in trees
-        for node in tree.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-    }
-    if function in defined_functions:
-        raise BundleAuthorError(
-            f"contract_tool_trace_unobservable: {entry.tool}: callable "
-            f"{entry.callable!r} invokes a wrapper outside {entry.module!r}; "
-            f"name the observable source function or provide its framework decorator"
+    module_name, object_name = entry.module, bound_name
+    seen: set[tuple[str, str]] = set()
+    while (module_name, object_name) not in seen:
+        seen.add((module_name, object_name))
+        found = _module_tree(roots, module_name)
+        if found is None:
+            break
+        tree, is_package = found
+        target = _langchain_tool_targets(tree).get(object_name)
+        if target is not None:
+            return module_name, target
+        if _owns_tool_method(tree, object_name, method):
+            return module_name, f"{object_name}.{method}"
+        reexport = _reexported_name(
+            tree, module_name, object_name, is_package=is_package
         )
-    return entry.callable
+        if reexport is None:
+            break
+        module_name, object_name = reexport
+    raise _unobservable_trace_binding(entry)
 
 
 def _trace_bindings(contract: dict[str, Any], source: Path) -> list[dict[str, str]]:
     bindings: list[dict[str, str]] = []
+    roots = _trace_source_roots(contract, source)
     for raw in contract.get("tool_entrypoints", []):
         if not isinstance(raw, dict):
             continue
@@ -2239,12 +2390,9 @@ def _trace_bindings(contract: dict[str, Any], source: Path) -> list[dict[str, st
             or not entry.callable
         ):
             continue
+        module, callable_name = _observable_trace_binding(roots, entry)
         bindings.append(
-            {
-                "name": entry.tool,
-                "module": entry.module,
-                "callable": _observable_trace_callable(source, entry),
-            }
+            {"name": entry.tool, "module": module, "callable": callable_name}
         )
     return bindings
 
