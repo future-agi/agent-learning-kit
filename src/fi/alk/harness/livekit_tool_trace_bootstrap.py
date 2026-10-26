@@ -283,7 +283,7 @@ def _install_declared_python_tools() -> None:
     def observed_callable(frame: Any) -> str:
         code = frame.f_code
         qualname = getattr(code, "co_qualname", code.co_name)
-        if "." in qualname and "<locals>" not in qualname:
+        if hasattr(code, "co_qualname"):
             return qualname
         owner = frame.f_locals.get("self")
         if owner is not None:
@@ -291,9 +291,20 @@ def _install_declared_python_tools() -> None:
         owner = frame.f_locals.get("cls")
         if isinstance(owner, type):
             return f"{owner.__qualname__}.{code.co_name}"
-        return code.co_name
+        target = frame.f_globals.get(code.co_name)
+        if getattr(target, "__code__", None) is code:
+            return code.co_name
+        for attribute in ("func", "coroutine"):
+            if getattr(getattr(target, attribute, None), "__code__", None) is code:
+                return code.co_name
+        return ""
 
-    def matches_module(filename: str, module_path: str) -> bool:
+    def matches_module(frame: Any, module_path: str) -> bool:
+        filename = frame.f_code.co_filename.replace("\\", "/")
+        module_name = module_path[:-3].replace("/", ".").removesuffix(".__init__")
+        actual = frame.f_globals.get("__name__")
+        if actual != module_name and actual != "__main__":
+            return False
         return filename == module_path or filename.endswith(f"/{module_path}")
 
     def profile(frame: Any, event: str, value: Any) -> None:
@@ -312,18 +323,18 @@ def _install_declared_python_tools() -> None:
         if event != "return":
             return
         # A coroutine also "returns" at every await; only a real return ends it.
-        finished = not code.co_flags & suspendable or dis.opname[
-            code.co_code[frame.f_lasti]
-        ].startswith("RETURN")
-        entry = entries.pop(id(frame), None) if finished else entries.get(id(frame))
+        opcode = dis.opname[code.co_code[frame.f_lasti]]
+        finished = not code.co_flags & suspendable or not opcode.startswith("YIELD")
+        if not finished:
+            return
+        entry = entries.pop(id(frame), None)
         started = entry[1] if entry is not None else time.time()
-        filename = frame.f_code.co_filename.replace("\\", "/")
         callable_name = observed_callable(frame)
         key = next(
             (
                 name
                 for (module_path, function), name in declared.items()
-                if callable_name == function and matches_module(filename, module_path)
+                if callable_name == function and matches_module(frame, module_path)
             ),
             None,
         )
@@ -346,12 +357,12 @@ def _install_declared_python_tools() -> None:
                             "name": key,
                             "arguments": arguments,
                             "output": value,
-                            "is_error": False,
+                            "is_error": not opcode.startswith("RETURN"),
                             "at": started,
                         },
                         default=str,
                         sort_keys=True,
-                    )[:10000]
+                    )
                     + "\n"
                 )
         except (OSError, KeyError, TypeError, ValueError):

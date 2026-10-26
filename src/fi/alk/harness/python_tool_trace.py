@@ -56,7 +56,44 @@ def _is_langchain_tool_reference(
     )
 
 
-def _langchain_tool_targets(tree: ast.Module) -> dict[str, str]:
+def _last_binding(
+    tree: ast.Module, name: str, before: ast.stmt | None = None
+) -> ast.stmt | None:
+    result = None
+    for node in _module_statements(tree):
+        if node is before:
+            break
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names = [node.name]
+        elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            names = [
+                item.id
+                for target in targets
+                for item in ast.walk(target)
+                if isinstance(item, ast.Name)
+            ]
+        elif isinstance(node, (ast.ImportFrom, ast.Import)):
+            names = [alias.asname or alias.name.split(".")[0] for alias in node.names]
+            if isinstance(node, ast.ImportFrom) and any(
+                alias.name == "*" for alias in node.names
+            ):
+                names.append(name)
+        elif isinstance(node, ast.Delete):
+            names = [
+                item.id
+                for target in node.targets
+                for item in ast.walk(target)
+                if isinstance(item, ast.Name)
+            ]
+        else:
+            names = []
+        if name in names:
+            result = node
+    return result
+
+
+def _langchain_tool_targets(tree: ast.Module, method: str) -> dict[str, str]:
     statements = _module_statements(tree)
     decorator_names: set[str] = set()
     structured_tool_names: set[str] = set()
@@ -78,18 +115,47 @@ def _langchain_tool_targets(tree: ast.Module) -> dict[str, str]:
                 if _is_langchain_module(alias.name):
                     module_names.add(alias.asname or alias.name.split(".", 1)[0])
 
-    functions = {
-        node.name
-        for node in statements
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-    }
+    def imported_reference(target: ast.expr, before: ast.stmt) -> bool:
+        while isinstance(target, ast.Call):
+            target = target.func
+        root = ast.unparse(target).split(".", 1)[0]
+        binding = _last_binding(tree, root, before)
+        if (
+            isinstance(binding, (ast.Assign, ast.AnnAssign))
+            and isinstance(binding.value, ast.Constant)
+            and binding.value.value is None
+            and any(
+                isinstance(handler, ast.ExceptHandler)
+                and isinstance(handler.type, ast.Name)
+                and handler.type.id == "ImportError"
+                and binding in handler.body
+                for handler in ast.walk(tree)
+            )
+        ):
+            binding = _last_binding(tree, root, binding)
+        return (
+            isinstance(binding, ast.Import)
+            and any(
+                _is_langchain_module(alias.name)
+                and (alias.asname or alias.name.split(".")[0]) == root
+                for alias in binding.names
+            )
+        ) or (
+            isinstance(binding, ast.ImportFrom)
+            and _is_langchain_module(binding.module or "")
+        )
+
     tools: dict[str, str] = {}
     for node in statements:
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
+        if _last_binding(tree, node.name) is not node:
+            continue
         for decorator in node.decorator_list:
             target = decorator.func if isinstance(decorator, ast.Call) else decorator
-            if _is_langchain_tool_reference(target, decorator_names, module_names):
+            if _is_langchain_tool_reference(
+                target, decorator_names, module_names
+            ) and imported_reference(target, node):
                 tools[node.name] = node.name
                 break
 
@@ -113,14 +179,41 @@ def _langchain_tool_targets(tree: ast.Module) -> dict[str, str]:
                 )
             )
         )
-        if not wraps_function:
+        if not wraps_function or not imported_reference(value.func, node):
             continue
-        assigned = [target.id for target in targets if isinstance(target, ast.Name)]
+        assigned = [
+            target.id
+            for target in targets
+            if isinstance(target, ast.Name) and _last_binding(tree, target.id) is node
+        ]
+        keywords = {item.arg: item.value for item in value.keywords}
+        if factory.endswith(".from_function"):
+            sync = keywords.get("func", value.args[0] if value.args else None)
+            candidate = (
+                keywords.get(
+                    "coroutine", value.args[1] if len(value.args) > 1 else None
+                )
+                if method == "ainvoke"
+                else sync
+            )
+            if (
+                candidate is None
+                or isinstance(candidate, ast.Constant)
+                and candidate.value is None
+            ):
+                candidate = sync
+            candidates = [candidate]
+        else:
+            candidates = value.args
         wrapped = next(
             (
                 candidate.id
-                for candidate in [*value.args, *(item.value for item in value.keywords)]
-                if isinstance(candidate, ast.Name) and candidate.id in functions
+                for candidate in candidates
+                if isinstance(candidate, ast.Name)
+                and isinstance(
+                    _last_binding(tree, candidate.id, node),
+                    (ast.FunctionDef, ast.AsyncFunctionDef),
+                )
             ),
             None,
         )
@@ -186,6 +279,8 @@ def _reexported_name(
     for node in _module_statements(tree):
         if not isinstance(node, ast.ImportFrom):
             continue
+        if _last_binding(tree, name) is not node:
+            continue
         for alias in node.names:
             if (alias.asname or alias.name) != name or alias.name == "*":
                 continue
@@ -200,9 +295,12 @@ def _reexported_name(
 def _owned_tool_method(tree: ast.Module, name: str, method: str) -> str | None:
     statements = _module_statements(tree)
     classes = {node.name: node for node in statements if isinstance(node, ast.ClassDef)}
-    owner = name if name in classes else None
+    binding = _last_binding(tree, name)
+    owner = name if isinstance(binding, ast.ClassDef) else None
     for node in statements:
         if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        if node is not binding:
             continue
         targets = node.targets if isinstance(node, ast.Assign) else [node.target]
         if not any(
@@ -253,10 +351,12 @@ def _observable_trace_binding(
     roots: tuple[Path, ...], entry: ToolEntry
 ) -> tuple[str, str]:
     if entry.mode != "import":
-        return entry.module, entry.callable
+        found = _module_tree(roots, entry.module)
+        return (found.trace_name if found else entry.module), entry.callable
     parts = entry.callable.rsplit(".", 1)
     if len(parts) != 2:
-        return entry.module, entry.callable
+        found = _module_tree(roots, entry.module)
+        return (found.trace_name if found else entry.module), entry.callable
     bound_name, method = parts
     if not bound_name.isidentifier() or not all(
         part.isidentifier() for part in entry.module.split(".")
@@ -271,7 +371,7 @@ def _observable_trace_binding(
         if found is None:
             break
         if method in _LANGCHAIN_TOOL_METHODS:
-            target = _langchain_tool_targets(found.tree).get(object_name)
+            target = _langchain_tool_targets(found.tree, method).get(object_name)
             if target is not None:
                 return found.trace_name, target
         owned_method = _owned_tool_method(found.tree, object_name, method)

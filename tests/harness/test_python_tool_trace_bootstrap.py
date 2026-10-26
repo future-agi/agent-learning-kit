@@ -66,8 +66,7 @@ def test_declared_python_tool_is_traced_without_changing_result(tmp_path: Path) 
 
     assert result.stdout.split() == ["sunny", "in", "Paris", "rain", "in", "Oslo"]
     records = [json.loads(line) for line in trace.read_text().splitlines()]
-    # A suspended coroutine is also traced (its awaited value as output); the
-    # completed call is the one that carries the tool's result.
+    assert len(records) == 2
     completed = {
         record["name"]: record
         for record in records
@@ -85,6 +84,77 @@ def test_declared_python_tool_is_traced_without_changing_result(tmp_path: Path) 
     assert started <= weather["at"] <= forecast["at"] <= finished
     # The tool began before its 200 ms await, not when it resumed after it.
     assert finished - forecast["at"] >= 0.2
+
+
+def test_trace_preserves_failures_large_outputs_and_callable_identity(
+    tmp_path: Path,
+) -> None:
+    _install_bootstrap(tmp_path)
+    (tmp_path / "agent.py").write_text(
+        "def lookup(x):\n"
+        " if x == 'fail': raise ValueError('failure')\n"
+        " return 'x' * 12000\n"
+        "def outer():\n"
+        " def lookup(x): return 'unrelated'\n"
+        " return lookup(1)\n",
+        encoding="utf-8",
+    )
+    vendor = tmp_path / "vendor"
+    vendor.mkdir()
+    (vendor / "__init__.py").write_text("")
+    (vendor / "agent.py").write_text("def lookup(x): return 'vendor'\n")
+    trace = tmp_path / "calls.jsonl"
+    env = _trace_environment(
+        tmp_path, trace, [{"name": "lookup", "module": "agent", "callable": "lookup"}]
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from agent import lookup, outer\n"
+            "from vendor.agent import lookup as other\n"
+            "outer(); other(1)\n"
+            "try: lookup('fail')\n"
+            "except ValueError: pass\n"
+            "lookup('large')\n",
+        ],
+        check=True,
+        capture_output=True,
+        env=env,
+    )
+    records = [json.loads(line) for line in trace.read_text().splitlines()]
+    assert len(records) == 2
+    assert records[0]["is_error"] is True
+    assert records[0]["arguments"] == {"x": "fail"}
+    assert records[1]["is_error"] is False
+    assert records[1]["output"] == "x" * 12000
+
+
+def test_async_failure_emits_one_failed_record(tmp_path: Path) -> None:
+    _install_bootstrap(tmp_path)
+    (tmp_path / "agent.py").write_text(
+        "import asyncio\nasync def lookup(x):\n"
+        " await asyncio.sleep(0.01)\n raise ValueError('failure')\n"
+    )
+    trace = tmp_path / "calls.jsonl"
+    env = _trace_environment(
+        tmp_path, trace, [{"name": "lookup", "module": "agent", "callable": "lookup"}]
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import asyncio\nfrom agent import lookup\n"
+            "try: asyncio.run(lookup(42))\nexcept ValueError: pass\n",
+        ],
+        check=True,
+        capture_output=True,
+        env=env,
+    )
+    records = [json.loads(line) for line in trace.read_text().splitlines()]
+    assert len(records) == 1
+    assert records[0]["is_error"] is True
+    assert records[0]["arguments"] == {"x": 42}
 
 
 def test_declared_method_trace_does_not_capture_other_methods_with_same_name(
@@ -175,10 +245,7 @@ def test_declared_package_tool_is_traced_from_init_module(tmp_path: Path) -> Non
 
 def test_declared_module_does_not_match_longer_filename_suffix(tmp_path: Path) -> None:
     _install_bootstrap(tmp_path)
-    implementation = (
-        "def check_availability(date):\n"
-        "    return f'free on {date}'\n"
-    )
+    implementation = "def check_availability(date):\n    return f'free on {date}'\n"
     (tmp_path / "agent.py").write_text(implementation, encoding="utf-8")
     (tmp_path / "other_agent.py").write_text(implementation, encoding="utf-8")
     trace = tmp_path / "calls.jsonl"
