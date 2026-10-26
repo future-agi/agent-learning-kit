@@ -265,12 +265,10 @@ def _install_declared_python_tools() -> None:
             isinstance(value, str) and value for value in (name, module, callable_name)
         ):
             continue
-        declared[
-            (module.replace(".", "/") + ".py", callable_name.rsplit(".", 1)[-1])
-        ] = name
+        declared[(module.replace(".", "/") + ".py", callable_name)] = name
     if not declared:
         return
-    function_names = {function for _, function in declared}
+    function_names = {function.rsplit(".", 1)[-1] for _, function in declared}
     active = threading.local()
     import dis
     import inspect
@@ -281,6 +279,22 @@ def _install_declared_python_tools() -> None:
     # frame id -> (frame, entry time). Holding the frame keeps its id from being
     # reused while an entry for it is still open.
     entries: dict[int, tuple[Any, float]] = {}
+
+    def observed_callable(frame: Any) -> str:
+        code = frame.f_code
+        qualname = getattr(code, "co_qualname", code.co_name)
+        if "." in qualname and "<locals>" not in qualname:
+            return qualname
+        owner = frame.f_locals.get("self")
+        if owner is not None:
+            return f"{type(owner).__qualname__}.{code.co_name}"
+        owner = frame.f_locals.get("cls")
+        if isinstance(owner, type):
+            return f"{owner.__qualname__}.{code.co_name}"
+        return code.co_name
+
+    def matches_module(filename: str, module_path: str) -> bool:
+        return filename == module_path or filename.endswith(f"/{module_path}")
 
     def profile(frame: Any, event: str, value: Any) -> None:
         if getattr(active, "busy", False):
@@ -301,16 +315,15 @@ def _install_declared_python_tools() -> None:
         finished = not code.co_flags & suspendable or dis.opname[
             code.co_code[frame.f_lasti]
         ].startswith("RETURN")
-        entry = (
-            entries.pop(id(frame), None) if finished else entries.get(id(frame))
-        )
+        entry = entries.pop(id(frame), None) if finished else entries.get(id(frame))
         started = entry[1] if entry is not None else time.time()
         filename = frame.f_code.co_filename.replace("\\", "/")
+        callable_name = observed_callable(frame)
         key = next(
             (
                 name
                 for (module_path, function), name in declared.items()
-                if frame.f_code.co_name == function and filename.endswith(module_path)
+                if callable_name == function and matches_module(filename, module_path)
             ),
             None,
         )
