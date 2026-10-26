@@ -387,7 +387,7 @@ class DesignTools:
                 "Not saved. The handler "
                 + "; ".join(problems)
                 + ". It runs against the world alone: define handle(args, db), raise "
-                "ToolError(message) to refuse, and import only "
+                "ToolError(message, category=...) to refuse, and import only "
                 + ", ".join(sorted(ALLOWED_IMPORTS))
                 + "."
             )
@@ -596,6 +596,24 @@ class DesignTools:
     def _seal(self, out: Path) -> tuple[Any, Any]:
         return seal_design(self.workspace, out, postgres_dsn=self.postgres_dsn())
 
+    def _finished(self) -> str:
+        """Why a design that already finished takes no second finish or stop. Sealing again
+        rewrites the output the platform collects, so a later turn could hand it a half-written
+        folder (a live design failed that way)."""
+        if not (self.workspace / FINISHED_MARKER).is_file():
+            return ""
+        try:
+            result = json.loads((self.output / RESULT).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            result = {}
+        if result.get("status") == "completed":
+            return (
+                f"Already sealed as {result['environment']['name']} with "
+                f"{result['suite']['scenarios']} scenarios; nothing more to do. Tell the person "
+                "it is ready."
+            )
+        return "This design has already stopped; nothing more to do."
+
     def _not_ready(self) -> str:
         if (self.workspace / PENDING_QUESTION).is_file():
             return PARKED
@@ -780,6 +798,8 @@ class DesignTools:
         )
 
     async def finish_design(self, _args: dict[str, Any]) -> dict[str, Any]:
+        if finished := self._finished():
+            return _ok(finished)
         if refused := self._not_ready():
             return _err(refused)
         try:
@@ -804,6 +824,8 @@ class DesignTools:
         )
 
     async def stop_design(self, args: dict[str, Any]) -> dict[str, Any]:
+        if finished := self._finished():
+            return _ok(finished)
         reason = str(args.get("reason") or "").strip()
         if not reason:
             return _err("say why the design cannot be finished")

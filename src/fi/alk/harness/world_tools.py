@@ -30,7 +30,8 @@ from typing import Any
 import psycopg
 from psycopg import conninfo, sql
 
-from fi.alk.harness.bindings import BoundResult, ToolError, run_bound_call
+from fi.alk.harness.bindings import BoundResult, run_bound_call
+from fi.alk.harness.world.runtime import ToolError
 
 # A handler is a few statements against one world; anything slower is a broken handler, and
 # without a bound one stuck call would hold the world for the rest of the run.

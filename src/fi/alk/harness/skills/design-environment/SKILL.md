@@ -86,13 +86,23 @@ generate random values: ids come from the data (`f"R-{1001 + count}"`).
 def handle(args, db):
     order = db.one("SELECT * FROM orders WHERE order_id = ?", (args.get("order_id"),))
     if order is None:
-        raise ToolError(f"No order {args.get('order_id')!r}.")
+        raise ToolError(f"No order {args.get('order_id')!r}.", category="not_found")
     ...
     return {"refund_id": refund_id, "amount": amount}
 ```
 
+The definition is what an agent's MCP client reads from `tools/list`, so it must be valid JSON
+Schema: types are `string`, `integer`, `number`, `boolean`, `array`, `object` or `null` (never
+`str` or `int`), and `required` lists every argument the tool cannot work without. When the
+requirements name an integration's own tools (an MCP server's documented tools such as Gmail's
+`search_threads` or Notion's `notion-search`), use those names exactly, hyphens included; name
+the rest the way that integration would. Names are letters, digits, `_` and `-`, at most 64.
+
 `db.query`, `db.one` and `db.execute` take `?` placeholders and work on both engines. Refuse with
-`ToolError(message)`: a refusal is how the world says no, and scenarios test it. A handler may
+`ToolError(message, category=...)`: a refusal is how the world says no, and scenarios test it. The
+category leads the message the agent reads, so it can tell a rule from an outage; use one of
+`invalid_input`, `not_found`, `permission_denied`, `conflict`, `policy_blocked`, `rate_limited`,
+`unavailable` or `timeout_unknown_outcome`. A handler may
 import only a few standard modules (`json`, `re`, `math`, `datetime`, `decimal` and similar) and
 reach nothing outside the world. Before a tool is kept it is called with your `sample_arguments` on
 a copy of the world: the call must succeed, change the world exactly when `mutates_state` says, a

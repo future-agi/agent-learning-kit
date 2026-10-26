@@ -25,6 +25,21 @@ from typing import Any, Mapping, Sequence
 
 from ..environment import EnvironmentAdapter, EnvironmentSnapshot, ToolExecutionResult
 
+# The stable refusal categories an agent can act on: a blocked policy is not an outage, and a
+# timeout with an unknown outcome is not a failure to retry blindly.
+ERROR_CATEGORIES = frozenset(
+    {
+        "invalid_input",
+        "not_found",
+        "permission_denied",
+        "conflict",
+        "policy_blocked",
+        "rate_limited",
+        "unavailable",
+        "timeout_unknown_outcome",
+    }
+)
+
 
 class ToolError(Exception):
     """A tool refusing for a real reason the agent should see and recover from.
@@ -32,7 +47,18 @@ class ToolError(Exception):
     Distinct from a crash. A refusal is the world working: the id does not exist, the item is
     unavailable, the argument is outside what the tool accepts. A crash is our bug, and the two
     must never look the same to a caller deciding whether the agent behaved correctly.
+
+    `category`, one of `ERROR_CATEGORIES`, leads the message the agent reads
+    (``permission_denied: ...``), so an agent and a check can tell the kinds of refusal apart.
     """
+
+    def __init__(self, message: str, category: str | None = None) -> None:
+        if category is not None and category not in ERROR_CATEGORIES:
+            raise ValueError(
+                f"unknown error category {category!r}; use one of {sorted(ERROR_CATEGORIES)}"
+            )
+        self.category = category
+        super().__init__(f"{category}: {message}" if category else message)
 
 
 @dataclass

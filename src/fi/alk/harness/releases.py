@@ -30,6 +30,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Literal
 
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -68,9 +70,11 @@ SUB_GOALS = "sub_goals.json"
 POLICY_TABLE = "environment_policy"
 WORLD_IMPLEMENTATION = "environment"
 
-_DIGEST_PATTERN = r"sha256:[0-9a-f]{64}"
-_SLUG_PATTERN = r"[a-z][a-z0-9_]*"
-_TOOL_NAME_PATTERN = r"[A-Za-z_][A-Za-z0-9_]*"
+_DIGEST_PATTERN = r"^sha256:[0-9a-f]{64}$"
+_SLUG_PATTERN = r"^[a-z][a-z0-9_]*$"
+# What MCP, Claude and OpenAI-style function calling all accept: an integration's own tool
+# names such as Notion's `notion-search` stay exact. Dots are MCP-legal but not model-legal.
+_TOOL_NAME_PATTERN = r"^[A-Za-z_][A-Za-z0-9_-]{0,63}$"
 _UNSEALED = "sha256:" + "0" * 64
 _STRAY_NAMES = {".DS_Store", "__pycache__"}
 _STRAY_SUFFIXES = (".pyc", ".pyo")
@@ -112,7 +116,29 @@ class ToolDefinition(_Strict):
     def _object_schema(cls, value: dict[str, JsonValue]) -> dict[str, JsonValue]:
         if value.get("type") != "object":
             raise ValueError("parameters must be a JSON Schema object")
-        return value
+        return _json_schema(value, "parameters")
+
+    @field_validator("returns")
+    @classmethod
+    def _returns_schema(
+        cls, value: dict[str, JsonValue] | None
+    ) -> dict[str, JsonValue] | None:
+        return value if value is None else _json_schema(value, "returns")
+
+
+def _json_schema(value: dict[str, JsonValue], label: str) -> dict[str, JsonValue]:
+    """A tool's schemas are what an MCP client reads from tools/list, so they must be valid
+    JSON Schema: a type such as "str" or "int" is a Python name, not a schema type, and a strict
+    client rejects the whole tool list over it."""
+    try:
+        Draft202012Validator.check_schema(value)
+    except SchemaError as exc:
+        where = "/".join(str(part) for part in exc.path) or "the root"
+        raise ValueError(
+            f"{label} is not valid JSON Schema at {where}: {exc.message}. Types are "
+            "string, integer, number, boolean, array, object or null."
+        ) from None
+    return value
 
 
 class DatabaseReader(_Strict):
@@ -204,15 +230,21 @@ def server_problems(
         # The agent sees `<id>__<tool>` as a tool name; one it cannot be offered as fails only
         # when a world starts, far from the release that listed it.
         if invalid := sorted(
-            name for name in server.tool_names() if not re.fullmatch(_TOOL_NAME_PATTERN, name)
+            name
+            for name in server.tool_names()
+            if not re.fullmatch(_TOOL_NAME_PATTERN, name)
         ):
             problems.append(f"{server.id}: not valid tool names: {invalid}")
-        if repeated := sorted(name for name, count in Counter(server.tools).items() if count > 1):
+        if repeated := sorted(
+            name for name, count in Counter(server.tools).items() if count > 1
+        ):
             problems.append(f"{server.id}: tools listed twice: {repeated}")
         reader = server.attach.database_reader
         if reader is not None:
             if DATABASE_READER not in registered.attach:
-                problems.append(f"{server.id}: {server.server} takes no database reader")
+                problems.append(
+                    f"{server.id}: {server.server} takes no database reader"
+                )
             for table in reader.tables:
                 if table not in world_tables:
                     problems.append(f"{server.id}: no world table {table!r}")
@@ -785,7 +817,9 @@ def _check_environment_contents(
     # Replacing a prebuilt tool with the customer's own code (contract §2.2) is not built: nothing
     # composes or runs such a handler differently, so a release claiming one would run the copy.
     if unsupported := sorted(
-        name for name, entry in handlers.items() if entry.mode is not HandlerMode.ENVIRONMENT
+        name
+        for name, entry in handlers.items()
+        if entry.mode is not HandlerMode.ENVIRONMENT
     ):
         raise ReleaseError(
             "environment_handler_unsupported",
@@ -891,9 +925,13 @@ def _check_extension(
         if child_rules.get(rule.id) != rule:
             problems.append(f"rule {rule.id} removed or changed")
     if load_servers(root) != load_servers(parent_root):
-        problems.append(f"{SERVERS} changed; attached servers belong to the base release")
+        problems.append(
+            f"{SERVERS} changed; attached servers belong to the base release"
+        )
     if _attached_files(root) != _attached_files(parent_root):
-        problems.append(f"{ATTACHED}/ changed; attached folders belong to the base release")
+        problems.append(
+            f"{ATTACHED}/ changed; attached folders belong to the base release"
+        )
     parent_db = parent_root / WORLD / "world.sqlite"
     child_db = root / WORLD / "world.sqlite"
     if parent_db.is_file():
@@ -919,7 +957,11 @@ def _lineage(document: Mapping[str, Any]) -> dict[str, Any]:
         "extends": document.get("extends"),
         "parent": document.get("parent"),
         "scenarios": sorted(
-            (str(entry.get("key")), str(entry.get("origin")), str(entry.get("derived_from")))
+            (
+                str(entry.get("key")),
+                str(entry.get("origin")),
+                str(entry.get("derived_from")),
+            )
             for entry in document.get("scenarios") or []
         ),
     }
@@ -954,7 +996,8 @@ def seal_environment_release(
     """Check an environment directory against the contract and write its `release.json`."""
     root = Path(root)
     handlers = {
-        tool.name: HandlerEntry(mode=HandlerMode.ENVIRONMENT) for tool in load_tools(root)
+        tool.name: HandlerEntry(mode=HandlerMode.ENVIRONMENT)
+        for tool in load_tools(root)
     }
     _check_environment_contents(root, handlers)
     extends = None
@@ -963,7 +1006,8 @@ def seal_environment_release(
         _check_extension(root, Path(parent_root), parent)
         extends = ReleaseRef(digest=parent.digest, name=parent.name)
     _unchanged_lineage(
-        root / ENVIRONMENT_MANIFEST, {"extends": extends.model_dump() if extends else None}
+        root / ENVIRONMENT_MANIFEST,
+        {"extends": extends.model_dump() if extends else None},
     )
     release = _validated(
         EnvironmentReleaseV1,
@@ -1096,7 +1140,11 @@ def _check_rule_coverage(
 def _check_simulator_prompt(root: Path) -> None:
     """The simulated person is the suite's prompt with each scenario's persona and instruction
     filled in; a prompt without those slots runs every scenario as the same aimless caller."""
-    from .simulator import load_simulator_prompt, validate_simulator_prompt, variables_in
+    from .simulator import (
+        load_simulator_prompt,
+        validate_simulator_prompt,
+        variables_in,
+    )
 
     prompt = load_simulator_prompt(root)
     if not prompt:
@@ -1347,7 +1395,11 @@ class PostgresProof:
         return [
             (name, goal.check)
             for name in scenario.sub_goals
-            if (goal := (self._catalogue if catalogue is None else catalogue).named(name))
+            if (
+                goal := (self._catalogue if catalogue is None else catalogue).named(
+                    name
+                )
+            )
             is not None
             and goal.deterministic()
         ]
@@ -1527,7 +1579,10 @@ def postgres_verdict(
                 *solved.failed,
                 *(f"{name} holds untouched" for name in weak),
                 *(f"{name} holds when every call crashed" for name in credited),
-                *(f"{name} holds when no state-changing call took effect" for name in trusted),
+                *(
+                    f"{name} holds when no state-changing call took effect"
+                    for name in trusted
+                ),
             ]
         )
         or "no deterministic check"
@@ -1634,7 +1689,9 @@ def seal_suite_release(
     _check_simulator_prompt(root)
     (root / PROOFS).unlink(missing_ok=True)
     proofs = _prove_all(root, environment_root, policy, profile, loaded)
-    if not postgres_dsn and any(entry.get("postgres_only") for entry in proofs.values()):
+    if not postgres_dsn and any(
+        entry.get("postgres_only") for entry in proofs.values()
+    ):
         raise ReleaseError(
             "suite_runtime_unproved",
             "scenarios that call attached MCP servers are proved only on PostgreSQL; "
@@ -2197,7 +2254,9 @@ def compose_bundle(
             },
             readiness=[
                 ReadinessProbeV2(capability="world_db", timeout_seconds=180),
-                ReadinessProbeV2(capability=capability, path=health, timeout_seconds=180),
+                ReadinessProbeV2(
+                    capability=capability, path=health, timeout_seconds=180
+                ),
             ],
             files=list_files(staging, BUNDLE_V2_MANIFEST),
             provenance=BundleProvenanceV2(
