@@ -422,6 +422,66 @@ def test_bundle_compiles_discovered_source_tool_entrypoint(tmp_path: Path) -> No
     }
 
 
+def test_chat_bundle_traces_langchain_tool_function_behind_invoke(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "chat-agent"
+    source.mkdir()
+    (source / "agent.py").write_text(
+        "from langchain_core.tools import tool\n"
+        "@tool\n"
+        "def check_availability(date):\n"
+        "    return f'free on {date}'\n",
+        encoding="utf-8",
+    )
+    authoring = _authoring(tmp_path)
+    (authoring / "contract.json").write_text(
+        json.dumps(
+            {
+                "modality": "chat",
+                "runtime": {
+                    "language": "python",
+                    "interface": {
+                        "kind": "openai_chat",
+                        "protocol": "openai",
+                        "include_tools": False,
+                    },
+                },
+                "tools": [{"name": "check_availability", "args": ["date"]}],
+                "tool_entrypoints": [
+                    {
+                        "tool": "check_availability",
+                        "mode": "import",
+                        "module": "agent",
+                        "callable": "check_availability.invoke",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    bundle = author_bundle_v2(
+        source=source,
+        job=_job(connector="http"),
+        authoring=authoring,
+        output=tmp_path / "bundle",
+    )
+
+    agent = next(process for process in bundle.processes if process.name == "agent")
+    assert json.loads(agent.environment["ALK_TOOL_TRACE_BINDINGS"]) == [
+        {
+            "name": "check_availability",
+            "module": "agent",
+            "callable": "check_availability",
+        }
+    ]
+    sealed_contract = json.loads((tmp_path / "bundle" / "contract.json").read_text())
+    assert sealed_contract["tool_entrypoints"][0]["callable"] == (
+        "check_availability.invoke"
+    )
+
+
 def test_auto_voice_contract_compiles_livekit_process_runtime(tmp_path: Path) -> None:
     source = tmp_path / "voice-agent"
     source.mkdir()
