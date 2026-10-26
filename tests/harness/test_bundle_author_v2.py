@@ -588,6 +588,67 @@ def test_chat_bundle_traces_function_wrapped_by_langchain_tool_assignment(
     )
 
 
+def test_chat_bundle_traces_langchain_tool_with_guarded_import(tmp_path: Path) -> None:
+    source = tmp_path / "chat-agent"
+    source.mkdir()
+    (source / "agent.py").write_text(
+        "try:\n"
+        "    from langchain_core.tools import tool\n"
+        "except ImportError:\n"
+        "    tool = None\n"
+        "@tool\n"
+        "def check_availability(date):\n"
+        "    return f'free on {date}'\n",
+        encoding="utf-8",
+    )
+    authoring = _authoring(tmp_path)
+    _write_trace_contract(authoring, "check_availability.invoke")
+
+    bundle = author_bundle_v2(
+        source=source,
+        job=_job(connector="http"),
+        authoring=authoring,
+        output=tmp_path / "bundle",
+    )
+
+    agent = next(process for process in bundle.processes if process.name == "agent")
+    assert json.loads(agent.environment["ALK_TOOL_TRACE_BINDINGS"])[0]["callable"] == (
+        "check_availability"
+    )
+
+
+def test_chat_bundle_resolves_reexported_langchain_tool(tmp_path: Path) -> None:
+    source = tmp_path / "chat-agent"
+    source.mkdir()
+    (source / "tools.py").write_text(
+        "from langchain_core.tools import tool\n"
+        "@tool\n"
+        "def check_availability(date):\n"
+        "    return f'free on {date}'\n",
+        encoding="utf-8",
+    )
+    (source / "agent.py").write_text(
+        "from tools import check_availability\n",
+        encoding="utf-8",
+    )
+    authoring = _authoring(tmp_path)
+    _write_trace_contract(authoring, "check_availability.invoke")
+
+    bundle = author_bundle_v2(
+        source=source,
+        job=_job(connector="http"),
+        authoring=authoring,
+        output=tmp_path / "bundle",
+    )
+
+    agent = next(process for process in bundle.processes if process.name == "agent")
+    assert json.loads(agent.environment["ALK_TOOL_TRACE_BINDINGS"])[0] == {
+        "name": "check_availability",
+        "module": "tools",
+        "callable": "check_availability",
+    }
+
+
 def test_chat_bundle_refuses_unproven_dotted_tool_wrapper(tmp_path: Path) -> None:
     source = tmp_path / "chat-agent"
     source.mkdir()
