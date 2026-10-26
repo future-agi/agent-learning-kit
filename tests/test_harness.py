@@ -6309,40 +6309,11 @@ def test_a_mutation_that_does_not_land_accuses_nobody():
     assert blind(survived) == []
 
 
-def test_an_opening_is_checked_by_shape_only():
-    """The opening is refused only for what can be checked without reading meaning into it: nothing
-    to say, only an end marker, or the scenario's own instruction handed back (the TH-8765 bug).
-    Which part the caller plays is set by the OPENING guidance, not by matching phrases."""
-    from fi.alk.harness.run.conversation import OPENING, _opening_line
-
-    instruction = "You contact support. You open by asking about your order."
-    assert _opening_line("", instruction) == ""
-    assert _opening_line("   \n\t", instruction) == ""
-    assert _opening_line("[DONE]", instruction) == ""
-    assert _opening_line("[STUCK]", instruction) == ""
-    assert _opening_line(instruction, instruction) == ""
-    assert _opening_line("  you CONTACT support.  You open by\nasking about your order. ", instruction) == ""
-    assert _opening_line(f"Hi! {instruction}", instruction) == ""
-    # Anything a person could say is sent as written, in any language or script.
-    assert _opening_line("Hi, where is my order? [DONE]", instruction) == "Hi, where is my order?"
-    assert _opening_line("Let me explain, my order never came", instruction) == (
-        "Let me explain, my order never came"
-    )
-    assert _opening_line("Merhaba, siparişim gelmedi.", instruction) == "Merhaba, siparişim gelmedi."
-    assert _opening_line("你好，我的订单还没到。", instruction) == "你好，我的订单还没到。"
-    # With no instruction there is nothing to compare against, and nothing is refused for it.
-    assert _opening_line("Where is my order?", "") == "Where is my order?"
-
-    # The guidance says which part to play and in which language.
-    assert "you speak first" in OPENING
-    assert "You are the caller" in OPENING and "not the agent being contacted" in OPENING
-    assert "in the language you speak" in OPENING
-
-
 ECHOED = "You contact support. You open by asking about your order."
+RETRIED = "Hi, where is my order?"
 
 
-def _open_a_conversation(monkeypatch, openings, replies=("Done.",)):
+def _open_a_conversation(monkeypatch, openings, replies=("Done.",), instruction=ECHOED):
     """Run converse with a caller that remembers every message it was sent, like a real session."""
     import asyncio
     from types import SimpleNamespace
@@ -6381,20 +6352,59 @@ def _open_a_conversation(monkeypatch, openings, replies=("Done.",)):
         return reply
 
     target = SimpleNamespace(open=noop, say=agent_hears, close=noop, spent_usd=0.0)
-    scenario = Scenario(
-        name="s",
-        instruction="You contact support. You open by asking about your order.",
-    )
+    scenario = Scenario(name="s", instruction=instruction)
     asyncio.run(conversation.converse(target, scenario, AgentContract()))
     return caller_saw, agent_heard
+
+
+def test_the_opening_ask_says_who_speaks_first_and_in_which_language():
+    """Which part the person plays is set by guidance, not by matching what they wrote."""
+    from fi.alk.harness.run.conversation import OPENING
+
+    assert "you speak first" in OPENING
+    assert "the person making contact, not the agent being contacted" in OPENING
+    assert "in the language you speak" in OPENING
+
+
+@pytest.mark.parametrize(
+    "instruction, said, sent",
+    [
+        (ECHOED, "", False),
+        (ECHOED, "   \n\t", False),
+        (ECHOED, "[DONE]", False),
+        (ECHOED, "[STUCK]", False),
+        (ECHOED, ECHOED, False),
+        (
+            ECHOED,
+            "  you CONTACT support.  You open by\nasking about your order. ",
+            False,
+        ),
+        (ECHOED, f"Hi! {ECHOED}", False),
+        ("Você quer saber do pedido.", "Voc\u0065\u0302 quer saber do pedido.", False),
+        ("我想取消订单", "我想 取消订单", False),
+        (ECHOED, "Let me explain, my order never came", True),
+        (ECHOED, "Merhaba, siparişim gelmedi.", True),
+        (ECHOED, "你好，我的订单还没到。", True),
+        ("Cancel my order", "Hi, I want to cancel my order.", True),
+        ("hi", "Is this the shop?", True),
+        ("", "Where is my order?", True),
+    ],
+)
+def test_an_opening_is_held_back_only_when_empty_a_marker_or_the_instruction(
+    monkeypatch, instruction, said, sent
+):
+    _, agent_heard = _open_a_conversation(
+        monkeypatch, [said, RETRIED], replies=(), instruction=instruction
+    )
+    assert agent_heard == [said.strip() if sent else RETRIED]
 
 
 @pytest.mark.parametrize(
     "openings, first",
     [
-        (["Hi, where is my order?"], "Hi, where is my order?"),
-        (["", "Hi, where is my order?"], "Hi, where is my order?"),
-        ([ECHOED, "Hi, where is my order?"], "Hi, where is my order?"),
+        ([RETRIED], RETRIED),
+        (["", RETRIED], RETRIED),
+        ([ECHOED, RETRIED], RETRIED),
         ([ECHOED, ECHOED, "Hi there."], "Hi there."),
         (["", "", "Merhaba."], "Merhaba."),
         (["", "", ""], "Hello."),
@@ -6404,14 +6414,18 @@ def _open_a_conversation(monkeypatch, openings, replies=("Done.",)):
 def test_an_unusable_opening_is_corrected_then_a_greeting_and_the_instruction_is_never_sent(
     monkeypatch, openings, first
 ):
-    from fi.alk.harness.run.conversation import OPENING, _GREET, _RETRY
+    from fi.alk.harness.run.conversation import OPENING
 
     caller_saw, agent_heard = _open_a_conversation(monkeypatch, openings, replies=())
     assert agent_heard == [first]
     # Each retry tells the person their last line was not sent, and the last asks for a greeting
     # in their own language, so a retry is never the same question with the failure in context.
-    assert caller_saw == [OPENING, _RETRY, _GREET][: len(openings)]
-    assert "in the language you speak" in _GREET and "not sent" in _RETRY
+    assert caller_saw[0] == OPENING
+    asks = caller_saw[1 : len(openings)]
+    assert all("not sent" in ask for ask in asks)
+    assert len(set(asks)) == len(asks)
+    if len(asks) == 2:
+        assert "greeting, in the language you speak" in asks[1]
 
 
 LONG = "My order " + "never arrived and " * 180 + "I want a refund."
@@ -6420,9 +6434,9 @@ LONG = "My order " + "never arrived and " * 180 + "I want a refund."
 @pytest.mark.parametrize(
     "openings, first",
     [
-        (["   \n\t", "Hi, where is my order?"], "Hi, where is my order?"),
-        (["[DONE]", "Hi, where is my order?"], "Hi, where is my order?"),
-        (["Hi, where is my order? [DONE]"], "Hi, where is my order?"),
+        (["   \n\t", RETRIED], RETRIED),
+        (["[DONE]", RETRIED], RETRIED),
+        ([RETRIED + " [DONE]"], RETRIED),
         (["مرحبا، طلبي لم يصل بعد"], "مرحبا، طلبي لم يصل بعد"),
         (["", "", "你好"], "你好"),
         ([ECHOED, "[STUCK]", "नमस्ते"], "नमस्ते"),
@@ -6442,14 +6456,11 @@ def test_openings_in_any_script_or_shape_reach_the_agent_as_the_person_wrote_the
 
 def test_after_a_corrected_opening_the_next_turn_is_only_the_agents_reply(monkeypatch):
     caller_saw, agent_heard = _open_a_conversation(
-        monkeypatch,
-        [ECHOED, "Hi, where is my order?", "Thanks. [DONE]"],
-        replies=("Let me check.",),
+        monkeypatch, [ECHOED, RETRIED, "Thanks. [DONE]"], replies=("Let me check.",)
     )
-    from fi.alk.harness.run.conversation import OPENING, _RETRY
-
-    assert agent_heard == ["Hi, where is my order?"]
-    assert caller_saw == [OPENING, _RETRY, "Let me check."]
+    assert agent_heard == [RETRIED]
+    assert caller_saw[2] == "Let me check."
+    assert "not sent" in caller_saw[1]
 
 
 def test_after_an_opening_the_person_did_not_write_their_next_turn_is_told_what_was_said(
@@ -6469,9 +6480,7 @@ def test_after_an_opening_the_person_did_not_write_their_next_turn_is_told_what_
 
 def test_an_opening_the_person_wrote_reaches_them_without_a_note(monkeypatch):
     caller_saw, _ = _open_a_conversation(
-        monkeypatch,
-        ["Hi, where is my order?", "Thanks. [DONE]"],
-        replies=("Let me check.",),
+        monkeypatch, [RETRIED, "Thanks. [DONE]"], replies=("Let me check.",)
     )
     assert caller_saw[-1] == "Let me check."
 

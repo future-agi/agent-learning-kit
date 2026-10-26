@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import json
 import time
+import unicodedata
 from dataclasses import dataclass, field
+from itertools import accumulate
 from typing import Any, Callable
 
 from ..backends import SessionSpec
@@ -125,11 +127,10 @@ class Transcript:
 # system prompt about an agent, and asked to speak with nothing preceding it, will sometimes reply
 # as the agent instead of to it.
 OPENING = (
-    "The conversation is starting and you speak first. You are the caller: the person making "
-    "contact, not the agent being contacted. What you write now are your first words to the "
-    "agent, in the language you speak. Say what you came to say, in your own words, and nothing "
-    "else. Do not offer to look anything up, do not answer on their behalf, and do not greet them "
-    "and wait: say the thing you actually want."
+    "The conversation is starting and you speak first. You are the person making contact, not "
+    "the agent being contacted. What you write now are your first words to the agent, in the "
+    "language you speak. Say what you came to say, in your own words, and nothing else. Do not "
+    "offer to look anything up and do not answer on the agent's behalf."
 )
 
 # When an opening line is not sent, the person is told so, because their own session keeps every
@@ -142,7 +143,7 @@ _UNSENT = (
 # opens with, in the language they speak, so the request comes after the agent's reply.
 _RETRY = (
     _UNSENT
-    + "You are the caller. Say what you came to say to the agent, in your own words."
+    + "You are the person making contact. Say what you came to say to the agent, in your own words."
 )
 _GREET = (
     _UNSENT
@@ -154,10 +155,23 @@ def _opening_line(said: str, instruction: str) -> str:
     """The line the agent hears, or "" when it is not one: empty, only an end marker, or the
     scenario's own instruction handed back instead of the person's words."""
     line = said.replace(DONE, "").replace(STUCK, "").strip()
-    written = " ".join(instruction.split()).casefold()
-    if written and written in " ".join(line.split()).casefold():
-        return ""
-    return line
+    written, heard = (
+        " ".join(unicodedata.normalize("NFKC", text).casefold().split())
+        for text in (instruction, line)
+    )
+    # The instruction must sit on whole words of the line, so a line that only shares a phrase
+    # with it is still sent. Written without spaces, the spaces the line added are ignored.
+    if " " in written:
+        echoed = f" {written} " in f" {heard} "
+    else:
+        words = heard.split()
+        edges = {0, *accumulate(map(len, words))}
+        joined = "".join(words)
+        echoed = bool(written) and any(
+            joined.startswith(written, at) and at + len(written) in edges
+            for at in edges
+        )
+    return "" if echoed else line
 
 
 def customer_prompt(
