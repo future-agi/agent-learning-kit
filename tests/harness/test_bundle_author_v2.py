@@ -422,13 +422,16 @@ def test_bundle_compiles_discovered_source_tool_entrypoint(tmp_path: Path) -> No
     }
 
 
-def _write_trace_contract(authoring: Path, called: str) -> None:
+def _write_trace_contract(
+    authoring: Path, called: str, *, workdir: str = "."
+) -> None:
     (authoring / "contract.json").write_text(
         json.dumps(
             {
                 "modality": "chat",
                 "runtime": {
                     "language": "python",
+                    "workdir": workdir,
                     "interface": {
                         "kind": "openai_chat",
                         "protocol": "openai",
@@ -486,6 +489,123 @@ def test_chat_bundle_traces_langchain_tool_function_behind_invoke(
     )
     handler = (tmp_path / "bundle" / "handlers" / "check_availability.py").read_text()
     assert "check_availability.invoke(**args)" in handler
+
+
+def test_chat_bundle_resolves_trace_binding_from_runtime_workdir(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "chat-agent"
+    component = source / "service"
+    component.mkdir(parents=True)
+    (component / "agent.py").write_text(
+        "from langchain_core.tools import tool\n"
+        "@tool\n"
+        "def check_availability(date):\n"
+        "    return f'free on {date}'\n",
+        encoding="utf-8",
+    )
+    authoring = _authoring(tmp_path)
+    _write_trace_contract(
+        authoring, "check_availability.invoke", workdir="service"
+    )
+
+    bundle = author_bundle_v2(
+        source=source,
+        job=_job(connector="http"),
+        authoring=authoring,
+        output=tmp_path / "bundle",
+    )
+
+    agent = next(process for process in bundle.processes if process.name == "agent")
+    assert json.loads(agent.environment["ALK_TOOL_TRACE_BINDINGS"])[0]["callable"] == (
+        "check_availability"
+    )
+
+
+@pytest.mark.parametrize(
+    ("relative", "called", "decorator"),
+    [
+        ("src/agent.py", "check_availability.invoke", "@tool"),
+        ("agent.py", "check_availability.ainvoke", "@tool"),
+        ("agent.py", "check_availability.invoke", '@tool("availability")'),
+    ],
+    ids=("src-layout", "ainvoke", "configured-tool-name"),
+)
+def test_chat_bundle_preserves_supported_langchain_trace_forms(
+    tmp_path: Path, relative: str, called: str, decorator: str
+) -> None:
+    source = tmp_path / "chat-agent"
+    module = source / relative
+    module.parent.mkdir(parents=True)
+    module.write_text(
+        "from langchain_core.tools import tool\n"
+        f"{decorator}\n"
+        "def check_availability(date):\n"
+        "    return f'free on {date}'\n",
+        encoding="utf-8",
+    )
+    authoring = _authoring(tmp_path)
+    _write_trace_contract(authoring, called)
+
+    bundle = author_bundle_v2(
+        source=source,
+        job=_job(connector="http"),
+        authoring=authoring,
+        output=tmp_path / "bundle",
+    )
+
+    agent = next(process for process in bundle.processes if process.name == "agent")
+    assert json.loads(agent.environment["ALK_TOOL_TRACE_BINDINGS"])[0]["callable"] == (
+        "check_availability"
+    )
+
+
+def test_chat_bundle_traces_function_wrapped_by_langchain_tool_assignment(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "chat-agent"
+    source.mkdir()
+    (source / "agent.py").write_text(
+        "from langchain_core.tools import tool\n"
+        "def check_availability(date):\n"
+        "    return f'free on {date}'\n"
+        "check_availability = tool(check_availability)\n",
+        encoding="utf-8",
+    )
+    authoring = _authoring(tmp_path)
+    _write_trace_contract(authoring, "check_availability.invoke")
+
+    bundle = author_bundle_v2(
+        source=source,
+        job=_job(connector="http"),
+        authoring=authoring,
+        output=tmp_path / "bundle",
+    )
+
+    agent = next(process for process in bundle.processes if process.name == "agent")
+    assert json.loads(agent.environment["ALK_TOOL_TRACE_BINDINGS"])[0]["callable"] == (
+        "check_availability"
+    )
+
+
+def test_chat_bundle_refuses_unproven_dotted_tool_wrapper(tmp_path: Path) -> None:
+    source = tmp_path / "chat-agent"
+    source.mkdir()
+    (source / "agent.py").write_text(
+        "from somewhere import tool_factory\n"
+        "check_availability = tool_factory()\n",
+        encoding="utf-8",
+    )
+    authoring = _authoring(tmp_path)
+    _write_trace_contract(authoring, "check_availability.invoke")
+
+    with pytest.raises(BundleAuthorError, match="contract_tool_trace_unobservable"):
+        author_bundle_v2(
+            source=source,
+            job=_job(connector="http"),
+            authoring=authoring,
+            output=tmp_path / "bundle",
+        )
 
 
 def test_chat_bundle_refuses_unobservable_external_invoke(tmp_path: Path) -> None:
