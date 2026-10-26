@@ -2462,6 +2462,11 @@ def scenario_tools(
         if set(change) == {"name"} and name == held.name:
             return _ok(f"Nothing changed: {held.name} already has that name.")
         if set(change) != {"name"}:
+            if edited(held, args) == edited(held, {}):
+                return _ok(
+                    f"Nothing changed: {held.name} already has these values. A field left out "
+                    "keeps its saved value; to remove one, name it in `clear`."
+                )
             return await submit_scenario.handler(edited(held, args))
         result = accept_scenario(
             {**held.model_dump(), "name": name},
