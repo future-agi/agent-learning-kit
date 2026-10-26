@@ -1948,6 +1948,14 @@ class HostedChatRuntime:
                     self._turn_acknowledged_through = max(
                         self._turn_acknowledged_through, answer_sequence
                     )
+                # The turn carries on after the answer (a design builds for an hour), so the
+                # platform settles the question now rather than at turn_completed.
+                await self.client.emit(
+                    "question_answered",
+                    message_id=message_id,
+                    stage=self.conversation.stage_name,
+                    payload={"reply_message_id": str(command["message_id"])},
+                )
                 if asked and self.backend_name == "claude":
                     # The CLI's own question tool takes its answers as an allowed, rewritten input.
                     from claude_agent_sdk.types import PermissionResultAllow

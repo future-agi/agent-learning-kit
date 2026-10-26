@@ -167,6 +167,21 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
 - The Gemini backend names its ADK agent with a valid identifier for any
   session id: a hosted chat whose conversation id began with a digit failed
   every turn with a ValidationError.
+- Designed tools must be valid JSON Schema (`parameters` and `returns`), checked
+  at `define_tool` and when a release loads: a sealed Gmail design had shipped
+  `'str'` and `'int'` types that MCP clients reject. Tool names may contain `-`
+  and run to 64 characters, as MCP and model function calling allow, and the
+  release name and digest patterns are anchored. `ToolError` takes an optional
+  stable `category` (`invalid_input`, `not_found`, `permission_denied`,
+  `conflict`, `policy_blocked`, `rate_limited`, `unavailable`,
+  `timeout_unknown_outcome`) that leads the message the agent reads; both
+  engines raise the one class.
+- A finished design refuses a second `finish_design` or `stop_design`: a builder
+  that carried on after sealing resealed over the registered output and the job
+  failed with `design_result_missing`.
+- The hosted chat emits `question_answered` when the builder takes a reply, so
+  the platform settles the question while the turn carries on rather than at
+  `turn_completed`; needs the platform that accepts the event kind.
 
 ## v1.0.0-rc.1 — 2026-06-10
 
