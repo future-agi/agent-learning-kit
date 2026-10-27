@@ -607,6 +607,8 @@ def world_tools(
         getattr(world, "external_runtime", False)
     )
     world.refusal_signature = contract.refusal_signature
+    # A designed environment's handlers are its own, model-written: they run isolated.
+    world.isolated = getattr(world, "isolated", False) or implementation == "environment"
     if source_root:
         world.reach(source_root)
     kind = for_contract(contract)

@@ -225,6 +225,10 @@ class GeneratedWorld(EnvironmentAdapter):
         # writes the frozen rows into the newly-created store.
         self.store.start()
         self.calls: list[Call] = []
+        # Whether the handlers are the environment's own (a designed or released world) rather
+        # than bound to an agent's code: those run in the isolated child when
+        # ALK_HANDLER_ISOLATION is set (see `handler_host`).
+        self.isolated = False
 
     @property
     def connection(self) -> Any:
@@ -338,13 +342,27 @@ class GeneratedWorld(EnvironmentAdapter):
                 )
             )
 
-        namespace: dict[str, Any] = {"ToolError": ToolError, "json": json}
+        from .handler_host import isolation_mode, run_handler
+
         try:
-            exec(compile(self.handlers[name], f"<handler:{name}>", "exec"), namespace)
-            handle = namespace.get("handle")
-            if not callable(handle):
-                raise RuntimeError("handler defines no handle(args, db)")
-            value = handle(args, Db(self.store, self.state_object))
+            mode = isolation_mode() if self.isolated else None
+            if mode is not None:
+                value = run_handler(
+                    self.handlers[name],
+                    name,
+                    args,
+                    Db(self.store, self.state_object),
+                    mode=mode,
+                )
+            else:
+                namespace: dict[str, Any] = {"ToolError": ToolError, "json": json}
+                exec(
+                    compile(self.handlers[name], f"<handler:{name}>", "exec"), namespace
+                )
+                handle = namespace.get("handle")
+                if not callable(handle):
+                    raise RuntimeError("handler defines no handle(args, db)")
+                value = handle(args, Db(self.store, self.state_object))
         except Exception as raised:
             if _is_refusal(raised, self.refusal_signature):
                 return self._record(
