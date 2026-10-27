@@ -1217,7 +1217,7 @@ def test_database_clone_checks_use_the_lane_count(tmp_path, monkeypatch):
         async def provision(self, *args, work_directory, **kwargs):
             (work_directory / "artifacts").mkdir()
             (work_directory / "artifacts" / "build.json").write_text("{}")
-            return [SimpleNamespace(endpoints={})]
+            return [SimpleNamespace(endpoints={}, world_index=0)]
 
         async def clone_world_database(self, runtime, name):
             clones.append(name)
@@ -1234,7 +1234,7 @@ def test_database_clone_checks_use_the_lane_count(tmp_path, monkeypatch):
             return self
 
     class Factory:
-        def __init__(self, work):
+        def __init__(self, work, bundle=None):
             pass
 
         async def create(self, *args, **kwargs):
@@ -1254,6 +1254,16 @@ def test_database_clone_checks_use_the_lane_count(tmp_path, monkeypatch):
 
     async def no_invariants(*args, **kwargs):
         return []
+
+    def author_bundle(**kwargs):
+        kwargs["output"].mkdir()
+        (kwargs["output"] / "contract.json").write_text("{}")
+        return SimpleNamespace(
+            runtime=BundleRuntimeV2(
+                kind=RuntimeKindV2.PROCESS,
+                evidence_seam=EvidenceSeam.HTTP_TOOL,
+            )
+        )
 
     for module, name, value in (
         (authoring_runtime_validation, "_database_lanes", lambda: 3),
@@ -1281,7 +1291,11 @@ def test_database_clone_checks_use_the_lane_count(tmp_path, monkeypatch):
         (
             contract,
             "AgentContract",
-            SimpleNamespace(model_validate_json=lambda text: None),
+            SimpleNamespace(
+                model_validate_json=lambda text: SimpleNamespace(
+                    modality="voice", runtime=None
+                )
+            ),
         ),
         (
             tool_certification,
@@ -1293,7 +1307,7 @@ def test_database_clone_checks_use_the_lane_count(tmp_path, monkeypatch):
             "certify_actions",
             lambda *args, **kwargs: SimpleNamespace(actions=[]),
         ),
-        (bundle_author_v2, "author_bundle_v2", lambda **kwargs: object()),
+        (bundle_author_v2, "author_bundle_v2", author_bundle),
         (process_preflight, "preflight_bundle", lambda *args, **kwargs: None),
         (
             outbound,
