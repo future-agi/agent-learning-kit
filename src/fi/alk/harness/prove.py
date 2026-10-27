@@ -38,7 +38,7 @@ from .checks import Outcome, reference_of, run_check
 from .folder import apply_setup, check_ready
 from .scenario import Scenario
 from .world.runtime import Call, GeneratedWorld
-from .world.snapshot import restore, read_manifest
+from .world.snapshot import read_manifest, restore
 
 
 @dataclass
@@ -100,9 +100,7 @@ class Proof:
         if self.deferred and not self.broken:
             return "DEFERRED: setup, readiness and outcome checks require the live runtime; file access declarations do not verify fixture contents."
         if self.broken and not self.why_not_ready:
-            return "these checks are broken, not failing:\n  - " + "\n  - ".join(
-                self.broken
-            )
+            return "these checks are broken, not failing:\n  - " + "\n  - ".join(self.broken)
         if not self.ready:
             return (
                 "the world is not ready for this scenario, so running it would test us rather "
@@ -302,11 +300,7 @@ def _resolve_reference_values(value: object, calls: list[Call]) -> object:
 
 
 def _run(
-    scenario: Scenario,
-    world_root: Path,
-    *,
-    with_solution: bool,
-    steps: Sequence[Any] | None = None,
+    scenario: Scenario, world_root: Path, *, with_solution: bool, steps: Sequence[Any] | None = None
 ) -> tuple[GeneratedWorld, list[Call], list[str], list[str]]:
     """A world set up for this scenario, optionally with the solution (or `steps`) played through it."""
     world, _applied, _ready = prepared(scenario, world_root)
@@ -450,12 +444,7 @@ def native_source_problem(source: str, entry: str) -> str:
 def _declared_options(world_root: Path) -> set[str]:
     """`tool.argument` names whose values the agent's own tool definitions limit to a set."""
     try:
-        tools = (
-            json.loads(
-                (Path(world_root) / "contract.json").read_text(encoding="utf-8")
-            ).get("tools")
-            or []
-        )
+        tools = json.loads((Path(world_root) / "contract.json").read_text(encoding="utf-8")).get("tools") or []
     except (OSError, ValueError):
         return set()
     return {
@@ -484,9 +473,7 @@ def _end_state(world: GeneratedWorld) -> dict[str, Any] | None:
         return None
 
 
-def _other_choices(
-    scenario: Scenario, declared: set[str] = frozenset()
-) -> tuple[list[Any], set[str]]:
+def _other_choices(scenario: Scenario, declared: set[str] = frozenset()) -> tuple[list[Any], set[str]]:
     """The solution with every free text argument the scenario does not mark fixed set otherwise."""
     steps = list(getattr(scenario, "solution", None) or ())
     if any(step.fixed is None for step in steps):
@@ -522,16 +509,8 @@ def _with_one_wrong(scenario: Scenario) -> list[tuple[str, list[Any], bool]]:
                 continue
             changed = _with_value(step, name, other)
             if changed is not None:
-                corrected = any(
-                    name in (later.arguments or {}) for later in steps[at + 1 :]
-                )
-                wrong.append(
-                    (
-                        f"{step.tool}.{name}",
-                        [*steps[:at], changed, *steps[at + 1 :]],
-                        corrected,
-                    )
-                )
+                corrected = any(name in (later.arguments or {}) for later in steps[at + 1 :])
+                wrong.append((f"{step.tool}.{name}", [*steps[:at], changed, *steps[at + 1 :]], corrected))
     return wrong
 
 
@@ -617,41 +596,29 @@ def prove(
                 f"{name} (the agent chose: {', '.join(sorted(changed))})"
                 for name, source in held
                 if not other_refused
-                and not run_check(
-                    source, other_world, other_calls, name=name, reference=reference
-                ).held
+                and not run_check(source, other_world, other_calls, name=name, reference=reference).held
             ]
         finally:
             other_world.close()
-    for number, other in enumerate(
-        getattr(scenario, "alternatives", None) or (), start=1
-    ):
-        alt_world, alt_calls, _, _ = _run(
-            scenario, world_root, with_solution=True, steps=other
-        )
+    for number, other in enumerate(getattr(scenario, "alternatives", None) or (), start=1):
+        alt_world, alt_calls, _, _ = _run(scenario, world_root, with_solution=True, steps=other)
         try:
             proof.too_strict += [
                 f"{name} (another way the instructions allow, alternative {number}: "
                 f"{', '.join(step.tool for step in other)})"
                 for name, source in held
-                if not run_check(
-                    source, alt_world, alt_calls, name=name, reference=reference
-                ).held
+                if not run_check(source, alt_world, alt_calls, name=name, reference=reference).held
             ]
         finally:
             alt_world.close()
     for label, steps, corrected in _with_one_wrong(scenario) if held else ():
-        wrong_world, wrong_calls, _, _ = _run(
-            scenario, world_root, with_solution=True, steps=steps
-        )
+        wrong_world, wrong_calls, _, _ = _run(scenario, world_root, with_solution=True, steps=steps)
         try:
             # Only a value a later step sets again, leaving the right end state, is a corrected draft
             # no check must notice; a read-only lookup leaves the same state and is still checked.
             ended = _end_state(wrong_world)
             if not (corrected and ended is not None and ended == right_state) and all(
-                run_check(
-                    source, wrong_world, wrong_calls, name=name, reference=reference
-                ).held
+                run_check(source, wrong_world, wrong_calls, name=name, reference=reference).held
                 for name, source in held
             ):
                 proof.unchecked.append(label)
@@ -682,9 +649,7 @@ def prove(
                 name
                 for name, source in checks
                 if not any(one.name == name and one.held for one in proof.with_nothing)
-                and run_check(
-                    source, untouched, crashed, name=name, reference=reference
-                ).held
+                and run_check(source, untouched, crashed, name=name, reference=reference).held
             ]
     finally:
         untouched.close()
