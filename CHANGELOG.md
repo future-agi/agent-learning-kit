@@ -7,6 +7,10 @@ All notable release changes for Agent Learning Kit are tracked here.
 Post-rc.1 increments on the release branch. Each one adds gates on top of the
 66 proved at rc.1; the rc.1 entry below is historical and unchanged.
 
+- Builder chat: `edit_scenario` changes a kept scenario by its key with only the fields that change
+  (`clear` resets a field), keeping its key, number, place and history; a rename alone is not
+  proved again. A new scenario never takes a key the environment has used, a dropped scenario's
+  included, and a repeated saved key is repaired so each scenario keeps its own.
 - A chat conversation never sends the scenario's instruction as the simulated person's first
   message: an empty or echoed opening is asked for again, then for a greeting in their language,
   and the person's own session records what the agent actually heard.
