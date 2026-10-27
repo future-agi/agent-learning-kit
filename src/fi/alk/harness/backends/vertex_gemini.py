@@ -600,7 +600,8 @@ class VertexGeminiSession:
                             response = part.function_response.response
                             response_name = part.function_response.name or ""
                             terminal_save_succeeded = terminal_save_succeeded or (
-                                _successful_terminal_save(response_name, response)
+                                context is None
+                                and _successful_terminal_save(response_name, response)
                             )
                             returned.append(
                                 ToolReturned(
