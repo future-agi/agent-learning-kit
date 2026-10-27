@@ -241,9 +241,9 @@ _install_worker_isolation()
 def _install_declared_python_tools() -> None:
     """Observe source-declared Python tool functions across agent frameworks.
 
-    The profiler matches both the declared module path and callable name, so unrelated
-    functions in dependencies cannot be misreported as a target tool. It records completed
-    invocations only and never executes or alters a tool itself.
+    The profiler matches the declared module path and callable, plus the instance name for
+    factory-created framework tools. It records completed invocations only and never executes
+    or alters a tool itself.
     """
 
     try:
@@ -253,6 +253,7 @@ def _install_declared_python_tools() -> None:
     if not isinstance(bindings, list):
         return
     declared: dict[tuple[str, str], str] = {}
+    named_instances: dict[tuple[str, str, str], str] = {}
     for item in bindings:
         if not isinstance(item, dict):
             continue
@@ -265,12 +266,19 @@ def _install_declared_python_tools() -> None:
             isinstance(value, str) and value for value in (name, module, callable_name)
         ):
             continue
-        declared[
-            (module.replace(".", "/") + ".py", callable_name.rsplit(".", 1)[-1])
-        ] = name
-    if not declared:
+        function = callable_name.rsplit(".", 1)[-1]
+        instance_name = item.get("instance_name")
+        if isinstance(instance_name, str) and instance_name:
+            named_instances[
+                (f"/{module.replace('.', '/')}/", function, instance_name)
+            ] = name
+        else:
+            declared[(module.replace(".", "/") + ".py", function)] = name
+    if not declared and not named_instances:
         return
-    function_names = {function for _, function in declared}
+    function_names = {function for _, function in declared} | {
+        function for _, function, _ in named_instances
+    }
     active = threading.local()
     import dis
     import inspect
@@ -314,6 +322,22 @@ def _install_declared_python_tools() -> None:
             ),
             None,
         )
+        if key is None and named_instances:
+            instance_name = getattr(frame.f_locals.get("self"), "name", None)
+            key = next(
+                (
+                    name
+                    for (
+                        module_path,
+                        function,
+                        expected_name,
+                    ), name in named_instances.items()
+                    if frame.f_code.co_name == function
+                    and module_path in filename
+                    and instance_name == expected_name
+                ),
+                None,
+            )
         if key is None:
             return
         active.busy = True
