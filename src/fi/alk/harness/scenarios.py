@@ -23,11 +23,13 @@ from typing import Any
 
 from .backends import (
     DELEGATE_TOOL,
+    FILE_TOOLS,
     MOST_WORKERS_AT_ONCE,
     SessionSpec,
     ToolServer,
     WorkerSpec,
 )
+from .catalogue import CATALOGUE
 from .config import (
     artifact_dir,
     chosen_model,
@@ -38,7 +40,7 @@ from .config import (
 from .contract import AgentContract
 from .job import HarnessJob
 from .poc_guest_booking import guest_booking_pin_guidance, guest_booking_pin_scenario_problem
-from .scenario import Scenario, voicemail_enabled
+from .scenario import Scenario, used_keys, voicemail_enabled, with_unique_keys
 from .scenario_tools import (
     SCENARIO_SERVER,
     TOOL_NAMES,
@@ -60,7 +62,7 @@ TURNS_EACH = 9
 TURNS_FLOOR = 120
 # One writer's own ceiling, so a single slice cannot spend the whole stage budget.
 WRITER_TURNS = int(os.environ.get("ALK_HARNESS_WRITER_TURNS", "300") or 300)
-WRITER_TOOLS = ("inspect_world", "try_calls", "add_sub_goal", "submit_scenario")
+WRITER_TOOLS = ("inspect_world", "try_calls", "try_check", "add_sub_goal", "submit_scenario")
 # Withheld from a loop that hands the suite out.
 WRITES_A_SCENARIO = ("try_calls", "submit_scenario")
 # Above this, the loop hands the suite out instead of writing it. Zero: always.
@@ -212,7 +214,9 @@ def writer_worker(
                 "reports how many the whole suite holds, across every writer; that count is not "
                 "your target and reaching it is not your job. Write what you were asked for and "
                 "stop.\n\n"
-                "Look at the world first, and read the sub-goals already defined. Submit each "
+                f"Look at the world first, and read {destination / CATALOGUE} for every sub-goal "
+                "you may name: its check, what it compares and where each value comes from, and "
+                "its criteria. Submit each "
                 "scenario with submit_scenario as you prove it rather than holding them to the "
                 "end, then stop: do not save, and do not ask what to do next.\n\n"
                 "**Finish with a report, because it is the only thing the loop sees of your "
@@ -229,6 +233,7 @@ def writer_worker(
                     tools=[spec for spec in server.tools if spec.name in WRITER_TOOLS],
                 )
             },
+            builtins=FILE_TOOLS,
             max_turns=min(WRITER_TURNS, budget),
             # Empty inherits the parent's model.
             model=writer_model(),
@@ -706,6 +711,16 @@ def callers_for(index: int, wanted: int, slice_name: str = "", spoken: bool = Tr
             " Each person is one ordinary, believable person, never a celebrity's or a fictional "
             "character's name: choose their language, home and name together."
         )
+    locations = offered("location")
+    if locations:
+        homes = [
+            locations[(index + step) % len(locations)]
+            for step in range(min(len(locations), max(2, wanted)))
+        ]
+        said += (
+            " Spread where your callers live rather than defaulting to one country: start from "
+            f"{', '.join(homes)}, where their situation allows."
+        )
     beds = places() if spoken else {}
     if beds:
         order = list(beds)
@@ -891,7 +906,9 @@ async def _write_slice(
     return list(kept)
 
 
-def merged(written: list[list[Scenario]]) -> list[Scenario]:
+def merged(
+    written: list[list[Scenario]], used: set[str] | None = None
+) -> list[Scenario]:
     """One suite out of several writers, with folder-name collisions renamed rather than dropped.
 
     Asking for twenty scenarios has to return twenty. Two scenarios may legitimately share a use
@@ -916,7 +933,8 @@ def merged(written: list[list[Scenario]]) -> list[Scenario]:
                 logger.info("renamed a duplicate folder name to %s", one.name)
             taken.add(one.name)
             suite.append(one)
-    return suite
+    # A key names one scenario, so a repeat, even one already saved, gets its own.
+    return with_unique_keys(suite, used)
 
 
 def _suite_summary(suite: list[Scenario]) -> str:
@@ -1116,7 +1134,7 @@ async def write_in_parallel(
         *(guarded(one, allocation, index) for index, one in enumerate(allocation)),
         return_exceptions=False,
     )
-    proved = merged([load_scenarios(destination), *written])
+    proved = merged([load_scenarios(destination), *written], used_keys(destination))
     # What a writer proved but never handed back, because its session died after proving it. Matched
     # by name so a scenario already in hand is not added twice under a numbered name.
     recovered = [
@@ -1132,7 +1150,7 @@ async def write_in_parallel(
         )
         if on_event:
             on_event({"type": "recovered", "kept": len(recovered)})
-    suite = merged([proved, recovered])
+    suite = merged([proved, recovered], used_keys(destination))
 
     # Read the whole thing and fill what nobody covered. Bounded, because a reviewer asked
     # twice will always find something smaller to say.
@@ -1167,7 +1185,7 @@ async def write_in_parallel(
             return_exceptions=False,
         )
         before = len(suite)
-        suite = merged([suite, *more])
+        suite = merged([suite, *more], used_keys(destination))
         allocation = [*allocation, *missing]
         if len(suite) == before:
             break
