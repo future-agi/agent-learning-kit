@@ -396,7 +396,8 @@ When the environment lists sub-actors, their presence is a condition on some sce
 as levels on the axes that already hold conditions: a second voice, someone taking over, a menu in the
 way or a second participant is a competing signal on `interface`, and a sub-actor pushing the
 agent to act for someone who is not the person it serves is an `overlay`. Give each sub-actor such a
-level, named for it, with a share like any other level, so each is tested without appearing in every
+level, named for it, with a real share: roughly one scenario in five for each sub-actor, never the two
+or three a rare level gets, so each is tested in enough calls to judge without appearing in every
 scenario. Such a level sits on top of whatever else the scenario tests, so it costs no scenario of
 its own: deal each one, even in a small suite, alongside another coordinate. A brief, or a scenario you
 write yourself, that has one of those levels includes that sub-actor.
