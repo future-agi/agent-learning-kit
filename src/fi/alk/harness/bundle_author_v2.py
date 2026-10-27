@@ -55,7 +55,7 @@ from .bundle_v2 import (
     load_bundle_v2,
     seal_bundle_v2,
 )
-from .contract import ToolEntry
+from .contract import DataStore, Runtime, ToolEntry
 from .credentials import discover_credentials
 from .job import HarnessJob
 from .job import ProviderExecutionMode, SourceKind
@@ -2159,6 +2159,27 @@ def _compile_source_tool_handlers(contract: dict[str, Any], staging: Path) -> li
     return written
 
 
+def _trace_bindings(contract: dict[str, Any]) -> list[dict[str, str]]:
+    """The source-declared tool callables a chat target's process traces."""
+    return [
+        {"name": entry.tool, "module": entry.module, "callable": entry.callable}
+        for raw in contract.get("tool_entrypoints", [])
+        if isinstance(raw, dict)
+        for entry in [ToolEntry.model_validate(raw)]
+        if entry.mode in {"import", "construct"} and entry.module and entry.callable
+    ]
+
+
+def _environment_tools(contract: dict[str, Any]) -> list[str]:
+    return sorted(
+        {
+            str(tool.get("name") or "").strip()
+            for tool in contract.get("tools", [])
+            if isinstance(tool, dict) and str(tool.get("name") or "").strip()
+        }
+    )
+
+
 def _files(root: Path) -> list[BundleFileV2]:
     records: list[BundleFileV2] = []
     for path in sorted(root.rglob("*")):
@@ -2309,13 +2330,7 @@ def author_bundle_v2(
     # callable boundaries inside the target Python process; the trace is observational and
     # never replays the tool. The same mechanism works for any Python framework with an
     # importable callable recorded during source understanding.
-    trace_bindings = [
-        {"name": entry.tool, "module": entry.module, "callable": entry.callable}
-        for raw in contract_body.get("tool_entrypoints", [])
-        if isinstance(raw, dict)
-        for entry in [ToolEntry.model_validate(raw)]
-        if entry.mode in {"import", "construct"} and entry.module and entry.callable
-    ]
+    trace_bindings = _trace_bindings(contract_body)
     if contract_modality == "chat" and trace_bindings:
         plan = replace(
             plan,
@@ -2509,14 +2524,7 @@ def author_bundle_v2(
                 type=provider,
                 source_target_id=str(job.agent.config[target_key]),
                 public_capability=public_capability,
-                environment_tools=sorted(
-                    {
-                        str(tool.get("name") or "").strip()
-                        for tool in contract_body.get("tools", [])
-                        if isinstance(tool, dict)
-                        and str(tool.get("name") or "").strip()
-                    }
-                ),
+                environment_tools=_environment_tools(contract_body),
                 event_path=str(
                     job.agent.config.get("event_path") or "/provider/events"
                 ),
@@ -2668,20 +2676,30 @@ def reseal_scenarios(authoring: str | Path) -> str | None:
         _copy_scenarios(authoring_root, staging, count=count)
         if (authoring_root / CATALOGUE).is_file():
             shutil.copy2(authoring_root / CATALOGUE, staging / CATALOGUE)
-        if (staging / "contract.json").is_file() and (authoring_root / "contract.json").is_file():
-            shutil.copy2(authoring_root / "contract.json", staging / "contract.json")
+        compiled, processes, metadata = _carry_contract(authoring_root, staging, manifest)
         seed = _reseeded(manifest, authoring_root, staging)
         world_changed = seed is not manifest.seed
         metadata = {
             key: value
-            for key, value in manifest.metadata.items()
-            if key != "sealed_from"
+            for key, value in metadata.items()
+            if key not in {"sealed_from", "contract_compiled"}
         }
-        if _carries_world(authoring_root, staging):
+        if compiled and _carries_world(authoring_root, staging):
             # Unstamped, the platform never replays this bundle for an edit.
             metadata["sealed_from"] = sealed_from(authoring_root)
+            contract = authoring_root / "contract.json"
+            if contract.is_file():
+                # Tells the platform this reseal compiled what the contract derives.
+                metadata["contract_compiled"] = hashlib.sha256(
+                    contract.read_bytes()
+                ).hexdigest()
         resealed = manifest.model_copy(
-            update={"files": _files(staging), "seed": seed, "metadata": metadata}
+            update={
+                "files": _files(staging),
+                "seed": seed,
+                "metadata": metadata,
+                "processes": processes,
+            }
         )
         resealed = resealed.model_copy(update={"digest": seal_bundle_v2(resealed)})
         (staging / BUNDLE_V2_MANIFEST).write_text(
@@ -2702,6 +2720,87 @@ def reseal_scenarios(authoring: str | Path) -> str | None:
             authoring_root, bundle_digest=resealed.digest, count=count, world_changed=world_changed
         )
     return resealed.digest
+
+
+def _built_from(contract: dict[str, Any]) -> tuple[Any, ...]:
+    """What a build derives from a contract other than its tools' handlers and traces."""
+    runtime = Runtime.model_validate(contract.get("runtime") or {})
+    store = contract.get("data_store")
+    tools = contract.get("tools")
+    return (
+        str(contract.get("modality") or "").strip().lower(),
+        runtime.model_dump(mode="json", exclude={"interface"}),
+        DataStore.model_validate(store).model_dump(mode="json")
+        if isinstance(store, dict)
+        else store,
+        contract.get("data_schema") or None,
+        isinstance(tools, list) and not tools,
+        bool(_trace_bindings(contract)),
+    )
+
+
+def _interface(contract: dict[str, Any]) -> Any:
+    return Runtime.model_validate(contract.get("runtime") or {}).model_dump(mode="json")[
+        "interface"
+    ]
+
+
+def _carry_contract(
+    authoring: Path, staging: Path, manifest: EnvironmentBundleV2
+) -> tuple[bool, list[Any], dict[str, Any]]:
+    """Carry an edited contract.json into the staged bundle with what a build compiles from
+    it: the runtime interface the build sealed, the tool handlers, the traced tool bindings
+    and a provider import's tools. Returns whether the bundle now runs the contract, with
+    the manifest's processes and metadata to seal. An edit to anything else a build derives
+    from the contract is carried as written and left for a build.
+    """
+    processes, metadata = list(manifest.processes), dict(manifest.metadata)
+    authored_path, sealed_path = authoring / "contract.json", staging / "contract.json"
+    if not authored_path.is_file() or not sealed_path.is_file():
+        return True, processes, metadata
+    try:
+        authored = json.loads(authored_path.read_text(encoding="utf-8"))
+        sealed = json.loads(sealed_path.read_text(encoding="utf-8"))
+        compiles = (
+            isinstance(authored, dict)
+            and isinstance(sealed, dict)
+            and _built_from(authored) == _built_from(sealed)
+        )
+    except ValueError:
+        compiles = False
+    if not compiles:
+        shutil.copy2(authored_path, sealed_path)
+        return False, processes, metadata
+    # The build may choose the runtime's interface from the source; a reseal keeps its choice.
+    # TODO: an edit to the authored interface alone is not carried; only a build applies it.
+    body = authored
+    built = (sealed.get("runtime") or {}).get("interface")
+    if built is not None and _interface(authored) != _interface(sealed):
+        body = {**authored, "runtime": {**(authored.get("runtime") or {}), "interface": built}}
+    sealed_path.write_text(json.dumps(body, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if body == sealed:
+        return True, processes, metadata
+    # As a build makes them: the authoring handlers, then one for each source tool entry.
+    shutil.rmtree(staging / "handlers", ignore_errors=True)
+    if (authoring / "handlers").is_dir():
+        shutil.copytree(authoring / "handlers", staging / "handlers")
+    _compile_source_tool_handlers(body, staging)
+    bindings = json.dumps(_trace_bindings(body))
+    processes = [
+        process.model_copy(
+            update={"environment": {**process.environment, "ALK_TOOL_TRACE_BINDINGS": bindings}}
+        )
+        if isinstance(process, SourceProcess)
+        and "ALK_TOOL_TRACE_BINDINGS" in process.environment
+        else process
+        for process in processes
+    ]
+    if isinstance(metadata.get("provider_import"), dict):
+        metadata["provider_import"] = {
+            **metadata["provider_import"],
+            "environment_tools": _environment_tools(body),
+        }
+    return True, processes, metadata
 
 
 # What a reseal carries from the authoring folders into the bundle.

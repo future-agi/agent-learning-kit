@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import sqlite3
@@ -2601,6 +2602,151 @@ def test_livekit_lower_bound_in_pyproject_is_read(tmp_path):
     assert _livekit_isolatable(tmp_path)
     (tmp_path / "pyproject.toml").write_text('dependencies = ["livekit-agents>=1.2,<2"]\n')
     assert not _livekit_isolatable(tmp_path)
+
+
+def _tool_entry(name: str) -> dict[str, str]:
+    return {"tool": name, "mode": "import", "module": "customer_tools", "callable": name}
+
+
+def _chat_tools_build(tmp_path: Path) -> tuple[Path, Path, dict]:
+    """A chat target with one source tool, built and sealed."""
+    source = tmp_path / "chat-agent"
+    source.mkdir()
+    (source / "agent.py").write_text("print('agent')\n", encoding="utf-8")
+    (source / "customer_tools.py").write_text(
+        "def lookup_account(email):\n    return {'email': email}\n\n"
+        "def refund(order):\n    return {'refunded': order}\n",
+        encoding="utf-8",
+    )
+    authoring = _authoring(tmp_path)
+    contract = {
+        "modality": "chat",
+        "runtime": {
+            "language": "python",
+            "interface": {"kind": "openai_chat", "protocol": "openai", "include_tools": False},
+        },
+        "tools": [{"name": "lookup_account", "args": ["email"]}],
+        "tool_entrypoints": [_tool_entry("lookup_account")],
+    }
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+    author_bundle_v2(
+        source=source,
+        job=_job(connector="http"),
+        authoring=authoring,
+        output=authoring / "environment-bundle",
+    )
+    return source, authoring, contract
+
+
+def _traced(manifest) -> list[str]:
+    return [
+        process.environment["ALK_TOOL_TRACE_BINDINGS"]
+        for process in manifest.processes
+        if "ALK_TOOL_TRACE_BINDINGS" in getattr(process, "environment", {})
+    ]
+
+
+@pytest.mark.parametrize("persisted", [False, True])
+def test_a_reseal_compiles_the_tool_a_contract_edit_adds(
+    tmp_path: Path, persisted: bool
+) -> None:
+    from fi.alk.harness.amend import _persist
+    from fi.alk.harness.contract import AgentContract
+
+    source, authoring, contract = _chat_tools_build(tmp_path)
+    bundle = authoring / "environment-bundle"
+    contract["tools"].append({"name": "refund", "args": ["order"]})
+    contract["tool_entrypoints"].append(_tool_entry("refund"))
+    if persisted:
+        # As a nudge's contract tools write it.
+        _persist(AgentContract.model_validate(contract), authoring)
+    else:
+        (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+
+    reseal_scenarios(authoring)
+
+    resealed = load_bundle_v2(bundle)
+    fresh = author_bundle_v2(
+        source=source, job=_job(connector="http"), authoring=authoring, output=tmp_path / "fresh"
+    )
+    assert "handlers/refund.py" in {one.path for one in resealed.files}
+    for path in ("contract.json", "handlers/lookup_account.py", "handlers/refund.py"):
+        assert (bundle / path).read_bytes() == (tmp_path / "fresh" / path).read_bytes()
+    assert _traced(resealed) == _traced(fresh) != []
+    assert "refund" in _traced(resealed)[0]
+    assert resealed.metadata["sealed_from"] == sealed_from(authoring)
+    assert resealed.metadata["contract_compiled"] == hashlib.sha256(
+        (authoring / "contract.json").read_bytes()
+    ).hexdigest()
+
+
+def test_a_reseal_drops_the_handler_of_a_tool_a_contract_edit_removes(
+    tmp_path: Path,
+) -> None:
+    _source, authoring, contract = _chat_tools_build(tmp_path)
+    contract["tools"].append({"name": "refund", "args": ["order"]})
+    contract["tool_entrypoints"] = [_tool_entry("refund")]
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+
+    reseal_scenarios(authoring)
+
+    handlers = authoring / "environment-bundle" / "handlers"
+    assert sorted(path.name for path in handlers.iterdir()) == ["refund.py"]
+
+
+def test_a_reseal_keeps_the_runtime_interface_the_build_sealed(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "requirements.txt").write_text("\n", encoding="utf-8")
+    (source / "main.py").write_text("print('real target output')\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(authoring, command=["python", "main.py"])
+    contract = json.loads((authoring / "contract.json").read_text(encoding="utf-8"))
+    contract["tools"] = [{"name": "status", "args": []}]
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+    bundle = authoring / "environment-bundle"
+    author_bundle_v2(source=source, job=_job(connector="auto"), authoring=authoring, output=bundle)
+    built = json.loads((bundle / "contract.json").read_text(encoding="utf-8"))
+    contract["tools"].append({"name": "history", "args": []})
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+
+    reseal_scenarios(authoring)
+
+    resealed = json.loads((bundle / "contract.json").read_text(encoding="utf-8"))
+    assert "interface" not in contract["runtime"]
+    assert resealed["runtime"] == built["runtime"]
+    assert resealed["runtime"]["interface"]["kind"] == "callable"
+    assert [tool["name"] for tool in resealed["tools"]] == ["status", "history"]
+    assert "sealed_from" in load_bundle_v2(bundle).metadata
+
+
+@pytest.mark.parametrize(
+    "edit",
+    [
+        {"runtime": {"language": "python", "command": ["python", "other.py"], "workdir": "."}},
+        {"modality": "voice"},
+        {"data_store": {"kind": "postgres"}},
+    ],
+)
+def test_a_reseal_leaves_a_contract_edit_it_cannot_compile_unstamped(
+    tmp_path: Path, edit: dict
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "requirements.txt").write_text("\n", encoding="utf-8")
+    (source / "main.py").write_text("print('real target output')\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(authoring, command=["python", "main.py"])
+    bundle = authoring / "environment-bundle"
+    author_bundle_v2(source=source, job=_job(connector="auto"), authoring=authoring, output=bundle)
+    contract = json.loads((authoring / "contract.json").read_text(encoding="utf-8"))
+    (authoring / "contract.json").write_text(json.dumps({**contract, **edit}), encoding="utf-8")
+
+    reseal_scenarios(authoring)
+
+    metadata = load_bundle_v2(bundle).metadata
+    assert "sealed_from" not in metadata and "contract_compiled" not in metadata
+    assert (bundle / "contract.json").read_bytes() == (authoring / "contract.json").read_bytes()
 
 
 def test_reseal_carries_an_added_scenario_into_the_sealed_bundle(tmp_path: Path) -> None:
