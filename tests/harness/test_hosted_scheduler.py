@@ -4667,8 +4667,6 @@ def test_a_scenario_with_sub_actors_is_never_run_while_they_are_off_and_says_why
 
 
 def _run_with_friend(monkeypatch, summary, sub_goals) -> hs.ResultReceipt:
-    from types import SimpleNamespace
-
     monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
 
     async def scenario() -> hs.ResultReceipt:
@@ -4686,7 +4684,8 @@ def _run_with_friend(monkeypatch, summary, sub_goals) -> hs.ResultReceipt:
         one = FakeScenario(
             "s1", "id-1", sub_goals=sub_goals, requires_tool_evidence=False
         )
-        one.sub_actors = (SimpleNamespace(id="friend"),)
+        # As `scenario_source` compiles it for a hosted run: the ids alone.
+        one.sub_actors = ("friend",)
         result = await asyncio.wait_for(scheduler.run([one]), timeout=5.0)
         await pool.close()
         return result.receipts[0]

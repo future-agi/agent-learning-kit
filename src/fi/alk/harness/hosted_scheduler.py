@@ -1522,7 +1522,8 @@ def _complications_not_executed(
     named = {str(getattr(goal, "sub_actor", "") or "") for goal in scenario.sub_goals}
     why = []
     for entry in getattr(scenario, "sub_actors", ()) or ():
-        key = str(getattr(entry, "id", "") or "")
+        # A compiled scenario carries the ids alone; a written one carries the entries.
+        key = str(entry if isinstance(entry, str) else getattr(entry, "id", "") or "")
         if not key or key in named:
             continue
         seen = next((one for one in summary if one.get("sub_actor") == key), {})
