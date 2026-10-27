@@ -133,8 +133,8 @@ SUB_ACTOR_SECONDS = 60.0
 MAX_WAITING_LINES = 2
 TIME_UP = "sub-actor time used up"
 # A background voice's level as an amplitude ratio to the person's voice (its RMS over theirs, on
-# each line), drawn per call from the run seed: an experimental default, about -16 to -8 dB.
-LOUDNESS_RANGE = (0.16, 0.40)
+# each line), drawn per call from the run seed: 1/3 to 1/1.5 of the person, about -9.5 to -3.5 dB.
+LOUDNESS_RANGE = (1 / 3, 1 / 1.5)
 # The highest a background line may peak once scaled, as a share of full scale, so the mix never clips.
 PEAK_LIMIT = 0.9
 SPEAKS_AGAIN = 0.5

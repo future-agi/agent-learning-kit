@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 from pathlib import Path
 from collections.abc import Awaitable, Callable
-from typing import Any, AsyncIterable
+from typing import Any, AsyncIterable, AsyncIterator
 from uuid import uuid4
 
 try:
@@ -3473,7 +3473,9 @@ class LiveKitEngine(BaseEngine):
             frames: AsyncIterable[Any], ratio: float, text: str, name: str
         ) -> None:
             level = at_level(frames, ratio, customer_agent.voice_rms())
-            await player.play(AudioConfig(level, volume=1.0)).wait_for_playout()
+            await player.play(
+                AudioConfig(_stream_at_mixer_rate(level), volume=1.0)
+            ).wait_for_playout()
             await heard(f"{name} said nearby, and you heard it: {text}")
 
         voices = []
@@ -4416,6 +4418,29 @@ def _frame_at_mixer_rate(frame: "rtc.AudioFrame") -> "rtc.AudioFrame":
         num_channels=frame.num_channels,
         samples_per_channel=len(converted) // (2 * frame.num_channels),
     )
+
+
+async def _stream_at_mixer_rate(frames: AsyncIterable[Any]) -> AsyncIterator[Any]:
+    """A voice's audio at the mixer's rate. The mixer reinterprets what it is given, so a voice made at
+    another rate would play fast and high. One resampler per stream, as its state carries between frames."""
+    resampler = None
+    async for frame in frames:
+        if frame.sample_rate == _BACKGROUND_MIXER_RATE:
+            yield frame
+            continue
+        resampler = resampler or PCMResampler(
+            from_rate=frame.sample_rate,
+            to_rate=_BACKGROUND_MIXER_RATE,
+            channels=frame.num_channels,
+        )
+        converted = resampler.convert(bytes(frame.data))
+        if converted:
+            yield rtc.AudioFrame(
+                data=converted,
+                sample_rate=_BACKGROUND_MIXER_RATE,
+                num_channels=frame.num_channels,
+                samples_per_channel=len(converted) // (2 * frame.num_channels),
+            )
 
 
 def _tone_frame(hz: float, seconds: float) -> "rtc.AudioFrame":

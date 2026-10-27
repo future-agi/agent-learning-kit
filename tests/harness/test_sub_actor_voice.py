@@ -766,3 +766,30 @@ def test_only_one_line_is_written_and_voiced_at_a_time():
 
     assert len(asyncio.run(scenario())) == 2
     assert writing["most"] == 1
+
+
+def test_a_background_line_reaches_the_mixer_at_its_rate_so_it_plays_at_its_own_speed():
+    from livekit import rtc
+
+    from fi.simulate.simulation.engines import livekit as engine
+
+    def frame(count=240):
+        return rtc.AudioFrame(
+            data=array.array("h", [1000] * count).tobytes(),
+            sample_rate=24000,
+            num_channels=1,
+            samples_per_channel=count,
+        )
+
+    async def frames():
+        for _ in range(100):
+            yield frame()
+
+    async def scenario():
+        return [out async for out in engine._stream_at_mixer_rate(frames())]
+
+    out = asyncio.run(scenario())
+    # One second of 24 kHz speech is still one second at the mixer's 48 kHz, not half of one.
+    assert {one.sample_rate for one in out} == {engine._BACKGROUND_MIXER_RATE}
+    total = sum(one.samples_per_channel for one in out)
+    assert abs(total - engine._BACKGROUND_MIXER_RATE) <= 48
