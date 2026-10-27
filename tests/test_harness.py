@@ -6424,35 +6424,180 @@ def test_a_mutation_that_does_not_land_accuses_nobody():
     assert blind(survived) == []
 
 
-def test_an_opening_line_in_the_agents_voice_falls_back_to_the_instruction():
-    """The opening turn is the one with no conversation behind it, and a model asked to speak into
-    that gap sometimes takes the other part.
+ECHOED = "You contact support. You open by asking about your order."
+RETRIED = "Hi, where is my order?"
 
-    Both of these are real opening lines from a run: the agent then replied that no question had
-    been asked, and the scenario failed for a reason that had nothing to do with the agent.
-    """
-    from fi.alk.harness.run.conversation import OPENING, _answered_as_the_agent
 
-    assert _answered_as_the_agent(
-        "Sure! Let me find the database and make that update for you."
-    )
-    assert _answered_as_the_agent(
-        "I'd be happy to look that up! Let me check the database."
-    )
-    assert _answered_as_the_agent("What would you like to know about the database?")
+def _open_a_conversation(monkeypatch, openings, replies=("Done.",), instruction=ECHOED):
+    """Run converse with a caller that remembers every message it was sent, like a real session."""
+    import asyncio
+    from types import SimpleNamespace
 
-    # What a person actually says, which must survive untouched.
-    assert not _answered_as_the_agent("How many of your customers are based in Canada?")
-    assert not _answered_as_the_agent(
-        "I want all track prices changed to 0.99 for the promotion, can you update them?"
-    )
-    assert not _answered_as_the_agent(
-        "Which genre has the highest average listener rating?"
-    )
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.run import conversation
+    from fi.alk.harness.scenario import Scenario
 
-    # And the instruction that produces the opening says which part to play.
+    openings = iter(openings)
+    caller_saw = []
+    agent_heard = []
+    replies = iter(replies)
+
+    async def noop(*_args):
+        return None
+
+    async def caller_says(prompt):
+        caller_saw.append(prompt)
+        text = next(openings, None)
+        return SimpleNamespace(text=text if text is not None else "Thanks, bye. [DONE]")
+
+    customer = SimpleNamespace(
+        __aenter__=noop,
+        __aexit__=noop,
+        say=caller_says,
+        spent_usd=0.0,
+        simulator_tokens=(0, 0),
+    )
+    monkeypatch.setattr(conversation, "Stage", lambda *_a, **_k: customer)
+
+    async def agent_hears(text):
+        agent_heard.append(text)
+        reply = next(replies, None)
+        if reply is None:
+            raise conversation.TargetConversationEnded("Done.")
+        return reply
+
+    target = SimpleNamespace(open=noop, say=agent_hears, close=noop, spent_usd=0.0)
+    scenario = Scenario(name="s", instruction=instruction)
+    asyncio.run(conversation.converse(target, scenario, AgentContract()))
+    return caller_saw, agent_heard
+
+
+def test_the_opening_ask_says_who_speaks_first_and_in_which_language():
+    """Which part the person plays is set by guidance, not by matching what they wrote."""
+    from fi.alk.harness.run.conversation import OPENING
+
     assert "you speak first" in OPENING
-    assert "not \nthe agent being contacted" in OPENING or "not the agent" in OPENING
+    assert "the person making contact, not the agent being contacted" in OPENING
+    assert "in the language you speak" in OPENING
+
+
+@pytest.mark.parametrize(
+    "instruction, said, sent",
+    [
+        (ECHOED, "", False),
+        (ECHOED, "   \n\t", False),
+        (ECHOED, "[DONE]", False),
+        (ECHOED, "[STUCK]", False),
+        (ECHOED, ECHOED, False),
+        (
+            ECHOED,
+            "  you CONTACT support.  You open by\nasking about your order. ",
+            False,
+        ),
+        (ECHOED, f"Hi! {ECHOED}", False),
+        ("Você quer saber do pedido.", "Voc\u0065\u0302 quer saber do pedido.", False),
+        ("我想取消订单", "我想 取消订单", False),
+        (ECHOED, "Let me explain, my order never came", True),
+        (ECHOED, "Merhaba, siparişim gelmedi.", True),
+        (ECHOED, "你好，我的订单还没到。", True),
+        ("Cancel my order", "Hi, I want to cancel my order.", True),
+        ("hi", "Is this the shop?", True),
+        ("", "Where is my order?", True),
+    ],
+)
+def test_an_opening_is_held_back_only_when_empty_a_marker_or_the_instruction(
+    monkeypatch, instruction, said, sent
+):
+    _, agent_heard = _open_a_conversation(
+        monkeypatch, [said, RETRIED], replies=(), instruction=instruction
+    )
+    assert agent_heard == [said.strip() if sent else RETRIED]
+
+
+@pytest.mark.parametrize(
+    "openings, first",
+    [
+        ([RETRIED], RETRIED),
+        (["", RETRIED], RETRIED),
+        ([ECHOED, RETRIED], RETRIED),
+        ([ECHOED, ECHOED, "Hi there."], "Hi there."),
+        (["", "", "Merhaba."], "Merhaba."),
+        (["", "", ""], "Hello."),
+        ([ECHOED, ECHOED, ECHOED], "Hello."),
+    ],
+)
+def test_an_unusable_opening_is_corrected_then_a_greeting_and_the_instruction_is_never_sent(
+    monkeypatch, openings, first
+):
+    from fi.alk.harness.run.conversation import OPENING
+
+    caller_saw, agent_heard = _open_a_conversation(monkeypatch, openings, replies=())
+    assert agent_heard == [first]
+    # Each retry tells the person their last line was not sent, and the last asks for a greeting
+    # in their own language, so a retry is never the same question with the failure in context.
+    assert caller_saw[0] == OPENING
+    asks = caller_saw[1 : len(openings)]
+    assert all("not sent" in ask for ask in asks)
+    assert len(set(asks)) == len(asks)
+    if len(asks) == 2:
+        assert "greeting, in the language you speak" in asks[1]
+
+
+LONG = "My order " + "never arrived and " * 180 + "I want a refund."
+
+
+@pytest.mark.parametrize(
+    "openings, first",
+    [
+        (["   \n\t", RETRIED], RETRIED),
+        (["[DONE]", RETRIED], RETRIED),
+        ([RETRIED + " [DONE]"], RETRIED),
+        (["مرحبا، طلبي لم يصل بعد"], "مرحبا، طلبي لم يصل بعد"),
+        (["", "", "你好"], "你好"),
+        ([ECHOED, "[STUCK]", "नमस्ते"], "नमस्ते"),
+        ([LONG], LONG.strip()),
+        (
+            ["The website said 'how can I help you' and then crashed."],
+            "The website said 'how can I help you' and then crashed.",
+        ),
+    ],
+)
+def test_openings_in_any_script_or_shape_reach_the_agent_as_the_person_wrote_them(
+    monkeypatch, openings, first
+):
+    _, agent_heard = _open_a_conversation(monkeypatch, openings, replies=())
+    assert agent_heard == [first]
+
+
+def test_after_a_corrected_opening_the_next_turn_is_only_the_agents_reply(monkeypatch):
+    caller_saw, agent_heard = _open_a_conversation(
+        monkeypatch, [ECHOED, RETRIED, "Thanks. [DONE]"], replies=("Let me check.",)
+    )
+    assert agent_heard == [RETRIED]
+    assert caller_saw[2] == "Let me check."
+    assert "not sent" in caller_saw[1]
+
+
+def test_after_an_opening_the_person_did_not_write_their_next_turn_is_told_what_was_said(
+    monkeypatch,
+):
+    caller_saw, agent_heard = _open_a_conversation(
+        monkeypatch,
+        ["", "", "", "My order never came."],
+        replies=("Hi, how can I help?",),
+    )
+    assert agent_heard == ["Hello.", "My order never came."]
+    assert (
+        caller_saw[-1]
+        == "You opened with: Hello.\nThe agent replied: Hi, how can I help?"
+    )
+
+
+def test_an_opening_the_person_wrote_reaches_them_without_a_note(monkeypatch):
+    caller_saw, _ = _open_a_conversation(
+        monkeypatch, [RETRIED, "Thanks. [DONE]"], replies=("Let me check.",)
+    )
+    assert caller_saw[-1] == "Let me check."
 
 
 def test_a_refusal_scenario_is_not_vacuous_because_its_evidence_is_what_was_said():

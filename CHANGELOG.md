@@ -11,6 +11,9 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
   (`clear` resets a field), keeping its key, number, place and history; a rename alone is not
   proved again. A new scenario never takes a key the environment has used, a dropped scenario's
   included, and a repeated saved key is repaired so each scenario keeps its own.
+- A chat conversation never sends the scenario's instruction as the simulated person's first
+  message: an empty or echoed opening is asked for again, then for a greeting in their language,
+  and the person's own session records what the agent actually heard.
 - Runtime validation checks scenarios on one database lane per CPU by default, capped by the
   sandbox's cgroup CPU quota, instead of a fixed 16; `ALK_VALIDATION_DB_LANES` still overrides it.
 - Docs corpus: the full `docs/` tree (quickstarts, per-track guides, framework
