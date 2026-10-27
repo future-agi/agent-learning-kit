@@ -1167,18 +1167,30 @@ def test_database_clone_checks_use_the_lane_count(tmp_path, monkeypatch):
     assert sorted(set(clones)) == ["lane0", "lane1", "lane2"]
 
 
-def test_local_runtime_validation_does_not_require_hosted_capabilities(
+def test_local_runtime_validation_uses_shared_ready_budget_without_hosted_capabilities(
     tmp_path, monkeypatch
 ):
     from fi.alk.harness import (
         bundle_author_v2,
         hosted_entrypoint,
+        hosted_scheduler,
         outbound,
         process_preflight,
         process_runtime,
         scenario_source,
         source_data_invariants,
     )
+
+    phase_timeouts = {}
+    run_phase = hosted_scheduler._run_phase
+
+    async def capture_timeout(fn, target, *, timeout, phase, executor):
+        phase_timeouts[phase] = timeout
+        return await run_phase(
+            fn, target, timeout=timeout, phase=phase, executor=executor
+        )
+
+    monkeypatch.setattr(hosted_scheduler, "_run_phase", capture_timeout)
 
     secrets = tmp_path / "secrets.json"
     secrets.write_text("{}", encoding="utf-8")
@@ -1265,6 +1277,8 @@ def test_local_runtime_validation_does_not_require_hosted_capabilities(
         )
         == 1
     )
+    assert hosted_scheduler.READY_TIMEOUT_SECONDS == 60.0
+    assert phase_timeouts["ready"] == hosted_scheduler.READY_TIMEOUT_SECONDS
 
 
 def test_connect_only_provider_repair_preserves_external_runtime_mode(
