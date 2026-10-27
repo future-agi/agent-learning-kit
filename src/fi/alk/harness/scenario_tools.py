@@ -1083,8 +1083,9 @@ def accept_scenario(
     # browser refresh, process restart, or later scenario failure cannot make the UI say none
     # were written. ``save_scenarios`` remains the suite-level diversity/finality gate.
     # Saved on both paths: parallel writers share this process, so the proof file is safe to
-    # write even where the folders are not.
-    record_proof(world_root, scenario.scenario_key or _slug(scenario.name), proof)
+    # write even where the folders are not. A rename is not proved again: its key keeps its proof.
+    if proof is not None:
+        record_proof(world_root, scenario.scenario_key or _slug(scenario.name), proof)
     if persist:
         write_scenarios(kept, world_root, catalogue)
     else:
