@@ -2749,6 +2749,17 @@ def test_a_reseal_leaves_a_contract_edit_it_cannot_compile_unstamped(
     assert (bundle / "contract.json").read_bytes() == (authoring / "contract.json").read_bytes()
 
 
+def test_a_reseal_leaves_a_contract_added_after_the_build_unstamped(tmp_path: Path) -> None:
+    _source, authoring, _model, bundle, _ = _places(tmp_path, ir_seed=False)
+    assert not (bundle / "contract.json").exists()
+    (authoring / "contract.json").write_text(json.dumps({"modality": "chat"}), encoding="utf-8")
+
+    reseal_scenarios(authoring)
+
+    metadata = load_bundle_v2(bundle).metadata
+    assert "sealed_from" not in metadata and "contract_compiled" not in metadata
+
+
 def test_reseal_carries_an_added_scenario_into_the_sealed_bundle(tmp_path: Path) -> None:
     source = tmp_path / "provider-target"
     source.mkdir()

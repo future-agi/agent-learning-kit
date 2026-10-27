@@ -2757,7 +2757,8 @@ def _carry_contract(
     processes, metadata = list(manifest.processes), dict(manifest.metadata)
     authored_path, sealed_path = authoring / "contract.json", staging / "contract.json"
     if not authored_path.is_file() or not sealed_path.is_file():
-        return True, processes, metadata
+        # A contract added after a build reaches the bundle only through a build.
+        return not authored_path.is_file(), processes, metadata
     try:
         authored = json.loads(authored_path.read_text(encoding="utf-8"))
         sealed = json.loads(sealed_path.read_text(encoding="utf-8"))
