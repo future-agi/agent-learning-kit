@@ -984,7 +984,38 @@ def test_texts_the_platform_masks_keep_a_value_whole_past_its_500_cap(tmp_path):
     assert value in left_out[0]["why"]
     assert value in nudge._problem("i", "k", "y" * 480 + value)["message"]
     assert value in nudge._failed(RuntimeError("y" * 480 + value))
-    assert len(nudge._failed(RuntimeError("y" * 5000))) == nudge._TEXT_MAX
+    assert len(nudge._failed(RuntimeError("y" * nudge._TEXT_MAX))) == nudge._TEXT_MAX
+
+
+@pytest.mark.parametrize("length", [32, 24_000, 65_536])
+def test_padding_the_platform_strips_cannot_push_a_value_past_the_cut(length):
+    value = ("FAKE-CREDENTIAL-" + "0123456789abcdef" * length)[:length]
+    padded = "\x01" * 3990 + "\x1b[0m" * 10 + "y" * 480 + value
+
+    for text in (
+        nudge._problem("i", "k", padded)["message"],
+        nudge._failed(RuntimeError(padded)),
+    ):
+        assert value in text
+        assert "\x01" not in text and "\x1b" not in text
+
+
+# The platform's ``_normalize_log_text`` (``hosted_harness_diagnostics``); the same table
+# is pinned there.
+@pytest.mark.parametrize(
+    ("raw", "normalised"),
+    [
+        ("plain text", "plain text"),
+        ("tab\tnew\nline\rreturn", "tab\tnew\nline\rreturn"),
+        ("\x00\x01\x08\x0b\x0c\x0e\x1f\x7fkept", "kept"),
+        ("\x1b[31mred\x1b[0m", "red"),
+        ("\x1b[1;2;3mx\x1bMy\x1b_z", "xyz"),
+        ("\x1b]0;title\x07after", "0;titleafter"),
+        ("\x80\x9f\u00e9", "\x80\x9f\u00e9"),
+    ],
+)
+def test_result_texts_are_normalised_as_the_platform_normalises_them(raw, normalised):
+    assert nudge._cut(raw) == normalised
 
 
 def test_the_result_keeps_only_what_the_platform_reads(tmp_path):

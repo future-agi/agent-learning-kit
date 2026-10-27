@@ -137,21 +137,32 @@ READ_ONLY_TOOLS = frozenset(
     }
 )
 _WORLD_JSON = (MANIFEST, STATE, SAVED, InProcessStore.FILE, "environment.json")
-# The platform's PROBLEM_TEXT_MAX (500) plus the longest value: it masks whole values,
-# then cuts, so a value cut short here could not be masked there.
-_TEXT_MAX = 4000
+# The platform's PROBLEM_TEXT_MAX (500) plus the longest credential it accepts (65,536): it
+# masks whole values, then cuts, so a value cut short here could not be masked there.
+_TEXT_MAX = 500 + 65_536
+# The platform strips these before masking (its ``_normalize_log_text``); stripping them
+# before the cut too keeps padding from pushing a value past it.
+_ANSI_ESCAPE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+_CONTROL_CHARACTERS = {
+    code: None for code in range(128) if (code < 32 and code not in {9, 10, 13}) or code == 127
+}
 # The platform reads this many of each list (PROBLEMS_MAX); the rest only grows the file.
 _LISTED_MAX = 50
 
 
+def _cut(text: str) -> str:
+    """``text`` normalised as the platform normalises it, then cut to what it can mask."""
+    return _ANSI_ESCAPE.sub("", text).translate(_CONTROL_CHARACTERS)[:_TEXT_MAX]
+
+
 def _problem(item: str, kind: str, message: str) -> dict[str, str]:
-    return {"item": item, "kind": kind, "message": message[:_TEXT_MAX]}
+    return {"item": item, "kind": kind, "message": _cut(message)}
 
 
 def _failed(exc: BaseException) -> str:
     if isinstance(exc, ValidationError):
-        return f"invalid: {_redact_validation_error(exc)}"[:_TEXT_MAX]
-    return f"{type(exc).__name__}: {exc}"[:_TEXT_MAX]
+        return _cut(f"invalid: {_redact_validation_error(exc)}")
+    return _cut(f"{type(exc).__name__}: {exc}")
 
 
 def filtered_spec(spec: SessionSpec, allowed: frozenset[str]) -> SessionSpec:
@@ -368,7 +379,7 @@ def suite_gate(
     left_out = [
         {
             "key": key,
-            "why": str((earlier.get(key) or {}).get("why") or "dropped")[:_TEXT_MAX],
+            "why": _cut(str((earlier.get(key) or {}).get("why") or "dropped")),
         }
         for key in sorted(before - present)
     ]
@@ -520,7 +531,7 @@ def invariant_problems(
     said = "source-data invariants SQLite cannot run: " + ", ".join(
         dict.fromkeys(unrun)
     )
-    return problems, [said[:_TEXT_MAX]]
+    return problems, [_cut(said)]
 
 
 def seed_row_problems(workspace: Path, source: Path | None) -> list[dict]:
