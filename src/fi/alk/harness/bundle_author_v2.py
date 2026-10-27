@@ -721,12 +721,37 @@ def _documented_ddl_statements(sql: str) -> list[str]:
     but database creation, psql commands, and fixture mutations stay out of the adopted schema.
     """
 
-    cleaned = "\n".join(
-        line for line in re.sub(r"--[^\n]*", "", sql).splitlines() if not line.lstrip().startswith("\\")
+    source = "\n".join(
+        line for line in sql.splitlines() if not line.lstrip().startswith("\\")
     )
+    cleaned_chars: list[str] = []
+    quote: str | None = None
+    index = 0
+    while index < len(source):
+        char = source[index]
+        if quote is not None:
+            cleaned_chars.append(char)
+            if char == quote:
+                if index + 1 < len(source) and source[index + 1] == quote:
+                    index += 1
+                    cleaned_chars.append(source[index])
+                else:
+                    quote = None
+        elif char in {"'", '"'}:
+            quote = char
+            cleaned_chars.append(char)
+        elif char == "-" and index + 1 < len(source) and source[index + 1] == "-":
+            index = source.find("\n", index)
+            if index == -1:
+                break
+            cleaned_chars.append("\n")
+        else:
+            cleaned_chars.append(char)
+        index += 1
+    cleaned = "".join(cleaned_chars)
     statements: list[str] = []
     start = 0
-    quote: str | None = None
+    quote = None
     index = 0
     while index < len(cleaned):
         char = cleaned[index]
@@ -753,8 +778,8 @@ def _documented_ddl_statements(sql: str) -> list[str]:
 def _documented_source_schemas(source: Path) -> list[_SourceSchemaArtifact]:
     """Use the first README's SQL fences without adopting duplicate alternatives.
 
-    This is source-owned executable evidence, not model-authored schema.  Taking the first
-    The first declaration of each table wins. This supports one fence per table without combining
+    This is source-owned executable evidence, not model-authored schema. The first declaration
+    of each table wins. This supports one fence per table without combining
     alternative local and cloud recipes that redeclare the same table.
     """
 
@@ -767,6 +792,13 @@ def _documented_source_schemas(source: Path) -> list[_SourceSchemaArtifact]:
             start=1,
         ):
             statements = _documented_ddl_statements(match.group(1))
+            tables = {
+                table_match.group(1).strip('"').lower()
+                for statement in statements
+                if (table_match := _CREATED_TABLE.match(statement))
+            }
+            if tables and tables <= declared_tables:
+                continue
             accepted: list[str] = []
             for statement in statements:
                 table_match = _CREATED_TABLE.match(statement)
