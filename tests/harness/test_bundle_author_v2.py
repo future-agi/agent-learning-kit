@@ -583,6 +583,66 @@ def test_chat_bundle_traces_langchain_sql_tool_execution(tmp_path: Path) -> None
     ]
 
 
+def test_chat_bundle_traces_individual_langchain_sql_tool_classes(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "chat-agent"
+    source.mkdir()
+    (source / "app.py").write_text("print('agent')\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring,
+        command=["python3", "app.py"],
+        interface={
+            "kind": "http",
+            "protocol": "openai_chat",
+            "port": 8080,
+            "path": "/v1/chat/completions",
+            "include_tools": False,
+        },
+    )
+    contract_path = authoring / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    tool_classes = {
+        "sql_db_query": "QuerySQLDataBaseTool",
+        "sql_db_schema": "InfoSQLDatabaseTool",
+        "sql_db_list_tables": "ListSQLDatabaseTool",
+        "sql_db_query_checker": "QuerySQLCheckerTool",
+    }
+    contract["tools"] = [{"name": name, "args": []} for name in tool_classes]
+    contract["tool_entrypoints"] = [
+        {
+            "tool": name,
+            "mode": "construct",
+            "module": "langchain_community.tools.sql_database.tool",
+            "callable": class_name,
+            "factory": f"{class_name}(db=database)",
+        }
+        for name, class_name in tool_classes.items()
+    ]
+    contract_path.write_text(json.dumps(contract))
+
+    bundle = author_bundle_v2(
+        source=source,
+        job=_job(connector="http"),
+        authoring=authoring,
+        output=tmp_path / "bundle",
+    )
+
+    process = next(
+        item for item in bundle.processes if item.name == bundle.runtime.control_service
+    )
+    assert json.loads(process.environment["ALK_TOOL_TRACE_BINDINGS"]) == [
+        {
+            "name": name,
+            "module": "langchain_community.tools.sql_database.tool",
+            "callable": "_run",
+            "instance_name": name,
+        }
+        for name in tool_classes
+    ]
+
+
 def test_auto_voice_contract_compiles_livekit_process_runtime(tmp_path: Path) -> None:
     source = tmp_path / "voice-agent"
     source.mkdir()

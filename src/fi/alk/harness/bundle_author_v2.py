@@ -3167,23 +3167,31 @@ def _files(root: Path) -> list[BundleFileV2]:
 
 
 def _langchain_sql_trace_bindings(contract: dict[str, Any]) -> list[dict[str, str]]:
-    """Bind toolkit products to their shared execution method by declared tool name."""
+    """Bind LangChain SQL tools to their shared execution method by declared name."""
 
     bindings: list[dict[str, str]] = []
     for raw in contract.get("tool_entrypoints", []):
         if not isinstance(raw, dict):
             continue
         entry = ToolEntry.model_validate(raw)
-        if (
-            entry.mode != "construct"
-            or entry.module != "langchain_community.agent_toolkits.sql.toolkit"
-            or entry.callable != "SQLDatabaseToolkit"
-        ):
+        toolkit_product = (
+            entry.mode == "construct"
+            and entry.module == "langchain_community.agent_toolkits.sql.toolkit"
+            and entry.callable == "SQLDatabaseToolkit"
+        )
+        individual_tool = (
+            entry.mode == "construct"
+            and entry.module == "langchain_community.tools.sql_database.tool"
+            and entry.callable.endswith("Tool")
+        )
+        if not toolkit_product and not individual_tool:
             continue
         bindings.append(
             {
                 "name": entry.tool,
-                "module": "langchain_community",
+                "module": (
+                    entry.module if individual_tool else "langchain_community"
+                ),
                 "callable": "_run",
                 "instance_name": entry.tool,
             }
