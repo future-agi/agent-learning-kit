@@ -65,8 +65,10 @@ from .caller_barge_in import (
 )
 from .opening import PromptOpeningGate
 from .sub_actor_voice import (
+    SILENCE_RMS,
     SubActorsOnCall,
     SubActorVoice,
+    at_level,
     with_sub_actor_turns,
     world_access,
 )
@@ -720,6 +722,9 @@ class _TestRunnerAgent(Agent):
         self._caller_barge_in: CallerBargeIn | None = None
         # Told about each committed agent turn; True while a sub-actor holds the line.
         self._sub_actor_turn: Any = None
+        # The person's speech so far, so a background voice is set against how loud they are.
+        self._voice_squares = 0.0
+        self._voice_samples = 0
 
     async def on_user_turn_completed(self, turn_ctx, new_message) -> None:
         if self._call_over:
@@ -1310,6 +1315,20 @@ class _TestRunnerAgent(Agent):
         logger.info("simulator hold rescue generating check-in")
         session.generate_reply(instructions=_HOLD_CHECK_IN)
 
+    def _hear_own_voice(self, frame: Any) -> None:
+        samples = array.array("h", bytes(frame.data))
+        squares = sum(sample * sample for sample in samples)
+        # Speech only: pauses would make the person seem quieter than they sound.
+        if samples and squares / len(samples) > SILENCE_RMS**2:
+            self._voice_squares += squares
+            self._voice_samples += len(samples)
+
+    def voice_rms(self) -> float | None:
+        """The person's speech level so far, or None before they have said anything."""
+        if not self._voice_samples:
+            return None
+        return math.sqrt(self._voice_squares / self._voice_samples)
+
     async def tts_node(self, text: AsyncIterable[str], model_settings: ModelSettings):
         started = time.monotonic()
         frames = 0
@@ -1325,6 +1344,7 @@ class _TestRunnerAgent(Agent):
                         time.monotonic() - started,
                     )
                 frames += 1
+                self._hear_own_voice(frame)
                 yield frame
         except asyncio.CancelledError:
             state = "cancelled"
@@ -3450,9 +3470,10 @@ class LiveKitEngine(BaseEngine):
             await heard(f"{name} said on the line: {text}")
 
         async def play(
-            frames: AsyncIterable[Any], volume: float, text: str, name: str
+            frames: AsyncIterable[Any], ratio: float, text: str, name: str
         ) -> None:
-            await player.play(AudioConfig(frames, volume=volume)).wait_for_playout()
+            level = at_level(frames, ratio, customer_agent.voice_rms())
+            await player.play(AudioConfig(level, volume=1.0)).wait_for_playout()
             await heard(f"{name} said nearby, and you heard it: {text}")
 
         voices = []

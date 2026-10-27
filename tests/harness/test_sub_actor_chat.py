@@ -38,9 +38,12 @@ class _Stage:
     async def say(self, text):
         _Stage.briefs.setdefault(self.name + ":heard", []).append(text)
         line = _Stage.scripts[self.name].pop(0)
+        if isinstance(line, float):
+            await asyncio.sleep(line)
+            line = "too late"
         if isinstance(line, Exception):
             raise line
-        return SimpleNamespace(text=line)
+        return SimpleNamespace(text=line, tokens_in=10, tokens_out=5, cost_usd=0.001)
 
 
 class _Target:
@@ -132,8 +135,15 @@ def test_a_participant_writes_after_its_trigger_and_both_the_agent_and_the_perso
         "name": "Rowan",
         "sub_actor": "friend",
         "content": "Add a second one for me",
+        "tokens": 15,
         "at": transcript.exchanges[4].at,
     }
+    # The message's tokens are in the call's simulator usage once; the person's own add nothing here.
+    assert (transcript.simulator_input_tokens, transcript.simulator_output_tokens) == (
+        10,
+        5,
+    )
+    assert transcript.spent_usd == 0.001
     record = body["sub_actors"]
     assert record["summary"] == [
         {
@@ -255,3 +265,26 @@ def test_an_empty_opening_falls_back_to_the_person_s_own_situation_only(
         tmp_path, monkeypatch, person=["", "That's all [DONE]"], writes=[]
     )
     assert target.said[0] == "You want one item."
+
+
+def test_a_message_not_ready_in_time_is_dropped_and_the_chat_goes_on(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(conversation, "HANDOFF_LINE_SECONDS", 0.05)
+    transcript, target = _run(
+        tmp_path,
+        monkeypatch,
+        person=["Hi, one item please", "Yes", "That's all [DONE]"],
+        writes=[1.0],
+    )
+    assert [one.speaker for one in transcript.exchanges] == [
+        "customer",
+        "agent",
+        "customer",
+        "agent",
+        "customer",
+    ]
+    assert target.heard == []
+    summary = json.loads(transcript.artifact())["sub_actors"]["summary"]
+    assert summary[0]["triggered"] and summary[0]["delivered"] == 0
+    assert summary[0]["dropped"] == ["not ready in time"]

@@ -3,8 +3,10 @@ person's own phone menu, which answers a call the agent places."""
 
 from __future__ import annotations
 
+import array
 import asyncio
 import logging
+import math
 import re
 import time
 from typing import Any, AsyncIterator, Awaitable, Callable
@@ -15,7 +17,9 @@ from fi.simulate.simulation.sub_actors import (
     TOOLS_READ_SECONDS,
     Cast,
     Moment,
+    limited,
     line_brief,
+    line_gain,
 )
 
 logger = logging.getLogger(__name__)
@@ -64,6 +68,58 @@ async def voiced(tts: Any, text: str) -> AsyncIterator[Any] | None:
             await close()
 
     return rest()
+
+
+# Below this a frame is a pause, not speech (about 1% of full scale).
+SILENCE_RMS = 328.0
+# How much of a background line is measured before it starts, to set its level.
+MEASURED_SECONDS = 0.5
+
+
+def _samples(frame: Any) -> array.array:
+    return array.array("h", bytes(frame.data))
+
+
+def _rms(samples: array.array) -> float:
+    return math.sqrt(sum(s * s for s in samples) / len(samples)) if samples else 0.0
+
+
+async def at_level(
+    frames: AsyncIterator[Any], ratio: float, person_rms: float | None
+) -> AsyncIterator[Any]:
+    """A background line at `ratio` of the person's level, measured on its own opening speech, with
+    each frame held under the peak limit so the mix never clips."""
+    from livekit import rtc
+
+    opening, measured, rate = [], array.array("h"), 0
+    async for frame in frames:
+        opening.append(frame)
+        rate = frame.sample_rate * frame.num_channels
+        heard = _samples(frame)
+        if _rms(heard) > SILENCE_RMS:
+            measured.extend(heard)
+        if len(measured) >= rate * MEASURED_SECONDS:
+            break
+    gain = line_gain(ratio, person_rms, _rms(measured))
+
+    def scaled(frame: Any) -> Any:
+        samples = _samples(frame)
+        peak = max((abs(s) for s in samples), default=0)
+        factor = limited(gain, peak)
+        data = array.array(
+            "h", (max(-32768, min(32767, round(s * factor))) for s in samples)
+        )
+        return rtc.AudioFrame(
+            data=data.tobytes(),
+            sample_rate=frame.sample_rate,
+            num_channels=frame.num_channels,
+            samples_per_channel=frame.samples_per_channel,
+        )
+
+    for frame in opening:
+        yield scaled(frame)
+    async for frame in frames:
+        yield scaled(frame)
 
 
 class SubActorVoice:
@@ -133,7 +189,7 @@ class SubActorsOnCall:
         clock: Callable[[], float] = time.time,
     ) -> None:
         self.voices = {str(voice.actor["id"]): voice for voice in voices}
-        self.cast = Cast([voice.actor for voice in voices], seed)
+        self.cast = Cast([voice.actor for voice in voices], seed, clock=clock)
         self.play = play
         self.say = say
         # Read only for a sub-actor that enters on a tool call: the person's turn waits on it.
@@ -151,6 +207,8 @@ class SubActorsOnCall:
         self._pending: dict[str, asyncio.Task[None]] = {}
         # Agent turns can overlap; one line at a time on the phone, decided once the last has ended.
         self._phone = asyncio.Lock()
+        # One line written and voiced at a time across the call; the others wait their turn.
+        self._writing = asyncio.Lock()
         self._greeting: asyncio.Task[Any] | None = None
 
     def __bool__(self) -> bool:
@@ -174,6 +232,7 @@ class SubActorsOnCall:
             return
         self.cast.entering(Moment(agent_turns=1))
         self.cast.holder = str(menu.actor["id"])
+        self.cast.line_wanted(menu.actor)
         await self._speak(menu, [_ANSWERED], written=self._greeting)
 
     def menu_cannot_answer(self, reason: str) -> None:
@@ -206,8 +265,10 @@ class SubActorsOnCall:
         holding = False
         for key, voice in self.voices.items():
             if voice.channel == "audio_mix":
-                if key not in self._pending and self.cast.may_speak(
-                    voice.actor, self.agent_turns
+                if (
+                    key not in self._pending
+                    and self.cast.may_speak(voice.actor, self.agent_turns)
+                    and self.cast.line_wanted(voice.actor)
                 ):
                     self._pending[key] = asyncio.create_task(
                         self._background(voice, heard)
@@ -218,6 +279,9 @@ class SubActorsOnCall:
                 if self.cast.holder not in ("", key) or not self.cast.may_speak(
                     voice.actor, self.agent_turns
                 ):
+                    continue
+                if not self.cast.line_wanted(voice.actor):
+                    self.cast.finish(voice.actor)
                     continue
                 self.cast.holder = key
                 took_part = True
@@ -234,22 +298,26 @@ class SubActorsOnCall:
     ) -> bool:
         """One line on the phone, or the one already being written. True while this sub-actor still holds it."""
         if self.say is None or voice.tts is None:
+            self.cast.line_settled()
             self.cast.dropped(voice.actor, "no voice of its own on this call")
             self.cast.finish(voice.actor)
             return False
         asked = self.clock()
         try:
             text, frames, done = await asyncio.wait_for(
-                written or voice.line(heard), HANDOFF_LINE_SECONDS
+                written or self._written(voice, heard),
+                self.cast.line_limit(HANDOFF_LINE_SECONDS),
             )
         except asyncio.TimeoutError:
-            self.cast.dropped(voice.actor, "not ready in time")
+            self.cast.late(voice.actor)
             self.cast.finish(voice.actor)
             return False
         except Exception as exc:  # noqa: BLE001 - a failed line hands the phone back, never fails the call
             self.cast.dropped(voice.actor, _failed(exc))
             self.cast.finish(voice.actor)
             return False
+        finally:
+            self.cast.line_settled()
         if not frames:
             if text:
                 self.cast.dropped(voice.actor, "voice failed")
@@ -265,23 +333,36 @@ class SubActorsOnCall:
             self.cast.finish(voice.actor)
         return not done
 
+    async def _written(
+        self, voice: SubActorVoice, heard: list[str]
+    ) -> tuple[str, Any, bool]:
+        async with self._writing:
+            return await voice.line(heard)
+
     async def _background(self, voice: SubActorVoice, heard: list[str]) -> None:
         key = str(voice.actor["id"])
         if self.play is None or voice.tts is None:
+            self.cast.line_settled()
             self.cast.dropped(voice.actor, "no voice of its own on this call")
             self.cast.finish(voice.actor)
             self._pending.pop(key, None)
             return
         asked = self.clock()
         try:
-            text, frames, _done = await voice.line(heard)
+            try:
+                text, frames, _done = await asyncio.wait_for(
+                    self._written(voice, heard),
+                    self.cast.line_limit(HANDOFF_LINE_SECONDS),
+                )
+            finally:
+                self.cast.line_settled()
             if not frames:
                 self.cast.dropped(voice.actor, "voice failed")
                 return
             started = self.clock()
             await self.play(
                 frames,
-                10 ** (float(voice.actor.get("loudness_db") or 0) / 20),
+                float(voice.actor.get("loudness_ratio") or 1.0),
                 text,
                 str(voice.actor.get("name") or "someone"),
             )
@@ -289,6 +370,8 @@ class SubActorsOnCall:
             self.cast.delivered(
                 voice.actor, text, self.agent_turns, started, self.clock(), asked
             )
+        except asyncio.TimeoutError:
+            self.cast.late(voice.actor)
         except asyncio.CancelledError:
             self.cast.dropped(voice.actor, "call ended before it was said")
         except Exception as exc:  # noqa: BLE001 - a quiet background voice is a weaker test, never a failed call

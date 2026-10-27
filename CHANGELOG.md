@@ -7,6 +7,12 @@ All notable release changes for Agent Learning Kit are tracked here.
 Post-rc.1 increments on the release branch. Each one adds gates on top of the
 66 proved at rc.1; the rc.1 entry below is historical and unchanged.
 
+- Sub-actors share 60 seconds of wall-clock per call and at most two lines waiting to be written; a line
+  that is late, cut off by that time or due while the queue is full is dropped with the reason, and the
+  simulated user takes back over. A complication sub-actor that never reached the agent makes the call
+  inconclusive with the reason, never a pass. A chat sub-actor's tokens count in the call's simulator
+  tokens and are kept on its message. A background voice is set as a ratio of the simulated user's
+  measured level on each line (`loudness_ratio`), with a limiter so the mix never clips.
 - Sub-actors in the builder chat: adding or dropping one from the environment's list, or changing which
   scenarios include one, waits for the person's yes, and an automatic repair cannot change a scenario's
   sub-actors.

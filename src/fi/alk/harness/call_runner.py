@@ -52,7 +52,7 @@ from fi.simulate.results.futureagi import target_provider_usage
 from fi.simulate.runtime.report import SimulationReport
 from fi.simulate.runtime.run import TestCaseStatus
 from fi.simulate.runtime.runner import SimulationRunner
-from fi.simulate.simulation.sub_actors import CHANNELS, loudness_db, with_others
+from fi.simulate.simulation.sub_actors import CHANNELS, loudness_ratio, with_others
 
 from .background_noise import place_of, scenario_source
 from .bundle_v2 import EvidenceSeam
@@ -724,7 +724,7 @@ def _voiced_sub_actors(
                 **actor.model_dump(exclude_none=True),
                 "instruction": included.instruction,
                 "trigger": included.trigger.model_dump(),
-                "loudness_db": loudness_db(seed, actor.id, actor.loudness_db),
+                "loudness_ratio": loudness_ratio(seed, actor.id, actor.loudness_ratio),
                 "voice": voice,
                 "speed": persona_speech_rate(persona),
                 "emotion": persona_emotion(persona),

@@ -2061,7 +2061,7 @@ def test_a_call_keeps_who_its_sub_actors_were_and_what_happened_to_each(
     tmp_path: Path, monkeypatch
 ) -> None:
     from fi.alk.harness.sub_actor import SubActor, SubActorList, save_sub_actors
-    from fi.simulate.simulation.sub_actors import LOUDNESS_DB, LOUDNESS_SPREAD_DB
+    from fi.simulate.simulation.sub_actors import LOUDNESS_RANGE
 
     monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
     _job_obj, context = _context(tmp_path=tmp_path)
@@ -2125,4 +2125,5 @@ def test_a_call_keeps_who_its_sub_actors_were_and_what_happened_to_each(
         "near",
         "You want them to hurry.",
     )
-    assert abs(resolved["loudness_db"] - LOUDNESS_DB) <= LOUDNESS_SPREAD_DB
+    low, high = LOUDNESS_RANGE
+    assert low <= resolved["loudness_ratio"] <= high

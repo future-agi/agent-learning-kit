@@ -11,6 +11,7 @@ All three are recorded, because how a conversation ended is often the finding.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import secrets
@@ -19,6 +20,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from fi.simulate.simulation.sub_actors import (
+    HANDOFF_LINE_SECONDS,
     Cast,
     Moment,
     line_brief,
@@ -63,6 +65,8 @@ class Exchange:
     # A sub-actor's turn: who it was, so it is never read as the person's or the agent's.
     name: str = ""
     sub_actor: str = ""
+    # The tokens it took to write a sub-actor's message, already in the call's simulator tokens.
+    tokens: int = 0
 
     def message(self, role: str, *, timed: bool = False) -> dict[str, Any]:
         when = {"at": self.at} if timed and self.at else {}
@@ -73,6 +77,7 @@ class Exchange:
             "name": self.name,
             "sub_actor": self.sub_actor,
             "content": self.text,
+            **({"tokens": self.tokens} if self.tokens else {}),
             **when,
         }
 
@@ -250,6 +255,10 @@ class _ChatSubActors:
         )
         self.model = model
         self.said: dict[str, list[str]] = {}
+        # What writing their messages cost, added to the call's simulator usage.
+        self.tokens_in = 0
+        self.tokens_out = 0
+        self.spent_usd = 0.0
 
     async def after_agent(
         self, turns: int, reply: str, tools_called: list[str], conversation: list[str]
@@ -260,14 +269,25 @@ class _ChatSubActors:
         )
         written = []
         for actor in self.actors:
-            if not self.cast.may_speak(actor, turns):
+            if not self.cast.may_speak(actor, turns) or not self.cast.line_wanted(
+                actor
+            ):
                 continue
             try:
-                text = await self._write(actor, conversation)
+                text, tokens = await asyncio.wait_for(
+                    self._write(actor, conversation),
+                    self.cast.line_limit(HANDOFF_LINE_SECONDS),
+                )
+            except asyncio.TimeoutError:
+                self.cast.late(actor)
+                self.cast.finish(actor)
+                continue
             except Exception as exc:  # noqa: BLE001 - a quiet participant is a weaker test, never a failed call
                 self.cast.dropped(actor, f"message failed: {type(exc).__name__}")
                 self.cast.finish(actor)
                 continue
+            finally:
+                self.cast.line_settled()
             if not text:
                 self.cast.finish(actor, "nothing more to say")
                 continue
@@ -281,13 +301,17 @@ class _ChatSubActors:
                     now,
                     name=str(actor.get("name") or ""),
                     sub_actor=str(actor["id"]),
+                    tokens=tokens,
                 )
             )
         if written:
             self.cast.took_turn()
         return written
 
-    async def _write(self, actor: dict[str, Any], conversation: list[str]) -> str:
+    async def _write(
+        self, actor: dict[str, Any], conversation: list[str]
+    ) -> tuple[str, int]:
+        """The message and the tokens it took; what it cost is counted even when it says nothing."""
         brief = line_brief(
             actor,
             situation=self.situation,
@@ -306,7 +330,11 @@ class _ChatSubActors:
             ),
             name="sub-actor",
         ) as stage:
-            return (await stage.say("Write it now.")).text.strip()
+            turn = await stage.say("Write it now.")
+        self.tokens_in += turn.tokens_in
+        self.tokens_out += turn.tokens_out
+        self.spent_usd += turn.cost_usd or 0.0
+        return turn.text.strip(), turn.tokens_in + turn.tokens_out
 
 
 async def converse(
@@ -428,11 +456,7 @@ async def converse(
         # runners attach this partial transcript to the failed usage record instead of silently
         # dropping a paid attempt that never reached a normal return.
         transcript.calls = list(target.world.calls) if hasattr(target, "world") else []
-        transcript.spent_usd = target.spent_usd + customer.spent_usd
-        (
-            transcript.simulator_input_tokens,
-            transcript.simulator_output_tokens,
-        ) = getattr(customer, "simulator_tokens", (0, 0))
+        _add_usage(transcript, target, customer, others)
         setattr(exc, "partial_transcript", transcript)
         raise
     finally:
@@ -447,9 +471,15 @@ async def converse(
         await target.close()
 
     transcript.calls = list(target.world.calls) if hasattr(target, "world") else []
-    transcript.spent_usd = target.spent_usd + customer.spent_usd
-    (
-        transcript.simulator_input_tokens,
-        transcript.simulator_output_tokens,
-    ) = getattr(customer, "simulator_tokens", (0, 0))
+    _add_usage(transcript, target, customer, others)
     return transcript
+
+
+def _add_usage(
+    transcript: Transcript, target: Any, customer: Any, others: _ChatSubActors
+) -> None:
+    """The call's spend and simulator tokens: the person's and every sub-actor message's, once each."""
+    transcript.spent_usd = target.spent_usd + customer.spent_usd + others.spent_usd
+    tokens_in, tokens_out = getattr(customer, "simulator_tokens", (0, 0))
+    transcript.simulator_input_tokens = tokens_in + others.tokens_in
+    transcript.simulator_output_tokens = tokens_out + others.tokens_out

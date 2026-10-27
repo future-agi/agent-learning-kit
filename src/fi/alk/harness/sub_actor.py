@@ -35,8 +35,9 @@ class SubActor(BaseModel):
     channel: str
     # The caller persona's fields; the voice is chosen from them.
     persona: dict[str, Any] = Field(default_factory=dict)
-    # Background voices only: how loud, relative to the person. Empty takes the run's default.
-    loudness_db: float | None = None
+    # Background voices only: its level as a ratio of the person's voice (RMS over RMS, per line).
+    # Empty takes a draw from the default range, fixed by the run seed.
+    loudness_ratio: float | None = Field(default=None, gt=0, le=1)
 
     @model_validator(mode="after")
     def _a_persona_the_caller_could_have(self) -> "SubActor":

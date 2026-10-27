@@ -4664,3 +4664,103 @@ def test_a_scenario_with_sub_actors_is_never_run_while_they_are_off_and_says_why
         "sub-actors are switched off",
     )
     assert ran.status == "passed" and ran.reason is None
+
+
+def _run_with_friend(monkeypatch, summary, sub_goals) -> hs.ResultReceipt:
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+
+    async def scenario() -> hs.ResultReceipt:
+        outbound = FakeOutbound()
+        pool, _ = _pool(1, outbound=outbound)
+        await pool.start()
+        outcome = replace(_call_outcome(), sub_actors=(summary,))
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=FakeCallRunner({"s1": outcome}),
+            outbound=outbound,
+            job_seed=1,
+        )
+        one = FakeScenario(
+            "s1", "id-1", sub_goals=sub_goals, requires_tool_evidence=False
+        )
+        one.sub_actors = (SimpleNamespace(id="friend"),)
+        result = await asyncio.wait_for(scheduler.run([one]), timeout=5.0)
+        await pool.close()
+        return result.receipts[0]
+
+    return asyncio.run(scenario())
+
+
+def _friend(**seen) -> dict:
+    return {
+        "sub_actor": "friend",
+        "name": "Rowan",
+        "triggered": True,
+        "delivered": 0,
+        "dropped": [],
+        **seen,
+    }
+
+
+def test_a_complication_that_never_reached_the_agent_makes_the_call_inconclusive(
+    monkeypatch,
+) -> None:
+    receipt = _run_with_friend(
+        monkeypatch,
+        _friend(dropped=["voice failed"]),
+        [FakeSubGoal("booked", lambda w, c: None)],
+    )
+    assert (receipt.status, receipt.reason) == (
+        "inconclusive",
+        "Rowan was triggered but did not take part: voice failed.",
+    )
+    # Each sub-goal keeps its own result.
+    assert [(one.name, one.verdict) for one in receipt.sub_goals] == [("booked", "pass")]
+
+    never = _run_with_friend(
+        monkeypatch,
+        _friend(triggered=False),
+        [FakeSubGoal("booked", lambda w, c: None)],
+    )
+    assert (never.status, never.reason) == (
+        "inconclusive",
+        "Rowan's trigger never fired in this call.",
+    )
+
+
+def test_a_complication_that_took_part_leaves_the_call_s_result_as_graded(
+    monkeypatch,
+) -> None:
+    receipt = _run_with_friend(
+        monkeypatch,
+        _friend(delivered=1),
+        [FakeSubGoal("booked", lambda w, c: None)],
+    )
+    assert (receipt.status, receipt.reason) == ("passed", None)
+    failed = _run_with_friend(
+        monkeypatch,
+        _friend(dropped=["voice failed"]),
+        [FakeSubGoal("booked", lambda w, c: "booked for the wrong time")],
+    )
+    assert failed.status == "failed"
+
+
+def test_a_sub_goal_about_a_dropped_sub_actor_makes_the_call_inconclusive_not_errored(
+    monkeypatch,
+) -> None:
+    about = FakeSubGoal("noticed", lambda w, c: None)
+    about.sub_actor = "friend"
+    receipt = _run_with_friend(
+        monkeypatch,
+        _friend(dropped=["not ready in time"]),
+        [about, FakeSubGoal("booked", lambda w, c: None)],
+    )
+    assert receipt.status == "inconclusive" and receipt.failure is None
+    assert [(one.name, one.verdict) for one in receipt.sub_goals] == [
+        ("noticed", "inconclusive"),
+        ("booked", "pass"),
+    ]
+    assert receipt.reason == "Rowan was triggered but did not take part: not ready in time."

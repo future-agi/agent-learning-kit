@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import array
 import asyncio
 import itertools
 import json
@@ -15,7 +16,9 @@ from fi.simulate.simulation.sub_actors import (
     Moment,
     due,
     line_brief,
-    loudness_db,
+    line_gain,
+    limited,
+    loudness_ratio,
     with_others,
 )
 
@@ -81,16 +84,54 @@ def test_a_probability_draw_is_fixed_by_the_run_seed():
     }
 
 
-def test_background_loudness_is_drawn_from_the_seed_around_its_base():
-    levels = [loudness_db(seed, "one", None) for seed in "abcdefgh"]
-    assert all(
-        abs(level - registry.LOUDNESS_DB) <= registry.LOUDNESS_SPREAD_DB
-        for level in levels
-    )
+def test_background_loudness_is_a_ratio_drawn_from_the_seed_unless_the_list_sets_one():
+    low, high = registry.LOUDNESS_RANGE
+    levels = [loudness_ratio(seed, "one", None) for seed in "abcdefgh"]
+    assert all(low <= level <= high for level in levels)
     assert len(set(levels)) > 1 and levels == [
-        loudness_db(seed, "one", None) for seed in "abcdefgh"
+        loudness_ratio(seed, "one", None) for seed in "abcdefgh"
     ]
-    assert abs(loudness_db("a", "one", -6.0) - -6.0) <= registry.LOUDNESS_SPREAD_DB
+    assert loudness_ratio("a", "one", 0.5) == 0.5
+
+
+def test_a_background_line_is_set_against_the_person_s_measured_level_and_never_clips():
+    # A line twice as loud as the person, at a ratio of a quarter, is scaled to an eighth.
+    assert line_gain(0.25, 2000.0, 4000.0) == 0.125
+    # Before the person has spoken, or for a silent line, the ratio is used as it is.
+    assert line_gain(0.25, None, 4000.0) == line_gain(0.25, 2000.0, 0.0) == 0.25
+    assert limited(2.0, 1000) == 2.0
+    ceiling = registry.PEAK_LIMIT * 32767
+    assert limited(2.0, 30000) * 30000 == pytest.approx(ceiling)
+
+
+def test_the_leveller_scales_each_frame_and_holds_its_peaks_under_the_limit():
+    from livekit import rtc
+
+    def frame(value, count=2400):
+        data = array.array("h", [value, -value] * (count // 2))
+        return rtc.AudioFrame(
+            data=data.tobytes(),
+            sample_rate=24000,
+            num_channels=1,
+            samples_per_channel=count,
+        )
+
+    async def frames():
+        for value in (4000, 4000, 4000, 4000, 4000, 30000):
+            yield frame(value)
+
+    async def scenario():
+        return [
+            out
+            async for out in voice_engine.at_level(frames(), 0.25, person_rms=2000.0)
+        ]
+
+    out = asyncio.run(scenario())
+    peaks = [max(abs(s) for s in array.array("h", bytes(one.data))) for one in out]
+    # Measured on its opening speech (RMS 4000): scaled to 0.25 x 2000 = 500.
+    assert peaks[:5] == [500] * 5
+    # A loud frame later in the line is scaled the same, and could never exceed the limit.
+    assert peaks[5] == 3750 and peaks[5] <= registry.PEAK_LIMIT * 32767
 
 
 def test_a_third_sub_actor_waits_for_room_and_enters_in_the_scenario_s_order():
@@ -424,7 +465,7 @@ def test_a_sub_actor_without_a_voice_of_its_own_is_dropped_with_the_reason_never
 def test_a_background_line_plays_whenever_it_is_ready_and_only_the_end_of_the_call_drops_it():
     async def scenario(delay, wait):
         near = _Voice(
-            {**_actor("near", "audio_mix"), "loudness_db": -20.0}, ["over here"]
+            {**_actor("near", "audio_mix"), "loudness_ratio": 0.1}, ["over here"]
         )
         slow = _Voice(_actor("slow", "audio_mix"), ["a moment later"], delay=delay)
         call, said, played = _on_call([near, slow], playing=0.01)
@@ -554,7 +595,7 @@ def test_a_scenario_s_sub_actors_reach_the_call_resolved_in_voices_no_one_else_h
         "turn": 2,
     }
     assert near["situation"] == "You want a refund." and near["language"] == "English"
-    assert near["loudness_db"] == loudness_db("run", "near", None)
+    assert near["loudness_ratio"] == loudness_ratio("run", "near", None)
     json.dumps(voiced)
 
 
@@ -613,3 +654,115 @@ def test_the_menu_s_greeting_is_ready_by_the_time_the_call_is_answered():
     said, waited, heard = asyncio.run(scenario())
     assert said == [("Menu", "Who are you calling for?")]
     assert waited < 0.1 and len(heard) == 1
+
+
+def test_the_call_s_sub_actor_time_runs_out_and_every_sub_actor_stops_with_the_reason():
+    now = [0.0]
+    cast = Cast(
+        [
+            _actor("one"),
+            _actor("two", "audio_mix"),
+            _actor("three", kind="mid_journey", turn=2),
+        ],
+        "run",
+        clock=lambda: now[0],
+    )
+    now[0] = 500.0
+    # The clock starts at the first trigger, not when the call does.
+    assert cast.remaining() == registry.SUB_ACTOR_SECONDS
+    assert len(cast.entering(Moment(1))) == 2
+    now[0] = 530.0
+    assert cast.remaining() == 30.0 and cast.line_limit(45.0) == 30.0
+    assert cast.entering(Moment(2)) == []  # the third waits for room
+    now[0] = 560.0
+    assert cast.out_of_time()
+    assert cast.entering(Moment(3)) == []
+    assert not cast.may_speak(cast.actors[0], 3)
+    stopped = {
+        (one["sub_actor"], one["kind"], one["reason"])
+        for one in cast.events
+        if one["kind"] in ("finished", "dropped")
+    }
+    assert stopped == {
+        ("one", "finished", registry.TIME_UP),
+        ("two", "finished", registry.TIME_UP),
+        ("three", "dropped", registry.TIME_UP),
+    }
+    cast.hang_up()
+    assert [one["dropped"] for one in cast.summary()] == [[], [], [registry.TIME_UP]]
+
+
+def test_a_line_due_while_two_are_waiting_is_dropped_as_queue_full():
+    cast = Cast([_actor("one"), _actor("two"), _actor("three")], "run")
+    one, two, three = cast.actors
+    assert cast.line_wanted(one) and cast.line_wanted(two)
+    assert not cast.line_wanted(three)
+    cast.line_settled()
+    assert cast.line_wanted(three)
+    assert [entry["dropped"] for entry in cast.summary()] == [[], [], ["queue full"]]
+
+
+def test_a_stalled_line_is_dropped_and_the_person_takes_the_phone_back(monkeypatch):
+    monkeypatch.setattr(voice_engine, "HANDOFF_LINE_SECONDS", 0.05)
+
+    async def scenario():
+        phone = _Voice(_actor("one"), ["too late"], delay=1.0)
+        near = _Voice(_actor("near", "audio_mix"), ["also late"], delay=1.0)
+        call, said, played = _on_call([phone, near])
+        holding = await call.agent_turn("Hello")
+        await asyncio.sleep(0.2)
+        await call.close()
+        return holding, said, played, [one["dropped"] for one in call.summary()]
+
+    holding, said, played, dropped = asyncio.run(scenario())
+    assert holding is False and said == [] and played == []
+    assert dropped == [["not ready in time"], ["not ready in time"]]
+
+
+def test_lines_cut_off_by_the_call_s_sub_actor_time_say_so():
+    import time
+
+    offset = [0.0]
+
+    async def scenario():
+        phone = _Voice(_actor("one"), ["too late"], delay=1.0)
+        call, said, _played = _on_call(
+            [phone], clock=lambda: time.monotonic() + offset[0]
+        )
+        call.cast.entering(Moment(1))
+        # The first trigger was 59.95 s ago, so the line has 50 ms left.
+        offset[0] = registry.SUB_ACTOR_SECONDS - 0.05
+        holding = await call.agent_turn("Hello")
+        await call.close()
+        return holding, said, call.summary()
+
+    holding, said, summary = asyncio.run(scenario())
+    assert holding is False and said == []
+    assert summary[0]["dropped"] == [registry.TIME_UP]
+
+
+def test_only_one_line_is_written_and_voiced_at_a_time():
+    writing = {"now": 0, "most": 0}
+
+    class _Counted(_Voice):
+        async def line(self, conversation):
+            writing["now"] += 1
+            writing["most"] = max(writing["most"], writing["now"])
+            try:
+                return await super().line(conversation)
+            finally:
+                writing["now"] -= 1
+
+    async def scenario():
+        voices = [
+            _Counted(_actor(key, "audio_mix"), ["a line"], delay=0.02)
+            for key in ("one", "two")
+        ]
+        call, _said, played = _on_call(voices)
+        await call.agent_turn("Hello")
+        await asyncio.sleep(0.2)
+        await call.close()
+        return played
+
+    assert len(asyncio.run(scenario())) == 2
+    assert writing["most"] == 1

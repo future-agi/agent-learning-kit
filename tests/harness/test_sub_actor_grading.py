@@ -105,7 +105,7 @@ def _receipt(**extra):
         scenario_id="00000000-0000-4000-8000-000000000003",
         scenario_attempt=1,
         world_index=0,
-        status="passed",
+        status=extra.pop("status", "passed"),
         sub_goals=[{**goal, **extra.pop("goal", {})}],
         evaluations=[],
         call=None,
@@ -181,3 +181,12 @@ def test_a_sub_goal_s_sub_actor_and_a_scenario_s_sub_actors_reach_the_run(tmp_pa
     assert [(goal.name, goal.sub_actor) for goal in loaded.sub_goals] == [
         ("noticed", "friend")
     ]
+
+
+def test_an_inconclusive_call_goes_out_with_its_reason():
+    wire = _receipt(
+        status="inconclusive",
+        reason="Rowan was triggered but did not take part: voice failed.",
+    )
+    assert wire["status"] == "inconclusive"
+    assert wire["reason"] == "Rowan was triggered but did not take part: voice failed."

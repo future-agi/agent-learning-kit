@@ -2453,6 +2453,8 @@ class ScenarioStatus(str, Enum):
     FAILED = "failed"
     ERRORED = "errored"
     SKIPPED = "skipped"
+    # It ran, but what it was meant to test did not happen or could not be decided: never a pass.
+    INCONCLUSIVE = "inconclusive"
 
 
 class SubGoalResult(BaseModel):

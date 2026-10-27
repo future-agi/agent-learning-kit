@@ -10,8 +10,9 @@ from __future__ import annotations
 import hashlib
 import random
 import re
+import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 CHANNELS: dict[str, dict[str, Any]] = {
     "audio_mix": {
@@ -125,8 +126,17 @@ TOOLS_READ_SECONDS = 1.0
 CONVERSATION_LINES = 12
 MAX_ACTIVE = 2
 TAKEOVER_AFTER_TURNS = 4
-LOUDNESS_DB = -12.0
-LOUDNESS_SPREAD_DB = 4.0
+# Wall-clock for all sub-actors together, from the first trigger: turns stop advancing while a line
+# is written or the agent is slow, so time bounds what turns cannot.
+SUB_ACTOR_SECONDS = 60.0
+# Lines asked for and not yet ready; one more is dropped rather than queued behind them.
+MAX_WAITING_LINES = 2
+TIME_UP = "sub-actor time used up"
+# A background voice's level as an amplitude ratio to the person's voice (its RMS over theirs, on
+# each line), drawn per call from the run seed: an experimental default, about -16 to -8 dB.
+LOUDNESS_RANGE = (0.16, 0.40)
+# The highest a background line may peak once scaled, as a share of full scale, so the mix never clips.
+PEAK_LIMIT = 0.9
 SPEAKS_AGAIN = 0.5
 
 
@@ -138,12 +148,26 @@ def seeded(seed: str, *parts: object) -> random.Random:
     )
 
 
-def loudness_db(seed: str, sub_actor_id: str, base: float | None) -> float:
-    """How loud a background voice is against the person on this call."""
-    spread = seeded(seed, sub_actor_id, "loudness").uniform(
-        -LOUDNESS_SPREAD_DB, LOUDNESS_SPREAD_DB
-    )
-    return (LOUDNESS_DB if base is None else base) + spread
+def loudness_ratio(seed: str, sub_actor_id: str, fixed: float | None) -> float:
+    """How loud a background voice is against the person on this call: the list's own ratio when it
+    sets one, else a draw from the run seed."""
+    if fixed is not None:
+        return fixed
+    return seeded(seed, sub_actor_id, "loudness").uniform(*LOUDNESS_RANGE)
+
+
+def line_gain(ratio: float, person_rms: float | None, line_rms: float) -> float:
+    """The factor that puts a line at `ratio` of the person's measured level; the ratio itself when
+    either level is unknown."""
+    if not person_rms or not line_rms:
+        return ratio
+    return ratio * person_rms / line_rms
+
+
+def limited(gain: float, peak: int) -> float:
+    """The gain, lowered for a frame whose peak it would push past the limit."""
+    ceiling = PEAK_LIMIT * 32767
+    return min(gain, ceiling / peak) if peak * gain > ceiling else gain
 
 
 @dataclass
@@ -220,9 +244,18 @@ class Cast:
     Each actor is a resolved entry: its list fields plus the scenario's `instruction` and `trigger`.
     """
 
-    def __init__(self, actors: list[dict[str, Any]], seed: str) -> None:
+    def __init__(
+        self,
+        actors: list[dict[str, Any]],
+        seed: str,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         self.actors = actors
         self.seed = seed
+        self.clock = clock
+        self._started_at: float | None = None
+        self._time_up = False
+        self._waiting_lines = 0
         self._state = {
             str(one["id"]): {
                 "entered": False,
@@ -244,8 +277,48 @@ class Cast:
             if state["entered"] and not state["done"]
         ]
 
+    def remaining(self) -> float:
+        """Seconds left of the call's sub-actor time; all of it until the first trigger."""
+        if self._started_at is None:
+            return SUB_ACTOR_SECONDS
+        return max(0.0, SUB_ACTOR_SECONDS - (self.clock() - self._started_at))
+
+    def out_of_time(self) -> bool:
+        """Whether the call's sub-actor time is used up; the first time it is, every sub-actor stops."""
+        if not self._time_up and self._started_at is not None and not self.remaining():
+            self._time_up = True
+            for actor in self.actors:
+                if self._state[str(actor["id"])]["entered"]:
+                    self.finish(actor, TIME_UP)
+            for key in self._waiting:
+                self._record(key, "dropped", reason=TIME_UP)
+            self._waiting.clear()
+        return self._time_up
+
+    def line_limit(self, seconds: float) -> float:
+        """How long the next line may take to be ready: its own limit, never past the call's time."""
+        return min(seconds, self.remaining())
+
+    def line_wanted(self, actor: dict[str, Any]) -> bool:
+        """Room for one more line to be written; a line due while the queue is full is dropped."""
+        if self._waiting_lines >= MAX_WAITING_LINES:
+            self.dropped(actor, "queue full")
+            return False
+        self._waiting_lines += 1
+        return True
+
+    def line_settled(self) -> None:
+        """A line asked for is ready, or dropped."""
+        self._waiting_lines = max(0, self._waiting_lines - 1)
+
+    def late(self, actor: dict[str, Any]) -> None:
+        """A line not ready within its limit, or cut off by the call's sub-actor time."""
+        self.dropped(actor, TIME_UP if self.out_of_time() else "not ready in time")
+
     def entering(self, moment: Moment) -> list[dict[str, Any]]:
         """The sub-actors that enter now: due ones in the scenario's order, while there is room."""
+        if self.out_of_time():
+            return []
         for actor in self.actors:
             key = str(actor["id"])
             state = self._state[key]
@@ -270,7 +343,7 @@ class Cast:
         """Whether this sub-actor may take part on this turn, within its own limit and the call's."""
         key = str(actor["id"])
         state = self._state[key]
-        if not state["entered"] or state["done"]:
+        if not state["entered"] or state["done"] or self.out_of_time():
             return False
         if (
             state["lines"] >= LIMITS.get(str(actor.get("channel")), 1)
@@ -335,6 +408,8 @@ class Cast:
         self._waiting.clear()
 
     def _record(self, key: str, kind: str, **details: Any) -> None:
+        if kind == "triggered" and self._started_at is None:
+            self._started_at = self.clock()
         actor = next(one for one in self.actors if str(one["id"]) == key)
         self.events.append(
             {
