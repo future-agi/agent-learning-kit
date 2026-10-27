@@ -3166,6 +3166,31 @@ def _files(root: Path) -> list[BundleFileV2]:
     return records
 
 
+def _langchain_sql_trace_bindings(contract: dict[str, Any]) -> list[dict[str, str]]:
+    """Bind toolkit products to their shared execution method by declared tool name."""
+
+    bindings: list[dict[str, str]] = []
+    for raw in contract.get("tool_entrypoints", []):
+        if not isinstance(raw, dict):
+            continue
+        entry = ToolEntry.model_validate(raw)
+        if (
+            entry.mode != "construct"
+            or entry.module != "langchain_community.agent_toolkits.sql.toolkit"
+            or entry.callable != "SQLDatabaseToolkit"
+        ):
+            continue
+        bindings.append(
+            {
+                "name": entry.tool,
+                "module": "langchain_community",
+                "callable": "_run",
+                "instance_name": entry.tool,
+            }
+        )
+    return bindings
+
+
 def author_bundle_v2(
     *,
     source: str | Path,
@@ -3304,6 +3329,30 @@ def author_bundle_v2(
         contract_runtime=(runtime if isinstance(runtime, dict) else None),
         runtime_dependencies=contract_body.get("runtime_dependencies"),
     )
+    trace_bindings = (
+        _langchain_sql_trace_bindings(contract_body)
+        if contract_modality == "chat"
+        else []
+    )
+    if trace_bindings:
+        plan = replace(
+            plan,
+            processes=tuple(
+                process.model_copy(
+                    update={
+                        "environment": {
+                            **process.environment,
+                            "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
+                            "ALK_TOOL_TRACE_BINDINGS": json.dumps(trace_bindings),
+                        }
+                    }
+                )
+                if isinstance(process, SourceProcess)
+                and process.name == plan.control_service
+                else process
+                for process in plan.processes
+            ),
+        )
     provided_environment = {
         str(name).upper()
         for name in (job.metadata.get("environment_value_names", []) or [])
