@@ -512,11 +512,18 @@ def write_sqlite_world(
     return wrote
 
 
+def _numbered(column: SourceColumn) -> bool:
+    """Whether the source numbers the column from a sequence (a serial), as a rowid would."""
+    return column.logical_type is LogicalType.INTEGER and "nextval(" in (
+        column.default_expression or ""
+    ).lower()
+
+
 def world_holds(stored: WorldIR, world: WorldIR, source: SourceModel) -> bool:
     """Whether a stored world seeds what a World IR does: its rows, with every value
-    it sets. A value left absent must read back absent, except an integer with a source
-    default, which a rowid key numbers; an explicit null where the source has a default
-    cannot be stored, since SQLite's NULL reads back as absent.
+    it sets. A value left absent must read back absent, except an integer the source
+    numbers from a sequence, which a rowid key numbers too; an explicit null where the
+    source has a default cannot be stored, since SQLite's NULL reads back as absent.
     """
     columns = {
         table.name: {column.name: column for column in table.columns}
@@ -542,10 +549,7 @@ def world_holds(stored: WorldIR, world: WorldIR, source: SourceModel) -> bool:
                         return False
                 elif value.state is ValueState.NULL and column.has_default:
                     return False
-                elif (
-                    not column.has_default
-                    or column.logical_type is not LogicalType.INTEGER
-                ):
+                elif not _numbered(column):
                     wanted[name] = None
 
             def holds(one: WorldRow) -> bool:

@@ -681,6 +681,28 @@ def test_a_repaired_row_left_without_its_serial_key_takes_the_next_rowid(
     ) == [(1, "staff"), (2, "admin")]
 
 
+@pytest.mark.parametrize("id_default", ["100", "'100'::integer"])
+def test_a_repaired_row_left_without_a_plain_integer_default_is_rejected(
+    tmp_path, id_default
+) -> None:
+    """Only a sequence numbers an omitted key; SQLite's rowid would override 100."""
+    source_model = _users_with_a_role_default(id_default, "'user'::text")
+    path = tmp_path / "world.sqlite"
+    with sqlite3.connect(path) as database:
+        database.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, role TEXT)")
+        database.execute("INSERT INTO users VALUES (1, 'staff')")
+        world = import_sqlite_world(database, source_model).world
+    before = path.read_bytes()
+    repaired = _with_a_row_added(
+        world, {"role": WorldValue.present(LogicalType.STRING, "admin")}
+    )
+
+    with pytest.raises(RepairPatchRejected, match="repair_patch_not_storable"):
+        _stored_in_world(tmp_path, repaired, source_model)
+
+    assert path.read_bytes() == before
+
+
 def test_generic_validation_rejects_unchanged_compiler_failure(tmp_path) -> None:
     source = tmp_path / "source"
     authoring = tmp_path / "authoring"
