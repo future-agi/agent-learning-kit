@@ -302,9 +302,25 @@ def test_meaning_changes_wait_for_a_yes_to_that_call_but_surface_edits_do_not(tm
     client = BuilderClient()
     runtime = _runtime(tmp_path, client, monkeypatch)
     (tmp_path / "scenarios" / "one" / "scenario.json").write_text(
-        json.dumps({"name": "one", "instruction": "ask for a refund", "persona": {"name": "Ana"}})
+        json.dumps(
+            {
+                "name": "one",
+                "scenario_key": "one",
+                "instruction": "ask for a refund",
+                "persona": {"name": "Ana", "accent": "American"},
+                "solution": [
+                    {
+                        "tool": "refund",
+                        "arguments": {"id": "7"},
+                        "environment_arguments": {},
+                    }
+                ],
+            }
+        )
     )
-    (tmp_path / "sub_goals.json").write_text(json.dumps({"sub_goals": [{"name": "refunded", "description": "x"}]}))
+    (tmp_path / "sub_goals.json").write_text(
+        json.dumps({"sub_goals": [{"name": "refunded", "description": "x"}]})
+    )
     calls, asked, answers = [], [], []
 
     async def handler(args):
@@ -325,7 +341,40 @@ def test_meaning_changes_wait_for_a_yes_to_that_call_but_surface_edits_do_not(tm
     assert asyncio.run(submit.handler(surface)).get("is_error") is None
     assert asyncio.run(submit.handler({"name": "two", "instruction": "anything"})).get("is_error") is None
     assert asyncio.run(goal.handler({"name": "new-goal"})).get("is_error") is None
+    assert (
+        asyncio.run(
+            submit.handler({**surface, "name": "uno", "scenario_key": "one"})
+        ).get("is_error")
+        is None
+    )
+    (tmp_path / "scenarios" / "old").mkdir()
+    (tmp_path / "scenarios" / "old" / "scenario.json").write_text(
+        json.dumps({"name": "old"})
+    )
+    answers.append("No")
+    unreadable = {"name": "old", "instruction": "anything"}
+    assert asyncio.run(submit.handler(unreadable))["is_error"] is True
+    asked.pop()
+    resubmitted = {
+        **surface,
+        "name": "uno",
+        "scenario_key": "one",
+        "solution": [{"tool": "refund", "arguments": {"id": "7"}}],
+    }
+    assert asyncio.run(submit.handler(resubmitted)).get("is_error") is None
     assert asked == []
+    answers.append("No")
+    assert (
+        asyncio.run(submit.handler({**meaning, "name": "uno", "scenario_key": "one"}))[
+            "is_error"
+        ]
+        is True
+    )
+    assert "ask for a cancellation" in asked.pop()
+    assert not runtime._changes_situation(
+        {"scenario_key": "one", "persona": {"name": "Ana"}}
+    )
+    assert runtime._changes_situation({"scenario_key": "one", "persona": {"accent": "Indian"}})
 
     answers.extend(["No, keep it", "Which scenarios use it?"])
     assert asyncio.run(drop.handler({"names": ["one"]}))["is_error"] is True
@@ -344,10 +393,101 @@ def test_meaning_changes_wait_for_a_yes_to_that_call_but_surface_edits_do_not(tm
     answers.append("No")
     assert asyncio.run(submit.handler(meaning))["is_error"] is True
     assert asyncio.run(submit.handler(surface)).get("is_error") is None
-    assert len(calls) == 5
+    assert len(calls) == 7
 
 
-def test_the_harness_builds_from_an_empty_workspace_with_the_tools_for_what_exists(tmp_path, monkeypatch):
+def test_an_edit_and_a_clear_go_through_the_same_confirmation_as_a_submission(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness.backends import ToolSpec
+
+    runtime = _runtime(tmp_path, BuilderClient(), monkeypatch)
+    (tmp_path / "scenarios" / "one" / "scenario.json").write_text(
+        json.dumps(
+            {
+                "name": "one",
+                "scenario_key": "one",
+                "instruction": "ask for a refund",
+                "persona": {"name": "Ana", "accent": "American"},
+                "fixture": {"origin": "seed", "order": "7"},
+                "solution": [
+                    {
+                        "tool": "refund",
+                        "arguments": {"id": "7"},
+                        "environment_arguments": {},
+                    }
+                ],
+            }
+        )
+    )
+    calls, asked, answers = [], [], []
+
+    async def handler(args):
+        calls.append(args)
+        return {"content": [{"type": "text", "text": "kept"}]}
+
+    async def ask(tool, payload, context):
+        asked.append(payload["question"])
+        return {"content": [{"type": "text", "text": answers.pop(0)}]}
+
+    runtime._ask = ask
+    edit = runtime._confirmed(ToolSpec("edit_scenario", "", {}, handler))
+    assert (
+        asyncio.run(
+            edit.handler({"scenario_key": "one", "persona": {"accent": "Indian"}})
+        ).get("is_error")
+        is None
+    )
+    assert asked == []
+    answers.append("No")
+    assert (
+        asyncio.run(edit.handler({"scenario_key": "one", "clear": ["solution"]}))[
+            "is_error"
+        ]
+        is True
+    )
+    assert len(asked) == 1
+    assert runtime._changes_situation({"scenario_key": "one", "clear": ["fixture"]})
+    assert runtime._changes_situation({"scenario_key": "one", "clear": ["persona"]})
+    assert runtime._changes_situation(
+        {"scenario_key": "one", "clear": ["persona.accent"]}
+    )
+    runtime._from_platform = True
+    assert (
+        asyncio.run(edit.handler({"scenario_key": "one", "clear": ["fixture"]}))[
+            "is_error"
+        ]
+        is True
+    )
+    assert len(calls) == 1
+
+
+def test_the_keys_the_platform_has_used_are_never_given_to_a_new_scenario(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness.scenario import used_keys
+
+    monkeypatch.setenv("ALK_HARNESS", "vertex-gemini")
+    policy = tmp_path / "policy.yaml"
+    policy.write_text(
+        "schema_version: 1\nharness_chat:\n  enabled: true\n", encoding="utf-8"
+    )
+    HostedChatRuntime(
+        client=BuilderClient(),  # type: ignore[arg-type]
+        policy=load_chat_policy(policy),
+        workspace=tmp_path,
+        source=tmp_path,
+        job={
+            "metadata": {"agent_name": "demo", "used_scenario_keys": ["two", "one"]},
+            "scenario_count": 1,
+        },
+    )
+    assert {"one", "two"} <= used_keys(tmp_path)
+
+
+def test_the_harness_builds_from_an_empty_workspace_with_the_tools_for_what_exists(
+    tmp_path, monkeypatch
+):
     monkeypatch.setenv("ALK_HARNESS", "claude")
     policy = tmp_path / "policy.yaml"
     policy.write_text(
@@ -400,7 +540,6 @@ def test_the_harness_builds_from_an_empty_workspace_with_the_tools_for_what_exis
     over = asyncio.run(finish.handler({}))
     assert over["is_error"] and "the build asked for 3" in over["content"][0]["text"]
     assert not (workspace / ".futureagi-build-finished.json").exists()
-
 
     async def commands():
         return [{"sequence": 7, "message_id": "m7", "kind": "user_message", "payload": {"content": "add a lapsed policy"}}]

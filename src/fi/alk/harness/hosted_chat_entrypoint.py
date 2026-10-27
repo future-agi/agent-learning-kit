@@ -60,6 +60,7 @@ _LEDGER_NOTES = 40
 _NEEDS_CONFIRMATION = frozenset(
     {
         "submit_scenario",
+        "edit_scenario",
         "drop_scenario",
         "drop_scenarios",
         "change_world",
@@ -71,6 +72,7 @@ _NEEDS_CONFIRMATION = frozenset(
         "add_sub_goal",
     }
 )
+_SUBMITS = ("submit_scenario", "edit_scenario")
 _CONFIRM = "Yes, make this change"
 _NUDGE_NOTE = (
     "\n\nLoad `builder/agent-update` with read_skill first, and end the turn with "
@@ -99,6 +101,7 @@ _PUBLISHED_PARTS = (
 _WRITING_TOOLS = frozenset(
     {
         "submit_scenario",
+        "edit_scenario",
         "drop_scenario",
         "drop_scenarios",
         "save_scenarios",
@@ -279,6 +282,15 @@ class HostedChatRuntime:
         self.workspace = workspace
         self.source = source
         self.job = job
+        from .scenario import used_keys
+
+        # Every key the environment has given a scenario, a dropped one's included, so a new
+        # scenario never takes one and inherits another's row and run history.
+        used_keys(workspace).update(
+            str(key)
+            for key in (job.get("metadata") or {}).get("used_scenario_keys") or ()
+            if key
+        )
         backend = resolve()
         self.backend_name = backend.name
         self.event_store: Any = None
@@ -539,7 +551,7 @@ class HostedChatRuntime:
         async def guarded(args: dict[str, Any]) -> Any:
             if self._from_platform:
                 if spec.name in ("drop_scenarios", "drop_scenario") or (
-                    spec.name == "submit_scenario" and self._changes_situation(args)
+                    spec.name in _SUBMITS and self._changes_situation(args)
                 ):
                     return {
                         "content": [
@@ -554,7 +566,7 @@ class HostedChatRuntime:
                         "is_error": True,
                     }
                 return await handler(args)
-            if spec.name == "submit_scenario" and not self._changes_meaning(args):
+            if spec.name in _SUBMITS and not self._changes_meaning(args):
                 return await handler(args)
             if spec.name == "add_sub_goal" and not self._replaces_sub_goal(args):
                 return await handler(args)
@@ -588,7 +600,9 @@ class HostedChatRuntime:
     def _changes_situation(self, args: dict[str, Any]) -> bool:
         """Whether a submission changes what an existing scenario tests, not how it is graded."""
         return self._changes(
-            args, ("instruction", "use_case", "branch", "tests", "coverage", "fixture"), whole_persona=True
+            args,
+            ("instruction", "use_case", "branch", "tests", "coverage", "fixture"),
+            whole_persona=True,
         )
 
     def _replaces_sub_goal(self, args: dict[str, Any]) -> bool:
@@ -606,14 +620,47 @@ class HostedChatRuntime:
         `whole_persona` compares the persona the submission would save, so a changed language or a
         dropped persona counts: a submission replaces the scenario rather than patching it.
         """
-        path = self.workspace / "scenarios" / str(args.get("name") or "") / "scenario.json"
+        from .scenario_tools import edited, load_scenarios
+
+        scenario_key = str(args.get("scenario_key") or "")
+        target = next(
+            (
+                one
+                for one in load_scenarios(self.workspace)
+                if scenario_key and one.scenario_key == scenario_key
+            ),
+            None,
+        )
+        name = str(args.get("name") or "") if target is None else target.name
+        # What the submission names, a field it clears included.
+        cleared = [str(path) for path in args.get("clear") or ()]
+        named = set(args) | {path.split(".")[0] for path in cleared}
+        sent = set(args.get("persona") or {}) | {
+            path.split(".", 1)[1] for path in cleared if path.startswith("persona.")
+        }
+        if "persona" in cleared:
+            sent |= {"name", "gender", "age_group"}
+        change = args if target is None else edited(target, args)
+        path = self.workspace / "scenarios" / name / "scenario.json"
         try:
             held = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return False
-        if any(field in args and args.get(field) != held.get(field) for field in fields):
+        from .scenario import Scenario
+
+        try:
+            saved_now = Scenario.model_validate(held).model_dump()
+            submitted = Scenario.model_validate(
+                change if target is not None else {**held, **change}
+            ).model_dump()
+        except ValueError:
+            saved_now, submitted = held, {**held, **change}
+        if any(
+            field in named and submitted.get(field) != saved_now.get(field)
+            for field in fields
+        ):
             return True
-        persona, before = args.get("persona") or {}, held.get("persona") or {}
+        persona, before = change.get("persona") or {}, held.get("persona") or {}
         if whole_persona:
             from .scenario import Persona
 
@@ -625,8 +672,8 @@ class HostedChatRuntime:
             except ValueError:  # an unreadable persona is never a safe unattended change
                 return True
         return any(
-            key in persona and persona.get(key) != before.get(key)
-            for key in ("name", "gender", "age_group")
+            field in sent and persona.get(field) != before.get(field)
+            for field in ("name", "gender", "age_group")
         )
 
     def _builder_platform_server(self):
@@ -645,9 +692,9 @@ class HostedChatRuntime:
             "Read the environment's scenarios exactly as the Scenarios tab shows them, with each "
             "one's tab number. Returns total_scenarios (the whole suite), matching (how many fit "
             "what you asked) and one page of rows. Narrow with any of: `numbers` (tab numbers, "
-            "e.g. [12, 250, 499]), `ranges` (e.g. [{\"from\": 3, \"to\": 7}]), `names`, `search` (every word must match a "
+            'e.g. [12, 250, 499]), `ranges` (e.g. [{"from": 3, "to": 7}]), `names`, `search` (every word must match a '
             "scenario's name, situation, use case or branch), `filters` (field to a list of "
-            "values, e.g. {\"persona.accent\": [\"Indian\"]}; fields: use_case, persona.name, "
+            'values, e.g. {"persona.accent": ["Indian"]}; fields: use_case, persona.name, '
             "persona.accent, persona.languages, persona.age_group, persona.gender, "
             "persona.location, persona.personality, persona.communication_style, "
             "background_noise, coverage.overlay, coverage.overlay_intensity, coverage.task, "
