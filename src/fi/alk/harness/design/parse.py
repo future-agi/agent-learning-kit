@@ -210,9 +210,17 @@ def main(argv: list[str]) -> int:
         print(str(exc), file=sys.stderr)
         return 3
     out.mkdir(parents=True, exist_ok=True)
-    listed, total = [], 0
+    listed, total, taken = [], 0, set()
     for raw, content in parts:
-        name = part_name(raw)
+        # Sheet titles such as "A B" and "A-B" read the same as a file name: each part gets a
+        # name of its own, and its title is kept as written.
+        base = part_name(raw)
+        name = next(
+            candidate
+            for candidate in (base, *(f"{base}-{n}" for n in range(2, len(parts) + 2)))
+            if candidate.lower() not in taken
+        )
+        taken.add(name.lower())
         if isinstance(content, str):
             total += len(content)
             if total > MOST_CHARS:
@@ -222,7 +230,9 @@ def main(argv: list[str]) -> int:
                 )
                 return 3
             (out / f"{name}.md").write_text(content, encoding="utf-8")
-            listed.append({"name": name, "kind": "text", "chars": len(content)})
+            listed.append(
+                {"name": name, "title": raw, "kind": "text", "chars": len(content)}
+            )
         else:
             (out / f"{name}.json").write_text(
                 json.dumps(content, ensure_ascii=False), encoding="utf-8"
@@ -230,6 +240,7 @@ def main(argv: list[str]) -> int:
             listed.append(
                 {
                     "name": name,
+                    "title": raw,
                     "kind": "table",
                     "columns": content["columns"],
                     "rows": len(content["rows"]),

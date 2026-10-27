@@ -182,6 +182,23 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
 - The hosted chat emits `question_answered` when the builder takes a reply, so
   the platform settles the question while the turn carries on rather than at
   `turn_completed`; needs the platform that accepts the event kind.
+- Environment-authored handlers (designs and releases) run in an isolated child
+  process when `ALK_HANDLER_ISOLATION` is set (`fi.alk.harness.world.handler_host`).
+  The hosted image sets `namespace`: a user namespace as a uid from svc-control's
+  subordinate range, an empty environment, no network, and empty mounts over
+  `/work`, `/run`, `/home` and `/tmp`; the call fails rather than fall back when
+  the namespace cannot be made. The handler reaches the world only through its
+  `db`, whose operations the calling process answers; messages are JSON lines,
+  values keep their types, refusals keep their category, and a hung handler times
+  out. Run processes inherit the setting. A model-written handler could otherwise
+  read the builder's model and platform credentials (or a run's secrets).
+- Finishing and stopping a design are serialized: two concurrent `finish_design`
+  calls no longer both seal into one output.
+- Personal-details replacement in `import_rows` and `attach_document` matches
+  numbers as written (a phone number in a numeric cell), and the tool names each
+  requested replacement the document never held.
+- XLSX sheets whose titles read the same as file names (`A B`, `A-B`) each get a
+  part of their own; a part keeps its sheet's `title` as written.
 
 ## v1.0.0-rc.1 — 2026-06-10
 

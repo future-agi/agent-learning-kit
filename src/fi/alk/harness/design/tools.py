@@ -186,6 +186,8 @@ class DesignTools:
         # server offers; the caller owns it across reopenings and closes it.
         self.view_proof = view_proof
         self.done = False
+        # Held across a finish or stop: two concurrent calls would both seal into one output.
+        self._finishing = asyncio.Lock()
         # Set when the session has to be opened again: the world was saved (the scenario tools
         # open), or the contract the writers were given changed.
         self.reopen = False
@@ -798,25 +800,31 @@ class DesignTools:
         )
 
     async def finish_design(self, _args: dict[str, Any]) -> dict[str, Any]:
-        if finished := self._finished():
-            return _ok(finished)
-        if refused := self._not_ready():
-            return _err(refused)
-        try:
-            environment, suite = await asyncio.to_thread(self._seal, self.output)
-        except ReleaseError as exc:
-            return _err(f"Not finished; nothing was sealed. {exc.code}: {exc.detail}")
-        self._finish(
-            {
-                "status": "completed",
-                "environment": {"digest": environment.digest, "name": environment.name},
-                "suite": {
-                    "digest": suite.digest,
-                    "name": suite.name,
-                    "scenarios": len(suite.scenarios),
-                },
-            }
-        )
+        async with self._finishing:
+            if finished := self._finished():
+                return _ok(finished)
+            if refused := self._not_ready():
+                return _err(refused)
+            try:
+                environment, suite = await asyncio.to_thread(self._seal, self.output)
+            except ReleaseError as exc:
+                return _err(
+                    f"Not finished; nothing was sealed. {exc.code}: {exc.detail}"
+                )
+            self._finish(
+                {
+                    "status": "completed",
+                    "environment": {
+                        "digest": environment.digest,
+                        "name": environment.name,
+                    },
+                    "suite": {
+                        "digest": suite.digest,
+                        "name": suite.name,
+                        "scenarios": len(suite.scenarios),
+                    },
+                }
+            )
         return _ok(
             f"Sealed: environment {environment.name} {environment.digest[:19]} and suite "
             f"{suite.name} {suite.digest[:19]} with {len(suite.scenarios)} scenarios. Tell the "
@@ -824,17 +832,18 @@ class DesignTools:
         )
 
     async def stop_design(self, args: dict[str, Any]) -> dict[str, Any]:
-        if finished := self._finished():
-            return _ok(finished)
         reason = str(args.get("reason") or "").strip()
-        if not reason:
-            return _err("say why the design cannot be finished")
-        self._finish(
-            {
-                "status": "failed",
-                "failure": {"code": "design_stopped", "message": reason},
-            }
-        )
+        async with self._finishing:
+            if finished := self._finished():
+                return _ok(finished)
+            if not reason:
+                return _err("say why the design cannot be finished")
+            self._finish(
+                {
+                    "status": "failed",
+                    "failure": {"code": "design_stopped", "message": reason},
+                }
+            )
         return _ok("Stopped. Tell the person why, in a line or two.")
 
     def _finish(self, result: dict[str, Any]) -> None:

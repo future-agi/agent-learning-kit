@@ -139,15 +139,39 @@ def _err(text: str) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": text[:4000]}], "is_error": True}
 
 
-def _replaced(value: Any, replacements: dict[str, str]) -> tuple[Any, int]:
-    if not isinstance(value, str) or not replacements:
+def _replaced(
+    value: Any, replacements: dict[str, str], matched: set[str]
+) -> tuple[Any, int]:
+    """`value` with each original replaced by its made-up text, adding the originals found to
+    `matched`. A number is matched as written (a phone or account number in a numeric cell)."""
+    if not replacements or value is None or isinstance(value, bool):
+        return value, 0
+    if isinstance(value, str):
+        text = value
+    elif isinstance(value, int | float):
+        text = str(
+            int(value) if isinstance(value, float) and value.is_integer() else value
+        )
+    else:
         return value, 0
     count = 0
     for original, made_up in replacements.items():
-        if original and original in value:
-            count += value.count(original)
-            value = value.replace(original, made_up)
-    return value, count
+        if original and original in text:
+            matched.add(original)
+            count += text.count(original)
+            text = text.replace(original, made_up)
+    # A number nothing replaced keeps its type; a replaced one is coerced again by its column.
+    return (text, count) if count or isinstance(value, str) else (value, 0)
+
+
+def _unmatched(replacements: dict[str, str], matched: set[str]) -> str:
+    """A note naming each requested replacement the document never held."""
+    missing = [original for original in replacements if original not in matched]
+    if not missing:
+        return ""
+    return "; not found, so nothing was replaced for: " + ", ".join(
+        repr(original) for original in missing
+    )
 
 
 def _markdown_table(table: dict[str, Any], most: int) -> str:
@@ -396,12 +420,12 @@ class DocumentTools:
         decision, replacements, refused = _personal(args)
         if refused:
             return _err(f"Nothing was imported: {refused}.")
-        rows, replaced = [], 0
+        rows, replaced, matched = [], 0, set()
         for number, row in enumerate(content["rows"], start=2):
             values = []
             for column, index in sources.items():
                 value, count = _replaced(
-                    row[index] if index < len(row) else None, replacements
+                    row[index] if index < len(row) else None, replacements, matched
                 )
                 replaced += count
                 try:
@@ -440,6 +464,7 @@ class DocumentTools:
         return _ok(
             f"{len(rows)} rows imported into {table} from {record.name} / {part['name']}"
             + (f", with {replaced} personal details replaced" if replaced else "")
+            + _unmatched(replacements, matched)
             + "."
         )
 
@@ -468,7 +493,10 @@ class DocumentTools:
             sections.append(
                 text if len(record.parts) == 1 else f"## {part['name']}\n\n{text}"
             )
-        text, replaced = _replaced("\n\n".join(sections).strip() + "\n", replacements)
+        matched: set[str] = set()
+        text, replaced = _replaced(
+            "\n\n".join(sections).strip() + "\n", replacements, matched
+        )
         relative = Path(ATTACHED) / folder / f"{record.name}.md"
         target = self.workspace / relative
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -487,6 +515,7 @@ class DocumentTools:
         return _ok(
             f"{record.file} attached as {relative}"
             + (f", with {replaced} personal details replaced" if replaced else "")
+            + _unmatched(replacements, matched)
             + f". Attach a filesystem server to {ATTACHED}/{folder} for the agent to read it."
         )
 
