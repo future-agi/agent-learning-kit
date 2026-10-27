@@ -311,6 +311,8 @@ def restore(path: str | Path, *, into: str | Path | None = None) -> GeneratedWor
     world.external_runtime = bool(manifest.get("external_runtime", False))
     world.tools = manifest.get("tool_specs", [])
     world.refusal_signature = str(manifest.get("refusal_signature") or "")
+    # The environment's own handlers (a design or a release), not bindings to an agent's code.
+    world.isolated = manifest.get("tool_implementation") == "environment"
     # A world whose handlers bind to the agent's own code cannot run them unless that code
     # is importable again, and the frozen state is what those tools act on.
     reached = str(manifest.get("source_root") or "")

@@ -30,6 +30,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Literal
 
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -68,9 +70,11 @@ SUB_GOALS = "sub_goals.json"
 POLICY_TABLE = "environment_policy"
 WORLD_IMPLEMENTATION = "environment"
 
-_DIGEST_PATTERN = r"sha256:[0-9a-f]{64}"
-_SLUG_PATTERN = r"[a-z][a-z0-9_]*"
-_TOOL_NAME_PATTERN = r"[A-Za-z_][A-Za-z0-9_]*"
+_DIGEST_PATTERN = r"^sha256:[0-9a-f]{64}$"
+_SLUG_PATTERN = r"^[a-z][a-z0-9_]*$"
+# What MCP, Claude and OpenAI-style function calling all accept: an integration's own tool
+# names such as Notion's `notion-search` stay exact. Dots are MCP-legal but not model-legal.
+_TOOL_NAME_PATTERN = r"^[A-Za-z_][A-Za-z0-9_-]{0,63}$"
 _UNSEALED = "sha256:" + "0" * 64
 _STRAY_NAMES = {".DS_Store", "__pycache__"}
 _STRAY_SUFFIXES = (".pyc", ".pyo")
@@ -112,7 +116,29 @@ class ToolDefinition(_Strict):
     def _object_schema(cls, value: dict[str, JsonValue]) -> dict[str, JsonValue]:
         if value.get("type") != "object":
             raise ValueError("parameters must be a JSON Schema object")
-        return value
+        return _json_schema(value, "parameters")
+
+    @field_validator("returns")
+    @classmethod
+    def _returns_schema(
+        cls, value: dict[str, JsonValue] | None
+    ) -> dict[str, JsonValue] | None:
+        return value if value is None else _json_schema(value, "returns")
+
+
+def _json_schema(value: dict[str, JsonValue], label: str) -> dict[str, JsonValue]:
+    """A tool's schemas are what an MCP client reads from tools/list, so they must be valid
+    JSON Schema: a type such as "str" or "int" is a Python name, not a schema type, and a strict
+    client rejects the whole tool list over it."""
+    try:
+        Draft202012Validator.check_schema(value)
+    except SchemaError as exc:
+        where = "/".join(str(part) for part in exc.path) or "the root"
+        raise ValueError(
+            f"{label} is not valid JSON Schema at {where}: {exc.message}. Types are "
+            "string, integer, number, boolean, array, object or null."
+        ) from None
+    return value
 
 
 class DatabaseReader(_Strict):
@@ -161,9 +187,22 @@ def attached_tool_names(root: Path) -> set[str]:
 
 
 def _check_servers(root: Path, tools: Sequence[ToolDefinition]) -> None:
+    if problems := server_problems(
+        load_servers(root), Path(root), tools, Path(root) / WORLD / "world.sqlite"
+    ):
+        raise ReleaseError("environment_servers_invalid", "; ".join(problems))
+
+
+def server_problems(
+    servers: Sequence[AttachedServer],
+    root: Path,
+    tools: Sequence[ToolDefinition],
+    world_database: Path,
+) -> list[str]:
+    """What is wrong with attaching `servers` to the environment at `root` whose own tools are
+    `tools` and whose world is `world_database`, one line each."""
     from .mcp_servers import DATABASE_READER, DIRECTORY, REGISTRY
 
-    servers = load_servers(root)
     problems: list[str] = []
     if repeated := sorted(
         name
@@ -172,7 +211,7 @@ def _check_servers(root: Path, tools: Sequence[ToolDefinition]) -> None:
     ):
         problems.append(f"duplicate server ids: {repeated}")
     native = {tool.name for tool in tools}
-    world_tables = set(_parent_tables(Path(root) / WORLD / "world.sqlite"))
+    world_tables = set(_parent_tables(world_database))
     for server in servers:
         registered = REGISTRY.get(server.server)
         if registered is None:
@@ -181,20 +220,31 @@ def _check_servers(root: Path, tools: Sequence[ToolDefinition]) -> None:
                 f"known: {', '.join(sorted(REGISTRY))}"
             )
             continue
+        if writes := sorted(set(server.tools) - registered.attachable):
+            problems.append(
+                f"{server.id}: not attachable (only read-only tools are): {writes}; "
+                f"attachable: {sorted(registered.attachable)}"
+            )
         if clashes := sorted(set(server.tool_names()) & native):
             problems.append(f"{server.id}: tool names clash with {clashes}")
         # The agent sees `<id>__<tool>` as a tool name; one it cannot be offered as fails only
         # when a world starts, far from the release that listed it.
         if invalid := sorted(
-            name for name in server.tool_names() if not re.fullmatch(_TOOL_NAME_PATTERN, name)
+            name
+            for name in server.tool_names()
+            if not re.fullmatch(_TOOL_NAME_PATTERN, name)
         ):
             problems.append(f"{server.id}: not valid tool names: {invalid}")
-        if repeated := sorted(name for name, count in Counter(server.tools).items() if count > 1):
+        if repeated := sorted(
+            name for name, count in Counter(server.tools).items() if count > 1
+        ):
             problems.append(f"{server.id}: tools listed twice: {repeated}")
         reader = server.attach.database_reader
         if reader is not None:
             if DATABASE_READER not in registered.attach:
-                problems.append(f"{server.id}: {server.server} takes no database reader")
+                problems.append(
+                    f"{server.id}: {server.server} takes no database reader"
+                )
             for table in reader.tables:
                 if table not in world_tables:
                     problems.append(f"{server.id}: no world table {table!r}")
@@ -216,8 +266,7 @@ def _check_servers(root: Path, tools: Sequence[ToolDefinition]) -> None:
                 )
         if DIRECTORY in registered.attach and directory is None:
             problems.append(f"{server.id}: {server.server} needs a directory")
-    if problems:
-        raise ReleaseError("environment_servers_invalid", "; ".join(problems))
+    return problems
 
 
 def reader_grants_sql(environment_root: Path) -> str:
@@ -768,7 +817,9 @@ def _check_environment_contents(
     # Replacing a prebuilt tool with the customer's own code (contract §2.2) is not built: nothing
     # composes or runs such a handler differently, so a release claiming one would run the copy.
     if unsupported := sorted(
-        name for name, entry in handlers.items() if entry.mode is not HandlerMode.ENVIRONMENT
+        name
+        for name, entry in handlers.items()
+        if entry.mode is not HandlerMode.ENVIRONMENT
     ):
         raise ReleaseError(
             "environment_handler_unsupported",
@@ -874,9 +925,13 @@ def _check_extension(
         if child_rules.get(rule.id) != rule:
             problems.append(f"rule {rule.id} removed or changed")
     if load_servers(root) != load_servers(parent_root):
-        problems.append(f"{SERVERS} changed; attached servers belong to the base release")
+        problems.append(
+            f"{SERVERS} changed; attached servers belong to the base release"
+        )
     if _attached_files(root) != _attached_files(parent_root):
-        problems.append(f"{ATTACHED}/ changed; attached folders belong to the base release")
+        problems.append(
+            f"{ATTACHED}/ changed; attached folders belong to the base release"
+        )
     parent_db = parent_root / WORLD / "world.sqlite"
     child_db = root / WORLD / "world.sqlite"
     if parent_db.is_file():
@@ -902,7 +957,11 @@ def _lineage(document: Mapping[str, Any]) -> dict[str, Any]:
         "extends": document.get("extends"),
         "parent": document.get("parent"),
         "scenarios": sorted(
-            (str(entry.get("key")), str(entry.get("origin")), str(entry.get("derived_from")))
+            (
+                str(entry.get("key")),
+                str(entry.get("origin")),
+                str(entry.get("derived_from")),
+            )
             for entry in document.get("scenarios") or []
         ),
     }
@@ -937,7 +996,8 @@ def seal_environment_release(
     """Check an environment directory against the contract and write its `release.json`."""
     root = Path(root)
     handlers = {
-        tool.name: HandlerEntry(mode=HandlerMode.ENVIRONMENT) for tool in load_tools(root)
+        tool.name: HandlerEntry(mode=HandlerMode.ENVIRONMENT)
+        for tool in load_tools(root)
     }
     _check_environment_contents(root, handlers)
     extends = None
@@ -946,7 +1006,8 @@ def seal_environment_release(
         _check_extension(root, Path(parent_root), parent)
         extends = ReleaseRef(digest=parent.digest, name=parent.name)
     _unchanged_lineage(
-        root / ENVIRONMENT_MANIFEST, {"extends": extends.model_dump() if extends else None}
+        root / ENVIRONMENT_MANIFEST,
+        {"extends": extends.model_dump() if extends else None},
     )
     release = _validated(
         EnvironmentReleaseV1,
@@ -1079,7 +1140,11 @@ def _check_rule_coverage(
 def _check_simulator_prompt(root: Path) -> None:
     """The simulated person is the suite's prompt with each scenario's persona and instruction
     filled in; a prompt without those slots runs every scenario as the same aimless caller."""
-    from .simulator import load_simulator_prompt, validate_simulator_prompt, variables_in
+    from .simulator import (
+        load_simulator_prompt,
+        validate_simulator_prompt,
+        variables_in,
+    )
 
     prompt = load_simulator_prompt(root)
     if not prompt:
@@ -1185,6 +1250,9 @@ def _prove_all(
 
     catalogue = load_catalogue(root)
     attached = frozenset(attached_tool_names(environment_root))
+    state_changing = frozenset(
+        tool.name for tool in load_tools(environment_root) if tool.mutates_state
+    )
     results: dict[str, Any] = {}
     failures: list[str] = []
     with tempfile.TemporaryDirectory(prefix="suite-proof-") as scratch:
@@ -1192,7 +1260,13 @@ def _prove_all(
         shutil.copytree(environment_root / WORLD, world_root)
         apply_policy_profile(world_root, policy, profile)
         for entry, scenario in loaded:
-            proof = prove(scenario, catalogue, world_root, postgres_only=attached)
+            proof = prove(
+                scenario,
+                catalogue,
+                world_root,
+                postgres_only=attached,
+                state_changing=state_changing,
+            )
             results[entry.key] = {
                 "holds": proof.holds,
                 "gates": proof.gates(),
@@ -1317,13 +1391,38 @@ class PostgresProof:
             f'DROP ROLE IF EXISTS "{self._target}_reader"',
         )
 
-    def checks(self, scenario: Any) -> list[tuple[str, str]]:
+    def checks(self, scenario: Any, catalogue: Any = None) -> list[tuple[str, str]]:
         return [
             (name, goal.check)
             for name in scenario.sub_goals
-            if (goal := self._catalogue.named(name)) is not None
+            if (
+                goal := (self._catalogue if catalogue is None else catalogue).named(
+                    name
+                )
+            )
+            is not None
             and goal.deterministic()
         ]
+
+    def attached_definitions(self) -> list[ToolDefinition]:
+        """The attached servers' tools as a fresh world offers them, read from each server's own
+        `tools/list`; raises `ToolError` when a server does not offer a tool it lists."""
+        from .world_tools import attach_servers
+
+        self._admin(
+            f'DROP DATABASE IF EXISTS "{self._target}" WITH (FORCE)',
+            f'CREATE DATABASE "{self._target}" TEMPLATE "{self._base}"',
+        )
+        attached = attach_servers(
+            self._servers, self._dsn(self._target), cwd=self._environment_root
+        )
+        if attached is None:
+            return []
+        try:
+            attached.start()
+            return list(attached.definitions)
+        finally:
+            attached.close()
 
     def attempt(
         self,
@@ -1331,13 +1430,13 @@ class PostgresProof:
         calls: Sequence[tuple[str, Any]],
         binding: AgentBindingV1 | None = None,
         *,
-        crashed: Sequence[Any] | None = None,
+        observed: Sequence[Any] | None = None,
+        catalogue: Any = None,
     ) -> Attempt:
         """`calls` are `(tool, arguments)` in `binding`'s vocabulary, played in order. With
-        `crashed`, nothing is played: the checks see an untouched world and those calls, each
-        failed with no result, the way an execution failure leaves them."""
+        `observed`, nothing is played: the checks see an untouched world and those calls.
+        `catalogue` grades with sub-goals not yet written to the suite."""
         import random
-        from dataclasses import replace
 
         from .checks import run_check
         from .folder import apply_setup, check_ready
@@ -1368,7 +1467,7 @@ class PostgresProof:
         faults: list[str] = []
         outcomes: list[Any] = []
         try:
-            for tool, arguments in calls if ready.ok and crashed is None else ():
+            for tool, arguments in calls if ready.ok and observed is None else ():
                 outcome = tools.call(tool, arguments)
                 outcomes.append(outcome)
                 if outcome.status == "fault":
@@ -1399,23 +1498,95 @@ class PostgresProof:
                     )
         finally:
             tools.close()
-        if ready.ok and crashed is not None:
-            played = [
-                replace(call, ok=False, result=None, error="execution failed", refused=False)
-                for call in crashed
-            ]
+        if ready.ok and observed is not None:
+            played = list(observed)
         return Attempt(
             ready,
             faults,
             [
                 (name, run_check(source, world, played, name=name))
-                for name, source in self.checks(scenario)
+                for name, source in self.checks(scenario, catalogue)
             ]
             if ready.ok
             else [],
             outcomes,
             played,
         )
+
+
+def postgres_verdict(
+    proof: PostgresProof, scenario: Any, *, catalogue: Any = None
+) -> tuple[dict[str, Any], str]:
+    """One scenario on PostgreSQL, canonically: it must hold with its reference solution, and fail
+    when nothing is done, when every call it made crashed, and when its state-changing calls
+    succeed without their effect. Its proof record, and why it does not hold ("" when it does)."""
+    from .prove import crashed, without_effect
+
+    state_changing = frozenset(
+        tool.name for tool in proof.environment_tools if tool.mutates_state
+    )
+    solved = proof.attempt(
+        scenario,
+        [(step.tool, dict(step.arguments)) for step in scenario.solution],
+        catalogue=catalogue,
+    )
+    untouched = proof.attempt(scenario, [], catalogue=catalogue)
+    weak = [name for name, outcome in untouched.checks if outcome.held]
+    # As on SQLite: a check that credits an attempted call without its effect, whether the call
+    # crashed or succeeded.
+    credited = [
+        name
+        for name, outcome in (
+            proof.attempt(
+                scenario, [], observed=crashed(solved.played), catalogue=catalogue
+            ).checks
+            if solved.played
+            else []
+        )
+        if outcome.held and name not in weak
+    ]
+    trusted = [
+        name
+        for name, outcome in (
+            proof.attempt(
+                scenario,
+                [],
+                observed=without_effect(solved.played, state_changing),
+                catalogue=catalogue,
+            ).checks
+            if solved.holds
+            and any(call.ok and call.name in state_changing for call in solved.played)
+            else []
+        )
+        if outcome.held and name not in weak and name not in credited
+    ]
+    holds = solved.holds and not weak and not credited and not trusted
+    record = {
+        "holds": holds,
+        "ready": solved.ready.ok,
+        "faults": solved.faults,
+        "failed": solved.failed,
+        "weak": weak,
+    }
+    if holds:
+        return record, ""
+    return record, (
+        solved.ready.said
+        if not solved.ready.ok
+        else "; ".join(
+            [
+                *solved.faults,
+                *solved.failed,
+                *(f"{name} holds untouched" for name in weak),
+                *(f"{name} holds when every call crashed" for name in credited),
+                *(
+                    f"{name} holds when no state-changing call took effect"
+                    for name in trusted
+                ),
+            ]
+        )
+        or "no deterministic check"
+    )
 
 
 def _prove_on_postgres(
@@ -1425,47 +1596,13 @@ def _prove_on_postgres(
     loaded: Sequence[tuple[SuiteScenario, Any]],
     admin_dsn: str,
 ) -> dict[str, Any]:
-    """Every scenario again, on PostgreSQL (`PostgresProof`), canonically: it must hold with its
-    reference solution, and fail when nothing is done and when every call it made crashed."""
+    """Every scenario again, on PostgreSQL (`postgres_verdict`)."""
     results: dict[str, Any] = {}
     failures: list[str] = []
     with PostgresProof(root, environment_root, profile, admin_dsn) as proof:
         for entry, scenario in loaded:
-            solved = proof.attempt(
-                scenario,
-                [(step.tool, dict(step.arguments)) for step in scenario.solution],
-            )
-            untouched = proof.attempt(scenario, [])
-            weak = [name for name, outcome in untouched.checks if outcome.held]
-            # As on SQLite: a check that credits an attempted call without its effect.
-            crashed = proof.attempt(scenario, [], crashed=solved.played) if solved.played else None
-            credited = [
-                name
-                for name, outcome in (crashed.checks if crashed else [])
-                if outcome.held and name not in weak
-            ]
-            holds = solved.holds and not weak and not credited
-            results[entry.key] = {
-                "holds": holds,
-                "ready": solved.ready.ok,
-                "faults": solved.faults,
-                "failed": solved.failed,
-                "weak": weak,
-            }
-            if not holds:
-                reason = (
-                    solved.ready.said
-                    if not solved.ready.ok
-                    else "; ".join(
-                        [
-                            *solved.faults,
-                            *solved.failed,
-                            *(f"{name} holds untouched" for name in weak),
-                            *(f"{name} holds when every call crashed" for name in credited),
-                        ]
-                    )
-                    or "no deterministic check"
-                )
+            results[entry.key], reason = postgres_verdict(proof, scenario)
+            if reason:
                 failures.append(f"{entry.key}: {reason}")
     if failures:
         raise ReleaseError(
@@ -1552,7 +1689,9 @@ def seal_suite_release(
     _check_simulator_prompt(root)
     (root / PROOFS).unlink(missing_ok=True)
     proofs = _prove_all(root, environment_root, policy, profile, loaded)
-    if not postgres_dsn and any(entry.get("postgres_only") for entry in proofs.values()):
+    if not postgres_dsn and any(
+        entry.get("postgres_only") for entry in proofs.values()
+    ):
         raise ReleaseError(
             "suite_runtime_unproved",
             "scenarios that call attached MCP servers are proved only on PostgreSQL; "
@@ -1848,6 +1987,27 @@ def _require_runtime_proof(suite_root: Path, suite: SuiteReleaseV1) -> None:
         )
 
 
+def world_tool_specs(root: str | Path) -> list[dict[str, Any]]:
+    """The world's own description of each tool, derived from an environment's `tools.json`."""
+    specs = []
+    for tool in load_tools(Path(root)):
+        properties = tool.parameters.get("properties") or {}
+        specs.append(
+            {
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": {
+                    argument: {
+                        "type": _ARG_TYPES.get(str(schema.get("type")), "str"),
+                        "values": schema.get("enum"),
+                    }
+                    for argument, schema in properties.items()
+                },
+            }
+        )
+    return specs
+
+
 def _contract(name: str, modality: str, tools: Sequence[Any]) -> dict[str, Any]:
     """The `contract.json` the runners read: the agent's view of the tools it calls (release
     `ToolDefinition`s, or a `tool_routed` binding's `agent_tools`)."""
@@ -2094,7 +2254,9 @@ def compose_bundle(
             },
             readiness=[
                 ReadinessProbeV2(capability="world_db", timeout_seconds=180),
-                ReadinessProbeV2(capability=capability, path=health, timeout_seconds=180),
+                ReadinessProbeV2(
+                    capability=capability, path=health, timeout_seconds=180
+                ),
             ],
             files=list_files(staging, BUNDLE_V2_MANIFEST),
             provenance=BundleProvenanceV2(

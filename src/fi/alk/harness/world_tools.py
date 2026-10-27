@@ -30,7 +30,9 @@ from typing import Any
 import psycopg
 from psycopg import conninfo, sql
 
-from fi.alk.harness.bindings import BoundResult, ToolError, run_bound_call
+from fi.alk.harness.bindings import BoundResult, run_bound_call
+from fi.alk.harness.world.handler_host import isolation_mode, run_handler
+from fi.alk.harness.world.runtime import ToolError
 
 # A handler is a few statements against one world; anything slower is a broken handler, and
 # without a bound one stuck call would hold the world for the rest of the run.
@@ -78,17 +80,20 @@ class Db:
         ]
 
 
-def load_handlers(tools_file: Path, handlers_directory: Path) -> dict[str, CodeType]:
-    """One compiled handler per tool in ``tools_file``, from ``<tool>.py``."""
+def load_handlers(
+    tools_file: Path, handlers_directory: Path
+) -> dict[str, tuple[str, CodeType]]:
+    """Each tool's handler in ``tools_file``, from ``<tool>.py``: its source, which the isolated
+    child runs, and its compiled code, so a release that does not compile fails on loading."""
     tools = json.loads(tools_file.read_text(encoding="utf-8"))
-    return {
-        tool["name"]: compile(
-            (handlers_directory / f"{tool['name']}.py").read_text(encoding="utf-8"),
-            f"<handler:{tool['name']}>",
-            "exec",
+    loaded = {}
+    for tool in tools:
+        source = (handlers_directory / f"{tool['name']}.py").read_text(encoding="utf-8")
+        loaded[tool["name"]] = (
+            source,
+            compile(source, f"<handler:{tool['name']}>", "exec"),
         )
-        for tool in tools
-    }
+    return loaded
 
 
 def ensure_reader_login(admin_url: str, login: str) -> str:
@@ -279,7 +284,7 @@ class WorldTools:
 
     def __init__(
         self,
-        handlers: dict[str, CodeType],
+        handlers: dict[str, tuple[str, CodeType]],
         environment_tools: Sequence[Any],
         database_url: str,
         *,
@@ -354,8 +359,11 @@ class WorldTools:
     ) -> Any:
         if self.attached is not None and tool in self.attached.names:
             return self.attached.call(tool, arguments)
+        source, code = self.handlers[tool]
+        if (mode := isolation_mode()) is not None:
+            return run_handler(source, tool, dict(arguments), Db(connection), mode=mode)
         namespace: dict[str, Any] = {"ToolError": ToolError, "json": json}
-        exec(self.handlers[tool], namespace)  # noqa: S102 - sealed release handlers only
+        exec(code, namespace)  # noqa: S102 - sealed release handlers only
         return namespace["handle"](dict(arguments), Db(connection))
 
     def _trace(

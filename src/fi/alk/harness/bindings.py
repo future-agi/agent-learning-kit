@@ -32,17 +32,18 @@ from pydantic import (
     model_validator,
 )
 
+# The one class handlers raise to refuse, in the tool server, in proofs and in worlds.
+from .world.runtime import ToolError
+
 if TYPE_CHECKING:
     from .releases import AgentBindingV1, ToolDefinition
 
-_SLUG_PATTERN = r"[a-z][a-z0-9_]*"
-_TOOL_NAME_PATTERN = r"[A-Za-z_][A-Za-z0-9_]*"
+_SLUG_PATTERN = r"^[a-z][a-z0-9_]*$"
+# What MCP, Claude and OpenAI-style function calling all accept: an integration's own tool
+# names such as Notion's `notion-search` stay exact. Dots are MCP-legal but not model-legal.
+_TOOL_NAME_PATTERN = r"^[A-Za-z_][A-Za-z0-9_-]{0,63}$"
 # Provider function names (Retell and Vapi both allow dashes, up to 64 characters).
-_AGENT_TOOL_PATTERN = r"[A-Za-z0-9_-]{1,64}"
-
-
-class ToolError(Exception):
-    """A handler refusing a call. The one class handlers raise, in the tool server and in proofs."""
+_AGENT_TOOL_PATTERN = r"^[A-Za-z0-9_-]{1,64}$"
 
 
 # --- models ----------------------------------------------------------------------------------------

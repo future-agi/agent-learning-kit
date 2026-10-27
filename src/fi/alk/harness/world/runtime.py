@@ -25,6 +25,21 @@ from typing import Any, Mapping, Sequence
 
 from ..environment import EnvironmentAdapter, EnvironmentSnapshot, ToolExecutionResult
 
+# The stable refusal categories an agent can act on: a blocked policy is not an outage, and a
+# timeout with an unknown outcome is not a failure to retry blindly.
+ERROR_CATEGORIES = frozenset(
+    {
+        "invalid_input",
+        "not_found",
+        "permission_denied",
+        "conflict",
+        "policy_blocked",
+        "rate_limited",
+        "unavailable",
+        "timeout_unknown_outcome",
+    }
+)
+
 
 class ToolError(Exception):
     """A tool refusing for a real reason the agent should see and recover from.
@@ -32,7 +47,18 @@ class ToolError(Exception):
     Distinct from a crash. A refusal is the world working: the id does not exist, the item is
     unavailable, the argument is outside what the tool accepts. A crash is our bug, and the two
     must never look the same to a caller deciding whether the agent behaved correctly.
+
+    `category`, one of `ERROR_CATEGORIES`, leads the message the agent reads
+    (``permission_denied: ...``), so an agent and a check can tell the kinds of refusal apart.
     """
+
+    def __init__(self, message: str, category: str | None = None) -> None:
+        if category is not None and category not in ERROR_CATEGORIES:
+            raise ValueError(
+                f"unknown error category {category!r}; use one of {sorted(ERROR_CATEGORIES)}"
+            )
+        self.category = category
+        super().__init__(f"{category}: {message}" if category else message)
 
 
 @dataclass
@@ -199,6 +225,10 @@ class GeneratedWorld(EnvironmentAdapter):
         # writes the frozen rows into the newly-created store.
         self.store.start()
         self.calls: list[Call] = []
+        # Whether the handlers are the environment's own (a designed or released world) rather
+        # than bound to an agent's code: those run in the isolated child when
+        # ALK_HANDLER_ISOLATION is set (see `handler_host`).
+        self.isolated = False
 
     @property
     def connection(self) -> Any:
@@ -312,13 +342,27 @@ class GeneratedWorld(EnvironmentAdapter):
                 )
             )
 
-        namespace: dict[str, Any] = {"ToolError": ToolError, "json": json}
+        from .handler_host import isolation_mode, run_handler
+
         try:
-            exec(compile(self.handlers[name], f"<handler:{name}>", "exec"), namespace)
-            handle = namespace.get("handle")
-            if not callable(handle):
-                raise RuntimeError("handler defines no handle(args, db)")
-            value = handle(args, Db(self.store, self.state_object))
+            mode = isolation_mode() if self.isolated else None
+            if mode is not None:
+                value = run_handler(
+                    self.handlers[name],
+                    name,
+                    args,
+                    Db(self.store, self.state_object),
+                    mode=mode,
+                )
+            else:
+                namespace: dict[str, Any] = {"ToolError": ToolError, "json": json}
+                exec(
+                    compile(self.handlers[name], f"<handler:{name}>", "exec"), namespace
+                )
+                handle = namespace.get("handle")
+                if not callable(handle):
+                    raise RuntimeError("handler defines no handle(args, db)")
+                value = handle(args, Db(self.store, self.state_object))
         except Exception as raised:
             if _is_refusal(raised, self.refusal_signature):
                 return self._record(
