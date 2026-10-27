@@ -26,6 +26,8 @@ from .provider_import import inspect_provider_target
 from .scenarios import load as load_written
 from .understand import PROVIDER_IMPORT_PROFILE_PATH_ENV
 
+PROVIDER_MANAGED_CONNECTORS = frozenset({"vapi", "retell", "retell_chat"})
+
 
 def _persist_authored_scenario_count(
     job_path: Path, job: HarnessJob, output: Path
@@ -83,7 +85,7 @@ def _load_provider_import_profile(
         }
     inspect_connect_only_provider = (
         job.agent.mode is ProviderExecutionMode.CONNECT_ONLY
-        and job.agent.connector.strip().lower() in {"vapi", "retell", "retell_chat"}
+        and job.agent.connector.strip().lower() in PROVIDER_MANAGED_CONNECTORS
     )
     if (
         job.agent.mode is not ProviderExecutionMode.PROVIDER_IMPORT
