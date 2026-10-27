@@ -3177,7 +3177,7 @@ def _langchain_sql_trace_bindings(contract: dict[str, Any]) -> list[dict[str, st
         toolkit_product = (
             entry.mode == "construct"
             and entry.module == "langchain_community.agent_toolkits.sql.toolkit"
-            and entry.callable == "SQLDatabaseToolkit"
+            and entry.callable in {"SQLDatabaseToolkit", "SQLDatabaseToolkit.get_tools"}
         )
         individual_tool = (
             entry.mode == "construct"

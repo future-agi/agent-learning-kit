@@ -523,7 +523,12 @@ def test_tool_registration_is_not_observed_as_tool_execution(tmp_path: Path) -> 
     assert not trace.exists(), "Registering a tool does not prove the agent executed it"
 
 
-def test_chat_bundle_traces_langchain_sql_tool_execution(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "toolkit_callable", ["SQLDatabaseToolkit", "SQLDatabaseToolkit.get_tools"]
+)
+def test_chat_bundle_traces_langchain_sql_tool_execution(
+    tmp_path: Path, toolkit_callable: str
+) -> None:
     source = tmp_path / "chat-agent"
     source.mkdir()
     (source / "app.py").write_text("print('agent')\n", encoding="utf-8")
@@ -550,7 +555,7 @@ def test_chat_bundle_traces_langchain_sql_tool_execution(tmp_path: Path) -> None
             "tool": tool["name"],
             "mode": "construct",
             "module": "langchain_community.agent_toolkits.sql.toolkit",
-            "callable": "SQLDatabaseToolkit",
+            "callable": toolkit_callable,
             "factory": "SQLDatabaseToolkit(db=database, llm=llm).get_tools()",
         }
         for tool in contract["tools"]
