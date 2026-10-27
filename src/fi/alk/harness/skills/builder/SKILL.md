@@ -157,7 +157,11 @@ what the gates check. Then:
   environment's list of who might be around its users, and no scenario changes with it. Including one
   in scenarios changes what they test: give each its `sub_actors` entry and resubmit it; "joins 20% of
   the time" is a level with that share, so `aim_for` it and brief the writers. When a request does not
-  say whether it means the list or scenarios, ask.
+  say whether it means the list or scenarios, ask. An entry you write follows the same rules as one a
+  writer writes: the sub-actor has a part, never the person's goal, so it never confirms, chooses or
+  gives a value for them, and its trigger brings it in at a moment its part can happen. When a sub-actor
+  or trigger the person asked for cannot be used with this agent, tell them which one and why before
+  using another.
 - **The contract's reading of the agent**: `amend_contract`, `add_rule`, `drop_rule`, `fix_tool`, and
   `declare_tool` for a tool the contract lacks (with the line in the agent's source that defines it),
   always with the reason. This corrects the harness's understanding; it never changes the agent.
