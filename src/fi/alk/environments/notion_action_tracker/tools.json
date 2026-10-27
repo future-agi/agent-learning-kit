@@ -1,0 +1,407 @@
+[
+  {
+    "name": "notion_search",
+    "description": "Search workspace pages and databases by query string with optional type filtering.",
+    "parameters": {
+      "required": [
+        "query"
+      ],
+      "properties": {
+        "query": {
+          "description": "Search keyword or query string",
+          "type": "string"
+        },
+        "filter_type": {
+          "enum": [
+            "page",
+            "database",
+            "all"
+          ],
+          "description": "Filter search results by type: 'page', 'database', or 'all'",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "mutates_state": false,
+    "returns": {
+      "properties": {
+        "results": {
+          "items": {
+            "required": [
+              "id",
+              "title",
+              "type"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              },
+              "archived": {
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object",
+      "required": [
+        "results"
+      ]
+    }
+  },
+  {
+    "name": "notion_fetch_page",
+    "description": "Retrieve the title, markdown content, timestamps, timezone, and archive status of a meeting page by page_id.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "page_id"
+      ],
+      "properties": {
+        "page_id": {
+          "type": "string",
+          "description": "The unique ID of the page (e.g., 'N-04')"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "properties": {
+        "page_id": {
+          "type": "string"
+        },
+        "allowed_access": {
+          "type": "boolean"
+        },
+        "archived": {
+          "type": "boolean"
+        },
+        "title": {
+          "type": "string"
+        },
+        "created_time": {
+          "type": "string"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "content_markdown": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "page_id",
+        "title",
+        "content_markdown",
+        "created_time",
+        "timezone",
+        "archived",
+        "allowed_access"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "notion_get_database_schema",
+    "description": "Inspect the schema and property definitions of a database by database_id.",
+    "parameters": {
+      "required": [
+        "database_id"
+      ],
+      "properties": {
+        "database_id": {
+          "description": "The ID of the database",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "database_id": {
+          "type": "string"
+        },
+        "schema": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "database_id",
+        "title",
+        "schema"
+      ]
+    }
+  },
+  {
+    "name": "notion_query_database",
+    "description": "Query action records from a database with filtering by source_page_id, owner_id, or status, supporting pagination.",
+    "parameters": {
+      "required": [
+        "database_id"
+      ],
+      "type": "object",
+      "properties": {
+        "status": {
+          "description": "Filter actions by status",
+          "type": "string"
+        },
+        "owner_id": {
+          "type": "string",
+          "description": "Filter actions by owner user ID"
+        },
+        "source_page_id": {
+          "type": "string",
+          "description": "Filter actions by source page ID"
+        },
+        "cursor": {
+          "type": "string",
+          "description": "Pagination cursor"
+        },
+        "database_id": {
+          "description": "Database ID",
+          "type": "string"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Max rows to return"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "results"
+      ],
+      "properties": {
+        "results": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "notion_create_action_record",
+    "description": "Create an approved action item in the target database linked to a source page.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "database_id",
+        "title",
+        "owner_id",
+        "due_date",
+        "source_page_id"
+      ],
+      "properties": {
+        "status": {
+          "description": "Status string",
+          "type": "string"
+        },
+        "due_date": {
+          "type": "string",
+          "description": "Due date in YYYY-MM-DD format"
+        },
+        "database_id": {
+          "type": "string",
+          "description": "Target database ID"
+        },
+        "title": {
+          "type": "string",
+          "description": "Action title/description"
+        },
+        "owner_id": {
+          "type": "string",
+          "description": "Workspace user ID assigned to the action"
+        },
+        "external_key": {
+          "description": "Optional unique external idempotency key",
+          "type": "string"
+        },
+        "source_page_id": {
+          "description": "Source meeting page ID",
+          "type": "string"
+        },
+        "is_async": {
+          "description": "Whether to run as an asynchronous task",
+          "type": "boolean"
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "required": [
+        "action_id",
+        "status"
+      ],
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string"
+        },
+        "async_task_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "action_id": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "notion_update_action_record",
+    "description": "Update properties of an existing action item record.",
+    "parameters": {
+      "required": [
+        "action_id"
+      ],
+      "type": "object",
+      "properties": {
+        "owner_id": {
+          "description": "Updated owner ID",
+          "type": "string"
+        },
+        "title": {
+          "description": "Updated title",
+          "type": "string"
+        },
+        "action_id": {
+          "description": "ID of the action item to update",
+          "type": "string"
+        },
+        "due_date": {
+          "type": "string",
+          "description": "Updated due date"
+        },
+        "status": {
+          "description": "Updated status",
+          "type": "string"
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "required": [
+        "action_id",
+        "updated",
+        "status"
+      ],
+      "properties": {
+        "action_id": {
+          "type": "string"
+        },
+        "updated": {
+          "type": "boolean"
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "notion_update_page_content",
+    "description": "Append or update markdown content blocks in a meeting page.",
+    "parameters": {
+      "required": [
+        "page_id",
+        "append_content"
+      ],
+      "properties": {
+        "append_content": {
+          "type": "string",
+          "description": "Markdown content to append"
+        },
+        "page_id": {
+          "type": "string",
+          "description": "Meeting page ID to update"
+        }
+      },
+      "type": "object"
+    },
+    "mutates_state": true,
+    "returns": {
+      "required": [
+        "page_id",
+        "updated"
+      ],
+      "type": "object",
+      "properties": {
+        "page_id": {
+          "type": "string"
+        },
+        "updated": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  {
+    "name": "notion_get_async_task",
+    "description": "Poll the status and retrieve results of an asynchronous workspace write task by task_id.",
+    "parameters": {
+      "required": [
+        "task_id"
+      ],
+      "properties": {
+        "task_id": {
+          "description": "The asynchronous task ID",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string"
+        },
+        "result": {
+          "type": "object"
+        },
+        "error_message": {
+          "type": "string"
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "operation": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "status",
+        "operation"
+      ]
+    }
+  }
+]

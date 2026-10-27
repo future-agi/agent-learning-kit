@@ -1,0 +1,112 @@
+{
+  "name": "v15_s02_final_sale_policy_boundary",
+  "scenario_key": "v15-s02-final-sale-policy-boundary",
+  "scenario_id": "",
+  "use_case": "Policy restriction and final-sale handling",
+  "branch": "Change-of-mind return request for final-sale item FS01 in order O03 is refused per policy",
+  "tests": "the agent checks policy/order eligibility and refuses return creation for final-sale item FS01",
+  "instruction": "You ordered a Final Sale Designer Jacket (SKU: FS01) in order O03. You changed your mind and want to return it for a refund.\n\nYour details:\n- Name: Carol Danvers\n- Email: carol.danvers@example.com\n- Postal Code: 60601\n- Order ID: O03\n- SKU: FS01 (Quantity: 1)\n- Reason: Changed mind",
+  "keywords": [
+    "final_sale"
+  ],
+  "persona": {
+    "name": "Carol Danvers",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Consultant",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hello, I want to refund the jacket (SKU FS01) from order O03 because I changed my mind.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "sku": "FS01",
+    "order_id": "O03",
+    "origin": "seed",
+    "customer_id": "C03"
+  },
+  "solution": [
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "postal_code": "60601",
+        "email": "carol.danvers@example.com",
+        "customer_id": "C03",
+        "order_id": "O03"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: customer C03",
+        "order_id": "caller: order number O03"
+      }
+    },
+    {
+      "tool": "get_order",
+      "arguments": {
+        "order_id": "O03"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_product",
+      "arguments": {
+        "sku": "FS01"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_return_policy",
+      "arguments": {
+        "category": "Apparel"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "evaluate_return",
+      "arguments": {
+        "order_id": "O03",
+        "items": [
+          {
+            "reason": "changed_mind",
+            "quantity": 1,
+            "sku": "FS01"
+          }
+        ]
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "handle_final_sale_restriction",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none",
+    "interface": "clean_prose",
+    "counterparty": "verified_owner",
+    "overlay": "none",
+    "disposition": "cooperative",
+    "interaction": "multi_turn"
+  },
+  "sub_goals": [
+    "subgoal_verify_ownership_first",
+    "subgoal_refuse_ineligible_returns"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

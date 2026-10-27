@@ -1,0 +1,113 @@
+{
+  "name": "s09_multi_item_quantity_correction_flow",
+  "scenario_key": "s09-multi-item-quantity-correction-flow",
+  "scenario_id": "",
+  "use_case": "Eligible item return and label generation",
+  "branch": "Caller corrects return item quantity mid-turn from two to one unit for SKU AP12 on order O09",
+  "tests": "the agent processes mid-turn quantity correction and accurately creates return authorization for 1 unit of AP12",
+  "instruction": "You ordered apparel SKU AP12 in order O09. During the conversation, you clarify that you only need to return 1 unit rather than two.\n\nYour details:\n- Name: Iris West\n- Email: iris.west@example.com\n- Postal Code: 63101\n- Order ID: O09\n- Final Item and Quantity: SKU AP12, Quantity 1\n- Reason: Wrong fit",
+  "keywords": [
+    "return_authorization"
+  ],
+  "persona": {
+    "name": "Iris West",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Teacher",
+    "location": "India",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Collaborative",
+    "initial_message": "Hi! I have order O09. I wanted to return two items... actually let me correct that, just one unit of SKU AP12 please.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "sku": "AP12",
+    "order_id": "O09",
+    "origin": "seed",
+    "customer_id": "C09"
+  },
+  "solution": [
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "postal_code": "63101",
+        "email": "iris.west@example.com",
+        "customer_id": "C09",
+        "order_id": "O09"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_order",
+      "arguments": {
+        "order_id": "O09"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "evaluate_return",
+      "arguments": {
+        "order_id": "O09",
+        "items": [
+          {
+            "sku": "AP12",
+            "quantity": 1,
+            "reason": "wrong_fit"
+          }
+        ]
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_return",
+      "arguments": {
+        "order_id": "O09",
+        "customer_id": "C09",
+        "items": [
+          {
+            "reason": "wrong_fit",
+            "quantity": 1,
+            "sku": "AP12"
+          }
+        ]
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: customer C09",
+        "order_id": "caller: order number O09"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "overlay": "none",
+    "interaction": "correction_mid_turn",
+    "disposition": "discounted_pricing",
+    "counterparty": "verified_owner",
+    "overlay_intensity": "absent",
+    "interface": "split_message",
+    "task": "return_eligible_item"
+  },
+  "sub_goals": [
+    "subgoal_confirm_before_creation",
+    "subgoal_accurate_refund_status",
+    "subgoal_return_created"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

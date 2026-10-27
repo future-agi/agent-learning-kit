@@ -1,0 +1,94 @@
+{
+  "name": "dispute_status_lookup_tracking",
+  "scenario_key": "dispute-status-lookup-tracking",
+  "scenario_id": "",
+  "use_case": "Evaluate dispute eligibility and file or track transaction dispute",
+  "branch": "Customer inquires about the current status and progress of an active dispute case D106 filed for transaction TX106.",
+  "tests": "passes when the agent queries dispute status for D106 and provides the current case status to the customer.",
+  "instruction": "You filed a dispute several days ago for a $54.00 charge on TX106 at Home Depot and want to check on its current review status.\n\nProvide your passcode 6295 when asked, and provide case reference D106 to check status.\n\nYour details:\n- Name: Fiona Miller\n- Customer ID: C106\n- Session ID: SESS106\n- Dispute ID: D106\n- Transaction ID: TX106 (Home Depot, $54.00)\n- Security Passcode: 6295",
+  "keywords": [
+    "authentication"
+  ],
+  "persona": {
+    "name": "Fiona Miller",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Business Owner",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hello, could you please check the status of my open dispute case D106?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "lost_card_and_dispute_desk"
+  },
+  "fixture": {
+    "card_id": "CARD106",
+    "dispute_id": "D106",
+    "passcode": "6295",
+    "transaction_id": "TX106",
+    "origin": "generated",
+    "amount": 5400,
+    "customer_id": "C106"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "session_id": "SESS106",
+        "customer_id": "C106",
+        "challenge_response": "6295",
+        "challenge_type": "passcode"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "challenge_response": "caller: 6295",
+        "session_id": "record: SESS106",
+        "customer_id": "record: C106"
+      }
+    },
+    {
+      "tool": "get_dispute_status",
+      "arguments": {
+        "session_id": "SESS106",
+        "customer_id": "C106",
+        "transaction_id": "",
+        "dispute_id": "D106"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "dispute_id": "caller: D106",
+        "customer_id": "record: C106",
+        "session_id": "record: SESS106"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "file_or_track_dispute",
+    "overlay_intensity": "absent",
+    "counterparty": "individual_cardholder",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "interface": "clean_prose",
+    "interaction": "single_request",
+    "disposition": "existing_dispute"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "dispute_status_retrieved"
+  ],
+  "max_turns": 6,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

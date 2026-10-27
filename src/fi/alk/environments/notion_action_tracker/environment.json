@@ -1,0 +1,46 @@
+{
+  "derived_from": "phase1_sheet:M05",
+  "name": "notion_action_tracker",
+  "notes": "Notion Action Tracker environment built with 8 meeting pages, 2 databases, 6 workspace users, clock, async task tracking, 8 MCP tools, 7 sub-goals, policy rules, and clean initial world state.",
+  "sequences": [
+    {
+      "calls": [
+        {
+          "arguments": {
+            "database_id": "db_action_tracker",
+            "due_date": "2026-10-30",
+            "owner_id": "user_alex_rivera",
+            "source_page_id": "N-04",
+            "status": "Not Started",
+            "title": "Update enterprise SLA docs"
+          },
+          "tool": "notion_create_action_record"
+        },
+        {
+          "arguments": {
+            "action_id": "act_101",
+            "status": "In Progress"
+          },
+          "tool": "notion_update_action_record"
+        },
+        {
+          "arguments": {
+            "append_content": "Synced: SLA doc task created.",
+            "page_id": "N-04"
+          },
+          "tool": "notion_update_page_content"
+        }
+      ],
+      "expect_state": {
+        "action_records.count": 1,
+        "audit_log.count": 3
+      },
+      "name": "create_and_update_action"
+    }
+  ],
+  "world_checks": {
+    "check_baseline_pages_and_databases": "def check(world):\n    state = world.state()\n    pages = state.get(\"pages\", [])\n    databases = state.get(\"databases\", [])\n    if len(pages) < 8:\n        return f\"expected at least 8 meeting pages, got {len(pages)}\"\n    if len(databases) < 2:\n        return f\"expected at least 2 databases, got {len(databases)}\"\n    return None",
+    "check_clock_and_async_tasks": "def check(world):\n    state = world.state()\n    clock = state.get(\"clock\", [])\n    tasks = state.get(\"async_tasks\", [])\n    if not clock or not clock[0].get(\"now\"):\n        return \"clock table missing current time entry\"\n    if len(tasks) < 2:\n        return f\"expected at least 2 async task fixtures, got {len(tasks)}\"\n    return None",
+    "check_users_and_actions_present": "def check(world):\n    state = world.state()\n    users = state.get(\"workspace_users\", [])\n    if len(users) < 6:\n        return f\"expected at least 6 workspace users, got {len(users)}\"\n    return None"
+  }
+}

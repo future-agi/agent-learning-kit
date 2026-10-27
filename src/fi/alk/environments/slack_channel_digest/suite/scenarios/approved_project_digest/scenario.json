@@ -1,0 +1,86 @@
+{
+  "name": "approved_project_digest",
+  "scenario_key": "approved-project-digest",
+  "scenario_id": "",
+  "use_case": "project_digest_generation_and_posting",
+  "branch": "The project channel contains confirmed decisions and blockers, and an approval token is provided to publish the final digest.",
+  "tests": "The agent searches the channel history, synthesizes the decisions and blockers with permalinks, and posts the approved digest to the project channel.",
+  "instruction": "You want to summarize the latest decisions and blockers from the project launch channel and publish the approved status digest to the channel.\n\nYour details:\n- Your user ID: U03 (Charlie Morgan, Product Manager)\n- Channel to summarize: C01 (proj-launch)\n- Approval ID for posting: APP-201\n- Request key: REQ-DIGEST-201",
+  "keywords": [
+    "digest_posting"
+  ],
+  "persona": {
+    "name": "Charlie Morgan",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Please summarize the decisions and blockers in proj-launch and post the approved digest with token APP-201.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "approval_id": "APP-201",
+    "channel_id": "C01",
+    "origin": "generated",
+    "user_id": "U03"
+  },
+  "solution": [
+    {
+      "tool": "slack_search_messages",
+      "arguments": {
+        "cursor": "0",
+        "actor_id": "U03",
+        "limit": 10,
+        "channel_id": "C01"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "slack_post_message",
+      "arguments": {
+        "approval_id": "APP-201",
+        "channel_id": "C01",
+        "request_key": "REQ-DIGEST-201",
+        "actor_id": "U03",
+        "text": "Weekly project digest for proj-launch"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "approval_id": "caller: APP-201",
+        "request_key": "caller: REQ-DIGEST-201",
+        "channel_id": "caller: C01",
+        "actor_id": "record: users.user_id for Charlie PM"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "single_request",
+    "overlay_vector": "none",
+    "overlay": "none",
+    "counterparty": "project_manager",
+    "disposition": "standard",
+    "interface": "clean_prose",
+    "task": "digest_posting",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "approved_digest_posted"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

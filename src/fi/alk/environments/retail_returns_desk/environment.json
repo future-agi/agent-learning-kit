@@ -1,0 +1,58 @@
+{
+  "derived_from": "phase1_sheet:V15",
+  "name": "retail_returns_desk",
+  "notes": "Retail returns desk world with clean baseline state, 20 customers, 30 orders, 50 products, 8 tools, 8 sub-goals, policies, and sequences.",
+  "sequences": [
+    {
+      "calls": [
+        {
+          "arguments": {
+            "customer_id": "C01",
+            "email": "alice.morgan@example.com",
+            "order_id": "O01",
+            "postal_code": "90210"
+          },
+          "tool": "verify_order_owner"
+        },
+        {
+          "arguments": {
+            "items": [
+              {
+                "quantity": 1,
+                "reason": "wrong_size",
+                "sku": "SH01"
+              }
+            ],
+            "order_id": "O01"
+          },
+          "tool": "evaluate_return"
+        },
+        {
+          "arguments": {
+            "customer_id": "C01",
+            "items": [
+              {
+                "quantity": 1,
+                "reason": "wrong_size",
+                "sku": "SH01"
+              }
+            ],
+            "order_id": "O01"
+          },
+          "tool": "create_return"
+        }
+      ],
+      "expect_state": {
+        "return_items.count": 1,
+        "return_labels.count": 1,
+        "returns.count": 1
+      },
+      "name": "verify_and_create_return_flow"
+    }
+  ],
+  "world_checks": {
+    "check_baseline_entity_counts": "def check(world):\n    st = world.state()\n    custs = st.get(\"customers\", [])\n    if len(custs) < 20:\n        return f\"insufficient customers: expected at least 20, got {len(custs)}\"\n    ords = st.get(\"orders\", [])\n    if len(ords) < 30:\n        return f\"insufficient orders: expected at least 30, got {len(ords)}\"\n    prods = st.get(\"products\", [])\n    if len(prods) < 50:\n        return f\"insufficient products: expected at least 50, got {len(prods)}\"\n    return None\n",
+    "check_clock_and_policies_present": "def check(world):\n    st = world.state()\n    clock = st.get(\"clock\", [])\n    if not clock or not clock[0].get(\"now\"):\n        return \"clock table must hold current timestamp\"\n    policies = st.get(\"environment_policy\", [])\n    if not policies:\n        return \"environment policies must be configured\"\n    return None\n",
+    "check_order_items_and_products_consistency": "def check(world):\n    st = world.state()\n    order_items = st.get(\"order_items\", [])\n    if not order_items:\n        return \"no order items in world state\"\n    prods = {p[\"sku\"]: p for p in st.get(\"products\", [])}\n    ords = {o[\"order_id\"]: o for o in st.get(\"orders\", [])}\n    for oi in order_items:\n        if oi[\"sku\"] not in prods:\n            return f\"order item {oi['item_id']} references unknown sku {oi['sku']}\"\n        if oi[\"order_id\"] not in ords:\n            return f\"order item {oi['item_id']} references unknown order {oi['order_id']}\"\n        if oi[\"line_net_cents\"] <= 0:\n            return f\"order item {oi['item_id']} has non-positive net price {oi['line_net_cents']}\"\n    return None\n"
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "name": "m04_s01_current_travel_policy",
+  "scenario_key": "m04-s01-current-travel-policy",
+  "scenario_id": "",
+  "use_case": "Policy lookup and version-aware citation",
+  "branch": "The user asks for the current daily travel meal cap where older and newer policy files exist; the agent must search, read the approved 2024 policy, cite the $150 cap, and avoid the outdated $100 cap.",
+  "tests": "the agent retrieves the active 2024 travel policy, quotes the $150 cap, and cites the document ID.",
+  "instruction": "You are planning a business trip and want to know what daily travel meal cap applies today under corporate travel policy. Ask the assistant what daily travel cap applies today.\n\nYour details:\n- Department: Engineering\n- Trip type: Domestic travel",
+  "keywords": [
+    "travel"
+  ],
+  "persona": {
+    "name": "Sarah Jenkins",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "What daily travel cap applies today under our corporate travel policy?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "search_files",
+      "arguments": {
+        "query": "travel"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "file_id": "file_travel_v2_active"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "file_id": "record: files.file_id for active travel policy"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "lookup_policy",
+    "overlay_intensity": "absent",
+    "interaction": "single_request",
+    "disposition": "active_policy_exists",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "interface": "clean_prose",
+    "counterparty": "employee"
+  },
+  "sub_goals": [
+    "searches_and_reads_active_policy"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

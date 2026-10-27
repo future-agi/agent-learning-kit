@@ -199,6 +199,16 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
   requested replacement the document never held.
 - XLSX sheets whose titles read the same as file names (`A B`, `A-B`) each get a
   part of their own; a part keeps its sheet's `title` as written.
+- Ten prebuilt environments designed by the environment builder from the
+  phase-1 sheet, committed as source the way the clinic is (tools, policy,
+  handlers, world SQL, base-suite scenario folders):
+  `lost_card_and_dispute_desk` (V01), `hr_leave_desk` (V13),
+  `retail_returns_desk` (V15), `subscription_billing_desk` (V16),
+  `it_access_desk` (V20), `slack_channel_digest` (M01), `gmail_inbox_triage`
+  (M02), `calendar_scheduling_desk` (M03), `drive_policy_search` (M04) and
+  `notion_action_tracker` (M05). Each builds with
+  `python -m fi.alk.environments.<name>.build --out DIR`, through the shared
+  `fi.alk.environments.designed`.
 
 ## v1.0.0-rc.1 — 2026-06-10
 

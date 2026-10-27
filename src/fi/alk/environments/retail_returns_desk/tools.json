@@ -1,0 +1,725 @@
+[
+  {
+    "name": "verify_order_owner",
+    "description": "Verify order ownership and customer credentials against the order record.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "order_id"
+      ],
+      "properties": {
+        "customer_id": {
+          "type": "string",
+          "description": "Customer identifier (e.g. C01)."
+        },
+        "postal_code": {
+          "description": "Customer postal/zip code to verify.",
+          "type": "string"
+        },
+        "email": {
+          "type": "string",
+          "description": "Customer email address to verify."
+        },
+        "order_id": {
+          "type": "string",
+          "description": "The order identifier (e.g. O01)."
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "verified",
+        "order_id",
+        "customer_id",
+        "customer_name"
+      ],
+      "properties": {
+        "customer_name": {
+          "type": "string"
+        },
+        "order_id": {
+          "type": "string"
+        },
+        "customer_id": {
+          "type": "string"
+        },
+        "verified": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  {
+    "name": "get_order",
+    "description": "Retrieve complete order details including status, dates, line items, pricing, discounts, and return history.",
+    "parameters": {
+      "required": [
+        "order_id"
+      ],
+      "type": "object",
+      "properties": {
+        "order_id": {
+          "type": "string",
+          "description": "The order identifier to retrieve."
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "order_id",
+        "customer_id",
+        "order_date",
+        "status",
+        "currency",
+        "total_gross_cents",
+        "total_net_cents",
+        "items"
+      ],
+      "properties": {
+        "status": {
+          "type": "string"
+        },
+        "total_tax_cents": {
+          "type": "integer"
+        },
+        "total_net_cents": {
+          "type": "integer"
+        },
+        "currency": {
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "type": "object",
+            "required": [
+              "item_id",
+              "sku",
+              "quantity",
+              "unit_price_cents",
+              "line_net_cents",
+              "returned_quantity",
+              "returnable_quantity",
+              "is_final_sale",
+              "returnable"
+            ],
+            "properties": {
+              "line_net_cents": {
+                "type": "integer"
+              },
+              "is_final_sale": {
+                "type": "boolean"
+              },
+              "unit_price_cents": {
+                "type": "integer"
+              },
+              "title": {
+                "type": "string"
+              },
+              "returnable": {
+                "type": "boolean"
+              },
+              "line_discount_cents": {
+                "type": "integer"
+              },
+              "returned_quantity": {
+                "type": "integer"
+              },
+              "sku": {
+                "type": "string"
+              },
+              "quantity": {
+                "type": "integer"
+              },
+              "returnable_quantity": {
+                "type": "integer"
+              },
+              "line_tax_cents": {
+                "type": "integer"
+              },
+              "item_id": {
+                "type": "string"
+              }
+            }
+          },
+          "type": "array"
+        },
+        "total_discount_cents": {
+          "type": "integer"
+        },
+        "delivery_date": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "order_date": {
+          "type": "string"
+        },
+        "order_id": {
+          "type": "string"
+        },
+        "total_gross_cents": {
+          "type": "integer"
+        },
+        "customer_id": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "get_product",
+    "description": "Retrieve product catalog details, category, list price, and returnability flags by SKU.",
+    "parameters": {
+      "properties": {
+        "sku": {
+          "description": "The SKU of the product to look up.",
+          "type": "string"
+        }
+      },
+      "type": "object",
+      "required": [
+        "sku"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "properties": {
+        "list_price_cents": {
+          "type": "integer"
+        },
+        "category": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "sku": {
+          "type": "string"
+        },
+        "returnable": {
+          "type": "boolean"
+        },
+        "is_final_sale": {
+          "type": "boolean"
+        }
+      },
+      "type": "object",
+      "required": [
+        "sku",
+        "title",
+        "category",
+        "list_price_cents",
+        "is_final_sale",
+        "returnable"
+      ]
+    }
+  },
+  {
+    "name": "get_return_policy",
+    "description": "Retrieve the active return policy rules, return window duration, restocking fees, and exclusions for a product category.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "category": {
+          "description": "Product category to check policy for (e.g. Footwear, Apparel, Accessories, Clearance, or general).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "category"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "required": [
+        "return_window_days",
+        "restocking_fee_rate",
+        "final_sale_enforced",
+        "label_service_available",
+        "policy_summary",
+        "category"
+      ],
+      "type": "object",
+      "properties": {
+        "label_service_available": {
+          "type": "boolean"
+        },
+        "policy_summary": {
+          "type": "string"
+        },
+        "final_sale_enforced": {
+          "type": "boolean"
+        },
+        "restocking_fee_rate": {
+          "type": "number"
+        },
+        "category": {
+          "type": "string"
+        },
+        "return_window_days": {
+          "type": "integer"
+        }
+      }
+    }
+  },
+  {
+    "name": "evaluate_return",
+    "description": "Dry-run evaluation of return eligibility and calculated net refund amounts for specified order items.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "description": "List of items to evaluate for return.",
+          "type": "array",
+          "items": {
+            "required": [
+              "sku",
+              "quantity"
+            ],
+            "properties": {
+              "quantity": {
+                "type": "integer",
+                "description": "Quantity to return."
+              },
+              "reason": {
+                "type": "string",
+                "description": "Reason for return."
+              },
+              "sku": {
+                "type": "string",
+                "description": "Product SKU."
+              }
+            },
+            "type": "object"
+          }
+        },
+        "order_id": {
+          "type": "string",
+          "description": "The order identifier."
+        }
+      },
+      "required": [
+        "order_id",
+        "items"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "order_id": {
+          "type": "string"
+        },
+        "overall_eligible": {
+          "type": "boolean"
+        },
+        "total_estimated_refund_cents": {
+          "type": "integer"
+        },
+        "total_restocking_fee_cents": {
+          "type": "integer"
+        },
+        "items_evaluation": {
+          "items": {
+            "properties": {
+              "ineligibility_reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "quantity": {
+                "type": "integer"
+              },
+              "sku": {
+                "type": "string"
+              },
+              "restocking_fee_cents": {
+                "type": "integer"
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "unit_net_cents": {
+                "type": "integer"
+              },
+              "net_refund_cents": {
+                "type": "integer"
+              },
+              "gross_refund_cents": {
+                "type": "integer"
+              },
+              "eligible": {
+                "type": "boolean"
+              }
+            },
+            "type": "object",
+            "required": [
+              "sku",
+              "quantity",
+              "eligible",
+              "unit_net_cents",
+              "gross_refund_cents",
+              "restocking_fee_cents",
+              "net_refund_cents"
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "order_id",
+        "overall_eligible",
+        "total_estimated_refund_cents",
+        "total_restocking_fee_cents",
+        "items_evaluation"
+      ]
+    }
+  },
+  {
+    "name": "create_return",
+    "description": "Authorize a return for eligible order items, allocate refund estimation, and generate a synthetic return label.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "order_id",
+        "customer_id",
+        "items"
+      ],
+      "properties": {
+        "customer_id": {
+          "description": "The customer identifier making the return.",
+          "type": "string"
+        },
+        "order_id": {
+          "type": "string",
+          "description": "The order identifier."
+        },
+        "items": {
+          "type": "array",
+          "description": "List of items to return.",
+          "items": {
+            "required": [
+              "sku",
+              "quantity",
+              "reason"
+            ],
+            "properties": {
+              "reason": {
+                "description": "Reason for returning.",
+                "type": "string"
+              },
+              "quantity": {
+                "description": "Quantity to return.",
+                "type": "integer"
+              },
+              "sku": {
+                "description": "Product SKU.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "properties": {
+        "status": {
+          "type": "string"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "properties": {
+              "sku": {
+                "type": "string"
+              },
+              "quantity": {
+                "type": "integer"
+              },
+              "refunded_amount_cents": {
+                "type": "integer"
+              }
+            },
+            "type": "object",
+            "required": [
+              "sku",
+              "quantity",
+              "refunded_amount_cents"
+            ]
+          }
+        },
+        "restocking_fee_cents": {
+          "type": "integer"
+        },
+        "order_id": {
+          "type": "string"
+        },
+        "return_id": {
+          "type": "string"
+        },
+        "label_status": {
+          "type": "string"
+        },
+        "customer_id": {
+          "type": "string"
+        },
+        "estimated_refund_cents": {
+          "type": "integer"
+        },
+        "label": {
+          "required": [
+            "label_id",
+            "tracking_number",
+            "carrier",
+            "label_url",
+            "status"
+          ],
+          "properties": {
+            "carrier": {
+              "type": "string"
+            },
+            "label_id": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "tracking_number": {
+              "type": "string"
+            },
+            "label_url": {
+              "type": "string"
+            }
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      },
+      "type": "object",
+      "required": [
+        "return_id",
+        "order_id",
+        "customer_id",
+        "status",
+        "estimated_refund_cents",
+        "restocking_fee_cents",
+        "label_status",
+        "items"
+      ]
+    }
+  },
+  {
+    "name": "get_return_status",
+    "description": "Check status of existing return authorizations, item details, and return shipping label by return_id or order_id.",
+    "parameters": {
+      "properties": {
+        "order_id": {
+          "type": "string",
+          "description": "Order identifier to find associated returns."
+        },
+        "return_id": {
+          "description": "Specific return identifier (e.g. R01).",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "returns": {
+          "items": {
+            "required": [
+              "return_id",
+              "order_id",
+              "customer_id",
+              "created_at",
+              "status",
+              "estimated_refund_cents",
+              "restocking_fee_cents",
+              "return_reason",
+              "items",
+              "label_status"
+            ],
+            "properties": {
+              "restocking_fee_cents": {
+                "type": "integer"
+              },
+              "created_at": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "items": {
+                "items": {
+                  "required": [
+                    "return_item_id",
+                    "item_id",
+                    "sku",
+                    "quantity",
+                    "refunded_amount_cents"
+                  ],
+                  "type": "object",
+                  "properties": {
+                    "return_item_id": {
+                      "type": "string"
+                    },
+                    "quantity": {
+                      "type": "integer"
+                    },
+                    "sku": {
+                      "type": "string"
+                    },
+                    "refunded_amount_cents": {
+                      "type": "integer"
+                    },
+                    "item_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "type": "array"
+              },
+              "return_id": {
+                "type": "string"
+              },
+              "estimated_refund_cents": {
+                "type": "integer"
+              },
+              "order_id": {
+                "type": "string"
+              },
+              "label_status": {
+                "type": "string"
+              },
+              "customer_id": {
+                "type": "string"
+              },
+              "label": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "label_url": {
+                    "type": "string"
+                  },
+                  "carrier": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string"
+                  },
+                  "tracking_number": {
+                    "type": "string"
+                  },
+                  "label_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "label_id",
+                  "tracking_number",
+                  "carrier",
+                  "label_url",
+                  "status"
+                ]
+              },
+              "return_reason": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "returns"
+      ]
+    }
+  },
+  {
+    "name": "create_support_case",
+    "description": "Create an escalated customer support case for exceptions, manual reviews, policy disputes, or service issues.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "customer_id",
+        "subject",
+        "details"
+      ],
+      "properties": {
+        "order_id": {
+          "description": "Associated order identifier if applicable.",
+          "type": "string"
+        },
+        "details": {
+          "description": "Detailed explanation of the issue or requested exception.",
+          "type": "string"
+        },
+        "subject": {
+          "description": "Subject summary of the support issue.",
+          "type": "string"
+        },
+        "customer_id": {
+          "type": "string",
+          "description": "Customer identifier."
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "required": [
+        "case_id",
+        "customer_id",
+        "subject",
+        "details",
+        "status",
+        "created_at"
+      ],
+      "properties": {
+        "details": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "case_id": {
+          "type": "string"
+        },
+        "order_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "customer_id": {
+          "type": "string"
+        },
+        "subject": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  }
+]

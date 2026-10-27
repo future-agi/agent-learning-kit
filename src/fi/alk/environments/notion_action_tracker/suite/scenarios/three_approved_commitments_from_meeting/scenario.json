@@ -1,0 +1,124 @@
+{
+  "name": "three_approved_commitments_from_meeting",
+  "scenario_key": "three-approved-commitments-from-meeting",
+  "scenario_id": "",
+  "use_case": "Extract and create approved action records from explicit meeting commitments",
+  "branch": "Meeting N-04 contains three explicit commitments with unambiguous owners and due dates",
+  "tests": "Agent creates three linked action items with correct owners, dates, and source page after review",
+  "instruction": "You are reviewing notes from the Weekly Leadership Sync (page N-04). Ask the assistant to process the agreed commitments and create action items for them in the Action Tracker database after showing them for review.\n\nYour details:\nMeeting page ID: N-04\nTarget database: db_action_tracker\nAgreed tasks to create:\n- Title: Update SLA documentation for enterprise tier, Owner: Alex Rivera, Due date: 2026-10-30\n- Title: Review engineering hiring pipeline, Owner: Sarah Connor, Due date: 2026-11-02\n- Title: Benchmark database queries under heavy load, Owner: Marcus Wright, Due date: 2026-11-05",
+  "keywords": [
+    "action_extraction",
+    "schema_compliance"
+  ],
+  "persona": {
+    "name": "Sarah Connor",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Please review page N-04 and create action records in our tracker for the agreed commitments.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "page_id": "N-04",
+    "database_id": "db_action_tracker",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "notion_fetch_page",
+      "arguments": {
+        "page_id": "N-04"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "notion_get_database_schema",
+      "arguments": {
+        "database_id": "db_action_tracker"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "notion_create_action_record",
+      "arguments": {
+        "owner_id": "user_alex_rivera",
+        "source_page_id": "N-04",
+        "database_id": "db_action_tracker",
+        "title": "Update SLA documentation for enterprise tier",
+        "due_date": "2026-10-30"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "due_date": "caller: 2026-10-30",
+        "owner_id": "record: workspace_users.user_id",
+        "source_page_id": "caller: N-04"
+      }
+    },
+    {
+      "tool": "notion_create_action_record",
+      "arguments": {
+        "database_id": "db_action_tracker",
+        "owner_id": "user_sarah_connor",
+        "source_page_id": "N-04",
+        "due_date": "2026-11-02",
+        "title": "Review engineering hiring pipeline"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "due_date": "caller: 2026-11-02",
+        "source_page_id": "caller: N-04",
+        "owner_id": "record: workspace_users.user_id"
+      }
+    },
+    {
+      "tool": "notion_create_action_record",
+      "arguments": {
+        "owner_id": "user_marcus_wright",
+        "source_page_id": "N-04",
+        "due_date": "2026-11-05",
+        "database_id": "db_action_tracker",
+        "title": "Benchmark database queries under heavy load"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "owner_id": "record: workspace_users.user_id",
+        "source_page_id": "caller: N-04",
+        "due_date": "caller: 2026-11-05"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "task": "extract_commitments",
+    "counterparty": "lead",
+    "disposition": "standard",
+    "overlay_vector": "none",
+    "interface": "clean_prose",
+    "overlay_intensity": "absent",
+    "interaction": "multi_turn"
+  },
+  "sub_goals": [
+    "approved_commitments_created",
+    "due_dates_grounded_in_meeting",
+    "approval_sought_before_creation"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

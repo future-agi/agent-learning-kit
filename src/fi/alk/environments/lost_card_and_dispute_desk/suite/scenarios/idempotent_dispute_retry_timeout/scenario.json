@@ -1,0 +1,98 @@
+{
+  "name": "idempotent_dispute_retry_timeout",
+  "scenario_key": "idempotent-dispute-retry-timeout",
+  "scenario_id": "",
+  "use_case": "Handle idempotency, retryable timeouts, and service failures",
+  "branch": "Customer resubmits a dispute request for TX104 following a connection timeout; agent submits dispute with existing request key and reuses dispute record D104 idempotently.",
+  "tests": "passes when the agent submits the dispute request key and returns the existing dispute record without duplicate creation.",
+  "instruction": "You were in the middle of filing a dispute for a $99.00 charge on TX104 when your browser session timed out. You want to make sure the dispute was submitted properly or resubmitted without creating double charges or duplicate cases.\n\nWhen prompted, provide your security passcode 7402. State that the previous request timed out and ask to ensure dispute for TX104 is submitted under request key REQ-C104-TX104.\n\nYour details:\n- Name: Diana Johnson\n- Customer ID: C104\n- Session ID: SESS104\n- Transaction ID: TX104 (Jiffy Lube, $99.00)\n- Request Key: REQ-C104-TX104\n- Security Passcode: 7402",
+  "keywords": [
+    "idempotency",
+    "dispute_filing"
+  ],
+  "persona": {
+    "name": "Diana Johnson",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Consultant",
+    "location": "United States",
+    "personality": "Detail-oriented",
+    "communication_style": "Detailed and elaborate",
+    "initial_message": "My previous dispute submission for TX104 timed out. Can you submit it again under REQ-C104-TX104?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "lost_card_and_dispute_desk"
+  },
+  "fixture": {
+    "origin": "generated",
+    "customer_id": "C104",
+    "passcode": "7402",
+    "card_id": "CARD104",
+    "transaction_id": "TX104",
+    "amount": 9900,
+    "dispute_id": "D104",
+    "request_key": "REQ-C104-TX104"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "challenge_response": "7402",
+        "challenge_type": "passcode",
+        "session_id": "SESS104",
+        "customer_id": "C104"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "challenge_response": "caller: 7402",
+        "session_id": "record: SESS104",
+        "customer_id": "record: C104"
+      }
+    },
+    {
+      "tool": "create_dispute",
+      "arguments": {
+        "request_key": "REQ-C104-TX104",
+        "session_id": "SESS104",
+        "dispute_reason": "unrecognized_charge",
+        "customer_id": "C104",
+        "customer_notes": "Resubmitted after timeout",
+        "transaction_id": "TX104"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "transaction_id": "caller: TX104",
+        "session_id": "record: SESS104",
+        "customer_id": "record: C104"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "existing_dispute",
+    "counterparty": "individual_cardholder",
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "interface": "split_message",
+    "interaction": "resumed_after_pause",
+    "task": "handle_idempotency_and_failures",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "idempotent_dispute_reused"
+  ],
+  "max_turns": 8,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

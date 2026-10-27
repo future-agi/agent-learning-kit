@@ -1,0 +1,93 @@
+{
+  "rules": [
+    {
+      "id": "order_ownership_verified",
+      "text": "Order ownership must be verified before disclosing order details or creating returns.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "quantity_limit_enforced",
+      "text": "Cumulative returned quantity across all returns for an order line item cannot exceed the original purchased quantity.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "item_level_net_arithmetic",
+      "text": "Refund calculations and authorizations strictly derive from net paid line amount (gross price minus line discounts) minus configured restocking fees; no over-refunding.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "duplicate_return_prevented",
+      "text": "Cannot create duplicate active return records for the same line item return request.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "return_window_policy",
+      "text": "Returns are only permitted within a configured number of days following order delivery.",
+      "class": "configurable_environment_policy",
+      "parameters": {
+        "return_window_days": {
+          "type": "integer",
+          "default": 30
+        }
+      }
+    },
+    {
+      "id": "restocking_fee_policy",
+      "text": "Restocking fee rate deducted from the net refundable return total.",
+      "class": "configurable_environment_policy",
+      "parameters": {
+        "restocking_fee_rate": {
+          "type": "number",
+          "default": 0
+        }
+      }
+    },
+    {
+      "id": "final_sale_policy",
+      "text": "Items designated as final sale are excluded from return authorization unless policy enforcement is disabled.",
+      "class": "configurable_environment_policy",
+      "parameters": {
+        "final_sale_enforced": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    {
+      "id": "label_service_policy",
+      "text": "Controls whether the synthetic return label generation service is operational.",
+      "class": "configurable_environment_policy",
+      "parameters": {
+        "label_service_available": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    {
+      "id": "agent_verify_ownership_first",
+      "text": "Agent must verify caller identity and order ownership before discussing specific order contents or creating returns.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "agent_quote_net_breakdown",
+      "text": "Agent must quote the exact net refundable amount breakdown (unit net price, discounts, fees) and return instructions before creating a return.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "agent_confirm_before_creation",
+      "text": "Agent must obtain explicit customer confirmation before executing return creation.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "agent_accurate_refund_status",
+      "text": "Agent must accurately describe return authorization status and not falsely claim funds have already been deposited or returned to the customer's payment method.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "agent_refuse_ineligible_returns",
+      "text": "Agent must refuse return requests for final-sale, out-of-window, or already-returned items and offer support case escalation when appropriate.",
+      "class": "agent_policy"
+    }
+  ]
+}

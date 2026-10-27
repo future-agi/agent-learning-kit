@@ -1,0 +1,575 @@
+[
+  {
+    "name": "verify_identity",
+    "description": "Verify customer identity against an active session challenge (passcode, KBA, or OTP).",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "customer_id",
+        "session_id",
+        "challenge_type",
+        "challenge_response"
+      ],
+      "properties": {
+        "challenge_response": {
+          "type": "string",
+          "description": "The response provided by the customer for the challenge"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The active session identifier, e.g. SESS01"
+        },
+        "customer_id": {
+          "type": "string",
+          "description": "The unique customer identifier, e.g. C01"
+        },
+        "challenge_type": {
+          "description": "The type of identity challenge used",
+          "type": "string",
+          "enum": [
+            "passcode",
+            "kba",
+            "otp"
+          ]
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "required": [
+        "status",
+        "customer_id",
+        "session_id"
+      ],
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string"
+        },
+        "customer_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "verified_at": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "list_owned_cards",
+    "description": "List payment cards owned by a verified customer, optionally filtered by status.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "customer_id",
+        "session_id"
+      ],
+      "properties": {
+        "customer_id": {
+          "type": "string",
+          "description": "The unique customer identifier, e.g. C01"
+        },
+        "status": {
+          "enum": [
+            "active",
+            "locked"
+          ],
+          "type": "string",
+          "description": "Optional filter for card status ('active' or 'locked')"
+        },
+        "session_id": {
+          "description": "The active session identifier, e.g. SESS01",
+          "type": "string"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "customer_id": {
+          "type": "string"
+        },
+        "cards": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "count": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "customer_id",
+        "cards",
+        "count"
+      ]
+    }
+  },
+  {
+    "name": "list_transactions",
+    "description": "List transaction history for a verified customer, filterable by card_id, status (posted/pending), and limit.",
+    "parameters": {
+      "required": [
+        "customer_id",
+        "session_id"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "posted",
+            "pending"
+          ],
+          "description": "Optional status filter ('posted' or 'pending')",
+          "type": "string"
+        },
+        "customer_id": {
+          "type": "string",
+          "description": "The unique customer identifier, e.g. C01"
+        },
+        "limit": {
+          "description": "Optional maximum number of transactions to return",
+          "type": "integer"
+        },
+        "card_id": {
+          "type": "string",
+          "description": "Optional card identifier to filter transactions"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The active session identifier, e.g. SESS01"
+        }
+      },
+      "type": "object"
+    },
+    "mutates_state": false,
+    "returns": {
+      "properties": {
+        "transactions": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "customer_id": {
+          "type": "string"
+        },
+        "count": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "customer_id",
+        "transactions",
+        "count"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_dispute_policy",
+    "description": "Retrieve current dispute policy rules, eligible statuses, timeframes, and provisional credit guidelines.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "policy_type"
+      ],
+      "properties": {
+        "policy_type": {
+          "type": "string",
+          "description": "The policy category to retrieve ('transaction_dispute' or 'card_policy')",
+          "enum": [
+            "transaction_dispute",
+            "card_policy"
+          ]
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "properties": {
+        "max_dispute_age_days": {
+          "type": "integer"
+        },
+        "eligible_statuses": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "provisional_credit_policy": {
+          "type": "string"
+        },
+        "policy_type": {
+          "type": "string"
+        },
+        "standard_resolution_days": {
+          "type": "integer"
+        },
+        "allowed_reasons": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "policy_type",
+        "eligible_statuses",
+        "max_dispute_age_days",
+        "allowed_reasons",
+        "provisional_credit_policy"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "lock_card",
+    "description": "Lock or freeze a lost or compromised payment card with confirmation.",
+    "parameters": {
+      "properties": {
+        "card_id": {
+          "type": "string",
+          "description": "The card identifier to lock, e.g. CARD01"
+        },
+        "customer_id": {
+          "type": "string",
+          "description": "The unique customer identifier, e.g. C01"
+        },
+        "session_id": {
+          "description": "The active session identifier, e.g. SESS01",
+          "type": "string"
+        },
+        "reason": {
+          "description": "The reason for locking the card",
+          "enum": [
+            "lost_card",
+            "stolen_card",
+            "suspected_fraud",
+            "customer_request"
+          ],
+          "type": "string"
+        },
+        "confirmed": {
+          "type": "boolean",
+          "description": "Whether the customer explicitly confirmed the card lock request"
+        }
+      },
+      "required": [
+        "customer_id",
+        "session_id",
+        "card_id",
+        "reason",
+        "confirmed"
+      ],
+      "type": "object"
+    },
+    "mutates_state": true,
+    "returns": {
+      "properties": {
+        "last_four": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "idempotent": {
+          "type": "boolean"
+        },
+        "locked_at": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "card_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "card_id",
+        "status",
+        "locked_at",
+        "last_four"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "create_dispute",
+    "description": "File a new transaction dispute for an eligible posted transaction, with idempotency protection.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "customer_id",
+        "session_id",
+        "transaction_id",
+        "dispute_reason"
+      ],
+      "properties": {
+        "transaction_id": {
+          "description": "The transaction identifier to dispute, e.g. TX17",
+          "type": "string"
+        },
+        "request_key": {
+          "type": "string",
+          "description": "Optional idempotency request key to avoid duplicate submissions"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The active session identifier, e.g. SESS01"
+        },
+        "dispute_reason": {
+          "enum": [
+            "unrecognized_charge",
+            "incorrect_amount",
+            "duplicate_charge",
+            "goods_not_received"
+          ],
+          "description": "Reason for opening the dispute",
+          "type": "string"
+        },
+        "customer_notes": {
+          "type": "string",
+          "description": "Optional customer details or explanation of the dispute"
+        },
+        "customer_id": {
+          "description": "The unique customer identifier, e.g. C01",
+          "type": "string"
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "properties": {
+        "created_at": {
+          "type": "string"
+        },
+        "amount": {
+          "type": "integer"
+        },
+        "request_key": {
+          "type": "string"
+        },
+        "dispute_id": {
+          "type": "string"
+        },
+        "next_steps": {
+          "type": "string"
+        },
+        "customer_notes": {
+          "type": "string"
+        },
+        "idempotent": {
+          "type": "boolean"
+        },
+        "currency": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "customer_id": {
+          "type": "string"
+        },
+        "transaction_id": {
+          "type": "string"
+        },
+        "dispute_reason": {
+          "type": "string"
+        }
+      },
+      "type": "object",
+      "required": [
+        "dispute_id",
+        "transaction_id",
+        "customer_id",
+        "amount",
+        "currency",
+        "status",
+        "dispute_reason",
+        "created_at",
+        "next_steps"
+      ]
+    }
+  },
+  {
+    "name": "get_dispute_status",
+    "description": "Look up the current status and details of an existing dispute by dispute_id or transaction_id.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "customer_id",
+        "session_id"
+      ],
+      "properties": {
+        "session_id": {
+          "description": "The active session identifier, e.g. SESS01",
+          "type": "string"
+        },
+        "transaction_id": {
+          "description": "The transaction identifier to look up dispute for",
+          "type": "string"
+        },
+        "customer_id": {
+          "description": "The unique customer identifier, e.g. C01",
+          "type": "string"
+        },
+        "dispute_id": {
+          "description": "The dispute identifier to look up, e.g. D01",
+          "type": "string"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "dispute_id",
+        "transaction_id",
+        "customer_id",
+        "amount",
+        "currency",
+        "dispute_reason",
+        "status",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {
+        "customer_id": {
+          "type": "string"
+        },
+        "amount": {
+          "type": "integer"
+        },
+        "currency": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "dispute_reason": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "transaction_id": {
+          "type": "string"
+        },
+        "notes": {
+          "type": "string"
+        },
+        "dispute_id": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "create_handoff",
+    "description": "Create a specialist escalation or support handoff when automation is blocked or verification fails.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "department": {
+          "enum": [
+            "fraud_specialist",
+            "customer_support",
+            "card_services"
+          ],
+          "description": "Target department for the transfer",
+          "type": "string"
+        },
+        "context": {
+          "type": "string",
+          "description": "Context or notes explaining the handoff reason"
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "verification_failed",
+            "service_error",
+            "complex_dispute",
+            "customer_requested_agent",
+            "unrecognized_card"
+          ],
+          "description": "The reason triggering the escalation or handoff"
+        },
+        "transaction_id": {
+          "type": "string",
+          "description": "Optional transaction identifier related to the handoff"
+        },
+        "card_id": {
+          "description": "Optional card identifier related to the handoff",
+          "type": "string"
+        },
+        "customer_id": {
+          "type": "string",
+          "description": "The unique customer identifier, e.g. C01"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The active session identifier, e.g. SESS01"
+        }
+      },
+      "required": [
+        "customer_id",
+        "session_id",
+        "reason"
+      ]
+    },
+    "mutates_state": true,
+    "returns": {
+      "required": [
+        "handoff_id",
+        "customer_id",
+        "session_id",
+        "department",
+        "reason",
+        "status",
+        "created_at"
+      ],
+      "type": "object",
+      "properties": {
+        "card_id": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "handoff_id": {
+          "type": "string"
+        },
+        "context": {
+          "type": "string"
+        },
+        "customer_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "department": {
+          "type": "string"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "transaction_id": {
+          "type": "string"
+        }
+      }
+    }
+  }
+]

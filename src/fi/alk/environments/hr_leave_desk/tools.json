@@ -1,0 +1,522 @@
+[
+  {
+    "name": "get_employee_profile",
+    "description": "Retrieve employee profile, region, reporting manager, and role information.",
+    "parameters": {
+      "properties": {
+        "actor_id": {
+          "description": "The ID of the actor requesting the profile (defaults to the employee themselves)",
+          "type": "string"
+        },
+        "employee_id": {
+          "description": "The ID of the employee whose profile to retrieve",
+          "type": "string"
+        }
+      },
+      "type": "object",
+      "required": [
+        "employee_id"
+      ]
+    },
+    "mutates_state": false,
+    "returns": {
+      "required": [
+        "employee_id",
+        "name",
+        "email",
+        "region",
+        "manager_id",
+        "role"
+      ],
+      "properties": {
+        "manager_id": {
+          "type": "string"
+        },
+        "region": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string"
+        },
+        "employee_id": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "search_hr_policy",
+    "description": "Search effective HR leave policies by region and topic as of a specific date.",
+    "parameters": {
+      "required": [
+        "region",
+        "topic",
+        "effective_date"
+      ],
+      "type": "object",
+      "properties": {
+        "topic": {
+          "type": "string",
+          "description": "Policy topic (e.g. annual_leave, sick_leave)"
+        },
+        "effective_date": {
+          "description": "The date to check policy effectiveness for (YYYY-MM-DD)",
+          "type": "string"
+        },
+        "region": {
+          "type": "string",
+          "description": "The geographic region (e.g. US, UK, APAC)"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "required": [
+        "region",
+        "topic",
+        "effective_date",
+        "policies"
+      ],
+      "type": "object",
+      "properties": {
+        "policies": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "policy_id",
+              "region",
+              "topic",
+              "version",
+              "effective_from",
+              "effective_to",
+              "title",
+              "content",
+              "carry_forward_days",
+              "max_consecutive_days"
+            ],
+            "properties": {
+              "region": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "content": {
+                "type": "string"
+              },
+              "effective_from": {
+                "type": "string"
+              },
+              "effective_to": {
+                "type": "string"
+              },
+              "topic": {
+                "type": "string"
+              },
+              "max_consecutive_days": {
+                "type": "integer"
+              },
+              "policy_id": {
+                "type": "string"
+              },
+              "carry_forward_days": {
+                "type": "integer"
+              },
+              "version": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "region": {
+          "type": "string"
+        },
+        "effective_date": {
+          "type": "string"
+        },
+        "topic": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "get_leave_balance",
+    "description": "Retrieve current leave balance allocations, usage, reserved days, and available days for an employee.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "employee_id"
+      ],
+      "properties": {
+        "actor_id": {
+          "type": "string",
+          "description": "The actor requesting the balance information"
+        },
+        "employee_id": {
+          "type": "string",
+          "description": "The employee ID to check balances for"
+        },
+        "leave_type": {
+          "type": "string",
+          "description": "Optional filter by leave type (e.g. annual, sick)"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "required": [
+        "employee_id",
+        "balances"
+      ],
+      "properties": {
+        "balances": {
+          "type": "array",
+          "items": {
+            "properties": {
+              "allocated_days": {
+                "type": "number"
+              },
+              "used_days": {
+                "type": "number"
+              },
+              "leave_type": {
+                "type": "string"
+              },
+              "available_days": {
+                "type": "number"
+              },
+              "reserved_days": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "leave_type",
+              "allocated_days",
+              "used_days",
+              "reserved_days",
+              "available_days"
+            ],
+            "type": "object"
+          }
+        },
+        "employee_id": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "calculate_working_days",
+    "description": "Calculate net working days between two dates for a given region, excluding weekends and public holidays.",
+    "parameters": {
+      "required": [
+        "start_date",
+        "end_date",
+        "region"
+      ],
+      "type": "object",
+      "properties": {
+        "start_date": {
+          "description": "The start date (YYYY-MM-DD, inclusive)",
+          "type": "string"
+        },
+        "region": {
+          "description": "The geographic region (e.g. US, UK, APAC)",
+          "type": "string"
+        },
+        "end_date": {
+          "type": "string",
+          "description": "The end date (YYYY-MM-DD, inclusive)"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "required": [
+        "start_date",
+        "end_date",
+        "region",
+        "total_calendar_days",
+        "weekend_days",
+        "holiday_days",
+        "holidays_encountered",
+        "working_days"
+      ],
+      "properties": {
+        "start_date": {
+          "type": "string"
+        },
+        "end_date": {
+          "type": "string"
+        },
+        "weekend_days": {
+          "type": "integer"
+        },
+        "working_days": {
+          "type": "integer"
+        },
+        "total_calendar_days": {
+          "type": "integer"
+        },
+        "holiday_days": {
+          "type": "integer"
+        },
+        "region": {
+          "type": "string"
+        },
+        "holidays_encountered": {
+          "items": {
+            "required": [
+              "date",
+              "name"
+            ],
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "date": {
+                "type": "string"
+              }
+            }
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "submit_leave_request",
+    "description": "Submit a new leave request for an employee, validating dates, overlap, balances, and routing to their manager for approval.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "employee_id",
+        "leave_type",
+        "start_date",
+        "end_date"
+      ],
+      "properties": {
+        "start_date": {
+          "type": "string",
+          "description": "The start date (YYYY-MM-DD, inclusive)"
+        },
+        "employee_id": {
+          "type": "string",
+          "description": "The ID of the employee requesting leave"
+        },
+        "actor_id": {
+          "type": "string",
+          "description": "The actor submitting the request (must match employee_id)"
+        },
+        "end_date": {
+          "description": "The end date (YYYY-MM-DD, inclusive)",
+          "type": "string"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Optional reason for leave"
+        },
+        "leave_type": {
+          "description": "The leave category (e.g. annual, sick, unpaid)",
+          "type": "string"
+        }
+      }
+    },
+    "mutates_state": true,
+    "returns": {
+      "properties": {
+        "start_date": {
+          "type": "string"
+        },
+        "employee_id": {
+          "type": "string"
+        },
+        "working_days": {
+          "type": "number"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "leave_type": {
+          "type": "string"
+        },
+        "reserved_days": {
+          "type": "number"
+        },
+        "status": {
+          "type": "string"
+        },
+        "end_date": {
+          "type": "string"
+        },
+        "approver_id": {
+          "type": "string"
+        },
+        "request_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_id",
+        "employee_id",
+        "leave_type",
+        "start_date",
+        "end_date",
+        "working_days",
+        "status",
+        "approver_id"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_request_status",
+    "description": "Retrieve the current status, approver, dates, and details for a specific leave request.",
+    "parameters": {
+      "required": [
+        "request_id"
+      ],
+      "type": "object",
+      "properties": {
+        "actor_id": {
+          "description": "The actor requesting the request status",
+          "type": "string"
+        },
+        "request_id": {
+          "description": "The unique ID of the leave request (e.g. REQ-1001)",
+          "type": "string"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "required": [
+        "request_id",
+        "employee_id",
+        "leave_type",
+        "start_date",
+        "end_date",
+        "working_days",
+        "status",
+        "approver_id",
+        "created_at"
+      ],
+      "type": "object",
+      "properties": {
+        "reason": {
+          "type": "string"
+        },
+        "approver_id": {
+          "type": "string"
+        },
+        "end_date": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "employee_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "working_days": {
+          "type": "number"
+        },
+        "start_date": {
+          "type": "string"
+        },
+        "leave_type": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "create_hr_case",
+    "description": "Create an HR support case for policy exceptions, balance disputes, or manual HR escalations.",
+    "parameters": {
+      "required": [
+        "employee_id",
+        "category",
+        "subject",
+        "description"
+      ],
+      "properties": {
+        "actor_id": {
+          "description": "The actor opening the case",
+          "type": "string"
+        },
+        "subject": {
+          "type": "string",
+          "description": "Short summary of the case"
+        },
+        "category": {
+          "type": "string",
+          "description": "Case category (e.g. policy_exception, balance_dispute, general_inquiry, medical_leave)"
+        },
+        "employee_id": {
+          "description": "The ID of the employee opening the case",
+          "type": "string"
+        },
+        "description": {
+          "description": "Detailed description of the issue or inquiry",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "required": [
+        "case_id",
+        "employee_id",
+        "category",
+        "subject",
+        "description",
+        "status",
+        "created_at"
+      ],
+      "properties": {
+        "case_id": {
+          "type": "string"
+        },
+        "employee_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "category": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "subject": {
+          "type": "string"
+        }
+      }
+    }
+  }
+]

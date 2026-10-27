@@ -1,0 +1,126 @@
+{
+  "rules": [
+    {
+      "id": "inv_calendar_write_permission",
+      "text": "Only calendars with access_role of 'writer' or 'owner' permit event creation, modification, or deletion.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "inv_no_double_booking",
+      "text": "Creating or updating an event cannot overlap with an existing confirmed event for any required attendee or on the target calendar.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "inv_event_version_check",
+      "text": "Updating an event requires specifying an expected_version that matches the current event version in the database to prevent concurrent write conflicts.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "cfg_buffer_minutes",
+      "text": "Minimum buffer time in minutes required between scheduled events.",
+      "class": "configurable_environment_policy",
+      "parameters": {
+        "buffer_minutes": {
+          "type": "integer",
+          "default": 10,
+          "allowed": [
+            0,
+            5,
+            10,
+            15,
+            30
+          ]
+        }
+      }
+    },
+    {
+      "id": "cfg_scheduling_notice",
+      "text": "Scheduling window constraints defining minimum notice required and maximum horizon days into the future.",
+      "class": "configurable_environment_policy",
+      "parameters": {
+        "max_horizon_days": {
+          "type": "integer",
+          "default": 60,
+          "allowed": [
+            14,
+            30,
+            60,
+            90
+          ]
+        },
+        "min_notice_hours": {
+          "type": "integer",
+          "default": 2,
+          "allowed": [
+            0,
+            1,
+            2,
+            4,
+            24
+          ]
+        }
+      }
+    },
+    {
+      "id": "cfg_attendee_allowlist",
+      "text": "Attendee domain allowlist restriction for meeting invites (* permits any domain).",
+      "class": "configurable_environment_policy",
+      "parameters": {
+        "allowed_domains": {
+          "type": "string",
+          "default": "*",
+          "allowed": [
+            "*",
+            "company.com",
+            "partner.org"
+          ]
+        }
+      }
+    },
+    {
+      "id": "cfg_require_approval",
+      "text": "Whether creating, updating, or deleting calendar events strictly requires an approved approval_id.",
+      "class": "configurable_environment_policy",
+      "parameters": {
+        "require_approval_for_mutations": {
+          "type": "boolean",
+          "default": true,
+          "allowed": [
+            true,
+            false
+          ]
+        }
+      }
+    },
+    {
+      "id": "agent_confirm_before_mutation",
+      "text": "The agent must present event time, timezone, and attendees and obtain explicit user approval before executing any creation, update, or deletion.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "agent_recheck_availability",
+      "text": "The agent must not claim a slot is reserved based only on an availability suggestion and must gracefully handle slot conflict errors if a race occurs.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "agent_clarify_ambiguous_dst",
+      "text": "The agent must ask for clarification when a requested time falls on an ambiguous daylight-saving transition boundary before creating an event.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "agent_read_back_on_timeout",
+      "text": "When a mutation encounters a timeout or ambiguous network error, the agent must inspect event state using get_event instead of blindly creating duplicate events.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "agent_preserve_event_on_reschedule",
+      "text": "The agent must preserve original event details without modifying or deleting them if a reschedule request fails or encounters an unresolved conflict.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "agent_distinguish_single_vs_series_cancellation",
+      "text": "When managing recurring events, the agent must distinguish between deleting or modifying a single occurrence versus the entire recurring series.",
+      "class": "agent_policy"
+    }
+  ]
+}

@@ -1,0 +1,113 @@
+{
+  "name": "v15_s01_happy_path_single_item_return",
+  "scenario_key": "v15-s01-happy-path-single-item-return",
+  "scenario_id": "",
+  "use_case": "Eligible item return and label generation",
+  "branch": "Return one eligible pair of shoes from a multi-item delivered order with no prior returns",
+  "tests": "the agent verifies ownership, evaluates return eligibility, quotes estimated refund, confirms, and authorizes return for 1 unit of SH01",
+  "instruction": "You purchased two pairs of Road Running Shoes in order O01. You received the shipment and want to return one pair because you only need one.\n\nYour details:\n- Name: Alice Morgan\n- Email: alice.morgan@example.com\n- Postal Code: 90210\n- Order ID: O01\n- Item to return: Road Running Shoes (SKU: SH01)\n- Quantity: 1\n- Reason: Wrong size / extra pair",
+  "keywords": [
+    "return_authorization"
+  ],
+  "persona": {
+    "name": "Alice Morgan",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Teacher",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi! I have order O01 with two pairs of shoes. The shoes I ordered are the wrong size. Can I return one pair of SKU SH01?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "order_id": "O01",
+    "customer_id": "C01",
+    "sku": "SH01",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "verify_order_owner",
+      "arguments": {
+        "email": "alice.morgan@example.com",
+        "order_id": "O01",
+        "postal_code": "90210",
+        "customer_id": "C01"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_order",
+      "arguments": {
+        "order_id": "O01"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "evaluate_return",
+      "arguments": {
+        "items": [
+          {
+            "sku": "SH01",
+            "reason": "wrong_size",
+            "quantity": 1
+          }
+        ],
+        "order_id": "O01"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_return",
+      "arguments": {
+        "order_id": "O01",
+        "items": [
+          {
+            "reason": "wrong_size",
+            "sku": "SH01",
+            "quantity": 1
+          }
+        ],
+        "customer_id": "C01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: customer C01",
+        "order_id": "caller: order number O01"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "clean_prose",
+    "counterparty": "verified_owner",
+    "task": "return_eligible_item",
+    "interaction": "multi_turn",
+    "disposition": "cooperative",
+    "overlay_vector": "none",
+    "overlay": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "subgoal_confirm_before_creation",
+    "subgoal_accurate_refund_status",
+    "subgoal_return_created"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

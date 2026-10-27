@@ -1,0 +1,24 @@
+{
+  "parameters": {},
+  "scored_agent_rules": {
+    "agent_approval_before_mutation": [
+      "approval_sought_before_creation"
+    ],
+    "agent_deduplicate_imports": [
+      "duplicate_records_avoided_on_reimport"
+    ],
+    "agent_disambiguate_owners": [
+      "ambiguous_owner_disambiguated"
+    ],
+    "agent_explicit_commitments_only": [
+      "tentative_ideas_not_assigned",
+      "approved_commitments_created"
+    ],
+    "agent_grounded_due_dates": [
+      "due_dates_grounded_in_meeting"
+    ],
+    "agent_verify_async_completion": [
+      "async_task_outcome_verified"
+    ]
+  }
+}

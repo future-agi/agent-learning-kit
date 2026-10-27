@@ -1,0 +1,73 @@
+{
+  "derived_from": "phase1_sheet:M02",
+  "name": "gmail_inbox_triage",
+  "notes": "Seeded 25 mailbox threads, 25 messages, 13 labels, clean starting drafts, defined 7 Gmail MCP tools, 5 policy rules, 7 sub-goals, and simulator prompt.",
+  "sequences": [
+    {
+      "calls": [
+        {
+          "arguments": {
+            "q": "label:UNREAD"
+          },
+          "tool": "search_threads"
+        },
+        {
+          "arguments": {
+            "add_label_ids": [
+              "TRIAGED"
+            ],
+            "remove_label_ids": [
+              "UNREAD"
+            ],
+            "thread_id": "T-01"
+          },
+          "tool": "label_thread"
+        }
+      ],
+      "expect_state": {
+        "thread_labels.count": 51
+      },
+      "name": "search_and_label_inbox"
+    },
+    {
+      "calls": [
+        {
+          "arguments": {
+            "thread_id": "T-07"
+          },
+          "tool": "get_thread"
+        },
+        {
+          "arguments": {
+            "add_label_ids": [
+              "TRIAGED"
+            ],
+            "remove_label_ids": [
+              "UNREAD"
+            ],
+            "thread_id": "T-07"
+          },
+          "tool": "label_thread"
+        },
+        {
+          "arguments": {
+            "body": "David, our on-call engineering team is actively investigating the outage.",
+            "recipient": "david@enterprise.com",
+            "subject": "Re: URGENT: Production outage on US-East cluster",
+            "thread_id": "T-07"
+          },
+          "tool": "create_draft"
+        }
+      ],
+      "expect_state": {
+        "drafts.count": 1,
+        "thread_labels.count": 51
+      },
+      "name": "triage_and_draft_escalation"
+    }
+  ],
+  "world_checks": {
+    "check_drafts_and_fixtures": "def check(world):\n    state = world.state()\n    labels = state.get(\"labels\", [])\n    if len(labels) < 5:\n        return f\"labels has {len(labels)} rows, expected at least 5\"\n    label_ids = {l[\"id\"] for l in labels}\n    tl = state.get(\"thread_labels\", [])\n    if not tl:\n        return \"thread_labels table is empty\"\n    for row in tl:\n        if row[\"label_id\"] not in label_ids:\n            return f\"invalid label_id {row['label_id']!r} in thread_labels\"\n    return None\n",
+    "check_threads_and_messages": "def check(world):\n    state = world.state()\n    threads = state.get(\"threads\", [])\n    if len(threads) < 20:\n        return f\"threads has {len(threads)} rows, expected at least 20\"\n    messages = state.get(\"messages\", [])\n    if len(messages) < 20:\n        return f\"messages has {len(messages)} rows, expected at least 20\"\n    thread_ids = {t[\"id\"] for t in threads}\n    msg_thread_ids = {m[\"thread_id\"] for m in messages}\n    missing_msgs = thread_ids - msg_thread_ids\n    if missing_msgs:\n        return f\"threads without messages: {missing_msgs}\"\n    clock = state.get(\"clock\", [])\n    if not clock or not clock[0].get(\"now\"):\n        return \"clock table is empty or missing 'now'\"\n    return None\n"
+  }
+}

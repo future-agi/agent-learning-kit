@@ -1,0 +1,2 @@
+def setup(world):
+    world.put("entitlements", {"entitlement_id": "ENT-CRM-09", "employee_id": "E09", "app_id": "APP-CRM", "role_name": "sales_rep", "status": "active", "granted_at": "2026-06-01T09:00:00Z", "expires_at": "2026-12-01T09:00:00Z", "granted_by": "E13"})
