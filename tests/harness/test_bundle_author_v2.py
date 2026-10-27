@@ -523,6 +523,66 @@ def test_tool_registration_is_not_observed_as_tool_execution(tmp_path: Path) -> 
     assert not trace.exists(), "Registering a tool does not prove the agent executed it"
 
 
+def test_chat_bundle_traces_langchain_sql_tool_execution(tmp_path: Path) -> None:
+    source = tmp_path / "chat-agent"
+    source.mkdir()
+    (source / "app.py").write_text("print('agent')\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring,
+        command=["python3", "app.py"],
+        interface={
+            "kind": "http",
+            "protocol": "openai_chat",
+            "port": 8080,
+            "path": "/v1/chat/completions",
+            "include_tools": False,
+        },
+    )
+    contract_path = authoring / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract["tools"] = [
+        {"name": "sql_db_list_tables", "args": []},
+        {"name": "sql_db_query", "args": ["query"]},
+    ]
+    contract["tool_entrypoints"] = [
+        {
+            "tool": tool["name"],
+            "mode": "construct",
+            "module": "langchain_community.agent_toolkits.sql.toolkit",
+            "callable": "SQLDatabaseToolkit",
+            "factory": "SQLDatabaseToolkit(db=database, llm=llm).get_tools()",
+        }
+        for tool in contract["tools"]
+    ]
+    contract_path.write_text(json.dumps(contract))
+
+    bundle = author_bundle_v2(
+        source=source,
+        job=_job(connector="http"),
+        authoring=authoring,
+        output=tmp_path / "bundle",
+    )
+
+    process = next(
+        item for item in bundle.processes if item.name == bundle.runtime.control_service
+    )
+    assert json.loads(process.environment["ALK_TOOL_TRACE_BINDINGS"]) == [
+        {
+            "name": "sql_db_list_tables",
+            "module": "langchain_community",
+            "callable": "_run",
+            "instance_name": "sql_db_list_tables",
+        },
+        {
+            "name": "sql_db_query",
+            "module": "langchain_community",
+            "callable": "_run",
+            "instance_name": "sql_db_query",
+        },
+    ]
+
+
 def test_auto_voice_contract_compiles_livekit_process_runtime(tmp_path: Path) -> None:
     source = tmp_path / "voice-agent"
     source.mkdir()
