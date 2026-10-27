@@ -134,9 +134,7 @@ def _write_runtime_evidence(
             )
     if native_observation:
         compiler_version = "native-compose-observation-v1"
-        limitations.append(
-            "Native application state is opaque: schema, seed, source invariants, value-level reset equivalence and state isolation are not certified. Compose lifecycle rebuilds private source copies and volumes; checks may observe only native responses. Source actions are not probed by the harness."
-        )
+        limitations.append("Native application state is opaque: schema, seed, source invariants, value-level reset equivalence and state isolation are not certified. Compose lifecycle rebuilds private source copies and volumes; checks may observe only native responses. Source actions are not probed by the harness.")
     if not external_provider and not native_observation:
         source_model = store.read_source_model()
         world_ir = store.read_world_ir()
@@ -154,8 +152,7 @@ def _write_runtime_evidence(
         invariant_review = authoring / ARTIFACT
         if (
             invariant_review.is_file()
-            and json.loads(invariant_review.read_text()).get("status")
-            == "not_applicable"
+            and json.loads(invariant_review.read_text()).get("status") == "not_applicable"
         ):
             source_invariants = CheckStatus.NOT_APPLICABLE
             limitations.append(
@@ -166,11 +163,7 @@ def _write_runtime_evidence(
         limitations.append(
             "concurrent world isolation was not applicable or runtime parallelism was safely degraded"
         )
-    elif (
-        world_isolation is CheckStatus.NOT_APPLICABLE
-        and not external_provider
-        and not native_observation
-    ):
+    elif world_isolation is CheckStatus.NOT_APPLICABLE and not external_provider and not native_observation:
         limitations.append(
             "concurrent world isolation is not applicable because a fixed-port runtime is "
             "enforced at single-world parallelism; reset equivalence remains certified"
@@ -292,9 +285,7 @@ def _freeze_certified_bundle(bundle: Path, authoring: Path) -> None:
     shutil.copytree(bundle, certified_bundle)
 
 
-def _setup_check_keys(
-    bundle: Path, invariants: list, baseline_digest: str
-) -> list[str]:
+def _setup_check_keys(bundle: Path, invariants: list, baseline_digest: str) -> list[str]:
     """One key per scenario folder, in load order, over everything its setup check depends on."""
 
     shared = hashlib.sha256()
@@ -308,8 +299,7 @@ def _setup_check_keys(
         shared.update(item.read_bytes())
     prefix = shared.hexdigest()
     return [
-        "sha256:"
-        + hashlib.sha256((prefix + _artifact_digest(folder)).encode()).hexdigest()
+        "sha256:" + hashlib.sha256((prefix + _artifact_digest(folder)).encode()).hexdigest()
         for folder in sorted((bundle / "scenarios").iterdir())
         if folder.is_dir()
     ]
@@ -605,30 +595,15 @@ class _GeneratedWorldActionAdapter:
 
 
 async def _probe_runtime_readiness(
-    *,
-    job,
-    source,
-    authoring,
-    manifest,
-    contract,
-    provider,
-    runtime,
-    factory,
-    work,
-    values,
-    redactions,
-    compare_baseline=True,
+    *, job, source, authoring, manifest, contract, provider, runtime, factory,
+    work, values, redactions, compare_baseline=True,
 ):
     from .chat_call_runner import _tools, _chat_target_timeout_seconds
     from .chat_readiness import probe_chat_ingress
 
     interface = contract.runtime.interface if contract.runtime else None
     endpoint = runtime.endpoints.get("target_http")
-    if (
-        interface is None
-        or interface.kind not in {"http", "callable", "command"}
-        or endpoint is None
-    ):
+    if interface is None or interface.kind not in {"http", "callable", "command"} or endpoint is None:
         raise RuntimeValidationError(
             "runtime", "generated_runtime_plan_invalid: unsupported chat ingress"
         )
@@ -659,13 +634,10 @@ async def _probe_runtime_readiness(
             try:
                 await provider.reset(runtime, work_directory=work)
                 if compare_baseline:
-                    restored = await factory.create(
-                        runtime, rng=random.Random(job.seed or 0)
-                    )
+                    restored = await factory.create(runtime, rng=random.Random(job.seed or 0))
                     if _world_state_digest(restored) != baseline_digest:
                         raise RuntimeValidationError(
-                            "environment",
-                            "Readiness reset did not restore the baseline",
+                            "environment", "Readiness reset did not restore the baseline"
                         )
             except RuntimeValidationError:
                 raise
@@ -742,13 +714,9 @@ async def validate_once(
         and job.metadata.get("generic_harness_v1") is True
     )
     if readiness_only and not generic:
-        raise RuntimeValidationError(
-            "runtime", "Early readiness requires the generic runtime"
-        )
+        raise RuntimeValidationError("runtime", "Early readiness requires the generic runtime")
     if readiness_only:
-        (authoring / "generic-harness" / "runtime-readiness.json").unlink(
-            missing_ok=True
-        )
+        (authoring / "generic-harness" / "runtime-readiness.json").unlink(missing_ok=True)
     if generic:
         from .certification import CheckStatus, GenericHarnessArtifactStore
 
@@ -847,9 +815,7 @@ async def validate_once(
             generic_artifact_root=(authoring / "generic-harness") if generic else None,
         )
         # Parallel runtime instances inside the one sandbox, each with its own ports and databases.
-        requested_lanes = max(
-            1, int(os.environ.get("ALK_VALIDATION_INSTANCES", "4") or 4)
-        )
+        requested_lanes = max(1, int(os.environ.get("ALK_VALIDATION_INSTANCES", "4") or 4))
         # Setup checks touch only the world's database, so a single-database world checks each
         # scenario on its own clone of the sealed baseline instead of a whole agent stack.
         database_lanes = _database_lanes()
@@ -881,26 +847,14 @@ async def validate_once(
                 manifest,
                 parallelism=validation_parallelism,
                 secret_refs=job_secret_purposes(job),
-                allow_compose=(local_runtime and compose_enabled())
-                or broker_socket is not None,
+                allow_compose=(local_runtime and compose_enabled()) or broker_socket is not None,
             )
             from .bundle_v2 import RuntimeKindV2
-
             if manifest.runtime.kind is RuntimeKindV2.COMPOSE:
                 from .compose_integration import validate_native
-
-                return await validate_native(
-                    job=job,
-                    source=source,
-                    authoring=authoring,
-                    bundle=bundle,
-                    manifest=manifest,
-                    work=work,
-                    values=target_secret_values,
-                    redactions=redaction_values,
-                    executor=executor,
-                    readiness_only=readiness_only,
-                )
+                return await validate_native(job=job, source=source, authoring=authoring,
+                    bundle=bundle, manifest=manifest, work=work, values=target_secret_values,
+                    redactions=redaction_values, executor=executor, readiness_only=readiness_only)
 
             runtimes = await provider.provision(
                 manifest,
@@ -983,17 +937,9 @@ async def validate_once(
             runtime = runtimes[0]
             if readiness_only:
                 await _probe_runtime_readiness(
-                    job=job,
-                    source=source,
-                    authoring=authoring,
-                    manifest=manifest,
-                    contract=contract,
-                    provider=provider,
-                    runtime=runtime,
-                    factory=factory,
-                    work=work,
-                    values=target_secret_values,
-                    redactions=redaction_values,
+                    job=job, source=source, authoring=authoring, manifest=manifest,
+                    contract=contract, provider=provider, runtime=runtime, factory=factory,
+                    work=work, values=target_secret_values, redactions=redaction_values,
                 )
                 return 0
             lanes = len(runtimes) or 1
@@ -1082,17 +1028,9 @@ async def validate_once(
                     ("ready", scenario.ready, world.read_only(), 15.0),
                 ):
                     result = await _run_phase(
-                        fn,
-                        target,
-                        timeout=timeout,
-                        phase=name,
-                        executor=executor,
+                        fn, target, timeout=timeout, phase=name, executor=executor,
                         audit_log=phase_sink.log,
-                        audit_context={
-                            "scenario_key": scenario.scenario_key,
-                            "world_index": against.world_index,
-                            "stage": "validation",
-                        },
+                        audit_context={"scenario_key": scenario.scenario_key, "world_index": against.world_index, "stage": "validation"},
                     )
                     if result.failure:
                         raise RuntimeValidationError(
@@ -1173,11 +1111,7 @@ async def validate_once(
                 chat_ingress = CheckStatus.NOT_APPLICABLE
                 interface = contract.runtime.interface if contract.runtime else None
                 if contract.modality != "voice":
-                    if interface is None or interface.kind not in {
-                        "http",
-                        "callable",
-                        "command",
-                    }:
+                    if interface is None or interface.kind not in {"http", "callable", "command"}:
                         raise RuntimeValidationError(
                             "runtime",
                             "generated_runtime_plan_invalid: unsupported chat ingress",
@@ -1204,12 +1138,8 @@ async def validate_once(
                     )
                     if getattr(representative, "requires_tool_evidence", False):
                         await probe_chat_workflow(
-                            job=job,
-                            source=source,
-                            bundle=bundle,
-                            authoring=authoring,
-                            runtime=runtime,
-                            scenario=representative,
+                            job=job, source=source, bundle=bundle, authoring=authoring,
+                            runtime=runtime, scenario=representative,
                             candidate_hash=_generic_candidate_hash(source, authoring),
                             bundle_digest=manifest.digest,
                             secret_values=target_secret_values,
@@ -1226,9 +1156,7 @@ async def validate_once(
                             bundle_digest=manifest.digest,
                             secret_values=target_secret_values,
                             redaction_values=redaction_values,
-                            local_auth_values=getattr(
-                                runtime, "_local_auth_values", None
-                            ),
+                            local_auth_values=getattr(runtime, "_local_auth_values", None),
                             tools=_tools(contract) if interface.include_tools else (),
                             scenario_id=representative.scenario_id,
                             timeout=_chat_target_timeout_seconds(),
@@ -1385,17 +1313,14 @@ async def validate_once(
                     validation_error.process_evidence = retained_process_evidence(
                         process_logs, logs_before, redaction_values
                     )
-                    control_service = getattr(
-                        getattr(manifest, "runtime", None), "control_service", None
+                    control_service = (
+                        getattr(manifest.runtime, "control_service", None)
+                        if manifest is not None else None
                     )
                     if control_service:
-                        validation_error.target_process_evidence = (
-                            retained_process_evidence(
-                                process_logs,
-                                logs_before,
-                                redaction_values,
-                                process_name=control_service,
-                            )
+                        validation_error.target_process_evidence = retained_process_evidence(
+                            process_logs, logs_before, redaction_values,
+                            process_name=control_service,
                         )
                 except OSError:
                     pass
@@ -1454,9 +1379,7 @@ async def validate_and_repair(
             raise RuntimeValidationError(
                 "runtime", "Early readiness requires the generic runtime"
             )
-        (authoring / "generic-harness" / "runtime-readiness.json").unlink(
-            missing_ok=True
-        )
+        (authoring / "generic-harness" / "runtime-readiness.json").unlink(missing_ok=True)
     if repair is None:
 
         async def repair(phase, guidance):
@@ -1599,9 +1522,7 @@ async def validate_and_repair(
             if readiness_only:
                 path = authoring / "generic-harness" / "readiness-repair-history.json"
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(
-                    repair_controller.history.model_dump_json(indent=2) + "\n"
-                )
+                path.write_text(repair_controller.history.model_dump_json(indent=2) + "\n")
             else:
                 artifacts.write_repair_history(repair_controller.history)
 

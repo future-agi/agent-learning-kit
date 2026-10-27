@@ -134,12 +134,9 @@ def test_worker_inherits_runner_topology_but_uploaded_values_cannot_replace_it()
     assert child["HARNESS_RUNTIME_WEBHOOK_URL"] == "http://runner.internal:8787"
 
 
-def test_worker_inherits_only_the_runner_owned_caller_voice_credential():
+def test_worker_never_inherits_host_voice_provider_credentials():
     child = worker_environment(
-        {
-            "LIVEKIT_API_KEY": "job-livekit",
-            "CARTESIA_API_KEY": "job-cartesia",
-        },
+        {"LIVEKIT_API_KEY": "job-livekit"},
         host_environment={
             "PATH": "/bin",
             "LIVEKIT_API_KEY": "runner-livekit",
@@ -152,7 +149,7 @@ def test_worker_inherits_only_the_runner_owned_caller_voice_credential():
     assert child["LIVEKIT_API_KEY"] == "job-livekit"
     assert "LIVEKIT_API_SECRET" not in child
     assert "DEEPGRAM_API_KEY" not in child
-    assert child["CARTESIA_API_KEY"] == "runner-cartesia"
+    assert "CARTESIA_API_KEY" not in child
 
 
 def test_worker_inherits_runner_model_roles_but_jobs_cannot_replace_them():

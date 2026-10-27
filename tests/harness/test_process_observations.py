@@ -35,13 +35,13 @@ def test_real_process_workers_combine_files_http_and_private_auth(
     address, secrets, requests = application
     world = hosted(tmp_path, {"app": address})
     caplog.set_level(logging.INFO, logger="fi.alk.harness.hosted_scheduler")
+    readonly = world.read_only()
     assert (
         phase(
             SETUP + "    world.write_file('files', 'result.txt', 'verified')\n", world
         )
         is None
     )
-    readonly = world.read_only()
     assert (
         phase(
             READY.replace(
@@ -68,7 +68,7 @@ def test_real_process_workers_combine_files_http_and_private_auth(
 
 def test_real_process_worker_named_post_and_denials(named_application, phase, tmp_path):
     observation, calls = named_application
-    world = observation
+    world = hosted(tmp_path, observation._endpoints, CATALOGUE)
     assert (
         phase(
             "def setup(world):\n    world.set_headers('app', {'Authorization': 'Bearer private-test-credential'})\n",
