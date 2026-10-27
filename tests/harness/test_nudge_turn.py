@@ -1064,7 +1064,7 @@ def test_the_result_stays_under_the_size_the_platform_reads(tmp_path, letter):
     assert len(raw) < 4 * 1024 * 1024
     assert written["checks"]["passed"] is False
     assert written["checks"]["problems"][0]["message"] == long
-    assert "check items left out" in written["notes"]
+    assert "check items left out" in written["notes"][:4000]
 
 
 def _add_sub_goal(root: Path, name: str) -> None:

@@ -654,7 +654,8 @@ def write_result(
             used += size
             listed[name].append(item)
     if dropped:
-        notes += f"\n\n({dropped} check items left out: the result file is full.)"
+        # First, as the platform keeps only the start of the notes.
+        notes = f"({dropped} check items left out: the result file is full.)\n\n{notes}"
     body = {
         "nudge_id": nudge_id,
         "stage": stage,
