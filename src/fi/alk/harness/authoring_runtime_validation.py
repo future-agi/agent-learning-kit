@@ -503,7 +503,7 @@ async def validate_once(
         _resolve_hosted_public_url,
         job_secret_purposes,
     )
-    from .hosted_scheduler import _classify_ready, _run_phase
+    from .hosted_scheduler import READY_TIMEOUT_SECONDS, _classify_ready, _run_phase
     from .job import ProviderExecutionMode, SourceKind
     from .process_preflight import preflight_bundle
     from .process_runtime import (
@@ -798,7 +798,7 @@ async def validate_once(
                         )
                 for name, fn, target, timeout in (
                     ("setup", scenario.setup, world, 30.0),
-                    ("ready", scenario.ready, world.read_only(), 15.0),
+                    ("ready", scenario.ready, world.read_only(), READY_TIMEOUT_SECONDS),
                 ):
                     result = await _run_phase(
                         fn, target, timeout=timeout, phase=name, executor=executor
