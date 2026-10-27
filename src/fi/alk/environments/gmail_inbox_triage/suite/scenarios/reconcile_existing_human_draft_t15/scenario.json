@@ -1,0 +1,71 @@
+{
+  "name": "reconcile_existing_human_draft_t15",
+  "scenario_key": "reconcile-existing-human-draft-t15",
+  "scenario_id": "",
+  "use_case": "Protect and reconcile existing human-edited drafts and handle error states",
+  "branch": "existing human-edited draft on T-15 is detected and preserved without duplication or overwrite",
+  "tests": "passes when human-edited draft on T-15 is preserved and conflict surfaced",
+  "instruction": "Ask the assistant to run the draft task again on T-15. An existing human-edited draft already exists; the assistant should leave it intact.\n\nYour details:\nThread: T-15",
+  "keywords": [
+    "conflict_guard"
+  ],
+  "persona": {
+    "name": "Aria Thorne",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Manager",
+    "location": "Canada",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Run the draft task again for thread T-15.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "thread_id": "T-15",
+    "draft_id": "D-01",
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "list_drafts",
+      "arguments": {},
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "thread_id": "T-15"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "reconcile_human_drafts",
+    "counterparty": "support_lead",
+    "overlay_intensity": "absent",
+    "disposition": "existing_draft_conflict",
+    "interface": "clean_text",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "interaction": "self_correction"
+  },
+  "sub_goals": [
+    "human_draft_preserved"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

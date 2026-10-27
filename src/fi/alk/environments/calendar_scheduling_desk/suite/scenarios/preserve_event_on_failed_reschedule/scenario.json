@@ -1,0 +1,76 @@
+{
+  "name": "preserve_event_on_failed_reschedule",
+  "scenario_key": "preserve-event-on-failed-reschedule",
+  "scenario_id": "",
+  "use_case": "Reschedule and Modify Existing Meeting",
+  "branch": "Reschedule target slot has an unresolvable attendee conflict; agent aborts update and preserves original event.",
+  "tests": "the agent preserves the original event in confirmed status when rescheduling cannot proceed.",
+  "instruction": "You have a confirmed meeting EVT-RESCHED-01 (\"Client Architecture Review\") on CAL-PRIMARY on October 30, 2026 from 13:00 to 14:00 UTC.\nYou want to check if it can be moved to 15:00 UTC on the same day.\nHowever, if 15:00 UTC is conflicting or unavailable, you must keep the original 13:00 UTC meeting confirmed and unchanged.\n\nYour details:\n- Event ID: EVT-RESCHED-01\n- Current time: 2026-10-30T13:00:00Z - 14:00:00Z\n- Requested time: 2026-10-30T15:00:00Z - 16:00:00Z\n- Calendar: CAL-PRIMARY",
+  "keywords": [
+    "slot_conflict"
+  ],
+  "persona": {
+    "name": "Rohan Gupta",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Consultant",
+    "location": "India",
+    "personality": "Cautious and skeptical",
+    "communication_style": "Formal and polite",
+    "initial_message": "Can we reschedule our Client Architecture Review (EVT-RESCHED-01) to 15:00 UTC on October 30? If that slot is busy, please keep our current 13:00 UTC slot intact.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "event_id": "EVT-RESCHED-01",
+    "origin": "generated",
+    "calendar_id": "CAL-PRIMARY"
+  },
+  "solution": [
+    {
+      "tool": "get_event",
+      "arguments": {
+        "calendar_id": "CAL-PRIMARY",
+        "event_id": "EVT-RESCHED-01"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "list_events",
+      "arguments": {
+        "calendar_id": "CAL-PRIMARY",
+        "time_max": "2026-10-30T18:00:00Z",
+        "time_min": "2026-10-30T14:00:00Z"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "disposition": "stale_slot",
+    "interface": "clean_text",
+    "overlay": "none",
+    "task": "reschedule_meeting",
+    "overlay_vector": "none",
+    "interaction": "single_request",
+    "counterparty": "external_client"
+  },
+  "sub_goals": [
+    "preserves_original_event_on_reschedule_failure"
+  ],
+  "max_turns": 6,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

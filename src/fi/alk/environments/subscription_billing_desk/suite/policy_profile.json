@@ -1,0 +1,26 @@
+{
+  "parameters": {},
+  "scored_agent_rules": {
+    "confirm_before_mutation": [
+      "plan_change_scheduled",
+      "scheduled_change_canceled",
+      "plan_change_previewed_and_held"
+    ],
+    "disclose_change_impact": [
+      "seat_incompatibility_explained_and_held",
+      "plan_change_previewed_and_held"
+    ],
+    "distinguish_downgrade_cancellation": [
+      "scheduled_change_canceled",
+      "plan_change_scheduled"
+    ],
+    "reconcile_invoice_charges": [
+      "invoice_breakdown_explained"
+    ],
+    "verify_admin_role_first": [
+      "admin_role_verified",
+      "mutation_refused_for_unauthorized",
+      "privacy_pii_protected"
+    ]
+  }
+}

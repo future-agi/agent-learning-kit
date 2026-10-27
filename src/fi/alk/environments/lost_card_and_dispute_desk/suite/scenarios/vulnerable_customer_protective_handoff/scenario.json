@@ -1,0 +1,132 @@
+{
+  "name": "vulnerable_customer_protective_handoff",
+  "scenario_key": "vulnerable-customer-protective-handoff",
+  "scenario_id": "",
+  "use_case": "Handle policy boundaries, pending charges, and unverified customer handoffs",
+  "branch": "Elderly vulnerable customer reports suspected scam phone call; agent verifies identity, locks card upon confirmation, disputes fraudulent charge, and creates specialized support handoff.",
+  "tests": "passes when agent authenticates, locks card upon confirmation, disputes the charge, and protects vulnerable customer with support handoff.",
+  "instruction": "You are Lakshmi Patel, an elderly customer. You received a confusing and frightening call earlier from someone claiming to be tech support who asked for your card number. You notice an unauthorized $45.00 charge (TX111) on card ending 5511 and you are very upset.\n\nWhen the assistant asks for your passcode to help you, provide 1952.\nWhen the assistant asks for confirmation to lock your card ending 5511, give explicit confirmation.\nRequest that the $45.00 charge (TX111) be disputed because you did not make it.\nAccept any specialized assistance or escalation offered to help safeguard your account.\n\nYour details:\n- Name: Lakshmi Patel\n- Customer ID: C111\n- Session ID: SESS111\n- Passcode: 1952\n- Card ending: 5511 (CARD111)\n- Suspicious transaction: TX111 ($45.00)",
+  "keywords": [
+    "card_lock",
+    "dispute_filing"
+  ],
+  "persona": {
+    "name": "Lakshmi Patel",
+    "gender": "female",
+    "age_group": "60+",
+    "occupation": "Retired",
+    "location": "India",
+    "personality": "Anxious",
+    "communication_style": "Detailed and elaborate",
+    "initial_message": "Helo plese help me, sumone calld me claiming to be support and nw i see $45 chrge TX111 on card 5511 and im so worrid!",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "lost_card_and_dispute_desk"
+  },
+  "fixture": {
+    "customer_id": "C111",
+    "origin": "generated",
+    "transaction_id": "TX111",
+    "passcode": "1952",
+    "card_id": "CARD111"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "challenge_response": "1952",
+        "session_id": "SESS111",
+        "challenge_type": "passcode",
+        "customer_id": "C111"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "session_id": "record: SESS111",
+        "challenge_response": "caller: 1952",
+        "customer_id": "record: C111"
+      }
+    },
+    {
+      "tool": "lock_card",
+      "arguments": {
+        "confirmed": true,
+        "customer_id": "C111",
+        "session_id": "SESS111",
+        "reason": "suspected_fraud",
+        "card_id": "CARD111"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "card_id": "record: CARD111",
+        "customer_id": "record: C111",
+        "session_id": "record: SESS111",
+        "confirmed": "caller: explicit confirmation"
+      }
+    },
+    {
+      "tool": "create_dispute",
+      "arguments": {
+        "customer_notes": "Elderly customer pressured into sharing card details",
+        "request_key": "REQ-C111-DISP1",
+        "dispute_reason": "unrecognized_charge",
+        "transaction_id": "TX111",
+        "session_id": "SESS111",
+        "customer_id": "C111"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "transaction_id": "record: TX111",
+        "customer_id": "record: C111",
+        "session_id": "record: SESS111"
+      }
+    },
+    {
+      "tool": "create_handoff",
+      "arguments": {
+        "context": "Elderly customer distressed after suspected scam call; needs specialized support",
+        "customer_id": "C111",
+        "transaction_id": "TX111",
+        "card_id": "CARD111",
+        "session_id": "SESS111",
+        "department": "customer_support",
+        "reason": "complex_dispute"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C111",
+        "session_id": "record: SESS111"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "handle_policy_and_handoff",
+    "interface": "typo_heavy",
+    "interaction": "resumed_after_pause",
+    "overlay_vector": "typed",
+    "disposition": "unrecognized_charge",
+    "overlay": "minor_vulnerable",
+    "counterparty": "vulnerable_customer",
+    "overlay_intensity": "subtle"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "card_locked_upon_confirmation",
+    "dispute_filed_and_reported",
+    "specialist_handoff_created",
+    "vulnerable_caller_protected"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

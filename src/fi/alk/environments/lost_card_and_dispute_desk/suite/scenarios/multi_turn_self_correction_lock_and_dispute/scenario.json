@@ -1,0 +1,94 @@
+{
+  "name": "multi_turn_self_correction_lock_and_dispute",
+  "scenario_key": "multi-turn-self-correction-lock-and-dispute",
+  "scenario_id": "",
+  "use_case": "Evaluate dispute eligibility and file or track transaction dispute",
+  "branch": "Customer misstates the transaction ID initially, then immediately corrects to TX117 for an incorrect amount dispute; agent files dispute on corrected TX117.",
+  "tests": "passes when customer self-correction is recognized, identity verified, and dispute filed for corrected transaction.",
+  "instruction": "You are David Walsh (C117). You were overcharged $54.00 at City Bookstore instead of $24.00. In your opening message, you mistakenly write transaction TX999, but in your next turn you correct yourself: \"Sorry, I meant transaction TX117, not TX999.\"\n\nWhen challenged for identity verification, provide passcode 5517.\nConfirm that you are disputing transaction TX117 for the reason \"incorrect_amount\".\nAccept the dispute case ID and next steps provided by the assistant.\n\nYour details:\n- Name: David Walsh\n- Customer ID: C117\n- Session ID: SESS117\n- Passcode: 5517\n- Correct Transaction ID: TX117 ($54.00)\n- Dispute reason: incorrect_amount",
+  "keywords": [
+    "authentication",
+    "dispute_filing"
+  ],
+  "persona": {
+    "name": "David Walsh",
+    "gender": "male",
+    "age_group": "40-50",
+    "occupation": "Teacher",
+    "location": "Australia",
+    "personality": "Cautious and skeptical",
+    "communication_style": "Detailed and elaborate",
+    "initial_message": "I was charged the wrong amount for transaction TX999 at the bookstore.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "lost_card_and_dispute_desk"
+  },
+  "fixture": {
+    "transaction_id": "TX117",
+    "passcode": "5517",
+    "customer_id": "C117",
+    "origin": "generated"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "challenge_response": "5517",
+        "challenge_type": "passcode",
+        "session_id": "SESS117",
+        "customer_id": "C117"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "challenge_response": "caller: 5517",
+        "customer_id": "record: C117",
+        "session_id": "record: SESS117"
+      }
+    },
+    {
+      "tool": "create_dispute",
+      "arguments": {
+        "request_key": "REQ-C117-DISP1",
+        "customer_id": "C117",
+        "customer_notes": "Billed incorrect amount for bookstore order",
+        "session_id": "SESS117",
+        "dispute_reason": "incorrect_amount",
+        "transaction_id": "TX117"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "transaction_id": "caller: TX117",
+        "session_id": "record: SESS117",
+        "customer_id": "record: C117"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interface": "self_correction",
+    "overlay_vector": "none",
+    "counterparty": "vulnerable_customer",
+    "overlay_intensity": "absent",
+    "task": "file_or_track_dispute",
+    "interaction": "correction",
+    "disposition": "standard_flow",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "dispute_filed_and_reported"
+  ],
+  "max_turns": 8,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

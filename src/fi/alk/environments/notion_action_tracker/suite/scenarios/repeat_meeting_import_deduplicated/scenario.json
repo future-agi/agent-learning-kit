@@ -1,0 +1,75 @@
+{
+  "name": "repeat_meeting_import_deduplicated",
+  "scenario_key": "repeat-meeting-import-deduplicated",
+  "scenario_id": "",
+  "use_case": "Deduplicate and reconcile repeat meeting note imports",
+  "branch": "Meeting N-07 already has its action items imported and existing in action_records",
+  "tests": "Agent checks existing records and avoids creating duplicate action items on repeat import",
+  "instruction": "You are looking at the Security Incident Post-Mortem notes (page N-07). Ask the assistant to import the action items from N-07 into the Action Tracker again.\n\nYour details:\nMeeting page ID: N-07\nTarget database: db_action_tracker\nStatus: Actions were previously imported and are already tracked",
+  "keywords": [
+    "repeat_import",
+    "schema_compliance"
+  ],
+  "persona": {
+    "name": "Alex Rivera",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "United Kingdom",
+    "personality": "Cautious and skeptical",
+    "communication_style": "Technical",
+    "initial_message": "Can you import the actions from N-07 again to make sure everything is in the tracker?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "page_id": "N-07",
+    "database_id": "db_action_tracker",
+    "origin": "mixed"
+  },
+  "solution": [
+    {
+      "tool": "notion_fetch_page",
+      "arguments": {
+        "page_id": "N-07"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "notion_query_database",
+      "arguments": {
+        "database_id": "db_action_tracker",
+        "source_page_id": "N-07"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "deduplicate_imports",
+    "counterparty": "admin",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "interface": "clean_prose",
+    "interaction": "multi_turn",
+    "disposition": "repeat"
+  },
+  "sub_goals": [
+    "duplicate_records_avoided_on_reimport"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

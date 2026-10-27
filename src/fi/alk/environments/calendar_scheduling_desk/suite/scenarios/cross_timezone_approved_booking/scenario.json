@@ -1,0 +1,109 @@
+{
+  "name": "cross_timezone_approved_booking",
+  "scenario_key": "cross-timezone-approved-booking",
+  "scenario_id": "",
+  "use_case": "Schedule Meeting with Multi-Attendee Availability & Timezones",
+  "branch": "All attendees have overlapping availability in their respective working hours with approval.",
+  "tests": "Tests that the agent discovers overlapping multi-attendee availability across timezones, confirms candidate details, and creates the meeting after user approval.",
+  "instruction": "You are Alice Walker (alice@company.com). You need to schedule a 30-minute cross-timezone meeting with Bob Smith (bob@company.com, based in New York) and Charlie Green (charlie@company.com, based in London) for tomorrow October 27, 2026.\nFirst ask the assistant to suggest candidate meeting slots that accommodate everyone's working hours and timezones.\nOnce candidate slots are suggested, confirm the slot at 10:00 AM EDT (14:00:00Z / 2:00 PM London / 7:30 PM Kolkata).\nWhen the assistant presents candidate details (time, timezone, attendees) and asks for your confirmation, provide your approval token APP-1001 to execute the booking on CAL-PRIMARY.",
+  "keywords": [
+    "cross_timezone"
+  ],
+  "persona": {
+    "name": "Alice Walker",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Manager",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Collaborative",
+    "initial_message": "Hi, I need to schedule a 30-minute meeting with Bob (bob@company.com) and Charlie (charlie@company.com) for tomorrow Oct 27. Please suggest candidate slots within everyone's working hours.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "approval_id": "APP-1001",
+    "caller_name": "Alice Walker",
+    "origin": "mixed",
+    "target_slot": "2026-10-27T14:00:00Z to 2026-10-27T14:30:00Z",
+    "caller_email": "alice@company.com",
+    "calendar_id": "CAL-PRIMARY"
+  },
+  "solution": [
+    {
+      "tool": "suggest_time",
+      "arguments": {
+        "max_candidates": 3,
+        "duration_minutes": 30,
+        "time_zone": "America/New_York",
+        "time_min": "2026-10-27T00:00:00Z",
+        "time_max": "2026-10-27T23:59:59Z",
+        "attendees": [
+          "bob@company.com",
+          "charlie@company.com"
+        ]
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_event",
+      "arguments": {
+        "location": "Zoom",
+        "summary": "Cross-Timezone Team Sync",
+        "start": {
+          "dateTime": "2026-10-27T14:00:00Z",
+          "timeZone": "America/New_York"
+        },
+        "calendar_id": "CAL-PRIMARY",
+        "attendees": [
+          {
+            "email": "bob@company.com",
+            "displayName": "Bob Smith"
+          },
+          {
+            "email": "charlie@company.com",
+            "displayName": "Charlie Green"
+          }
+        ],
+        "approval_id": "APP-1001",
+        "end": {
+          "dateTime": "2026-10-27T14:30:00Z",
+          "timeZone": "America/New_York"
+        }
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "approval_id": "caller: provide your approval token APP-1001",
+        "calendar_id": "caller: CAL-PRIMARY"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "disposition": "cooperative",
+    "task": "schedule_meeting",
+    "counterparty": "colleague",
+    "interface": "clean_text",
+    "overlay_intensity": "absent",
+    "interaction": "multi_turn",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "creates_approved_meeting_event",
+    "confirms_before_mutation"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,86 @@
+{
+  "rules": [
+    {
+      "id": "auth_employee_boundary",
+      "text": "Employees can only view and submit requests or cases for their own account; cross-employee access is refused unless the actor is an authorized manager or HR partner.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "valid_request_dates",
+      "text": "Leave request start_date must be before or equal to end_date, formatted YYYY-MM-DD, and contain at least one working day.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "no_overlapping_requests",
+      "text": "An employee cannot have overlapping leave requests with status 'pending' or 'approved'.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "explicit_approval_state",
+      "text": "Submitted leave requests are always created with status 'pending' and assigned to the employee's designated manager; leave is never auto-approved on submission.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "balance_reservation_rule",
+      "text": "Determines whether submitted pending leave requests reserve leave balance immediately or upon manager approval.",
+      "class": "configurable_environment_policy",
+      "parameters": {
+        "balance_reservation_policy": {
+          "type": "string",
+          "default": "reserve_on_submit",
+          "allowed": [
+            "reserve_on_submit",
+            "reserve_on_approval"
+          ]
+        }
+      }
+    },
+    {
+      "id": "allowed_leave_types",
+      "text": "Comma-separated list of permitted leave categories for request submissions.",
+      "class": "configurable_environment_policy",
+      "parameters": {
+        "allowed_leave_types": {
+          "type": "string",
+          "default": "annual,sick,unpaid,parental,bereavement"
+        }
+      }
+    },
+    {
+      "id": "advance_booking_window",
+      "text": "Maximum number of days in advance an employee can submit a leave request.",
+      "class": "configurable_environment_policy",
+      "parameters": {
+        "max_advance_booking_days": {
+          "type": "integer",
+          "default": 365
+        }
+      }
+    },
+    {
+      "id": "accurate_policy_citation",
+      "text": "The agent must provide accurate leave policy terms (such as carry-forward limits and notice requirements) for the employee's specific region based on the effective policy version, and never present outdated policy terms as active.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "preserve_privacy_and_medical_confidentiality",
+      "text": "The agent must maintain strict confidentiality: it must never disclose coworker leave schedules, reasons, or private medical details, nor probe for confidential medical diagnoses.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "truthful_status_reporting",
+      "text": "The agent must truthfully communicate leave request status and never represent a pending or unapproved request as approved.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "explain_insufficient_balance",
+      "text": "When an employee's requested leave exceeds their available balance, the agent must clearly explain the shortage and offer valid alternatives (such as unpaid leave or submitting an HR case) rather than falsely confirming paid leave.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "confirm_details_before_submission",
+      "text": "The agent must confirm the requested dates and leave type with the employee before submitting a leave request.",
+      "class": "agent_policy"
+    }
+  ]
+}

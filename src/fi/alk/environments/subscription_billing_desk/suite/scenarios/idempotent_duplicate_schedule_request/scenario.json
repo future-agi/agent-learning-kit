@@ -1,0 +1,87 @@
+{
+  "name": "idempotent_duplicate_schedule_request",
+  "scenario_key": "idempotent-duplicate-schedule-request",
+  "scenario_id": "",
+  "use_case": "Preview and schedule end-of-cycle plan change",
+  "branch": "Admin submits duplicate plan change requests with same request_key req_dup_01; handled idempotently with single pending record",
+  "tests": "Handles duplicate plan change requests idempotently without creating multiple pending changes",
+  "instruction": "You are Carol Cloud, billing admin for CloudScale (Tenant ID: T03). You want to switch to the Basic plan with 5 seats. You submit the schedule request with confirmation code 'confirmed' and request key 'req_dup_01'. Due to a network retry or uncertainty, you submit the exact same request again with key 'req_dup_01'. When the agent processes the request idempotently and confirms that only one scheduled change exists, thank them.\n\nYour details:\n- Organization: CloudScale (Tenant ID: T03)\n- Your User ID: U03_ADMIN (Role: Billing Administrator)\n- Target Plan: Basic (Plan ID: basic)\n- Target Seats: 5\n- Request Key: req_dup_01\n- Confirmation Code: confirmed",
+  "keywords": [
+    "idempotency",
+    "plan_downgrade"
+  ],
+  "persona": {
+    "name": "Carol Cloud",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Manager",
+    "location": "Australia",
+    "personality": "Detail-oriented",
+    "communication_style": "Questioning",
+    "initial_message": "I want to schedule a plan downgrade for CloudScale to Basic (5 seats) at the end of the period. I'm submitting it with request key req_dup_01 and confirmation confirmed, and submitting again to make sure it wasn't dropped.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "target_plan_id": "basic",
+    "origin": "seed",
+    "request_key": "req_dup_01",
+    "actor_id": "U03_ADMIN",
+    "tenant_id": "T03",
+    "target_seats": 5
+  },
+  "solution": [
+    {
+      "tool": "verify_billing_admin",
+      "arguments": {
+        "tenant_id": "T03",
+        "actor_id": "U03_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "tenant_id": "caller: T03",
+        "actor_id": "caller: U03_ADMIN"
+      }
+    },
+    {
+      "tool": "schedule_plan_change",
+      "arguments": {
+        "effective_timing": "end_of_period",
+        "target_seats": 5,
+        "target_plan_id": "basic",
+        "confirmation_code": "confirmed",
+        "request_key": "req_dup_01",
+        "tenant_id": "T03",
+        "actor_id": "U03_ADMIN"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "disposition": "duplicate_request",
+    "overlay": "none",
+    "interface": "clean_chat",
+    "counterparty": "billing_admin",
+    "task": "schedule_plan_change",
+    "interaction": "multi_turn",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "idempotent_duplicate_handled"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

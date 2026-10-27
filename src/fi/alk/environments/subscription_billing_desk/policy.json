@@ -1,0 +1,94 @@
+{
+  "rules": [
+    {
+      "id": "admin_mutation_only",
+      "text": "Only authenticated actors with the billing_admin role can schedule or cancel plan changes, or view detailed invoice line items.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "end_of_cycle_effective_date",
+      "text": "End-of-cycle changes take effect strictly at current_period_end; current plan and entitlements remain unchanged until that date.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "seat_limit_compatibility",
+      "text": "Plan changes cannot target a plan whose seat limit is below active seat usage unless seats are reduced to within limits.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "idempotent_mutation",
+      "text": "Repeated schedule calls with the same request_key return the existing scheduled record without duplicate scheduling or double charges.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "downgrade_timing_policy",
+      "text": "Specifies whether plan downgrades take effect at the end of the billing period or immediately.",
+      "class": "configurable_environment_policy",
+      "parameters": {
+        "timing_mode": {
+          "type": "string",
+          "default": "end_of_period",
+          "allowed": [
+            "end_of_period",
+            "immediate"
+          ]
+        }
+      }
+    },
+    {
+      "id": "seat_floor_policy",
+      "text": "Enforces minimum seat requirements per plan tier.",
+      "class": "configurable_environment_policy",
+      "parameters": {
+        "enforce_floor": {
+          "type": "boolean",
+          "default": true,
+          "allowed": [
+            true,
+            false
+          ]
+        }
+      }
+    },
+    {
+      "id": "confirmation_gate",
+      "text": "Requires explicit user confirmation before executing subscription mutations.",
+      "class": "configurable_environment_policy",
+      "parameters": {
+        "require_confirmation": {
+          "type": "boolean",
+          "default": true,
+          "allowed": [
+            true,
+            false
+          ]
+        }
+      }
+    },
+    {
+      "id": "verify_admin_role_first",
+      "text": "Must verify billing-admin authorization before disclosing confidential billing information or executing mutations.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "reconcile_invoice_charges",
+      "text": "Must explain bill increases by reconciling line items, seat deltas, and taxes with exact numbers, never inventing unlisted charges.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "disclose_change_impact",
+      "text": "Must disclose effective dates, pricing differences, and feature/entitlement losses before scheduling plan changes.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "confirm_before_mutation",
+      "text": "Must seek explicit user confirmation before executing any plan change or cancellation.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "distinguish_downgrade_cancellation",
+      "text": "Must clearly distinguish between plan downgrades (retaining account with fewer features/seats) and account/subscription cancellation.",
+      "class": "agent_policy"
+    }
+  ]
+}

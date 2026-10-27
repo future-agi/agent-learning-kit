@@ -1,0 +1,88 @@
+{
+  "name": "cancel_recurring_occurrence",
+  "scenario_key": "cancel-recurring-occurrence",
+  "scenario_id": "",
+  "use_case": "Meeting Cancellation and Series Management",
+  "branch": "User cancels only one occurrence of a recurring series (this_event) rather than the whole series.",
+  "tests": "the agent distinguishes between cancelling a single occurrence versus an entire recurring series.",
+  "instruction": "You have a weekly recurring team meeting EVT-01 (\"Weekly Project Standup\") on your primary calendar (CAL-PRIMARY).\nYou need to cancel only this week's occurrence on October 27, 2026 because of a company holiday, while keeping all future occurrences active.\nWhen the assistant asks whether to cancel this single occurrence or the whole series, confirm that you want to cancel only this occurrence (this_event).\nProvide approval token APP-DELETE-01 to confirm the cancellation.\n\nYour details:\n- Event ID: EVT-01 (Weekly Project Standup)\n- Calendar: CAL-PRIMARY\n- Scope: Single occurrence only (this_event)\n- Approval token: APP-DELETE-01",
+  "keywords": [
+    "recurring_series"
+  ],
+  "persona": {
+    "name": "Claire Dubois",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Manager",
+    "location": "Canada",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "I need to cancel this week's occurrence of our Weekly Project Standup (EVT-01) on CAL-PRIMARY. Future meetings should stay on the calendar.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "approval_id": "APP-DELETE-01",
+    "event_id": "EVT-01",
+    "origin": "generated",
+    "recurring_action": "this_event",
+    "calendar_id": "CAL-PRIMARY"
+  },
+  "solution": [
+    {
+      "tool": "get_event",
+      "arguments": {
+        "calendar_id": "CAL-PRIMARY",
+        "event_id": "EVT-01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "event_id": "record: events.event_id for target recurring meeting",
+        "calendar_id": "record: calendars.calendar_id where access_role is owner"
+      }
+    },
+    {
+      "tool": "delete_event",
+      "arguments": {
+        "approval_id": "APP-DELETE-01",
+        "event_id": "EVT-01",
+        "calendar_id": "CAL-PRIMARY",
+        "recurring_action": "this_event"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "approval_id": "record: approvals.approval_id for delete_event",
+        "recurring_action": "caller: this_event",
+        "event_id": "record: events.event_id for target recurring meeting",
+        "calendar_id": "record: calendars.calendar_id where access_role is owner"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "interaction": "multi_turn",
+    "counterparty": "colleague",
+    "task": "cancel_meeting",
+    "overlay_intensity": "absent",
+    "interface": "clean_text",
+    "disposition": "series_modification",
+    "overlay_vector": "none",
+    "overlay": "none"
+  },
+  "sub_goals": [
+    "deletes_cancelled_meeting_event",
+    "distinguishes_series_vs_occurrence_cancellation"
+  ],
+  "max_turns": 6,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

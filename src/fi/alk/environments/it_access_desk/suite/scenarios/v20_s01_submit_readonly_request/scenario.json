@@ -1,0 +1,125 @@
+{
+  "name": "v20_s01_submit_readonly_request",
+  "scenario_key": "v20-s01-submit-readonly-request",
+  "scenario_id": "",
+  "use_case": "submit_access_request",
+  "branch": "Employee requests read-only reporting access; pending request is created and routed for manager approval.",
+  "tests": "Does the agent verify the employee and create a pending request for viewer role with manager approval routing without claiming access is already granted?",
+  "instruction": "You are Alice Smith (employee ID E01), an analytics specialist. You joined the analytics team and need read-only access to the Reporting Application (APP-RPT) to view BI dashboards. Ask the IT service desk to request viewer access for you. If asked for business justification, provide: 'Reporting dashboard access for analytics team'.",
+  "keywords": [
+    "access_request",
+    "approval_routing",
+    "least_privilege"
+  ],
+  "persona": {
+    "name": "Alice Smith",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Technician",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I'm Alice Smith (E01) from Analytics. I need read-only viewer access to the Reporting Application (APP-RPT) to check dashboards.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "origin": "seed",
+    "target_app": "APP-RPT",
+    "employee_id": "E01",
+    "target_role": "viewer"
+  },
+  "solution": [
+    {
+      "tool": "verify_employee",
+      "arguments": {
+        "employee_id": "E01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: Alice Smith (E01)"
+      }
+    },
+    {
+      "tool": "get_app_catalog",
+      "arguments": {
+        "category": "Analytics",
+        "app_id": "APP-RPT"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "app_id": "caller: Reporting Application (APP-RPT)"
+      }
+    },
+    {
+      "tool": "get_current_access",
+      "arguments": {
+        "employee_id": "E01",
+        "app_id": "APP-RPT"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: Alice Smith (E01)",
+        "app_id": "caller: Reporting Application (APP-RPT)"
+      }
+    },
+    {
+      "tool": "check_access_policy",
+      "arguments": {
+        "role_name": "viewer",
+        "employee_id": "E01",
+        "app_id": "APP-RPT"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "role_name": "rule: \"The agent must select and request the minimum necessary role matching the user's stated need (e.g. viewer rather than admin).\"",
+        "app_id": "caller: Reporting Application (APP-RPT)",
+        "employee_id": "caller: Alice Smith (E01)"
+      }
+    },
+    {
+      "tool": "create_access_request",
+      "arguments": {
+        "app_id": "APP-RPT",
+        "role_name": "viewer",
+        "employee_id": "E01",
+        "justification": "Reporting dashboard access for analytics team"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "employee_id": "caller: Alice Smith (E01)",
+        "app_id": "caller: Reporting Application (APP-RPT)",
+        "role_name": "rule: \"The agent must select and request the minimum necessary role matching the user's stated need (e.g. viewer rather than admin).\""
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "submit_access_request",
+    "overlay": "none",
+    "interface": "chat",
+    "counterparty": "standard_employee",
+    "interaction": "collaborative",
+    "disposition": "valid_request",
+    "overlay_intensity": "absent",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "employee_verified_before_action",
+    "pending_request_created",
+    "least_privilege_enforced",
+    "accurate_status_communicated"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

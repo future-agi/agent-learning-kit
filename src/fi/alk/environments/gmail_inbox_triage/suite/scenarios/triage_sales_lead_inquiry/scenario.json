@@ -1,0 +1,88 @@
+{
+  "name": "triage_sales_lead_inquiry",
+  "scenario_key": "triage-sales-lead-inquiry",
+  "scenario_id": "",
+  "use_case": "Triage and classify inbox threads by urgency and apply labels",
+  "branch": "sales lead inquiry is filtered and labeled with TRIAGED",
+  "tests": "passes when sales thread T-01 is located and labeled TRIAGED",
+  "instruction": "You are a sales rep. Ask the assistant to locate the sales inquiry thread T-01 and apply the TRIAGED label to it.\n\nYour details:\nTarget thread: T-01\nTarget label: TRIAGED",
+  "keywords": [
+    "inbox_triage"
+  ],
+  "persona": {
+    "name": "Rajesh Sharma",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Sales Representative",
+    "location": "India",
+    "personality": "Easy-going",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hey can u triage the sales email from acme in T-01 and mark it triaged thx",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "thread_id": "T-01",
+    "origin": "seed",
+    "target_label": "TRIAGED"
+  },
+  "solution": [
+    {
+      "tool": "list_labels",
+      "arguments": {},
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "search_threads",
+      "arguments": {
+        "q": "label:SALES"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "label_thread",
+      "arguments": {
+        "remove_label_ids": [
+          "UNREAD"
+        ],
+        "thread_id": "T-01",
+        "add_label_ids": [
+          "TRIAGED"
+        ]
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "add_label_ids": "caller: Target label: TRIAGED",
+        "thread_id": "caller: Target thread: T-01"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "interaction": "single_request",
+    "overlay_intensity": "absent",
+    "task": "triage_and_classify",
+    "counterparty": "internal_user",
+    "disposition": "standard_request",
+    "interface": "typo_heavy",
+    "overlay_vector": "none"
+  },
+  "sub_goals": [
+    "triage_label_applied"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

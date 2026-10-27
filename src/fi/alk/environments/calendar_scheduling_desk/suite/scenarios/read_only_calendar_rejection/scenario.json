@@ -1,0 +1,75 @@
+{
+  "name": "read_only_calendar_rejection",
+  "scenario_key": "read-only-calendar-rejection",
+  "scenario_id": "",
+  "use_case": "Permission Controls, Policy Enforcement & Fault Handling",
+  "branch": "User requests moving an event into read-only calendar CAL-RO; agent inspects permissions and refuses write.",
+  "tests": "the agent refuses write operations on read-only calendars and leaves original events intact.",
+  "instruction": "You have an event titled \"Team Planning\" (ID: EVT-MOVE-01) on your primary calendar (CAL-PRIMARY).\nYou want to move this meeting to the \"Corporate Announcements\" calendar (CAL-RO).\nAsk the assistant to move EVT-MOVE-01 from CAL-PRIMARY into CAL-RO.\nYou do not realize that CAL-RO has access_role='reader' and does not permit modifications.\n\nYour details:\n- Event ID: EVT-MOVE-01\n- Current Calendar: CAL-PRIMARY\n- Target Calendar: CAL-RO (Corporate Announcements)",
+  "keywords": [
+    "read_only_calendar"
+  ],
+  "persona": {
+    "name": "Marcus Vance",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Technician",
+    "location": "United States",
+    "personality": "Detail-oriented",
+    "communication_style": "Direct and concise",
+    "initial_message": "Please move my meeting EVT-MOVE-01 from my primary calendar into the Corporate Announcements calendar CAL-RO.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "source_calendar": "CAL-PRIMARY",
+    "event_id": "EVT-MOVE-01",
+    "origin": "generated",
+    "read_only_calendar": "CAL-RO"
+  },
+  "solution": [
+    {
+      "tool": "list_calendars",
+      "arguments": {
+        "min_access_role": "reader"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_event",
+      "arguments": {
+        "event_id": "EVT-MOVE-01",
+        "calendar_id": "CAL-PRIMARY"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay": "none",
+    "disposition": "read_only_target",
+    "overlay_intensity": "absent",
+    "counterparty": "self",
+    "task": "permission_and_fault_handling",
+    "overlay_vector": "none",
+    "interface": "clean_text",
+    "interaction": "single_request"
+  },
+  "sub_goals": [
+    "refuses_mutation_on_read_only_calendar"
+  ],
+  "max_turns": 6,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

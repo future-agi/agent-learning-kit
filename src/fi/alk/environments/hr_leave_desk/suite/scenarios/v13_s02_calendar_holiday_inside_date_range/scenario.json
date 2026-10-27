@@ -1,0 +1,83 @@
+{
+  "name": "v13_s02_calendar_holiday_inside_date_range",
+  "scenario_key": "v13-s02-calendar-holiday-inside-date-range",
+  "scenario_id": "",
+  "use_case": "Calculate working days for a requested date range accounting for regional holidays",
+  "branch": "The requested Monday to Friday span includes one regional public holiday (Veterans Day on Nov 11), requiring the assistant to deduct the holiday and compute 4 working days.",
+  "tests": "Correctly counts 4 working days across a 5-day span containing one regional holiday.",
+  "instruction": "You want to find out how many working days of leave will be deducted if you take time off from Monday, November 9, 2026 through Friday, November 13, 2026. You are located in the US and know there is a public holiday that week (Veterans Day on Wednesday, November 11). Ask the HR assistant to calculate the working days.\n\nYour details:\n- Employee ID: E02\n- Name: Bob Smith\n- Region: US\n- Start Date: 2026-11-09\n- End Date: 2026-11-13",
+  "keywords": [
+    "working_days",
+    "holiday_calendar",
+    "leave_policy"
+  ],
+  "persona": {
+    "name": "Bob Smith",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Engineer",
+    "location": "United States",
+    "personality": "Analytical",
+    "communication_style": "Direct and concise",
+    "initial_message": "How many leave days does taking off Monday, Nov 9 to Friday, Nov 13, 2026 use in the US?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "region": "US",
+    "employee_id": "E02",
+    "origin": "seed",
+    "working_days": 4,
+    "requested_span": "2026-11-09 to 2026-11-13"
+  },
+  "solution": [
+    {
+      "tool": "get_employee_profile",
+      "arguments": {
+        "employee_id": "E02"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "calculate_working_days",
+      "arguments": {
+        "start_date": "2026-11-09",
+        "end_date": "2026-11-13",
+        "region": "US"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "region": "record: US",
+        "start_date": "caller: 2026-11-09",
+        "end_date": "caller: 2026-11-13"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "counterparty": "employee_us",
+    "interaction": "single_request",
+    "overlay_vector": "none",
+    "task": "calculate_working_days",
+    "overlay": "none",
+    "disposition": "standard",
+    "overlay_intensity": "absent",
+    "interface": "clean_prose"
+  },
+  "sub_goals": [
+    "working_days_calculated_accurately"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

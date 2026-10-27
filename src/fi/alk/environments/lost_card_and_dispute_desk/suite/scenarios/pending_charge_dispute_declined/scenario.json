@@ -1,0 +1,87 @@
+{
+  "name": "pending_charge_dispute_declined",
+  "scenario_key": "pending-charge-dispute-declined",
+  "scenario_id": "",
+  "use_case": "Handle policy boundaries, pending charges, and unverified customer handoffs",
+  "branch": "Customer attempts to dispute a pending transaction TX103 ($20.00 at Corner Cafe); agent explains bank policy prohibiting disputes on pending charges and declines filing.",
+  "tests": "passes when the agent retrieves bank dispute policy and explains that pending transactions cannot be disputed until posted.",
+  "instruction": "You noticed a $20.00 charge for Corner Cafe (TX103) on your account and want to dispute it immediately. The charge is currently showing as pending.\n\nProvide your security passcode 2948 when prompted to verify your identity. If the assistant explains that pending transactions cannot be disputed until they have posted to your account, ask if there are next steps and accept the explanation once provided.\n\nYour details:\n- Name: Charlie Johnson\n- Customer ID: C103\n- Session ID: SESS103\n- Transaction ID: TX103 (Corner Cafe, $20.00, pending)\n- Security Passcode: 2948",
+  "keywords": [
+    "dispute_filing"
+  ],
+  "persona": {
+    "name": "Charlie Johnson",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Teacher",
+    "location": "Canada",
+    "personality": "Easy-going",
+    "communication_style": "Simple and clear",
+    "initial_message": "I see a $20.00 pending charge for TX103 from Corner Cafe that I want to dispute right now.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "lost_card_and_dispute_desk"
+  },
+  "fixture": {
+    "transaction_status": "pending",
+    "amount": 2000,
+    "transaction_id": "TX103",
+    "card_id": "CARD103",
+    "customer_id": "C103",
+    "origin": "generated",
+    "passcode": "2948"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "session_id": "SESS103",
+        "challenge_type": "passcode",
+        "customer_id": "C103",
+        "challenge_response": "2948"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "challenge_response": "caller: 2948",
+        "customer_id": "record: C103",
+        "session_id": "record: SESS103"
+      }
+    },
+    {
+      "tool": "get_dispute_policy",
+      "arguments": {
+        "policy_type": "transaction_dispute"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "pending_charge",
+    "interface": "clean_prose",
+    "overlay_vector": "none",
+    "interaction": "multi_turn",
+    "overlay": "none",
+    "counterparty": "individual_cardholder",
+    "task": "handle_policy_and_handoff",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "pending_charge_policy_explained"
+  ],
+  "max_turns": 8,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

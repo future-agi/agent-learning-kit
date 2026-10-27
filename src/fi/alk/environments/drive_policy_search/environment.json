@@ -1,0 +1,40 @@
+{
+  "derived_from": "phase1_sheet:M04",
+  "name": "drive_policy_search",
+  "notes": "Google Drive policy search world with 30 documents, 5 users with folder ACLs, 5 verified read-only tools, and 6 proved sub-goals.",
+  "sequences": [
+    {
+      "calls": [
+        {
+          "arguments": {
+            "page_size": 2,
+            "page_token": "0",
+            "query": "travel"
+          },
+          "tool": "search_files"
+        },
+        {
+          "arguments": {
+            "file_id": "file_travel_v2_active"
+          },
+          "tool": "get_file_metadata"
+        },
+        {
+          "arguments": {
+            "file_id": "file_travel_v2_active"
+          },
+          "tool": "read_file_content"
+        }
+      ],
+      "expect_state": {
+        "files.count": 30,
+        "users.count": 5
+      },
+      "name": "search_and_read_policy_flow"
+    }
+  ],
+  "world_checks": {
+    "check_files_and_fixtures": "def check(world):\n    state = world.state()\n    files = state.get(\"files\", [])\n    if len(files) < 25:\n        return f\"World has only {len(files)} files, expected at least 25.\"\n    deleted = [f for f in files if f.get(\"is_deleted\")]\n    if not deleted:\n        return \"World lacks deleted file edge fixture.\"\n    binary = [f for f in files if f.get(\"mime_type\") == \"application/octet-stream\"]\n    if not binary:\n        return \"World lacks binary unsupported file edge fixture.\"\n    return None\n",
+    "check_users_and_acls": "def check(world):\n    state = world.state()\n    users = state.get(\"users\", [])\n    if len(users) < 5:\n        return f\"Expected at least 5 users, found {len(users)}.\"\n    perms = state.get(\"permissions\", [])\n    if len(perms) < 10:\n        return f\"Expected at least 10 permissions rows, found {len(perms)}.\"\n    folders = state.get(\"folders\", [])\n    if len(folders) < 3:\n        return f\"Expected at least 3 folders, found {len(folders)}.\"\n    return None\n"
+  }
+}

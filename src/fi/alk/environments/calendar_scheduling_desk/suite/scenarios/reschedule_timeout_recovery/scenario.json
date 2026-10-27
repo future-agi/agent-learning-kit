@@ -1,0 +1,91 @@
+{
+  "name": "reschedule_timeout_recovery",
+  "scenario_key": "reschedule-timeout-recovery",
+  "scenario_id": "",
+  "use_case": "Reschedule and Modify Existing Meeting",
+  "branch": "Reschedule call commits on server but network timeout occurs; agent verifies state via get_event.",
+  "tests": "Tests that the agent reads back event state after an update timeout and confirms the committed update without duplicate creation.",
+  "instruction": "You are Aarav Patel (aarav@company.com). You need to reschedule meeting EVT-04 (\"Quarterly Roadmap Review\") on CAL-PRIMARY from 10:00 AM EDT to 2:00 PM EDT (18:00:00Z to 18:30:00Z) tomorrow October 27, 2026.\nWhen the assistant presents the reschedule plan, approve the operation with token APP-RESCHEDULE-01.\nIf the update encounters a timeout or network glitch, ask the assistant to verify whether the reschedule committed rather than creating a duplicate meeting.\nYour details:\n- Event ID: EVT-04\n- Calendar: CAL-PRIMARY\n- New Slot: 2026-10-27T18:00:00Z to 2026-10-27T18:30:00Z\n- Approval token: APP-RESCHEDULE-01",
+  "keywords": [
+    "timeout_fault",
+    "reschedule_meeting"
+  ],
+  "persona": {
+    "name": "Aarav Patel",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "India",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Please reschedule meeting EVT-04 on CAL-PRIMARY to 2:00 PM EDT (18:00:00Z) tomorrow.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {},
+  "fixture": {
+    "event_id": "EVT-04",
+    "approval_id": "APP-RESCHEDULE-01",
+    "caller_email": "aarav@company.com",
+    "origin": "mixed",
+    "calendar_id": "CAL-PRIMARY",
+    "fault_type": "timeout_after_commit",
+    "caller_name": "Aarav Patel"
+  },
+  "solution": [
+    {
+      "tool": "update_event",
+      "arguments": {
+        "summary": "Quarterly Roadmap Review",
+        "calendar_id": "CAL-PRIMARY",
+        "expected_version": 1,
+        "event_id": "EVT-04",
+        "start": {
+          "timeZone": "America/New_York",
+          "dateTime": "2026-10-27T18:00:00Z"
+        },
+        "end": {
+          "dateTime": "2026-10-27T18:30:00Z",
+          "timeZone": "America/New_York"
+        },
+        "approval_id": "APP-RESCHEDULE-01"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_event",
+      "arguments": {
+        "calendar_id": "CAL-PRIMARY",
+        "event_id": "EVT-04"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "counterparty": "colleague",
+    "interface": "clean_text",
+    "interaction": "multi_turn",
+    "disposition": "timeout_fault",
+    "overlay_vector": "none",
+    "task": "reschedule_meeting"
+  },
+  "sub_goals": [
+    "reads_back_event_after_timeout"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

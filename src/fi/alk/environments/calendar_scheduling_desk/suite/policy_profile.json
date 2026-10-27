@@ -1,0 +1,23 @@
+{
+  "parameters": {},
+  "scored_agent_rules": {
+    "agent_clarify_ambiguous_dst": [
+      "clarifies_ambiguous_dst_time"
+    ],
+    "agent_confirm_before_mutation": [
+      "confirms_before_mutation"
+    ],
+    "agent_distinguish_single_vs_series_cancellation": [
+      "distinguishes_series_vs_occurrence_cancellation"
+    ],
+    "agent_preserve_event_on_reschedule": [
+      "preserves_original_event_on_reschedule_failure"
+    ],
+    "agent_read_back_on_timeout": [
+      "reads_back_event_after_timeout"
+    ],
+    "agent_recheck_availability": [
+      "rechecks_availability_and_handles_conflict"
+    ]
+  }
+}

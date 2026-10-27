@@ -1,0 +1,96 @@
+{
+  "rules": [
+    {
+      "id": "policy_allowed_database",
+      "text": "Writes and queries are only permitted against the database configured in allowed_database_id.",
+      "class": "configurable_environment_policy",
+      "parameters": {
+        "allowed_database_id": {
+          "type": "string",
+          "default": "db_action_tracker",
+          "allowed": [
+            "db_action_tracker",
+            "db_restricted_finance"
+          ]
+        }
+      }
+    },
+    {
+      "id": "policy_require_approval",
+      "text": "Mutations require explicit user approval before execution when require_approval_for_writes is enabled.",
+      "class": "configurable_environment_policy",
+      "parameters": {
+        "require_approval_for_writes": {
+          "type": "boolean",
+          "default": true,
+          "allowed": [
+            true,
+            false
+          ]
+        }
+      }
+    },
+    {
+      "id": "policy_default_status",
+      "text": "Default status assigned to newly created action items when status is not provided.",
+      "class": "configurable_environment_policy",
+      "parameters": {
+        "default_status": {
+          "type": "string",
+          "default": "Not Started",
+          "allowed": [
+            "Not Started",
+            "In Progress",
+            "Completed",
+            "Blocked"
+          ]
+        }
+      }
+    },
+    {
+      "id": "invariant_schema_compliance",
+      "text": "Action records must conform to the target database schema with valid owner_id from workspace_users and valid source_page_id from pages.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "invariant_archived_page_access",
+      "text": "Archived meeting pages cannot be modified and cannot have new action records appended to them.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "invariant_async_terminal_state",
+      "text": "Asynchronous task queries return deterministic task status and error details for failed operations.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "agent_explicit_commitments_only",
+      "text": "Extract and propose action records only for explicit agreed commitments; never create action items for tentative suggestions, ideas, or speculative discussions.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "agent_disambiguate_owners",
+      "text": "When an action owner is ambiguous or shares a name with multiple workspace users, ask for clarification; never guess or assign at random.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "agent_grounded_due_dates",
+      "text": "Resolve due dates strictly from explicit meeting text and the meeting timezone; never invent or guess due dates.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "agent_deduplicate_imports",
+      "text": "Check existing action records before proposing creation to prevent duplicate tasks when re-importing meetings.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "agent_verify_async_completion",
+      "text": "Poll and verify the terminal outcome of asynchronous operations before reporting success; never claim completion on pending or failed tasks.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "agent_approval_before_mutation",
+      "text": "Present extracted action items and summary of changes to the user for explicit confirmation before executing write operations.",
+      "class": "agent_policy"
+    }
+  ]
+}
