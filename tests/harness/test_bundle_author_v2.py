@@ -1698,6 +1698,7 @@ CREATE DATABASE ticketsdb;
 CREATE TABLE tickets (
     id SERIAL PRIMARY KEY,
     title TEXT NOT NULL,
+    marker TEXT DEFAULT '--',
     description TEXT
 );
 INSERT INTO tickets (title, description) VALUES ('Broken login', 'Fixture');
@@ -1716,6 +1717,8 @@ CREATE TABLE tickets (id BIGINT PRIMARY KEY, embedding vector(768));
     assert artifacts[0].relative_path == "README.md#sql-1"
     assert "CREATE TABLE tickets" in artifacts[0].sql
     assert "title TEXT NOT NULL" in artifacts[0].sql
+    assert "marker TEXT DEFAULT '--'" in artifacts[0].sql
+    assert "description TEXT" in artifacts[0].sql
     assert "CREATE DATABASE" not in artifacts[0].sql
     assert "INSERT INTO" not in artifacts[0].sql
     assert "embedding" not in artifacts[0].sql
@@ -1767,39 +1770,37 @@ INSERT INTO riders VALUES (gen_random_uuid());
     assert "INSERT INTO" not in sql
 
 
-def test_documented_readme_schema_skips_alternative_for_existing_tables(
+def test_documented_readme_schema_skips_an_alternative_fence_not_later_tables(
     tmp_path: Path,
 ) -> None:
     source = tmp_path / "source"
     source.mkdir()
     (source / "README.md").write_text(
-        """# Local setup
-
-```sql
-CREATE TABLE tickets (id BIGINT PRIMARY KEY);
-```
-
-# Cloud deployment
-
-```sql
-CREATE EXTENSION IF NOT EXISTS cloud_only_extension;
-CREATE TABLE tickets (id BIGINT PRIMARY KEY, embedding vector(768));
+        """```sql
+CREATE TABLE items (id BIGINT PRIMARY KEY);
 ```
 
 ```sql
-ALTER TABLE tickets ADD COLUMN cloud_only_value vector(768);
+CREATE TABLE items (id UUID PRIMARY KEY);
+ALTER TABLE items ADD COLUMN cloud_only TEXT;
+```
+
+```sql
+CREATE TABLE audit_log (id BIGINT PRIMARY KEY);
 ```
 """,
         encoding="utf-8",
     )
 
-    sql = "\n".join(
-        artifact.sql for artifact in _source_schema_artifacts(source)
-    )
+    artifacts = _source_schema_artifacts(source)
 
-    assert sql.count("CREATE TABLE tickets") == 1
-    assert "cloud_only_extension" not in sql
-    assert "cloud_only_value" not in sql
+    sql = "\n".join(artifact.sql for artifact in artifacts)
+    assert [artifact.relative_path for artifact in artifacts] == [
+        "README.md#sql-1",
+        "README.md#sql-3",
+    ]
+    assert "cloud_only" not in sql
+    assert "CREATE TABLE audit_log" in sql
 
 
 def test_docker_python_respects_project_requires_python(tmp_path: Path) -> None:

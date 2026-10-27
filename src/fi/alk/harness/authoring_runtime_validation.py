@@ -500,18 +500,20 @@ def _looks_like_runtime_plan_failure(detail: str) -> bool:
 
 
 def _provider_owns_tool_execution(job) -> bool:
+    from .authoring_entrypoint import PROVIDER_MANAGED_CONNECTORS
     from .job import ProviderExecutionMode
 
     agent = getattr(job, "agent", None)
-    return str(getattr(agent, "connector", "")).lower() in {
-        "retell",
-        "retell_chat",
-        "vapi",
-    } and getattr(agent, "mode", None) in {
-        ProviderExecutionMode.CONNECT_ONLY,
-        ProviderExecutionMode.ENVIRONMENT_BACKED,
-        ProviderExecutionMode.PROVIDER_IMPORT,
-    }
+    return (
+        str(getattr(agent, "connector", "")).lower()
+        in PROVIDER_MANAGED_CONNECTORS
+        and getattr(agent, "mode", None)
+        in {
+            ProviderExecutionMode.CONNECT_ONLY,
+            ProviderExecutionMode.ENVIRONMENT_BACKED,
+            ProviderExecutionMode.PROVIDER_IMPORT,
+        }
+    )
 
 
 def _repair_guidance(diagnostics) -> str:
