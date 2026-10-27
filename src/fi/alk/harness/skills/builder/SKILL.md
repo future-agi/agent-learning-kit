@@ -160,8 +160,8 @@ what the gates check. Then:
   say whether it means the list or scenarios, ask. An entry you write follows the same rules as one a
   writer writes: the sub-actor has a part, never the person's goal, so it never confirms, chooses or
   gives a value for them, and its trigger brings it in at a moment its part can happen. When a sub-actor
-  or trigger the person asked for cannot be used with this agent, tell them which one and why before
-  using another.
+  or trigger the person asked for cannot be used with this agent, or a check refuses it, stop: tell them
+  which one and why, offer what can be used instead, and change it only once they agree.
 - **The contract's reading of the agent**: `amend_contract`, `add_rule`, `drop_rule`, `fix_tool`, and
   `declare_tool` for a tool the contract lacks (with the line in the agent's source that defines it),
   always with the reason. This corrects the harness's understanding; it never changes the agent.

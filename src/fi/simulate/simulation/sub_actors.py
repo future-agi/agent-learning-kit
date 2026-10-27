@@ -70,7 +70,8 @@ CHANNELS: dict[str, dict[str, Any]] = {
 TRIGGER_ABOUT: dict[str, str] = {
     "always": "after the agent's first turn (a phone menu answers the call itself)",
     "mid_journey": "after the agent's turn `turn`",
-    "on_tool": "on call `on_call` of the agent's tool `tool`",
+    "on_tool": "on call `on_call` of the agent's tool `tool`, a tool that runs in the simulated world "
+    "(one that runs only inside the agent cannot be seen)",
     "on_keyword": "when one of `words` is in the agent's latest turn",
     "probability": "with chance `p`, drawn once per call from the run's seed",
 }
