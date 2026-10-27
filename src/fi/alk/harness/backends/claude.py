@@ -174,10 +174,12 @@ class ClaudeSession:
         *,
         reported_model: str | None = None,
         streaming: bool = False,
+        interrupt_on_terminal_save: bool = True,
     ) -> None:
         self._options = options
         self._reported_model = reported_model
         self._streaming = streaming
+        self._interrupt_on_terminal_save = interrupt_on_terminal_save
         self._client: ClaudeSDKClient | None = None
         self._mirror_errors: list[str] = []
         self._tool_names: dict[str, str] = {}
@@ -309,8 +311,9 @@ class ClaudeSession:
             for block in blocks:
                 if isinstance(block, ToolResultBlock):
                     name = self._tool_names.pop(block.tool_use_id, "")
-                    self._terminal_save_succeeded = bool(
-                        name in TERMINAL_SAVE_TOOLS
+                    self._terminal_save_succeeded = self._terminal_save_succeeded or bool(
+                        self._interrupt_on_terminal_save
+                        and name in TERMINAL_SAVE_TOOLS
                         and not getattr(block, "is_error", False)
                     )
                     returned.append(
@@ -392,6 +395,7 @@ class ClaudeBackend:
             self._options(spec),
             reported_model=reported,
             streaming=bool(context and context.streaming),
+            interrupt_on_terminal_save=context is None,
         )
 
     def _options(self, spec: SessionSpec) -> ClaudeAgentOptions:
