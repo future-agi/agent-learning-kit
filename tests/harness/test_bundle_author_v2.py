@@ -635,7 +635,7 @@ def test_chat_bundle_traces_individual_langchain_sql_tool_classes(
     assert json.loads(process.environment["ALK_TOOL_TRACE_BINDINGS"]) == [
         {
             "name": name,
-            "module": "langchain_community.tools.sql_database.tool",
+            "module": "langchain_community",
             "callable": "_run",
             "instance_name": name,
         }

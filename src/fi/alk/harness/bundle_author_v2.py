@@ -3189,9 +3189,7 @@ def _langchain_sql_trace_bindings(contract: dict[str, Any]) -> list[dict[str, st
         bindings.append(
             {
                 "name": entry.tool,
-                "module": (
-                    entry.module if individual_tool else "langchain_community"
-                ),
+                "module": "langchain_community",
                 "callable": "_run",
                 "instance_name": entry.tool,
             }
