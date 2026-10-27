@@ -26,9 +26,9 @@ opt_in_lane: false
 
 This page takes you from an empty directory to a replayable run artifact in two
 commands, fully offline — no Docker, no cloud login, no API key. The point of
-the first run is not to exercise a real agent; it is to prove the harness:
-manifest loading, the simulation engine, evaluation, and artifact emission all
-work on your machine before any of your own code enters the loop.
+the first run is not to exercise a real agent; it checks manifest loading, the
+scripted simulation/evaluation path and artifact emission before your own code
+enters the loop. It does not exercise the source-authoring reference harness.
 
 `agent-learn init . --preset run` scaffolds four things: `manifests/run.json`,
 a `README.md` that lists this exact command path with per-command checks and a
@@ -40,15 +40,24 @@ expected outcome verbatim, the `local_text` simulation engine, and an
 the run is deterministic — if anything fails, the fault is in your environment,
 not in model behavior.
 
-The scaffolded manifest carries `required_env: ["AGENT_LEARNING_API_KEY"]`.
-This is CI metadata, not an offline precondition: the per-preset golden-path
-test runs this exact sequence with that variable explicitly unset and passes.
+By default `init` adds no required environment variable. Use repeatable
+`--required-env NAME` only when your scaffold needs explicit wiring checks;
+those checks are not a provider-authentication test. An installed package is
+enough for this scaffold; no checkout-only examples or UI are needed.
+
+Set `AGENT_LEARNING_SYNC=local` to suppress automatic account telemetry sync even
+when the shell already contains account credentials. This does not disable
+provider calls if you later replace the scripted agent with a live one.
 
 ## 2. Run it
 
 CLI:
 
+In an empty working directory after installation:
+
 ```bash
+export AGENT_LEARNING_SYNC=local
+export AGENT_LEARNING_LEDGER_PATH="$PWD/artifacts/ledger"
 agent-learn init . --preset run
 agent-learn run manifests/run.json --output artifacts/run.json
 ```
@@ -91,8 +100,10 @@ same manifests at platform-connected features.
 
 ## 5. Prove it / keep it
 
-A passing scripted run is a working harness, not a tested agent. Next steps, in
-spine order:
+A passing scripted run validates this fixture's execution path, not a real agent
+or the source-authoring harness. For environment creation, follow
+[environment authoring](../simulate/environment-authoring.md); for scoring modes,
+read the [evaluation guide](../eval/overview.md). Next steps, in spine order:
 
 1. Replace the `agent` block in `manifests/run.json` with your real agent (see
    the framework adapters under `../frameworks/` or

@@ -23,10 +23,12 @@
 - [Eval suites](docs/eval/eval-suites.md): twin=examples/sdk_task_evaluation.py kind=agent-learning.eval.v1
 - [Evaluate any task](docs/eval/evaluate-any-task.md): twin=examples/sdk_task_evaluation.py kind=agent-learning.eval.v1
 - [Judge reliability](docs/eval/judge-reliability.md): twin=examples/sdk_judge_reliability_evaluation.py kind=agent-learning.eval.v1
+- [Evaluation guide](docs/eval/overview.md): twin=examples/sdk_task_evaluation.py kind=agent-learning.eval.v1
 - [Task evidence](docs/eval/task-evidence.md): twin=examples/sdk_task_evaluation_synthesis.py kind=agent-learning.artifact-evaluation.v1
 
 ## Simulate
 - [CUA loop: the deterministic browser/computer-use substrate, credential-free](docs/simulate/cua-loop.md): twin=examples/sdk_cua_loop.py kind=agent-learning.run.v1
+- [Environment authoring and extension contracts](docs/simulate/environment-authoring.md): twin=examples/sdk_spec_runner_quickstart.py kind=none
 - [Your First Simulation Run](docs/simulate/first-run.md): twin=examples/sdk_agent_integration_simulation.py kind=agent-learning.run.v1
 - [Image loop: the deterministic multimodal substrate, credential-free](docs/simulate/image-loop.md): twin=examples/sdk_image_loop.py kind=agent-learning.run.v1
 - [Memory: simulate the layer that persists between sessions](docs/simulate/memory.md): twin=examples/sdk_framework_adapter_memory_trace.py kind=agent-learning.run.v1

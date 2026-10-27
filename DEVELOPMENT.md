@@ -6,8 +6,9 @@ evaluation, red teaming, and optimization.
 All new public SDK work should land here first:
 
 - Public Python imports belong under `fi.alk.*`.
-- Public TypeScript package work belongs under `typescript/agent-learning-kit`
-  and publishes as `@future-agi/agent-learning-kit`.
+- Public TypeScript package work belongs under `typescript/agent-learning-kit`,
+  whose declared package name is `@future-agi/agent-learning-kit`. Workspace
+  exports are not evidence of npm publication or Python harness parity.
 - Public CLI commands belong under `agent-learn`.
 - Public examples and cookbooks should use `agent-learning-kit` install commands.
 - Runtime implementation should live under this repo, either in
@@ -22,9 +23,10 @@ All new public SDK work should land here first:
 `ai-evaluation` is an active engine for this release, not legacy history. Its
 Python runtime must be present under `src/fi/evals`, and its TypeScript SDK
 source must be present under `typescript/agent-learning-kit/src`.
-`agent-learn release-check` compares those source trees with
-the ai-evaluation source inventory (maintained in the internal-docs repo) so missing ai-evaluation
-files fail the v1 release gate.
+Use the public [library inventory](LIBRARIES.md), [package manifest](pyproject.toml),
+source trees and tests as the consolidation references. Keep evaluation, runtime,
+harness and contained-library documentation in this repository alongside the
+code; consumers should not need an out-of-repository inventory.
 
 The older `simulate-sdk` and `agent-opt` repositories are source/history during
 the migration. New runtime code should be moved into `agent-learning-kit`, not
