@@ -422,8 +422,18 @@ def _source_model_fingerprint(raw: dict[str, object]) -> str:
             return {str(key): jsonable(item) for key, item in value.items()}
         return value
 
+    canonical = jsonable(raw)
+    if isinstance(canonical, dict):
+        # Models saved before identity support omitted the false default from their hash.
+        for table in canonical.get("tables", []):
+            if not isinstance(table, dict):
+                continue
+            for column in table.get("columns", []):
+                if isinstance(column, dict) and column.get("identity") is False:
+                    column.pop("identity")
+
     encoded = json.dumps(
-        jsonable(raw),
+        canonical,
         ensure_ascii=False,
         allow_nan=False,
         sort_keys=True,
