@@ -146,13 +146,23 @@ _ANSI_ESCAPE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 _CONTROL_CHARACTERS = {
     code: None for code in range(128) if (code < 32 and code not in {9, 10, 13}) or code == 127
 }
+# The same for notes: the platform's NOTES_MAX (4000) plus the longest credential.
+_NOTES_MAX = 4000 + 65_536
 # The platform reads this many of each list (PROBLEMS_MAX); the rest only grows the file.
 _LISTED_MAX = 50
+# The platform drops a result file over 4 MiB (its RESULT_FILE_MAX) whole; items past this
+# many UTF-8 bytes are left out instead.
+_RESULT_BUDGET = 3 * 1024 * 1024
 
 
-def _cut(text: str) -> str:
+def _cut(text: str, bound: int = _TEXT_MAX) -> str:
     """``text`` normalised as the platform normalises it, then cut to what it can mask."""
-    return _ANSI_ESCAPE.sub("", text).translate(_CONTROL_CHARACTERS)[:_TEXT_MAX]
+    return _ANSI_ESCAPE.sub("", text).translate(_CONTROL_CHARACTERS)[:bound]
+
+
+def _size(value: Any) -> int:
+    # Indentation adds a little per line; the budget leaves room for it.
+    return len(json.dumps(value, ensure_ascii=False).encode("utf-8", "replace"))
 
 
 def _problem(item: str, kind: str, message: str) -> dict[str, str]:
@@ -625,6 +635,26 @@ def write_result(
     left_out: list[dict],
 ) -> None:
     """Write the result the platform lands; the last write wins."""
+    notes = _cut(notes, _NOTES_MAX)
+    used = _size(notes) + 1024
+    listed: dict[str, list[Any]] = {}
+    dropped = 0
+    for name, items in (
+        ("problems", problems),
+        ("warnings", warnings),
+        ("not_checked", not_checked),
+        ("left_out", left_out),
+    ):
+        listed[name] = []
+        for item in items[:_LISTED_MAX]:
+            size = _size(item) + 64
+            if used + size > _RESULT_BUDGET:
+                dropped += 1
+                continue
+            used += size
+            listed[name].append(item)
+    if dropped:
+        notes += f"\n\n({dropped} check items left out: the result file is full.)"
     body = {
         "nudge_id": nudge_id,
         "stage": stage,
@@ -632,11 +662,11 @@ def write_result(
         "notes": notes,
         "checks": {
             "passed": not problems,
-            "problems": problems[:_LISTED_MAX],
-            "warnings": warnings[:_LISTED_MAX],
-            "not_checked": not_checked[:_LISTED_MAX],
+            "problems": listed["problems"],
+            "warnings": listed["warnings"],
+            "not_checked": listed["not_checked"],
         },
-        "left_out": left_out[:_LISTED_MAX],
+        "left_out": listed["left_out"],
     }
     target = Path(workspace) / NUDGE_RESULT
     temporary = target.with_name(target.name + ".tmp")

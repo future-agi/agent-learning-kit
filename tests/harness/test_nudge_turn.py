@@ -1043,6 +1043,30 @@ def test_the_result_keeps_only_what_the_platform_reads(tmp_path):
     } == {50}
 
 
+@pytest.mark.parametrize("letter", ["y", "\u00e9"])
+def test_the_result_stays_under_the_size_the_platform_reads(tmp_path, letter):
+    long = letter * nudge._TEXT_MAX
+    nudge.write_result(
+        tmp_path,
+        nudge_id="n-1",
+        stage="suite",
+        changed=True,
+        notes=letter * 5 * 1024 * 1024,
+        problems=[nudge._problem("i", "k", long)] * 50,
+        warnings=[],
+        not_checked=[],
+        left_out=[{"key": "k", "why": nudge._cut(long)}] * 50,
+    )
+
+    raw = (tmp_path / nudge.NUDGE_RESULT).read_bytes()
+    written = json.loads(raw)
+    # The platform's RESULT_FILE_MAX.
+    assert len(raw) < 4 * 1024 * 1024
+    assert written["checks"]["passed"] is False
+    assert written["checks"]["problems"][0]["message"] == long
+    assert "check items left out" in written["notes"]
+
+
 def _add_sub_goal(root: Path, name: str) -> None:
     catalogue = load_catalogue(root)
     catalogue.sub_goals.append(
