@@ -3,10 +3,11 @@
 import asyncio
 from types import SimpleNamespace
 
-from claude_agent_sdk import AssistantMessage, ResultMessage, ToolResultBlock, ToolUseBlock
+from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock, ToolResultBlock, ToolUseBlock
 
 from fi.alk.harness.backends.base import (
     Call,
+    ConversationSession,
     ModelReply,
     SessionSpec,
     StageDone,
@@ -80,10 +81,18 @@ def test_a_successful_terminal_save_interrupts_and_ignores_later_tool_calls() ->
     terminal = "mcp__runtime_repair__submit_runtime_plan_patch"
     received = [
         AssistantMessage(
-            content=[ToolUseBlock(id="first", name=terminal, input={})],
+            content=[
+                ToolUseBlock(id="first", name=terminal, input={}),
+                ToolUseBlock(id="ordinary", name="mcp__world__inspect", input={}),
+            ],
             model="gemini-3.7-flash",
         ),
-        SimpleNamespace(content=[ToolResultBlock(tool_use_id="first", content="accepted")]),
+        SimpleNamespace(
+            content=[
+                ToolResultBlock(tool_use_id="first", content="accepted"),
+                ToolResultBlock(tool_use_id="ordinary", content="observed"),
+            ]
+        ),
         AssistantMessage(
             content=[ToolUseBlock(id="second", name=terminal, input={})],
             model="gemini-3.7-flash",
@@ -124,5 +133,63 @@ def test_a_successful_terminal_save_interrupts_and_ignores_later_tool_calls() ->
         for part in event.parts
         if isinstance(part, Call)
     ]
-    assert [call.name for call in calls] == [terminal]
+    assert [call.name for call in calls] == [terminal, "mcp__world__inspect"]
+    assert isinstance(events[-1], StageDone)
+
+
+def test_an_interactive_builder_can_reply_after_saving() -> None:
+    terminal = "mcp__scenarios__save_scenarios"
+    received = [
+        AssistantMessage(
+            content=[ToolUseBlock(id="save", name=terminal, input={})],
+            model="gemini-3.7-flash",
+        ),
+        SimpleNamespace(content=[ToolResultBlock(tool_use_id="save", content="saved")]),
+        AssistantMessage(content=[TextBlock(text="Saved all scenarios.")], model="gemini-3.7-flash"),
+        ResultMessage(
+            subtype="success",
+            duration_ms=1,
+            duration_api_ms=1,
+            is_error=False,
+            num_turns=2,
+            session_id="session",
+        ),
+    ]
+
+    class Client:
+        interrupted = 0
+
+        async def receive_response(self):
+            for item in received:
+                yield item
+
+        async def interrupt(self):
+            self.interrupted += 1
+
+    session = ClaudeBackend().create(
+        SessionSpec(
+            system_prompt="Builder",
+            conversation=ConversationSession(
+                app_name="builder",
+                user_id="user",
+                session_id="conversation",
+                streaming=False,
+            ),
+        )
+    )
+    client = Client()
+    session._client = client
+
+    async def collect():
+        return [event async for event in session.replies()]
+
+    events = asyncio.run(collect())
+    assert client.interrupted == 0
+    assert any(
+        part.text == "Saved all scenarios."
+        for event in events
+        if isinstance(event, ModelReply)
+        for part in event.parts
+        if hasattr(part, "text")
+    )
     assert isinstance(events[-1], StageDone)
