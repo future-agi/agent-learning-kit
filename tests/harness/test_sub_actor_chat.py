@@ -258,13 +258,16 @@ def test_the_hosted_chat_names_the_participant_in_the_message_itself():
     ]
 
 
-def test_an_empty_opening_falls_back_to_the_person_s_own_situation_only(
+def test_an_empty_opening_never_hands_the_agent_the_note_about_the_others(
     tmp_path, monkeypatch
 ):
     _transcript, target = _run(
-        tmp_path, monkeypatch, person=["", "That's all [DONE]"], writes=[]
+        tmp_path, monkeypatch, person=["", "", "", "That's all [DONE]"], writes=[]
     )
-    assert target.said[0] == "You want one item."
+    # Every ask came back empty, so the run opens with a greeting; the note about the others in
+    # the chat never reaches the agent.
+    assert target.said[0] == "Hello."
+    assert not any("Rowan" in said for said in target.said)
 
 
 def test_a_message_not_ready_in_time_is_dropped_and_the_chat_goes_on(

@@ -20,6 +20,7 @@ import re
 from collections import Counter, defaultdict
 from itertools import combinations
 from math import ceil, log
+from pathlib import Path
 from typing import Any, ClassVar
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -207,6 +208,44 @@ def _slug(name: str) -> str:
     """
     cleaned = re.sub(r"[^a-z0-9]+", "-", (name or "").strip().lower()).strip("-")
     return cleaned or "scenario-" + hashlib.sha256(name.encode()).hexdigest()[:12]
+
+
+_USED_KEYS: dict[str, set[str]] = {}
+
+
+def used_keys(destination: Any) -> set[str]:
+    """Every key the environment at ``destination`` has given a scenario, a dropped one's included,
+    so a new scenario never takes one and inherits another's row and run history. One live set per
+    environment: whatever adds to it is seen by every writer."""
+    return _USED_KEYS.setdefault(str(Path(destination).resolve()), set())
+
+
+def unused_key(key: str, taken: set[str]) -> str:
+    """``key``, or it with a numbered suffix when another scenario already holds it."""
+    if not key or key not in taken:
+        return key
+    suffix = 2
+    while f"{key}-{suffix}" in taken:
+        suffix += 1
+    return f"{key}-{suffix}"
+
+
+def with_unique_keys(
+    scenarios: list[Scenario], used: set[str] | None = None
+) -> list[Scenario]:
+    """``scenarios`` with a key each: the first holder of a repeated key keeps it, and every other
+    one gets the next key no scenario holds or has held, the same one the platform gives it."""
+    held = {one.scenario_key for one in scenarios} | (used or set())
+    keys: set[str] = set()
+    out: list[Scenario] = []
+    for one in scenarios:
+        if not one.scenario_key or one.scenario_key in keys:
+            key = unused_key(one.scenario_key or _slug(one.name), held | keys)
+            one = one.model_copy(update={"scenario_key": key})
+            held.add(key)
+        keys.add(one.scenario_key)
+        out.append(one)
+    return out
 
 
 class Scenario(BaseModel):
