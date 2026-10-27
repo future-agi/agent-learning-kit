@@ -2780,6 +2780,37 @@ def test_a_reseal_leaves_an_interface_edit_unstamped(tmp_path: Path) -> None:
     assert "sealed_from" not in metadata and "contract_compiled" not in metadata
 
 
+def test_a_reseal_leaves_an_interface_edit_on_a_graph_unstamped(tmp_path: Path) -> None:
+    # The graph's sealed interface has the bridge's bytes, but no command was bridged.
+    source = tmp_path / "source"
+    graph_source = source / "src" / "example" / "graph.py"
+    graph_source.parent.mkdir(parents=True)
+    graph_source.write_text("graph = object()\n", encoding="utf-8")
+    (source / "pyproject.toml").write_text(
+        '[project]\nname = "example"\nversion = "0.1"\n', encoding="utf-8"
+    )
+    (source / "langgraph.json").write_text(
+        json.dumps({"graphs": {"Example": "./src/example/graph.py:graph"}}),
+        encoding="utf-8",
+    )
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(authoring, command=[])
+    contract = json.loads((authoring / "contract.json").read_text(encoding="utf-8"))
+    contract["tools"] = [{"name": "status", "args": []}]
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+    bundle = authoring / "environment-bundle"
+    author_bundle_v2(source=source, job=_job(connector="auto"), authoring=authoring, output=bundle)
+    built = json.loads((bundle / "contract.json").read_text(encoding="utf-8"))
+    assert built["runtime"]["interface"]["kind"] == "callable"
+    contract["runtime"]["interface"] = {"kind": "callable", "include_tools": True}
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+
+    reseal_scenarios(authoring)
+
+    metadata = load_bundle_v2(bundle).metadata
+    assert "sealed_from" not in metadata and "contract_compiled" not in metadata
+
+
 def test_a_reseal_keeps_a_callable_command_the_build_bridged(tmp_path: Path) -> None:
     source = tmp_path / "source"
     source.mkdir()

@@ -2749,16 +2749,25 @@ def _interface(contract: dict[str, Any]) -> Any:
     ]
 
 
-def _interface_edited(authored: dict[str, Any], sealed: dict[str, Any]) -> bool:
+def _interface_edited(
+    authored: dict[str, Any], sealed: dict[str, Any], processes: list[Any]
+) -> bool:
     """Whether the authored contract names an interface the build did not seal: one only
-    a build applies. A build replaces an omitted one, and bridges a ``callable`` command."""
-    named = (authored.get("runtime") or {}).get("interface")
+    a build applies. A build replaces an omitted one, and bridges a ``callable`` command
+    (its processes then run the command through ALK_SUBPROCESS_COMMAND)."""
+    runtime = authored.get("runtime") or {}
+    named = runtime.get("interface")
     if not isinstance(named, dict) or _interface(authored) == _interface(sealed):
         return False
     bridged = _interface({"runtime": {"interface": _COMMAND_BRIDGE_INTERFACE}})
     return not (
         str(named.get("kind") or "").strip().lower() == "callable"
+        and runtime.get("command")
         and _interface(sealed) == bridged
+        and any(
+            "ALK_SUBPROCESS_COMMAND" in (getattr(process, "environment", None) or {})
+            for process in processes
+        )
     )
 
 
@@ -2785,7 +2794,7 @@ def _carry_contract(
             and isinstance(authored, dict)
             and isinstance(sealed, dict)
             and _built_from(authored) == _built_from(sealed)
-            and not _interface_edited(authored, sealed)
+            and not _interface_edited(authored, sealed, processes)
         )
     except ValueError:
         compiles = False
