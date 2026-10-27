@@ -2749,6 +2749,63 @@ def test_a_reseal_leaves_a_contract_edit_it_cannot_compile_unstamped(
     assert (bundle / "contract.json").read_bytes() == (authoring / "contract.json").read_bytes()
 
 
+def test_a_reseal_after_a_copied_contract_stays_unstamped(tmp_path: Path) -> None:
+    _source, authoring, contract = _chat_tools_build(tmp_path)
+    bundle = authoring / "environment-bundle"
+    contract["runtime"]["command"] = ["python", "other.py"]
+    contract["tool_entrypoints"].append(_tool_entry("refund"))
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+    reseal_scenarios(authoring)
+
+    # The copied contract now equals the authored one; the bundle still runs the build's.
+    reseal_scenarios(authoring)
+
+    metadata = load_bundle_v2(bundle).metadata
+    assert "sealed_from" not in metadata and "contract_compiled" not in metadata
+    assert sorted(path.name for path in (bundle / "handlers").iterdir()) == [
+        "lookup_account.py"
+    ]
+
+
+def test_a_reseal_leaves_an_interface_edit_unstamped(tmp_path: Path) -> None:
+    _source, authoring, contract = _chat_tools_build(tmp_path)
+    bundle = authoring / "environment-bundle"
+    interface = contract["runtime"]["interface"]
+    contract["runtime"]["interface"] = {**interface, "port": 9123, "include_tools": True}
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+
+    reseal_scenarios(authoring)
+
+    metadata = load_bundle_v2(bundle).metadata
+    assert "sealed_from" not in metadata and "contract_compiled" not in metadata
+
+
+def test_a_reseal_keeps_a_callable_command_the_build_bridged(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "requirements.txt").write_text("\n", encoding="utf-8")
+    (source / "main.py").write_text("print('real target output')\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring, command=["python", "main.py"], interface={"kind": "callable"}
+    )
+    contract = json.loads((authoring / "contract.json").read_text(encoding="utf-8"))
+    contract["tools"] = [{"name": "status", "args": []}]
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+    bundle = authoring / "environment-bundle"
+    author_bundle_v2(source=source, job=_job(connector="auto"), authoring=authoring, output=bundle)
+    built = json.loads((bundle / "contract.json").read_text(encoding="utf-8"))
+    assert built["runtime"]["interface"] != contract["runtime"]["interface"]
+    contract["tools"].append({"name": "history", "args": []})
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+
+    reseal_scenarios(authoring)
+
+    resealed = json.loads((bundle / "contract.json").read_text(encoding="utf-8"))
+    assert resealed["runtime"]["interface"] == built["runtime"]["interface"]
+    assert "contract_compiled" in load_bundle_v2(bundle).metadata
+
+
 def test_a_reseal_leaves_a_contract_added_after_the_build_unstamped(tmp_path: Path) -> None:
     _source, authoring, _model, bundle, _ = _places(tmp_path, ir_seed=False)
     assert not (bundle / "contract.json").exists()

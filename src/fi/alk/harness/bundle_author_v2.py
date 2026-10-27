@@ -2352,13 +2352,7 @@ def author_bundle_v2(
         )
     if command_adapter_contract:
         sealed_runtime = dict(contract_body["runtime"])
-        sealed_runtime["interface"] = {
-            "kind": "callable",
-            "protocol": "fi.alk",
-            "path": "",
-            "health_path": "",
-            "include_tools": False,
-        }
+        sealed_runtime["interface"] = dict(_COMMAND_BRIDGE_INTERFACE)
         contract_body = {**contract_body, "runtime": sealed_runtime}
     provided_environment = {
         str(name).upper()
@@ -2739,10 +2733,33 @@ def _built_from(contract: dict[str, Any]) -> tuple[Any, ...]:
     )
 
 
+# What a build seals as the interface of a command it bridges.
+_COMMAND_BRIDGE_INTERFACE = {
+    "kind": "callable",
+    "protocol": "fi.alk",
+    "path": "",
+    "health_path": "",
+    "include_tools": False,
+}
+
+
 def _interface(contract: dict[str, Any]) -> Any:
     return Runtime.model_validate(contract.get("runtime") or {}).model_dump(mode="json")[
         "interface"
     ]
+
+
+def _interface_edited(authored: dict[str, Any], sealed: dict[str, Any]) -> bool:
+    """Whether the authored contract names an interface the build did not seal: one only
+    a build applies. A build replaces an omitted one, and bridges a ``callable`` command."""
+    named = (authored.get("runtime") or {}).get("interface")
+    if not isinstance(named, dict) or _interface(authored) == _interface(sealed):
+        return False
+    bridged = _interface({"runtime": {"interface": _COMMAND_BRIDGE_INTERFACE}})
+    return not (
+        str(named.get("kind") or "").strip().lower() == "callable"
+        and _interface(sealed) == bridged
+    )
 
 
 def _carry_contract(
@@ -2763,17 +2780,21 @@ def _carry_contract(
         authored = json.loads(authored_path.read_text(encoding="utf-8"))
         sealed = json.loads(sealed_path.read_text(encoding="utf-8"))
         compiles = (
-            isinstance(authored, dict)
+            # A contract an earlier reseal copied is not what the bundle was built from.
+            not metadata.get("contract_copied")
+            and isinstance(authored, dict)
             and isinstance(sealed, dict)
             and _built_from(authored) == _built_from(sealed)
+            and not _interface_edited(authored, sealed)
         )
     except ValueError:
         compiles = False
     if not compiles:
         shutil.copy2(authored_path, sealed_path)
+        # Until a build, whose metadata drops this, no reseal stamps the bundle again.
+        metadata["contract_copied"] = True
         return False, processes, metadata
     # The build may choose the runtime's interface from the source; a reseal keeps its choice.
-    # TODO: an edit to the authored interface alone is not carried; only a build applies it.
     body = authored
     built = (sealed.get("runtime") or {}).get("interface")
     if built is not None and _interface(authored) != _interface(sealed):
