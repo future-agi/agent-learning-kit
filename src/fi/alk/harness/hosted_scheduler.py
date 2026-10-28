@@ -31,6 +31,7 @@ Decoupling, deliberate:
 from __future__ import annotations
 
 import asyncio
+import json
 import inspect
 import logging
 import os
@@ -92,6 +93,10 @@ class ReadOnlyWorld(Protocol):
     world_index: int
     rng: random.Random
 
+    def read_file(self, workspace: str, path: str) -> str: ...
+
+    def write_file(self, workspace: str, path: str, content: str) -> None: ...
+
     def state(self, table: str | None = None) -> dict[str, list[dict[str, Any]]]: ...
 
     def put(
@@ -112,6 +117,10 @@ class ReadOnlyWorld(Protocol):
 class World(Protocol):
     world_index: int
     rng: random.Random
+
+    def read_file(self, workspace: str, path: str) -> str: ...
+
+    def write_file(self, workspace: str, path: str, content: str) -> None: ...
 
     def state(self, table: str | None = None) -> dict[str, list[dict[str, Any]]]: ...
 
@@ -673,9 +682,11 @@ async def _invoke(
         from .process_runtime import _allowlisted_ambient_env
         from .world.handle import HostedWorld, ReadOnlyWorld as HostedReadOnlyWorld
 
+        from .world.observation import ObservationWorld
+
         if (
             args
-            and isinstance(args[0], (HostedWorld, HostedReadOnlyWorld))
+            and isinstance(args[0], (HostedWorld, HostedReadOnlyWorld, ObservationWorld))
             and hasattr(fn, "_alk_source")
         ):
             started_flag.set()
@@ -685,6 +696,8 @@ async def _invoke(
                 "entry": fn._alk_entry,
                 "world": world._execution_state(),
             }
+            if isinstance(world, ObservationWorld):
+                payload["private_http"] = world._private_http_state()
             if len(args) > 1:
                 payload["calls"] = [asdict(call) for call in args[1]]
             if len(args) > 2:
@@ -694,8 +707,22 @@ async def _invoke(
                 payload,
                 environ=_allowlisted_ambient_env(dict(os.environ)),
                 work_directory=Path(tempfile.gettempdir()) / "alk-phase-workers",
+                # Authored phases can print private login responses before redaction.
+                suppress_output=True,
             )
             world.rng.setstate(tuples(result["rng"]))
+            if isinstance(world, ObservationWorld):
+                from .world.http_session import validate_events
+
+                world._restore_private_http_state(result.get("private_http", {}))
+                for event in validate_events(
+                    result.get("http_events", []), world._endpoints
+                ):
+                    logger.info(
+                        "native_http phase=%s evidence=%s",
+                        phase,
+                        json.dumps(event, sort_keys=True),
+                    )
             if "error" in result:
                 error_types = {
                     error.__name__: error
@@ -1594,6 +1621,7 @@ class HostedScheduler:
         job_seed: int,
         cancel_requested: Callable[[], bool] | None = None,
         judge: JudgeFn | None = None,
+        require_tool_workflow: bool = False,
         joint_judge: JointJudgeFn | None = None,
     ) -> None:
         self._pool = pool
@@ -1601,6 +1629,7 @@ class HostedScheduler:
         self._call_runner = call_runner
         self._outbound = outbound
         self._job_seed = job_seed
+        self._require_tool_workflow = require_tool_workflow
         self._cancel_requested = cancel_requested or (lambda: False)
         # Injected like every other collaborator, so a test decides a judged sub-goal without a
         # model call. Resolved here rather than as a default argument, which would bind at import
@@ -2171,7 +2200,10 @@ class HostedScheduler:
         calls = list(
             call_outcome.calls
         )  # m12: `folder.py::_RUNNABLE` expects a list, not a tuple.
-        if not calls and getattr(scenario, "requires_tool_evidence", True):
+        if not calls and (
+            self._require_tool_workflow
+            or getattr(scenario, "requires_tool_evidence", True)
+        ):
             # M10: unconditioned on `turns` — an empty list must never reach checks regardless of
             # whether the simulator observed a turn (world-handle-interface.md "Coverage
             # guarantee": "An empty list is never handed to checks").

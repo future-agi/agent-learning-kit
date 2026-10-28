@@ -1,5 +1,7 @@
 import asyncio
 import json
+import sqlite3
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -24,6 +26,7 @@ from fi.alk.harness.certification import (
     RuntimeValidationEvidence,
 )
 from fi.alk.harness.job import HarnessJob
+from fi.alk.harness.bundle_v2 import BundleRuntimeV2, EvidenceSeam, RuntimeKindV2
 from fi.alk.harness.diagnostics import HarnessDiagnostic
 from fi.alk.harness.job import HarnessStage
 from fi.alk.harness.repair_controller import (
@@ -264,7 +267,7 @@ def test_generic_repair_without_typed_patch_keeps_validation_failure(
         GenericHarnessArtifactStore, "read_world_ir", lambda self: object()
     )
 
-    async def no_patch(*args):
+    async def no_patch(*args, **kwargs):
         raise repair_authoring.RepairPatchNotSubmittedError("no patch submitted")
 
     monkeypatch.setattr(repair_authoring, "request_world_ir_patch", no_patch)
@@ -461,6 +464,49 @@ def test_generic_validation_retries_infrastructure_without_reauthoring(
     ]
 
 
+@pytest.mark.parametrize("changing_evidence", [False, True])
+def test_initial_materialization_does_not_grant_extra_infrastructure_retries(tmp_path, changing_evidence):
+    source, authoring = tmp_path / "source", tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    calls = []
+
+    async def validate(*args):
+        calls.append("validate")
+        generated = authoring / "generic-harness"
+        generated.mkdir(exist_ok=True)
+        for name in ("source-model.json", "world-ir.json"):
+            (generated / name).write_text(json.dumps({
+                "fingerprint": len(calls) if changing_evidence else "stable",
+            }))
+        raise RuntimeValidationError("infrastructure", "temporary outage")
+
+    async def repair(*args):
+        pytest.fail("Infrastructure retries must not rewrite the candidate")
+
+    async def sleeper(seconds):
+        pass
+
+    controller = RepairController(RepairBudgets(
+        environment_patches=0,
+        infrastructure_retries_per_candidate=2,
+        infrastructure_initial_backoff_seconds=0,
+        infrastructure_jitter_ratio=0,
+    ))
+    with pytest.raises(RuntimeValidationError, match="temporary outage"):
+        asyncio.run(validate_and_repair(
+            SimpleNamespace(metadata={"generic_harness_v1": True}),
+            source, authoring, validate=validate, repair=repair,
+            controller=controller, sleeper=sleeper,
+        ))
+    assert len(calls) == 3
+    assert [item.action for item in controller.history.decisions] == [
+        RepairAction.RETRY_INFRASTRUCTURE,
+        RepairAction.RETRY_INFRASTRUCTURE,
+        RepairAction.REJECT,
+    ]
+
+
 def test_generic_candidate_hash_ignores_repository_metadata_and_own_artifacts(
     tmp_path,
 ) -> None:
@@ -481,8 +527,9 @@ def test_generic_candidate_hash_ignores_repository_metadata_and_own_artifacts(
     assert _generic_candidate_hash(source, authoring) == before
 
 
+@pytest.mark.parametrize("invariants_status", ["passed", "not_applicable"])
 def test_runtime_evidence_reads_generic_models_when_world_isolation_not_run(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, invariants_status
 ) -> None:
     from fi.alk.harness import certification
 
@@ -511,6 +558,9 @@ def test_runtime_evidence_reads_generic_models_when_world_isolation_not_run(
     authoring = tmp_path / "authoring"
     authoring.mkdir()
     (authoring / "contract.json").write_text("{}", encoding="utf-8")
+    from fi.alk.harness.source_data_invariants import ARTIFACT
+
+    (authoring / ARTIFACT).write_text(json.dumps({"status": invariants_status}))
     report = SimpleNamespace(certified_or_runtime_only=1, total=1)
     action_report = SimpleNamespace(passed=1, certified=1, executable=1, total=1)
     manifest = SimpleNamespace(
@@ -528,6 +578,7 @@ def test_runtime_evidence_reads_generic_models_when_world_isolation_not_run(
         action_report=action_report,
         reset_equivalence=CheckStatus.PASSED,
         world_isolation=CheckStatus.NOT_RUN,
+        chat_ingress=CheckStatus.PASSED,
     )
 
     evidence = captured["evidence"]
@@ -536,6 +587,9 @@ def test_runtime_evidence_reads_generic_models_when_world_isolation_not_run(
     assert evidence.compiler_version == "futureagi.no-state-compiler.v1"
     assert evidence.checks.schema_and_seed is CheckStatus.PASSED
     assert evidence.checks.world_isolation is CheckStatus.NOT_RUN
+    assert evidence.checks.source_invariants.value == invariants_status
+    if invariants_status == "not_applicable":
+        assert any("private application state" in item for item in evidence.limitations)
 
 
 def test_fixed_port_single_world_marks_concurrent_isolation_not_applicable() -> None:
@@ -603,6 +657,7 @@ def test_external_provider_runtime_evidence_marks_state_checks_not_applicable(
         action_report=action_report,
         reset_equivalence=CheckStatus.NOT_APPLICABLE,
         world_isolation=CheckStatus.NOT_APPLICABLE,
+        chat_ingress=CheckStatus.NOT_APPLICABLE,
     )
 
     checks = captured["evidence"].checks
@@ -612,8 +667,9 @@ def test_external_provider_runtime_evidence_marks_state_checks_not_applicable(
     assert checks.world_isolation is CheckStatus.NOT_APPLICABLE
 
 
+@pytest.mark.parametrize("source_invariants", [CheckStatus.PASSED, CheckStatus.NOT_APPLICABLE])
 def test_generic_certificate_combines_runtime_evidence_and_repair_history(
-    tmp_path,
+    tmp_path, source_invariants,
 ) -> None:
     authoring = tmp_path / "authoring"
     store = GenericHarnessArtifactStore(authoring / "generic-harness")
@@ -634,6 +690,7 @@ def test_generic_certificate_combines_runtime_evidence_and_repair_history(
                 static=CheckStatus.PASSED,
                 schema_and_seed=CheckStatus.PASSED,
                 scenario_setup_ready="2/2",
+                source_invariants=source_invariants,
             ),
             limitations=("tool trajectories not run",),
         )
@@ -655,6 +712,7 @@ def test_generic_certificate_combines_runtime_evidence_and_repair_history(
     assert certificate.runtime.snapshot == "snapshot-r1"
     assert certificate.runtime.validation_attempts == 1
     assert certificate.checks.scenario_setup_ready == "2/2"
+    assert certificate.checks.source_invariants is source_invariants
     assert (
         json.loads((authoring / "runtime-validation.json").read_text())["fingerprint"]
         == certificate.fingerprint
@@ -724,7 +782,12 @@ def test_runtime_gate_resets_each_scenario_and_preserves_execution_secrets(
     provider_type = process_runtime.ProcessRuntimeProvider
     monkeypatch.setattr(process_runtime, "ProcessRuntimeProvider", Provider)
     monkeypatch.setattr(hosted_entrypoint, "ProcessWorldFactory", Factory)
-    monkeypatch.setattr(bundle_author_v2, "author_bundle_v2", lambda **kwargs: object())
+    monkeypatch.setattr(
+        bundle_author_v2, "author_bundle_v2",
+        lambda **kwargs: SimpleNamespace(runtime=BundleRuntimeV2(
+            kind=RuntimeKindV2.PROCESS, evidence_seam=EvidenceSeam.HTTP_TOOL,
+        )),
+    )
     monkeypatch.setattr(
         process_preflight, "preflight_bundle", lambda *args, **kwargs: None
     )
@@ -843,7 +906,9 @@ def test_connect_only_provider_validation_does_not_invent_source_data_review(
     monkeypatch.setattr(process_runtime, "ProcessRuntimeProvider", Provider)
     monkeypatch.setattr(hosted_entrypoint, "ProcessWorldFactory", Factory)
     monkeypatch.setattr(
-        bundle_author_v2, "author_bundle_v2", lambda **_kwargs: object()
+        bundle_author_v2, "author_bundle_v2", lambda **_kwargs: SimpleNamespace(runtime=BundleRuntimeV2(
+            kind=RuntimeKindV2.PROCESS, evidence_seam=EvidenceSeam.HTTP_TOOL,
+        ))
     )
     monkeypatch.setattr(process_preflight, "preflight_bundle", lambda *_a, **_k: None)
     monkeypatch.setattr(
@@ -973,7 +1038,9 @@ def test_connect_only_validation_walks_only_scenarios_whose_setup_does_something
     monkeypatch.setattr(process_runtime, "ProcessRuntimeProvider", Provider)
     monkeypatch.setattr(hosted_entrypoint, "ProcessWorldFactory", Factory)
     monkeypatch.setattr(
-        bundle_author_v2, "author_bundle_v2", lambda **_kwargs: object()
+        bundle_author_v2, "author_bundle_v2", lambda **_kwargs: SimpleNamespace(runtime=BundleRuntimeV2(
+            kind=RuntimeKindV2.PROCESS, evidence_seam=EvidenceSeam.HTTP_TOOL,
+        ))
     )
     monkeypatch.setattr(process_preflight, "preflight_bundle", lambda *_a, **_k: None)
     monkeypatch.setattr(
@@ -1227,7 +1294,9 @@ def test_local_runtime_validation_does_not_require_hosted_capabilities(
     monkeypatch.setattr(process_runtime, "ProcessRuntimeProvider", Provider)
     monkeypatch.setattr(hosted_entrypoint, "ProcessWorldFactory", Factory)
     monkeypatch.setattr(
-        bundle_author_v2, "author_bundle_v2", lambda **_kwargs: object()
+        bundle_author_v2, "author_bundle_v2", lambda **_kwargs: SimpleNamespace(runtime=BundleRuntimeV2(
+            kind=RuntimeKindV2.PROCESS, evidence_seam=EvidenceSeam.HTTP_TOOL,
+        ))
     )
     monkeypatch.setattr(process_preflight, "preflight_bundle", lambda *_a, **_k: None)
     monkeypatch.setattr(
@@ -1356,6 +1425,7 @@ def test_provider_lifecycle_transient_failure_is_retryable_infrastructure(detail
     "detail",
     (
         "GeneratedRuntimeError: generated_runtime_component_ambiguous",
+        "BundleAuthorError: generated_runtime_extra_omitted: sdk/pyproject.toml requires cloud",
         "ProcessRuntimeError: no runnable shipped entrypoint was identified",
         "docker build failed while installing dependencies",
         "agent process exited before readiness probe passed",
@@ -1455,7 +1525,9 @@ def test_default_generic_repair_dispatches_unknown_runtime_to_repository_inspect
     )
     inspected = []
 
-    async def inspect(source_root, current_contract, diagnostics):
+    async def inspect(source_root, current_contract, diagnostics, *, guidance=""):
+        assert "Preserve the submitted identifiers." in guidance
+        assert "require_tool_workflow" in guidance
         inspected.append((source_root, current_contract.agent, diagnostics[0].code))
         return RuntimePlanPatch(
             base_contract_hash=_contract_hash(current_contract),
@@ -1477,7 +1549,16 @@ def test_default_generic_repair_dispatches_unknown_runtime_to_repository_inspect
             )
         return 1
 
-    job = SimpleNamespace(metadata={"generic_harness_v1": True})
+    job = HarnessJob(
+        job_id="repair",
+        run_id="repair",
+        execution="local",
+        source={"kind": "local_repository", "local_path": str(source)},
+        agent={"connector": "auto"},
+        metadata={"generic_harness_v1": True},
+        guidance=["Preserve the submitted identifiers."],
+        require_tool_workflow=True,
+    )
     asyncio.run(validate_and_repair(job, source, authoring, validate=validate))
 
     assert inspected == [
@@ -1671,3 +1752,169 @@ def test_scenario_repair_rejected_every_time_keeps_the_original_failure(
         )
     assert len(repairs) == RepairBudgets().scenario_patches + 1
     assert suite["value"] == "original"
+
+@pytest.mark.parametrize(
+   "declared_kind,legacy_world,expected_storage_repair",
+   [
+       (None, True, True),
+       ("postgres", True, False),
+       (None, False, False),
+       ("filesystem", False, False),
+   ],
+)
+@pytest.mark.parametrize("candidate_kind", ["filesystem", None, ""])
+def test_missing_storage_routes_to_understanding_only_when_metadata_can_help(
+   tmp_path,
+   monkeypatch,
+   declared_kind,
+   legacy_world,
+   expected_storage_repair,
+   candidate_kind,
+):
+   from fi.alk.harness import cli, runtime_repair
+   from fi.alk.harness.bundle_author_v2 import (
+       BundleAuthorError,
+       _generic_postgres_seed_artifacts,
+   )
+
+   source = tmp_path / "source"
+   authoring = tmp_path / "authoring"
+   staging = tmp_path / "staging"
+   source.mkdir()
+   authoring.mkdir()
+   (staging / "seed").mkdir(parents=True)
+   (source / "notes.py").write_text(
+       "from pathlib import Path\ndef read_note(name):\n"
+       '    return (Path("workspace") / name).read_text()\n'
+   )
+   contract = AgentContract(
+       agent="note-reader",
+       tools=[{"name": "read_note", "args": ["name"]}],
+       runtime=Runtime(execution="native", command=["python", "notes.py"]),
+       data_store={"kind": declared_kind} if declared_kind else None,
+   )
+   contract_path = authoring / "contract.json"
+   contract_path.write_text(contract.model_dump_json())
+   if legacy_world:
+       with sqlite3.connect(authoring / "world.sqlite") as connection:
+           connection.execute("CREATE TABLE task_state (id TEXT PRIMARY KEY)")
+   else:
+       (authoring / "generic-harness").mkdir()
+       (authoring / "generic-harness" / "world-ir.json").write_text("{}")
+   calls = []
+
+   async def understand(args):
+       calls.append(Path(args.out))
+       assert args.path == str(source)
+       assert "Keep the note identifiers." in "\n".join(args.guidance)
+       candidate = contract.model_dump()
+       candidate["data_store"] = (
+           {"kind": candidate_kind} if candidate_kind is not None else None
+       )
+       candidate["agent"] = "must-not-be-promoted"
+       Path(args.out, "contract.json").write_text(json.dumps(candidate))
+       return 0
+
+   async def unexpected_runtime_repair(*args, **kwargs):
+       pytest.fail("storage failure incorrectly dispatched to runtime repair")
+
+   monkeypatch.setattr(
+       runtime_repair, "request_runtime_plan_patch", unexpected_runtime_repair
+   )
+   monkeypatch.setattr(cli, "_understand", understand)
+
+   async def validate(*_args):
+       try:
+           _generic_postgres_seed_artifacts(
+               authoring,
+               staging,
+               source=source,
+               contract=json.loads(contract_path.read_text()),
+               prefix="",
+           )
+       except BundleAuthorError as exc:
+           raise RuntimeValidationError("runtime", f"{type(exc).__name__}: {exc}") from exc
+       return 1
+
+   job = HarnessJob(
+       job_id="storage-repair",
+       run_id="storage-repair",
+       execution="local",
+       source={"kind": "local_repository", "local_path": str(source)},
+       agent={"connector": "auto"},
+       metadata={"generic_harness_v1": True},
+       guidance=["Keep the note identifiers."],
+   )
+   if expected_storage_repair and not candidate_kind:
+       with pytest.raises(RuntimeValidationError):
+           asyncio.run(validate_and_repair(job, source, authoring, validate=validate))
+       assert AgentContract.model_validate_json(contract_path.read_text()) == contract
+       assert len(calls) == 1 and not calls[0].exists()
+   elif expected_storage_repair:
+       asyncio.run(validate_and_repair(job, source, authoring, validate=validate))
+       expected = contract.model_dump()
+       expected["data_store"] = AgentContract(
+           agent="note-reader", data_store={"kind": "filesystem"}
+       ).data_store.model_dump()
+       assert json.loads(contract_path.read_text()) == expected
+       assert len(calls) == 1 and not calls[0].exists()
+   else:
+       error = None
+       try:
+           asyncio.run(validate(job, source, authoring))
+       except RuntimeValidationError as exc:
+           error = exc
+       assert error is not None
+       diagnostic = _fallback_diagnostic(error, authoring=authoring)
+       assert diagnostic.code != "generated_storage_declaration_missing"
+       assert not calls
+       assert AgentContract.model_validate_json(contract_path.read_text()) == contract
+
+
+@pytest.mark.parametrize(
+   "prefix,storage_repair",
+   [
+       ("", True),
+       ("BundleAuthorError: ", True),
+       ("OtherError: ", False),
+       ("BundleAuthorError: BundleAuthorError: ", False),
+   ],
+)
+def test_storage_diagnostic_accepts_only_known_exception_wrapper(
+   tmp_path, prefix, storage_repair
+):
+    (tmp_path / "world.sqlite").touch()
+    (tmp_path / "contract.json").write_text('{"data_store": null}')
+    diagnostic = _fallback_diagnostic(
+        RuntimeValidationError(
+            "runtime",
+            prefix
+            + "generic_pipeline_source_schema_required: no source-owned PostgreSQL schema found",
+        ),
+        authoring=tmp_path,
+    )
+    assert (
+        diagnostic.code == "generated_storage_declaration_missing"
+    ) is storage_repair
+
+
+@pytest.mark.parametrize("repair_result", [None, 0, 1])
+def test_dependency_investigation_rejects_untyped_repair_results(tmp_path, repair_result):
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    diagnostic = HarnessDiagnostic.create(stage=HarnessStage.CONNECTING_AGENT, component="chat_ingress", code="chat_ingress_failed", message="application failed")
+    calls = []
+
+    async def validate(*_args):
+        calls.append("validate")
+        raise RuntimeValidationError("environment", "application failed", diagnostics=(diagnostic,))
+
+    async def repair(*_args):
+        calls.append("repair")
+        return repair_result
+
+    with pytest.raises(RuntimeValidationError, match="application failed"):
+        asyncio.run(validate_and_repair(SimpleNamespace(metadata={"generic_harness_v1": True}), source, authoring, validate=validate, repair=repair))
+    assert calls == ["validate", "repair"]

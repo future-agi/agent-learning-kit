@@ -8,6 +8,7 @@ cannot silently fall back to the legacy prompt-reconstruction path.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 from datetime import datetime, timezone
 import json
 import os
@@ -27,6 +28,8 @@ from .hosted_entrypoint import (
     ProcessWorldFactory,
     _default_build_call_runner,
     job_secret_purposes,
+    peek_target_provider_secret_values,
+    peek_simulator_provider_secret_values,
 )
 from .hosted_scheduler import HostedScheduler, ResultReceipt, WorldPool
 from .job import HarnessJob
@@ -118,7 +121,7 @@ class LocalCertifiedSink:
         label = str(getattr(kind, "value", kind))
         directory = self.root / (scenario_key or "run")
         directory.mkdir(parents=True, exist_ok=True)
-        path = directory / f"{label}.bin"
+        path = directory / f"{label}-{hashlib.sha256(data).hexdigest()}.bin"
         path.write_bytes(data)
         return str(path)
 
@@ -149,6 +152,8 @@ async def run_local_certified(
         secrets = work / "secrets.json"
         secrets.write_text(json.dumps(values), encoding="utf-8")
         secrets.chmod(0o600)
+        target_values = peek_target_provider_secret_values(secrets, purposes)
+        simulator_values = peek_simulator_provider_secret_values(secrets, purposes)
 
         async def local_validate(candidate_job, candidate_source, candidate_authoring):
             return await validate_once(
@@ -172,6 +177,16 @@ async def run_local_certified(
         _make_local_seed_files_readable(bundle_dir)
         manifest = load_bundle_v2(bundle_dir)
 
+        runs = authoring / "runs"
+        runs.mkdir(parents=True, exist_ok=True)
+        run_root = Path(
+            tempfile.mkdtemp(
+                prefix=datetime.now(timezone.utc).strftime("run-%Y%m%d-%H%M%S-"),
+                dir=runs,
+            )
+        )
+        run_id = run_root.name
+        sink = LocalCertifiedSink(run_root)
         # Validation reads a private copy, so the original handoff still exists here.  The
         # execution provider consumes and unlinks it on first provision, exactly like hosted.
         provider = ProcessRuntimeProvider(
@@ -183,10 +198,16 @@ async def run_local_certified(
                 else default_user_resolver
             ),
             require_declared_user=False,
-            generic_artifact_root=authoring / "generic-harness",
+            generic_artifact_root=run_root / "generic-harness",
         )
-        run_id = datetime.now(timezone.utc).strftime("run-%Y%m%d-%H%M%S")
-        sink = LocalCertifiedSink(authoring / "runs" / run_id)
+        from .bundle_v2 import RuntimeKindV2
+        from .world.observation import ObservationWorldFactory
+        if manifest.runtime.kind is RuntimeKindV2.COMPOSE:
+            from .compose_integration import provider as compose_provider
+            provider = compose_provider(target_values, run_root / "compose-logs")
+            world_factory = ObservationWorldFactory()
+        else:
+            world_factory = ProcessWorldFactory(work)
         pool = WorldPool(
             provider,
             bundle=manifest,
@@ -205,20 +226,19 @@ async def run_local_certified(
                 bundle_dir=bundle_dir,
                 work_directory=work,
                 evidence_seam=manifest.runtime.evidence_seam,
-                target_provider_secret_values=values,
-                # A local test intentionally shares its explicitly admitted values with the
-                # simulator. Hosted execution keeps the two vault purposes separate.
-                simulator_provider_secret_values=values,
+                target_provider_secret_values=target_values,
+                simulator_provider_secret_values=simulator_values,
                 attempt_number=1,
                 source_directory=source,
             )
             call_runner = _default_build_call_runner(sink, context)
             scheduler = HostedScheduler(
                 pool=pool,
-                world_factory=ProcessWorldFactory(work),
+                world_factory=world_factory,
                 call_runner=call_runner,
                 outbound=sink,
                 job_seed=job.seed or 0,
+                require_tool_workflow=job.require_tool_workflow,
             )
             result = await scheduler.run(scenarios)
             summary = {
@@ -238,6 +258,17 @@ async def run_local_certified(
                     result.aborted.message,
                     completed_scenarios=len(sink.receipts),
                 )
+            for receipt in sink.receipts:
+                if receipt.status == "errored":
+                    failure = receipt.failure
+                    raise LocalCertifiedRunError(
+                        failure.domain if failure else "infrastructure",
+                        failure.code if failure else "scenario_errored",
+                        failure.message
+                        if failure
+                        else f"Scenario {receipt.scenario_key} errored without failure details",
+                        completed_scenarios=len(sink.receipts),
+                    )
             failed = any(item.status != "passed" for item in sink.receipts)
             return (2 if failed else 0), len(sink.receipts)
         finally:
@@ -245,6 +276,16 @@ async def run_local_certified(
             if callable(close):
                 await close()
             await pool.close()
+            from .process_diagnostics import upload_process_logs
+
+            try:
+                await upload_process_logs(run_root / "generic-harness", sink)
+            except OSError:
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "process diagnostic collection failed"
+                )
 
 
 __all__ = ["LocalCertifiedRunError", "LocalCertifiedSink", "run_local_certified"]

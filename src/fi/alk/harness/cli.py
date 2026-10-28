@@ -348,11 +348,14 @@ async def _build(args: argparse.Namespace) -> int:
 
     source_root = _source_root(destination, args.path or "")
     external_runtime = bool(getattr(args, "external_runtime", False))
+    from .build import uses_native_runtime
+    native_runtime = uses_native_runtime(contract, source_root)
     try:
         require_buildable(
             contract,
             source_root,
             external_runtime=external_runtime,
+            native_runtime=native_runtime,
         )
     except RuntimeError as failed:
         print(str(failed), file=sys.stderr)
@@ -361,7 +364,7 @@ async def _build(args: argparse.Namespace) -> int:
     from .provision import ProvisionError, provision_if_present
 
     environment = None
-    if not bool(getattr(args, "skip_source_provision", False)):
+    if not native_runtime and not bool(getattr(args, "skip_source_provision", False)):
         try:
             environment = await asyncio.to_thread(
                 provision_if_present, source_root, destination, contract
@@ -381,6 +384,7 @@ async def _build(args: argparse.Namespace) -> int:
         source_root=source_root,
         deferred_runtime=bool(getattr(args, "skip_source_provision", False)),
         external_runtime=external_runtime,
+        native_runtime=native_runtime,
     )
     deferred_runtime = bool(getattr(args, "skip_source_provision", False))
     await _converse(
@@ -390,6 +394,7 @@ async def _build(args: argparse.Namespace) -> int:
             provisioned=environment is not None,
             deferred_runtime=deferred_runtime,
             external_runtime=external_runtime,
+            native_runtime=native_runtime,
         )
         + _guidance(args),
         interactive=args.interactive,
@@ -403,6 +408,21 @@ async def _build(args: argparse.Namespace) -> int:
     if not world_saved(destination):
         print("\nNo world was saved.", file=sys.stderr)
         return 1
+    if native_runtime:
+        from .bundle import BundleError
+        from .certified_compose_runtime import ComposeRuntimeError
+        from .compose_integration import validate_source
+
+        try:
+            await asyncio.to_thread(validate_source, Path(source_root))
+        except (BundleError, ComposeRuntimeError) as failed:
+            print(f"Cannot admit the native source: {failed}", file=sys.stderr)
+            return 1
+        print(f"\nworld: {destination}")
+        print("Native bundle sealing follows scenario authoring.")
+        print(f"spent: ${stage.spent_usd:.4f}")
+        return 0
+
     from .bundle import BundleError
 
     try:
@@ -987,6 +1007,14 @@ async def _auto(args: argparse.Namespace) -> int:
             f"({len(loaded_connection)} names; values hidden)\n"
         )
 
+    base_guidance = tuple(
+        dict.fromkeys(
+            [
+                *job.authoring_guidance(),
+                *(getattr(args, "guidance", None) or []),
+            ]
+        )
+    )
     authoring_only = bool(getattr(args, "authoring_only", False))
     stages = [
         (
@@ -999,7 +1027,7 @@ async def _auto(args: argparse.Namespace) -> int:
                 out=str(destination),
                 interactive=False,
                 model=args.model,
-                guidance=[],
+                guidance=list(base_guidance),
                 job=job,
                 provider_profile=getattr(args, "provider_profile", None),
             ),
@@ -1012,7 +1040,7 @@ async def _auto(args: argparse.Namespace) -> int:
                 path=str(source),
                 out=str(destination),
                 interactive=False,
-                guidance=[],
+                guidance=list(base_guidance),
                 # Hosted V2 authoring resolves and provisions the submitted runtime inside the
                 # Daytona guest.  The authoring worker still creates the same logical world and
                 # scenarios, but must not start customer Compose/Docker resources on the control
@@ -1032,7 +1060,7 @@ async def _auto(args: argparse.Namespace) -> int:
                 out=str(destination),
                 count=args.count,
                 interactive=False,
-                guidance=[],
+                guidance=list(base_guidance),
                 job=job,
             ),
         ),
@@ -1067,6 +1095,7 @@ async def _auto(args: argparse.Namespace) -> int:
             label, operation, stage_args = stages[stage_index]
             print(f"\n=== {label} ===", flush=True)
             emit("harness.stage.started", label)
+            stage_guidance = tuple(getattr(stage_args, "guidance", []))
             status = await operation(stage_args)
             # Hosted authoring is unattended, and a successful scenario-stage
             # process is not sufficient evidence that it honoured the requested
@@ -1087,6 +1116,7 @@ async def _auto(args: argparse.Namespace) -> int:
                     # Count alone is the wrong instruction: asked only for a number, the
                     # stage pads with happy paths that satisfy cardinality and measure nothing.
                     stage_args.guidance = [
+                        *stage_guidance,
                         (
                             f"The hosted run requires exactly {wanted} scenarios, but "
                             f"only {written_count} are currently saved. "
@@ -1109,7 +1139,7 @@ async def _auto(args: argparse.Namespace) -> int:
                                 "ones that duplicate a branch another scenario already "
                                 "exercises, not the ones that are hardest to pass."
                             )
-                        )
+                        ),
                     ]
                     emit(
                         "harness.stage.repairing",
@@ -1151,10 +1181,13 @@ async def _auto(args: argparse.Namespace) -> int:
                 while missing and repair_attempt < 2:
                     repair_attempt += 1
                     stage_args.guidance = [
-                        scenario_adjustment_guidance[adjustment_id]
-                        + "\nNo saved scenario currently carries this marker. Correct the "
-                        "suite, preserve unaffected scenarios, and call save_scenarios again."
-                        for adjustment_id in missing
+                        *stage_guidance,
+                        *[
+                            scenario_adjustment_guidance[adjustment_id]
+                            + "\nNo saved scenario currently carries this marker. Correct the "
+                            "suite, preserve unaffected scenarios, and call save_scenarios again."
+                            for adjustment_id in missing
+                        ],
                     ]
                     emit(
                         "harness.stage.repairing",
@@ -1182,6 +1215,25 @@ async def _auto(args: argparse.Namespace) -> int:
                         file=sys.stderr,
                     )
                     status = 1
+            if label == "scenarios" and not status and job.require_tool_workflow:
+                from .contract import AgentContract, validate_tool_workflow
+
+                try:
+                    validate_tool_workflow(
+                        AgentContract.model_validate_json(
+                            (destination / "contract.json").read_text(encoding="utf-8")
+                        )
+                    )
+                except (ValueError, OSError) as exc:
+                    emit(
+                        "harness.stage.failed",
+                        "scenarios",
+                        status=1,
+                        code="required_tool_workflow_unavailable",
+                    )
+                    print(f"\nautomatic authoring stopped: {exc}", file=sys.stderr)
+                    return 1
+
             # A completed call suite returns 2 when the submitted agent fails one or more checks.
             # That is a valid RL result. Earlier stages returning non-zero are harness failures.
             if status and label != "calls":
@@ -1206,7 +1258,7 @@ async def _auto(args: argparse.Namespace) -> int:
                 )
             applying[label] = []
             if hasattr(stage_args, "guidance"):
-                stage_args.guidance = []
+                stage_args.guidance = list(base_guidance)
 
             incoming, adjustment_cursor = _new_adjustments(
                 adjustments_path, adjustment_cursor

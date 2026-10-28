@@ -8,7 +8,10 @@ import mimetypes
 import os
 import re
 from pathlib import Path, PurePosixPath
+
 from pydantic import BaseModel, Field, model_validator
+
+from .public_material import SECRET_CONTENT_PATTERNS as _SECRET_CONTENT, is_public_pem
 
 ARTIFACT_MANIFEST_VERSION = "futureagi.harness-artifacts.v1"
 ARTIFACT_MANIFEST_NAME = "artifact-manifest.json"
@@ -66,12 +69,6 @@ class ArtifactManifest(BaseModel):
         return self
 
 
-_SECRET_CONTENT = (
-    re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
-    re.compile(rb"\b(?:ghp|github_pat)_[A-Za-z0-9_]{20,}\b"),
-    re.compile(rb"\bAKIA[0-9A-Z]{16}\b"),
-    re.compile(rb"\bsk-[A-Za-z0-9_-]{20,}\b"),
-)
 _SECRET_FILES = {".env", ".env.local", ".npmrc", ".pypirc", "id_rsa"}
 _TERMINAL_STATUSES = {
     "completed",
@@ -116,13 +113,6 @@ def seal_artifacts(
                 f"artifact_symlink_forbidden: {path.relative_to(root)}"
             )
         relative = path.relative_to(root).as_posix()
-        if path.name in _SECRET_FILES or path.suffix.lower() in {
-            ".pem",
-            ".key",
-            ".p12",
-            ".pfx",
-        }:
-            raise ArtifactIntegrityError(f"artifact_secret_file_forbidden: {relative}")
         digest, size = _hash_file(path, relative)
         total += size
         if total > max_bytes:
@@ -273,6 +263,11 @@ def _scenario_evidence(root: Path) -> list[ScenarioEvidence]:
 
 
 def _hash_file(path: Path, relative: str) -> tuple[str, int]:
+    if path.name in _SECRET_FILES or (
+        path.suffix.lower() in {".pem", ".key", ".p12", ".pfx"}
+        and not is_public_pem(path)
+    ):
+        raise ArtifactIntegrityError(f"artifact_secret_file_forbidden: {relative}")
     digest = hashlib.sha256()
     size = 0
     with path.open("rb") as stream:

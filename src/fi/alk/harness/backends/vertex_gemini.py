@@ -117,6 +117,7 @@ _SCHEMA_KEYS = (
     "required",
     "type",
     "anyOf",
+    "additionalProperties",
 )
 
 
@@ -135,13 +136,18 @@ def _gemini_schema(schema: Any) -> dict[str, Any]:
             continue
         if key == "type" and isinstance(value, list):
             bare = [entry for entry in value if entry != "null"]
-            cleaned["type"] = bare[0] if bare else "string"
+            if len(bare) > 1:
+                cleaned["anyOf"] = [_gemini_schema({"type": kind}) for kind in bare]
+            else:
+                cleaned["type"] = bare[0] if bare else "string"
             if "null" in value:
                 cleaned["nullable"] = True
         elif key == "properties" and isinstance(value, dict):
             cleaned["properties"] = {
                 name: _gemini_schema(inner) for name, inner in value.items()
             }
+        elif key == "additionalProperties" and isinstance(value, dict):
+            cleaned[key] = _gemini_schema(value)
         elif key == "items":
             cleaned["items"] = _gemini_schema(value)
         elif key == "anyOf" and isinstance(value, list):
@@ -620,6 +626,10 @@ class VertexGeminiSession:
         context = self._spec.conversation
         run_config = RunConfig(
             max_llm_calls=max(self._spec.max_turns, 1),
+            http_options=types.HttpOptions(
+                timeout=300_000,
+                retry_options=types.HttpRetryOptions(attempts=1),
+            ),
             streaming_mode=(
                 StreamingMode.SSE
                 if context is not None and context.streaming

@@ -562,9 +562,16 @@ def test_bundle_rejects_missing_runtime_configuration_after_source_checkout(
     authoring = _authoring(tmp_path)
     _write_voice_contract(authoring)
 
+    contract_path = authoring / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract.setdefault("runtime", {})["required_environment"] = {
+        "agent": ["GOOGLE_CLOUD_PROJECT"]
+    }
+    contract_path.write_text(json.dumps(contract))
+
     with pytest.raises(
         BundleAuthorError,
-        match="target_runtime_configuration_missing: environment:GOOGLE_CLOUD_PROJECT",
+        match="target_runtime_configuration_missing: agent:GOOGLE_CLOUD_PROJECT",
     ):
         author_bundle_v2(
             source=source,
@@ -1622,7 +1629,9 @@ def test_uv_sync_repairs_only_a_stale_lock_in_the_build_copy(tmp_path: Path) -> 
     uv.chmod(0o755)
 
     completed = subprocess.run(
-        _uv_sync_build_command(tmp_path, "python3.12"),
+        _uv_sync_build_command(
+            tmp_path, "python3.12", extra_arguments=["--all-packages", "--extra", "cloud"]
+        ),
         cwd=tmp_path,
         env={
             **os.environ,
@@ -1639,6 +1648,7 @@ def test_uv_sync_repairs_only_a_stale_lock_in_the_build_copy(tmp_path: Path) -> 
     assert "--locked" not in attempts[1]
     assert "--no-dev" in attempts[0]
     assert "--no-dev" in attempts[1]
+    assert all("--all-packages --extra cloud" in attempt for attempt in attempts)
 
 
 def test_uv_sync_does_not_reinterpret_other_install_failures(tmp_path: Path) -> None:
@@ -1735,8 +1745,9 @@ def test_generic_pipeline_prefers_canonical_world_ir(tmp_path: Path) -> None:
     preflight_bundle(output, manifest, parallelism=1, secret_refs={})
 
 
+@pytest.mark.parametrize("source_invariants", [CheckStatus.PASSED, CheckStatus.NOT_APPLICABLE])
 def test_generic_pipeline_reuses_the_exact_runtime_certified_bundle(
-    tmp_path: Path,
+    tmp_path: Path, source_invariants,
 ) -> None:
     source = tmp_path / "source"
     (source / "db").mkdir(parents=True)
@@ -1784,13 +1795,15 @@ def test_generic_pipeline_reuses_the_exact_runtime_certified_bundle(
             static=CheckStatus.PASSED,
             schema_and_seed=CheckStatus.PASSED,
             processes=CheckStatus.PASSED,
-            source_invariants=CheckStatus.PASSED,
+            chat_ingress=CheckStatus.PASSED,
+            source_invariants=source_invariants,
             scenario_setup_ready="1/1",
             tool_contract="0/0",
             action_behavior="0/0",
             reset_equivalence=CheckStatus.PASSED,
             world_isolation=CheckStatus.PASSED,
         ),
+        limitations=("No runtime SQL business tables; private state is not certified",),
         repairs=RepairHistory(
             decisions=(),
             results=(),
@@ -1803,10 +1816,9 @@ def test_generic_pipeline_reuses_the_exact_runtime_certified_bundle(
         certificate.model_dump_json(indent=2) + "\n", encoding="utf-8"
     )
 
-    # Build/cache directories do not alter source identity.  They also must not cause a second
-    # compilation to replace the exact environment bytes that passed runtime validation.
-    (source / "build").mkdir()
-    (source / "build" / "generated.py").write_text(
+    # Excluded interpreter caches must not replace the certified environment bytes.
+    (source / "__pycache__").mkdir()
+    (source / "__pycache__" / "generated.pyc").write_text(
         "def agent_callback(message):\n    return message\n", encoding="utf-8"
     )
     execution = tmp_path / "execution"
@@ -1817,6 +1829,16 @@ def test_generic_pipeline_reuses_the_exact_runtime_certified_bundle(
     assert reused.digest == manifest.digest
     assert (tmp_path / "runtime-validation.json").is_file()
     assert load_bundle_v2(execution).digest == manifest.digest
+
+    changed_world = WorldIR.create(
+        source_model_fingerprint="sha256:" + "f" * 64, tables=()
+    )
+    (artifact_root / "world-ir.json").write_text(changed_world.model_dump_json())
+    with pytest.raises(BundleAuthorError, match="certified_bundle_inputs_changed: world"):
+        author_bundle_v2(
+            source=source, job=job, authoring=authoring, output=tmp_path / "changed-world"
+        )
+    (artifact_root / "world-ir.json").write_text(world.model_dump_json())
 
     # A black-box hosted agent has no harness-owned schema/world. Those fingerprints are
     # intentionally synthetic and must not be compared to model-authored placeholder artifacts
@@ -1839,6 +1861,7 @@ def test_generic_pipeline_reuses_the_exact_runtime_certified_bundle(
             static=CheckStatus.PASSED,
             schema_and_seed=CheckStatus.NOT_APPLICABLE,
             processes=CheckStatus.PASSED,
+            chat_ingress=CheckStatus.PASSED,
             source_invariants=CheckStatus.NOT_APPLICABLE,
             scenario_setup_ready="1/1",
             tool_contract="0/0",
@@ -1863,6 +1886,15 @@ def test_generic_pipeline_reuses_the_exact_runtime_certified_bundle(
         source=source, job=job, authoring=authoring, output=external_execution
     )
     assert external_reused.digest == manifest.digest
+
+    from fi.alk.harness.certification import CertificationGateError
+
+    (source / "build").mkdir()
+    (source / "build" / "agent.py").write_text("print('new source')\n")
+    with pytest.raises(CertificationGateError, match="source digest"):
+        author_bundle_v2(
+            source=source, job=job, authoring=authoring, output=tmp_path / "changed-source"
+        )
 
 
 def test_generic_pipeline_requires_source_schema_and_world(tmp_path: Path) -> None:
@@ -2769,8 +2801,9 @@ def test_declared_http_runtime_uses_contract_command_port_and_health(
     assert readiness.path == "/docs"
 
 
+@pytest.mark.parametrize("declare_mount_root", [False, True])
 def test_declared_http_runtime_selects_gpt_researcher_compose_backend(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch, declare_mount_root: bool
 ) -> None:
     fixture = Path(__file__).parents[1] / "fixtures" / "gpt_researcher_compose.yml"
     shutil.copyfile(fixture, tmp_path / "docker-compose.yml")
@@ -2778,6 +2811,26 @@ def test_declared_http_runtime_selects_gpt_researcher_compose_backend(
         "FROM python:3.12\nCMD uvicorn main:app --port 8000\n"
     )
     (tmp_path / "main.py").write_text("print('server')\n")
+    monkeypatch.setenv("PWD", "/ambient-private")
+    if declare_mount_root:
+        (tmp_path / "alk.yaml").write_text(
+            'schema_version: "1"\nruntime:\n  environment:\n    PWD: "."\n'
+        )
+    else:
+        with pytest.raises(
+            BundleAuthorError, match="compose_structural_configuration_missing: PWD"
+        ):
+            resolve_environment_plan(
+                tmp_path,
+                _job(connector="auto"),
+                contract_modality="chat",
+                contract_interface_kind="http",
+                contract_runtime={
+                    "command": ["python", "main.py"],
+                    "interface": {"kind": "http", "port": 8000, "health_path": "/"},
+                },
+            )
+        return
     plan = resolve_environment_plan(
         tmp_path,
         _job(connector="auto"),
@@ -2794,6 +2847,7 @@ def test_declared_http_runtime_selects_gpt_researcher_compose_backend(
         "gpt-researcher",
     ]
     agent = plan.processes[1]
+    assert agent.environment["PWD"] == "."
     assert agent.run_command == ["python", "main.py"]
     assert agent.fixed_port == 8000
     assert plan.capabilities["target_http"].container_port == 8000
@@ -2908,6 +2962,50 @@ def test_declared_compose_runtime_keeps_transitive_dependencies(tmp_path: Path) 
     assert next(
         process for process in plan.processes if process.name == "backend"
     ).depends_on == ["cache"]
+
+
+@pytest.mark.parametrize(
+    ("postgres_image", "redis_image", "redis_version"),
+    [
+        ("postgres", "redis", "7"),
+        ("registry.example/team/postgres:16", "bitnami/redis:7-alpine", "7"),
+    ],
+)
+def test_declared_compose_runtime_accepts_catalog_images_without_a_tag_or_with_a_namespace(
+    tmp_path: Path,
+    postgres_image: str,
+    redis_image: str,
+    redis_version: str,
+) -> None:
+    (tmp_path / "Dockerfile").write_text(
+        'FROM python:3.12\nCMD ["python", "main.py"]\n'
+    )
+    (tmp_path / "docker-compose.yml").write_text(
+        "services:\n"
+        "  backend:\n    build: .\n    ports: ['8000:8000']\n"
+        "    depends_on: [cache, postgres]\n"
+        f"  cache:\n    image: {redis_image}\n"
+        f"  postgres:\n    image: {postgres_image}\n"
+    )
+
+    plan = resolve_environment_plan(
+        tmp_path,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime={
+            "command": ["python", "main.py"],
+            "interface": {"kind": "http", "port": 8000},
+        },
+    )
+
+    cache = next(process for process in plan.processes if process.name == "cache")
+    assert cache.version == redis_version
+    assert {process.name for process in plan.processes} == {
+        "world-db",
+        "cache",
+        "backend",
+    }
 
 
 @pytest.mark.parametrize("ports", ["8000:8000", "8001:8001", "8000:8000/udp"])
@@ -3325,3 +3423,57 @@ def test_a_changed_world_reaches_a_world_ir_seed_on_reseal(tmp_path: Path) -> No
     assert "renamed" in (bundle / "seed" / "world-ir.json").read_text(encoding="utf-8")
     assert "renamed" in (artifact_root / "world-ir.json").read_text(encoding="utf-8")
     assert reseal_scenarios(authoring) == digest
+
+
+def test_bundle_retains_unused_static_credential_inventory_without_blocking(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('source')")
+    (source / "optional.py").write_text(
+        "import os\ndef unused(): return os.environ['UNUSED_TOKEN']\n"
+    )
+    authoring = _authoring(tmp_path)
+    _write_voice_contract(authoring)
+    output = tmp_path / "bundle"
+    author_bundle_v2(
+        source=source, job=_job(connector="auto"), authoring=authoring, output=output
+    )
+    inventory = json.loads((output / "credentials.json").read_text())
+    unused = next(
+        item
+        for item in inventory["requirements"]
+        if item["environment_name"] == "UNUSED_TOKEN"
+    )
+    assert unused["status"] == "missing"
+    assert unused["required"] is True
+
+@pytest.mark.parametrize("version", ["3.12", "3.12.8"])
+def test_native_runtime_honors_declared_python_version(tmp_path: Path, version: str) -> None:
+    (tmp_path / "agent.py").write_text("print('agent')\n")
+    (tmp_path / "Dockerfile").write_text("FROM python:3.14\n")
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='agent'\nversion='1'\nrequires-python='>=3.12'\n"
+    )
+    before = {p.name: p.read_bytes() for p in tmp_path.iterdir()}
+    plan = resolve_environment_plan(
+        tmp_path, _job(connector="http"),
+        contract_runtime={"language": "python", "version": version, "command": ["python", "agent.py"]},
+    )
+    process = next(p for p in plan.processes if p.name == "agent")
+    command = process.build_commands[0]
+    assert command[command.index("--python") + 1] == (
+        "==3.12.*,>=3.12" if version == "3.12" else "python3.12.8"
+    )
+    assert {p.name: p.read_bytes() for p in tmp_path.iterdir()} == before
+
+@pytest.mark.parametrize("version", ["3.11.9", "nonsense", "3.12garbage"])
+def test_native_runtime_rejects_invalid_declared_python(tmp_path: Path, version: str) -> None:
+    (tmp_path / "agent.py").write_text("print('agent')\n")
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='agent'\nversion='1'\nrequires-python='>=3.12'\n"
+    )
+    with pytest.raises(BundleAuthorError, match="generated_runtime_python_version_unsupported"):
+        resolve_environment_plan(
+            tmp_path, _job(connector="http"),
+            contract_runtime={"language": "python", "version": version, "command": ["python", "agent.py"]},
+        )

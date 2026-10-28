@@ -47,6 +47,7 @@ from .bundle_v2 import (
 )
 from .provider_import import ProviderImportSpec
 from .provider_lifecycle import ProviderLifecycleSpec, ProviderScope
+from .public_material import is_public_pem
 
 _SECRET_PURPOSE_VALUES = {member.value for member in SecretPurpose}
 
@@ -161,6 +162,7 @@ def preflight_bundle(
     *,
     parallelism: int,
     secret_refs: dict[str, str],
+    allow_compose: bool = False,
 ) -> None:
     """Run the complete §2e checklist against a sealed v2 bundle directory, in the contract's own
     numbered order. Raises ``PreflightError`` on the first violation; returns ``None`` when clean.
@@ -192,7 +194,7 @@ def preflight_bundle(
                 f"secret_refs[{alias!r}] = {purpose!r} is not a SecretPurpose value"
             )
 
-    if manifest.runtime.kind is RuntimeKindV2.COMPOSE:
+    if manifest.runtime.kind is RuntimeKindV2.COMPOSE and not allow_compose:
         # §2a: "a hosted job with kind: compose fails preflight" — not one of §2e's seven numbered
         # items, so ahead of item 1 rather than slotted between them: every item below assumes
         # v2's processes/seed shape, which a compose bundle need not carry, and a compose bundle's
@@ -207,6 +209,30 @@ def preflight_bundle(
     walked_files = _verify_path_safety(bundle_dir, files)  # 2
     _scan_bundle_files_for_secrets(bundle_dir, walked_files)  # 3
     _verify_unknown_fields(bundle_dir, manifest)  # 4
+    contract_path = bundle_dir / "contract.json"
+    if contract_path.is_file():
+        contract = json.loads(contract_path.read_text())
+        runtime = contract.get("runtime") if isinstance(contract, dict) else None
+        interface = runtime.get("interface") if isinstance(runtime, dict) else None
+        interface = interface if isinstance(interface, dict) else {}
+        bindings = interface.get("setup_secrets", {})
+        if bindings:
+            from .contract import RuntimeInterface
+
+            try:
+                RuntimeInterface._setup_secret_aliases(bindings)
+            except (ValueError, TypeError, AttributeError) as exc:
+                raise PreflightError(
+                    "secret_purpose_forbidden", "invalid HTTP setup secret declarations"
+                ) from exc
+            if any(
+                secret_refs.get(alias) != "target_provider"
+                for alias in bindings.values()
+            ):
+                raise PreflightError(
+                    "secret_purpose_forbidden",
+                    "HTTP setup secrets require declared target-provider aliases",
+                )
 
     if manifest.runtime.kind is RuntimeKindV2.PROCESS:
         _verify_placeholder_vocabulary(manifest)  # 5
@@ -328,7 +354,7 @@ def _scan_bundle_files_for_secrets(bundle_dir: Path, walked_files: list[Path]) -
         posix_path = PurePosixPath(relative)
         if (
             posix_path.name in _SECRET_FILES
-            or posix_path.suffix.lower() in _SECRET_SUFFIXES
+            or (posix_path.suffix.lower() in _SECRET_SUFFIXES and not is_public_pem(path))
         ):
             raise PreflightError(
                 "secret_in_bundle", f"{relative}: forbidden secret-shaped file"
