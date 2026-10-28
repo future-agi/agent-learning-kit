@@ -8920,11 +8920,17 @@ _MENU = {
     "role": "the person's phone menu",
     "channel": "ivr",
 }
+_ON_A_PAGE = {
+    "id": "page",
+    "name": "Banner",
+    "role": "something on the page",
+    "channel": "page_content",
+}
 _SECOND = {
     "id": "second",
     "name": "Rowan",
-    "role": "someone in the chat",
-    "channel": "thread_message",
+    "role": "someone who takes the phone",
+    "channel": "audio_handoff",
 }
 
 
@@ -8962,12 +8968,6 @@ _SECOND = {
             "voice",
             {},
             "a turn of 1 or more",
-        ),
-        (
-            {**_SECOND, "trigger": {"kind": "mid_journey", "turn": 11}},
-            "chat",
-            {},
-            "after the chat's last turn, 10",
         ),
         ({**_NEARBY, "trigger": {"kind": "mid_journey", "turn": 40}}, "voice", {}, ""),
         (
@@ -9031,14 +9031,12 @@ def test_a_scenario_s_sub_actors_are_refused_with_the_reason_no_run_could_honour
     )
     problems = scenario_problems(
         [included],
-        _listed(_NEARBY, _MENU, _SECOND),
+        _listed(_NEARBY, _MENU),
         modality=modality,
-        max_turns=10,
         call_direction=overrides.get("call_direction", "outbound"),
         person=overrides.get("person", "Sam"),
         tools={"add", "lookup"},
         runs_in_world=lambda tool: tool == "add",
-        about={},
     )
     if refused:
         assert len(problems) == 1 and refused in problems[0], problems
@@ -9046,32 +9044,20 @@ def test_a_scenario_s_sub_actors_are_refused_with_the_reason_no_run_could_honour
         assert problems == []
 
 
-def test_a_scenario_names_each_sub_actor_once_and_only_grades_one_it_includes():
+def test_a_scenario_names_each_sub_actor_once():
     from fi.alk.harness.sub_actor import ScenarioSubActor, scenario_problems
 
     one = ScenarioSubActor(id="nearby", instruction="You want something else.")
-    common = dict(
+    twice = scenario_problems(
+        [one, one],
+        _listed(_NEARBY),
         modality="voice",
-        max_turns=10,
         call_direction="",
         person="Sam",
         tools=None,
         runs_in_world=lambda _tool: True,
     )
-    twice = scenario_problems([one, one], _listed(_NEARBY), about={}, **common)
     assert twice == ["sub_actors: nearby is included twice"]
-    absent = scenario_problems(
-        [], _listed(_NEARBY), about={"noticed": "nearby", "done": ""}, **common
-    )
-    assert absent == [
-        "sub_actors: noticed is about nearby, which this scenario does not include"
-    ]
-    assert (
-        scenario_problems(
-            [one], _listed(_NEARBY), about={"noticed": "nearby"}, **common
-        )
-        == []
-    )
 
 
 def test_the_list_keeps_one_entry_per_sub_actor_and_refuses_what_no_run_can_deliver(
@@ -9098,9 +9084,9 @@ def test_the_list_keeps_one_entry_per_sub_actor_and_refuses_what_no_run_can_deli
         ("nearby", "Rowan", {})
     ]
     assert (
-        said(add, _SECOND)[0]
-        and "a voice agent cannot be reached through thread_message"
-        in said(add, _SECOND)[1]
+        said(add, _ON_A_PAGE)[0]
+        and "a voice agent cannot be reached through page_content"
+        in said(add, _ON_A_PAGE)[1]
     )
     assert "an id, a name and a role" in said(add, {**_NEARBY, "role": ""})[1]
     assert (
@@ -9146,7 +9132,7 @@ def test_a_scenario_keeps_its_sub_actors_and_one_without_is_written_as_before(
             world_root=root,
             catalogue=catalogue,
             kept=[],
-            spoken=False,
+            spoken=True,
             sub_actor_list=_listed(_SECOND),
             tools={"add", "lst"},
         )
@@ -9175,36 +9161,6 @@ def test_a_scenario_keeps_its_sub_actors_and_one_without_is_written_as_before(
     )
 
 
-def test_a_sub_goal_names_a_sub_actor_only_when_they_are_on_and_listed(
-    tmp_path, monkeypatch
-):
-    from fi.alk.harness.catalogue import Catalogue, SubGoal, save_catalogue
-    from fi.alk.harness.sub_actor import save_sub_actors, sub_goal_subject_problems
-
-    save_sub_actors(tmp_path, _listed(_NEARBY))
-    monkeypatch.delenv("HARNESS_SUB_ACTORS", raising=False)
-    assert "switched off" in sub_goal_subject_problems("nearby", tmp_path)[0]
-    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
-    assert sub_goal_subject_problems("nearby", tmp_path) == []
-    assert (
-        "'ghost' is not on the environment's list (it has: nearby)"
-        in sub_goal_subject_problems("ghost", tmp_path)[0]
-    )
-    assert sub_goal_subject_problems("", tmp_path) == []
-
-    save_catalogue(
-        Catalogue(
-            sub_goals=[
-                SubGoal(name="plain", what="x"),
-                SubGoal(name="about", what="y", sub_actor="nearby"),
-            ]
-        ),
-        tmp_path,
-    )
-    saved = json.loads((tmp_path / "sub_goals.json").read_text())["sub_goals"]
-    assert "sub_actor" not in saved[0] and saved[1]["sub_actor"] == "nearby"
-
-
 def test_sub_actor_tools_and_fields_are_offered_only_when_switched_on(
     tmp_path, monkeypatch
 ):
@@ -9212,6 +9168,7 @@ def test_sub_actor_tools_and_fields_are_offered_only_when_switched_on(
     from fi.alk.harness.world.tools import world_tools
 
     root, contract, _catalogue = _built_environment(tmp_path)
+    contract.modality = "voice"
 
     def offered():
         server, _kept = scenario_tools(contract, root, root, wanted=2)
@@ -9230,7 +9187,8 @@ def test_sub_actor_tools_and_fields_are_offered_only_when_switched_on(
     monkeypatch.delenv("HARNESS_SUB_ACTORS", raising=False)
     assert offered() == (False, False, False)
     monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
-    assert offered() == (True, True, True)
+    # A sub-goal is never about a sub-actor, so add_sub_goal never offers one.
+    assert offered() == (True, False, True)
 
 
 def test_check_world_says_when_the_list_of_sub_actors_is_empty(tmp_path, monkeypatch):
@@ -9240,6 +9198,7 @@ def test_check_world_says_when_the_list_of_sub_actors_is_empty(tmp_path, monkeyp
     from fi.alk.harness.world.tools import world_tools
 
     _root, contract, _catalogue = _built_environment(tmp_path)
+    contract.modality = "voice"
     destination = tmp_path / "w"
 
     def said():
@@ -9264,6 +9223,7 @@ def test_the_coverage_plan_and_the_world_view_name_the_environment_s_sub_actors(
     from fi.alk.harness.sub_actor import save_sub_actors
 
     root, contract, _catalogue = _built_environment(tmp_path)
+    contract.modality = "voice"
     save_sub_actors(root, _listed(_SECOND))
 
     def replies(levels):
@@ -9282,8 +9242,52 @@ def test_the_coverage_plan_and_the_world_view_name_the_environment_s_sub_actors(
     aimed, seen = replies(["quiet_line"])
     assert (
         "no level is named for them yet. Keep them" in aimed
-        and "- second: Rowan (someone in the chat), thread_message" in aimed
+        and "- second: Rowan (someone who takes the phone), audio_handoff" in aimed
     )
     assert "sub-actors a scenario can include:\n- second: Rowan" in seen
     aimed, _seen = replies(["quiet_line", "with_second"])
     assert "no level is named" not in aimed
+
+
+def test_a_suite_keeps_its_share_of_scenarios_with_a_sub_actor_unless_the_person_set_another():
+    from types import SimpleNamespace
+
+    from fi.alk.harness.scenario_tools import _sub_actors_short
+
+    with_one = SimpleNamespace(name="a", sub_actors=[object()])
+    alone = [SimpleNamespace(name=f"p{i}", sub_actors=[]) for i in range(8)]
+    plain = {"name": "next"}
+    # 9 written of 10, one with a sub-actor; a 20% share needs 2, so the last one must include one.
+    refused = _sub_actors_short(plain, [with_one, *alone], 10, 0.2, ["near"])
+    assert "1 of the 10 scenarios" in refused and "at least 2 must" in refused and "near" in refused
+    assert _sub_actors_short({**plain, "sub_actors": [{"id": "near"}]}, [with_one, *alone], 10, 0.2, ["near"]) == ""
+    # Room left: the share can still be met by the scenarios still to come.
+    assert _sub_actors_short(plain, [with_one, *alone[:3]], 10, 0.2, ["near"]) == ""
+    # None asked for, or nothing this agent can be reached by: no share to keep.
+    assert _sub_actors_short(plain, [with_one, *alone], 10, 0.0, ["near"]) == ""
+    assert _sub_actors_short(plain, [with_one, *alone], 10, 0.2, []) == ""
+
+
+def test_aim_for_reports_the_default_share_and_takes_the_person_s_own(tmp_path, monkeypatch):
+    import asyncio
+
+    from fi.alk.harness.scenario_tools import CANONICAL_AXES, scenario_tools
+    from fi.alk.harness.sub_actor import save_sub_actors
+    from fi.simulate.simulation.sub_actors import SHARE_RANGE, at_least, default_share
+
+    root, contract, _catalogue = _built_environment(tmp_path)
+    contract.modality = "voice"
+    save_sub_actors(root, _listed(_SECOND))
+    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+    server, _kept = scenario_tools(contract, root, root, wanted=40)
+    aim = next(one.handler for one in server.tools if one.name == "aim_for")
+    axes = {axis: ["plain", "with_second"] for axis in CANONICAL_AXES}
+
+    def said(**extra):
+        return asyncio.run(aim({"count": 40, "axes": axes, **extra}))["content"][0]["text"]
+
+    share = default_share(str(root))
+    assert SHARE_RANGE[0] <= share <= SHARE_RANGE[1]
+    assert f"At least {at_least(share, 40)} of the 40 scenarios include a sub-actor" in said()
+    assert "At least 16 of the 40" in said(sub_actor_share=40)
+    assert "No scenario includes a sub-actor, as the person asked" in said(sub_actor_share=0)

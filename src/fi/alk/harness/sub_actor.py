@@ -135,18 +135,13 @@ def scenario_problems(
     listing: SubActorList,
     *,
     modality: str,
-    max_turns: int,
     call_direction: str,
     person: str,
     tools: set[str] | None,
     runs_in_world: Callable[[str], bool],
-    about: dict[str, str],
 ) -> list[str]:
-    """Why a scenario's sub-actors cannot run, or nothing.
-
-    `person` is the simulated user's name, which no sub-actor may share; `about` maps each of the
-    scenario's sub-goals to the sub-actor it names, if any.
-    """
+    """Why a scenario's sub-actors cannot run, or nothing. `person` is the simulated user's name,
+    which no sub-actor may share."""
     problems = []
     seen: set[str] = set()
     for entry in entries:
@@ -185,13 +180,8 @@ def scenario_problems(
                 problems.append(
                     f"{entry.id} is a phone menu, which answers the call itself: use `always`"
                 )
-        if trigger.kind == "mid_journey":
-            if trigger.turn < 1:
-                problems.append(f"{entry.id}: mid_journey needs a turn of 1 or more")
-            elif modality == "chat" and trigger.turn > max_turns:
-                problems.append(
-                    f"{entry.id}: mid_journey turn {trigger.turn} is after the chat's last turn, {max_turns}"
-                )
+        if trigger.kind == "mid_journey" and trigger.turn < 1:
+            problems.append(f"{entry.id}: mid_journey needs a turn of 1 or more")
         if trigger.kind == "on_tool":
             if not trigger.tool.strip():
                 problems.append(f"{entry.id}: on_tool needs the `tool` it waits for")
@@ -209,29 +199,7 @@ def scenario_problems(
             problems.append(f"{entry.id}: on_keyword needs the words that bring it in")
         if trigger.kind == "probability" and not 0 < trigger.p <= 1:
             problems.append(f"{entry.id}: probability needs p above 0 and at most 1")
-    problems.extend(
-        f"{name} is about {sub_actor}, which this scenario does not include"
-        for name, sub_actor in about.items()
-        if sub_actor and sub_actor not in seen
-    )
     return ["sub_actors: " + problem for problem in problems]
-
-
-def sub_goal_subject_problems(sub_actor_id: str, root: Path) -> list[str]:
-    """Why a sub-goal cannot be about this sub-actor, or nothing."""
-    if not sub_actor_id:
-        return []
-    if not sub_actors_enabled():
-        return [
-            "sub-actors are switched off in this environment, so leave sub_actor empty"
-        ]
-    listing = load_sub_actors(root)
-    if listing.get(sub_actor_id) is None:
-        known = ", ".join(one.id for one in listing.sub_actors) or "none"
-        return [
-            f"sub_actor {sub_actor_id!r} is not on the environment's list (it has: {known})"
-        ]
-    return []
 
 
 def scenarios_using(destination: Path, sub_actor_id: str) -> list[str]:

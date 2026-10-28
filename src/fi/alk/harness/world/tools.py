@@ -29,8 +29,8 @@ from ..backends import tool, tool_server
 
 from ..amend import add_rule, drop_rule, fix_tool, set_modality, widen
 from ..catalogue import (
-    add_sub_goal_fields,
     CONTRACT_FIELDS,
+    CONTRACT_SCHEMA,
     CHECK_RULES,
     CRITERIA_RULES,
     SUB_GOAL_RULES,
@@ -51,7 +51,6 @@ from ..sub_actor import (
     save_sub_actors,
     scenarios_using,
     sub_actors_enabled,
-    sub_goal_subject_problems,
 )
 from ..checks import reference_of, run_check, run_world_check
 from ..contract import AgentContract, is_data_free_conversation
@@ -1368,8 +1367,6 @@ def world_tools(
             + ", ".join(sorted(variables_in(prompt)))
         )
 
-    sub_actor_said, sub_goal_fields = add_sub_goal_fields()
-
     @tool(
         "add_sub_goal",
         "Add a named thing this agent can be checked on, shared by every scenario that needs "
@@ -1386,8 +1383,11 @@ def world_tools(
         "`prompt_injection`, `social_engineering`, `privacy_pii`. A scenario carrying an "
         "overlay is refused until it names a sub-goal that fails when that overlay is "
         "mishandled, so this is what makes one available. Leave it empty for an ordinary "
-        "task sub-goal." + sub_actor_said,
-        schema(sub_goal_fields, ["name", "what"]),
+        "task sub-goal.",
+        schema(
+            {"name": str, "what": str, "check": str, "judged": str, "output": str, "overlay": str, **CONTRACT_SCHEMA},
+            ["name", "what"],
+        ),
     )
     async def add_sub_goal(args: dict[str, Any]) -> dict[str, Any]:
         sub_goal = SubGoal(
@@ -1397,12 +1397,9 @@ def world_tools(
             judged=str(args.get("judged") or ""),
             output=str(args.get("output") or "pass_fail"),
             overlay=str(args.get("overlay") or ""),
-            sub_actor=str(args.get("sub_actor") or ""),
             **{field: str(args.get(field) or "") for field in CONTRACT_FIELDS},
         )
-        problems = validate_sub_goal(sub_goal) + sub_goal_subject_problems(
-            sub_goal.sub_actor, destination
-        )
+        problems = validate_sub_goal(sub_goal)
         if problems:
             return _err("Not added:\n  - " + "\n  - ".join(problems))
         sub_goal, cleared = without_delivery_overlay(sub_goal)

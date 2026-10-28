@@ -719,8 +719,8 @@ these the first time.
 ## Sub-actors
 
 Only when `add_sub_actor` is offered. A sub-actor is someone on the person's side who is not the
-person, whom the agent has to cope with: someone with them who speaks up, takes over from them for a
-while, or joins the same conversation. Never anyone on the agent's side: the agent, its staff and its systems are what is being
+person, whom the agent has to cope with: someone with them who speaks up, or takes over from them for a
+while. Never anyone on the agent's side: the agent, its staff and its systems are what is being
 tested, so the run never plays them. Read the contract and add one for each of these this agent's users
 could have around them:
 
@@ -728,8 +728,7 @@ could have around them:
   (`audio_handoff`);
 - an agent that places calls: the person's own phone menu, which answers before they do and puts the
   call through to them (`ivr`). A voicemail or answering machine is not one: nobody is put through, and
-  a scenario sets it with `answered_by`;
-- a chat agent: someone with the person who writes in the same chat (`thread_message`).
+  a scenario sets it with `answered_by`.
 
 The list says who each one is: a name that is never the person's, a `role` (who they are to the
 person), and a `persona` in the person's fields, true to who they are in this world, from which their

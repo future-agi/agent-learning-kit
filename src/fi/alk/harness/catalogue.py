@@ -43,8 +43,6 @@ class SubGoal(BaseModel):
     output: str = "pass_fail"
     # Which overlay level this sub-goal is the claim for, when it is one.
     overlay: str = ""
-    # The sub-actor this sub-goal is about; it has nothing to grade in a call they never entered.
-    sub_actor: str = ""
     # The check contract; `verifier` is code, llm or both, empty settles by the check if there is one.
     reference: str = ""
     observed: str = ""
@@ -325,28 +323,6 @@ CHECK_RULES = (
 )
 
 
-def add_sub_goal_fields() -> tuple[str, dict[str, Any]]:
-    """What add_sub_goal says about `sub_actor` and the fields it takes; `sub_actor` only when sub-actors are on."""
-    from .sub_actor import sub_actors_enabled
-
-    fields: dict[str, Any] = {
-        "name": str,
-        "what": str,
-        "check": str,
-        "judged": str,
-        "output": str,
-        "overlay": str,
-    }
-    fields.update(CONTRACT_SCHEMA)
-    if not sub_actors_enabled():
-        return "", fields
-    return (
-        " `sub_actor` names the sub-actor this sub-goal is about, when it is the thing being tested; "
-        "a call they never entered has nothing for it to grade.",
-        {**fields, "sub_actor": str},
-    )
-
-
 def validate_sub_goal(sub_goal: SubGoal) -> list[str]:
     """Problems that make a sub-goal unusable.
 
@@ -589,11 +565,10 @@ def save_catalogue(catalogue: Catalogue, destination: Path) -> Path:
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
     path = destination / CATALOGUE
-    body = catalogue.model_dump()
-    for one in body.get("sub_goals") or []:
-        if not one.get("sub_actor"):
-            one.pop("sub_actor", None)
-    path.write_text(json.dumps(body, indent=2, ensure_ascii=False), encoding="utf-8")
+    path.write_text(
+        json.dumps(catalogue.model_dump(), indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
     return path
 
 

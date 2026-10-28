@@ -395,15 +395,12 @@ class RetellChatCallRunner:
             )
         return CallOutcome(
             calls=calls,
-            turns=sum(
-                1 for turn in transcript.exchanges if turn.speaker != "sub_actor"
-            ),
+            turns=len(transcript.exchanges),
             started_at=format_rfc3339_millis(started),
             ended_at=format_rfc3339_millis(ended),
             duration_ms=_duration_ms(started, ended),
             transcript_artifact=transcript_id,
             messages=tuple(transcript.canonical_messages()),
-            sub_actors=tuple(transcript.sub_actors.get("summary") or ()),
         )
 
 

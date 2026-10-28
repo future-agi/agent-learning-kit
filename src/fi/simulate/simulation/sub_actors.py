@@ -40,13 +40,6 @@ CHANNELS: dict[str, dict[str, Any]] = {
         "tells_person": "{who} answers your line first. Say nothing until it has put the call through to you.",
         "setting": "You are the automated phone menu that answers this line before a person does.",
     },
-    "thread_message": {
-        "modalities": {"chat"},
-        "available": True,
-        "about": "a second participant in the chat, seen by the agent and the person",
-        "tells_person": "{who} is in this chat with you and may write to the agent too. Give them a chance to write before you end the conversation.",
-        "setting": "You are a second person in a chat between someone and an automated agent.",
-    },
     "ui_event": {
         "modalities": {"computer_use"},
         "available": False,
@@ -121,7 +114,6 @@ LIMITS: dict[str, int] = {
     "audio_mix": 3,
     "audio_handoff": 3,
     "ivr": 3,
-    "thread_message": 3,
 }
 HANDOFF_LINE_SECONDS = 30.0
 TOOLS_READ_SECONDS = 1.0
@@ -152,6 +144,21 @@ def seeded(seed: str, *parts: object) -> random.Random:
     return random.Random(
         int.from_bytes(hashlib.sha256(key.encode()).digest()[:8], "big")
     )
+
+
+# The share of a suite's scenarios that include a sub-actor when the person has not asked for one:
+# drawn once per environment within this range, so suites differ and none goes without.
+SHARE_RANGE = (0.15, 0.25)
+
+
+def default_share(seed: str) -> float:
+    """The share of an environment's scenarios that include a sub-actor, unless the person asked for one."""
+    return seeded(seed, "share").uniform(*SHARE_RANGE)
+
+
+def at_least(share: float, of: int) -> int:
+    """How many of `of` scenarios a share asks for, rounded up so a small suite still gets one."""
+    return -int(-share * of // 1) if share > 0 else 0
 
 
 def loudness_ratio(seed: str, sub_actor_id: str, fixed: float | None) -> float:

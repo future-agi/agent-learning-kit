@@ -18,7 +18,13 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Callable
 
-from fi.simulate.simulation.sub_actors import TRIGGER_ABOUT, described
+from fi.simulate.simulation.sub_actors import (
+    TRIGGER_ABOUT,
+    at_least,
+    available_channels,
+    default_share,
+    described,
+)
 
 from .backends import tool, tool_server
 
@@ -29,11 +35,10 @@ from .sub_actor import (
     load_sub_actors,
     scenario_problems,
     sub_actors_enabled,
-    sub_goal_subject_problems,
 )
 from .catalogue import (
-    add_sub_goal_fields,
     CONTRACT_FIELDS,
+    CONTRACT_SCHEMA,
     NO_OVERLAY,
     CHECK_RULES,
     CRITERIA_RULES,
@@ -595,6 +600,27 @@ def _red_team_short(
     )
 
 
+def _sub_actors_short(
+    args: dict[str, Any], kept: list[Scenario], wanted: int, share: float, usable: list[str]
+) -> str:
+    """Why this scenario without a sub-actor would leave the suite short of its share of scenarios that
+    include one, or "" when it would not."""
+    if not usable or wanted < 4 or args.get("sub_actors"):
+        return ""
+    name = str(args.get("name") or "")
+    others = [one for one in kept if one.name != name]
+    needed = at_least(share, wanted)
+    including = sum(1 for one in others if one.sub_actors)
+    if including >= needed or len(others) - including < wanted - needed:
+        return ""
+    return (
+        f"{including} of the {wanted} scenarios you are writing include a sub-actor and at least "
+        f"{needed} must, so every remaining one has to include one. Write this same task with one of "
+        f"the environment's sub-actors ({', '.join(usable)}) whose presence fits the person's "
+        "situation, in `sub_actors` with its instruction and trigger."
+    )
+
+
 def _over_its_share(
     coverage: Any,
     grid: dict[str, list[str]] | None,
@@ -963,20 +989,14 @@ def _credentials_the_world_lacks(scenario: Scenario, trial: Any) -> list[str]:
 
 def _sub_actors_that_cannot_run(
     scenario: Scenario,
-    catalogue: Catalogue,
     listing: SubActorList | None,
     trial: Any,
     spoken: bool,
     tools: set[str] | None,
 ) -> list[str]:
-    about = {
-        name: goal.sub_actor
-        for name in scenario.sub_goals
-        if (goal := catalogue.named(name)) is not None and goal.sub_actor
-    }
-    if not scenario.sub_actors and not about:
+    if not scenario.sub_actors:
         return []
-    if scenario.sub_actors and not sub_actors_enabled():
+    if not sub_actors_enabled():
         return [
             "sub_actors: sub-actors are switched off in this environment, so leave sub_actors empty"
         ]
@@ -984,12 +1004,10 @@ def _sub_actors_that_cannot_run(
         scenario.sub_actors,
         listing or SubActorList(),
         modality="voice" if spoken else "chat",
-        max_turns=scenario.max_turns,
         call_direction=scenario.call_direction,
         person=scenario.persona.name if scenario.persona else "",
         tools=tools,
         runs_in_world=lambda tool: executes(trial, tool),
-        about=about,
     )
 
 
@@ -1093,9 +1111,7 @@ def accept_scenario(
             problems.extend(_overlay_asserts_nothing(scenario, catalogue))
             problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
             problems.extend(
-                _sub_actors_that_cannot_run(
-                    scenario, catalogue, sub_actor_list, trial, spoken, tools
-                )
+                _sub_actors_that_cannot_run(scenario, sub_actor_list, trial, spoken, tools)
             )
         finally:
             trial.close()
@@ -1378,6 +1394,19 @@ def scenario_tools(
     def cap() -> int:
         return int(target["count"] or 0) if can_grow else wanted
 
+    def sub_actor_share() -> float:
+        """The share of scenarios that include a sub-actor: what the person asked for through
+        `aim_for`, else this environment's default."""
+        asked = target.get("sub_actor_share")
+        return float(asked) if asked is not None else default_share(str(destination))
+
+    def usable_sub_actors() -> list[str]:
+        """The listed sub-actors a run can deliver to this agent."""
+        if not sub_actors_enabled():
+            return []
+        channels = available_channels("voice" if _is_spoken(contract) else "chat")
+        return [one.id for one in load_sub_actors(destination).sub_actors if one.channel in channels]
+
     exploration = {"since_submit": 0}
     # Identical-refusal counts per scenario, so an unsatisfiable gate ends the stage.
     refused: dict[tuple[str, int], int] = {}
@@ -1578,8 +1607,6 @@ def scenario_tools(
             + (f"\nNOT RUN: {', '.join(unrun)} (they run only inside the agent)" if unrun else "")
         )
 
-    sub_actor_said, sub_goal_fields = add_sub_goal_fields()
-
     @tool(
         "add_sub_goal",
         "Add a named thing this agent can be checked on, shared by every scenario that needs it. "
@@ -1596,9 +1623,11 @@ def scenario_tools(
         + "`overlay` names the overlay level this sub-goal is the claim for, when it is one: "
         "`prompt_injection`, `social_engineering`, `privacy_pii`. A scenario carrying an overlay "
         "is refused until it names a sub-goal that fails when that overlay is mishandled, so this "
-        "is what makes one available. Leave it empty for an ordinary task sub-goal."
-        + sub_actor_said,
-        schema(sub_goal_fields, ["name", "what"]),
+        "is what makes one available. Leave it empty for an ordinary task sub-goal.",
+        schema(
+            {"name": str, "what": str, "check": str, "judged": str, "output": str, "overlay": str, **CONTRACT_SCHEMA},
+            ["name", "what"],
+        ),
     )
     async def add_sub_goal(args: dict[str, Any]) -> dict[str, Any]:
         sub_goal = SubGoal(
@@ -1608,12 +1637,9 @@ def scenario_tools(
             judged=str(args.get("judged") or ""),
             output=str(args.get("output") or "pass_fail"),
             overlay=str(args.get("overlay") or ""),
-            sub_actor=str(args.get("sub_actor") or ""),
             **{field: str(args.get(field) or "") for field in CONTRACT_FIELDS},
         )
-        problems = validate_sub_goal(sub_goal) + sub_goal_subject_problems(
-            sub_goal.sub_actor, destination
-        )
+        problems = validate_sub_goal(sub_goal)
         if problems:
             return _err("Not added:\n  - " + "\n  - ".join(problems))
         sub_goal, cleared = without_delivery_overlay(sub_goal)
@@ -1921,7 +1947,9 @@ def scenario_tools(
         if crowded_level:
             return _refuse(crowded_level)
         if not can_grow:
-            short = _red_team_short(args, target.get("axes"), kept, cap())
+            short = _red_team_short(args, target.get("axes"), kept, cap()) or _sub_actors_short(
+                args, kept, cap(), sub_actor_share(), usable_sub_actors()
+            )
             if short:
                 return _refuse(short)
         twin = _already_in_the_suite(
@@ -2143,6 +2171,20 @@ def scenario_tools(
                     "additionalProperties": {"type": "array", "items": {"type": "string"}},
                 },
                 "keywords": {"type": "array", "items": {"type": "string"}},
+                **(
+                    {
+                        "sub_actor_share": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 100,
+                            "description": "Only when the person asked how many scenarios should include "
+                            "a sub-actor: that share as a percentage of the suite, 0 for none. It replaces "
+                            "the environment's default share. Leave it out otherwise.",
+                        }
+                    }
+                    if sub_actors_enabled()
+                    else {}
+                ),
                 "axes": {
                     "type": "object",
                     "additionalProperties": {"type": "array", "items": {"type": "string"}},
@@ -2173,6 +2215,8 @@ def scenario_tools(
                 if people == "alike"
                 else ". No accent, language or location may dominate the suite"
             )
+        if args.get("sub_actor_share") is not None:
+            target["sub_actor_share"] = min(max(float(args["sub_actor_share"]), 0.0), 100.0) / 100
         asked = {
             level_name(str(axis)): [str(one).strip() for one in levels if str(one).strip()]
             for axis, levels in (args.get("asked_for") or {}).items()
@@ -2245,14 +2289,22 @@ def scenario_tools(
                 f". {len(vocabulary)} keywords are the suite's vocabulary; deal them in the briefs, "
                 "because a writer that never sees the list cannot stay inside it"
             )
-        listing = load_sub_actors(destination) if sub_actors_enabled() else None
+        usable = usable_sub_actors()
+        share = sub_actor_share()
+        if usable:
+            said += (
+                f". At least {at_least(share, cap())} of the {cap()} scenarios include a sub-actor"
+                if share > 0
+                else ". No scenario includes a sub-actor, as the person asked"
+            )
+        listing = load_sub_actors(destination) if usable and share > 0 else None
         named = " ".join(
             level for levels in (target.get("axes") or {}).values() for level in levels
         )
         unplaced = [
             one
             for one in (listing.sub_actors if listing else [])
-            if one.id not in named
+            if one.id in usable and one.id not in named
         ]
         if unplaced:
             said += (

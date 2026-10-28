@@ -365,12 +365,12 @@ class ResultReceipt:
     scenario_id: str
     scenario_attempt: int
     world_index: int | None
-    status: str  # "passed" | "failed" | "inconclusive" | "errored" | "skipped"
+    status: str  # "passed" | "failed" | "errored" | "skipped"
     sub_goals: tuple[SubGoalResult, ...]
     evaluations: tuple[Evaluation, ...]
     call: CallSummary | None
     failure: ReceiptFailure | None
-    # Why a scenario was skipped for a reason, or why a call that ran is inconclusive.
+    # Why a scenario was skipped, when there is a reason to give.
     reason: str | None = None
 
 
@@ -1493,53 +1493,6 @@ def _switched_off(scenario: Scenario) -> bool:
     return bool(getattr(scenario, "sub_actors", ())) and not sub_actors_enabled()
 
 
-def _sub_actor_absent(
-    goal: Any, summary: Sequence[dict[str, Any]]
-) -> SubGoalResult | None:
-    """A sub-goal about a sub-actor that never triggered is not applicable; one that was triggered but
-    delivered nothing cannot be decided. Otherwise the sub-goal is graded as usual."""
-    sub_actor = str(getattr(goal, "sub_actor", "") or "")
-    if not sub_actor:
-        return None
-    seen = next((one for one in summary if one.get("sub_actor") == sub_actor), {})
-    who = str(seen.get("name") or sub_actor)
-    if not seen.get("triggered"):
-        reason = f"{NOT_APPLICABLE}{who}'s trigger never fired in this call."
-        return SubGoalResult(goal.name, True, reason, goal.judged != "")
-    if not seen.get("delivered"):
-        why = ", ".join(seen.get("dropped") or ()) or "nothing reached the agent"
-        reason = f"{INCONCLUSIVE}{who} was triggered but did not take part: {why}."
-        return SubGoalResult(goal.name, None, reason, goal.judged != "")
-    return None
-
-
-def _complications_not_executed(
-    scenario: Scenario, summary: Sequence[dict[str, Any]]
-) -> list[str]:
-    """Why each complication, a sub-actor no sub-goal names, never reached the agent in this call.
-
-    Its scenario's usual sub-goals could all pass without the agent ever facing it."""
-    named = {str(getattr(goal, "sub_actor", "") or "") for goal in scenario.sub_goals}
-    why = []
-    for entry in getattr(scenario, "sub_actors", ()) or ():
-        # A compiled scenario carries the ids alone; a written one carries the entries.
-        key = str(entry if isinstance(entry, str) else getattr(entry, "id", "") or "")
-        if not key or key in named:
-            continue
-        seen = next((one for one in summary if one.get("sub_actor") == key), {})
-        if seen.get("delivered"):
-            continue
-        who = str(seen.get("name") or key)
-        if seen.get("triggered"):
-            dropped = (
-                ", ".join(seen.get("dropped") or ()) or "nothing reached the agent"
-            )
-            why.append(f"{who} was triggered but did not take part: {dropped}.")
-        else:
-            why.append(f"{who}'s trigger never fired in this call.")
-    return why
-
-
 def _skipped_receipt(scenario: Scenario) -> ResultReceipt:
     # Exact body per outbound-channels.md Channel 2, "skipped receipt body (exact)".
     return ResultReceipt(
@@ -2281,14 +2234,7 @@ class HostedScheduler:
         checked: dict[int, _Verdict] = {}
         check_handle = world.read_only()
         broken_failure: ReceiptFailure | None = None
-        # Sub-goals a sub-actor's absence decided, so their inconclusive is not the judge's.
-        absent_names: set[str] = set()
         for goal in scenario.sub_goals:
-            absent = _sub_actor_absent(goal, call_outcome.sub_actors)
-            if absent is not None:
-                sub_goal_results.append(absent)
-                absent_names.add(absent.name)
-                continue
             if broken_failure is not None:
                 sub_goal_results.append(
                     SubGoalResult(
@@ -2434,17 +2380,10 @@ class HostedScheduler:
                 retry=False,
             )
 
-        # A settled `False` fails the scenario; an unsettled sub-goal makes it not decided. A sub-actor
-        # that did not take part, named by a sub-goal or there as a complication, makes it
-        # inconclusive: never a pass.
-        unexecuted = _complications_not_executed(scenario, call_outcome.sub_actors)
-        reason = None
+        # A settled `False` fails the scenario; an unsettled sub-goal makes it not decided.
         if any(result.held is False for result in sub_goal_results):
             status = "failed"
-        elif any(
-            result.held is None and result.name not in absent_names
-            for result in sub_goal_results
-        ):
+        elif any(result.held is None for result in sub_goal_results):
             return self._fault(
                 scenario,
                 world_index,
@@ -2454,16 +2393,6 @@ class HostedScheduler:
                 call=self._call_summary(call_outcome),
                 retry=False,
             )
-        elif unexecuted or any(result.held is None for result in sub_goal_results):
-            status = "inconclusive"
-            # Each sub-actor once, whether a sub-goal names it or it was a complication.
-            why = unexecuted + [
-                (result.reason or "").removeprefix(INCONCLUSIVE)
-                for result in sub_goal_results
-                if result.held is None
-            ]
-            # The platform keeps up to 500 characters of it.
-            reason = " ".join(dict.fromkeys(why))[:500]
         else:
             status = "passed"
         failure = None
@@ -2477,7 +2406,6 @@ class HostedScheduler:
             evaluations=(),
             call=self._call_summary(call_outcome),
             failure=failure,
-            reason=reason,
         )
 
     @staticmethod

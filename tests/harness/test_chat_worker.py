@@ -93,7 +93,6 @@ def test_parallel_chat_workers_keep_routing_private_and_upload_in_parent(
     monkeypatch.setenv("AGENTCC_BASE_URL", "https://gateway.example")
     monkeypatch.setenv("ALK_CLAUDE_GATEWAY_API_KEY", "simulator-claude-key")
     monkeypatch.setenv("ALK_CLAUDE_GATEWAY_URL", "https://claude.example")
-    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
     original = dict(os.environ)
     payloads = []
 
@@ -106,7 +105,6 @@ def test_parallel_chat_workers_keep_routing_private_and_upload_in_parent(
             assert environ["AGENTCC_BASE_URL"] == "https://gateway.example"
             assert environ["ALK_CLAUDE_GATEWAY_API_KEY"] == "simulator-claude-key"
             assert environ["ALK_CLAUDE_GATEWAY_URL"] == "https://claude.example"
-            assert environ["HARNESS_SUB_ACTORS"] == "1"
             payloads.append(payload)
             if len(payloads) == 2:
                 both.set()

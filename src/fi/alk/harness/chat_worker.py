@@ -44,8 +44,6 @@ _CHAT_ENV = frozenset(
         "CLOUD_ML_REGION",
         "ALK_STAGE_IDLE_TIMEOUT_SECONDS",
         "ALK_STAGE_IDLE_RETRIES",
-        # Not a credential: whether the chat brings in the scenario's sub-actors.
-        "HARNESS_SUB_ACTORS",
     }
 )
 

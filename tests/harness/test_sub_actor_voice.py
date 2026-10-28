@@ -239,11 +239,11 @@ def test_a_sub_actor_s_brief_carries_the_situation_its_part_and_the_conversation
         language="",
     )
     told = with_others(
-        "The person's situation.", [_actor("one"), _actor("two", "thread_message")]
+        "The person's situation.", [_actor("one"), _actor("two", "ivr")]
     )
     assert (
         "One (someone with the person) may take the phone" in told
-        and "Two (someone with the person) is in this chat" in told
+        and "Two (someone with the person) answers your line first" in told
     )
 
 
@@ -575,8 +575,8 @@ def test_a_scenario_s_sub_actors_reach_the_call_resolved_in_voices_no_one_else_h
                 SubActor(
                     id="writer",
                     name="Kai",
-                    role="someone in the chat",
-                    channel="thread_message",
+                    role="something on the page",
+                    channel="page_content",
                 ),
             ]
         ),

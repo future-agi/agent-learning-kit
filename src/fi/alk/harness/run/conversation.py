@@ -11,24 +11,12 @@ All three are recorded, because how a conversation ended is often the finding.
 
 from __future__ import annotations
 
-import asyncio
 import json
-import logging
-import secrets
 import time
 import unicodedata
 from dataclasses import dataclass, field
 from itertools import accumulate
 from typing import Any, Callable
-
-from fi.simulate.simulation.sub_actors import (
-    HANDOFF_LINE_SECONDS,
-    Cast,
-    Moment,
-    line_brief,
-    someone_else,
-    with_others,
-)
 
 from ..backends import SessionSpec
 
@@ -38,8 +26,6 @@ from ..scenario import Scenario
 from ..session import Stage
 from ..world.runtime import Call
 from .targets import Target
-
-logger = logging.getLogger(__name__)
 
 DONE = "[DONE]"
 STUCK = "[STUCK]"
@@ -64,24 +50,6 @@ class Exchange:
     # Epoch seconds when the turn was delivered, on the same clock as `Call.at`, so a tool call
     # the agent made before replying sorts between the customer's turn and the reply.
     at: float = 0.0
-    # A sub-actor's turn: who it was, so it is never read as the person's or the agent's.
-    name: str = ""
-    sub_actor: str = ""
-    # The tokens it took to write a sub-actor's message, already in the call's simulator tokens.
-    tokens: int = 0
-
-    def message(self, role: str, *, timed: bool = False) -> dict[str, Any]:
-        when = {"at": self.at} if timed and self.at else {}
-        if self.speaker != "sub_actor":
-            return {"role": role, "content": self.text, **when}
-        return {
-            "role": "sub_actor",
-            "name": self.name,
-            "sub_actor": self.sub_actor,
-            "content": self.text,
-            **({"tokens": self.tokens} if self.tokens else {}),
-            **when,
-        }
 
 
 @dataclass
@@ -94,21 +62,17 @@ class Transcript:
     spent_usd: float = 0.0
     simulator_input_tokens: int = 0
     simulator_output_tokens: int = 0
-    # Who the call's sub-actors were, what happened to each, and in what order.
-    sub_actors: dict[str, Any] = field(default_factory=dict)
 
     def spoken(self) -> str:
-        return "\n".join(
-            f"{someone_else(turn.name)}: {turn.text}"
-            if turn.speaker == "sub_actor"
-            else f"{turn.speaker}: {turn.text}"
-            for turn in self.exchanges
-        )
+        return "\n".join(f"{turn.speaker}: {turn.text}" for turn in self.exchanges)
 
     def canonical_messages(self) -> list[dict[str, str]]:
         """The turns in the role convention the judge reads: `user` said it, `assistant` answered."""
         return [
-            turn.message("assistant" if turn.speaker == "agent" else "user")
+            {
+                "role": "assistant" if turn.speaker == "agent" else "user",
+                "content": turn.text,
+            }
             for turn in self.exchanges
         ]
 
@@ -119,14 +83,16 @@ class Transcript:
                 {
                     "transcript": self.spoken(),
                     "messages": [
-                        turn.message(
-                            "user" if turn.speaker == "customer" else "assistant",
-                            timed=True,
-                        )
+                        {
+                            "role": "user"
+                            if turn.speaker == "customer"
+                            else "assistant",
+                            "content": turn.text,
+                            **({"at": turn.at} if turn.at else {}),
+                        }
                         for turn in self.exchanges
                     ],
                     "ended": self.ended,
-                    **({"sub_actors": self.sub_actors} if self.sub_actors else {}),
                 },
                 sort_keys=True,
             )
@@ -244,120 +210,6 @@ def customer_prompt(
     )
 
 
-class _ChatSubActors:
-    """The scenario's chat participants besides the person, within the call's limits."""
-
-    def __init__(
-        self, scenario: Scenario, world_root: Any, model: str | None, seed: str
-    ) -> None:
-        from ..sub_actor import load_sub_actors, sub_actors_enabled
-
-        listing = (
-            load_sub_actors(world_root)
-            if world_root and scenario.sub_actors and sub_actors_enabled()
-            else None
-        )
-        self.actors = [
-            {
-                **actor.model_dump(exclude_none=True),
-                "instruction": one.instruction,
-                "trigger": one.trigger.model_dump(),
-            }
-            for one in scenario.sub_actors
-            if listing
-            and (actor := listing.get(one.id)) is not None
-            and actor.channel == "thread_message"
-        ]
-        self.cast = Cast(self.actors, seed)
-        self.situation = scenario.instruction
-        self.language = (
-            ", ".join(scenario.persona.languages) if scenario.persona else ""
-        )
-        self.model = model
-        self.said: dict[str, list[str]] = {}
-        # What writing their messages cost, added to the call's simulator usage.
-        self.tokens_in = 0
-        self.tokens_out = 0
-        self.spent_usd = 0.0
-
-    async def after_agent(
-        self, turns: int, reply: str, tools_called: list[str], conversation: list[str]
-    ) -> list[Exchange]:
-        """The messages the sub-actors write after this agent turn."""
-        self.cast.entering(
-            Moment(agent_turns=turns, last_text=reply, tools_called=tools_called)
-        )
-        written = []
-        for actor in self.actors:
-            if not self.cast.may_speak(actor, turns) or not self.cast.line_wanted(
-                actor
-            ):
-                continue
-            asked = time.time()
-            try:
-                text, tokens = await asyncio.wait_for(
-                    self._write(actor, conversation),
-                    self.cast.line_limit(HANDOFF_LINE_SECONDS),
-                )
-            except asyncio.TimeoutError:
-                self.cast.late(actor)
-                self.cast.finish(actor)
-                continue
-            except Exception as exc:  # noqa: BLE001 - a quiet participant is a weaker test, never a failed call
-                self.cast.dropped(actor, f"message failed: {type(exc).__name__}")
-                self.cast.finish(actor)
-                continue
-            finally:
-                self.cast.line_settled()
-            if not text:
-                self.cast.finish(actor, "nothing more to say")
-                continue
-            now = time.time()
-            self.said.setdefault(str(actor["id"]), []).append(text)
-            self.cast.delivered(actor, text, turns, now, now, asked)
-            written.append(
-                Exchange(
-                    "sub_actor",
-                    text,
-                    now,
-                    name=str(actor.get("name") or ""),
-                    sub_actor=str(actor["id"]),
-                    tokens=tokens,
-                )
-            )
-        if written:
-            self.cast.took_turn()
-        return written
-
-    async def _write(
-        self, actor: dict[str, Any], conversation: list[str]
-    ) -> tuple[str, int]:
-        """The message and the tokens it took; what it cost is counted even when it says nothing."""
-        brief = line_brief(
-            actor,
-            situation=self.situation,
-            said=self.said.get(str(actor["id"]), []),
-            conversation=conversation,
-            language=self.language,
-        )
-        async with Stage(
-            SessionSpec(
-                system_prompt=brief
-                + "\n\nWrite your next message, short, as yourself. Output only the message, "
-                "or nothing at all when you have nothing more to say.",
-                max_turns=1,
-                model=chosen_model(self.model),
-                gated=False,
-            ),
-            name="sub-actor",
-        ) as stage:
-            turn = await stage.say("Write it now.")
-        self.tokens_in += turn.tokens_in
-        self.tokens_out += turn.tokens_out
-        self.spent_usd += turn.cost_usd or 0.0
-        return turn.text.strip(), turn.tokens_in + turn.tokens_out
-
-
 async def converse(
     target: Target,
     scenario: Scenario,
@@ -366,19 +218,11 @@ async def converse(
     world_root: Any = None,
     model: str | None = None,
     on_exchange: Callable[[Exchange], Any] | None = None,
-    seed: str = "",
 ) -> Transcript:
     """Run one scenario as a conversation and return what happened."""
     transcript = Transcript()
     from ..simulator import load_simulator_prompt
 
-    others = _ChatSubActors(scenario, world_root, model, seed or secrets.token_hex(8))
-    # What the person may fall back to saying: their own situation, never the note about the others.
-    situation = scenario.instruction
-    if others.actors:
-        scenario = scenario.model_copy(
-            update={"instruction": with_others(scenario.instruction, others.actors)}
-        )
     customer = Stage(
         SessionSpec(
             system_prompt=customer_prompt(
@@ -395,13 +239,11 @@ async def converse(
         name="customer",
     )
 
-    def keep(exchange: Exchange) -> None:
+    def record(speaker: str, text: str) -> None:
+        exchange = Exchange(speaker, text, time.time())
         transcript.exchanges.append(exchange)
         if on_exchange:
             on_exchange(exchange)
-
-    def record(speaker: str, text: str) -> None:
-        keep(Exchange(speaker, text, time.time()))
 
     await target.open()
     await customer.__aenter__()
@@ -409,59 +251,32 @@ async def converse(
         # The customer opens, in its own words. The scenario's instruction is written *about*
         # the caller ("orders two burgers and asks for..."), so speaking it verbatim would hand
         # the agent a stage direction instead of a person.
-        said = _opening_line((await customer.say(OPENING)).text, situation)
+        said = _opening_line((await customer.say(OPENING)).text, scenario.instruction)
         for again in (_RETRY, _GREET):
             if said:
                 break
-            said = _opening_line((await customer.say(again)).text, situation)
+            said = _opening_line((await customer.say(again)).text, scenario.instruction)
         # Only when every ask came back unusable does the run open with a line the person did not
         # write; they are told it with the agent's reply, so their session matches what was said.
         opened_for_them = not said
         if opened_for_them:
             said = "Hello."
         record("customer", said)
-        # Messages from a sub-actor that the target cannot take with a sender name: they reach it at
-        # the start of the person's next message.
-        waiting = ""
         for _turn in range(max(1, scenario.max_turns)):
             try:
-                reply = await target.say(
-                    "\n\n".join(part for part in (waiting, said) if part)
-                )
+                reply = await target.say(said)
             except TargetConversationEnded as ended:
                 if ended.final_message:
                     record("agent", ended.final_message)
                 transcript.ended = FINISHED
                 break
-            waiting = ""
             record("agent", reply or "(said nothing)")
 
-            heard = []
-            tools = [
-                call.name
-                for call in getattr(getattr(target, "world", None), "calls", [])
-            ]
-            speakers = {"customer": "The person", "agent": "The agent"}
-            conversation = [
-                f"{speakers.get(one.speaker) or one.name}: {one.text}"
-                for one in transcript.exchanges
-            ]
-            for entered in await others.after_agent(
-                _turn + 1, reply or "", tools, conversation
-            ):
-                keep(entered)
-                heard.append(f"[{entered.name}]: {entered.text}")
-                interject = getattr(target, "interject", None)
-                if callable(interject):
-                    interject(entered.name, entered.text)
-            if heard and not callable(getattr(target, "interject", None)):
-                waiting = "\n\n".join(heard)
-            told = reply or "(no response)"
+            heard = reply or "(no response)"
             if opened_for_them:
-                told = f"You opened with: {said}\nThe agent replied: {told}"
+                heard = f"You opened with: {said}\nThe agent replied: {heard}"
                 opened_for_them = False
-            # The chat is shared: the person sees the other participant's messages too.
-            turn = await customer.say("\n\n".join([told, *heard]))
+            turn = await customer.say(heard)
             said = turn.text.strip()
             if DONE in said or STUCK in said:
                 transcript.ended = GAVE_UP if STUCK in said else FINISHED
@@ -481,30 +296,21 @@ async def converse(
         # runners attach this partial transcript to the failed usage record instead of silently
         # dropping a paid attempt that never reached a normal return.
         transcript.calls = list(target.world.calls) if hasattr(target, "world") else []
-        _add_usage(transcript, target, customer, others)
+        transcript.spent_usd = target.spent_usd + customer.spent_usd
+        (
+            transcript.simulator_input_tokens,
+            transcript.simulator_output_tokens,
+        ) = getattr(customer, "simulator_tokens", (0, 0))
         setattr(exc, "partial_transcript", transcript)
         raise
     finally:
-        others.cast.hang_up()
-        if others.actors:
-            transcript.sub_actors = {
-                "resolved": others.actors,
-                "summary": others.cast.summary(),
-                "events": others.cast.events,
-            }
         await customer.__aexit__(None, None, None)
         await target.close()
 
     transcript.calls = list(target.world.calls) if hasattr(target, "world") else []
-    _add_usage(transcript, target, customer, others)
+    transcript.spent_usd = target.spent_usd + customer.spent_usd
+    (
+        transcript.simulator_input_tokens,
+        transcript.simulator_output_tokens,
+    ) = getattr(customer, "simulator_tokens", (0, 0))
     return transcript
-
-
-def _add_usage(
-    transcript: Transcript, target: Any, customer: Any, others: _ChatSubActors
-) -> None:
-    """The call's spend and simulator tokens: the person's and every sub-actor message's, once each."""
-    transcript.spent_usd = target.spent_usd + customer.spent_usd + others.spent_usd
-    tokens_in, tokens_out = getattr(customer, "simulator_tokens", (0, 0))
-    transcript.simulator_input_tokens = tokens_in + others.tokens_in
-    transcript.simulator_output_tokens = tokens_out + others.tokens_out

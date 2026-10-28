@@ -4571,60 +4571,6 @@ def test_call_file_written_before_setup_and_removed_after_each_scenario(
     asyncio.run(scenario())
 
 
-def test_a_sub_goal_about_a_sub_actor_reads_from_whether_it_took_part_in_the_call(
-    monkeypatch,
-) -> None:
-    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
-
-    async def scenario() -> list[hs.SubGoalResult]:
-        outbound = FakeOutbound()
-        pool, _ = _pool(1, outbound=outbound)
-        await pool.start()
-        outcome = replace(
-            _call_outcome(),
-            sub_actors=(
-                {
-                    "sub_actor": "friend",
-                    "name": "Rowan",
-                    "triggered": False,
-                    "delivered": 0,
-                    "dropped": [],
-                },
-            ),
-        )
-        about = FakeSubGoal(
-            "noticed", lambda w, c: "the agent did not check with the customer"
-        )
-        about.sub_actor = "friend"
-        scheduler = hs.HostedScheduler(
-            pool=pool,
-            world_factory=FakeWorldFactory(),
-            call_runner=FakeCallRunner({"s1": outcome}),
-            outbound=outbound,
-            job_seed=1,
-        )
-        scenarios = [
-            FakeScenario(
-                "s1",
-                "id-1",
-                sub_goals=[about, FakeSubGoal("done", lambda w, c: None)],
-                requires_tool_evidence=False,
-            )
-        ]
-        result = await asyncio.wait_for(scheduler.run(scenarios), timeout=5.0)
-        await pool.close()
-        return list(result.receipts[0].sub_goals)
-
-    results = asyncio.run(scenario())
-    assert [(one.name, one.verdict) for one in results] == [
-        ("noticed", "not_applicable"),
-        ("done", "pass"),
-    ]
-    assert (
-        results[0].reason == "Not applicable: Rowan's trigger never fired in this call."
-    )
-
-
 def test_a_scenario_with_sub_actors_is_never_run_while_they_are_off_and_says_why(
     monkeypatch,
 ) -> None:
@@ -4704,30 +4650,15 @@ def _friend(**seen) -> dict:
     }
 
 
-def test_a_complication_that_never_reached_the_agent_makes_the_call_inconclusive(
+def test_a_sub_actor_that_never_came_in_leaves_the_call_graded_on_its_sub_goals(
     monkeypatch,
 ) -> None:
-    receipt = _run_with_friend(
-        monkeypatch,
-        _friend(dropped=["voice failed"]),
-        [FakeSubGoal("booked", lambda w, c: None)],
-    )
-    assert (receipt.status, receipt.reason) == (
-        "inconclusive",
-        "Rowan was triggered but did not take part: voice failed.",
-    )
-    # Each sub-goal keeps its own result.
-    assert [(one.name, one.verdict) for one in receipt.sub_goals] == [("booked", "pass")]
-
-    never = _run_with_friend(
-        monkeypatch,
-        _friend(triggered=False),
-        [FakeSubGoal("booked", lambda w, c: None)],
-    )
-    assert (never.status, never.reason) == (
-        "inconclusive",
-        "Rowan's trigger never fired in this call.",
-    )
+    for seen in (_friend(dropped=["voice failed"]), _friend(triggered=False)):
+        receipt = _run_with_friend(
+            monkeypatch, seen, [FakeSubGoal("booked", lambda w, c: None)]
+        )
+        assert (receipt.status, receipt.reason) == ("passed", None)
+        assert [(one.name, one.verdict) for one in receipt.sub_goals] == [("booked", "pass")]
 
 
 def test_a_complication_that_took_part_leaves_the_call_s_result_as_graded(
@@ -4745,21 +4676,3 @@ def test_a_complication_that_took_part_leaves_the_call_s_result_as_graded(
         [FakeSubGoal("booked", lambda w, c: "booked for the wrong time")],
     )
     assert failed.status == "failed"
-
-
-def test_a_sub_goal_about_a_dropped_sub_actor_makes_the_call_inconclusive_not_errored(
-    monkeypatch,
-) -> None:
-    about = FakeSubGoal("noticed", lambda w, c: None)
-    about.sub_actor = "friend"
-    receipt = _run_with_friend(
-        monkeypatch,
-        _friend(dropped=["not ready in time"]),
-        [about, FakeSubGoal("booked", lambda w, c: None)],
-    )
-    assert receipt.status == "inconclusive" and receipt.failure is None
-    assert [(one.name, one.verdict) for one in receipt.sub_goals] == [
-        ("noticed", "inconclusive"),
-        ("booked", "pass"),
-    ]
-    assert receipt.reason == "Rowan was triggered but did not take part: not ready in time."
