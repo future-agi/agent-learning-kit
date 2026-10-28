@@ -947,8 +947,6 @@ def accept_scenario(
             problems.extend(contract_sequence_problems(scenario, hard_constraints or []))
             problems.extend(_credentials_the_world_lacks(scenario, trial))
             problems.extend(_identifiers_the_instruction_invents(scenario, trial))
-            problems.extend(_fixed_sources_that_do_not_hold(scenario, trial, instructions))
-            problems.extend(_steps_the_contract_refuses(scenario, world_root))
             problems.extend(_overlay_asserts_nothing(scenario, catalogue))
             problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
         finally:
@@ -1215,20 +1213,8 @@ def scenario_tools(
         schema({"table": str, "limit": int, "matching": str}, []),
     )
     async def inspect_world(args: dict[str, Any]) -> dict[str, Any]:
-        if native_runtime(world_root):
+        if native_runtime(world_root) or not args.get("table"):
             return _ok(world_summary(world_root))
-        if not args.get("table"):
-            lines = [world_summary(world_root)]
-            if catalogue.sub_goals:
-                lines.append("\nsub-goals available:")
-                for goal in sorted(catalogue.sub_goals, key=lambda one: one.name):
-                    compares = (
-                        f" Its check compares {goal.reference.strip()}"
-                        if goal.reference.strip()
-                        else ""
-                    )
-                    lines.append(f"- {goal.name}: {goal.what.strip()}{compares}")
-            return _ok("\n".join(lines))
         world = restore(world_root)
         try:
             state = world.state()

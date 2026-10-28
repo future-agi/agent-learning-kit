@@ -349,10 +349,15 @@ def workspace_bindings(world_root: Path) -> dict[str, str]:
 
 
 def _file_calls(tree: ast.AST) -> list[ast.Call]:
-    return [node for node in ast.walk(tree)
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-            and isinstance(node.func.value, ast.Name) and node.func.value.id == "world"
-            and node.func.attr in {"write_file", "read_file"}]
+    return [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "world"
+        and node.func.attr in {"write_file", "read_file"}
+    ]
 
 
 def workspace_fixture(scenario: Scenario, catalogue: Catalogue) -> bool:
@@ -367,8 +372,9 @@ def workspace_fixture(scenario: Scenario, catalogue: Catalogue) -> bool:
     return False
 
 
-def workspace_fixture_problems(scenario: Scenario, catalogue: Catalogue,
-                               bindings: dict[str, str]) -> list[str]:
+def workspace_fixture_problems(
+    scenario: Scenario, catalogue: Catalogue, bindings: dict[str, str]
+) -> list[str]:
     """Check fixture structure; only live readiness can verify target file contents."""
     if not bindings:
         return ["file fixtures require a declared runtime.workspaces binding"]
@@ -388,7 +394,10 @@ def workspace_fixture_problems(scenario: Scenario, catalogue: Catalogue,
         except SyntaxError as exc:
             problems.append(f"{entry} syntax error: {exc.msg}")
             continue
-        if not any(isinstance(node, ast.FunctionDef) and node.name == entry for node in tree.body):
+        if not any(
+            isinstance(node, ast.FunctionDef) and node.name == entry
+            for node in tree.body
+        ):
             problems.append(f"missing {entry} function")
         for node in _file_calls(tree):
             writes |= entry == "setup" and node.func.attr == "write_file"
@@ -401,9 +410,13 @@ def workspace_fixture_problems(scenario: Scenario, catalogue: Catalogue,
             if node.args and isinstance(node.args[0], ast.Constant):
                 name = node.args[0].value
                 if name not in bindings:
-                    problems.append(f"workspace {name!r} is not declared in runtime.workspaces")
+                    problems.append(
+                        f"workspace {name!r} is not declared in runtime.workspaces"
+                    )
     if writes and not reads:
-        problems.append("ready(world) must read back seeded files and verify their contents in the live runtime")
+        problems.append(
+            "ready(world) must read back seeded files and verify their contents in the live runtime"
+        )
     return problems
 
 
@@ -524,7 +537,9 @@ def prove(
     checks = _checks_for(scenario, catalogue)
     if workspace_fixture(scenario, catalogue) and not native_runtime(world_root):
         proof.deferred = True
-        proof.broken = workspace_fixture_problems(scenario, catalogue, workspace_bindings(world_root))
+        proof.broken = workspace_fixture_problems(
+            scenario, catalogue, workspace_bindings(world_root)
+        )
         return proof
     if native_runtime(world_root):
         proof.deferred = True
