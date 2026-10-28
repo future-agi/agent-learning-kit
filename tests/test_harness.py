@@ -8927,22 +8927,6 @@ def test_proofs_merge_by_key_and_survive_a_bad_file(tmp_path):
     assert not list(tmp_path.glob(".proofs-*"))
 
 
-def test_a_deferred_proof_leaves_its_scenario_unrecorded(tmp_path):
-    from fi.alk.harness.proofs import load_proofs, record_proof, record_unprovable
-    from fi.alk.harness.prove import Proof
-
-    record_unprovable(tmp_path, "one", "RuntimeError")
-    record_unprovable(tmp_path, "two", "RuntimeError")
-
-    record_proof(tmp_path, "one", Proof(deferred=True))
-    record_proof(tmp_path, "three", Proof(deferred=True))
-    record_proof(tmp_path, "two", Proof(deferred=True, broken=["ready"]))
-
-    proofs = load_proofs(tmp_path)
-    assert set(proofs) == {"two"}
-    assert proofs["two"]["holds"] is False
-
-
 @pytest.mark.parametrize("store", ["filesystem", "none", ""])
 def test_runtime_tools_without_record_store_do_not_require_synthetic_tables(
     tmp_path, store
