@@ -1172,6 +1172,11 @@ class OutboundAdapter:
         # contract, must come first) -- `configure_artifacts` below is called once it's available;
         # this default is never actually exercised in practice, just a safe placeholder shape.
         self._artifacts_policy = HarnessArtifactPolicy()
+        # job.metadata's `certification` block, echoed verbatim inside the
+        # terminal event (see `set_certification_metadata`): job.json is parsed
+        # after this adapter is built, so the provenance echo is wired through
+        # the same post-parse hook pattern as `configure_artifacts`.
+        self._certification_metadata: dict[str, Any] | None = None
         # `recording_headroom_bytes` stays 0 -- this adapter has no visibility into how many
         # scenarios are still to run (or how large their recordings will be) at construction time,
         # unlike the scheduler; sizing it here would be a guess dressed up as enforcement.
@@ -1272,6 +1277,14 @@ class OutboundAdapter:
     @property
     def scenario_counts(self) -> dict[str, int]:
         return dict(self._scenario_counts)
+
+    def set_certification_metadata(
+        self, certification: dict[str, Any] | None
+    ) -> None:
+        """Wire the terminal event's `certification` provenance echo. Called once
+        after job.json parses with `job.metadata.get("certification")` — None on
+        ordinary runs, leaving the terminal payload byte-identical to before."""
+        self._certification_metadata = certification
 
     def configure_artifacts(self, policy: HarnessArtifactPolicy) -> None:
         self._artifacts_policy = policy
@@ -1779,15 +1792,18 @@ class OutboundAdapter:
         # the latch is set AFTER a successful append (below), not before -- a raise inside
         # `_emit_event` (an oversized payload, an invalid `failure.domain`) must not permanently
         # disable the terminal event.
+        payload: dict[str, Any] = {
+            "stage": stage.value,
+            "reason": reason.value if reason is not None else None,
+            "failure": failure,
+            "scenario_counts": dict(self._scenario_counts),
+        }
+        if self._certification_metadata:
+            payload["certification"] = self._certification_metadata
         self._emit_event(
             stage=stage,
             type_=ob.OutboundEventType.TERMINAL,
-            payload={
-                "stage": stage.value,
-                "reason": reason.value if reason is not None else None,
-                "failure": failure,
-                "scenario_counts": dict(self._scenario_counts),
-            },
+            payload=payload,
         )
         self._terminal_emitted = True
         # arm the flush window HERE, unconditionally -- "120s from the cancel signal / TTL /
@@ -2428,6 +2444,9 @@ async def run_job(
         adapter.configure_artifacts(
             job.artifacts
         )  # level table + budget, now that job.json is known.
+        adapter.set_certification_metadata(
+            (job.metadata or {}).get("certification")
+        )  # campaign provenance echo for the terminal event.
 
         adapter.stage_changed(HarnessStage.VALIDATING_ENVIRONMENT)
         await adapter.aflush_events()

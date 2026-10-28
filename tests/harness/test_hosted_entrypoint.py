@@ -2642,6 +2642,47 @@ def test_redaction_end_to_end_secret_never_crosses_any_channel() -> None:
     asyncio.run(scenario())
 
 
+def test_terminal_event_echoes_the_jobs_certification_metadata() -> None:
+    # Campaign provenance passthrough: `run_job` wires `job.metadata.certification`
+    # into the adapter after job.json parses; the terminal event must return it
+    # verbatim so the platform can bind the terminal attempt to the campaign/case.
+    async def scenario() -> None:
+        transport = FakeTransport()
+        adapter = _build_adapter(transport)
+        adapter.set_certification_metadata(
+            {
+                "campaign_id": "cmp-123",
+                "case_key": "cert-case",
+                "suite_digest": "a" * 64,
+            }
+        )
+        await adapter.emit_terminal(stage=HarnessStage.COMPLETED)
+        await adapter.drain(complete=True)
+        terminal = transport.terminal_events()[0]
+        assert terminal["payload"]["certification"] == {
+            "campaign_id": "cmp-123",
+            "case_key": "cert-case",
+            "suite_digest": "a" * 64,
+        }
+
+    asyncio.run(scenario())
+
+
+def test_terminal_event_omits_certification_on_ordinary_runs() -> None:
+    # Ordinary (non-certification) jobs carry no `metadata.certification` — the
+    # key must be absent entirely, keeping their terminal payload byte-identical
+    # to before the echo existed.
+    async def scenario() -> None:
+        transport = FakeTransport()
+        adapter = _build_adapter(transport)
+        await adapter.emit_terminal(stage=HarnessStage.COMPLETED)
+        await adapter.drain(complete=True)
+        terminal = transport.terminal_events()[0]
+        assert "certification" not in terminal["payload"]
+
+    asyncio.run(scenario())
+
+
 def test_drain_loops_past_a_backlog_larger_than_one_batch_and_still_delivers_the_terminal() -> (
     None
 ):
