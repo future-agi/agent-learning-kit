@@ -23,6 +23,11 @@ opt_in_lane: false
 > · emits `agent-learning.eval.v1` · offline, no credentials.
 > A coding agent can complete this page from the frontmatter alone.
 
+For the larger map—facade versus included engine, local/model/platform modes,
+harness grading, loss and benchmarks—start with the [Evaluation guide](overview.md).
+The recipe below assumes a **checkout**: pip installation alone does not install
+`examples/`. Its echo provider is offline; arbitrary suites are not.
+
 ## 1. What you are testing
 
 That a fixed set of prompts, run through a named provider, still satisfies
@@ -52,9 +57,15 @@ release-check, which is what admits this page.
 CLI — validate the shape first, then execute:
 
 ```bash
+export AGENT_LEARNING_SYNC=local
+export AGENT_LEARNING_LEDGER_PATH="$PWD/artifacts/eval-suite-ledger"
 agent-learn eval examples/eval_suite.json --dry-run
 agent-learn eval examples/eval_suite.json --output artifacts/eval-suite.json
 ```
+
+`--dry-run` checks suite shape without executing providers; its successful status
+is validation, not a measured quality verdict. Telemetry local mode does not
+prevent a different suite from calling a model or HTTP service.
 
 SDK — the same operation:
 
