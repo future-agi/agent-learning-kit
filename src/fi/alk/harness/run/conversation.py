@@ -14,7 +14,9 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+import unicodedata
 from dataclasses import dataclass, field
+from itertools import accumulate
 from typing import Any, Callable
 
 from ..backends import SessionSpec
@@ -127,32 +129,50 @@ class Transcript:
 # as the agent instead of to it.
 OPENING = (
     "The conversation is starting and you speak first. You are the person making contact, not "
-    "the agent being contacted. Say what you came to say, in your own words, and nothing else. "
-    "Do not offer to look anything up, do not answer on their behalf, and do not greet them and "
-    "wait: say the thing you actually want."
+    "the agent being contacted. What you write now are your first words to the agent, in the "
+    "language you speak. Say what you came to say, in your own words, and nothing else. Do not "
+    "offer to look anything up and do not answer on the agent's behalf."
 )
 
-# How an opening turn reads when the part has been swapped. Offers of help, not requests for it.
-_AS_THE_AGENT = (
-    "let me ",
-    "i'll look",
-    "i will look",
-    "i'd be happy to look",
-    "i can help you with that",
-    "how can i help",
-    "how may i help",
-    "what would you like to know",
-    "i'll check",
-    "i will check",
-    "let me check",
-    "sure! let me",
+# When an opening line is not sent, the person is told so, because their own session keeps every
+# line they wrote: the next one has to follow from what the agent actually heard, which is nothing.
+_UNSENT = (
+    "That line was not sent: it was empty, or it repeated the description of your situation "
+    "instead of saying something to the agent, so the agent has heard nothing yet. "
+)
+# The second try asks again for what they came to say; the last asks only for the greeting a person
+# opens with, in the language they speak, so the request comes after the agent's reply.
+_RETRY = (
+    _UNSENT
+    + "You are the person making contact. Say what you came to say to the agent, in your own words."
+)
+_GREET = (
+    _UNSENT
+    + "Open as a person does: say only a short greeting, in the language you speak."
 )
 
 
-def _answered_as_the_agent(said: str) -> bool:
-    """Whether the opening line is the agent's part rather than the person's."""
-    opening = said.strip().lower()
-    return any(mark in opening for mark in _AS_THE_AGENT)
+def _opening_line(said: str, instruction: str) -> str:
+    """The line the agent hears, or "" when it is not one: empty, only an end marker, or the
+    scenario's own instruction handed back instead of the person's words."""
+    line = said.replace(DONE, "").replace(STUCK, "").strip()
+    written, heard = (
+        " ".join(unicodedata.normalize("NFKC", text).casefold().split())
+        for text in (instruction, line)
+    )
+    # The instruction must sit on whole words of the line, so a line that only shares a phrase
+    # with it is still sent. Written without spaces, the spaces the line added are ignored.
+    if " " in written:
+        echoed = f" {written} " in f" {heard} "
+    else:
+        words = heard.split()
+        edges = {0, *accumulate(map(len, words))}
+        joined = "".join(words)
+        echoed = bool(written) and any(
+            joined.startswith(written, at) and at + len(written) in edges
+            for at in edges
+        )
+    return "" if echoed else line
 
 
 def customer_prompt(
@@ -232,16 +252,16 @@ async def converse(
         # The customer opens, in its own words. The scenario's instruction is written *about*
         # the caller ("orders two burgers and asks for..."), so speaking it verbatim would hand
         # the agent a stage direction instead of a person.
-        opening = await customer.say(OPENING)
-        said = opening.text.strip() or scenario.instruction
-        if _answered_as_the_agent(said):
-            # The opening turn is the one with no conversation behind it, and a model asked to
-            # speak into that gap will sometimes take the other part: it offers to look something
-            # up, the agent replies that no question was asked, and the run fails for a reason
-            # that has nothing to do with the agent. The instruction is the fallback, because a
-            # blunt version of the right question tests more than a fluent version of the wrong
-            # one.
-            said = scenario.instruction
+        said = _opening_line((await customer.say(OPENING)).text, scenario.instruction)
+        for again in (_RETRY, _GREET):
+            if said:
+                break
+            said = _opening_line((await customer.say(again)).text, scenario.instruction)
+        # Only when every ask came back unusable does the run open with a line the person did not
+        # write; they are told it with the agent's reply, so their session matches what was said.
+        opened_for_them = not said
+        if opened_for_them:
+            said = "Hello."
         record("customer", said)
         for _turn in range(max(1, scenario.max_turns)):
             try:
@@ -253,7 +273,11 @@ async def converse(
                 break
             record("agent", reply or "(said nothing)")
 
-            turn = await customer.say(reply or "(no response)")
+            heard = reply or "(no response)"
+            if opened_for_them:
+                heard = f"You opened with: {said}\nThe agent replied: {heard}"
+                opened_for_them = False
+            turn = await customer.say(heard)
             said = turn.text.strip()
             if DONE in said or STUCK in said:
                 transcript.ended = GAVE_UP if STUCK in said else FINISHED
