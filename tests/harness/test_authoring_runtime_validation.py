@@ -10,6 +10,7 @@ from fi.alk.harness.authoring_runtime_validation import (
     _database_lanes,
     _fallback_diagnostic,
     _make_local_seed_files_readable,
+    _provider_owns_tool_execution,
     RuntimeValidationError,
     _setup_check_keys,
     _generic_candidate_hash,
@@ -25,7 +26,7 @@ from fi.alk.harness.certification import (
     GenericHarnessArtifactStore,
     RuntimeValidationEvidence,
 )
-from fi.alk.harness.job import HarnessJob
+from fi.alk.harness.job import HarnessJob, ProviderExecutionMode
 from fi.alk.harness.bundle_v2 import BundleRuntimeV2, EvidenceSeam, RuntimeKindV2
 from fi.alk.harness.diagnostics import HarnessDiagnostic
 from fi.alk.harness.job import HarnessStage
@@ -56,6 +57,24 @@ from fi.alk.harness.world_ir import (
     WorldValue,
     validate_world_ir,
 )
+
+
+@pytest.mark.parametrize(
+    ("connector", "mode"),
+    [
+        ("retell", ProviderExecutionMode.CONNECT_ONLY),
+        ("retell", ProviderExecutionMode.ENVIRONMENT_BACKED),
+        ("retell", ProviderExecutionMode.PROVIDER_IMPORT),
+        ("retell_chat", ProviderExecutionMode.PROVIDER_IMPORT),
+        ("vapi", ProviderExecutionMode.CONNECT_ONLY),
+        ("vapi", ProviderExecutionMode.ENVIRONMENT_BACKED),
+        ("vapi", ProviderExecutionMode.PROVIDER_IMPORT),
+    ],
+)
+def test_provider_connector_owns_tool_execution(connector, mode) -> None:
+    job = SimpleNamespace(agent=SimpleNamespace(connector=connector, mode=mode))
+
+    assert _provider_owns_tool_execution(job)
 
 
 def test_database_lanes_default_to_one_per_cpu(monkeypatch):
@@ -198,7 +217,8 @@ def test_runtime_validation_error_carries_structured_diagnostics() -> None:
 
 @pytest.mark.parametrize("readiness_only", [False, True])
 def test_generic_validation_uses_typed_patch_policy_and_persists_history(
-    tmp_path, readiness_only,
+    tmp_path,
+    readiness_only,
 ) -> None:
     source = tmp_path / "source"
     authoring = tmp_path / "authoring"
@@ -232,12 +252,27 @@ def test_generic_validation_uses_typed_patch_policy_and_persists_history(
 
     job = SimpleNamespace(metadata={"generic_harness_v1": True})
     asyncio.run(
-        validate_and_repair(job, source, authoring, validate=validate, repair=repair, readiness_only=readiness_only)
+        validate_and_repair(
+            job,
+            source,
+            authoring,
+            validate=validate,
+            repair=repair,
+            readiness_only=readiness_only,
+        )
     )
 
     assert calls == ["validate", "repair", "validate"]
     history = json.loads(
-        (authoring / "generic-harness" / ("readiness-repair-history.json" if readiness_only else "repair-history.json")).read_text()
+        (
+            authoring
+            / "generic-harness"
+            / (
+                "readiness-repair-history.json"
+                if readiness_only
+                else "repair-history.json"
+            )
+        ).read_text()
     )
     assert [item["action"] for item in history["decisions"]] == [
         RepairAction.PATCH_ENVIRONMENT.value,
@@ -470,9 +505,13 @@ def test_generic_validation_retries_infrastructure_without_reauthoring(
 
 
 @pytest.mark.parametrize("changing_evidence", [False, True])
-@pytest.mark.parametrize("code", ["external_service_unavailable", "chat_ingress_timeout"])
+@pytest.mark.parametrize(
+    "code", ["external_service_unavailable", "chat_ingress_timeout"]
+)
 def test_initial_materialization_does_not_grant_extra_infrastructure_retries(
-    tmp_path, changing_evidence, code,
+    tmp_path,
+    changing_evidence,
+    code,
 ):
     source, authoring = tmp_path / "source", tmp_path / "authoring"
     source.mkdir()
@@ -484,15 +523,25 @@ def test_initial_materialization_does_not_grant_extra_infrastructure_retries(
         generated = authoring / "generic-harness"
         generated.mkdir(exist_ok=True)
         for name in ("source-model.json", "world-ir.json"):
-            (generated / name).write_text(json.dumps({
-                "fingerprint": len(calls) if changing_evidence else "stable",
-            }))
-        raise RuntimeValidationError("environment", "temporary outage", diagnostics=[
-            HarnessDiagnostic.create(
-                stage=HarnessStage.CONNECTING_AGENT, component="chat_ingress",
-                code=code, message="temporary outage",
-            ),
-        ])
+            (generated / name).write_text(
+                json.dumps(
+                    {
+                        "fingerprint": len(calls) if changing_evidence else "stable",
+                    }
+                )
+            )
+        raise RuntimeValidationError(
+            "environment",
+            "temporary outage",
+            diagnostics=[
+                HarnessDiagnostic.create(
+                    stage=HarnessStage.CONNECTING_AGENT,
+                    component="chat_ingress",
+                    code=code,
+                    message="temporary outage",
+                ),
+            ],
+        )
 
     async def repair(*args):
         pytest.fail("Infrastructure retries must not rewrite the candidate")
@@ -500,18 +549,26 @@ def test_initial_materialization_does_not_grant_extra_infrastructure_retries(
     async def sleeper(seconds):
         pass
 
-    controller = RepairController(RepairBudgets(
-        environment_patches=0,
-        infrastructure_retries_per_candidate=2,
-        infrastructure_initial_backoff_seconds=0,
-        infrastructure_jitter_ratio=0,
-    ))
+    controller = RepairController(
+        RepairBudgets(
+            environment_patches=0,
+            infrastructure_retries_per_candidate=2,
+            infrastructure_initial_backoff_seconds=0,
+            infrastructure_jitter_ratio=0,
+        )
+    )
     with pytest.raises(RuntimeValidationError, match="temporary outage"):
-        asyncio.run(validate_and_repair(
-            SimpleNamespace(metadata={"generic_harness_v1": True}),
-            source, authoring, validate=validate, repair=repair,
-            controller=controller, sleeper=sleeper,
-        ))
+        asyncio.run(
+            validate_and_repair(
+                SimpleNamespace(metadata={"generic_harness_v1": True}),
+                source,
+                authoring,
+                validate=validate,
+                repair=repair,
+                controller=controller,
+                sleeper=sleeper,
+            )
+        )
     assert len(calls) == 3
     assert [item.action for item in controller.history.decisions] == [
         RepairAction.RETRY_INFRASTRUCTURE,
@@ -680,9 +737,12 @@ def test_external_provider_runtime_evidence_marks_state_checks_not_applicable(
     assert checks.world_isolation is CheckStatus.NOT_APPLICABLE
 
 
-@pytest.mark.parametrize("source_invariants", [CheckStatus.PASSED, CheckStatus.NOT_APPLICABLE])
+@pytest.mark.parametrize(
+    "source_invariants", [CheckStatus.PASSED, CheckStatus.NOT_APPLICABLE]
+)
 def test_generic_certificate_combines_runtime_evidence_and_repair_history(
-    tmp_path, source_invariants,
+    tmp_path,
+    source_invariants,
 ) -> None:
     authoring = tmp_path / "authoring"
     store = GenericHarnessArtifactStore(authoring / "generic-harness")
@@ -796,10 +856,14 @@ def test_runtime_gate_resets_each_scenario_and_preserves_execution_secrets(
     monkeypatch.setattr(process_runtime, "ProcessRuntimeProvider", Provider)
     monkeypatch.setattr(hosted_entrypoint, "ProcessWorldFactory", Factory)
     monkeypatch.setattr(
-        bundle_author_v2, "author_bundle_v2",
-        lambda **kwargs: SimpleNamespace(runtime=BundleRuntimeV2(
-            kind=RuntimeKindV2.PROCESS, evidence_seam=EvidenceSeam.HTTP_TOOL,
-        )),
+        bundle_author_v2,
+        "author_bundle_v2",
+        lambda **kwargs: SimpleNamespace(
+            runtime=BundleRuntimeV2(
+                kind=RuntimeKindV2.PROCESS,
+                evidence_seam=EvidenceSeam.HTTP_TOOL,
+            )
+        ),
     )
     monkeypatch.setattr(
         process_preflight, "preflight_bundle", lambda *args, **kwargs: None
@@ -919,9 +983,14 @@ def test_connect_only_provider_validation_does_not_invent_source_data_review(
     monkeypatch.setattr(process_runtime, "ProcessRuntimeProvider", Provider)
     monkeypatch.setattr(hosted_entrypoint, "ProcessWorldFactory", Factory)
     monkeypatch.setattr(
-        bundle_author_v2, "author_bundle_v2", lambda **_kwargs: SimpleNamespace(runtime=BundleRuntimeV2(
-            kind=RuntimeKindV2.PROCESS, evidence_seam=EvidenceSeam.HTTP_TOOL,
-        ))
+        bundle_author_v2,
+        "author_bundle_v2",
+        lambda **_kwargs: SimpleNamespace(
+            runtime=BundleRuntimeV2(
+                kind=RuntimeKindV2.PROCESS,
+                evidence_seam=EvidenceSeam.HTTP_TOOL,
+            )
+        ),
     )
     monkeypatch.setattr(process_preflight, "preflight_bundle", lambda *_a, **_k: None)
     monkeypatch.setattr(
@@ -977,7 +1046,9 @@ def _sourced(entry, source):
 
 
 def _noop(entry):
-    return _sourced(entry, f'def {entry}(world):\n    """Nothing beyond the base world."""\n')
+    return _sourced(
+        entry, f'def {entry}(world):\n    """Nothing beyond the base world."""\n'
+    )
 
 
 def test_does_nothing_reads_only_a_bare_function_as_a_no_op():
@@ -1051,9 +1122,14 @@ def test_connect_only_validation_walks_only_scenarios_whose_setup_does_something
     monkeypatch.setattr(process_runtime, "ProcessRuntimeProvider", Provider)
     monkeypatch.setattr(hosted_entrypoint, "ProcessWorldFactory", Factory)
     monkeypatch.setattr(
-        bundle_author_v2, "author_bundle_v2", lambda **_kwargs: SimpleNamespace(runtime=BundleRuntimeV2(
-            kind=RuntimeKindV2.PROCESS, evidence_seam=EvidenceSeam.HTTP_TOOL,
-        ))
+        bundle_author_v2,
+        "author_bundle_v2",
+        lambda **_kwargs: SimpleNamespace(
+            runtime=BundleRuntimeV2(
+                kind=RuntimeKindV2.PROCESS,
+                evidence_seam=EvidenceSeam.HTTP_TOOL,
+            )
+        ),
     )
     monkeypatch.setattr(process_preflight, "preflight_bundle", lambda *_a, **_k: None)
     monkeypatch.setattr(
@@ -1064,17 +1140,25 @@ def test_connect_only_validation_walks_only_scenarios_whose_setup_does_something
     monkeypatch.setattr(
         scenario_source,
         "load_scenarios",
-        lambda _bundle: [
-            SimpleNamespace(scenario_key=f"quiet-{index}", setup=_noop("setup"), ready=_noop("ready"))
-            for index in range(3)
-        ]
-        + [
-            SimpleNamespace(
-                scenario_key="seeds",
-                setup=_sourced("setup", "def setup(world):\n    world.insert('t', {})\n"),
-                ready=_noop("ready"),
-            )
-        ],
+        lambda _bundle: (
+            [
+                SimpleNamespace(
+                    scenario_key=f"quiet-{index}",
+                    setup=_noop("setup"),
+                    ready=_noop("ready"),
+                )
+                for index in range(3)
+            ]
+            + [
+                SimpleNamespace(
+                    scenario_key="seeds",
+                    setup=_sourced(
+                        "setup", "def setup(world):\n    world.insert('t', {})\n"
+                    ),
+                    ready=_noop("ready"),
+                )
+            ]
+        ),
     )
     job = HarnessJob(
         job_id="job-provider",
@@ -1133,7 +1217,7 @@ def test_database_clone_checks_use_the_lane_count(tmp_path, monkeypatch):
         async def provision(self, *args, work_directory, **kwargs):
             (work_directory / "artifacts").mkdir()
             (work_directory / "artifacts" / "build.json").write_text("{}")
-            return [SimpleNamespace(endpoints={})]
+            return [SimpleNamespace(endpoints={}, world_index=0)]
 
         async def clone_world_database(self, runtime, name):
             clones.append(name)
@@ -1150,7 +1234,7 @@ def test_database_clone_checks_use_the_lane_count(tmp_path, monkeypatch):
             return self
 
     class Factory:
-        def __init__(self, work):
+        def __init__(self, work, bundle=None):
             pass
 
         async def create(self, *args, **kwargs):
@@ -1170,6 +1254,16 @@ def test_database_clone_checks_use_the_lane_count(tmp_path, monkeypatch):
 
     async def no_invariants(*args, **kwargs):
         return []
+
+    def author_bundle(**kwargs):
+        kwargs["output"].mkdir()
+        (kwargs["output"] / "contract.json").write_text("{}")
+        return SimpleNamespace(
+            runtime=BundleRuntimeV2(
+                kind=RuntimeKindV2.PROCESS,
+                evidence_seam=EvidenceSeam.HTTP_TOOL,
+            )
+        )
 
     for module, name, value in (
         (authoring_runtime_validation, "_database_lanes", lambda: 3),
@@ -1197,7 +1291,11 @@ def test_database_clone_checks_use_the_lane_count(tmp_path, monkeypatch):
         (
             contract,
             "AgentContract",
-            SimpleNamespace(model_validate_json=lambda text: None),
+            SimpleNamespace(
+                model_validate_json=lambda text: SimpleNamespace(
+                    modality="voice", runtime=None
+                )
+            ),
         ),
         (
             tool_certification,
@@ -1209,7 +1307,7 @@ def test_database_clone_checks_use_the_lane_count(tmp_path, monkeypatch):
             "certify_actions",
             lambda *args, **kwargs: SimpleNamespace(actions=[]),
         ),
-        (bundle_author_v2, "author_bundle_v2", lambda **kwargs: object()),
+        (bundle_author_v2, "author_bundle_v2", author_bundle),
         (process_preflight, "preflight_bundle", lambda *args, **kwargs: None),
         (
             outbound,
@@ -1277,8 +1375,11 @@ def test_local_runtime_validation_does_not_require_hosted_capabilities(
 
     class Provider:
         def __init__(self, **kwargs):
-            expected = (process_runtime.fixed_sandbox_user_resolver if fixed_user
-                        else process_runtime.default_user_resolver)
+            expected = (
+                process_runtime.fixed_sandbox_user_resolver
+                if fixed_user
+                else process_runtime.default_user_resolver
+            )
             assert kwargs["user_resolver"] is expected
             assert kwargs["public_url_resolver"] is None
             assert kwargs["provider_attempt_id"] is None
@@ -1307,9 +1408,14 @@ def test_local_runtime_validation_does_not_require_hosted_capabilities(
     monkeypatch.setattr(process_runtime, "ProcessRuntimeProvider", Provider)
     monkeypatch.setattr(hosted_entrypoint, "ProcessWorldFactory", Factory)
     monkeypatch.setattr(
-        bundle_author_v2, "author_bundle_v2", lambda **_kwargs: SimpleNamespace(runtime=BundleRuntimeV2(
-            kind=RuntimeKindV2.PROCESS, evidence_seam=EvidenceSeam.HTTP_TOOL,
-        ))
+        bundle_author_v2,
+        "author_bundle_v2",
+        lambda **_kwargs: SimpleNamespace(
+            runtime=BundleRuntimeV2(
+                kind=RuntimeKindV2.PROCESS,
+                evidence_seam=EvidenceSeam.HTTP_TOOL,
+            )
+        ),
     )
     monkeypatch.setattr(process_preflight, "preflight_bundle", lambda *_a, **_k: None)
     monkeypatch.setattr(
@@ -1496,8 +1602,11 @@ def test_generic_validation_applies_runtime_plan_patch_and_revalidates(tmp_path)
         calls.append("repair")
         return RuntimePlanPatch(
             base_contract_hash=_contract_hash(contract),
-            runtime=Runtime(language="python", command=["python", "server.py"],
-                            interface={"kind": "http", "port": 8080, "path": "/chat"}),
+            runtime=Runtime(
+                language="python",
+                command=["python", "server.py"],
+                interface={"kind": "http", "port": 8080, "path": "/chat"},
+            ),
             evidence_paths=("pyproject.toml", "server.py"),
             diagnostic_codes=("generated_runtime_plan_invalid",),
             summary="Use the repository's server entrypoint.",
@@ -1539,14 +1648,25 @@ def test_default_generic_repair_dispatches_unknown_runtime_to_repository_inspect
     )
     inspected = []
 
-    async def inspect(source_root, current_contract, diagnostics, *, guidance="", available_secret_aliases=frozenset()):
+    async def inspect(
+        source_root,
+        current_contract,
+        diagnostics,
+        *,
+        guidance="",
+        available_secret_aliases=frozenset(),
+        allow_ingress_repair=False,
+    ):
         assert "Preserve the submitted identifiers." in guidance
         assert "require_tool_workflow" in guidance
         inspected.append((source_root, current_contract.agent, diagnostics[0].code))
         return RuntimePlanPatch(
             base_contract_hash=_contract_hash(current_contract),
-            runtime=Runtime(language="python", command=["python", "worker.py"],
-                            interface={"kind": "command", "protocol": "fi.alk"}),
+            runtime=Runtime(
+                language="python",
+                command=["python", "worker.py"],
+                interface={"kind": "command", "protocol": "fi.alk"},
+            ),
             evidence_paths=("pyproject.toml", "worker.py"),
             diagnostic_codes=("generated_runtime_plan_invalid",),
             summary="Use the discovered worker entrypoint.",
@@ -1626,7 +1746,9 @@ def test_declared_invariants_survive_a_review_that_forgot_to_finish(
 
     class Stage:
         def __init__(self, spec, **kwargs):
-            self.tools = {tool.name: tool.handler for tool in spec.servers["source_data"].tools}
+            self.tools = {
+                tool.name: tool.handler for tool in spec.servers["source_data"].tools
+            }
 
         async def __aenter__(self):
             return self
@@ -1639,7 +1761,9 @@ def test_declared_invariants_survive_a_review_that_forgot_to_finish(
                 {
                     "name": "aliases resolve",
                     "violations_sql": "SELECT target FROM aliases",
-                    "evidence": [{"path": "lookup.py", "quote": "return records[alias.target]"}],
+                    "evidence": [
+                        {"path": "lookup.py", "quote": "return records[alias.target]"}
+                    ],
                 }
             )
 
@@ -1689,7 +1813,9 @@ def test_rejected_scenario_repair_is_undone_and_repaired_again(
     monkeypatch.setattr(
         scenario_tools,
         "write_scenarios",
-        lambda scenarios, path: restored.append(scenarios) or suite.update(value=scenarios),
+        lambda scenarios, path: (
+            restored.append(scenarios) or suite.update(value=scenarios)
+        ),
     )
 
     def certify(before, after, **kwargs):
@@ -1743,7 +1869,9 @@ def test_scenario_repair_rejected_every_time_keeps_the_original_failure(
     suite = {"value": "original"}
     monkeypatch.setattr(scenario_tools, "load_scenarios", lambda path: suite["value"])
     monkeypatch.setattr(
-        scenario_tools, "write_scenarios", lambda scenarios, path: suite.update(value=scenarios)
+        scenario_tools,
+        "write_scenarios",
+        lambda scenarios, path: suite.update(value=scenarios),
     )
 
     def certify(before, after, **kwargs):
@@ -1763,10 +1891,13 @@ def test_scenario_repair_rejected_every_time_keeps_the_original_failure(
     job = SimpleNamespace(metadata={"generic_harness_v1": True}, scenario_count=3)
     with pytest.raises(ValueError, match="scenario_repair_weakened_checks"):
         asyncio.run(
-            validate_and_repair(job, source, authoring, validate=validate, repair=repair)
+            validate_and_repair(
+                job, source, authoring, validate=validate, repair=repair
+            )
         )
     assert len(repairs) == RepairBudgets().scenario_patches + 1
     assert suite["value"] == "original"
+
 
 @pytest.mark.parametrize(
     "declared_kind,legacy_world,expected_storage_repair",
@@ -1848,7 +1979,9 @@ def test_missing_storage_routes_to_understanding_only_when_metadata_can_help(
                 prefix="",
             )
         except BundleAuthorError as exc:
-            raise RuntimeValidationError("runtime", f"{type(exc).__name__}: {exc}") from exc
+            raise RuntimeValidationError(
+                "runtime", f"{type(exc).__name__}: {exc}"
+            ) from exc
         return 1
 
     job = HarnessJob(
@@ -1914,24 +2047,41 @@ def test_storage_diagnostic_accepts_only_known_exception_wrapper(
 
 
 @pytest.mark.parametrize("repair_result", [None, 0, 1])
-def test_dependency_investigation_rejects_untyped_repair_results(tmp_path, repair_result):
+def test_dependency_investigation_rejects_untyped_repair_results(
+    tmp_path, repair_result
+):
     source = tmp_path / "source"
     authoring = tmp_path / "authoring"
     source.mkdir()
     authoring.mkdir()
-    diagnostic = HarnessDiagnostic.create(stage=HarnessStage.CONNECTING_AGENT, component="chat_ingress", code="chat_ingress_failed", message="application failed")
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.CONNECTING_AGENT,
+        component="chat_ingress",
+        code="chat_ingress_failed",
+        message="application failed",
+    )
     calls = []
 
     async def validate(*_args):
         calls.append("validate")
-        raise RuntimeValidationError("environment", "application failed", diagnostics=(diagnostic,))
+        raise RuntimeValidationError(
+            "environment", "application failed", diagnostics=(diagnostic,)
+        )
 
     async def repair(*_args):
         calls.append("repair")
         return repair_result
 
     with pytest.raises(RuntimeValidationError, match="application failed"):
-        asyncio.run(validate_and_repair(SimpleNamespace(metadata={"generic_harness_v1": True}), source, authoring, validate=validate, repair=repair))
+        asyncio.run(
+            validate_and_repair(
+                SimpleNamespace(metadata={"generic_harness_v1": True}),
+                source,
+                authoring,
+                validate=validate,
+                repair=repair,
+            )
+        )
     assert calls == ["validate", "repair"]
 
 
@@ -1939,32 +2089,48 @@ def test_runtime_repairs_leave_budget_for_real_chat_setup(tmp_path):
     source, authoring = tmp_path / "source", tmp_path / "authoring"
     source.mkdir()
     authoring.mkdir()
-    controller = RepairController(RepairBudgets(
-        compiler_candidates=0, environment_patches=1, scenario_patches=0,
-        infrastructure_retries_per_candidate=0,
-    ))
+    controller = RepairController(
+        RepairBudgets(
+            compiler_candidates=0,
+            environment_patches=1,
+            scenario_patches=0,
+            infrastructure_retries_per_candidate=0,
+        )
+    )
     attempts = []
 
     async def validate(*args):
         attempts.append(len(attempts))
         if len(attempts) <= 5:
             phase = "runtime" if len(attempts) <= 4 else "environment"
-            raise RuntimeValidationError(phase, "setup incomplete", diagnostics=[
-                HarnessDiagnostic.create(
-                    stage=HarnessStage.VALIDATING_ENVIRONMENT, component="test",
-                    code="ready_condition_invalid", message="setup incomplete",
-                ),
-            ])
+            raise RuntimeValidationError(
+                phase,
+                "setup incomplete",
+                diagnostics=[
+                    HarnessDiagnostic.create(
+                        stage=HarnessStage.VALIDATING_ENVIRONMENT,
+                        component="test",
+                        code="ready_condition_invalid",
+                        message="setup incomplete",
+                    ),
+                ],
+            )
         return 1
 
     async def repair(*args):
         (authoring / "contract.json").write_text(json.dumps({"attempt": len(attempts)}))
         return 0
 
-    asyncio.run(validate_and_repair(
-        SimpleNamespace(metadata={"generic_harness_v1": True}),
-        source, authoring, validate=validate, repair=repair, controller=controller,
-    ))
+    asyncio.run(
+        validate_and_repair(
+            SimpleNamespace(metadata={"generic_harness_v1": True}),
+            source,
+            authoring,
+            validate=validate,
+            repair=repair,
+            controller=controller,
+        )
+    )
     assert len(attempts) == 6
     assert controller.history.runtime_patches_used == 4
     assert controller.history.environment_patches_used == 1
@@ -1972,16 +2138,22 @@ def test_runtime_repairs_leave_budget_for_real_chat_setup(tmp_path):
 
 
 @pytest.mark.parametrize("readiness_only", [False, True])
-def test_repair_exception_preserves_runtime_failure_without_secret_text(tmp_path, capsys, readiness_only):
+def test_repair_exception_preserves_runtime_failure_without_secret_text(
+    tmp_path, capsys, readiness_only
+):
     source = tmp_path / "source"
     authoring = tmp_path / "authoring"
     source.mkdir()
     authoring.mkdir()
     diagnostic = HarnessDiagnostic.create(
         stage=HarnessStage.VALIDATING_ENVIRONMENT,
-        component="world_ir", code="required_value_missing", message="missing value",
+        component="world_ir",
+        code="required_value_missing",
+        message="missing value",
     )
-    original = RuntimeValidationError("environment", "invalid runtime", diagnostics=(diagnostic,))
+    original = RuntimeValidationError(
+        "environment", "invalid runtime", diagnostics=(diagnostic,)
+    )
 
     class LlmCallsLimitExceededError(Exception):
         pass
@@ -1993,13 +2165,21 @@ def test_repair_exception_preserves_runtime_failure_without_secret_text(tmp_path
         raise LlmCallsLimitExceededError("private-secret-token")
 
     with pytest.raises(RuntimeValidationError) as caught:
-        asyncio.run(validate_and_repair(
-            SimpleNamespace(metadata={"generic_harness_v1": True}), source, authoring,
-            validate=validate, repair=repair, readiness_only=readiness_only,
-        ))
+        asyncio.run(
+            validate_and_repair(
+                SimpleNamespace(metadata={"generic_harness_v1": True}),
+                source,
+                authoring,
+                validate=validate,
+                repair=repair,
+                readiness_only=readiness_only,
+            )
+        )
     assert caught.value is original
-    history_path = authoring / "generic-harness" / (
-        "readiness-repair-history.json" if readiness_only else "repair-history.json"
+    history_path = (
+        authoring
+        / "generic-harness"
+        / ("readiness-repair-history.json" if readiness_only else "repair-history.json")
     )
     history = json.loads(history_path.read_text())
     assert len(history["results"]) == 1
@@ -2008,7 +2188,9 @@ def test_repair_exception_preserves_runtime_failure_without_secret_text(tmp_path
     assert result["after_candidate_hash"] == result["before_candidate_hash"]
     output = capsys.readouterr().out
     assert "LlmCallsLimitExceededError" in output
-    assert "private-secret-token" not in output + history_path.read_text() + str(caught.value)
+    assert "private-secret-token" not in output + history_path.read_text() + str(
+        caught.value
+    )
     assert caught.value.__suppress_context__
 
 
@@ -2019,26 +2201,39 @@ def test_repair_cancellation_is_not_reclassified(tmp_path):
     authoring.mkdir()
     diagnostic = HarnessDiagnostic.create(
         stage=HarnessStage.VALIDATING_ENVIRONMENT,
-        component="world_ir", code="required_value_missing", message="missing value",
+        component="world_ir",
+        code="required_value_missing",
+        message="missing value",
     )
 
     async def validate(*args):
-        raise RuntimeValidationError("environment", "invalid", diagnostics=(diagnostic,))
+        raise RuntimeValidationError(
+            "environment", "invalid", diagnostics=(diagnostic,)
+        )
 
     async def repair(*args):
         raise asyncio.CancelledError()
 
     with pytest.raises(asyncio.CancelledError):
-        asyncio.run(validate_and_repair(
-            SimpleNamespace(metadata={"generic_harness_v1": True}), source, authoring,
-            validate=validate, repair=repair,
-        ))
-    history = json.loads((authoring / "generic-harness/repair-history.json").read_text())
+        asyncio.run(
+            validate_and_repair(
+                SimpleNamespace(metadata={"generic_harness_v1": True}),
+                source,
+                authoring,
+                validate=validate,
+                repair=repair,
+            )
+        )
+    history = json.loads(
+        (authoring / "generic-harness/repair-history.json").read_text()
+    )
     assert history["results"] == []
 
 
 @pytest.mark.parametrize("readiness_only", [False, True])
-def test_default_validator_is_resolved_at_call_time(tmp_path, monkeypatch, readiness_only):
+def test_default_validator_is_resolved_at_call_time(
+    tmp_path, monkeypatch, readiness_only
+):
     from fi.alk.harness import authoring_runtime_validation as validation
 
     source = tmp_path / "source"
@@ -2052,10 +2247,14 @@ def test_default_validator_is_resolved_at_call_time(tmp_path, monkeypatch, readi
         return 0
 
     monkeypatch.setattr(validation, "validate_once", replacement)
-    asyncio.run(validation.validate_and_repair(
-        SimpleNamespace(metadata={"generic_harness_v1": True}), source, authoring,
-        readiness_only=readiness_only,
-    ))
+    asyncio.run(
+        validation.validate_and_repair(
+            SimpleNamespace(metadata={"generic_harness_v1": True}),
+            source,
+            authoring,
+            readiness_only=readiness_only,
+        )
+    )
     assert calls == ([{"readiness_only": True}] if readiness_only else [{}])
 
 
@@ -2093,19 +2292,28 @@ def test_startup_failure_preserves_redacted_process_logs_for_repair(
     def compile_bundle(**kwargs):
         if compile_failure:
             raise ValueError("compiler rejected candidate")
-        return SimpleNamespace(runtime=BundleRuntimeV2(
-            kind=RuntimeKindV2.PROCESS, evidence_seam=EvidenceSeam.HTTP_TOOL,
-            control_service="agent",
-        ))
+        return SimpleNamespace(
+            runtime=BundleRuntimeV2(
+                kind=RuntimeKindV2.PROCESS,
+                evidence_seam=EvidenceSeam.HTTP_TOOL,
+                control_service="agent",
+            )
+        )
 
     monkeypatch.setattr(process_runtime, "ProcessRuntimeProvider", Provider)
     monkeypatch.setattr(bundle_author_v2, "author_bundle_v2", compile_bundle)
     monkeypatch.setattr(process_preflight, "preflight_bundle", lambda *a, **k: None)
     job = SimpleNamespace(agent=SimpleNamespace(secret_refs={}))
     with pytest.raises(RuntimeValidationError) as caught:
-        asyncio.run(validate_once(
-            job, tmp_path, authoring, secrets_path=secrets, local_runtime=True,
-        ))
+        asyncio.run(
+            validate_once(
+                job,
+                tmp_path,
+                authoring,
+                secrets_path=secrets,
+                local_runtime=True,
+            )
+        )
     failure = caught.value
     assert failure.phase == "runtime"
     if compile_failure:
@@ -2118,3 +2326,222 @@ def test_startup_failure_preserves_redacted_process_logs_for_repair(
             assert "aiohttp not installed" in evidence
             assert "private-startup-token" not in evidence
             assert "stale failure" not in evidence
+
+
+@pytest.mark.parametrize("readiness_only", [False, True])
+def test_ingress_repair_capability_is_private_and_revalidates_candidate(
+    tmp_path, monkeypatch, readiness_only
+):
+    from fi.alk.harness import runtime_repair
+    from fi.alk.harness.contract import RuntimeInterface
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "cli.py").write_text("from agent import interactive\ninteractive()\n")
+    (source / "server.py").write_text("from agent import chat\nROUTE = '/chat'\n")
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    contract = AgentContract(
+        agent="same-agent",
+        runtime=Runtime(
+            language="python",
+            execution="native",
+            command=["python", "cli.py"],
+            interface=RuntimeInterface(kind="command", protocol="fi.alk"),
+        ),
+    )
+    path = authoring / "contract.json"
+    path.write_text(contract.model_dump_json())
+    calls = []
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.CONNECTING_AGENT,
+        component="chat_ingress",
+        code="chat_ingress_failed",
+        message="selected CLI did not return a chat response",
+    )
+
+    async def validate(*args):
+        current = AgentContract.model_validate_json(path.read_text())
+        calls.append(("validate", current.runtime.command))
+        if current.runtime.interface.kind == "command":
+            raise RuntimeValidationError(
+                "environment", "wrong ingress", diagnostics=(diagnostic,)
+            )
+        return 1
+
+    async def inspect(
+        root, current, diagnostics, *, allow_ingress_repair=False, **kwargs
+    ):
+        calls.append(("capability", allow_ingress_repair))
+        return RuntimePlanPatch(
+            mode="chat_ingress",
+            base_contract_hash=_contract_hash(current),
+            runtime=current.runtime.model_copy(
+                update={
+                    "command": ["python", "server.py"],
+                    "interface": RuntimeInterface(
+                        kind="http", protocol="fi.alk", port=8080, path="/chat"
+                    ),
+                }
+            ),
+            evidence_paths=("cli.py", "server.py"),
+            diagnostic_codes=("chat_ingress_failed",),
+            summary="Correct the source-backed ingress declaration",
+        )
+
+    monkeypatch.setattr(runtime_repair, "request_runtime_plan_patch", inspect)
+    job = SimpleNamespace(metadata={"generic_harness_v1": True})
+    run = validate_and_repair(
+        job, source, authoring, validate=validate, readiness_only=readiness_only
+    )
+    if readiness_only:
+        asyncio.run(run)
+        assert calls == [
+            ("validate", ["python", "cli.py"]),
+            ("capability", True),
+            ("validate", ["python", "server.py"]),
+        ]
+        patch = json.loads(
+            (authoring / "generic-harness/runtime-plan-repair-1.json").read_text()
+        )
+        assert patch["mode"] == "chat_ingress"
+    else:
+        with pytest.raises(ValueError, match="ingress_repair_not_allowed"):
+            asyncio.run(run)
+        assert calls == [("validate", ["python", "cli.py"]), ("capability", False)]
+        assert AgentContract.model_validate_json(path.read_text()) == contract
+
+
+def test_ingress_repair_replays_same_private_chat_over_http(tmp_path, monkeypatch):
+    import threading
+    from http.server import ThreadingHTTPServer
+    from fi.alk.harness import runtime_repair
+    from fi.alk.harness.chat_readiness import probe_chat_ingress
+    from fi.alk.harness.contract import RuntimeInterface
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "cli.py").write_text("def interactive():\n    return ''\n")
+    server_source = source / "server.py"
+    server_source.write_text("""import json
+from http.server import BaseHTTPRequestHandler
+requests = []
+def chat(message):
+    return str(sum(int(value) for value in message.split()))
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+    def do_POST(self):
+        request = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+        requests.append((self.path, request))
+        content = chat(request['new_message']['content']) if self.path == '/chat' else ''
+        body = json.dumps({'content': content}).encode()
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+""")
+    namespace = {}
+    exec(compile(server_source.read_text(), str(server_source), "exec"), namespace)
+    try:
+        server = ThreadingHTTPServer(("127.0.0.1", 0), namespace["Handler"])
+    except PermissionError:
+        pytest.skip("loopback listener unavailable in this sandbox")
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        authoring = tmp_path / "authoring"
+        authoring.mkdir()
+        contract = AgentContract(
+            agent="fixture-agent",
+            runtime=Runtime(
+                language="python",
+                execution="native",
+                command=["python", "cli.py"],
+                interface=RuntimeInterface(kind="command", protocol="fi.alk"),
+            ),
+        )
+        path = authoring / "contract.json"
+        path.write_text(contract.model_dump_json())
+        source_before = {entry.name: entry.read_bytes() for entry in source.iterdir()}
+        tools = [
+            {
+                "name": "calculate",
+                "description": "Add numbers",
+                "parameters": {"type": "object"},
+            }
+        ]
+        endpoint = f"http://127.0.0.1:{server.server_port}"
+
+        async def validate(*args):
+            current = AgentContract.model_validate_json(path.read_text())
+            await probe_chat_ingress(
+                interface=current.runtime.interface,
+                endpoint=endpoint,
+                opening_message="2 3",
+                authoring=authoring,
+                candidate_hash=_contract_hash(current),
+                bundle_digest="sha256:" + "0" * 64,
+                secret_values={},
+                redaction_values={},
+                tools=tools,
+                scenario_key="private-same-request",
+                timeout=5,
+            )
+            return 1
+
+        async def inspect(
+            root, current, diagnostics, *, allow_ingress_repair=False, **kwargs
+        ):
+            assert allow_ingress_repair
+            assert {item.code for item in diagnostics} == {"chat_ingress_failed"}
+            return RuntimePlanPatch(
+                mode="chat_ingress",
+                base_contract_hash=_contract_hash(current),
+                runtime=current.runtime.model_copy(
+                    update={
+                        "command": ["python", "server.py"],
+                        "interface": RuntimeInterface(
+                            kind="http",
+                            protocol="fi.alk",
+                            port=server.server_port,
+                            path="/chat",
+                        ),
+                    }
+                ),
+                evidence_paths=("cli.py", "server.py"),
+                diagnostic_codes=("chat_ingress_failed",),
+                summary="Use the source HTTP handler for the same private conversation",
+            )
+
+        monkeypatch.setattr(runtime_repair, "request_runtime_plan_patch", inspect)
+        asyncio.run(
+            validate_and_repair(
+                SimpleNamespace(metadata={"generic_harness_v1": True}),
+                source,
+                authoring,
+                validate=validate,
+                readiness_only=True,
+            )
+        )
+        requests = namespace["requests"]
+        assert [route for route, _ in requests] == ["/invoke", "/chat"]
+        assert (
+            requests[0][1]["messages"]
+            == requests[1][1]["messages"]
+            == [{"role": "user", "content": "2 3"}]
+        )
+        assert requests[0][1]["tools"] == requests[1][1]["tools"] == tools
+        assert {
+            entry.name: entry.read_bytes() for entry in source.iterdir()
+        } == source_before
+        receipts = [
+            json.loads(item.read_text())
+            for item in (authoring / "generic-harness/chat-readiness").glob("*.json")
+        ]
+        assert sorted(item["status"] for item in receipts) == ["failed", "passed"]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)

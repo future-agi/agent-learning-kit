@@ -372,10 +372,15 @@ def test_invalid_selection_and_required_names():
         {"compose_file": "../outside.yaml"},
         {"required_environment": {"agent": ["X", "X"]}},
         {"required_environment": {"agent": ["bad-name"]}},
-        {"context_excludes": ["clients/**"]},
+        {"context_excludes": ["clients/[generated]"]},
+        {"context_excludes": ["../source"]},
+        {"context_excludes": ["tests", "tests"]},
     ]:
         with pytest.raises(ValueError):
             Runtime.model_validate(runtime)
+    assert Runtime.model_validate(
+        {"context_excludes": ["clients/**", "**/*.test.ts"]}
+    ).context_excludes == ["clients/**", "**/*.test.ts"]
 
 
 def test_explicit_native_survives_unselected_compose_ambiguity(tmp_path):
@@ -409,7 +414,9 @@ def test_runtime_schema_fields_match_manual_tool_schema(tmp_path, monkeypatch):
     contract_tools.contract_tools(tmp_path)
     manual = captured["submit_contract"]["properties"]["runtime"]["properties"]
     canonical = Runtime.model_json_schema()["properties"]
-    for name in ("execution", "service", "compose_file", "required_environment"):
+    for name in (
+        "execution", "service", "compose_file", "required_environment", "compose_image_services"
+    ):
         assert manual[name]["type"] == [canonical[name]["type"], "null"]
     assert [
         value for value in manual["execution"]["enum"] if value is not None
@@ -686,3 +693,26 @@ def test_local_editable_extra_must_be_selected(tmp_path):
     )
     command = plan.processes[-1].build_commands[0]
     assert "--all-packages --extra cloud" in " ".join(command)
+
+
+def test_process_lane_rejects_selected_dependency_image(tmp_path):
+    (tmp_path / "server.py").write_text("print('source')")
+    (tmp_path / "compose.yaml").write_text(
+        "services:\n  dialogue:\n    build: .\n    depends_on: [cache]\n  cache:\n    image: redis:7\n"
+    )
+    with pytest.raises(
+        BundleAuthorError, match="runtime_compose_image_requires_container_runtime"
+    ):
+        resolve_environment_plan(
+            tmp_path,
+            job(),
+            contract_modality="chat",
+            contract_interface_kind="http",
+            contract_runtime={
+                **native(),
+                "execution": "compose",
+                "compose_file": "compose.yaml",
+                "service": "dialogue",
+                "compose_image_services": ["cache"],
+            },
+        )

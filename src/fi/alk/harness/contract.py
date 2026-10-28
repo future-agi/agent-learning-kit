@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import re
 import shlex
+from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -416,7 +417,7 @@ class RuntimeHttpSetupRequest(BaseModel):
 
 
 class LocalHttpAuth(BaseModel):
-    """Names for a source-owned server token generated privately per world."""
+    """Names for a source-owned server credential generated privately per world."""
 
     model_config = {"extra": "forbid"}
     server_environment: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
@@ -479,9 +480,10 @@ class RuntimeInterface(BaseModel):
     completed_tools: CompletedToolRows | None = None
     local_auth: LocalHttpAuth | None = Field(
         default=None,
-        description="Native HTTP only: source-declared local server token environment name and "
-        "private header template variable. ALK generates a per-world token. Never use for "
-        "external account/API credentials; never provide token values.",
+        description="Native HTTP only: source-declared local server credential environment name "
+        "and private template variable. ALK generates a per-world value for direct headers or a "
+        "source-owned login setup request. Never use for external account/API credentials; never "
+        "provide credential values.",
     )
     setup_secrets: dict[str, str] = Field(default_factory=dict)
     failure_rule: RuntimeHttpFailureRule | None = None
@@ -548,17 +550,19 @@ class RuntimeInterface(BaseModel):
                 | set(self.setup_secrets)
                 | set(self.setup_secrets.values())
             )
-            non_header_templates = [self.path, self.request_template]
-            for setup in self.setup_requests:
-                non_header_templates.extend([setup.path, setup.body_template])
+            forbidden_templates = [self.path, self.request_template]
+            forbidden_templates.extend(setup.path for setup in self.setup_requests)
             if self.local_auth.template_variable in _runtime_template_names(
-                non_header_templates
+                forbidden_templates
             ):
-                raise ValueError("runtime_local_auth_requires_header_only")
+                raise ValueError("runtime_local_auth_url_or_chat_body_forbidden")
+            auth_templates = [self.headers_template]
+            for setup in self.setup_requests:
+                auth_templates.extend([setup.headers_template, setup.body_template])
             if self.local_auth.template_variable not in _runtime_template_names(
-                self.headers_template
+                auth_templates
             ):
-                raise ValueError("runtime_local_auth_header_binding_required")
+                raise ValueError("runtime_local_auth_binding_required")
         if self.kind in {"http", "websocket"}:
             if self.port is None:
                 raise ValueError(f"runtime_{self.kind}_interface_requires_port")
@@ -774,7 +778,7 @@ class Runtime(BaseModel):
     )
     requirements_files: list[str] = Field(
         default_factory=list,
-        description="Additional source-declared Python requirements files relative to workdir, installed alongside project dependencies and extras. Select files required by install evidence; never invent dependencies.",
+        description="Additional source-declared Python requirements files relative to the selected installable project root, which may be an ancestor of workdir, installed alongside project dependencies and extras. Select files required by install evidence; never invent dependencies.",
     )
     observations: dict[str, HttpObservation] = Field(
         default_factory=dict,
@@ -790,6 +794,11 @@ class Runtime(BaseModel):
     execution: Literal["auto", "native", "compose"] = "auto"
     compose_file: str = ""
     compose_overrides: list[str] = Field(default_factory=list, max_length=8)
+    compose_image_services: list[str] = Field(
+        default_factory=list,
+        max_length=64,
+        description="Selected Compose services that use their source-declared image instead of build. Requires explicit compose_file and service. Never invent image references; retain source deployment evidence.",
+    )
     service: str = ""
     additional_services: list[str] = Field(default_factory=list, max_length=32)
     required_environment: dict[str, list[str]] = Field(default_factory=dict)
@@ -851,6 +860,17 @@ class Runtime(BaseModel):
                 for path in self.compose_overrides
             ):
                 raise ValueError("runtime_compose_overrides_path_invalid")
+        if self.compose_image_services:
+            if self.execution == "native" or not (self.compose_file and self.service):
+                raise ValueError("runtime_compose_images_require_compose_selection")
+            if (
+                len(set(self.compose_image_services)) != len(self.compose_image_services)
+                or any(
+                    not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", name)
+                    for name in self.compose_image_services
+                )
+            ):
+                raise ValueError("runtime_compose_image_services_invalid")
         if self.additional_services:
             if self.execution == "native" or not (self.compose_file and self.service):
                 raise ValueError(
@@ -866,6 +886,15 @@ class Runtime(BaseModel):
                 )
             ):
                 raise ValueError("runtime_additional_services_invalid")
+        if self.interface and self.interface.kind == "command" and any(
+            re.search(r"\{\{\s*(?:messages|new_message(?:_content)?)\s*\}\}", argument)
+            for argument in self.command
+        ):
+            raise ValueError(
+                "runtime_command_message_template_unsupported: command argv is literal. "
+                "Use a source-owned HTTP interface or a noninteractive command that reads "
+                "JSON stdin, ALK_USER_MESSAGE, or ALK_MESSAGES_JSON."
+            )
         if self.execution == "native" and (self.compose_file or self.service):
             raise ValueError("runtime_selection_conflict: native cannot select Compose")
         if self.execution == "native" and not self.command:
@@ -892,8 +921,21 @@ class Runtime(BaseModel):
                 )
             ):
                 raise ValueError("runtime_required_environment_invalid")
-        if any(any(char in path for char in "*?[]") for path in self.context_excludes):
-            raise ValueError("runtime_context_excludes_glob_unsupported")
+        if len(self.context_excludes) != len(set(self.context_excludes)):
+            raise ValueError("runtime_context_excludes_duplicate")
+        for path in self.context_excludes:
+            relative = Path(path)
+            if (
+                not relative.parts
+                or relative.is_absolute()
+                or ".." in relative.parts
+                or "\\" in path
+                or "$" in path
+                or any(ord(char) < 32 for char in path)
+            ):
+                raise ValueError("runtime_context_exclude_invalid")
+            if any(char in path for char in "?[]"):
+                raise ValueError("runtime_context_excludes_pattern_unsupported")
         return self
 
     @field_validator("command", mode="before")
@@ -1315,22 +1357,28 @@ def is_data_free_conversation(contract: AgentContract) -> bool:
     )
 
 
-def validate_tool_workflow(contract: AgentContract) -> None:
+def has_executable_tool_workflow(contract: AgentContract) -> bool:
     declared = {tool.name for tool in contract.tools if tool.name.strip()}
     for entry in contract.tool_entrypoints:
         if entry.tool not in declared:
             continue
         if entry.mode == "import" and entry.module.strip() and entry.callable.strip():
-            return
+            return True
         if (
             entry.mode == "construct"
             and entry.module.strip()
             and entry.callable.strip()
             and entry.factory.strip()
         ):
-            return
+            return True
         if entry.mode == "service" and entry.service.strip() and entry.endpoint.strip():
-            return
+            return True
+    return False
+
+
+def validate_tool_workflow(contract: AgentContract) -> None:
+    if has_executable_tool_workflow(contract):
+        return
     raise ValueError(
         "required_tool_workflow_unavailable: no declared tool has an executable entrypoint"
     )

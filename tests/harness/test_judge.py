@@ -746,7 +746,6 @@ def test_the_contract_records_the_agents_languages_and_older_contracts_still_loa
 
 def test_native_judge_exposes_capabilities_without_private_endpoints_or_sql() -> None:
     import random
-
     from fi.alk.harness.world.observation import ObservationWorld
 
     world = ObservationWorld(
@@ -855,6 +854,7 @@ def test_native_judge_inspects_public_capabilities_and_actual_evidence(monkeypat
     assert inspected[0]["kind"] == "native_observation"
     assert inspected[0]["capabilities"] == ["chat", "history"]
     assert "No local database or SQL query" in inspected[0]["state_access"]
+
 
 def test_an_unreadable_recording_and_a_failing_tool_leave_the_judge_on_the_transcript(
     monkeypatch, tmp_path
