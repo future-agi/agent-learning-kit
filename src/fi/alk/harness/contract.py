@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import re
 import shlex
+from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -338,7 +339,12 @@ class RuntimeHttpSetupRequest(BaseModel):
     path: str
     body_template: Any = Field(default_factory=dict)
     encoding: Literal["json", "form"] = "json"
-    headers_template: dict[str, str] = Field(default_factory=dict)
+    headers_template: dict[str, str] = Field(
+        default_factory=dict,
+        description="Headers for this setup request only. Chat headers_template is not applied "
+        "during setup. If this route requires local_auth, bind its template_variable here too. "
+        "Earlier setup captures are available; later captures are not.",
+    )
     capture_headers: dict[str, str] = Field(default_factory=dict)
     accepted_statuses: list[int] = Field(default_factory=lambda: [200, 201, 204, 409])
     failure_rule: RuntimeHttpFailureRule | None = None
@@ -411,7 +417,7 @@ class RuntimeHttpSetupRequest(BaseModel):
 
 
 class LocalHttpAuth(BaseModel):
-    """Names for a source-owned server token generated privately per world."""
+    """Names for a source-owned server credential generated privately per world."""
 
     model_config = {"extra": "forbid"}
     server_environment: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
@@ -430,8 +436,20 @@ class RuntimeInterface(BaseModel):
     endpoint the repository does not already implement.
     """
 
-    kind: str = ""
-    protocol: str = "fi.alk"
+    kind: str = Field(
+        default="",
+        description="Generated chat supports http, callable, or command. Use callable only "
+        "for a source-exported agent_callback. Use command only for a noninteractive "
+        "entrypoint consuming JSON stdin, ALK_USER_MESSAGE, or ALK_MESSAGES_JSON and "
+        "returning the chat response on stdout. Interactive CLIs, startup commands, ACP, "
+        "and WebSocket are not supported generated chat ingress.",
+    )
+    protocol: str = Field(
+        default="fi.alk",
+        description="HTTP supports fi.alk, openai_chat, or json_template. Callable and "
+        "command bridges require fi.alk; they do not translate arbitrary stdin protocols. "
+        "Use json_template only for a source-owned HTTP JSON API, not ACP or WebSocket.",
+    )
     model: str | None = Field(
         default=None,
         description="Source-owned model or profile identifier accepted by the OpenAI-compatible "
@@ -446,15 +464,26 @@ class RuntimeInterface(BaseModel):
     # of ``{{name}}`` preserves the canonical value's JSON type; embedded placeholders render as
     # strings. Dotted/list response paths select the assistant content from arbitrary JSON/SSE.
     request_template: Any = None
-    response_path: str = ""
-    headers_template: dict[str, str] = Field(default_factory=dict)
+    response_path: str = Field(
+        default="",
+        description="For json_template only: optional dot-separated object keys and numeric "
+        "list-index segments selecting assistant text. Negative indexes are supported, "
+        "e.g. output.-1.content.0.text. Bracket indexing and JSONPath expressions are not supported.",
+    )
+    headers_template: dict[str, str] = Field(
+        default_factory=dict,
+        description="Chat headers rendered after setup completes, using setup captures or local "
+        "auth. These are not inherited by setup_requests; declare required auth headers on each "
+        "protected setup request. Session cookies are preserved in an isolated cookie jar.",
+    )
     completed_tool_events: CompletedToolEvents | None = None
     completed_tools: CompletedToolRows | None = None
     local_auth: LocalHttpAuth | None = Field(
         default=None,
-        description="Native HTTP only: source-declared local server token environment name and "
-        "private header template variable. ALK generates a per-world token. Never use for "
-        "external account/API credentials; never provide token values.",
+        description="Native HTTP only: source-declared local server credential environment name "
+        "and private template variable. ALK generates a per-world value for direct headers or a "
+        "source-owned login setup request. Never use for external account/API credentials; never "
+        "provide credential values.",
     )
     setup_secrets: dict[str, str] = Field(default_factory=dict)
     failure_rule: RuntimeHttpFailureRule | None = None
@@ -521,17 +550,19 @@ class RuntimeInterface(BaseModel):
                 | set(self.setup_secrets)
                 | set(self.setup_secrets.values())
             )
-            non_header_templates = [self.path, self.request_template]
-            for setup in self.setup_requests:
-                non_header_templates.extend([setup.path, setup.body_template])
+            forbidden_templates = [self.path, self.request_template]
+            forbidden_templates.extend(setup.path for setup in self.setup_requests)
             if self.local_auth.template_variable in _runtime_template_names(
-                non_header_templates
+                forbidden_templates
             ):
-                raise ValueError("runtime_local_auth_requires_header_only")
+                raise ValueError("runtime_local_auth_url_or_chat_body_forbidden")
+            auth_templates = [self.headers_template]
+            for setup in self.setup_requests:
+                auth_templates.extend([setup.headers_template, setup.body_template])
             if self.local_auth.template_variable not in _runtime_template_names(
-                self.headers_template
+                auth_templates
             ):
-                raise ValueError("runtime_local_auth_header_binding_required")
+                raise ValueError("runtime_local_auth_binding_required")
         if self.kind in {"http", "websocket"}:
             if self.port is None:
                 raise ValueError(f"runtime_{self.kind}_interface_requires_port")
@@ -548,6 +579,7 @@ class RuntimeInterface(BaseModel):
         if (
             self.completed_tools
             and not self.completed_tools.error_path
+            and not self.completed_tools.result_error_path
             and not (self.failure_rule and self.failure_rule.success_values is not None)
         ):
             raise ValueError(
@@ -746,7 +778,7 @@ class Runtime(BaseModel):
     )
     requirements_files: list[str] = Field(
         default_factory=list,
-        description="Additional source-declared Python requirements files relative to workdir, installed alongside project dependencies and extras. Select files required by install evidence; never invent dependencies.",
+        description="Additional source-declared Python requirements files relative to the selected installable project root, which may be an ancestor of workdir, installed alongside project dependencies and extras. Select files required by install evidence; never invent dependencies.",
     )
     observations: dict[str, HttpObservation] = Field(
         default_factory=dict,
@@ -762,6 +794,11 @@ class Runtime(BaseModel):
     execution: Literal["auto", "native", "compose"] = "auto"
     compose_file: str = ""
     compose_overrides: list[str] = Field(default_factory=list, max_length=8)
+    compose_image_services: list[str] = Field(
+        default_factory=list,
+        max_length=64,
+        description="Selected Compose services that use their source-declared image instead of build. Requires explicit compose_file and service. Never invent image references; retain source deployment evidence.",
+    )
     service: str = ""
     additional_services: list[str] = Field(default_factory=list, max_length=32)
     required_environment: dict[str, list[str]] = Field(default_factory=dict)
@@ -823,6 +860,17 @@ class Runtime(BaseModel):
                 for path in self.compose_overrides
             ):
                 raise ValueError("runtime_compose_overrides_path_invalid")
+        if self.compose_image_services:
+            if self.execution == "native" or not (self.compose_file and self.service):
+                raise ValueError("runtime_compose_images_require_compose_selection")
+            if (
+                len(set(self.compose_image_services)) != len(self.compose_image_services)
+                or any(
+                    not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", name)
+                    for name in self.compose_image_services
+                )
+            ):
+                raise ValueError("runtime_compose_image_services_invalid")
         if self.additional_services:
             if self.execution == "native" or not (self.compose_file and self.service):
                 raise ValueError(
@@ -838,6 +886,15 @@ class Runtime(BaseModel):
                 )
             ):
                 raise ValueError("runtime_additional_services_invalid")
+        if self.interface and self.interface.kind == "command" and any(
+            re.search(r"\{\{\s*(?:messages|new_message(?:_content)?)\s*\}\}", argument)
+            for argument in self.command
+        ):
+            raise ValueError(
+                "runtime_command_message_template_unsupported: command argv is literal. "
+                "Use a source-owned HTTP interface or a noninteractive command that reads "
+                "JSON stdin, ALK_USER_MESSAGE, or ALK_MESSAGES_JSON."
+            )
         if self.execution == "native" and (self.compose_file or self.service):
             raise ValueError("runtime_selection_conflict: native cannot select Compose")
         if self.execution == "native" and not self.command:
@@ -864,8 +921,21 @@ class Runtime(BaseModel):
                 )
             ):
                 raise ValueError("runtime_required_environment_invalid")
-        if any(any(char in path for char in "*?[]") for path in self.context_excludes):
-            raise ValueError("runtime_context_excludes_glob_unsupported")
+        if len(self.context_excludes) != len(set(self.context_excludes)):
+            raise ValueError("runtime_context_excludes_duplicate")
+        for path in self.context_excludes:
+            relative = Path(path)
+            if (
+                not relative.parts
+                or relative.is_absolute()
+                or ".." in relative.parts
+                or "\\" in path
+                or "$" in path
+                or any(ord(char) < 32 for char in path)
+            ):
+                raise ValueError("runtime_context_exclude_invalid")
+            if any(char in path for char in "?[]"):
+                raise ValueError("runtime_context_excludes_pattern_unsupported")
         return self
 
     @field_validator("command", mode="before")
@@ -881,6 +951,30 @@ class Runtime(BaseModel):
         if isinstance(value, str):
             return [item.strip() for item in value.split(",") if item.strip()]
         return value
+
+
+def generated_chat_interface_problem(runtime: Runtime | None) -> str | None:
+    interface = runtime.interface if runtime else None
+    if interface and (
+        interface.kind == "http"
+        and interface.protocol in {"fi.alk", "openai_chat", "json_template"}
+        or interface.kind in {"callable", "command"} and interface.protocol == "fi.alk"
+    ):
+        return None
+    code = (
+        "missing-chat-interface"
+        if interface is None or not interface.kind
+        else "unsupported-chat-interface"
+    )
+    return (
+        f"{code}: inspect the source and declare runtime.interface.kind. Generated chat "
+        "supports http with fi.alk, openai_chat, or json_template, and callable or command "
+        "with fi.alk. Callable requires a source-exported agent_callback. Declare command "
+        "only for a proven noninteractive entrypoint consuming JSON stdin, ALK_USER_MESSAGE, "
+        "or ALK_MESSAGES_JSON and returning the chat response on stdout. An interactive CLI, "
+        "startup command, ACP, or WebSocket is not supported generated chat ingress. "
+        "The declared interface must still pass a real chat readiness check."
+    )
 
 
 class Dependency(BaseModel):
@@ -1263,22 +1357,28 @@ def is_data_free_conversation(contract: AgentContract) -> bool:
     )
 
 
-def validate_tool_workflow(contract: AgentContract) -> None:
+def has_executable_tool_workflow(contract: AgentContract) -> bool:
     declared = {tool.name for tool in contract.tools if tool.name.strip()}
     for entry in contract.tool_entrypoints:
         if entry.tool not in declared:
             continue
         if entry.mode == "import" and entry.module.strip() and entry.callable.strip():
-            return
+            return True
         if (
             entry.mode == "construct"
             and entry.module.strip()
             and entry.callable.strip()
             and entry.factory.strip()
         ):
-            return
+            return True
         if entry.mode == "service" and entry.service.strip() and entry.endpoint.strip():
-            return
+            return True
+    return False
+
+
+def validate_tool_workflow(contract: AgentContract) -> None:
+    if has_executable_tool_workflow(contract):
+        return
     raise ValueError(
         "required_tool_workflow_unavailable: no declared tool has an executable entrypoint"
     )

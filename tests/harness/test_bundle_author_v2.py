@@ -292,6 +292,52 @@ def test_phone_connect_only_uses_platform_telephony_without_target_secret(
     preflight_bundle(tmp_path / "bundle", bundle, parallelism=1, secret_refs={})
 
 
+def test_phone_connect_only_does_not_require_a_local_transport_seam(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "phone-target"
+    source.mkdir()
+    job = HarnessJob.model_validate(
+        {
+            "job_id": "phone-only-job",
+            "run_id": "phone-only-run",
+            "execution": "hosted",
+            "source": {"kind": "provider", "visibility": "public"},
+            "agent": {
+                "connector": "phone",
+                "mode": "connect_only",
+                "config": {
+                    "phone_number": "+14155551234",
+                    "target_system_prompt": "Answer questions about a ride booking.",
+                },
+            },
+            "scenario_count": 1,
+            "runtime": {
+                "isolation": "dedicated_vm",
+                "cpu_units": 2,
+                "memory_mb": 4096,
+                "parallelism": 1,
+            },
+        }
+    )
+
+    plan = resolve_environment_plan(
+        source,
+        job,
+        contract_modality="voice",
+        runtime_dependencies=[
+            {
+                "kind": "transport",
+                "name": "phone_network",
+                "engine": "telephony",
+                "reached": {},
+            }
+        ],
+    )
+
+    assert plan.packaging == "provider_connect_only"
+
+
 def test_generic_connect_only_provider_uses_authored_world_schema(
     tmp_path: Path,
 ) -> None:
@@ -425,6 +471,56 @@ def test_bundle_compiles_discovered_source_tool_entrypoint(tmp_path: Path) -> No
         "email": "customer@example.com",
         "status": "active",
     }
+
+
+def test_tool_registration_is_not_observed_as_tool_execution(tmp_path: Path) -> None:
+    source = tmp_path / "chat-agent"
+    source.mkdir()
+    (source / "agent.py").write_text("print('agent')\n", encoding="utf-8")
+    (source / "tools.py").write_text(
+        "class Editor:\n"
+        "    @classmethod\n"
+        "    def prepare(cls, context):\n"
+        "        return [{'name': 'edit', 'description': 'Edit a file'}]\n",
+        encoding="utf-8",
+    )
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring,
+        command=["python3", "agent.py"],
+        interface={
+            "kind": "http", "protocol": "openai_chat", "port": 8080,
+            "path": "/chat", "include_tools": False,
+        },
+    )
+    contract_path = authoring / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract["tool_entrypoints"] = [
+        {
+            "tool": "edit", "mode": "construct", "module": "tools",
+            "callable": "Editor.prepare", "factory": "Editor()",
+        }
+    ]
+    contract_path.write_text(json.dumps(contract))
+    bundle = author_bundle_v2(
+        source=source, job=_job(connector="http"), authoring=authoring,
+        output=tmp_path / "bundle",
+    )
+    process = next(p for p in bundle.processes if p.name == bundle.runtime.control_service)
+    trace = tmp_path / "agent-tool-calls.jsonl"
+    bootstrap = Path(__file__).resolve().parents[2] / "src/fi/alk/harness/livekit_tool_trace_bootstrap.py"
+    shutil.copy2(bootstrap, source / "sitecustomize.py")
+    result = subprocess.run(
+        [sys.executable, "-c", "from tools import Editor; print(Editor.prepare({}))"],
+        env={
+            **os.environ,
+            **{k: v.replace("{{WORLD_DIR}}", str(tmp_path)) for k, v in process.environment.items()},
+            "PYTHONPATH": str(source),
+        },
+        capture_output=True, text=True, check=True,
+    )
+    assert "Edit a file" in result.stdout
+    assert not trace.exists(), "Registering a tool does not prove the agent executed it"
 
 
 def test_auto_voice_contract_compiles_livekit_process_runtime(tmp_path: Path) -> None:
@@ -1013,6 +1109,105 @@ def test_fixed_multi_store_fixture_compiles_to_a_preflight_clean_bundle(
     assert manifest.capabilities["target_http"].service == "agent"
     assert manifest.capabilities["cache_redis"].service == "cache"
     preflight_bundle(output, manifest, parallelism=2, secret_refs={})
+
+
+def test_native_multi_store_contract_uses_source_compose_dependency_topology(
+    tmp_path: Path,
+) -> None:
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "examples"
+        / "harness"
+        / "generic_multi_store_chat"
+    )
+    runtime = {
+        "language": "python",
+        "execution": "native",
+        "command": ["python", "agent.py"],
+        "required_environment": {"agent": ["DATABASE_URL", "CACHE_URL"]},
+        "interface": {
+            "kind": "http",
+            "protocol": "openai_chat",
+            "port": 8080,
+            "path": "/v1/chat/completions",
+            "health_path": "/health",
+        },
+    }
+    dependencies = [
+        {
+            "name": "account store",
+            "kind": "datastore",
+            "engine": "postgresql",
+            "reached": {"dsn_env": "DATABASE_URL", "database": "app"},
+        },
+        {
+            "name": "access cache",
+            "kind": "queue",
+            "engine": "redis",
+            "reached": {"dsn_env": "CACHE_URL"},
+        },
+    ]
+
+    plan = resolve_environment_plan(
+        source,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime=runtime,
+        runtime_dependencies=dependencies,
+    )
+
+    agent = next(process for process in plan.processes if process.name == "agent")
+    assert agent.depends_on == ["world-db", "cache"]
+    assert agent.environment["DATABASE_URL"] == "{{WORLD_DATABASE_URL}}"
+    assert agent.environment["CACHE_URL"] == "{{CACHE_URL}}/2"
+    assert plan.capabilities["target_http"].service == "agent"
+    assert plan.capabilities["cache_redis"].service == "cache"
+
+
+def test_native_multi_store_contract_accepts_compose_list_environment(
+    tmp_path: Path,
+) -> None:
+    import shutil
+
+    source = tmp_path / "generic_multi_store_chat"
+    shutil.copytree(
+        Path(__file__).resolve().parents[2] / "examples" / "harness" / "generic_multi_store_chat",
+        source,
+    )
+    compose = source / "compose.yml"
+    compose.write_text(compose.read_text().replace(
+        "      DATABASE_URL: postgresql://source:source@postgres:5432/app\n"
+        "      CACHE_URL: redis://cache:6379/2\n"
+        '      PORT: "8080"\n',
+        "      - DATABASE_URL=postgresql://source:source@postgres:5432/app\n"
+        "      - CACHE_URL=redis://cache:6379/2\n"
+        "      - PORT=8080\n",
+    ))
+    runtime = {
+        "language": "python", "execution": "native", "command": ["python", "agent.py"],
+        "required_environment": {"agent": ["DATABASE_URL", "CACHE_URL"]},
+        "interface": {
+            "kind": "http", "protocol": "openai_chat", "port": 8080,
+            "path": "/v1/chat/completions", "health_path": "/health",
+        },
+    }
+    dependencies = [
+        {"name": "account store", "kind": "datastore", "engine": "postgresql",
+         "reached": {"dsn_env": "DATABASE_URL", "database": "app"}},
+        {"name": "access cache", "kind": "queue", "engine": "redis",
+         "reached": {"dsn_env": "CACHE_URL"}},
+    ]
+
+    plan = resolve_environment_plan(
+        source, _job(connector="auto"), contract_modality="chat",
+        contract_interface_kind="http", contract_runtime=runtime,
+        runtime_dependencies=dependencies,
+    )
+
+    agent = next(process for process in plan.processes if process.name == "agent")
+    assert agent.environment["DATABASE_URL"] == "{{WORLD_DATABASE_URL}}"
+    assert agent.environment["CACHE_URL"] == "{{CACHE_URL}}/2"
 
 
 def test_bundle_never_persists_resolved_secret(tmp_path: Path) -> None:
@@ -2830,6 +3025,7 @@ def test_declared_http_runtime_uses_contract_command_port_and_health(
     assert agent.working_directory == "."
     assert agent.run_command == runtime["command"]
     assert agent.fixed_port == 9090
+    assert agent.environment["PORT"] == "{{PORT_agent}}"
     readiness = next(
         item for item in plan.readiness if item.capability == "target_http"
     )
@@ -3285,7 +3481,7 @@ def test_explicit_adk_command_keeps_one_shot_adapter(tmp_path: Path) -> None:
     assert "ALK_SUBPROCESS_COMMAND" in agent.environment
 
 
-def test_adk_web_command_repairs_incomplete_http_interface(tmp_path: Path) -> None:
+def test_adk_web_command_repairs_stale_http_interface(tmp_path: Path) -> None:
     source = tmp_path / "source"
     app = source / "bug_agent"
     app.mkdir(parents=True)
@@ -3298,7 +3494,14 @@ def test_adk_web_command_repairs_incomplete_http_interface(tmp_path: Path) -> No
     _write_chat_contract(
         authoring,
         command=["uv", "run", "adk", "web", "--port=9090"],
-        interface={"kind": "http", "port": 9090},
+        interface={
+            "kind": "http",
+            "port": 9090,
+            "path": "/run",
+            "request_template": {
+                "new_message": {"parts": [{"text": "{{new_message}}"}]}
+            },
+        },
     )
     with sqlite3.connect(authoring / "world.sqlite") as database:
         database.execute("CREATE TABLE fixture (id TEXT PRIMARY KEY)")
@@ -3838,6 +4041,43 @@ def test_workspace_exclusions_stay_relative_to_declared_component(tmp_path):
     assert not (context / "apps/chat/fixtures").exists()
     assert (context / "apps/chat/server.ts").is_file()
     assert (context / "package.json").is_file()
+
+
+def test_workspace_exclusions_accept_repository_relative_paths(tmp_path):
+    from fi.alk.harness.bundle_author_v2 import _package_process_sources
+    from fi.alk.harness.contract import Runtime
+
+    app = tmp_path / "apps/chat"
+    app.mkdir(parents=True)
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.uv.workspace]\nmembers=["apps/*"]\n'
+    )
+    (tmp_path / "uv.lock").write_text("version = 1\n")
+    (app / "pyproject.toml").write_text(
+        '[project]\nname="chat-server"\nversion="1"\n'
+    )
+    (app / "server.py").write_text("print('ready')\n")
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "auth.md").write_text("sk-unreviewedFixtureValue1234567890")
+    runtime = Runtime(
+        language="python",
+        execution="native",
+        workdir="apps/chat",
+        command=[sys.executable, "server.py"],
+        context_excludes=["docs/auth.md"],
+    )
+    plan = resolve_environment_plan(
+        tmp_path, _job(connector="auto"), contract_runtime=runtime.model_dump()
+    )
+    output = tmp_path.parent / (tmp_path.name + "-bundle")
+
+    packaged = _package_process_sources(tmp_path, output, plan, runtime)
+
+    agent = next(p for p in packaged.processes if p.name == packaged.control_service)
+    context = output / agent.working_directory
+    assert not (context / "docs/auth.md").exists()
+    assert (context / "apps/chat/server.py").is_file()
 
 
 def test_python_workspace_packages_siblings_and_preserves_member_cwd(tmp_path):

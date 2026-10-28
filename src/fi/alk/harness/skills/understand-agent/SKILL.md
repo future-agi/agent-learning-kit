@@ -6,6 +6,9 @@ description: Reads an AI agent's source or definition and records what is verifi
 # Understand the agent
 
 Record executable capabilities, not commented examples, docstrings or suggested future features.
+For a framework or platform repository, do not inventory its component or integration catalogue.
+Choose one runnable source-owned agent/example that matches the requested target configuration,
+prove its startup and interaction path, and submit the contract once those facts are sufficient.
 An agent can legitimately have no custom tools: submit `tools: []` and `tool_entrypoints: []`.
 Do not invent a tool or database to make a contract look complete. Zero-argument tools are also
 valid when their actual signatures take no arguments. Follow registrations into executable code;
@@ -133,12 +136,32 @@ Find, in roughly this order:
    Never declare token values, disable authentication, override supplied credentials, or use this
    for external provider/account keys. This facility requires native HTTP, not Compose or CLI.
 
+   Inspect the selected chat route's response producers for structured application failures,
+   including errors returned with HTTP 200. Declare `runtime.interface.failure_rule` using the
+   source-defined status field, failure or success values, and error message path. A readable
+   assistant message does not prove successful execution. Do not infer failure from prose alone.
+
    Inspect whether the selected chat route returns pending tool requests for its caller to execute,
    or executes tools internally before replying. For internal execution, inspect the source response
    schema or correlated event API and declare `runtime.interface.completed_tools` or
    `runtime.interface.completed_tool_events` to collect completed results, including errors. Pair
-   actions and observations using source identifiers and preserve conversation correlation. Tool
-   declarations and assistant text are not execution evidence. Never fabricate events or replay
+   actions and observations using source identifiers and preserve conversation correlation. Inspect
+   success, error and rejection event producers, including native tool result wrappers. Completion
+   status means execution ended, not that it succeeded. When source defines a nullable boolean or
+   string error field inside the result, declare `result_error_path` relative to `result_path`.
+   ALK decodes a JSON-text result once for classification and preserves the original result.
+   Missing, null, false or empty string reports no error; true or nonempty string reports failure.
+   Other values and incompatible traversal invalidate the evidence. Declare this convention only
+   when supported by the source, and retain any existing boolean `error_path`.
+   Declare distinct failed terminal kinds with
+   `completed_tool_events.failure_events`, each containing `kind`, `action_id_path` and `result_path`.
+   Verify that all terminal kinds join the same action identifier; chronological parents are not
+   necessarily action references. Failure events always record `ok=false` and require an error
+   result. Select arguments present even when native validation fails, such as the raw tool-call
+   arguments JSON rather than a parsed action created only after validation. Tool
+   declarations, registration/factory calls, and assistant text are not execution evidence.
+   Importable tool bindings do not replace a completed-result observation mapping for internal
+   execution. Never fabricate events or replay
    completed tools. If the source offers equivalent chat routes, prefer one that exposes completed
    tool results over a text-only compatibility route. If no supported observation seam exists,
    record that limitation.
@@ -198,7 +221,12 @@ Find, in roughly this order:
    language and version, where imports resolve from, and whether it has a Dockerfile of its own.
    When the selected execution runtime supports Dockerfiles, prefer its own Dockerfile to
    generating one. Otherwise use it as evidence for a supported native startup path; do not
-   select an unsupported container build. For a chat agent, also
+   select an unsupported container build. If source deployment instructions offer a published
+   image for a Compose service, `runtime.compose_image_services` can select that service's
+   existing image instead of its build. Declare the source Compose file and control service;
+   retain the deployment evidence and resolve image variables only from source-owned values.
+   This selection does not add services, invent images, or establish an immutable image identity.
+   It requires a container runtime. For a chat agent, also
    record the conversational ingress the submitted runtime already exposes: HTTP, WebSocket or
    callable; its exact port and path; whether it is OpenAI Chat Completions-compatible; and any
    existing health path. Do not invent an endpoint. Without a real ingress the runtime may be
@@ -212,8 +240,15 @@ Find, in roughly this order:
    request, declare a capture from its dotted response path (for example
    `{"session_id": "id"}`) and reference it later as `{{session_id}}`; never substitute an
    unrelated built-in identifier. Use only documented template placeholders and only routes
-   proven in source. In particular, a source field named user ID is not itself a template
-   variable: map it to an available identifier such as `{{thread_id}}` when appropriate.
+   proven in source. If setup imports a graph or workflow, use a runnable source-owned example,
+   bind every required component input, and configure its provider and model through the
+   repository's supported mechanism using the requested target configuration. A starter template
+   with an unselected model is not a runnable agent. If the repository has no example already
+   bound to the requested model and the supported API cannot bind it during setup, do not select
+   that flow and do not rewrite its source. Prefer a source-owned example with no model dependency
+   so the repository's real interaction path can still be proved. In particular, a source field
+   named user ID is not itself a template variable: map it to an available identifier such as
+   `{{thread_id}}` when appropriate.
 
 13. **Its data store, and how the connection is chosen.** Which kind it is, and whether the
     connection comes from an environment variable, a config file, or a constructor argument. Say

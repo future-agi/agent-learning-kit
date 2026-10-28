@@ -47,6 +47,34 @@ def _runtime_snapshot(job) -> str | None:
     return os.environ.get("ALK_DAYTONA_SNAPSHOT") or None
 
 
+def _representative_chat_scenario(scenarios, bundle: Path):
+    """Prefer the generated workflow that exercises the broadest real tool surface."""
+
+    from .chat_call_runner import _scenario_document
+
+    candidates = [
+        scenario
+        for scenario in scenarios
+        if getattr(scenario, "requires_tool_evidence", False)
+    ]
+    if not candidates:
+        return scenarios[0]
+
+    def workflow_strength(scenario):
+        source_key = (
+            getattr(scenario, "source_scenario_key", None) or scenario.scenario_key
+        )
+        solution = _scenario_document(bundle, source_key).get("solution", [])
+        tools = [
+            step.get("tool")
+            for step in solution
+            if isinstance(step, dict) and isinstance(step.get("tool"), str)
+        ]
+        return len(set(tools)), len(tools)
+
+    return max(candidates, key=workflow_strength)
+
+
 def _world_isolation_status(build_output: dict):
     """Classify the isolation proof at the runtime's enforced parallelism."""
 
@@ -442,6 +470,7 @@ def _looks_like_runtime_plan_failure(detail: str) -> bool:
         marker in detail
         for marker in (
             "generated_runtime_",
+            "bundle_secret_material_detected",
             "no runnable shipped entrypoint",
             "dependency manifest",
             "failed to build",
@@ -457,6 +486,23 @@ def _looks_like_runtime_plan_failure(detail: str) -> bool:
             "cannot find module",
             "command not found",
         )
+    )
+
+
+def _provider_owns_tool_execution(job) -> bool:
+    from .authoring_entrypoint import PROVIDER_MANAGED_CONNECTORS
+    from .job import ProviderExecutionMode
+
+    agent = getattr(job, "agent", None)
+    return (
+        str(getattr(agent, "connector", "")).lower()
+        in PROVIDER_MANAGED_CONNECTORS
+        and getattr(agent, "mode", None)
+        in {
+            ProviderExecutionMode.CONNECT_ONLY,
+            ProviderExecutionMode.ENVIRONMENT_BACKED,
+            ProviderExecutionMode.PROVIDER_IMPORT,
+        }
     )
 
 
@@ -620,6 +666,7 @@ async def validate_once(
     from . import outbound
     from .bundle_author_v2 import author_bundle_v2
     from .compose_integration import enabled as compose_enabled
+    from .hosted_compose_bootstrap import initialize_hosted_compose
     from .contract import AgentContract
     from .hosted_entrypoint import (
         ProcessWorldFactory,
@@ -638,6 +685,12 @@ async def validate_once(
     from .source_data_invariants import author_invariants, check_invariants
     from .tool_certification import ToolAvailability, certify_tool_inventory
 
+    broker_socket = None
+    if not local_runtime:
+        broker_socket = await asyncio.to_thread(initialize_hosted_compose, job, source)
+        if broker_socket is not None:
+            os.environ["ALK_COMPOSE_BROKER_SOCKET"] = str(broker_socket)
+
     if getattr(job, "require_tool_workflow", False):
         from .contract import validate_tool_workflow
 
@@ -655,6 +708,7 @@ async def validate_once(
         and getattr(getattr(job, "agent", None), "mode", None)
         is ProviderExecutionMode.CONNECT_ONLY
     )
+    provider_owned_tools = _provider_owns_tool_execution(job)
     generic = bool(
         isinstance(getattr(job, "metadata", None), dict)
         and job.metadata.get("generic_harness_v1") is True
@@ -793,7 +847,7 @@ async def validate_once(
                 manifest,
                 parallelism=validation_parallelism,
                 secret_refs=job_secret_purposes(job),
-                allow_compose=local_runtime and compose_enabled(),
+                allow_compose=(local_runtime and compose_enabled()) or broker_socket is not None,
             )
             from .bundle_v2 import RuntimeKindV2
             if manifest.runtime.kind is RuntimeKindV2.COMPOSE:
@@ -827,10 +881,10 @@ async def validate_once(
                 from .action_certification import certify_actions
 
                 contract = AgentContract.model_validate_json(
-                    (authoring / "contract.json").read_text(encoding="utf-8")
+                    (bundle / "contract.json").read_text(encoding="utf-8")
                 )
                 tool_report = certify_tool_inventory(
-                    contract, bundle, external_provider=external_provider
+                    contract, bundle, external_provider=provider_owned_tools
                 )
                 rejected_tools = [
                     item.tool
@@ -1067,10 +1121,7 @@ async def validate_once(
                             "environment",
                             "Chat readiness requires a representative scenario",
                         )
-                    representative = next(
-                        (item for item in scenarios if getattr(item, "requires_tool_evidence", False)),
-                        scenarios[0],
-                    )
+                    representative = _representative_chat_scenario(scenarios, bundle)
                     await check_setup(representative, [])
                     endpoint = runtime.endpoints.get("target_http")
                     if endpoint is None:
@@ -1402,6 +1453,7 @@ async def validate_and_repair(
                         _active_repair_diagnostics,
                         guidance=guidance,
                         available_secret_aliases=available_secret_aliases,
+                        allow_ingress_repair=readiness_only,
                     )
                 if generic and all(
                     (artifact_root / name).is_file()
@@ -1640,6 +1692,7 @@ async def validate_and_repair(
                                 item.code for item in diagnostics
                             },
                             available_secret_aliases=available_secret_aliases,
+                            allow_ingress_repair=readiness_only,
                         )
                         patch_path = (
                             authoring
