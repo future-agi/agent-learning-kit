@@ -24,9 +24,12 @@ import tempfile
 
 from .cli import _auto
 from .job import HarnessJob, ProviderExecutionMode, SourceKind
+from .hosted_compose_bootstrap import initialize_hosted_compose
 from .provider_import import inspect_provider_target
 from .scenarios import load as load_written
 from .understand import PROVIDER_IMPORT_PROFILE_PATH_ENV
+
+PROVIDER_MANAGED_CONNECTORS = frozenset({"vapi", "retell", "retell_chat"})
 
 
 def _persist_authored_scenario_count(
@@ -486,7 +489,7 @@ def _load_provider_import_profile(
         }
     inspect_connect_only_provider = (
         job.agent.mode is ProviderExecutionMode.CONNECT_ONLY
-        and job.agent.connector.strip().lower() in {"vapi", "retell", "retell_chat"}
+        and job.agent.connector.strip().lower() in PROVIDER_MANAGED_CONNECTORS
     )
     if (
         job.agent.mode is not ProviderExecutionMode.PROVIDER_IMPORT
@@ -672,11 +675,22 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
         return _certify_only(args)
 
     job = HarnessJob.model_validate(json.loads(args.job.read_text(encoding="utf-8")))
+    broker_socket = initialize_hosted_compose(job, args.source.resolve())
+    if broker_socket is not None:
+        os.environ["ALK_COMPOSE_BROKER_SOCKET"] = str(broker_socket)
     profile = _load_provider_import_profile(
         job, args.target_secrets, args.provider_profile_cache
     )
     source_kind = agent_source_kind(job, profile)
     source_free_provider = source_kind == "provider"
+
+    async def runtime_readiness(candidate_job, source, authoring):
+        from .authoring_runtime_validation import validate_and_repair
+
+        await validate_and_repair(
+            candidate_job, source, authoring, readiness_only=True
+        )
+
     namespace = argparse.Namespace(
         path=str(args.source.resolve()),
         name=str(job.metadata.get("agent_name") or args.source.name),
@@ -685,7 +699,7 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
         count=job.scenario_count,
         interactive=False,
         model=None,
-        guidance=[],
+        guidance=job.authoring_guidance(),
         adjustments_path=str(args.adjustments) if args.adjustments else None,
         conversation_capabilities_path=(
             str(args.conversation_capabilities)
@@ -693,6 +707,7 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
             else None
         ),
         authoring_only=True,
+        runtime_readiness=runtime_readiness if validate_runtime else None,
         run_model=None,
         job=job,
         provider_profile=profile if source_free_provider else None,

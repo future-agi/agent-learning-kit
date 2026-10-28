@@ -42,8 +42,15 @@ def _now() -> str:
 
 
 def record_proof(destination: Path, scenario_key: str, proof: Proof) -> None:
-    """Save the three gates for one scenario, replacing its earlier proof."""
+    """Save the three gates for one scenario, replacing its earlier proof.
+
+    A proof deferred to the live runtime is no verdict, so it leaves the scenario unrecorded.
+    """
     proofs = load_proofs(destination)
+    if proof.deferred and not proof.broken:
+        if proofs.pop(scenario_key, None) is not None:
+            _save(destination, proofs)
+        return
     proofs[scenario_key] = {
         "holds": proof.holds,
         "ready": proof.ready,

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 
 from fi.simulate.runtime.spec import SecretRef
+
+from .backends import GOOGLE_ADK_APPROVAL_ENV
 
 
 class SecretResolutionError(RuntimeError):
@@ -13,6 +15,28 @@ class SecretResolutionError(RuntimeError):
 
 
 _RUNTIME_CONFIGURATION_PREFIX = "ALK_RUNTIME_VALUE_"
+
+
+PROCESS_SECRET_FILE_ENVIRONMENT = {
+    "GOOGLE_APPLICATION_CREDENTIALS_JSON": "GOOGLE_APPLICATION_CREDENTIALS",
+}
+
+
+def process_secret_environment_names(injected_names: Iterable[str]) -> set[str]:
+    """Project injected names through the runtime's existing secret-file materializers."""
+    return {PROCESS_SECRET_FILE_ENVIRONMENT.get(name, name) for name in injected_names}
+
+
+def target_provider_environment(values: Mapping[str, str]) -> dict[str, str]:
+    """Project target Vertex settings into SDK aliases without changing explicit choices."""
+    projected = dict(values)
+    for canonical, primary, fallback in (
+        ("GOOGLE_CLOUD_LOCATION", "VERTEXAI_LOCATION", "VERTEX_LOCATION"),
+        ("GOOGLE_CLOUD_PROJECT", "VERTEXAI_PROJECT", "VERTEX_PROJECT"),
+    ):
+        if values.get(canonical) and primary not in values and fallback not in values:
+            projected[primary] = values[canonical]
+    return projected
 
 
 def runtime_configuration_environment(values: Mapping[str, str]) -> dict[str, str]:
@@ -102,6 +126,7 @@ def worker_environment(
         # The backend choice travels with the model it names: without it the worker
         # falls back to the default backend and hands it a model it cannot drive.
         "ALK_HARNESS",
+        GOOGLE_ADK_APPROVAL_ENV,
         "ALK_HARNESS_MODEL",
         "ALK_HARNESS_THINKING",
         "AGENTCC_API_KEY",
@@ -131,6 +156,7 @@ def worker_environment(
     child = {name: value for name, value in host.items() if name in allowed}
     reserved = {
         "ALK_HARNESS",
+        GOOGLE_ADK_APPROVAL_ENV,
         "ALK_HARNESS_MODEL",
         "ALK_HARNESS_THINKING",
         "AGENTCC_API_KEY",

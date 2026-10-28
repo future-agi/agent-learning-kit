@@ -152,6 +152,7 @@ def _certifying_validate(calls: list[str]):
                     static=CheckStatus.PASSED,
                     schema_and_seed=CheckStatus.PASSED,
                     processes=CheckStatus.PASSED,
+                    chat_ingress=CheckStatus.PASSED,
                     source_invariants=CheckStatus.PASSED,
                     scenario_setup_ready=f"{job.scenario_count}/{job.scenario_count}",
                     tool_contract="0/0",
@@ -930,9 +931,26 @@ def test_certify_only_never_reads_provider_credentials(tmp_path, monkeypatch) ->
     assert opened == []
 
 
-def _real_runtime(tmp_path: Path, monkeypatch, state: dict) -> None:
-    """Fake only the process boundary; validate_once and the invariant review stay real."""
-    from fi.alk.harness import hosted_entrypoint, outbound, process_runtime
+def _real_runtime(
+    tmp_path: Path, monkeypatch, state: dict, authoring: Path | None = None
+) -> None:
+    """Fake only the process boundary; validate_once and the invariant review stay real.
+
+    With ``authoring``, its chat contract gets an HTTP ingress whose probe passes.
+    """
+    from fi.alk.harness import chat_readiness, hosted_entrypoint, outbound, process_runtime
+
+    if authoring is not None:
+        contract = json.loads((authoring / "contract.json").read_text(encoding="utf-8"))
+        contract["runtime"] = {
+            "interface": {"kind": "http", "port": 8080, "path": "/chat"}
+        }
+        (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+
+        async def ingress(**_kwargs):
+            return None
+
+        monkeypatch.setattr(chat_readiness, "probe_chat_ingress", ingress)
 
     secrets = tmp_path / "runtime-secrets.json"
     secrets.write_text("{}", encoding="utf-8")
@@ -955,7 +973,8 @@ def _real_runtime(tmp_path: Path, monkeypatch, state: dict) -> None:
             artifacts = work_directory / "artifacts"
             artifacts.mkdir(parents=True, exist_ok=True)
             (artifacts / "build.json").write_text('{"conformance": true}')
-            return [SimpleNamespace(endpoints={})]
+            endpoint = SimpleNamespace(address="http://127.0.0.1:1")
+            return [SimpleNamespace(endpoints={"target_http": endpoint}, world_index=0)]
 
         async def reset(self, *args, **kwargs):
             return None
@@ -983,7 +1002,7 @@ def _real_runtime(tmp_path: Path, monkeypatch, state: dict) -> None:
             return None
 
     class Factory:
-        def __init__(self, work):
+        def __init__(self, work, bundle):
             pass
 
         async def create(self, *args, **kwargs):
@@ -998,7 +1017,7 @@ def test_certify_only_runs_the_real_runtime_gate_without_a_model(
 ) -> None:
     source, authoring, job_path = _assembled(tmp_path, {"one": ["works"]})
     opened = _forbid_models(monkeypatch)
-    _real_runtime(tmp_path, monkeypatch, state={})
+    _real_runtime(tmp_path, monkeypatch, state={}, authoring=authoring)
     bundle = tmp_path / "bundle"
 
     assert (
@@ -1019,7 +1038,9 @@ def test_certify_only_refuses_to_author_invariants_for_a_live_world_with_data(
 ) -> None:
     source, authoring, job_path = _assembled(tmp_path, {"one": ["works"]})
     opened = _forbid_models(monkeypatch)
-    _real_runtime(tmp_path, monkeypatch, state={"users": [{"id": "u1"}]})
+    _real_runtime(
+        tmp_path, monkeypatch, state={"users": [{"id": "u1"}]}, authoring=authoring
+    )
     bundle = tmp_path / "bundle"
 
     assert (

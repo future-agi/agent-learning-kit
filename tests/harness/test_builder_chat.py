@@ -105,6 +105,7 @@ class EditingConversation(BuilderConversation):
 
 def _runtime(tmp_path: Path, client: BuilderClient, monkeypatch) -> HostedChatRuntime:
     monkeypatch.setenv("ALK_HARNESS", "vertex-gemini")
+    monkeypatch.setenv("ALK_GOOGLE_ADK_EXPLICITLY_APPROVED_BY_USER", "1")
     (tmp_path / "scenarios" / "one").mkdir(parents=True)
     (tmp_path / "scenarios" / "one" / "scenario.json").write_text("{}")
     policy = tmp_path / "policy.yaml"
@@ -468,6 +469,7 @@ def test_the_keys_the_platform_has_used_are_never_given_to_a_new_scenario(
     from fi.alk.harness.scenario import used_keys
 
     monkeypatch.setenv("ALK_HARNESS", "vertex-gemini")
+    monkeypatch.setenv("ALK_GOOGLE_ADK_EXPLICITLY_APPROVED_BY_USER", "1")
     policy = tmp_path / "policy.yaml"
     policy.write_text(
         "schema_version: 1\nharness_chat:\n  enabled: true\n", encoding="utf-8"
@@ -810,6 +812,7 @@ def _rebuild(
     from fi.alk.harness import spend
 
     monkeypatch.setenv("ALK_HARNESS", "vertex-gemini" if resumed else "claude")
+    monkeypatch.setenv("ALK_GOOGLE_ADK_EXPLICITLY_APPROVED_BY_USER", "1")
     monkeypatch.setattr(spend, "_stages", {})
     workspace = tmp_path / "work"
     workspace.mkdir()
