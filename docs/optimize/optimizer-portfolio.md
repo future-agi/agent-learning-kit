@@ -88,7 +88,7 @@ the allocation decision plus the evidence for it.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `Set AGENT_LEARNING_SDK_OPTIMIZER_PORTFOLIO_KEY...` | missing placeholder env | `agent-learn doctor` → `summary.api_key_configured` |
+| `Set AGENT_LEARNING_SDK_OPTIMIZER_PORTFOLIO_KEY...` | missing placeholder env | `agent-learn doctor --boundary` → `summary.api_key_configured` |
 | `vendored import failed` | infra | `summary.missing_engine_modules` |
 | a backend missing from completed set | engine fault | inspect the portfolio proof block in the artifact |
 

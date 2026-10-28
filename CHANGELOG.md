@@ -7,6 +7,15 @@ All notable release changes for Agent Learning Kit are tracked here.
 Post-rc.1 increments on the release branch. Each one adds gates on top of the
 66 proved at rc.1; the rc.1 entry below is historical and unchanged.
 
+- Sign in to a FutureAGI platform from the CLI (TH-8848): `agent-learn auth login|status|logout`
+  and `profile list|show|use|set` save key pairs per profile, in the OS keychain or an
+  owner-only file, and only ever show a key's last four characters. `doctor` now checks this
+  machine against the platform (signed in, workspace resolved, platform reachable); the kit's
+  module-boundary check moved to `doctor --boundary`, whose file flag is now `--write PATH`.
+  The commands are built on `fi.alk.platform.Client`, which Python code uses directly. Every
+  failure is a `PlatformError` with one of seven categories and a documented exit code, a
+  workspace the platform cannot use is refused rather than silently replaced, and submissions
+  carry a retry key that is reused when a lost answer is retried.
 - Builder chat: `edit_scenario` changes a kept scenario by its key with only the fields that change
   (`clear` resets a field), keeping its key, number, place and history; a rename alone is not
   proved again. A new scenario never takes a key the environment has used, a dropped scenario's

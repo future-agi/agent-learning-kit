@@ -106,7 +106,7 @@ config" from the artifact alone.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | manifest rejected | config fault | `summary.public_boundary_passed` + the manifest error line |
 | governance block missing fields | engine drift | rerun against a clean checkout; compare lineage blocks |
 

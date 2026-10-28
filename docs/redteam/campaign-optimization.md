@@ -89,8 +89,8 @@ and an auditable selection.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
-| manifest rejected at load | config fault | `agent-learn doctor` → `summary.public_boundary_passed`, then the manifest error line |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
+| manifest rejected at load | config fault | `agent-learn doctor --boundary` → `summary.public_boundary_passed`, then the manifest error line |
 | `optimization_passed: false` | real gap | the search space contains no candidate clearing the threshold — widen it |
 | governance checks failing | selection fault | inspect `optimizer_governance_*` counts before trusting `best_candidate_id` |
 

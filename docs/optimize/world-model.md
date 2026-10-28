@@ -92,7 +92,7 @@ in this track.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | manifest rejected | config fault | `summary.public_boundary_passed` + the manifest error line |
 | no candidate reaches 0.95 | world fault | inspect which invariant or quarantine step scored low |
 

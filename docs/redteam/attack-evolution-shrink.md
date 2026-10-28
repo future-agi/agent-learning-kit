@@ -95,7 +95,7 @@ a runnable `agent-learning.run.v1` manifest — the finding as a test.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | `shrink requires an artifact with attack-evolution evidence` | wrong input | point shrink at the evolution artifact, not a plain campaign result |
 | `shrink requires local-only evidence; external markers: ...` | evidence fault | remove external dependencies from the counterexample path |
 | `shrink requires at least one verified counterexample` | real gap | the evolution never verified a breach — there is nothing to minimize |

@@ -92,7 +92,7 @@ per-test results that justify it.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | suite rejected | config fault | `summary.public_boundary_passed` + the suite error line |
 | no candidate passes at threshold 1.0 | candidate fault | inspect per-test assertion results in the artifact |
 

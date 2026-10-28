@@ -99,7 +99,7 @@ candidate won and why the labeled fixture beat the unlabeled one.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | manifest rejected / `images must contain at least one environment` | config fault | `summary.public_boundary_passed` + the manifest error line |
 | case scores low | answer not grounded in the fixture's `labels`/`ocr_text` | compare the case response against the image data in the artifact |
 

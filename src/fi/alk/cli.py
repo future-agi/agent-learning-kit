@@ -48,7 +48,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if command in {"-h", "--help", "help"}:
         return _help()
     if command == "doctor":
-        return _doctor(args[1:])
+        if "--boundary" in args[1:]:
+            return _doctor([arg for arg in args[1:] if arg != "--boundary"])
+        from fi.alk.platform_cli import doctor
+
+        return doctor(args[1:])
     if command in {"release-check", "v1-check", "release"}:
         return _release_check(args[1:])
     if command in {"release-proof", "v1-proof"}:
@@ -65,6 +69,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _action_optimize(args[1:])
     if command == "run":
         return _run(args[1:])
+    if command == "auth":
+        from fi.alk.platform_cli import auth
+
+        return auth(args[1:])
+    if command == "profile":
+        from fi.alk.platform_cli import profile
+
+        return profile(args[1:])
     if command == "harness":
         # The complete environment/scenario/simulation workflow lives in ALK. This dispatch is
         # deliberately a thin CLI renderer; hosted executors import the same harness contracts.
@@ -4392,14 +4404,13 @@ def _run_async(awaitable: Any) -> Any:
 
 def _doctor(args: Sequence[str] = ()) -> int:
     parser = argparse.ArgumentParser(
-        prog="agent-learn doctor",
+        prog="agent-learn doctor --boundary",
         description="Verify the Agent Learning Kit trinity consolidation boundary.",
     )
     parser.add_argument(
-        "-o",
-        "--output",
+        "--write",
         default=None,
-        help="Write the doctor status JSON payload to this path.",
+        help="Write the boundary status JSON payload to this path.",
     )
     parser.add_argument(
         "--quiet",
@@ -4411,8 +4422,8 @@ def _doctor(args: Sequence[str] = ()) -> int:
     from fi.alk import trinity
 
     payload = trinity.trinity_status()
-    if parsed.output:
-        output_path = Path(parsed.output).expanduser().resolve()
+    if parsed.write:
+        output_path = Path(parsed.write).expanduser().resolve()
         output_path.parent.mkdir(parents=True, exist_ok=True)
         payload.setdefault("outputs_written", []).append(str(output_path))
         output_path.write_text(

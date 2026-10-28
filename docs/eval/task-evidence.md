@@ -91,7 +91,7 @@ the record and one for the judgment, so each can evolve independently.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | every criterion missing, score near zero | evidence fault | messages/tool_calls absent from the record you passed |
 | required tool reported unused | real catch | the transcript shows the agent skipped a verification step |
 

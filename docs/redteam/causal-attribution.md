@@ -96,8 +96,8 @@ attribution was earned against.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
-| manifest rejected at load | config fault | `agent-learn doctor` → `summary.public_boundary_passed`, then the manifest error line |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
+| manifest rejected at load | config fault | `agent-learn doctor --boundary` → `summary.public_boundary_passed`, then the manifest error line |
 | coordination proof checks failing | evidence fault | inspect `multi_agent_coordination_proof_*` before trusting any attribution |
 | `optimization_passed: false` | real gap | no candidate produced localizable findings — your trace lacks the signals attribution needs |
 

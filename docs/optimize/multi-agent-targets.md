@@ -94,7 +94,7 @@ as the survivor.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `Set AGENT_LEARNING_SDK_MULTI_AGENT_TARGET_OPTIMIZATION_KEY...` | missing placeholder env | `agent-learn doctor` → `summary.api_key_configured` |
+| `Set AGENT_LEARNING_SDK_MULTI_AGENT_TARGET_OPTIMIZATION_KEY...` | missing placeholder env | `agent-learn doctor --boundary` → `summary.api_key_configured` |
 | `vendored import failed` | infra | `summary.missing_engine_modules` |
 | both rooms score the same | evaluator fault | check the coordination checks in the evaluation config |
 

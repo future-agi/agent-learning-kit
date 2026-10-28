@@ -99,7 +99,7 @@ produced. The `kind` field is the contract every downstream command
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | manifest rejected / `required_env` missing | config fault | `summary.public_boundary_passed` + the manifest error line |
 | artifact missing after exit 0 | output path resolution | a relative `--output` lands in your current working directory (see §2 note) |
 

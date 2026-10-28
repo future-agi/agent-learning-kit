@@ -111,7 +111,7 @@ step five replayed.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | `manifest not found` on compare/replay | output landed next to the source artifact, not in CWD | see the resolution note in §1 |
 | compare exits non-zero | a real regression: score dropped or new findings appeared | read `regression-compare.json` findings; that exit code is the CI gate working |
 

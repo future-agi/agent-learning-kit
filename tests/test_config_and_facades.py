@@ -16823,7 +16823,7 @@ def test_agent_learn_optimize_eval_runs_unified_command_and_writes_artifacts(tmp
 def test_agent_learn_doctor_reports_module_availability(tmp_path, capsys):
     from fi.alk import trinity
 
-    exit_code = main(["doctor"])
+    exit_code = main(["doctor", "--boundary"])
 
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
@@ -16942,7 +16942,7 @@ def test_agent_learn_doctor_reports_module_availability(tmp_path, capsys):
     assert payload["modules"]["optimize"]["available"] is True
 
     output_path = tmp_path / "doctor-status.json"
-    exit_code = main(["doctor", "--output", str(output_path), "--quiet"])
+    exit_code = main(["doctor", "--boundary", "--write", str(output_path), "--quiet"])
     captured = capsys.readouterr()
     written = json.loads(output_path.read_text(encoding="utf-8"))
     assert exit_code == 0

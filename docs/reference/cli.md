@@ -4,7 +4,7 @@ track: reference
 backing: []
 artifact_kinds: []
 commands:
-  - agent-learn doctor
+  - agent-learn doctor --boundary
 postcondition: python -c "from fi.alk import cli; assert callable(cli.main); print('ok')"
 claims: []
 doctor_checks:
@@ -34,7 +34,7 @@ The regression-lifecycle subcommands (`baseline`, `compare`, `replay`,
 ## 2. Run it
 
 ```bash
-agent-learn doctor
+agent-learn doctor --boundary
 ```
 
 ```python
@@ -53,7 +53,9 @@ The command surface, one row per command (aliases from the `main()` dispatch):
 
 | Command | Aliases | Does | Artifact kind |
 | --- | --- | --- | --- |
-| `doctor` | — | environment + module diagnostics, config status | `agent-learning.doctor.v1` |
+| `doctor` | — | platform checks: signed in, workspace resolved, platform reachable (`--boundary`: the kit's module-boundary diagnostics, `--write PATH` for the JSON) | (checks; `--boundary`: `agent-learning.doctor.v1`) |
+| `auth` | — | `login` / `status` / `logout` against a FutureAGI platform | (platform output) |
+| `profile` | — | saved sign-ins: `list` / `show` / `use` / `set base_url\|workspace` | (platform output) |
 | `release-check` | `v1-check`, `release` | run the full local gate matrix | `agent-learning.release-check.v1` |
 | `release-proof` | `v1-proof` | cut the seven-check release proof | `agent-learning.release-proof.v1` |
 | `init` | — | scaffold manifests for a preset: `ci` (default), `run`, `redteam`, `optimize`, `all` | `agent-learning.init.v1` |
@@ -87,11 +89,53 @@ The command surface, one row per command (aliases from the `main()` dispatch):
 | `simulate` | — | namespace passthrough to the regression-lifecycle subcommands | per subcommand |
 | `eval-cli` | `fi` | passthrough to the vendored evaluation CLI | per subcommand |
 
+### Platform commands
+
+`auth`, `profile` and `doctor` talk to a FutureAGI platform through
+`fi.alk.platform`, the same client Python code uses:
+
+```python
+from fi.alk.platform import Client
+with Client.from_profile() as client:   # or Client(base_url=..., api_key=..., secret_key=...)
+    print(client.whoami().workspace)
+```
+
+`agent-learn auth login` asks for an API key and a secret key (from the
+platform's Keys page), checks them, and saves a profile: the platform URL and
+workspace in `$AGENT_LEARNING_HOME/profiles.json` (default `~/.agent-learning`),
+the key pair in the OS keychain, or, without one, in `credentials.json` there,
+readable only by you. With `--non-interactive` it reads `FI_API_KEY` and
+`FI_SECRET_KEY` instead of prompting. Only the key's last four characters are
+ever shown.
+
+Every platform command takes `--output human|json|jsonl`. With `json` or `jsonl`
+the result, or the error, is one JSON document on stdout. An error always has
+the same shape, `{"error": {"category", "code", "message", "fix", "status"}}`,
+and exits with its category's code:
+
+| Exit code | Category | For example |
+| --- | --- | --- |
+| 0 | — | success |
+| 1 | — | an unexpected failure in the CLI itself |
+| 2 | — | a usage error (unknown flag or command) |
+| 3 | `validation` | a missing key pair with `--non-interactive`; a request the platform rejected as invalid |
+| 4 | `auth` | a bad or missing key pair; not signed in |
+| 5 | `permission` | no access to the workspace, or no write access |
+| 6 | `allowance` | the plan's limit or credit is used up |
+| 7 | `not_found` | a workspace the key cannot act in; an unknown profile |
+| 8 | `conflict` | a retry key reused for a different request |
+| 9 | `infrastructure` | the platform is unreachable or unavailable |
+
+A workspace the platform cannot use is refused, never silently replaced by its
+default one. Requests that create something carry a retry key (generated per
+submission, or given): when an answer is lost they are sent again with the same
+key, so the platform returns the original instead of doing it twice.
+
 ## 4. When it fails
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `<command> could not import the vendored Agent Learning Kit engine` | infra — broken install; reinstall `agent-learning-kit` | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `<command> could not import the vendored Agent Learning Kit engine` | infra — broken install; reinstall `agent-learning-kit` | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | `unknown command: <name>` | config fault — alias typo; check the Aliases column | n/a (help text lists the surface) |
 | command exits asking for an API key | config fault — platform-backed step without a key | `summary.api_key_configured`; see [configure](configure.md) |
 

@@ -95,7 +95,7 @@ replayable record, not a one-off score.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | manifest rejected | config fault | `summary.public_boundary_passed` + the manifest error line |
 | best score below threshold | candidate fault | inspect `candidates[*].score` in the artifact |
 

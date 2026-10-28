@@ -93,7 +93,7 @@ verdict came out the way it did without opening the source artifact.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | `artifact root must be an object` | input fault | the file is not a saved Agent Learning artifact |
 | score drops with `forbidden_patterns` findings | real catch | the recorded run contains a pattern your config bans |
 

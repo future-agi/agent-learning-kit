@@ -94,8 +94,8 @@ and subject to the same gates as every other run.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
-| `missing required environment variable(s)` | config fault | set the placeholder key shown above; `agent-learn doctor` → `summary.public_boundary_passed` confirms the install surface |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
+| `missing required environment variable(s)` | config fault | set the placeholder key shown above; `agent-learn doctor --boundary` → `summary.public_boundary_passed` confirms the install surface |
 | trace lacks `deterministic_reset` or claims an external service | behavior regression | re-run the twin and compare the `openenv_trace` flags — replayability is the contract |
 
 ## 5. Prove it / keep it

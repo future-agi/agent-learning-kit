@@ -101,7 +101,7 @@ scored low.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | `Set AGENT_LEARNING_SDK_BEHAVIOR_ENTROPY_KEY...` | missing placeholder env | `summary.api_key_configured` |
 | weak and strong agents tie | evaluator fault | check the behavior checks in the evaluation config |
 

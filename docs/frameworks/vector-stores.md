@@ -103,8 +103,8 @@ Each vendor's native hit list normalizes to the same document shape
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
-| `missing required environment variable(s)` | config fault | set the placeholder key; `agent-learn doctor` → `summary.public_boundary_passed` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
+| `missing required environment variable(s)` | config fault | set the placeholder key; `agent-learn doctor --boundary` → `summary.public_boundary_passed` |
 | `retrieval_memory` summary empty (wrong hit key) | behavior regression | confirm the vendor row above and re-map the hit container to the normalized shape |
 
 ## 5. Prove it / keep it

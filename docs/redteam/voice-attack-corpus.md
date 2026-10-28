@@ -94,10 +94,10 @@ round-trip record, which arrives only with the Phase-9A loopback rung.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | `missing_channels: ["voice"]` in a corpus gate | real gap | a voice row is missing or the channel constant was not grown |
 | `corpus_errors` on `voice_surface` | config fault | a voice row's `voice_surface` is not one of the six |
-| hook returns no rows | config fault | `agent-learn doctor` → `summary.public_boundary_passed` |
+| hook returns no rows | config fault | `agent-learn doctor --boundary` → `summary.public_boundary_passed` |
 
 ## 5. Prove it / keep it
 

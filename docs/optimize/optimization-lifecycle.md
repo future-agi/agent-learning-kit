@@ -101,7 +101,7 @@ the score, is the durable output of the lifecycle.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | manifest rejected | config fault | `summary.public_boundary_passed` + the manifest error line |
 | promotion writes no manifest | no findings at `--min-level` | rerun with `--min-level note` |
 

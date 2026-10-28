@@ -102,9 +102,9 @@ requirements, and library bindings — plus a top-level `passed` and
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | exit code 1 with `findings[]` populated | a capability pin is unmet | read `summary.missing_required_capabilities` — it names key and value |
-| facade import errors in the SDK path | broken install | `agent-learn doctor` → `summary.missing_public_modules` |
+| facade import errors in the SDK path | broken install | `agent-learn doctor --boundary` → `summary.missing_public_modules` |
 | profile `passed: false` for a framework | contract gap | read that profile's `findings` and `evidence_requirements` |
 
 ## 5. Prove it / keep it
