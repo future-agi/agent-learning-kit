@@ -21,6 +21,24 @@ def fixture(source):
     return path
 
 
+def test_source_fingerprint_ignores_appledouble_metadata(tmp_path):
+    (tmp_path / "agent.py").write_text("ready = True\n")
+    expected = source_fingerprint(tmp_path)
+
+    (tmp_path / "._agent.py").write_bytes(b"\x00\x05\x16\x07" + b"\x00" * 28)
+
+    assert source_fingerprint(tmp_path) == expected
+
+
+def test_source_fingerprint_keeps_non_appledouble_dot_underscore_files(tmp_path):
+    (tmp_path / "agent.py").write_text("ready = True\n")
+    expected = source_fingerprint(tmp_path)
+
+    (tmp_path / "._agent.py").write_text("submitted_source = True\n")
+
+    assert source_fingerprint(tmp_path) != expected
+
+
 def test_image_only_needs_no_source_copy_but_keeps_full_identity(tmp_path):
     source = tmp_path / "source"
     source.mkdir()
@@ -50,6 +68,49 @@ def test_consumed_test_credentials_still_need_content_admission(tmp_path, kind):
     inputs = source_inputs(tmp_path, document(**service), capabilities={})
     with pytest.raises(BundleError, match="bundle_secret_material_detected"):
         validate_source(tmp_path, paths=inputs.files)
+
+
+def test_declared_context_patterns_remove_test_only_build_inputs(tmp_path):
+    (tmp_path / "Dockerfile").write_text("FROM busybox\n")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/app.ts").write_text("export const ready = true;\n")
+    (tmp_path / "src/app.test.ts").write_text("const token = 'ghp_" + "x" * 36 + "';\n")
+    inputs = source_inputs(
+        tmp_path,
+        document(build="."),
+        capabilities={},
+        context_excludes=("**/*.test.ts",),
+    )
+
+    validate_source(tmp_path, paths=inputs.files)
+    destination = tmp_path / "copy"
+    inputs.copy_to(destination)
+    assert (destination / "src/app.ts").is_file()
+    assert not (destination / "src/app.test.ts").exists()
+
+
+def test_declared_context_pattern_cannot_remove_required_source_root(tmp_path):
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app/Dockerfile").write_text("FROM busybox\n")
+
+    with pytest.raises(ComposeRuntimeError, match="required_path_excluded"):
+        source_inputs(
+            tmp_path,
+            document(build="./app"),
+            capabilities={},
+            context_excludes=("app",),
+        )
+
+
+@pytest.mark.parametrize("excluded", ["../outside", "/tmp/source", "tests/[fixture]"])
+def test_context_exclusion_must_be_safe_relative_pattern(tmp_path, excluded):
+    with pytest.raises(ComposeRuntimeError, match="context_exclude_invalid"):
+        source_inputs(
+            tmp_path,
+            document(image="example/app:1"),
+            capabilities={},
+            context_excludes=(excluded,),
+        )
 
 
 @pytest.mark.parametrize("kind", ["file", "directory", "parent_alias", "env_file"])
