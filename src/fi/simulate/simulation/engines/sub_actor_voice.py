@@ -29,8 +29,10 @@ _DONE = "[DONE]"
 _ANSWERED = "(the call has just been answered)"
 _HOW = {
     "audio_mix": "Say one short thing you would say out loud near the call now, under 15 words. Output only the line.",
-    "audio_handoff": "Say your next line into the phone, under 30 words. Output only the line. End it with "
-    f"{_DONE} when it finishes your part or gives the phone back; once your part is done, output only {_DONE}.",
+    "audio_handoff": "Say your next line into the phone, under 30 words. Output only the line. Stay on to hear "
+    "the agent answer what you said and reply to it; end a line with "
+    f"{_DONE} only once the agent has dealt with your part and you give the phone back; once your part is done, "
+    f"output only {_DONE}.",
     "ivr": "Say the menu's next prompt, under 30 words. Output only the prompt. When the agent's reply is what "
     f"you are waiting for, output only {_DONE} and the call is put through.",
 }
