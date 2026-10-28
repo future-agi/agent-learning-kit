@@ -1167,8 +1167,9 @@ def test_database_clone_checks_use_the_lane_count(tmp_path, monkeypatch):
     assert sorted(set(clones)) == ["lane0", "lane1", "lane2"]
 
 
+@pytest.mark.parametrize("fixed_user", [False, True])
 def test_local_runtime_validation_does_not_require_hosted_capabilities(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, fixed_user
 ):
     from fi.alk.harness import (
         bundle_author_v2,
@@ -1180,6 +1181,7 @@ def test_local_runtime_validation_does_not_require_hosted_capabilities(
         source_data_invariants,
     )
 
+    monkeypatch.setenv("ALK_FIXED_SANDBOX_USER", "1" if fixed_user else "0")
     secrets = tmp_path / "secrets.json"
     secrets.write_text("{}", encoding="utf-8")
     authoring = tmp_path / "authoring"
@@ -1195,6 +1197,9 @@ def test_local_runtime_validation_does_not_require_hosted_capabilities(
 
     class Provider:
         def __init__(self, **kwargs):
+            expected = (process_runtime.fixed_sandbox_user_resolver if fixed_user
+                        else process_runtime.default_user_resolver)
+            assert kwargs["user_resolver"] is expected
             assert kwargs["public_url_resolver"] is None
             assert kwargs["provider_attempt_id"] is None
             assert kwargs["provider_expires_at"] is None
