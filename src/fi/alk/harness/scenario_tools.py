@@ -1947,11 +1947,13 @@ def scenario_tools(
         if crowded_level:
             return _refuse(crowded_level)
         if not can_grow:
-            short = _red_team_short(args, target.get("axes"), kept, cap()) or _sub_actors_short(
-                args, kept, cap(), sub_actor_share(), usable_sub_actors()
-            )
+            short = _red_team_short(args, target.get("axes"), kept, cap())
             if short:
                 return _refuse(short)
+        # Held in every build, the builder session's included; only the person's own share replaces it.
+        short = _sub_actors_short(args, kept, cap(), sub_actor_share(), usable_sub_actors())
+        if short:
+            return _refuse(short)
         twin = _already_in_the_suite(
             {**args, "name": same}, kept, _first_names_on_disk(destination, same)
         )
