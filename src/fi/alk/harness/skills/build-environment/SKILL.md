@@ -731,7 +731,8 @@ could have around them:
   a scenario sets it with `answered_by`.
 
 The list says who each one is: a name that is never the person's, a `role` (who they are to the
-person), and a `persona` in the person's fields, true to who they are in this world, from which their
+person: a friend, a relative, a colleague; never someone there to help with the person's request), and a
+`persona` in the person's fields, true to who they are in this world, from which their
 voice is chosen. What they do is written by each scenario that includes them, so the list carries no
 script. Never add one for a situation the agent's users would not be in.
 
