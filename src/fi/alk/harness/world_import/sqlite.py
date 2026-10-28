@@ -20,7 +20,14 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 
 from ..source_model import LogicalType, SourceColumn, SourceModel, SourceTable
-from ..world_ir import WorldIR, WorldRow, WorldTable, WorldValue, validate_world_ir
+from ..world_ir import (
+    ValueState,
+    WorldIR,
+    WorldRow,
+    WorldTable,
+    WorldValue,
+    validate_world_ir,
+)
 
 
 class SQLiteNullPolicy(str, Enum):
@@ -105,6 +112,18 @@ def _canonical_json(value: Any) -> str:
     )
 
 
+def _identities(table: SourceTable, rows: list[dict[str, Any]]) -> list[str]:
+    """Each row's identity; equal rows are told apart by a suffix, in order."""
+    seen: dict[str, int] = {}
+    identities = []
+    for row in rows:
+        base = _row_identity(table, row)
+        collision = seen.get(base, 0)
+        seen[base] = collision + 1
+        identities.append(base if collision == 0 else f"{base}-{collision + 1}")
+    return identities
+
+
 def _row_identity(table: SourceTable, row: dict[str, Any]) -> str:
     if table.primary_key and all(
         row.get(column) is not None for column in table.primary_key
@@ -141,6 +160,70 @@ def _parse_structured(
     if not isinstance(parsed, expected):
         raise ValueError(code)
     return parsed
+
+
+def _postgres_array(text: str) -> list[str | None]:
+    """A one-dimensional Postgres array literal such as ``{}`` or ``{a,"b c",NULL}``."""
+    if not (text.startswith("{") and text.endswith("}")):
+        raise ValueError("array_value_invalid")
+    body, at = text[1:-1], 0
+    items: list[str | None] = []
+    if not body.strip():
+        return []
+    while True:
+        while at < len(body) and body[at].isspace():
+            at += 1
+        if at < len(body) and body[at] == '"':
+            at += 1
+            chars: list[str] = []
+            while at < len(body) and body[at] != '"':
+                at += body[at] == "\\"
+                if at >= len(body):
+                    break
+                chars.append(body[at])
+                at += 1
+            if at >= len(body):
+                raise ValueError("array_value_invalid")
+            at += 1
+            items.append("".join(chars))
+        else:
+            end = at
+            while end < len(body) and body[end] not in ',"{}\\':
+                end += 1
+            word = body[at:end].strip()
+            if not word:
+                raise ValueError("array_value_invalid")
+            items.append(None if word.upper() == "NULL" else word)
+            at = end
+        while at < len(body) and body[at].isspace():
+            at += 1
+        if at == len(body):
+            return items
+        if body[at] != ",":
+            raise ValueError("array_value_invalid")
+        at += 1
+
+
+_TEXT_ELEMENTS = {None, LogicalType.STRING, LogicalType.UUID, LogicalType.ENUM}
+
+
+def array_value(value: Any, element_type: LogicalType | None = None) -> list[Any]:
+    """An array cell as a list: JSON, a legacy Python repr, or a Postgres array literal.
+
+    The literal is what SQLite stores when a column declared ``TEXT[] DEFAULT '{}'`` is left
+    out of an insert. A JSON array never starts with ``{``, so reading it here is unambiguous.
+    """
+    try:
+        return _json_value(
+            _parse_structured(value, expected=list, code="array_value_invalid")
+        )
+    except ValueError:
+        if not (isinstance(value, str) and value.startswith("{")):
+            raise
+    items = _postgres_array(value)
+    if items and element_type not in _TEXT_ELEMENTS:
+        raise ValueError("array_value_invalid")
+    return items
 
 
 def _convert(column: SourceColumn, value: Any) -> Any:
@@ -200,9 +283,7 @@ def _convert(column: SourceColumn, value: Any) -> Any:
             raise ValueError(f"{logical.value}_value_invalid")
         return value
     if logical is LogicalType.ARRAY:
-        return _json_value(
-            _parse_structured(value, expected=list, code="array_value_invalid")
-        )
+        return array_value(value, column.element_type)
     if logical is LogicalType.JSON:
         parsed = _parse_structured(
             value,
@@ -255,15 +336,10 @@ def import_sqlite_world(
             dict(zip(authored_columns, row, strict=True))
             for row in connection.execute(query).fetchall()
         ]
-        identities: dict[str, int] = {}
         rows: list[WorldRow] = []
-        for raw_row in raw_rows:
-            base_identity = _row_identity(source_table, raw_row)
-            collision = identities.get(base_identity, 0)
-            identities[base_identity] = collision + 1
-            identity = (
-                base_identity if collision == 0 else f"{base_identity}-{collision + 1}"
-            )
+        for identity, raw_row in zip(
+            _identities(source_table, raw_rows), raw_rows, strict=True
+        ):
             values: dict[str, WorldValue] = {}
             for column in source_table.columns:
                 if column.name not in raw_row:
@@ -339,10 +415,170 @@ def import_sqlite_world(
     return SQLiteWorldImportResult(world=world, decisions=tuple(decisions))
 
 
+def _stored(value: WorldValue | None) -> Any:
+    if value is None or value.state is not ValueState.PRESENT:
+        return None
+    if value.logical_type in {LogicalType.ARRAY, LogicalType.JSON}:
+        return _canonical_json(value.value)
+    if value.logical_type is LogicalType.BOOLEAN:
+        return int(bool(value.value))
+    return value.value
+
+
+def _rowids(
+    connection: sqlite3.Connection, table: SourceTable, name: str
+) -> dict[str, int]:
+    """Each row's identity, as the import gives it, mapped to its SQLite rowid."""
+    columns = _sqlite_columns(connection, name)
+    selected = ", ".join(_identifier(column) for column in columns)
+    fetched = connection.execute(
+        f"SELECT rowid, {selected} FROM {_identifier(name)} ORDER BY {selected}"
+    ).fetchall()
+    rows = [dict(zip(columns, row[1:], strict=True)) for row in fetched]
+    return {
+        identity: row[0]
+        for identity, row in zip(_identities(table, rows), fetched, strict=True)
+    }
+
+
+def write_sqlite_world(
+    connection: sqlite3.Connection, world: WorldIR, source: SourceModel
+) -> bool:
+    """Write the rows where a World IR differs from what a SQLite world imports to.
+
+    Changed values are updated in place and new rows inserted with absent values as
+    NULL, which reads back absent (a rowid key takes the next number), so the source's
+    defaults apply rather than SQLite's. Untouched rows stay as stored and rows the IR
+    lacks are kept. Returns whether anything was written; commits nothing.
+    """
+    tables = {table.name: table for table in source.tables}
+    held = {
+        table.source_name: {row.identity: row for row in table.rows}
+        for table in import_sqlite_world(
+            connection, source, validate=False
+        ).world.tables
+    }
+    wrote = False
+    for table in world.tables:
+        name = table.source_name
+        current = held.get(name, {})
+        changes = [row for row in table.rows if current.get(row.identity) != row]
+        if not changes:
+            continue
+        wrote = True
+        if name not in held:
+            connection.execute(
+                f"CREATE TABLE {_identifier(name)} ("
+                + ", ".join(_identifier(column.name) for column in tables[name].columns)
+                + ")"
+            )
+        # Identities as the import gives them, before any column is added.
+        rowids = _rowids(connection, tables[name], name)
+        columns = set(_sqlite_columns(connection, name))
+        for row in changes:
+            for column, value in row.values.items():
+                if column not in columns and _stored(value) is not None:
+                    connection.execute(
+                        f"ALTER TABLE {_identifier(name)} "
+                        f"ADD COLUMN {_identifier(column)}"
+                    )
+                    columns.add(column)
+        for row in changes:
+            old = current.get(row.identity)
+            if old is None:
+                values = {
+                    column.name: _stored(row.values.get(column.name))
+                    for column in tables[name].columns
+                    if column.name in columns
+                }
+                connection.execute(
+                    f"INSERT INTO {_identifier(name)} "
+                    f"({', '.join(_identifier(column) for column in values)}) "
+                    f"VALUES ({', '.join('?' for _ in values)})",
+                    tuple(values.values()),
+                )
+                continue
+            changed = {
+                column: _stored(value)
+                for column, value in row.values.items()
+                if old.values.get(column) != value and column in columns
+            }
+            connection.execute(
+                f"UPDATE {_identifier(name)} SET "
+                + ", ".join(f"{_identifier(column)} = ?" for column in changed)
+                + " WHERE rowid = ?",
+                (*changed.values(), rowids.get(row.identity)),
+            )
+    return wrote
+
+
+def _numbered(column: SourceColumn) -> bool:
+    """Whether the source numbers the column from a sequence (a serial), as a rowid would."""
+    return column.logical_type is LogicalType.INTEGER and "nextval(" in (
+        column.default_expression or ""
+    ).lower()
+
+
+def world_holds(stored: WorldIR, world: WorldIR, source: SourceModel) -> bool:
+    """Whether a stored world seeds what a World IR does: its rows, with every value
+    it sets. A value left absent must read back absent, except an integer the source
+    numbers from a sequence, which a rowid key numbers too; an explicit null where the
+    source has a default cannot be stored, since SQLite's NULL reads back as absent.
+    """
+    columns = {
+        table.name: {column.name: column for column in table.columns}
+        for table in source.tables
+    }
+    rows = {table.source_name: list(table.rows) for table in stored.tables}
+    if {name for name, held in rows.items() if held} != {
+        table.source_name for table in world.tables if table.rows
+    }:
+        return False
+    for table in world.tables:
+        held = rows.get(table.source_name, [])
+        if len(held) != len(table.rows):
+            return False
+        for row in table.rows:
+            wanted: dict[str, Any] = {}
+            for name, column in columns[table.source_name].items():
+                value = row.values.get(name, WorldValue.absent())
+                if value.state is ValueState.PRESENT:
+                    try:
+                        wanted[name] = _convert(column, _stored(value))
+                    except (TypeError, ValueError):
+                        return False
+                elif value.state is ValueState.NULL and column.has_default:
+                    return False
+                elif not _numbered(column):
+                    wanted[name] = None
+
+            def holds(one: WorldRow) -> bool:
+                return all(
+                    one.values[name].state is not ValueState.PRESENT
+                    if value is None
+                    else one.values[name].state is ValueState.PRESENT
+                    and one.values[name].value == value
+                    for name, value in wanted.items()
+                )
+
+            # The same row first, so a looser added row cannot take another's place.
+            match = next(
+                (one for one in held if one.identity == row.identity and holds(one)),
+                next((one for one in held if holds(one)), None),
+            )
+            if match is None:
+                return False
+            held.remove(match)
+    return True
+
+
 __all__ = [
     "SQLiteImportDecision",
     "SQLiteNullPolicy",
     "SQLiteWorldImportError",
     "SQLiteWorldImportResult",
+    "array_value",
     "import_sqlite_world",
+    "world_holds",
+    "write_sqlite_world",
 ]

@@ -6,6 +6,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from fi.alk.harness.bundle_author_v2 import world_ir_is_imported
+from fi.alk.harness.compile.postgres import compile_postgres
+from fi.alk.harness.world_import.sqlite import import_sqlite_world
 from fi.alk.harness.authoring_runtime_validation import (
     _database_lanes,
     _fallback_diagnostic,
@@ -14,6 +17,7 @@ from fi.alk.harness.authoring_runtime_validation import (
     RuntimeValidationError,
     _setup_check_keys,
     _generic_candidate_hash,
+    _stored_in_world,
     _world_isolation_status,
     _write_generic_certificate,
     _write_runtime_evidence,
@@ -40,6 +44,7 @@ from fi.alk.harness.repair_controller import (
 from fi.alk.harness.repair_patch import (
     RepairPatchOp,
     RepairPatchOperation,
+    RepairPatchRejected,
     WorldIRRepairPatch,
 )
 from fi.alk.harness.runtime_repair import RuntimePlanPatch, _contract_hash
@@ -327,7 +332,10 @@ def test_generic_repair_without_typed_patch_keeps_validation_failure(
     assert history["results"][0]["outcome"] == "failed"
 
 
-def test_generic_validation_applies_typed_world_patch_transactionally(tmp_path) -> None:
+@pytest.mark.parametrize("saved_world", [False, True])
+def test_generic_validation_applies_typed_world_patch_transactionally(
+    tmp_path, saved_world
+) -> None:
     source_root = tmp_path / "source"
     authoring = tmp_path / "authoring"
     source_root.mkdir()
@@ -360,9 +368,16 @@ def test_generic_validation_applies_typed_world_patch_transactionally(tmp_path) 
             ),
         ),
     )
+    if saved_world:
+        # The world.sqlite the IR was imported from: the hashed world.
+        with sqlite3.connect(authoring / "world.sqlite") as database:
+            database.execute("CREATE TABLE accounts (id INTEGER)")
+            database.execute("INSERT INTO accounts VALUES (NULL)")
+            world = import_sqlite_world(database, source_model, validate=False).world
     store = GenericHarnessArtifactStore(authoring / "generic-harness")
     store.write_source_model(source_model)
     store.write_world_ir(world)
+    identity = world.tables[0].rows[0].identity
     diagnostic = HarnessDiagnostic.create(
         stage=HarnessStage.VALIDATING_ENVIRONMENT,
         component="world_ir",
@@ -387,7 +402,7 @@ def test_generic_validation_applies_typed_world_patch_transactionally(tmp_path) 
                 RepairPatchOperation(
                     op=RepairPatchOp.SET_VALUE,
                     table="accounts",
-                    row_identity="account-1",
+                    row_identity=identity,
                     column="id",
                     value=WorldValue.present(LogicalType.INTEGER, 1),
                     reason="required_value_missing",
@@ -405,11 +420,329 @@ def test_generic_validation_applies_typed_world_patch_transactionally(tmp_path) 
 
     validate_world_ir(store.read_world_ir(), source_model)
     assert (authoring / "generic-harness" / "repair-patch-0001.json").is_file()
+    if saved_world:
+        # The repair is in the hashed world too, and the IR is what it imports to.
+        with sqlite3.connect(authoring / "world.sqlite") as database:
+            assert database.execute("SELECT id FROM accounts").fetchall() == [(1,)]
+        assert world_ir_is_imported(authoring)
     history = store.read_repair_history()
     assert (
         history.results[0].after_candidate_hash
         != history.results[0].before_candidate_hash
     )
+
+
+def test_a_repair_world_sqlite_cannot_hold_fails_with_the_validation_error(
+    tmp_path,
+) -> None:
+    source_root = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source_root.mkdir()
+    authoring.mkdir()
+    (source_root / "agent.py").write_text("agent", encoding="utf-8")
+    source_model = SourceModel.create(
+        source_digest="sha256:" + "a" * 64,
+        engine="postgres",
+        tables=(
+            SourceTable(
+                name="accounts",
+                columns=(
+                    SourceColumn(
+                        name="id",
+                        logical_type=LogicalType.INTEGER,
+                        native_type="integer",
+                        nullable=False,
+                        has_default=False,
+                    ),
+                ),
+            ),
+        ),
+    )
+    path = authoring / "world.sqlite"
+    with sqlite3.connect(path) as database:
+        database.execute("CREATE TABLE accounts (id INTEGER CHECK (id IS NULL))")
+        database.execute("INSERT INTO accounts VALUES (NULL)")
+        world = import_sqlite_world(database, source_model, validate=False).world
+    before = path.read_bytes()
+    store = GenericHarnessArtifactStore(authoring / "generic-harness")
+    store.write_source_model(source_model)
+    store.write_world_ir(world)
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.VALIDATING_ENVIRONMENT,
+        component="world_ir",
+        code="required_value_missing",
+        message="accounts.id is missing",
+    )
+
+    async def validate(*args):
+        raise RuntimeValidationError("environment", "invalid", diagnostics=(diagnostic,))
+
+    async def repair(*args):
+        return WorldIRRepairPatch.create(
+            base_world_ir_hash=world.fingerprint,
+            operations=(
+                RepairPatchOperation(
+                    op=RepairPatchOp.SET_VALUE,
+                    table="accounts",
+                    row_identity=world.tables[0].rows[0].identity,
+                    column="id",
+                    value=WorldValue.present(LogicalType.INTEGER, 1),
+                    reason="required_value_missing",
+                    evidence_refs=("source-model:accounts.id",),
+                ),
+            ),
+        )
+
+    job = SimpleNamespace(metadata={"generic_harness_v1": True})
+    with pytest.raises(RuntimeValidationError, match="invalid"):
+        asyncio.run(
+            validate_and_repair(
+                job, source_root, authoring, validate=validate, repair=repair
+            )
+        )
+
+    assert path.read_bytes() == before
+    assert store.read_world_ir() == world
+    assert store.read_repair_history().results[0].outcome.value == "failed"
+
+
+@pytest.mark.parametrize("repair", ["a_value_sqlite_changes", "a_null_over_a_default"])
+def test_a_repair_world_sqlite_cannot_hold_is_rejected_and_writes_nothing(
+    tmp_path, repair
+) -> None:
+    source_model = SourceModel.create(
+        source_digest="sha256:" + "a" * 64,
+        engine="postgres",
+        tables=(
+            SourceTable(
+                name="accounts",
+                columns=(
+                    SourceColumn(
+                        name="zip",
+                        logical_type=LogicalType.STRING,
+                        native_type="text",
+                        nullable=True,
+                        has_default=True,
+                        default_expression="'00000'",
+                    ),
+                    SourceColumn(
+                        name="note",
+                        logical_type=LogicalType.STRING,
+                        native_type="text",
+                        nullable=True,
+                        has_default=False,
+                    ),
+                ),
+            ),
+        ),
+    )
+    path = tmp_path / "world.sqlite"
+    with sqlite3.connect(path) as database:
+        database.execute("CREATE TABLE accounts (zip INTEGER)")
+        database.execute("INSERT INTO accounts VALUES (NULL)")
+        world = import_sqlite_world(database, source_model, validate=False).world
+    before = path.read_bytes()
+    [row] = world.tables[0].rows
+    zip_code = (
+        WorldValue.present(LogicalType.STRING, "02134")
+        if repair == "a_value_sqlite_changes"
+        else WorldValue.null(LogicalType.STRING)
+    )
+    repaired = world.model_copy(
+        update={
+            "tables": (
+                WorldTable(
+                    source_name="accounts",
+                    rows=(
+                        WorldRow(
+                            identity=row.identity,
+                            values={
+                                "zip": zip_code,
+                                # A column world.sqlite lacks: added, then undone.
+                                "note": WorldValue.present(LogicalType.STRING, "x"),
+                            },
+                        ),
+                    ),
+                ),
+            )
+        }
+    )
+
+    with pytest.raises(RepairPatchRejected, match="repair_patch_not_storable"):
+        _stored_in_world(tmp_path, repaired, source_model)
+
+    assert path.read_bytes() == before
+
+
+def _users_with_a_role_default(
+    id_default: str | None, role_default: str
+) -> SourceModel:
+    return SourceModel.create(
+        source_digest="sha256:" + "a" * 64,
+        engine="postgres",
+        tables=(
+            SourceTable(
+                name="users",
+                columns=(
+                    SourceColumn(
+                        name="id",
+                        logical_type=LogicalType.INTEGER
+                        if id_default
+                        else LogicalType.STRING,
+                        native_type="integer" if id_default else "text",
+                        nullable=False,
+                        has_default=id_default is not None,
+                        default_expression=id_default,
+                    ),
+                    SourceColumn(
+                        name="role",
+                        logical_type=LogicalType.STRING,
+                        native_type="text",
+                        nullable=False,
+                        has_default=True,
+                        default_expression=role_default,
+                    ),
+                ),
+                primary_key=("id",),
+            ),
+        ),
+    )
+
+
+def _with_a_row_added(world: WorldIR, values: dict[str, WorldValue]) -> WorldIR:
+    [table] = world.tables
+    return WorldIR.create(
+        source_model_fingerprint=world.source_model_fingerprint,
+        tables=(
+            WorldTable(
+                source_name=table.source_name,
+                rows=tuple(
+                    sorted(
+                        (*table.rows, WorldRow(identity="added", values=values)),
+                        key=lambda row: row.identity,
+                    )
+                ),
+            ),
+        ),
+    )
+
+
+def _seeded_columns(source_model: SourceModel, world: WorldIR) -> list[tuple]:
+    return sorted(
+        operation.columns
+        for operation in compile_postgres(source_model, world).operations
+        if operation.table == "users"
+    )
+
+
+@pytest.mark.parametrize(
+    ("source_default", "sqlite_default"),
+    [("'user'::text", "'admin'"), ("now()", "CURRENT_TIMESTAMP")],
+)
+@pytest.mark.parametrize("left_out", [False, True])
+def test_a_repaired_row_keeps_the_source_default_for_a_value_left_absent(
+    tmp_path, source_default, sqlite_default, left_out
+) -> None:
+    source_model = _users_with_a_role_default(None, source_default)
+    path = tmp_path / "world.sqlite"
+    with sqlite3.connect(path) as database:
+        database.execute(
+            "CREATE TABLE users (id TEXT PRIMARY KEY, "
+            f"role TEXT DEFAULT {sqlite_default})"
+        )
+        database.execute("INSERT INTO users VALUES ('u1', 'staff')")
+        world = import_sqlite_world(database, source_model).world
+    values = {"id": WorldValue.present(LogicalType.STRING, "u2")}
+    if not left_out:
+        values["role"] = WorldValue.absent()
+    repaired = _with_a_row_added(world, values)
+
+    stored = _stored_in_world(tmp_path, repaired, source_model)
+
+    # The seed still leaves role to the source's default, not SQLite's.
+    assert _seeded_columns(source_model, stored) == [("id",), ("id", "role")]
+    assert _seeded_columns(source_model, stored) == _seeded_columns(
+        source_model, repaired
+    )
+    with sqlite3.connect(path) as database:
+        assert database.execute(
+            "SELECT role FROM users WHERE id = 'u2'"
+        ).fetchall() == [(None,)]
+
+
+def test_a_repaired_row_sqlite_must_fill_with_its_own_default_is_rejected(
+    tmp_path,
+) -> None:
+    source_model = _users_with_a_role_default(None, "'user'::text")
+    path = tmp_path / "world.sqlite"
+    with sqlite3.connect(path) as database:
+        database.execute(
+            "CREATE TABLE users (id TEXT PRIMARY KEY, "
+            "role TEXT NOT NULL DEFAULT 'admin')"
+        )
+        database.execute("INSERT INTO users VALUES ('u1', 'staff')")
+        world = import_sqlite_world(database, source_model).world
+    before = path.read_bytes()
+    repaired = _with_a_row_added(
+        world,
+        {
+            "id": WorldValue.present(LogicalType.STRING, "u2"),
+            "role": WorldValue.absent(),
+        },
+    )
+
+    with pytest.raises(RepairPatchRejected, match="repair_patch_not_storable"):
+        _stored_in_world(tmp_path, repaired, source_model)
+
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("autoincrement", ["", " AUTOINCREMENT"])
+def test_a_repaired_row_left_without_its_serial_key_takes_the_next_rowid(
+    tmp_path, autoincrement
+) -> None:
+    source_model = _users_with_a_role_default(
+        "nextval('users_id_seq'::regclass)", "'user'::text"
+    )
+    path = tmp_path / "world.sqlite"
+    with sqlite3.connect(path) as database:
+        database.execute(
+            f"CREATE TABLE users (id INTEGER PRIMARY KEY{autoincrement}, role TEXT)"
+        )
+        database.execute("INSERT INTO users VALUES (1, 'staff')")
+        world = import_sqlite_world(database, source_model).world
+    repaired = _with_a_row_added(
+        world, {"role": WorldValue.present(LogicalType.STRING, "admin")}
+    )
+
+    stored = _stored_in_world(tmp_path, repaired, source_model)
+
+    assert sorted(
+        (row.values["id"].value, row.values["role"].value)
+        for row in stored.tables[0].rows
+    ) == [(1, "staff"), (2, "admin")]
+
+
+@pytest.mark.parametrize("id_default", ["100", "'100'::integer"])
+def test_a_repaired_row_left_without_a_plain_integer_default_is_rejected(
+    tmp_path, id_default
+) -> None:
+    """Only a sequence numbers an omitted key; SQLite's rowid would override 100."""
+    source_model = _users_with_a_role_default(id_default, "'user'::text")
+    path = tmp_path / "world.sqlite"
+    with sqlite3.connect(path) as database:
+        database.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, role TEXT)")
+        database.execute("INSERT INTO users VALUES (1, 'staff')")
+        world = import_sqlite_world(database, source_model).world
+    before = path.read_bytes()
+    repaired = _with_a_row_added(
+        world, {"role": WorldValue.present(LogicalType.STRING, "admin")}
+    )
+
+    with pytest.raises(RepairPatchRejected, match="repair_patch_not_storable"):
+        _stored_in_world(tmp_path, repaired, source_model)
+
+    assert path.read_bytes() == before
 
 
 def test_generic_validation_rejects_unchanged_compiler_failure(tmp_path) -> None:
@@ -1345,10 +1678,8 @@ def test_database_clone_checks_use_the_lane_count(tmp_path, monkeypatch):
     assert sorted(set(clones)) == ["lane0", "lane1", "lane2"]
 
 
-@pytest.mark.parametrize("fixed_user", [False, True])
-def test_local_runtime_validation_does_not_require_hosted_capabilities(
-    tmp_path, monkeypatch, fixed_user
-):
+def _stub_local_validation(tmp_path, monkeypatch, check_invariants, fixed_user=False):
+    """validate_once's collaborators for a local run of one scenario; returns its arguments."""
     from fi.alk.harness import (
         bundle_author_v2,
         hosted_entrypoint,
@@ -1433,9 +1764,6 @@ def test_local_runtime_validation_does_not_require_hosted_capabilities(
     async def author_invariants(*_args, **_kwargs):
         return []
 
-    async def check_invariants(*_args, **_kwargs):
-        return None
-
     monkeypatch.setattr(source_data_invariants, "author_invariants", author_invariants)
     monkeypatch.setattr(source_data_invariants, "check_invariants", check_invariants)
     job = SimpleNamespace(
@@ -1444,6 +1772,19 @@ def test_local_runtime_validation_does_not_require_hosted_capabilities(
         metadata={},
         scenario_count=1,
         seed=0,
+    )
+    return job, authoring, secrets
+
+
+@pytest.mark.parametrize("fixed_user", [False, True])
+def test_local_runtime_validation_does_not_require_hosted_capabilities(
+    tmp_path, monkeypatch, fixed_user
+):
+    async def check_invariants(*_args, **_kwargs):
+        return None
+
+    job, authoring, secrets = _stub_local_validation(
+        tmp_path, monkeypatch, check_invariants, fixed_user
     )
 
     assert (
@@ -1457,6 +1798,40 @@ def test_local_runtime_validation_does_not_require_hosted_capabilities(
             )
         )
         == 1
+    )
+
+
+@pytest.mark.parametrize("certify_only", [True, False])
+@pytest.mark.parametrize(
+    ("violated_at", "phase"), [(None, "environment"), ("one", "scenarios")]
+)
+def test_certify_only_rejects_a_violated_invariant_with_a_typed_diagnostic(
+    tmp_path, monkeypatch, certify_only, violated_at, phase
+):
+    async def check_invariants(*_args, scenario_key=None, **_kwargs):
+        if scenario_key == violated_at:
+            raise ValueError("Source data invariants failed:\n- 'wallets' failed")
+
+    job, authoring, secrets = _stub_local_validation(
+        tmp_path, monkeypatch, check_invariants
+    )
+
+    with pytest.raises(RuntimeValidationError) as raised:
+        asyncio.run(
+            validate_once(
+                job,
+                tmp_path,
+                authoring,
+                secrets_path=secrets,
+                local_runtime=True,
+                reuse_invariants_only=certify_only,
+            )
+        )
+
+    assert raised.value.phase == phase
+    assert "Source data invariants failed" in str(raised.value)
+    assert [item.code for item in raised.value.diagnostics] == (
+        ["source_data_invariant_violated"] if certify_only else []
     )
 
 
