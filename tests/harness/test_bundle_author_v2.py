@@ -3855,6 +3855,41 @@ def test_a_reseal_stamps_an_adk_bundle_only_when_it_seals_adks_interface(
     assert ("sealed_from" in metadata) is not written
 
 
+@pytest.mark.parametrize("template", [{"message": "{{new_message}}"}, "{{new_message}}"])
+def test_a_reseal_stamps_an_adk_bundle_whose_build_kept_the_written_interface(
+    tmp_path: Path, template: object
+) -> None:
+    # Two app packages: no build derives ADK's interface, so the written one is the build's.
+    source = tmp_path / "source"
+    for name in ("first_agent", "second_agent"):
+        (source / name).mkdir(parents=True)
+        (source / name / "__init__.py").write_text("", encoding="utf-8")
+        (source / name / "agent.py").write_text("root_agent = object()\n", encoding="utf-8")
+    (source / "pyproject.toml").write_text(
+        "[project]\nname='agents'\nversion='1'\n", encoding="utf-8"
+    )
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring,
+        command=["uv", "run", "adk", "web", "--port=9090"],
+        interface={
+            "kind": "http", "port": 9090, "path": "/run", "request_template": template,
+        },
+    )
+    contract = json.loads((authoring / "contract.json").read_text(encoding="utf-8"))
+    contract["tools"] = [{"name": "status", "args": []}]
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+    bundle = authoring / "environment-bundle"
+    author_bundle_v2(source=source, job=_job(connector="auto"), authoring=authoring, output=bundle)
+    contract["tools"].append({"name": "history", "args": []})
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+
+    reseal_scenarios(authoring)
+
+    metadata = load_bundle_v2(bundle).metadata
+    assert "sealed_from" in metadata and "contract_compiled" in metadata
+
+
 def test_a_reseal_leaves_a_contract_added_after_the_build_unstamped(tmp_path: Path) -> None:
     _source, authoring, _model, bundle, _ = _places(tmp_path, ir_seed=False)
     assert not (bundle / "contract.json").exists()

@@ -3769,7 +3769,7 @@ def _interface_edited(authored: dict[str, Any], sealed: dict[str, Any]) -> bool:
     return isinstance(named, dict) and _interface(authored) != _interface(sealed)
 
 
-def _built_by_older_alk(sealed: dict[str, Any], processes: list[Any]) -> bool:
+def _built_by_older_alk(sealed: dict[str, Any], processes: list[Any], staging: Path) -> bool:
     """Whether an older build compiled this bundle: one that bridged a ``callable`` command,
     traced tool callables, or kept a written HTTP interface for ``adk web``, none of which a
     build does now."""
@@ -3781,12 +3781,15 @@ def _built_by_older_alk(sealed: dict[str, Any], processes: list[Any]) -> bool:
             _interface(sealed) == bridged
             and any("ALK_SUBPROCESS_COMMAND" in env for env in environments)
         )
-        or _adk_interface_written(sealed)
+        or _adk_interface_written(sealed, processes, staging)
     )
 
 
-def _adk_interface_written(sealed: dict[str, Any]) -> bool:
-    """Whether a chat ``adk web`` bundle seals an HTTP interface other than ADK's own."""
+def _adk_interface_written(
+    sealed: dict[str, Any], processes: list[Any], staging: Path
+) -> bool:
+    """Whether a chat ``adk web`` bundle seals an HTTP interface other than the one a build
+    now derives from the single ADK app in its packaged source."""
     runtime = sealed.get("runtime") or {}
     command = [str(item) for item in (runtime.get("command") or [])]
     interface = runtime.get("interface")
@@ -3797,11 +3800,14 @@ def _adk_interface_written(sealed: dict[str, Any]) -> bool:
         or str(interface.get("kind") or "").strip().lower() not in {"", "http"}
     ):
         return False
-    app_name = (interface.get("request_template") or {}).get("app_name")
-    if not isinstance(app_name, str) or not app_name:
-        return True
-    own = {"runtime": {"interface": _adk_interface_for(command, app_name)}}
-    return _interface(sealed) != _interface(own)
+    for process in processes:
+        directory = getattr(process, "working_directory", None)
+        app_name = _adk_app_name(staging / directory, "") if directory else None
+        if app_name is not None:
+            own = {"runtime": {"interface": _adk_interface_for(command, app_name)}}
+            return _interface(sealed) != _interface(own)
+    # Without one resolvable app a build keeps the written interface too.
+    return False
 
 
 def _carry_contract(
@@ -3828,7 +3834,7 @@ def _carry_contract(
             and isinstance(sealed, dict)
             and _built_from(authored) == _built_from(sealed)
             and not _interface_edited(authored, sealed)
-            and not _built_by_older_alk(sealed, processes)
+            and not _built_by_older_alk(sealed, processes, staging)
         )
     except ValueError:
         compiles = False
