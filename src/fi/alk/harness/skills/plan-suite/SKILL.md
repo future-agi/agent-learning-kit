@@ -925,7 +925,8 @@ The worker is called `scenario_writer`. **Every brief MUST carry, for each cell 
   would use;
 - where the environment lists sub-actors, which of this slice's scenarios include which sub-actor, on
   top of their other conditions and with the moment each enters, so that across all slices the suite
-  reaches its sub-actor share; a writer never adds one it was not dealt;
+  reaches its sub-actor share, each with a part of their own, never the person's request; a writer never
+  adds one it was not dealt;
 - the one difficulty each scenario carries, distinct from every other in the brief, stated as
   something that happens in the call that a competent agent could get wrong; the person's place,
   accent, surroundings or the venue they name are never the difficulty, and two scenarios that differ

@@ -649,8 +649,9 @@ that sub-actor in `sub_actors`, with two things written for this scenario:
   <does what the person asked>"). Give them a part, never the person's goal: the person still pursues it and gives
   every value the agent asks for, and a sub-actor never confirms or chooses for them. What they say is
   their own: something they want, know or worry about. Never the person's request, address, details or
-  answers, which the agent must get from the person; someone who takes the phone does it partway
-  through, once the person has started.
+  answers, which the agent must get from the person. Someone who takes the phone does it partway
+  through, once the person has started, to say something of their own: never to make, confirm, change
+  or cancel the person's request, or to give a value the agent needs from the person.
 - `trigger`: when they enter. `always`, `mid_journey` after the agent's turn N, `on_tool` on the Nth call
   of one of the agent's tools that runs in the world, `on_keyword` when one of its words is in the
   agent's latest turn, or `probability` with chance `p`. Pick a moment the conversation reaches before
