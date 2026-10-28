@@ -126,6 +126,30 @@ class LocalCertifiedSink:
         return str(path)
 
 
+async def check_local_runtime_readiness(job: HarnessJob, source: Path, authoring: Path) -> None:
+    """Probe the disposable target using the local execution credential boundary."""
+    with tempfile.TemporaryDirectory(
+        prefix="alk-local-readiness-", dir=_shared_temporary_parent(authoring.parent)
+    ) as raw:
+        secrets = Path(raw) / "secrets.json"
+        secrets.write_text(json.dumps(_runtime_values(job)), encoding="utf-8")
+        secrets.chmod(0o600)
+
+        async def local_validate(candidate_job, candidate_source, candidate_authoring):
+            return await validate_once(
+                candidate_job,
+                candidate_source,
+                candidate_authoring,
+                secrets_path=secrets,
+                local_runtime=True,
+                readiness_only=True,
+            )
+
+        await validate_and_repair(
+            job, source, authoring, validate=local_validate, readiness_only=True
+        )
+
+
 async def run_local_certified(
     job: HarnessJob,
     *,
@@ -205,9 +229,9 @@ async def run_local_certified(
         if manifest.runtime.kind is RuntimeKindV2.COMPOSE:
             from .compose_integration import provider as compose_provider
             provider = compose_provider(target_values, run_root / "compose-logs")
-            world_factory = ObservationWorldFactory()
+            world_factory = ObservationWorldFactory(bundle_dir)
         else:
-            world_factory = ProcessWorldFactory(work)
+            world_factory = ProcessWorldFactory(work, bundle_dir)
         pool = WorldPool(
             provider,
             bundle=manifest,

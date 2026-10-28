@@ -292,6 +292,52 @@ def test_phone_connect_only_uses_platform_telephony_without_target_secret(
     preflight_bundle(tmp_path / "bundle", bundle, parallelism=1, secret_refs={})
 
 
+def test_phone_connect_only_does_not_require_a_local_transport_seam(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "phone-target"
+    source.mkdir()
+    job = HarnessJob.model_validate(
+        {
+            "job_id": "phone-only-job",
+            "run_id": "phone-only-run",
+            "execution": "hosted",
+            "source": {"kind": "provider", "visibility": "public"},
+            "agent": {
+                "connector": "phone",
+                "mode": "connect_only",
+                "config": {
+                    "phone_number": "+14155551234",
+                    "target_system_prompt": "Answer questions about a ride booking.",
+                },
+            },
+            "scenario_count": 1,
+            "runtime": {
+                "isolation": "dedicated_vm",
+                "cpu_units": 2,
+                "memory_mb": 4096,
+                "parallelism": 1,
+            },
+        }
+    )
+
+    plan = resolve_environment_plan(
+        source,
+        job,
+        contract_modality="voice",
+        runtime_dependencies=[
+            {
+                "kind": "transport",
+                "name": "phone_network",
+                "engine": "telephony",
+                "reached": {},
+            }
+        ],
+    )
+
+    assert plan.packaging == "provider_connect_only"
+
+
 def test_generic_connect_only_provider_uses_authored_world_schema(
     tmp_path: Path,
 ) -> None:
@@ -425,6 +471,56 @@ def test_bundle_compiles_discovered_source_tool_entrypoint(tmp_path: Path) -> No
         "email": "customer@example.com",
         "status": "active",
     }
+
+
+def test_tool_registration_is_not_observed_as_tool_execution(tmp_path: Path) -> None:
+    source = tmp_path / "chat-agent"
+    source.mkdir()
+    (source / "agent.py").write_text("print('agent')\n", encoding="utf-8")
+    (source / "tools.py").write_text(
+        "class Editor:\n"
+        "    @classmethod\n"
+        "    def prepare(cls, context):\n"
+        "        return [{'name': 'edit', 'description': 'Edit a file'}]\n",
+        encoding="utf-8",
+    )
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring,
+        command=["python3", "agent.py"],
+        interface={
+            "kind": "http", "protocol": "openai_chat", "port": 8080,
+            "path": "/chat", "include_tools": False,
+        },
+    )
+    contract_path = authoring / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract["tool_entrypoints"] = [
+        {
+            "tool": "edit", "mode": "construct", "module": "tools",
+            "callable": "Editor.prepare", "factory": "Editor()",
+        }
+    ]
+    contract_path.write_text(json.dumps(contract))
+    bundle = author_bundle_v2(
+        source=source, job=_job(connector="http"), authoring=authoring,
+        output=tmp_path / "bundle",
+    )
+    process = next(p for p in bundle.processes if p.name == bundle.runtime.control_service)
+    trace = tmp_path / "agent-tool-calls.jsonl"
+    bootstrap = Path(__file__).resolve().parents[2] / "src/fi/alk/harness/livekit_tool_trace_bootstrap.py"
+    shutil.copy2(bootstrap, source / "sitecustomize.py")
+    result = subprocess.run(
+        [sys.executable, "-c", "from tools import Editor; print(Editor.prepare({}))"],
+        env={
+            **os.environ,
+            **{k: v.replace("{{WORLD_DIR}}", str(tmp_path)) for k, v in process.environment.items()},
+            "PYTHONPATH": str(source),
+        },
+        capture_output=True, text=True, check=True,
+    )
+    assert "Edit a file" in result.stdout
+    assert not trace.exists(), "Registering a tool does not prove the agent executed it"
 
 
 def test_auto_voice_contract_compiles_livekit_process_runtime(tmp_path: Path) -> None:
@@ -701,7 +797,10 @@ def test_repository_runtime_environment_rejects_secrets(tmp_path: Path) -> None:
         )
 
 
-def test_callable_contract_compiles_repository_callback_adapter(tmp_path: Path) -> None:
+@pytest.mark.parametrize("command", [None, ["python", "-m", "app.agent"]])
+def test_callable_contract_compiles_repository_callback_adapter(
+    tmp_path: Path, command: list[str] | None,
+) -> None:
     source = tmp_path / "ava"
     app = source / "app"
     app.mkdir(parents=True)
@@ -716,6 +815,11 @@ def test_callable_contract_compiles_repository_callback_adapter(tmp_path: Path) 
     (source / "requirements.txt").write_text("agent-simulate\n", encoding="utf-8")
     authoring = _authoring(tmp_path)
     _write_callable_contract(authoring)
+    if command:
+        contract_path = authoring / "contract.json"
+        contract = json.loads(contract_path.read_text())
+        contract["runtime"]["command"] = command
+        contract_path.write_text(json.dumps(contract))
 
     bundle = author_bundle_v2(
         source=source,
@@ -725,7 +829,8 @@ def test_callable_contract_compiles_repository_callback_adapter(tmp_path: Path) 
     )
 
     agent = next(process for process in bundle.processes if process.name == "agent")
-    assert agent.working_directory == "."
+    assert agent.source_origin == "bundle"
+    assert agent.working_directory == "generated/source/agent"
     assert agent.build_commands[1][-1] == "requirements.txt"
     assert agent.run_command[:2] == [".venv/bin/python", "-c"]
     assert "ThreadingHTTPServer" in agent.run_command[2]
@@ -782,7 +887,8 @@ def test_repository_callback_is_discovered_when_contract_omits_interface(
     )
 
     agent = next(process for process in bundle.processes if process.name == "agent")
-    assert agent.working_directory == "."
+    assert agent.source_origin == "bundle"
+    assert agent.working_directory == "generated/source/agent"
     assert agent.run_command[:2] == [".venv/bin/python", "-c"]
     assert agent.environment["ALK_CALLBACK_ENTRYPOINT"] == "app.agent:agent_callback"
     assert bundle.capabilities["target_http"].service == "agent"
@@ -1003,6 +1109,105 @@ def test_fixed_multi_store_fixture_compiles_to_a_preflight_clean_bundle(
     assert manifest.capabilities["target_http"].service == "agent"
     assert manifest.capabilities["cache_redis"].service == "cache"
     preflight_bundle(output, manifest, parallelism=2, secret_refs={})
+
+
+def test_native_multi_store_contract_uses_source_compose_dependency_topology(
+    tmp_path: Path,
+) -> None:
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "examples"
+        / "harness"
+        / "generic_multi_store_chat"
+    )
+    runtime = {
+        "language": "python",
+        "execution": "native",
+        "command": ["python", "agent.py"],
+        "required_environment": {"agent": ["DATABASE_URL", "CACHE_URL"]},
+        "interface": {
+            "kind": "http",
+            "protocol": "openai_chat",
+            "port": 8080,
+            "path": "/v1/chat/completions",
+            "health_path": "/health",
+        },
+    }
+    dependencies = [
+        {
+            "name": "account store",
+            "kind": "datastore",
+            "engine": "postgresql",
+            "reached": {"dsn_env": "DATABASE_URL", "database": "app"},
+        },
+        {
+            "name": "access cache",
+            "kind": "queue",
+            "engine": "redis",
+            "reached": {"dsn_env": "CACHE_URL"},
+        },
+    ]
+
+    plan = resolve_environment_plan(
+        source,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime=runtime,
+        runtime_dependencies=dependencies,
+    )
+
+    agent = next(process for process in plan.processes if process.name == "agent")
+    assert agent.depends_on == ["world-db", "cache"]
+    assert agent.environment["DATABASE_URL"] == "{{WORLD_DATABASE_URL}}"
+    assert agent.environment["CACHE_URL"] == "{{CACHE_URL}}/2"
+    assert plan.capabilities["target_http"].service == "agent"
+    assert plan.capabilities["cache_redis"].service == "cache"
+
+
+def test_native_multi_store_contract_accepts_compose_list_environment(
+    tmp_path: Path,
+) -> None:
+    import shutil
+
+    source = tmp_path / "generic_multi_store_chat"
+    shutil.copytree(
+        Path(__file__).resolve().parents[2] / "examples" / "harness" / "generic_multi_store_chat",
+        source,
+    )
+    compose = source / "compose.yml"
+    compose.write_text(compose.read_text().replace(
+        "      DATABASE_URL: postgresql://source:source@postgres:5432/app\n"
+        "      CACHE_URL: redis://cache:6379/2\n"
+        '      PORT: "8080"\n',
+        "      - DATABASE_URL=postgresql://source:source@postgres:5432/app\n"
+        "      - CACHE_URL=redis://cache:6379/2\n"
+        "      - PORT=8080\n",
+    ))
+    runtime = {
+        "language": "python", "execution": "native", "command": ["python", "agent.py"],
+        "required_environment": {"agent": ["DATABASE_URL", "CACHE_URL"]},
+        "interface": {
+            "kind": "http", "protocol": "openai_chat", "port": 8080,
+            "path": "/v1/chat/completions", "health_path": "/health",
+        },
+    }
+    dependencies = [
+        {"name": "account store", "kind": "datastore", "engine": "postgresql",
+         "reached": {"dsn_env": "DATABASE_URL", "database": "app"}},
+        {"name": "access cache", "kind": "queue", "engine": "redis",
+         "reached": {"dsn_env": "CACHE_URL"}},
+    ]
+
+    plan = resolve_environment_plan(
+        source, _job(connector="auto"), contract_modality="chat",
+        contract_interface_kind="http", contract_runtime=runtime,
+        runtime_dependencies=dependencies,
+    )
+
+    agent = next(process for process in plan.processes if process.name == "agent")
+    assert agent.environment["DATABASE_URL"] == "{{WORLD_DATABASE_URL}}"
+    assert agent.environment["CACHE_URL"] == "{{CACHE_URL}}/2"
 
 
 def test_bundle_never_persists_resolved_secret(tmp_path: Path) -> None:
@@ -1609,6 +1814,31 @@ def test_docker_python_respects_project_requires_python(tmp_path: Path) -> None:
     )
 
     assert _docker_python(tmp_path) == "python3.12"
+
+
+@pytest.mark.parametrize("version", ["3.14", "3.14.2"])
+@pytest.mark.parametrize("manifest", ["pyproject.toml", "requirements.txt", None])
+def test_native_python_provisions_source_pin(tmp_path: Path, version: str, manifest: str | None) -> None:
+    from fi.alk.harness.bundle_author_v2 import _plan_python
+
+    (tmp_path / ".python-version").write_text(version + "\n")
+    (tmp_path / "Dockerfile").write_text("FROM python:3.12\n")
+    (tmp_path / "agent.py").write_text("print('hello')\n")
+    if manifest:
+        (tmp_path / manifest).write_text(
+            "[project]\nname='agent'\nversion='1'\nrequires-python='>=3.11,<3.15'\n"
+            if manifest == "pyproject.toml" else ""
+        )
+    process = _plan_python(
+        tmp_path, name="agent", root=tmp_path, entry="agent.py", control=True,
+        needs_secrets=False,
+    )
+    command = " ".join(process.build_commands[0])
+    assert "uv " in command
+    assert "--python" in command
+    assert version in command
+    if manifest != "pyproject.toml":
+        assert process.run_command == [".venv/bin/python", "agent.py"]
 
 
 def test_uv_sync_repairs_only_a_stale_lock_in_the_build_copy(tmp_path: Path) -> None:
@@ -2539,11 +2769,8 @@ def test_chat_command_runtime_compiles_generic_subprocess_bridge(
     (source / "requirements.txt").write_text("\n", encoding="utf-8")
     (source / "main.py").write_text("print('real target output')\n", encoding="utf-8")
     authoring = _authoring(tmp_path)
-    _write_chat_contract(authoring, command=["python", "main.py"])
-    contract = json.loads((authoring / "contract.json").read_text(encoding="utf-8"))
-    contract.pop("data_store")
-    contract.pop("tools")
-    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+    interface = {"kind": "command", "protocol": "fi.alk"}
+    _write_chat_contract(authoring, command=["python", "main.py"], interface=interface)
     with sqlite3.connect(authoring / "world.sqlite") as database:
         database.execute("CREATE TABLE fixture (id TEXT PRIMARY KEY)")
 
@@ -2559,69 +2786,72 @@ def test_chat_command_runtime_compiles_generic_subprocess_bridge(
     )
 
     agent = next(process for process in manifest.processes if process.name == "agent")
-    assert agent.working_directory == "."
+    assert agent.source_origin == "bundle"
+    assert agent.working_directory == "generated/source/agent"
     assert agent.environment["ALK_SUBPROCESS_COMMAND"] == json.dumps(
         [".venv/bin/python", "main.py"]
     )
     assert "ThreadingHTTPServer" in agent.run_command[-1]
     assert manifest.capabilities["target_http"].service == "agent"
     sealed_contract = json.loads((output / "contract.json").read_text(encoding="utf-8"))
-    assert sealed_contract["runtime"]["interface"] == {
-        "kind": "callable",
-        "protocol": "fi.alk",
-        "path": "",
-        "health_path": "",
-        "include_tools": False,
-    }
+    assert sealed_contract["runtime"]["interface"] == interface
     preflight_bundle(output, manifest, parallelism=1, secret_refs={})
 
 
-def test_chat_callable_without_exported_callback_falls_back_to_command_bridge(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    "source_text",
+    [
+        "print('target')\n",
+        "from http.server import HTTPServer, BaseHTTPRequestHandler\n"
+        "HTTPServer(('127.0.0.1', 9119), BaseHTTPRequestHandler).serve_forever()\n",
+    ],
+)
+@pytest.mark.parametrize("interface_kind", [None, "callable"])
+def test_chat_command_without_supported_interface_requires_runtime_repair(
+    tmp_path: Path, source_text: str, interface_kind: str | None,
 ) -> None:
+    from fi.alk.harness.authoring_runtime_validation import (
+        RuntimeValidationError,
+        _fallback_diagnostic,
+        _needs_runtime_plan_repair,
+    )
+
     source = tmp_path / "source"
     source.mkdir()
     (source / "requirements.txt").write_text("\n", encoding="utf-8")
-    (source / "main.py").write_text(
-        "async def main():\n    print('target')\n",
-        encoding="utf-8",
-    )
+    (source / "main.py").write_text(source_text, encoding="utf-8")
     authoring = _authoring(tmp_path)
     _write_chat_contract(
         authoring,
         command=["python", "main.py"],
         interface={
-            "kind": "callable",
+            "kind": interface_kind,
             "protocol": "fi.alk",
             "path": "",
             "health_path": "",
             "include_tools": True,
-        },
+        } if interface_kind else None,
     )
     with sqlite3.connect(authoring / "world.sqlite") as database:
         database.execute("CREATE TABLE fixture (id TEXT PRIMARY KEY)")
 
     output = tmp_path / "bundle"
-    manifest = author_bundle_v2(
-        source=source,
-        job=_job(connector="auto", metadata={"generic_harness_v1": True}),
-        authoring=authoring,
-        output=output,
+    with pytest.raises(
+        BundleAuthorError, match="generated_runtime_entrypoint_ambiguous"
+    ) as failure:
+        author_bundle_v2(
+            source=source,
+            job=_job(connector="auto", metadata={"generic_harness_v1": True}),
+            authoring=authoring,
+            output=output,
+        )
+    diagnostic = _fallback_diagnostic(
+        RuntimeValidationError("environment", str(failure.value))
     )
-
-    agent = next(process for process in manifest.processes if process.name == "agent")
-    assert agent.environment["ALK_SUBPROCESS_COMMAND"] == json.dumps(
-        [".venv/bin/python", "main.py"]
-    )
-    assert "ThreadingHTTPServer" in agent.run_command[-1]
-    sealed_contract = json.loads((output / "contract.json").read_text(encoding="utf-8"))
-    assert sealed_contract["runtime"]["interface"] == {
-        "kind": "callable",
-        "protocol": "fi.alk",
-        "path": "",
-        "health_path": "",
-        "include_tools": False,
-    }
+    assert diagnostic.code == "generated_runtime_plan_invalid"
+    assert "chat" in diagnostic.redacted_message
+    assert _needs_runtime_plan_repair((diagnostic,))
+    assert not (output / "contract.json").exists()
 
 
 def test_declared_langgraph_graph_compiles_without_agent_script(tmp_path: Path) -> None:
@@ -2795,6 +3025,7 @@ def test_declared_http_runtime_uses_contract_command_port_and_health(
     assert agent.working_directory == "."
     assert agent.run_command == runtime["command"]
     assert agent.fixed_port == 9090
+    assert agent.environment["PORT"] == "{{PORT_agent}}"
     readiness = next(
         item for item in plan.readiness if item.capability == "target_http"
     )
@@ -3222,14 +3453,18 @@ def test_adk_source_toolbox_is_hosted_against_world_database(tmp_path: Path) -> 
     assert definition["tools"]["get-ticket"]["statement"].endswith("$1;")
 
 
-def test_non_server_adk_command_keeps_one_shot_adapter(tmp_path: Path) -> None:
+def test_explicit_adk_command_keeps_one_shot_adapter(tmp_path: Path) -> None:
     source = tmp_path / "source"
     source.mkdir()
     (source / "pyproject.toml").write_text(
         "[project]\nname='target'\nversion='1'\n", encoding="utf-8"
     )
     authoring = _authoring(tmp_path)
-    _write_chat_contract(authoring, command=["uv", "run", "adk", "run", "app"])
+    _write_chat_contract(
+        authoring,
+        command=["uv", "run", "adk", "run", "app"],
+        interface={"kind": "command", "protocol": "fi.alk"},
+    )
     with sqlite3.connect(authoring / "world.sqlite") as database:
         database.execute("CREATE TABLE fixture (id TEXT PRIMARY KEY)")
 
@@ -3246,7 +3481,7 @@ def test_non_server_adk_command_keeps_one_shot_adapter(tmp_path: Path) -> None:
     assert "ALK_SUBPROCESS_COMMAND" in agent.environment
 
 
-def test_adk_web_command_repairs_incomplete_http_interface(tmp_path: Path) -> None:
+def test_adk_web_command_repairs_stale_http_interface(tmp_path: Path) -> None:
     source = tmp_path / "source"
     app = source / "bug_agent"
     app.mkdir(parents=True)
@@ -3259,7 +3494,14 @@ def test_adk_web_command_repairs_incomplete_http_interface(tmp_path: Path) -> No
     _write_chat_contract(
         authoring,
         command=["uv", "run", "adk", "web", "--port=9090"],
-        interface={"kind": "http", "port": 9090},
+        interface={
+            "kind": "http",
+            "port": 9090,
+            "path": "/run",
+            "request_template": {
+                "new_message": {"parts": [{"text": "{{new_message}}"}]}
+            },
+        },
     )
     with sqlite3.connect(authoring / "world.sqlite") as database:
         database.execute("CREATE TABLE fixture (id TEXT PRIMARY KEY)")
@@ -3477,3 +3719,563 @@ def test_native_runtime_rejects_invalid_declared_python(tmp_path: Path, version:
             tmp_path, _job(connector="http"),
             contract_runtime={"language": "python", "version": version, "command": ["python", "agent.py"]},
         )
+
+
+@pytest.mark.parametrize("child", [".", "packages/chat", "-chat"])
+def test_native_bun_plan_installs_locked_root_and_preserves_child_command(
+    tmp_path: Path, child: str
+) -> None:
+    (tmp_path / "package.json").write_text(
+        json.dumps(
+            {
+                "name": "plain-chat" if child == "." else "workspace-bot",
+                "packageManager": "bun@1.3.14",
+            }
+        )
+    )
+    (tmp_path / "bun.lock").write_text('{"lockfileVersion": 1}')
+    component = tmp_path / child
+    component.mkdir(parents=True, exist_ok=True)
+    if child != ".":
+        (component / "package.json").write_text('{"name":"chat"}')
+    (component / "server.ts").write_text("Bun.serve({fetch: () => new Response('ok')})")
+    plan = resolve_environment_plan(
+        tmp_path,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime={
+            "language": "bun",
+            "version": "1.3.14",
+            "execution": "native",
+            "workdir": child,
+            "command": ["bun", "run", "server.ts"],
+            "install": "touch /tmp/must-not-execute",
+            "workspaces": {"project": "files"},
+            "interface": {"kind": "http", "port": 8001},
+        },
+    )
+    agent = next(process for process in plan.processes if process.name == "agent")
+    assert agent.working_directory == "."
+    assert agent.workspaces == {
+        "project": "files" if child == "." else child + "/files"
+    }
+    assert agent.build_commands[-1] == ["bun", "install", "--frozen-lockfile"]
+    assert agent.run_command == (
+        ["bun", "run", "server.ts"]
+        if child == "."
+        else [
+            "sh",
+            "-c",
+            'cd "./$1" && shift && exec "$@"',
+            "alk-source-process",
+            child,
+            "bun",
+            "run",
+            "server.ts",
+        ]
+    )
+    assert "must-not-execute" not in repr(agent.build_commands)
+
+
+@pytest.mark.parametrize(
+    "manifest,lock,version,command,error",
+    [
+        ({}, True, "", ["bun", "run", "server.ts"], "package_manager_missing"),
+        (
+            {"packageManager": "bun@latest"},
+            True,
+            "",
+            ["bun", "run", "server.ts"],
+            "package_manager_unpinned",
+        ),
+        (
+            {"packageManager": "npm@10.0.0"},
+            True,
+            "",
+            ["bun", "run", "server.ts"],
+            "package_manager_unpinned",
+        ),
+        (
+            {"packageManager": "bun@1.3.14"},
+            False,
+            "",
+            ["bun", "run", "server.ts"],
+            "lock_required",
+        ),
+        (
+            {"packageManager": "bun@1.3.14"},
+            True,
+            "1.3.13",
+            ["bun", "run", "server.ts"],
+            "version_mismatch",
+        ),
+        (
+            {"packageManager": "bun@1.3.14"},
+            True,
+            "",
+            ["sh", "-c", "bun server.ts"],
+            "command_required",
+        ),
+        ([], True, "", ["bun", "run", "server.ts"], "manifest_invalid"),
+    ],
+)
+def test_native_bun_rejects_invalid_source(
+    tmp_path: Path, manifest, lock, version, command, error: str
+) -> None:
+    from fi.alk.harness.bundle_author_v2 import _plan_source_process
+
+    (tmp_path / "package.json").write_text(json.dumps(manifest))
+    if lock:
+        (tmp_path / "bun.lock").write_text("{}")
+    with pytest.raises(BundleAuthorError, match=error):
+        _plan_source_process(
+            tmp_path,
+            language="bun",
+            name="agent",
+            root=tmp_path,
+            entry=None,
+            control=True,
+            needs_secrets=False,
+            version=version,
+            run_override=command,
+        )
+
+
+def test_native_bun_requires_matching_installed_toolchain(tmp_path: Path) -> None:
+    from fi.alk.harness.bundle_author_v2 import _plan_source_process
+
+    (tmp_path / "package.json").write_text('{"packageManager":"bun@1.3.14"}')
+    (tmp_path / "bun.lockb").write_bytes(b"frozen")
+    process = _plan_source_process(
+        tmp_path,
+        language="bun",
+        name="agent",
+        root=tmp_path,
+        entry=None,
+        control=True,
+        needs_secrets=False,
+        run_override=["bun", "server.ts"],
+    )
+    command = [sys.executable, *process.build_commands[0][1:]]
+    missing = subprocess.run(
+        command, env={"PATH": str(tmp_path)}, capture_output=True, text=True
+    )
+    assert missing.returncode != 0
+    assert "runtime_bun_toolchain_missing" in missing.stderr
+    binary = tmp_path / "bun"
+    binary.write_text("#!/bin/sh\necho 1.3.13\n")
+    binary.chmod(0o755)
+    wrong = subprocess.run(
+        command, env={"PATH": str(tmp_path)}, capture_output=True, text=True
+    )
+    assert wrong.returncode != 0
+    assert "runtime_bun_toolchain_version_mismatch" in wrong.stderr
+    binary.write_text("#!/bin/sh\necho 1.3.14\n")
+    matching = subprocess.run(
+        command, env={"PATH": str(tmp_path)}, capture_output=True, text=True
+    )
+    assert matching.returncode == 0
+    assert matching.stdout.strip() == "Bun toolchain 1.3.14"
+
+
+def test_native_bun_rejects_ambiguous_and_symlink_lock(tmp_path: Path) -> None:
+    from fi.alk.harness.bundle_author_v2 import _plan_source_process
+
+    (tmp_path / "package.json").write_text('{"packageManager":"bun@1.3.14"}')
+    (tmp_path / "bun.lock").write_text("{}")
+    (tmp_path / "bun.lockb").write_bytes(b"frozen")
+    kwargs = dict(
+        language="bun",
+        name="agent",
+        root=tmp_path,
+        entry=None,
+        control=True,
+        needs_secrets=False,
+        run_override=["bun", "server.ts"],
+    )
+    with pytest.raises(BundleAuthorError, match="lock_required"):
+        _plan_source_process(tmp_path, **kwargs)
+    (tmp_path / "bun.lockb").unlink()
+    (tmp_path / "bun.lock").unlink()
+    (tmp_path / "bun.lock").symlink_to(tmp_path / "package.json")
+    with pytest.raises(BundleAuthorError, match="manifest_unsafe"):
+        _plan_source_process(tmp_path, **kwargs)
+
+
+def test_native_process_runs_from_scanned_bundle_context(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("from helper import answer\nprint(answer())\n")
+    (source / "helper.py").write_text("def answer():\n    return 'chat-ready'\n")
+    (source / "fixtures").mkdir()
+    (source / "fixtures/token.txt").write_text("sk-unreviewedFixtureValue1234567890")
+    (source / "manifest.json").write_text('{"application": "fixture"}')
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring,
+        command=["python", "agent.py"],
+        interface={"kind": "command", "protocol": "fi.alk"},
+    )
+    document = json.loads((authoring / "contract.json").read_text())
+    document["runtime"]["execution"] = "native"
+    (authoring / "contract.json").write_text(json.dumps(document))
+    output = tmp_path / "bundle"
+    with pytest.raises(ValueError, match="generated_runtime_secret_material_detected"):
+        author_bundle_v2(
+            source=source,
+            authoring=authoring,
+            job=_job(connector="auto"),
+            output=output,
+        )
+    document["runtime"]["context_excludes"] = ["fixtures"]
+    (authoring / "contract.json").write_text(json.dumps(document))
+    manifest = author_bundle_v2(
+        source=source, authoring=authoring, job=_job(connector="auto"), output=output
+    )
+    process = next(
+        p for p in manifest.processes if p.name == manifest.runtime.control_service
+    )
+    assert process.source_origin == "bundle"
+    context = output / process.working_directory
+    assert not (context / "fixtures").exists()
+    assert (context / "manifest.json").read_text() == '{"application": "fixture"}'
+    assert any(f.path.endswith("/manifest.json") for f in manifest.files)
+    assert (source / "fixtures/token.txt").exists()
+    shutil.rmtree(source)
+    result = subprocess.run(
+        [sys.executable, "agent.py"],
+        cwd=context,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert result.stdout == "chat-ready\n"
+    load_bundle_v2(output)
+
+
+@pytest.mark.parametrize("directory", ["vendor", "coverage", "target"])
+def test_packaged_runtime_preserves_named_source_packages(tmp_path, directory):
+    from fi.alk.harness.bundle_author_v2 import _package_process_sources
+    from fi.alk.harness.contract import Runtime
+
+    source = tmp_path / "source"
+    (source / directory).mkdir(parents=True)
+    (source / directory / "agent.py").write_text("print('source preserved')\n")
+    runtime = Runtime(
+        language="python",
+        execution="native",
+        command=["python", f"{directory}/agent.py"],
+    )
+    plan = resolve_environment_plan(
+        source, _job(connector="auto"), contract_runtime=runtime.model_dump()
+    )
+    output = tmp_path / "bundle"
+    packaged = _package_process_sources(source, output, plan, runtime)
+    agent = next(p for p in packaged.processes if p.name == packaged.control_service)
+    assert (
+        output / agent.working_directory / directory / "agent.py"
+    ).read_text() == "print('source preserved')\n"
+
+
+@pytest.mark.parametrize("required", ["agent.py", "requirements.txt", "extra.txt"])
+def test_packaging_cannot_exclude_declared_runtime_inputs(tmp_path, required):
+    from fi.alk.harness.bundle_author_v2 import _package_process_sources
+    from fi.alk.harness.contract import Runtime
+
+    (tmp_path / "agent.py").write_text("print('ready')\n")
+    (tmp_path / "requirements.txt").write_text("")
+    (tmp_path / "extra.txt").write_text("")
+    runtime = Runtime(
+        language="python",
+        execution="native",
+        command=["python", "agent.py"],
+        requirements_files=["extra.txt"],
+    )
+    plan = resolve_environment_plan(
+        tmp_path, _job(connector="auto"), contract_runtime=runtime.model_dump()
+    )
+    runtime.context_excludes = [required]
+    with pytest.raises(ValueError, match="context_exclude_required"):
+        _package_process_sources(tmp_path, tmp_path.parent / "bundle", plan, runtime)
+
+
+def test_workspace_exclusions_stay_relative_to_declared_component(tmp_path):
+    from fi.alk.harness.bundle_author_v2 import _package_process_sources
+    from fi.alk.harness.contract import Runtime
+
+    app = tmp_path / "apps/chat"
+    (app / "fixtures").mkdir(parents=True)
+    (app / "fixtures/token.txt").write_text("sk-unreviewedFixtureValue1234567890")
+    (app / "server.ts").write_text("Bun.serve({fetch: () => new Response('ready')})")
+    (app / "package.json").write_text('{"name":"chat"}')
+    (tmp_path / "package.json").write_text(
+        '{"name":"workspace","packageManager":"bun@1.3.14","workspaces":["apps/*"]}'
+    )
+    (tmp_path / "bun.lock").write_text('{"lockfileVersion":1,"workspaces":{}}')
+    runtime = Runtime(
+        language="bun",
+        execution="native",
+        workdir="apps/chat",
+        command=["bun", "server.ts"],
+        context_excludes=["fixtures"],
+        interface={"kind": "http", "port": 8080, "path": "/chat"},
+    )
+    plan = resolve_environment_plan(
+        tmp_path,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime=runtime.model_dump(),
+    )
+    assert (
+        next(
+            p for p in plan.processes if p.name == plan.control_service
+        ).working_directory
+        == "."
+    )
+    output = tmp_path.parent / "bundle"
+    packaged = _package_process_sources(tmp_path, output, plan, runtime)
+    agent = next(p for p in packaged.processes if p.name == packaged.control_service)
+    context = output / agent.working_directory
+    assert not (context / "apps/chat/fixtures").exists()
+    assert (context / "apps/chat/server.ts").is_file()
+    assert (context / "package.json").is_file()
+
+
+def test_workspace_exclusions_accept_repository_relative_paths(tmp_path):
+    from fi.alk.harness.bundle_author_v2 import _package_process_sources
+    from fi.alk.harness.contract import Runtime
+
+    app = tmp_path / "apps/chat"
+    app.mkdir(parents=True)
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.uv.workspace]\nmembers=["apps/*"]\n'
+    )
+    (tmp_path / "uv.lock").write_text("version = 1\n")
+    (app / "pyproject.toml").write_text(
+        '[project]\nname="chat-server"\nversion="1"\n'
+    )
+    (app / "server.py").write_text("print('ready')\n")
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "auth.md").write_text("sk-unreviewedFixtureValue1234567890")
+    runtime = Runtime(
+        language="python",
+        execution="native",
+        workdir="apps/chat",
+        command=[sys.executable, "server.py"],
+        context_excludes=["docs/auth.md"],
+    )
+    plan = resolve_environment_plan(
+        tmp_path, _job(connector="auto"), contract_runtime=runtime.model_dump()
+    )
+    output = tmp_path.parent / (tmp_path.name + "-bundle")
+
+    packaged = _package_process_sources(tmp_path, output, plan, runtime)
+
+    agent = next(p for p in packaged.processes if p.name == packaged.control_service)
+    context = output / agent.working_directory
+    assert not (context / "docs/auth.md").exists()
+    assert (context / "apps/chat/server.py").is_file()
+
+
+def test_python_workspace_packages_siblings_and_preserves_member_cwd(tmp_path):
+    from fi.alk.harness.bundle_author_v2 import _package_process_sources
+    from fi.alk.harness.contract import Runtime
+
+    source = tmp_path / "source"
+    member = source / "apps" / "server"
+    sibling = source / "library"
+    member.mkdir(parents=True)
+    sibling.mkdir()
+    (source / "pyproject.toml").write_text(
+        '[tool.uv.workspace]\nmembers=["apps/*", "library"]\n'
+    )
+    (source / "uv.lock").write_text("version = 1\n")
+    (member / "pyproject.toml").write_text(
+        '[project]\nname="chat-server"\nversion="1"\n'
+    )
+    (sibling / "pyproject.toml").write_text(
+        '[project]\nname="chat-library"\nversion="1"\n[project.optional-dependencies]\ntransport=[]\n'
+    )
+    (sibling / "value.txt").write_text("local source")
+    (member / "app.py").write_text(
+        'from pathlib import Path\nprint(Path("../../library/value.txt").read_text())\n'
+    )
+    (member / "fixtures").mkdir()
+    (member / "fixtures" / "token.txt").write_text(
+        "sk-unreviewedFixtureValue1234567890"
+    )
+    runtime = Runtime(
+        language="python",
+        execution="native",
+        workdir="apps/server",
+        command=[sys.executable, "app.py"],
+        context_excludes=["fixtures"],
+        workspaces={"files": "files"},
+    )
+    plan = resolve_environment_plan(
+        source, _job(connector="auto"), contract_runtime=runtime.model_dump()
+    )
+    agent = next(p for p in plan.processes if p.name == plan.control_service)
+    assert agent.working_directory == "."
+    assert agent.workspaces == {"files": "apps/server/files"}
+    assert "--package chat-server" in agent.build_commands[0][-1]
+    assert "--locked" in agent.build_commands[0][-1]
+    output = tmp_path / "bundle"
+    packaged = _package_process_sources(source, output, plan, runtime)
+    agent = next(p for p in packaged.processes if p.name == packaged.control_service)
+    context = output / agent.working_directory
+    assert (context / "uv.lock").is_file()
+    assert not (context / "apps/server/fixtures").exists()
+    shutil.rmtree(source)
+    result = subprocess.run(
+        agent.run_command, cwd=context, check=True, text=True, capture_output=True
+    )
+    assert result.stdout == "local source\n"
+
+
+def test_compose_workspace_member_exclusions_without_runtime_workdir(tmp_path):
+    from fi.alk.harness.bundle_author_v2 import _package_process_sources
+    from fi.alk.harness.contract import Runtime
+
+    member = tmp_path / "server"
+    (member / "fixtures").mkdir(parents=True)
+    (member / "fixtures/token.txt").write_text("sk-unreviewedFixtureValue1234567890")
+    (member / "agent.py").write_text("print('ready')")
+    (member / "pyproject.toml").write_text('[project]\nname="server"\nversion="1"\n')
+    (member / "Dockerfile").write_text('FROM python:3.12\nCMD ["python", "agent.py"]\n')
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.uv.workspace]\nmembers=["server"]\n'
+    )
+    (tmp_path / "compose.yaml").write_text(
+        "services:\n  agent:\n    build: ./server\n    command: [python, agent.py]\n"
+    )
+    runtime = Runtime(
+        language="python",
+        execution="compose",
+        compose_file="compose.yaml",
+        service="agent",
+        context_excludes=["fixtures"],
+    )
+    plan = resolve_environment_plan(
+        tmp_path, _job(connector="auto"), contract_runtime=runtime.model_dump()
+    )
+    output = tmp_path.parent / (tmp_path.name + "-bundle")
+    packaged = _package_process_sources(tmp_path, output, plan, runtime)
+    agent = next(p for p in packaged.processes if p.name == packaged.control_service)
+    assert not (output / agent.working_directory / "server/fixtures").exists()
+    assert (output / agent.working_directory / "server/agent.py").exists()
+    assert 'source_component' not in agent.model_dump()
+
+
+def test_environment_bundle_omits_public_suite_and_simulator(tmp_path):
+    source = tmp_path / "agent"
+    source.mkdir()
+    (source / "agent.py").write_text("print('agent')\n")
+    (source / "pyproject.toml").write_text("[project]\nname='agent'\nversion='1'\n")
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(authoring, command=["python", "agent.py"], interface={
+        "kind": "http", "port": 8080, "path": "/chat",
+    })
+    (authoring / "simulator_prompt.md").write_text("Public simulator prompt")
+    shutil.rmtree(authoring / "scenarios")
+    job = _job(connector="auto", with_secrets=False)
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source, job=job, authoring=authoring, output=output,
+        include_scenarios=False,
+    )
+    assert (output / "contract.json").is_file()
+    assert not (output / "scenarios").exists()
+    assert not (output / "simulator_prompt.md").exists()
+    assert "scenarios/" not in manifest.provenance.adopted_files
+    with pytest.raises(BundleAuthorError, match="scenario_artifacts_missing"):
+        author_bundle_v2(source=source, job=job, authoring=authoring, output=tmp_path / "full")
+
+
+def test_native_plan_preserves_config_files_and_rejects_unknown_aliases(tmp_path):
+    (tmp_path / "agent.py").write_text("print('hello')")
+    runtime = {
+        "execution": "native",
+        "command": ["python", "agent.py"],
+        "config_files": {
+            ".env": {"values": {"MODE": "test"}, "secret_aliases": {"API_KEY": "KEY"}}
+        },
+        "directories": ["state"],
+    }
+    job = _job(connector="auto", with_secrets=True, secret_aliases=("KEY",))
+    plan = resolve_environment_plan(
+        tmp_path,
+        job,
+        contract_modality="chat",
+        contract_interface_kind="command",
+        contract_runtime=runtime,
+    )
+    process = next(p for p in plan.processes if p.name == "agent")
+    assert process.config_files[".env"].secret_aliases == {"API_KEY": "KEY"}
+    assert process.environment["MODE"] == "test"
+    assert process.directories == ["state"]
+    with pytest.raises(
+        BundleAuthorError, match="runtime_config_target_reference_required"
+    ):
+        resolve_environment_plan(
+            tmp_path,
+            _job(connector="auto"),
+            contract_modality="chat",
+            contract_interface_kind="command",
+            contract_runtime=runtime,
+        )
+
+
+@pytest.mark.parametrize("version", ["3.11", "3.11.9"])
+def test_native_python_rejects_source_uv_environment_mismatch(tmp_path: Path, version: str) -> None:
+    from fi.alk.harness.bundle_author_v2 import _plan_python
+
+    (tmp_path / "agent.py").write_text("print('hello')\n")
+    (tmp_path / ".python-version").write_text("3.14\n")
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='agent'\nversion='1'\nrequires-python='>=3.11,<3.15'\n"
+        "[tool.uv]\nenvironments=[\"python_version >= '3.14'\"]\n"
+    )
+    with pytest.raises(BundleAuthorError, match="generated_runtime_python_version_unsupported") as caught:
+        _plan_python(tmp_path, name="agent", root=tmp_path, entry="agent.py", control=True,
+                     needs_secrets=False, version=version)
+    assert "python_version >= '3.14'" in str(caught.value)
+    assert "source .python-version: 3.14" in str(caught.value)
+
+
+@pytest.mark.parametrize("version", ["3.13", "3.13.8", ">=3.11"])
+def test_native_python_selects_compatible_uv_environment_without_overriding_explicit_version(tmp_path: Path, version: str) -> None:
+    from fi.alk.harness.bundle_author_v2 import _plan_python
+
+    (tmp_path / "agent.py").write_text("print('hello')\n")
+    (tmp_path / ".python-version").write_text("3.14\n")
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='agent'\nversion='1'\nrequires-python='>=3.11,<3.15'\n"
+        "[tool.uv]\nenvironments=[\"python_version >= '3.13'\"]\n"
+    )
+    plan = _plan_python(tmp_path, name="agent", root=tmp_path, entry="agent.py", control=True,
+                        needs_secrets=False, version=version)
+    command = plan.build_commands[0]
+    assert command[command.index("--python") + 1] == (
+        "python3.13.8" if version == "3.13.8" else
+        "python3.13" if version == ">=3.11" else "<3.15,==3.13.*,>=3.11"
+    )
+
+
+@pytest.mark.parametrize("environments", [
+    ["python_version == '3.11'", "python_version >= '3.14'"],
+    ["python_version == '3.11' or python_version >= '3.14'"],
+    ["python_version >= '3.14'", "sys_platform == 'linux'"],
+    ["python_full_version >= '3.11.8'"],
+])
+def test_python_selection_preserves_uv_alternatives_and_target_only_constraints(tmp_path: Path, environments: list[str]) -> None:
+    from fi.alk.harness.generated_runtime import _python_language_version
+
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nrequires-python='>=3.11'\n[tool.uv]\n"
+        f"environments={json.dumps(environments)}\n"
+    )
+    assert _python_language_version(tmp_path, "3.11", interpreter_selector=True) == "==3.11.*,>=3.11"

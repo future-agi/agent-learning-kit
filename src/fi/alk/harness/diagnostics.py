@@ -158,7 +158,17 @@ _POLICIES = MappingProxyType(
             owner=RepairOwner.AUTHORING,
             repair_strategy="inspect_repository_and_revise_runtime_plan",
         ),
+        "chat_ingress_timeout": DiagnosticPolicy(
+            domain=FailureDomain.INFRASTRUCTURE,
+            owner=RepairOwner.INFRASTRUCTURE,
+            retryable=True,
+            repair_strategy="retry_chat_ingress_request",
+        ),
         "chat_ingress_failed": DiagnosticPolicy(
+            domain=FailureDomain.AGENT,
+            owner=RepairOwner.SOURCE,
+        ),
+        "chat_tool_evidence_unverified": DiagnosticPolicy(
             domain=FailureDomain.AGENT,
             owner=RepairOwner.SOURCE,
         ),

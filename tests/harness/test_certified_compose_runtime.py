@@ -10,7 +10,6 @@ from fi.alk.harness.certified_compose_runtime import (
     CertifiedComposeRuntimeProvider,
     ComposeRuntimeError,
     normalize_compose,
-    _copy_source,
 )
 from fi.alk.harness.bundle_v2 import CapabilityV2, RuntimeKindV2, ReadinessProbeV2
 from fi.alk.harness.process_runtime import RuntimeState
@@ -148,7 +147,9 @@ def test_source_symlink_escape_never_reaches_daemon(tmp_path):
     source.mkdir()
     (source / "outside").symlink_to(tmp_path)
     with pytest.raises(ComposeRuntimeError, match="symlink_escape"):
-        _copy_source(source, tmp_path / "copy")
+        from fi.alk.harness.compose_source import source_inputs
+
+        source_inputs(source, topology(), capabilities=capabilities())
 
 
 @pytest.mark.parametrize(
@@ -162,13 +163,24 @@ def test_configuration_cannot_control_trusted_client(tmp_path, key):
         )
 
 
-def test_lifecycle_two_worlds_reset_and_cleanup(tmp_path, monkeypatch):
+@pytest.mark.parametrize("locked_images", [False, True])
+def test_lifecycle_two_worlds_reset_and_cleanup(tmp_path, monkeypatch, locked_images):
     source, bundle_dir, work = (tmp_path / name for name in ("src", "bundle", "work"))
     for path in (source, bundle_dir, work):
         path.mkdir()
     (source / "fixture.txt").write_text("baseline")
-    (bundle_dir / "compose.json").write_text(json.dumps(topology()))
+    (source / "unused-test.py").write_text("TOKEN = 'ghp_" + "x" * 36 + "'\n")
+    document = topology()
+    document["services"]["chat"]["volumes"] = ["./fixture.txt:/app/fixture.txt"]
+    if locked_images:
+        for service in document["services"].values():
+            service["image"] = service["image"].split(":")[0] + "@sha256:" + "a" * 64
+    (bundle_dir / "compose.json").write_text(json.dumps(document))
+    from fi.alk.harness.bundle_v2 import BundleProvenanceV2
+    from fi.alk.harness.provision import source_fingerprint
+
     bundle = SimpleNamespace(
+        provenance=BundleProvenanceV2(source_kind="local", source_digest=source_fingerprint(source)),
         runtime=SimpleNamespace(kind=RuntimeKindV2.COMPOSE, document="compose.json"),
         seed=None,
         digest="sha256:" + "a" * 64,
@@ -178,9 +190,15 @@ def test_lifecycle_two_worlds_reset_and_cleanup(tmp_path, monkeypatch):
     provider = CertifiedComposeRuntimeProvider(socket_path=tmp_path / "socket")
     monkeypatch.setattr(provider, "_check_socket", lambda: None)
     commands = []
+    started_images = []
 
     def command(directory, project, *args, **kwargs):
         commands.append((project, args))
+        if args[0] == "up":
+            started_images.append({
+                name: service["image"]
+                for name, service in json.loads((directory / "compose.json").read_text())["services"].items()
+            })
         if args[0] == "config":
             return json.dumps({"services": {}})
         if args[0] == "port":
@@ -202,10 +220,12 @@ def test_lifecycle_two_worlds_reset_and_cleanup(tmp_path, monkeypatch):
         assert worlds[0].runtime_id != worlds[1].runtime_id
         assert all(world.metadata == {"observation_mode": "native"} for world in worlds)
         directories = [entry[1] for entry in provider._worlds.values()]
+        assert all(not (path / "source/unused-test.py").exists() for path in directories)
         (directories[0] / "source/fixture.txt").write_text("changed0")
         (directories[1] / "source/fixture.txt").write_text("changed1")
         await provider.reset(worlds[0], work_directory=work)
         assert (directories[0] / "source/fixture.txt").read_text() == "baseline"
+        assert not (directories[0] / "source/unused-test.py").exists()
         assert (directories[1] / "source/fixture.txt").read_text() == "changed1"
         assert await provider.healthy(worlds[0], work_directory=work)
         await provider.close(work_directory=work)
@@ -213,6 +233,9 @@ def test_lifecycle_two_worlds_reset_and_cleanup(tmp_path, monkeypatch):
         assert all(not directory.exists() for directory in directories)
         assert sum(args[0] == "down" for _, args in commands) == 3
         assert all("--volumes" in args for _, args in commands if args[0] == "down")
+        assert len(started_images) == 3
+        assert all(images == {name: service["image"] for name, service in document["services"].items()}
+                   for images in started_images)
 
     asyncio.run(run())
 
@@ -337,7 +360,11 @@ http.server.ThreadingHTTPServer(("0.0.0.0", 8000), Handler).serve_forever()
         "volumes": {"data": {}},
     }
     (bundle_dir / "compose.json").write_text(json.dumps(document))
+    from fi.alk.harness.bundle_v2 import BundleProvenanceV2
+    from fi.alk.harness.provision import source_fingerprint
+
     bundle = SimpleNamespace(
+        provenance=BundleProvenanceV2(source_kind="local", source_digest=source_fingerprint(source)),
         runtime=SimpleNamespace(kind=RuntimeKindV2.COMPOSE, document="compose.json"),
         seed=None,
         digest="sha256:" + "c" * 64,
@@ -437,7 +464,11 @@ def test_mutable_source_env_file_cannot_change_control_or_cleanup(
     document = topology()
     document["services"]["chat"].update(env_file="config.env", volumes=["./:/app"])
     (bundle_dir / "compose.json").write_text(json.dumps(document))
+    from fi.alk.harness.bundle_v2 import BundleProvenanceV2
+    from fi.alk.harness.provision import source_fingerprint
+
     bundle = SimpleNamespace(
+        provenance=BundleProvenanceV2(source_kind="local", source_digest=source_fingerprint(source)),
         runtime=SimpleNamespace(kind=RuntimeKindV2.COMPOSE, document="compose.json"),
         seed=None,
         digest="sha256:" + "a" * 64,
@@ -555,7 +586,11 @@ def test_real_compose_resolved_env_values_are_redacted(
     (source / "config.env").write_text(assignment)
     document = {"services": {"chat": {"image": "busybox", "env_file": "config.env"}}}
     (bundle_dir / "compose.json").write_text(json.dumps(document))
+    from fi.alk.harness.bundle_v2 import BundleProvenanceV2
+    from fi.alk.harness.provision import source_fingerprint
+
     bundle = SimpleNamespace(
+        provenance=BundleProvenanceV2(source_kind="local", source_digest=source_fingerprint(source)),
         runtime=SimpleNamespace(kind=RuntimeKindV2.COMPOSE, document="compose.json"),
         seed=None,
         digest="sha256:" + "a" * 64,
@@ -623,6 +658,19 @@ def test_config_failure_does_not_log_unresolved_secret(tmp_path, monkeypatch):
     assert "unknown-secret" not in (tmp_path / "logs/project.log").read_text()
 
 
+def test_disk_exhaustion_has_a_safe_repairable_error(tmp_path, monkeypatch):
+    def popen(command, **kwargs):
+        kwargs["stdout"].write(b"failed to apply diff: no space left on device")
+        return SimpleNamespace(wait=lambda **kwargs: 1, returncode=1)
+
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    provider = CertifiedComposeRuntimeProvider(
+        socket_path=tmp_path / "socket", artifact_root=tmp_path / "logs"
+    )
+    with pytest.raises(ComposeRuntimeError, match="^compose_resource_exhausted$"):
+        provider._command(tmp_path, "project", "up")
+
+
 def test_failed_resolution_never_collects_unredacted_service_logs(
     tmp_path, monkeypatch
 ):
@@ -630,7 +678,11 @@ def test_failed_resolution_never_collects_unredacted_service_logs(
     for path in (source, bundle_dir, work):
         path.mkdir()
     (bundle_dir / "compose.json").write_text(json.dumps(topology()))
+    from fi.alk.harness.bundle_v2 import BundleProvenanceV2
+    from fi.alk.harness.provision import source_fingerprint
+
     bundle = SimpleNamespace(
+        provenance=BundleProvenanceV2(source_kind="local", source_digest=source_fingerprint(source)),
         runtime=SimpleNamespace(kind=RuntimeKindV2.COMPOSE, document="compose.json"),
         seed=None,
         digest="sha256:" + "a" * 64,
@@ -654,3 +706,65 @@ def test_failed_resolution_never_collects_unredacted_service_logs(
         )
     assert commands == ["config"]
     assert list(work.iterdir()) == []
+
+
+@pytest.mark.parametrize('create_host_path', [True, False])
+def test_bind_creation_policy_is_preserved_for_existing_source(tmp_path, create_host_path):
+    (tmp_path / 'config.txt').write_text('public')
+    document = topology()
+    document['services']['chat']['volumes'] = [{
+        'type': 'bind', 'source': './config.txt', 'target': '/app/config.txt',
+        'bind': {'create_host_path': create_host_path},
+    }]
+    result = normalize_compose(document, tmp_path, capabilities=capabilities())
+    mount = result['services']['chat']['volumes'][0]
+    assert mount['source'] == str(tmp_path / 'config.txt')
+    assert mount['bind'] == {'create_host_path': create_host_path}
+
+
+def test_bind_no_create_rejects_missing_source_even_if_declared(tmp_path):
+    document = topology()
+    document['x-alk-config-files'] = {'config.env': {'values': {'MODE': 'public'}}}
+    document['services']['chat']['volumes'] = [{
+        'type': 'bind', 'source': './config.env', 'target': '/app/config.env',
+        'bind': {'create_host_path': False},
+    }]
+    with pytest.raises(ComposeRuntimeError, match='missing'):
+        normalize_compose(document, tmp_path, capabilities=capabilities())
+
+
+def test_bind_create_allows_only_declared_missing_resource(tmp_path):
+    document = topology()
+    document['services']['chat']['volumes'] = [{
+        'type': 'bind', 'source': './config.env', 'target': '/app/config.env',
+        'bind': {'create_host_path': True},
+    }]
+    with pytest.raises(ComposeRuntimeError, match='missing'):
+        normalize_compose(document, tmp_path, capabilities=capabilities())
+    document['x-alk-config-files'] = {'config.env': {'values': {'MODE': 'public'}}}
+    mount = normalize_compose(document, tmp_path, capabilities=capabilities())['services']['chat']['volumes'][0]
+    assert mount.get('read_only', False) is False
+    assert mount['source'] == str(tmp_path / 'config.env')
+    assert mount['bind'] == {'create_host_path': True}
+
+
+@pytest.mark.parametrize('options', [None, True, [], {'propagation': 'rshared'}, {'recursive': True}, {'create_host_path': 'true'}, {'create_host_path': 1}])
+def test_bind_options_do_not_enable_unsafe_mount_semantics(tmp_path, options):
+    (tmp_path / 'config.txt').write_text('public')
+    document = topology()
+    document['services']['chat']['volumes'] = [{
+        'type': 'bind', 'source': './config.txt', 'target': '/app/config.txt', 'bind': options,
+    }]
+    with pytest.raises(ComposeRuntimeError, match='bind_options'):
+        normalize_compose(document, tmp_path, capabilities=capabilities())
+
+
+@pytest.mark.parametrize('origin', ['/etc/passwd', '../escape', '~/private'])
+def test_bind_create_cannot_escape_source(tmp_path, origin):
+    document = topology()
+    document['services']['chat']['volumes'] = [{
+        'type': 'bind', 'source': origin, 'target': '/app/config.txt',
+        'bind': {'create_host_path': True},
+    }]
+    with pytest.raises(ComposeRuntimeError, match='host_bind|outside_source'):
+        normalize_compose(document, tmp_path, capabilities=capabilities())

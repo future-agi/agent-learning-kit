@@ -29,6 +29,7 @@ class ComposeSelection:
     control_service: str
     services: dict[str, Any]
     document: dict[str, Any]
+    source_files: tuple[Path, ...]
 
 
 def select_runtime(
@@ -79,13 +80,16 @@ def select_runtime(
 
         try:
             body = merge_compose(
-                root, [compose, *(root / name for name in runtime.compose_overrides)]
+                root,
+                [compose, *(root / name for name in runtime.compose_overrides)],
+                public_environment=public_environment,
             )
         except ValueError as exc:
             raise RuntimeSelectionError(str(exc)) from None
+        source_files = (compose, *((root / name).resolve() for name in runtime.compose_overrides))
         service_bases = {name: compose.parent for name in body["services"]}
     else:
-        body, service_bases = _load_compose(root, compose, public_environment or {})
+        body, service_bases, source_files = _load_compose(root, compose, public_environment or {})
     if not isinstance(body, dict) or not isinstance(body.get("services"), dict):
         raise RuntimeSelectionError("compose_invalid: services must be an object")
     services = {
@@ -115,15 +119,29 @@ def select_runtime(
             service_bases,
             additional_services=runtime.additional_services,
         )
+    for name in runtime.compose_image_services:
+        if name not in services:
+            raise RuntimeSelectionError(f"compose_image_service_unselected: {name}")
+        services[name].pop("build", None)
     services = {
         name: {
             key: _interpolate_structure(value, public_environment or {})
             if key in {"build", "image", "ports", "depends_on", "deploy", "volumes"}
+            and not (runtime.compose_overrides and key == "volumes")
             else value
             for key, value in service.items()
         }
         for name, service in services.items()
     }
+    for name in runtime.compose_image_services:
+        image = services[name].get("image")
+        if (
+            not isinstance(image, str)
+            or not image.strip()
+            or "$" in image
+            or any(char.isspace() for char in image)
+        ):
+            raise RuntimeSelectionError(f"compose_image_reference_invalid: {name}")
     for name, service in services.items():
         if service_bases[name] != compose.parent:
             _rebase_service(
@@ -133,7 +151,7 @@ def select_runtime(
                 root,
                 public_environment or {},
             )
-    return ComposeSelection(compose, control, services, body)
+    return ComposeSelection(compose, control, services, body, source_files)
 
 
 def _runtime_compose_services(
@@ -396,7 +414,7 @@ def _interpolate_structure(value: Any, public_environment: dict[str, str]) -> An
 
 def _load_compose(
     root: Path, compose: Path, environment: dict[str, str]
-) -> tuple[dict[str, Any], dict[str, Path]]:
+) -> tuple[dict[str, Any], dict[str, Path], tuple[Path, ...]]:
     seen = set()
     active = set()
     service_bases = {}
@@ -455,7 +473,8 @@ def _load_compose(
         active.remove(path)
         return body
 
-    return load(compose), service_bases
+    document = load(compose)
+    return document, service_bases, tuple(sorted(seen))
 
 
 def _rebase_service(service, base, destination, root, environment):

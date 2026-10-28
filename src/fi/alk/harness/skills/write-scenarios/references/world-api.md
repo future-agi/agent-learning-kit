@@ -7,6 +7,10 @@ world is kept in, which is deliberate: the store varies more between agents than
 
 For a native file task, use a named workspace declared in `runtime.workspaces`.
 Each declaration maps a name to a directory relative to the target process's working directory.
+Use declared workspace names and relative paths in setup and ready. Read back every seeded file
+and compare its contents before chat. Local proof is deferred until the live target exists.
+Without a declared binding, give all content in the conversation and ask the agent to create
+files first; do not assume existing project files.
 The directory must come from the target's actual configuration. A database collection called
 `files` does not populate that directory.
 
@@ -127,7 +131,14 @@ to 10 seconds; the scenario phase also has its own deadline. No environment secr
 A token obtained from the application's own login API may be supplied explicitly in headers.
 Transport-routing headers, including Host and Proxy-Authorization, are rejected.
 
-Setup may POST, PUT, PATCH or DELETE. Ready and outcome checks may only GET or HEAD.
+Setup may POST, PUT, PATCH or DELETE. Ready and outcome checks may only GET or HEAD through `request`.
+For a source-reviewed POST read operation declared in the sealed contract's `runtime.observations`,
+use `world.observe(name, parameters)` instead. It returns the same bounded response shape.
+The declaration fixes the capability, path and JSON body. Parameters replace entire scalar leaves
+only and require explicit string length or integer range bounds. Unknown or missing parameters,
+objects and booleans used as integers fail before network access. Scenarios cannot register new
+operations or override their selectors, paths or headers. Review the native implementation before
+declaring an operation; a POST declaration alone cannot prove that the server is read-only.
 Setup must create source-supported fixtures and ready must verify the same actual records.
 A 2xx status alone is not evidence that the requested data exists. Check exact response values.
 

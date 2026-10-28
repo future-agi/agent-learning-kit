@@ -779,7 +779,7 @@ def _build_harness(
         build_transport=lambda: transport,
         build_provider=lambda _capabilities, _transport: provisioner,
         build_call_runner=build_call_runner,
-        build_world_factory=lambda work_directory: FakeWorldFactory(),
+        build_world_factory=lambda work_directory, bundle_dir: FakeWorldFactory(),
         cancel_path=cancel_path,
         secrets_path=tmp / "secrets.json",
         install_sigterm_handler=lambda cancel_state: lambda: None,
@@ -922,6 +922,7 @@ def test_load_simulator_secret_values_is_allowlisted_and_destructive(
                 "SIP_OUTBOUND_TRUNK_ID": "platform-trunk",
                 "SIP_OUTBOUND_FROM_NUMBER": "+14155550000",
                 "HARNESS_CALLER_BARGE_IN_RATE": "0.2",
+                "ALK_GOOGLE_ADK_EXPLICITLY_APPROVED_BY_USER": "1",
                 "UNRELATED": "must-not-load",
             }
         ),
@@ -939,6 +940,7 @@ def test_load_simulator_secret_values_is_allowlisted_and_destructive(
         "SIP_OUTBOUND_TRUNK_ID": "platform-trunk",
         "SIP_OUTBOUND_FROM_NUMBER": "+14155550000",
         "HARNESS_CALLER_BARGE_IN_RATE": "0.2",
+        "ALK_GOOGLE_ADK_EXPLICITLY_APPROVED_BY_USER": "1",
     }
     assert not path.exists()
 
@@ -2534,7 +2536,7 @@ def test_finish_emits_the_terminal_before_closing_the_pool() -> None:
             scenario_source=FakeScenarioSource([]),
             build_transport=lambda: transport,
             build_provider=lambda _capabilities, _transport: provisioner,
-            build_world_factory=lambda work_directory: FakeWorldFactory(),
+            build_world_factory=lambda work_directory, bundle_dir: FakeWorldFactory(),
             cancel_path=tmp / "cancel.json",
             secrets_path=tmp / "secrets.json",
             install_sigterm_handler=lambda cancel_state: lambda: None,
@@ -4925,3 +4927,130 @@ def test_process_logs_from_close_are_uploaded_before_final_manifest():
         )
 
     asyncio.run(scenario())
+
+
+def test_hosted_job_passes_sealed_bundle_to_world_factory() -> None:
+    observed = []
+
+    def bundle_writer(root):
+        _write_bundle(root)
+        contract = json.dumps(
+            {
+                "runtime": {
+                    "observations": {
+                        "history": {
+                            "capability": "app",
+                            "path": "/history",
+                            "body": {"operation": "read"},
+                        }
+                    }
+                }
+            }
+        ).encode()
+        (root / "contract.json").write_bytes(contract)
+        path = root / "manifest.json"
+        body = json.loads(path.read_text())
+        body["files"].append(
+            {
+                "path": "contract.json",
+                "sha256": hashlib.sha256(contract).hexdigest(),
+                "size": len(contract),
+            }
+        )
+        body["digest"] = seal_bundle_v2(EnvironmentBundleV2.model_validate(body))
+        path.write_text(json.dumps(body))
+
+    async def scenario():
+        harness = _build_harness(
+            scenarios=[FakeScenario("s1", "platform-s1", [FakeSubGoal("holds", True)])],
+            bundle_writer=bundle_writer,
+        )
+
+        def build_factory(work_directory, bundle_dir):
+            factory = he.HostedEntrypointDeps().build_world_factory(
+                work_directory, bundle_dir
+            )
+            observed.append(
+                (work_directory, bundle_dir, factory._observations["history"].path)
+            )
+            return FakeWorldFactory()
+
+        harness.deps.build_world_factory = build_factory
+        assert (
+            await he.run_job(
+                harness.job_path, harness.source, harness.output, deps=harness.deps
+            )
+            == he.EXIT_OK
+        )
+        assert observed == [(harness.work, harness.bundle_dir, "/history")]
+
+    asyncio.run(scenario())
+
+
+def test_hosted_compose_bootstrap_failure_stops_before_bundle_or_provision(monkeypatch):
+    harness = _build_harness(scenarios=[])
+
+    def reject(job, source):
+        assert source == harness.source
+        raise he.BrokerError("compose_bootstrap_source_changed")
+
+    monkeypatch.setattr(he, "initialize_hosted_compose", reject)
+    assert _run(harness) == he.EXIT_OK
+    assert harness.provisioner.provision_calls == 0
+    terminal = harness.transport.terminal_events()
+    assert len(terminal) == 1
+    assert terminal[0]["payload"]["failure"]["code"] == "compose_bootstrap_failed"
+
+
+def test_unverified_compose_environment_does_not_enable_hosted_execution(monkeypatch):
+    harness = _build_harness(scenarios=[])
+    monkeypatch.setenv("ALK_COMPOSE_BROKER_SOCKET", "/tmp/untrusted.sock")
+    monkeypatch.setattr(he, "initialize_hosted_compose", lambda job, source: None)
+    original = he.preflight_bundle
+    observed = []
+
+    def preflight(*args, **kwargs):
+        observed.append(kwargs["allow_compose"])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(he, "preflight_bundle", preflight)
+    assert _run(harness) == he.EXIT_OK
+    assert observed == [False]
+
+
+def test_hosted_compose_uses_broker_and_observation_world(monkeypatch):
+    harness = _build_harness(scenarios=[])
+    broker_path = Path("/run/alk-compose/broker.sock")
+    monkeypatch.setattr(he, "initialize_hosted_compose", lambda job, source: broker_path)
+    monkeypatch.setenv("ALK_COMPOSE_BROKER_SOCKET", str(broker_path))
+    manifest, directory = harness.deps.bundle_source.load(
+        he.load_job(harness.job_path), source=harness.source, work_directory=harness.work
+    )
+    manifest = manifest.model_copy(update={"runtime": manifest.runtime.model_copy(
+        update={"kind": he.RuntimeKindV2.COMPOSE, "document": "compose.json"}
+    )})
+
+    class BundleSource:
+        def load(self, *args, **kwargs):
+            return manifest, directory
+
+    harness.deps.bundle_source = BundleSource()
+    monkeypatch.setattr(he, "preflight_bundle", lambda *args, **kwargs: None)
+    selected = []
+
+    def broker(path):
+        assert path == broker_path
+        selected.append("broker")
+        return harness.provisioner
+
+    def world(path):
+        assert path == directory
+        selected.append("observation")
+        return FakeWorldFactory()
+
+    monkeypatch.setattr(he, "ComposeBrokerClient", broker)
+    monkeypatch.setattr(he, "ObservationWorldFactory", world)
+    assert _run(harness) == he.EXIT_OK
+    assert selected == ["broker", "observation"]
+    assert harness.provisioner.provision_calls == 1
+    assert harness.provisioner.closed
