@@ -28,7 +28,8 @@ CHANNELS: dict[str, dict[str, Any]] = {
         "available": True,
         "about": "someone who takes the phone from the person for a few turns, then hands it back",
         "tells_person": "{who} may take the phone from you for a few turns. While they have it, say nothing; carry on once they hand it back.",
-        "setting": "You have just taken the phone from the person who was talking to an automated agent.",
+        "setting": "You have just taken the phone from the person, partway through their call with an automated "
+        "agent, to say something of your own before you hand it back.",
     },
     "ivr": {
         "modalities": {"voice"},
@@ -127,6 +128,9 @@ TOOLS_READ_SECONDS = 1.0
 CONVERSATION_LINES = 12
 MAX_ACTIVE = 2
 TAKEOVER_AFTER_TURNS = 4
+# Someone can only take the phone from a person who already has it: not before the agent's second turn, by
+# which point the person has spoken at least once. A trigger that fires earlier waits for that turn.
+TAKES_PHONE_FROM_TURN = 2
 # Wall-clock for all sub-actors together, from the first trigger: turns stop advancing while a line
 # is written or the agent is slow, so time bounds what turns cannot.
 SUB_ACTOR_SECONDS = 60.0
@@ -224,8 +228,9 @@ def line_brief(
         f"You are {actor.get('name') or 'someone'}{role}. {setting}",
         f"What is going on (this is the other person's situation, not yours):\n{situation}",
         f"What you do:\n{actor.get('instruction') or ''}",
-        "Never claim to be the other person, never give their codes, numbers or account details unless "
-        "what you do says so, and never confirm or choose anything for them.",
+        "You are not the other person. Never give their codes, numbers, addresses or account details, never "
+        "make their request or answer a question put to them, and never confirm or choose anything for them: "
+        "what they came for is theirs to say. Say only what you yourself want or know.",
         f"Speak {language}." if language else "",
         "What you have said so far: " + " | ".join(said) if said else "",
         (
@@ -267,6 +272,7 @@ class Cast:
             for one in actors
         }
         self._waiting: list[str] = []
+        self._held: set[str] = set()
         self._activity = 0
         self.holder = ""
         self.events: list[dict[str, Any]] = []
@@ -325,12 +331,19 @@ class Cast:
             state = self._state[key]
             if state["entered"] or state["done"] or key in self._waiting:
                 continue
-            if due(
+            if key in self._held or due(
                 dict(actor.get("trigger") or {}),
                 moment,
                 seed=self.seed,
                 sub_actor_id=key,
             ):
+                if (
+                    actor.get("channel") == "audio_handoff"
+                    and moment.agent_turns < TAKES_PHONE_FROM_TURN
+                ):
+                    self._held.add(key)
+                    continue
+                self._held.discard(key)
                 self._waiting.append(key)
                 self._record(key, "triggered", turn=moment.agent_turns)
         entered = []

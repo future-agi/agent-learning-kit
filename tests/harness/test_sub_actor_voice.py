@@ -136,7 +136,7 @@ def test_the_leveller_scales_each_frame_and_holds_its_peaks_under_the_limit():
 
 def test_a_third_sub_actor_waits_for_room_and_enters_in_the_scenario_s_order():
     cast = Cast([_actor("one"), _actor("two"), _actor("three")], "run")
-    assert [one["id"] for one in cast.entering(Moment(1))] == ["one", "two"]
+    assert [one["id"] for one in cast.entering(Moment(2))] == ["one", "two"]
     assert cast.entering(Moment(2)) == []
     cast.finish(cast.actors[0], "done")
     assert [one["id"] for one in cast.entering(Moment(3))] == ["three"]
@@ -147,7 +147,7 @@ def test_a_third_sub_actor_waits_for_room_and_enters_in_the_scenario_s_order():
 
 def test_limits_and_the_call_wide_budget_hand_the_call_back_to_the_person():
     cast = Cast([_actor("one"), _actor("two")], "run")
-    cast.entering(Moment(1))
+    cast.entering(Moment(2))
     for turn in range(1, registry.LIMITS["audio_handoff"] + 1):
         assert cast.may_speak(cast.actors[0], turn)
         cast.delivered(cast.actors[0], f"line {turn}", turn, 0.0, 0.0)
@@ -163,7 +163,7 @@ def test_limits_and_the_call_wide_budget_hand_the_call_back_to_the_person():
 def test_a_background_voice_never_speaks_on_two_turns_in_a_row(monkeypatch):
     monkeypatch.setattr(registry, "SPEAKS_AGAIN", 1.0)
     cast = Cast([_actor("near", "audio_mix")], "run")
-    cast.entering(Moment(1))
+    cast.entering(Moment(2))
     assert cast.may_speak(cast.actors[0], 1)
     cast.delivered(cast.actors[0], "a line", 1, 0.0, 0.0)
     assert not cast.may_speak(cast.actors[0], 2)
@@ -179,7 +179,7 @@ def test_the_summary_tells_triggered_delivered_and_dropped_apart():
         ],
         "run",
     )
-    cast.entering(Moment(1))
+    cast.entering(Moment(2))
     cast.delivered(cast.actors[0], "a line", 1, 0.0, 0.0)
     cast.dropped(cast.actors[1], "not ready in time")
     cast.hang_up()
@@ -265,6 +265,12 @@ class _Voice(voice_engine.SubActorVoice):
         return text, ([b"frame"] if text and text != "silent" else []), done
 
 
+@pytest.fixture
+def phone_from_first_turn(monkeypatch):
+    """Engine tests below are about lines, not entry: let a phone-taker enter on the agent's first turn."""
+    monkeypatch.setattr(registry, "TAKES_PHONE_FROM_TURN", 1)
+
+
 def _on_call(voices, playing=0.0, **kwargs):
     said, played = [], []
 
@@ -282,7 +288,9 @@ def _on_call(voices, playing=0.0, **kwargs):
     return call, said, played
 
 
-def test_every_line_is_written_from_the_conversation_so_far_and_records_how_long_it_took():
+def test_every_line_is_written_from_the_conversation_so_far_and_records_how_long_it_took(
+    phone_from_first_turn,
+):
     async def scenario():
         phone = _Voice(_actor("one"), ["Hi, it's me [DONE]"])
         near = _Voice(_actor("near", "audio_mix"), ["over here"])
@@ -396,7 +404,9 @@ def test_agent_turns_that_overlap_never_let_someone_speak_after_handing_the_phon
     assert held == [False, False]
 
 
-def test_someone_who_takes_the_phone_holds_it_until_done_and_only_one_holds_it_at_a_time():
+def test_someone_who_takes_the_phone_holds_it_until_done_and_only_one_holds_it_at_a_time(
+    phone_from_first_turn,
+):
     async def scenario():
         first = _Voice(_actor("one"), ["Hi, it's me", "Thanks [DONE]"])
         second = _Voice(_actor("two"), ["My turn [DONE]"])
@@ -427,7 +437,7 @@ class _StatusError(Exception):
     ],
 )
 def test_a_line_that_cannot_be_heard_hands_the_phone_back_with_the_reason(
-    monkeypatch, lines, delay, reason
+    monkeypatch, lines, delay, reason, phone_from_first_turn
 ):
     monkeypatch.setattr(voice_engine, "HANDOFF_LINE_SECONDS", 0.01)
 
@@ -442,7 +452,9 @@ def test_a_line_that_cannot_be_heard_hands_the_phone_back_with_the_reason(
     assert summary[0]["triggered"] and summary[0]["dropped"] == [reason]
 
 
-def test_a_sub_actor_without_a_voice_of_its_own_is_dropped_with_the_reason_never_left_out():
+def test_a_sub_actor_without_a_voice_of_its_own_is_dropped_with_the_reason_never_left_out(
+    phone_from_first_turn,
+):
     async def scenario():
         call, said, played = _on_call(
             [
@@ -670,7 +682,7 @@ def test_the_call_s_sub_actor_time_runs_out_and_every_sub_actor_stops_with_the_r
     now[0] = 500.0
     # The clock starts at the first trigger, not when the call does.
     assert cast.remaining() == registry.SUB_ACTOR_SECONDS
-    assert len(cast.entering(Moment(1))) == 2
+    assert len(cast.entering(Moment(2))) == 2
     now[0] = 530.0
     assert cast.remaining() == 30.0 and cast.line_limit(45.0) == 30.0
     assert cast.entering(Moment(2)) == []  # the third waits for room
@@ -702,7 +714,9 @@ def test_a_line_due_while_two_are_waiting_is_dropped_as_queue_full():
     assert [entry["dropped"] for entry in cast.summary()] == [[], [], ["queue full"]]
 
 
-def test_a_stalled_line_is_dropped_and_the_person_takes_the_phone_back(monkeypatch):
+def test_a_stalled_line_is_dropped_and_the_person_takes_the_phone_back(
+    monkeypatch, phone_from_first_turn
+):
     monkeypatch.setattr(voice_engine, "HANDOFF_LINE_SECONDS", 0.05)
 
     async def scenario():
@@ -729,7 +743,7 @@ def test_lines_cut_off_by_the_call_s_sub_actor_time_say_so():
         call, said, _played = _on_call(
             [phone], clock=lambda: time.monotonic() + offset[0]
         )
-        call.cast.entering(Moment(1))
+        call.cast.entering(Moment(2))
         # The first trigger was 59.95 s ago, so the line has 50 ms left.
         offset[0] = registry.SUB_ACTOR_SECONDS - 0.05
         holding = await call.agent_turn("Hello")
@@ -793,3 +807,31 @@ def test_a_background_line_reaches_the_mixer_at_its_rate_so_it_plays_at_its_own_
     assert {one.sample_rate for one in out} == {engine._BACKGROUND_MIXER_RATE}
     total = sum(one.samples_per_channel for one in out)
     assert abs(total - engine._BACKGROUND_MIXER_RATE) <= 48
+
+
+def test_someone_who_takes_the_phone_waits_until_the_person_has_spoken():
+    cast = Cast(
+        [
+            _actor("phone", kind="on_keyword", words=["pickup"]),
+            _actor("near", "audio_mix"),
+        ],
+        "run",
+    )
+    # The agent's greeting names the keyword before the person has said a word: only the
+    # background voice comes in; the phone-taker waits for the agent's next turn.
+    first = cast.entering(Moment(1, last_text="Where should we pickup?"))
+    assert [one["id"] for one in first] == ["near"]
+    assert [one["id"] for one in cast.entering(Moment(2, last_text="Got it."))] == [
+        "phone"
+    ]
+    assert {"kind": "triggered", "turn": 2}.items() <= next(
+        one for one in cast.events if one["sub_actor"] == "phone"
+    ).items()
+
+
+def test_a_sub_actor_is_never_told_it_may_answer_for_the_person():
+    brief = line_brief(
+        _actor("phone"), situation="Book a ride.", said=[], conversation=[], language=""
+    )
+    assert "unless" not in brief
+    assert "what they came for is theirs to say" in brief

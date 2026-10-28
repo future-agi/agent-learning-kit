@@ -647,7 +647,10 @@ that sub-actor in `sub_actors`, with two things written for this scenario:
 - `instruction`: who they are here and what they do, written to them like a situation text ("You are
   with <the person>. You want <something other than what they ask for> and say so once the agent
   <does what the person asked>"). Give them a part, never the person's goal: the person still pursues it and gives
-  every value the agent asks for, and a sub-actor never confirms or chooses for them.
+  every value the agent asks for, and a sub-actor never confirms or chooses for them. What they say is
+  their own: something they want, know or worry about. Never the person's request, address, details or
+  answers, which the agent must get from the person; someone who takes the phone does it partway
+  through, once the person has started.
 - `trigger`: when they enter. `always`, `mid_journey` after the agent's turn N, `on_tool` on the Nth call
   of one of the agent's tools that runs in the world, `on_keyword` when one of its words is in the
   agent's latest turn, or `probability` with chance `p`. Pick a moment the conversation reaches before

@@ -159,7 +159,7 @@ what the gates check. Then:
   the time" is a level with that share, so `aim_for` it and brief the writers. When a request does not
   say whether it means the list or scenarios, ask. An entry you write follows the same rules as one a
   writer writes: the sub-actor has a part, never the person's goal, so it never confirms, chooses or
-  gives a value for them, and its trigger brings it in at a moment its part can happen. When a sub-actor
+  gives a value for them and never says what the agent must hear from the person, and its trigger brings it in at a moment its part can happen. When a sub-actor
   or trigger the person asked for cannot be used with this agent, or a check refuses it, stop: tell them
   which one and why, offer what can be used instead, and change it only once they agree.
 - **The contract's reading of the agent**: `amend_contract`, `add_rule`, `drop_rule`, `fix_tool`, and
