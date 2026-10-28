@@ -1835,6 +1835,10 @@ def _adk_web_interface(root: Path, runtime: dict[str, Any]) -> dict[str, Any] | 
     app_name = _adk_app_name(root, str(runtime.get("workdir") or ""))
     if app_name is None:
         return None
+    return _adk_interface_for(command, app_name)
+
+
+def _adk_interface_for(command: list[str], app_name: str) -> dict[str, Any]:
     port = _command_port(command, default=8000)
     return {
         "kind": "http",
@@ -3738,6 +3742,7 @@ def _built_from(contract: dict[str, Any]) -> tuple[Any, ...]:
         else store,
         contract.get("data_schema") or None,
         isinstance(tools, list) and not tools,
+        contract.get("runtime_dependencies") or None,
     )
 
 
@@ -3765,14 +3770,38 @@ def _interface_edited(authored: dict[str, Any], sealed: dict[str, Any]) -> bool:
 
 
 def _built_by_older_alk(sealed: dict[str, Any], processes: list[Any]) -> bool:
-    """Whether an older build compiled this bundle: one that bridged a ``callable`` command
-    or traced tool callables, neither of which a build does now."""
+    """Whether an older build compiled this bundle: one that bridged a ``callable`` command,
+    traced tool callables, or kept a written HTTP interface for ``adk web``, none of which a
+    build does now."""
     environments = [getattr(process, "environment", None) or {} for process in processes]
     bridged = _interface({"runtime": {"interface": _COMMAND_BRIDGE_INTERFACE}})
-    return any("ALK_TOOL_TRACE_BINDINGS" in env for env in environments) or (
-        _interface(sealed) == bridged
-        and any("ALK_SUBPROCESS_COMMAND" in env for env in environments)
+    return (
+        any("ALK_TOOL_TRACE_BINDINGS" in env for env in environments)
+        or (
+            _interface(sealed) == bridged
+            and any("ALK_SUBPROCESS_COMMAND" in env for env in environments)
+        )
+        or _adk_interface_written(sealed)
     )
+
+
+def _adk_interface_written(sealed: dict[str, Any]) -> bool:
+    """Whether a chat ``adk web`` bundle seals an HTTP interface other than ADK's own."""
+    runtime = sealed.get("runtime") or {}
+    command = [str(item) for item in (runtime.get("command") or [])]
+    interface = runtime.get("interface")
+    if (
+        str(sealed.get("modality") or "").strip().lower() != "chat"
+        or not _is_adk_web_command(command)
+        or not isinstance(interface, dict)
+        or str(interface.get("kind") or "").strip().lower() not in {"", "http"}
+    ):
+        return False
+    app_name = (interface.get("request_template") or {}).get("app_name")
+    if not isinstance(app_name, str) or not app_name:
+        return True
+    own = {"runtime": {"interface": _adk_interface_for(command, app_name)}}
+    return _interface(sealed) != _interface(own)
 
 
 def _carry_contract(
