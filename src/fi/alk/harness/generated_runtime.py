@@ -37,10 +37,7 @@ _IGNORED_DIRECTORIES = {
     ".tox",
     ".venv",
     "__pycache__",
-    "coverage",
     "node_modules",
-    "target",
-    "vendor",
 }
 _SECRET_NAMES = {
     ".env",
@@ -396,19 +393,33 @@ def _python_language_version(
     old interpreter wheels. Exact patch values remain exact; native minor selectors let uv
     resolve a compatible patch. Image ranges prefer the harness' stable default.
     """
+    from packaging.markers import InvalidMarker, Marker
     from packaging.specifiers import InvalidSpecifier, SpecifierSet
     from packaging.version import Version
 
     declared = configured.strip()
-    requires = str(
-        _pyproject_document(root / "pyproject.toml")
-        .get("project", {})
-        .get("requires-python", "")
-        or ""
-    ).strip()
+    document = _pyproject_document(root / "pyproject.toml")
+    requires = str(document.get("project", {}).get("requires-python", "") or "").strip()
+    environments = document.get("tool", {}).get("uv", {}).get("environments", [])
+    # shortcut: uv validates platform and patch markers until selection models the target environment.
+    python_only = isinstance(environments, list) and all(
+        isinstance(item, str)
+        and set(re.findall(r"[A-Za-z_]\w*", item)) <= {"python_version", "and", "or", "in", "not"}
+        for item in environments
+    )
+    try:
+        markers = [Marker(item) for item in environments] if python_only else []
+    except InvalidMarker:
+        markers = []
+
+    def supported(version: str) -> bool:
+        return not markers or any(
+            marker.evaluate({"python_version": ".".join(version.split(".")[:2])})
+            for marker in markers
+        )
     try:
         project = SpecifierSet(requires)
-        if re.fullmatch(r"3\.\d+", declared):
+        if re.fullmatch(r"3\.\d+", declared) and supported(declared):
             if interpreter_selector:
                 return str(SpecifierSet(f"=={declared}.*,{requires}".rstrip(",")))
             # Image tags select a moving patch; installation validates Requires-Python.
@@ -417,18 +428,25 @@ def _python_language_version(
             if (
                 re.fullmatch(r"3\.\d+(?:\.\d+)?", declared)
                 and Version(declared) in project
+                and supported(declared)
             ):
                 return declared
         else:
             specifier = SpecifierSet(declared)
             for candidate in ("3.12", "3.13", "3.11", "3.10", "3.14", "3.9"):
-                if Version(candidate) in specifier and Version(candidate) in project:
+                if Version(candidate) in specifier and Version(candidate) in project and supported(candidate):
                     return candidate
     except (InvalidSpecifier, ValueError):
         pass
+    source_pin = ""
+    pin_path = root / ".python-version"
+    if pin_path.is_file() and pin_path.resolve().is_relative_to(root.resolve()):
+        pin = pin_path.read_text(encoding="utf-8", errors="replace").strip()
+        if re.fullmatch(r"3\.\d+(?:\.\d+)?", pin):
+            source_pin = f"; source .python-version: {pin}"
     raise GeneratedRuntimeError(
         f"generated_runtime_python_version_unsupported: {declared or requires}"
-        f" (project requires-python: {requires or 'unspecified'})"
+        f" (project requires-python: {requires or 'unspecified'}; uv environments: {environments}{source_pin})"
     )
 
 
@@ -559,6 +577,41 @@ def _needs_livekit_model_download(path: Path) -> bool:
     )
 
 
+def python_workspace_members(root: Path) -> set[Path]:
+    document = _pyproject_document(root / "pyproject.toml")
+    workspace = document.get("tool", {}).get("uv", {}).get("workspace", {})
+    members: set[Path] = set()
+    excluded: set[Path] = set()
+    for key, paths in (("members", members), ("exclude", excluded)):
+        for pattern in workspace.get(key, []):
+            relative = Path(pattern)
+            if relative.is_absolute() or ".." in relative.parts:
+                raise GeneratedRuntimeError("generated_runtime_workspace_path_invalid")
+            if pattern and not relative.parts:
+                continue
+            for path in root.glob(pattern):
+                resolved = path.resolve()
+                if not resolved.is_relative_to(root.resolve()):
+                    raise GeneratedRuntimeError(
+                        "generated_runtime_workspace_path_invalid"
+                    )
+                if resolved != root.resolve():
+                    paths.add(resolved)
+    return members - excluded
+
+
+def python_workspace_root(source: Path, component: Path) -> Path:
+    source, component = source.resolve(), component.resolve()
+    if not component.is_relative_to(source):
+        raise GeneratedRuntimeError("generated_runtime_workspace_path_invalid")
+    for ancestor in component.parents:
+        if not ancestor.is_relative_to(source):
+            break
+        if component in python_workspace_members(ancestor):
+            return ancestor
+    return component
+
+
 def select_python_extras(
     root: Path,
     requested: list[str],
@@ -584,23 +637,8 @@ def select_python_extras(
     root_names = declared(document)
     if required_owner is None and set(names) <= root_names:
         return PythonExtraSelection(names)
-    workspace = document.get("tool", {}).get("uv", {}).get("workspace", {})
-    members: set[Path] = set()
-    excluded: set[Path] = set()
-    for key, paths in (("members", members), ("exclude", excluded)):
-        for pattern in workspace.get(key, []):
-            if Path(pattern).is_absolute() or ".." in Path(pattern).parts:
-                raise GeneratedRuntimeError("generated_runtime_workspace_path_invalid")
-            for path in root.glob(pattern):
-                resolved = path.resolve()
-                if not resolved.is_relative_to(root.resolve()):
-                    raise GeneratedRuntimeError(
-                        "generated_runtime_workspace_path_invalid"
-                    )
-                if resolved != root.resolve():
-                    paths.add(resolved)
     owners = {name: [root] if name in root_names else [] for name in names}
-    for member in sorted(members - excluded):
+    for member in sorted(python_workspace_members(root)):
         if _context_path_excluded(
             member.relative_to(root) / "pyproject.toml", context_excludes
         ):
@@ -690,7 +728,19 @@ def select_python_requirements(
             raise GeneratedRuntimeError("generated_runtime_requirements_limit")
         visited.add(relative)
         active.add(relative)
+        lines = []
+        pending = ""
         for line in target.read_text(encoding="utf-8").splitlines():
+            if line.lstrip().startswith("#"):
+                line = " " + line
+            elif line.endswith("\\"):
+                pending += line.rstrip("\\")
+                continue
+            lines.append(pending + line)
+            pending = ""
+        if pending:
+            lines.append(pending)
+        for line in lines:
             line = re.split(r"\s+#", line, maxsplit=1)[0].strip()
             if not line or line.startswith("#"):
                 continue
@@ -700,6 +750,13 @@ def select_python_requirements(
             if include:
                 visit(relative.parent / include.group(1))
                 continue
+            hashed = re.fullmatch(
+                r"(.+?)(?:\s+--hash(?:=|\s+)(?:sha256:[a-fA-F0-9]{64}"
+                r"|sha384:[a-fA-F0-9]{96}|sha512:[a-fA-F0-9]{128}))+",
+                line,
+            )
+            if hashed:
+                line = hashed.group(1)
             try:
                 requirement = Requirement(line)
             except InvalidRequirement as exc:
@@ -995,19 +1052,21 @@ def _context_excludes(
         for name in (dependency, "pyproject.toml", "package.json")
         if name and component.joinpath(name).is_file()
     }
-    required.update(
-        Path(token)
-        for token in command
-        if token
-        and not Path(token).is_absolute()
-        and ".." not in Path(token).parts
-        and component.joinpath(token).is_file()
-    )
+    for token in command:
+        path = Path(token)
+        if not token or path.is_absolute() or ".." in path.parts:
+            continue
+        try:
+            if component.joinpath(path).is_file():
+                required.add(path)
+        except OSError:
+            # Inline interpreter programs are arguments, not filesystem paths.
+            continue
     values: set[str] = set()
     for raw in getattr(runtime, "context_excludes", None) or []:
-        if any(char in str(raw) for char in "*?[]"):
+        if any(char in str(raw) for char in "?[]"):
             raise GeneratedRuntimeError(
-                f"generated_runtime_context_exclude_glob_unsupported: {raw}"
+                f"generated_runtime_context_exclude_pattern_unsupported: {raw}"
             )
         relative = Path(str(raw))
         if relative.is_absolute() or not relative.parts or ".." in relative.parts:
@@ -1015,23 +1074,21 @@ def _context_excludes(
                 f"generated_runtime_context_exclude_invalid: {raw}"
             )
         normalized = relative.as_posix().removeprefix("./")
-        target = (component / normalized).resolve()
-        try:
-            target.relative_to(component.resolve())
-        except ValueError as exc:
-            raise GeneratedRuntimeError(
-                f"generated_runtime_context_exclude_invalid: {raw}"
-            ) from exc
-        if not target.exists():
+        matched = list(component.glob(normalized)) if "*" in normalized else [component / normalized]
+        matched = [target for target in matched if target.exists() or target.is_symlink()]
+        if not matched:
             # Generated/local state files are commonly listed even before the
             # first run creates them. A missing exclusion is already excluded
             # from the immutable build context and is therefore safe to ignore.
             continue
-        excluded_path = Path(normalized)
-        if any(
-            excluded_path == required_path or excluded_path in required_path.parents
-            for required_path in required
-        ):
+        try:
+            for target in matched:
+                target.resolve().relative_to(component.resolve())
+        except ValueError as exc:
+            raise GeneratedRuntimeError(
+                f"generated_runtime_context_exclude_invalid: {raw}"
+            ) from exc
+        if any(_context_path_excluded(path, (normalized,)) for path in required):
             raise GeneratedRuntimeError(
                 f"generated_runtime_context_exclude_required: {normalized}"
             )
@@ -1040,8 +1097,15 @@ def _context_excludes(
 
 
 def _context_path_excluded(relative: Path, exclusions: tuple[str, ...]) -> bool:
+    def matches(value: str) -> bool:
+        return relative.match(value) or (
+            value.startswith("**/") and relative.match(value.removeprefix("**/"))
+        )
+
     return any(
-        relative == Path(value) or Path(value) in relative.parents
+        relative == Path(value)
+        or Path(value) in relative.parents
+        or ("*" in value and matches(value))
         for value in exclusions
     )
 
@@ -1051,6 +1115,7 @@ def _copy_sanitized_context(
 ) -> None:
     count = 0
     total = 0
+    rejected_files: list[str] = []
     source = source.resolve()
 
     def copy_file(path: Path, relative: Path) -> None:
@@ -1072,10 +1137,9 @@ def _copy_sanitized_context(
             raise GeneratedRuntimeError("generated_runtime_context_limit_exceeded")
         try:
             inspect_public_file(path)
-        except ValueError as exc:
-            raise GeneratedRuntimeError(
-                "generated_runtime_secret_material_detected: " + relative.as_posix()
-            ) from exc
+        except ValueError:
+            rejected_files.append(relative.as_posix())
+            return
         target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(path, target, follow_symlinks=True)
@@ -1123,6 +1187,11 @@ def _copy_sanitized_context(
                 )
 
     copy_directory(source, Path(), frozenset())
+    if rejected_files:
+        raise GeneratedRuntimeError(
+            "generated_runtime_secret_material_detected: "
+            + json.dumps({"files": rejected_files[:32], "total": len(rejected_files)})
+        )
 
 
 def _sensitive_file(relative: Path, source: Path) -> bool:

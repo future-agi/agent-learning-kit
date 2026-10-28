@@ -58,11 +58,13 @@ from .bundle_v2 import (
     load_bundle_v2,
     seal_bundle_v2,
 )
-from .contract import Runtime, ToolEntry
+from .contract import Runtime, ToolEntry, runtime_public_environment
 from .generated_runtime import (
     GeneratedRuntimeError,
     _python_language_version,
     select_python_extras,
+    python_workspace_root,
+    _pyproject_document,
     select_python_requirements,
     supplemental_requirements_command,
     validate_local_install_extras,
@@ -1219,7 +1221,16 @@ def _plan_python(
         )
     if not run_override and entry is not None and not (root / entry).is_file():
         raise BundleAuthorError(f"runtime_entrypoint_missing: {name}:{entry}")
+    source, component = source.resolve(), root.resolve()
+    root = python_workspace_root(source, component)
+    member = component.relative_to(root)
+    workspace_excludes = tuple((member / path).as_posix() for path in context_excludes)
     relative = root.relative_to(source).as_posix() or "."
+    version_file = root / ".python-version"
+    if not version and version_file.is_file() and version_file.resolve().is_relative_to(source):
+        declared = version_file.read_text(encoding="utf-8").strip()
+        if re.fullmatch(r"3\.\d+(?:\.\d+)?", declared):
+            version = declared
     process = _python_process(
         name=name,
         working_directory=relative,
@@ -1237,15 +1248,34 @@ def _plan_python(
                 python = f"python{python}"
         else:
             python = _docker_python(root)
-        validate_local_install_extras(root, install, extras or [], context_excludes=context_excludes)
-        selection = select_python_extras(root, extras or [], context_excludes=context_excludes)
-        requirements = select_python_requirements(root, requirements_files or [], context_excludes=context_excludes)
+        validate_local_install_extras(
+            component, install, extras or [], context_excludes=context_excludes
+        )
+        selection = select_python_extras(
+            root, extras or [], context_excludes=workspace_excludes
+        )
+        requirements = select_python_requirements(
+            component, requirements_files or [], context_excludes=context_excludes
+        )
+        requirements = tuple((member / path).as_posix() for path in requirements)
     except GeneratedRuntimeError as exc:
         raise BundleAuthorError(str(exc)) from exc
     if (root / "pyproject.toml").is_file():
-        commands = [
-            _uv_sync_build_command(root, python, extra_arguments=selection.uv_arguments)
-        ]
+        arguments = selection.uv_arguments
+        if component != root and not selection.all_packages:
+            package = (
+                _pyproject_document(component / "pyproject.toml")
+                .get("project", {})
+                .get("name")
+            )
+            if not package:
+                raise BundleAuthorError(
+                    "generated_runtime_workspace_member_name_missing"
+                )
+            arguments = [*arguments, "--package", package]
+        commands = [_uv_sync_build_command(root, python, extra_arguments=arguments)]
+        if component != root:
+            commands.append(["ln", "-s", "../" * len(member.parts) + ".venv", (member / ".venv").as_posix()])
         if livekit_download:
             commands.append(
                 [
@@ -1288,8 +1318,29 @@ def _plan_python(
         commands.append(supplemental_requirements_command(".venv/bin/python", requirements))
         commands.append(["uv", "pip", "check", "--python", ".venv/bin/python"])
     return process.model_copy(
-        update={"build_commands": commands, "run_command": run_override or run}
+        update={"build_commands": commands, "run_command": run_override or run, "source_component": member.as_posix()}
     )
+
+def _python_component_command(
+    *, source: Path, component: Path, process: SourceProcess
+) -> SourceProcess:
+    build_root = (source / process.working_directory).resolve()
+    relative = component.resolve().relative_to(build_root).as_posix()
+    if relative == ".":
+        return process
+    return process.model_copy(
+        update={
+            "run_command": [
+                "sh",
+                "-c",
+                'cd "./$1" && shift && exec "$@"',
+                "alk-source-process",
+                relative,
+                *process.run_command,
+            ]
+        }
+    )
+
 
 def _plan_source_process(
     source: Path, *, language: str = "", **kwargs: Any
@@ -1388,6 +1439,7 @@ def _plan_source_process(
                 ["bun", "install", "--frozen-lockfile"],
             ],
             "run_command": run,
+            "source_component": child,
         }
     )
 
@@ -2050,6 +2102,21 @@ def _rewrite_managed_dependency_environment(
     return rewritten
 
 
+def _compose_environment(service: dict[str, Any]) -> dict[str, str]:
+    raw = service.get("environment") or {}
+    if isinstance(raw, dict):
+        return {str(name): str(value) for name, value in raw.items() if value is not None}
+    if isinstance(raw, list):
+        return {
+            name: value
+            for item in raw
+            if isinstance(item, str)
+            for name, separator, value in [item.partition("=")]
+            if separator
+        }
+    return {}
+
+
 def resolve_environment_plan(
     source: str | Path,
     job: HarnessJob,
@@ -2095,14 +2162,76 @@ def resolve_environment_plan(
                 if key != "interface"
             }
         )
+        declared_runtime_environment.update(
+            runtime_public_environment(contract_runtime or {})
+        )
         selected = select_runtime(
             root,
             contract_runtime or {},
             public_environment=declared_runtime_environment,
         )
+        if (
+            not isinstance(selected, ComposeSelection)
+            and runtime_model.execution == "native"
+            and (
+                runtime_model.required_environment
+                or any(
+                    dependency.get("kind", "").lower()
+                    in {"datastore", "database", "file", "queue"}
+                    or (dependency.get("reached") or {}).get("database")
+                    for dependency in (runtime_dependencies or [])
+                )
+            )
+        ):
+            topology_runtime = {
+                **(contract_runtime or {}),
+                "execution": "auto",
+                "compose_file": "",
+                "service": "",
+            }
+            try:
+                topology = select_runtime(
+                    root,
+                    topology_runtime,
+                    public_environment=declared_runtime_environment,
+                )
+            except ValueError:
+                topology = None
+            if isinstance(topology, ComposeSelection):
+                required = runtime_model.required_environment
+                requirements_are_wired = all(
+                    all(
+                            name in _compose_environment(
+                                topology.services.get(process, {})
+                            )
+                        for name in names
+                    )
+                    for process, names in required.items()
+                )
+                if requirements_are_wired:
+                    selected = topology
     except ValueError as exc:
         raise BundleAuthorError(str(exc)) from exc
     compose = selected.compose_file if isinstance(selected, ComposeSelection) else None
+    if runtime_model.compose_image_services:
+        raise BundleAuthorError("runtime_compose_image_requires_container_runtime")
+    from .contract import RuntimeInterface
+
+    raw_interface = (contract_runtime or {}).get("interface") or {}
+    local_auth = (
+        RuntimeInterface.model_validate(raw_interface).local_auth
+        if raw_interface.get("local_auth")
+        else None
+    )
+    if local_auth:
+        if compose:
+            raise BundleAuthorError("runtime_local_auth_requires_native_process")
+        try:
+            local_auth.reject_collisions(
+                job.available_target_environment_names() | set(job.agent.secret_refs)
+            )
+        except ValueError as exc:
+            raise BundleAuthorError(str(exc)) from exc
     if not compose and runtime_model.dockerfile:
         raise BundleAuthorError(
             "runtime_dockerfile_unsupported: process lane cannot execute a selected Dockerfile"
@@ -2111,7 +2240,11 @@ def resolve_environment_plan(
         raise BundleAuthorError(
             "runtime_language_unsupported: process lane supports Python or pinned Bun source"
         )
-    if compose is None and runtime_dependencies:
+    provider_connect_only = (
+        job.source.kind is SourceKind.PROVIDER
+        and job.agent.mode is ProviderExecutionMode.CONNECT_ONLY
+    )
+    if compose is None and runtime_dependencies and not provider_connect_only:
         for dependency in runtime_dependencies:
             reached = dependency.get("reached") or {}
             if dependency.get("kind", "").lower() in {
@@ -2251,17 +2384,7 @@ def resolve_environment_plan(
             service_root = (compose.parent / context).resolve()
             if not service_root.is_relative_to(root):
                 raise BundleAuthorError(f"build_context_escape: {service_name}")
-            environment: dict[str, str] = {}
-            raw_env = service.get("environment") or {}
-            if isinstance(raw_env, dict):
-                environment = {
-                    str(k): str(v) for k, v in raw_env.items() if v is not None
-                }
-            elif isinstance(raw_env, list):
-                environment = {
-                    str(item).partition("=")[0]: str(item).partition("=")[2]
-                    for item in raw_env
-                }
+            environment = _compose_environment(service)
             depends = (
                 list((service.get("depends_on") or {}).keys())
                 if isinstance(service.get("depends_on"), dict)
@@ -2409,6 +2532,8 @@ def resolve_environment_plan(
                         ),
                     }
                 )
+            if not (declared_runtime and runtime_model.language.lower() == "bun"):
+                process = _python_component_command(source=root, component=service_root, process=process)
             processes.append(process)
             if port:
                 slug = "target_http" if service_name == control_name else "tools_api"
@@ -2484,7 +2609,7 @@ def resolve_environment_plan(
             and not is_callback
             and contract_modality == "chat"
             and runtime_command
-            and (contract_interface_kind or "") in {"", "command"}
+            and contract_interface_kind == "command"
         )
         is_http_runtime = bool(
             not is_livekit
@@ -2540,6 +2665,8 @@ def resolve_environment_plan(
             if is_livekit
             else dict(declared_runtime_environment)
         )
+        if port is not None and not is_livekit:
+            environment["PORT"] = f"{{{{PORT_{control_name}}}}}"
         callback_entrypoint = (
             discovered_callback or _callback_entrypoint(root) if is_callback else None
         )
@@ -2635,6 +2762,50 @@ def resolve_environment_plan(
                 final_run_command, process.environment, component, root
             )
             process = process.model_copy(update=update)
+        if not is_bun_runtime:
+            process = _python_component_command(
+                source=root,
+                component=root if is_callback else component,
+                process=process,
+            )
+        resources = {}
+        directories = []
+        target_names = process_secret_environment_names(
+            alias
+            for alias, reference in job.agent.secret_refs.items()
+            if reference.purpose == "target_provider"
+        )
+        for path, resource in runtime_model.config_files.items():
+            try:
+                relative = Path(path).relative_to(process.working_directory).as_posix()
+            except ValueError as exc:
+                raise BundleAuthorError(
+                    "runtime_config_outside_process_source"
+                ) from exc
+            for alias in resource.secret_aliases.values():
+                if alias not in target_names:
+                    raise BundleAuthorError("runtime_config_target_reference_required")
+            resources[relative] = resource
+        for path in runtime_model.directories:
+            try:
+                directories.append(
+                    Path(path).relative_to(process.working_directory).as_posix()
+                )
+            except ValueError as exc:
+                raise BundleAuthorError(
+                    "runtime_directory_outside_process_source"
+                ) from exc
+        process = process.model_copy(
+            update={
+                "config_files": resources,
+                "directories": directories,
+                "local_auth": local_auth,
+            }
+        )
+        if local_auth:
+            local_auth.reject_collisions(
+                set(process.environment) | set(process.build_environment or {})
+            )
         processes.append(process)
         if port:
             capabilities["target_http"] = CapabilityV2(
@@ -2657,7 +2828,9 @@ def resolve_environment_plan(
         packaging = (
             "dockerfile"
             if (root / "Dockerfile").is_file()
-            else "generated_bun" if is_bun_runtime else "generated_python"
+            else "generated_bun"
+            if is_bun_runtime
+            else "generated_python"
         )
 
     toolbox = _mcp_toolbox_definition(root)
@@ -2737,9 +2910,19 @@ def resolve_environment_plan(
                     environment[name] = declared_runtime_environment[variable]
                 continue
             environment[name] = default if operator in {"-", ":-"} else ""
-        bindings[process.name] = {
-            name for name, value in environment.items() if value
-        } | secret_names
+        configured_secret_names = {
+            name
+            for resource in process.config_files.values()
+            for name, alias in resource.secret_aliases.items()
+            if alias in secret_names
+        }
+        bindings[process.name] = (
+            {name for name, value in environment.items() if value}
+            | secret_names
+            | configured_secret_names
+        )
+        if process.local_auth:
+            bindings[process.name].add(process.local_auth.server_environment)
         normalized_processes.append(
             process.model_copy(update={"environment": environment})
         )
@@ -2754,9 +2937,8 @@ def resolve_environment_plan(
         process.model_copy(update={
             "workspaces": {
                 name: (
-                    Path(runtime_workdir).relative_to(process.working_directory) / path
+                    Path(process.source_component) / path
                 ).as_posix()
-                if is_bun_runtime and runtime_workdir else path
                 for name, path in runtime_model.workspaces.items()
             }
         })
@@ -2772,6 +2954,93 @@ def resolve_environment_plan(
         capabilities=capabilities,
         readiness=tuple(readiness),
     )
+
+
+def _package_process_sources(
+    source: Path,
+    staging: Path,
+    plan: EnvironmentPlanV2,
+    runtime: Runtime,
+) -> EnvironmentPlanV2:
+    from .generated_runtime import _context_excludes, _copy_sanitized_context
+
+    processes = []
+    for process in plan.processes:
+        if not isinstance(process, SourceProcess) or process.source_origin == "bundle":
+            processes.append(process)
+            continue
+        component = (source / process.working_directory).resolve()
+        if not component.is_relative_to(source.resolve()) or not component.is_dir():
+            raise GeneratedRuntimeError(
+                f"generated_runtime_component_invalid: {process.working_directory}"
+            )
+        selected_runtime = runtime if process.name == plan.control_service else None
+        required = list(
+            selected_runtime.command if selected_runtime else process.run_command
+        )
+        if selected_runtime is not None:
+            required.extend(selected_runtime.requirements_files)
+        declared_component = (component / process.source_component).resolve()
+        if not declared_component.is_relative_to(component):
+            raise GeneratedRuntimeError("generated_runtime_context_component_mismatch")
+        prefix = declared_component.relative_to(component)
+        exclusion_runtime = selected_runtime or Runtime()
+        runtime_excludes = tuple(
+            exclusion_runtime.context_excludes
+        )
+
+        def exists_from(root: Path, path: str) -> bool:
+            matches = root.glob(path) if "*" in path else (root / path,)
+            return any(match.exists() or match.is_symlink() for match in matches)
+
+        workspace_excludes = tuple(
+            path for path in runtime_excludes if exists_from(component, path)
+        )
+        component_excludes = tuple(
+            path for path in runtime_excludes if path not in workspace_excludes
+        )
+        workspace_runtime = exclusion_runtime.model_copy(
+            update={"context_excludes": list(workspace_excludes)}
+        )
+        component_runtime = exclusion_runtime.model_copy(
+            update={"context_excludes": list(component_excludes)}
+        )
+        workspace_required = [
+            (prefix / path).as_posix() for path in map(Path, required)
+        ]
+        exclusions = _context_excludes(
+            component,
+            workspace_runtime,
+            (prefix / "requirements.txt").as_posix(),
+            workspace_required,
+        )
+        exclusions += tuple(
+            (prefix / path).as_posix()
+            for path in _context_excludes(
+                declared_component,
+                component_runtime,
+                "requirements.txt",
+                required,
+            )
+        )
+        relative = Path("generated/source") / process.name
+        context = staging / relative
+        context.mkdir(parents=True)
+        try:
+            _copy_sanitized_context(component, context, exclusions)
+        except GeneratedRuntimeError as exc:
+            raise GeneratedRuntimeError(
+                f"{exc}; process={process.name}; component={process.working_directory}"
+            ) from exc
+        processes.append(
+            process.model_copy(
+                update={
+                    "source_origin": "bundle",
+                    "working_directory": relative.as_posix(),
+                }
+            )
+        )
+    return replace(plan, processes=tuple(processes))
 
 
 def _copy_scenarios(authoring: Path, staging: Path, *, count: int) -> None:
@@ -2820,7 +3089,9 @@ def _copy_sub_goal_catalogue(authoring: Path, staging: Path) -> list[str]:
     return [CATALOGUE]
 
 
-def _copy_chat_authoring(authoring: Path, staging: Path) -> list[str]:
+def _copy_chat_authoring(
+    authoring: Path, staging: Path, *, include_simulator: bool = True
+) -> list[str]:
     """Adopt the frozen target/tool contract needed by response-carried HTTP tools.
 
     These are authoring outputs, not repository inference performed by the hosted consumer. The
@@ -2837,7 +3108,7 @@ def _copy_chat_authoring(authoring: Path, staging: Path) -> list[str]:
         shutil.copytree(handlers, staging / "handlers")
         adopted.append("handlers/")
     prompt = authoring / "simulator_prompt.md"
-    if prompt.is_file():
+    if include_simulator and prompt.is_file():
         shutil.copy2(prompt, staging / "simulator_prompt.md")
         adopted.append("simulator_prompt.md")
     return adopted
@@ -2899,7 +3170,7 @@ def _compile_source_tool_handlers(contract: dict[str, Any], staging: Path) -> li
 def _files(root: Path) -> list[BundleFileV2]:
     records: list[BundleFileV2] = []
     for path in sorted(root.rglob("*")):
-        if path.is_dir() or path.name == BUNDLE_V2_MANIFEST:
+        if path.is_dir() or path == root / BUNDLE_V2_MANIFEST:
             continue
         if path.is_symlink():
             raise BundleAuthorError(
@@ -2925,12 +3196,13 @@ def author_bundle_v2(
     job: HarnessJob,
     authoring: str | Path,
     output: str | Path,
+    include_scenarios: bool = True,
 ) -> EnvironmentBundleV2:
     source_root = Path(source).resolve()
     authoring_root = Path(authoring).resolve()
     output_root = Path(output).resolve()
     output_root.parent.mkdir(parents=True, exist_ok=True)
-    if job.metadata.get("generic_harness_v1") is True:
+    if include_scenarios and job.metadata.get("generic_harness_v1") is True:
         certified = _reuse_certified_bundle(
             source=source_root,
             job=job,
@@ -2943,7 +3215,6 @@ def author_bundle_v2(
     contract_interface_kind: str | None = None
     contract_body: dict[str, Any] = {}
     runtime: dict[str, Any] = {}
-    command_adapter_contract = False
     contract_path = authoring_root / "contract.json"
     if contract_path.is_file():
         try:
@@ -2965,10 +3236,9 @@ def author_bundle_v2(
                 contract_modality == "chat"
                 and adk_interface is not None
                 and contract_interface_kind in {"", "http"}
-                and not str(interface.get("path") or "").strip()
             ):
-                # Repair an incomplete model-authored HTTP declaration from deterministic source
-                # evidence. A complete source interface always wins and is never overwritten.
+                # ADK's source-owned web API is deterministic; do not retain stale model-authored
+                # request shapes from older ADK releases.
                 runtime = dict(runtime)
                 runtime["interface"] = adk_interface
                 contract_body = {**contract_body, "runtime": runtime}
@@ -3021,18 +3291,12 @@ def author_bundle_v2(
                 runtime["interface"] = adk_interface
                 contract_interface_kind = "http"
             else:
-                # A runnable one-shot command is a real source-owned execution boundary even when
-                # it is not a server. Compile the generic stdin/environment subprocess bridge
-                # below and expose that bridge to the chat runner as the callable protocol.
-                runtime["interface"] = {
-                    "kind": "command",
-                    "protocol": "fi.alk",
-                    "path": "",
-                    "health_path": "",
-                    "include_tools": False,
-                }
-                contract_interface_kind = "command"
-                command_adapter_contract = True
+                raise BundleAuthorError(
+                    "generated_runtime_entrypoint_ambiguous: runtime.command requires an "
+                    "explicit chat interface. Inspect the source and declare its native "
+                    "chat transport, or kind=command only if the command accepts a chat "
+                    "request and exits with the response."
+                )
             contract_body = {**contract_body, "runtime": runtime}
         if (
             contract_modality == "chat"
@@ -3040,26 +3304,18 @@ def author_bundle_v2(
             and runtime.get("command")
             and _discover_callback_entrypoint(source_root) is None
         ):
-            # Authoring models sometimes infer ``callable`` from an in-process agent object even
-            # though the repository exports no harness callback.  The executable command is the
-            # stronger, source-verifiable boundary in that case.  Compile it through the generic
-            # command bridge instead of starting a one-shot script and waiting for an HTTP port it
-            # can never open.  This rule is framework-neutral and does not modify submitted code.
-            runtime = dict(runtime)
-            runtime["interface"] = {
-                "kind": "command",
-                "protocol": "fi.alk",
-                "path": "",
-                "health_path": "",
-                "include_tools": False,
-            }
-            contract_body = {**contract_body, "runtime": runtime}
-            contract_interface_kind = "command"
-            command_adapter_contract = True
+            raise BundleAuthorError(
+                "generated_runtime_entrypoint_ambiguous: callable interface requires a "
+                "source-exported module-level agent_callback; runtime.command alone does "
+                "not establish a one-shot chat interface. Inspect the source and declare "
+                "its native chat transport, or kind=command only if the command accepts "
+                "a chat request and exits with the response."
+            )
     from .compose_integration import enabled as compose_enabled, compile_bundle
     if compose_enabled():
         composed = compile_bundle(source=source_root, job=job, authoring=authoring_root,
-                                  output=output_root, contract=contract_body)
+                                  output=output_root, contract=contract_body,
+                                  include_scenarios=include_scenarios)
         if composed is not None:
             return composed
     if job.public_material_admissions or job.public_test_fixture_admissions:
@@ -3072,46 +3328,6 @@ def author_bundle_v2(
         contract_runtime=(runtime if isinstance(runtime, dict) else None),
         runtime_dependencies=contract_body.get("runtime_dependencies"),
     )
-    # In-process framework tools do not cross the HTTP tool proxy. Trace only source-declared
-    # callable boundaries inside the target Python process; the trace is observational and
-    # never replays the tool. The same mechanism works for any Python framework with an
-    # importable callable recorded during source understanding.
-    trace_bindings = [
-        {"name": entry.tool, "module": entry.module, "callable": entry.callable}
-        for raw in contract_body.get("tool_entrypoints", [])
-        if isinstance(raw, dict)
-        for entry in [ToolEntry.model_validate(raw)]
-        if entry.mode in {"import", "construct"} and entry.module and entry.callable
-    ]
-    if contract_modality == "chat" and trace_bindings:
-        plan = replace(
-            plan,
-            processes=tuple(
-                process.model_copy(
-                    update={
-                        "environment": {
-                            **process.environment,
-                            "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
-                            "ALK_TOOL_TRACE_BINDINGS": json.dumps(trace_bindings),
-                        }
-                    }
-                )
-                if isinstance(process, SourceProcess)
-                and process.name == plan.control_service
-                else process
-                for process in plan.processes
-            ),
-        )
-    if command_adapter_contract:
-        sealed_runtime = dict(contract_body["runtime"])
-        sealed_runtime["interface"] = {
-            "kind": "callable",
-            "protocol": "fi.alk",
-            "path": "",
-            "health_path": "",
-            "include_tools": False,
-        }
-        contract_body = {**contract_body, "runtime": sealed_runtime}
     provided_environment = {
         str(name).upper()
         for name in (job.metadata.get("environment_value_names", []) or [])
@@ -3139,12 +3355,19 @@ def author_bundle_v2(
         tempfile.mkdtemp(prefix=f".{output_root.name}.", dir=output_root.parent)
     )
     try:
+        plan = _package_process_sources(
+            source_root, temporary, plan, Runtime.model_validate(runtime or {}),
+        )
         (temporary / "credentials.json").write_text(
             credential_manifest.model_dump_json(indent=2) + "\n", encoding="utf-8"
         )
-        _copy_scenarios(authoring_root, temporary, count=job.scenario_count)
-        adopted_catalogue = _copy_sub_goal_catalogue(authoring_root, temporary)
-        adopted_chat_files = _copy_chat_authoring(authoring_root, temporary)
+        adopted_catalogue = []
+        if include_scenarios:
+            _copy_scenarios(authoring_root, temporary, count=job.scenario_count)
+            adopted_catalogue = _copy_sub_goal_catalogue(authoring_root, temporary)
+        adopted_chat_files = _copy_chat_authoring(
+            authoring_root, temporary, include_simulator=include_scenarios
+        )
         if "contract.json" in adopted_chat_files and contract_body:
             (temporary / "contract.json").write_text(
                 json.dumps(contract_body, indent=2, sort_keys=True) + "\n",
@@ -3193,8 +3416,7 @@ def author_bundle_v2(
                 contract=contract_body,
                 prefix=prefix,
                 allow_harness_owned_schema=(
-                    command_adapter_contract
-                    or job.agent.mode
+                    job.agent.mode
                     in {
                         ProviderExecutionMode.CONNECT_ONLY,
                         ProviderExecutionMode.ENVIRONMENT_BACKED,
@@ -3318,10 +3540,12 @@ def author_bundle_v2(
                 source_digest=source_fingerprint(source_root),
                 generator="fi.alk.harness.bundle_author_v2",
                 generator_version="2",
-                adopted_files=["scenarios/"]
+                adopted_files=(["scenarios/"] if include_scenarios else [])
                 + adopted_catalogue
                 + adopted_seed
-                + adopted_chat_files,
+                + adopted_chat_files
+                + [p.working_directory + "/" for p in plan.processes
+                   if isinstance(p, SourceProcess) and p.working_directory.startswith("generated/source/")],
                 generated_files=["manifest.json"]
                 + (
                     [*migrations, *seed_files]

@@ -32,6 +32,44 @@ def enabled() -> bool:
     )
 
 
+def runtime_capability_briefing() -> str:
+    heading = (
+        "\n\n## Available execution capabilities\n\n"
+        "Generated native process execution supports Python or source-declared pinned Bun, "
+        "not arbitrary native Node.js startup. Do not translate a Node.js project to Bun "
+        "without source evidence or invent a replacement entrypoint or runtime. "
+    )
+    if not enabled():
+        return heading + (
+            "Managed source-owned Compose deployment is not enabled in this session. "
+            "Inspect deployment files as evidence for supported native source startup; "
+            "do not assume container execution or select published Compose images."
+        )
+    return heading + (
+        "Managed source-owned Compose deployment is available for chat agents with an HTTP ingress. "
+        "Choose supported native startup or Compose from repository deployment evidence; "
+        "neither mode is required. For Compose, "
+        "declare runtime.execution=compose, the repository-relative runtime.compose_file, "
+        "and runtime.service. ALK runs the selected service and its declared dependency closure, "
+        "including source-defined startup and migrations. Source-owned overlays may be selected "
+        "with runtime.compose_overrides; additional source-declared workflow roots use "
+        "runtime.additional_services. Use runtime.compose_image_services only for an already "
+        "selected service's source-declared image. Never invent deployment files or images. "
+        "Prefer source-declared Compose when native startup would otherwise recreate services "
+        "or migration steps that the repository already assembles. "
+        "For agents with multiple model providers, inspect the source-owned provider selection "
+        "mechanism and declare its public selector in runtime.config_files; forwarding provider "
+        "credentials alone is not configuration. Bind confidential values with secret_aliases. "
+        "When startup exceeds available resources, inspect and prefer a source-declared minimal "
+        "or development deployment that still provides the selected chat service and its dependencies. "
+        "Auto selection discovers conventional Compose filenames only at the repository root; "
+        "nested or ambiguous deployment files require an explicit selection. Explicit native "
+        "execution does not auto-select Compose. This capability does not add standalone "
+        "Dockerfile execution. Source validation, deployment policy, and real chat readiness "
+        "still must pass; capability availability is not evidence that an agent works."
+    )
+
+
 def provider(values, artifact_root):
     from .certified_compose_runtime import CertifiedComposeRuntimeProvider
 
@@ -48,7 +86,9 @@ def provider(values, artifact_root):
     )
 
 
-def validate_source(source: Path, admissions=(), *, fixtures=(), source_digest=None) -> None:
+def validate_source(
+    source: Path, admissions=(), *, fixtures=(), source_digest=None, paths=None
+) -> None:
     from .bundle import _inspect_file
     from .certified_compose_runtime import validate_source_tree
 
@@ -68,20 +108,26 @@ def validate_source(source: Path, admissions=(), *, fixtures=(), source_digest=N
     fixture_paths = {item.path: item for item in fixtures}
     if len(fixture_paths) != len(fixtures):
         raise ValueError("public_test_fixture_duplicate_path")
-    seen = set()
-    for path in sorted(source.rglob("*")):
+    admission_paths = set(by_path) | set(fixture_paths)
+    for relative in admission_paths:
+        path = source / relative
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("public_material_admission_file_missing")
+    inspected = source.rglob("*") if paths is None else [
+        *paths, *(source / relative for relative in admission_paths)
+    ]
+    for path in sorted(set(inspected)):
+        if not path.resolve().is_relative_to(source):
+            raise ValueError("compose_source_path_escape")
         if not path.is_symlink() and path.is_file():
             relative = path.relative_to(source).as_posix()
             _inspect_file(
                 source, path, admissions=by_path.get(relative, ()),
                 fixture=fixture_paths.get(relative),
             )
-            seen.add(relative)
-    if (set(by_path) | set(fixture_paths)) - seen:
-        raise ValueError("public_material_admission_file_missing")
 
 
-def compile_bundle(*, source, job, authoring, output, contract):
+def compile_bundle(*, source, job, authoring, output, contract, include_scenarios=True):
     from .bundle_author_v2 import (
         _copy_scenarios,
         _copy_sub_goal_catalogue,
@@ -118,7 +164,6 @@ def compile_bundle(*, source, job, authoring, output, contract):
     )
     if not isinstance(selection, ComposeSelection):
         return None
-    validate_source(source, job.public_material_admissions, fixtures=job.public_test_fixture_admissions)
     interface = runtime.get("interface") or {}
     if contract.get("modality") != "chat" or interface.get("kind") != "http":
         raise ValueError("compose_native_http_chat_required")
@@ -202,9 +247,10 @@ def compile_bundle(*, source, job, authoring, output, contract):
                 mount["source"] = relative(mount["source"])
     temporary = Path(tempfile.mkdtemp(prefix=".compose-", dir=output.parent))
     try:
-        _copy_scenarios(authoring, temporary, count=job.scenario_count)
-        _copy_sub_goal_catalogue(authoring, temporary)
-        _copy_chat_authoring(authoring, temporary)
+        if include_scenarios:
+            _copy_scenarios(authoring, temporary, count=job.scenario_count)
+            _copy_sub_goal_catalogue(authoring, temporary)
+        _copy_chat_authoring(authoring, temporary, include_simulator=include_scenarios)
         _compile_source_tool_handlers(contract, temporary)
         (temporary / "compose.json").write_text(json.dumps(document, indent=2))
         manifest = EnvironmentBundleV2(
@@ -239,15 +285,53 @@ def compile_bundle(*, source, job, authoring, output, contract):
                 source_digest=source_fingerprint(source),
                 generator="fi.alk.harness.compose_integration",
                 generator_version="1",
-                adopted_files=["scenarios/", "contract.json"],
+                adopted_files=(["scenarios/"] if include_scenarios else []) + ["contract.json"],
                 generated_files=["compose.json", "manifest.json"],
             ),
-            metadata={"observation_mode": "native", "generic_harness": "v1"},
+            metadata={
+                "observation_mode": "native",
+                "generic_harness": "v1",
+                "context_excludes": list(runtime.get("context_excludes") or ()),
+            },
         )
-        from .certified_compose_runtime import normalize_compose
+        from .compose_source import source_inputs
 
-        normalize_compose(document, source, capabilities=manifest.capabilities)
+        inputs = source_inputs(
+            source,
+            document,
+            capabilities=manifest.capabilities,
+            context_excludes=tuple(runtime.get("context_excludes") or ()),
+        )
+        validate_source(
+            source, job.public_material_admissions,
+            fixtures=job.public_test_fixture_admissions,
+            paths=(*inputs.files, *selection.source_files),
+        )
         manifest = manifest.model_copy(update={"digest": seal_bundle_v2(manifest)})
+        from .compose_image_lock import lock_document
+
+        if any(not service.get("build") for service in document["services"].values()):
+            identities = provider({}, None).resolve_images(
+                manifest=manifest, document=(temporary / "compose.json").read_text(),
+                runtime=runtime, source=source,
+            )
+            lock_document(document, identities)
+            (temporary / "compose.json").write_text(json.dumps(document, indent=2))
+            (temporary / "image-lock.json").write_text(json.dumps({
+                "version": 1,
+                "images": [item.model_dump(mode="json") for item in identities],
+                "source_built_services": sorted(
+                    name for name, service in document["services"].items() if service.get("build")
+                ),
+                "source_build_reproducibility": "not_verified",
+            }, indent=2))
+            manifest = manifest.model_copy(update={
+                "files": _files(temporary),
+                "provenance": manifest.provenance.model_copy(update={
+                    "generated_files": [*manifest.provenance.generated_files, "image-lock.json"],
+                }),
+            })
+            manifest = manifest.model_copy(update={"digest": seal_bundle_v2(manifest)})
         (temporary / "manifest.json").write_text(manifest.model_dump_json(indent=2))
         manifest = load_bundle_v2(temporary)
         preflight_bundle(
@@ -267,7 +351,8 @@ def compile_bundle(*, source, job, authoring, output, contract):
 
 
 async def validate_native(
-    *, job, source, authoring, bundle, manifest, work, values, redactions, executor
+    *, job, source, authoring, bundle, manifest, work, values, redactions, executor,
+    readiness_only=False,
 ):
     import random
     from .action_certification import certify_actions
@@ -301,8 +386,8 @@ async def validate_native(
         raise RuntimeValidationError(
             "environment", "native tool inventory contains unreachable declarations"
         )
-    scenarios = load_scenarios(bundle)
-    if not scenarios or len(scenarios) != job.scenario_count:
+    scenarios = [] if readiness_only else load_scenarios(bundle)
+    if not readiness_only and (not scenarios or len(scenarios) != job.scenario_count):
         raise RuntimeValidationError("environment", "native scenario count mismatch")
     owner = provider(values, authoring / "generic-harness" / "compose-logs")
     try:
@@ -314,6 +399,16 @@ async def validate_native(
             instances=job.runtime.parallelism,
         )
         factory = ObservationWorldFactory(bundle)
+        if readiness_only:
+            from .authoring_runtime_validation import _probe_runtime_readiness
+
+            await _probe_runtime_readiness(
+                job=job, source=source, authoring=authoring, manifest=manifest,
+                contract=contract, provider=owner, runtime=runtimes[0], factory=factory,
+                work=work, values=values, redactions=redactions,
+                compare_baseline=False,
+            )
+            return 0
         from .local_certified_runtime import LocalCertifiedSink
 
         phase_sink = LocalCertifiedSink(

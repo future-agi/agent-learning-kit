@@ -86,7 +86,7 @@ async def _record_text_usage(
         )
 
 
-DEFAULT_CHAT_TARGET_TIMEOUT_SECONDS = 120.0
+DEFAULT_CHAT_TARGET_TIMEOUT_SECONDS = 300.0
 
 
 def _chat_target_timeout_seconds() -> float:
@@ -487,9 +487,9 @@ class HostedChatCallRunner:
                 "chat_contract_unavailable: bundle/contract.json is absent"
             )
         interface = self._contract.runtime.interface if self._contract.runtime else None
-        if interface is None or interface.kind not in {"http", "callable"}:
+        if interface is None or interface.kind not in {"http", "callable", "command"}:
             raise CallAborted(
-                "chat_interface_unsupported: an HTTP or callable runtime interface is required"
+                "chat_interface_unsupported: an HTTP, callable, or command runtime interface is required"
             )
         endpoint = runtime.endpoints.get("target_http")
         if endpoint is None:
@@ -521,6 +521,7 @@ class HostedChatCallRunner:
             endpoint.address,
             wrapper_type=HTTPAgentWrapper,
             secret_values=self._context.target_provider_secret_values,
+            local_auth_values=getattr(runtime, "_local_auth_values", None),
             timeout=_chat_target_timeout_seconds(),
             metadata={
                 "target": "hosted_repository_runtime",
@@ -560,12 +561,26 @@ class HostedChatCallRunner:
             failure = exc
             transcript = getattr(exc, "partial_transcript", None) or Transcript()
         except Exception as exc:  # noqa: BLE001 - convert target transport failures to call faults
+            status = (
+                exc.trace.get("status_code")
+                if isinstance(exc, HTTPCallFailure)
+                else None
+            )
             wrapped = CallAborted(
                 f"chat_target_failed: {type(exc).__name__}: "
                 + sanitize_diagnostic(
-                    str(exc), self._context.target_provider_secret_values
+                    str(exc),
+                    {
+                        **self._context.target_provider_secret_values,
+                        **getattr(runtime, "_local_auth_values", {}),
+                    },
                 ),
-                code="target_agent_failed",
+                code=(
+                    "call_failed"
+                    if isinstance(status, int)
+                    and status in {408, 429, 502, 503, 504}
+                    else "target_agent_failed"
+                ),
             )
             partial = getattr(exc, "partial_transcript", None)
             if partial is not None:

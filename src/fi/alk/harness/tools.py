@@ -23,11 +23,15 @@ from .contract import (
     CALL_DIRECTIONS,
     AgentContract,
     Runtime,
+    RuntimeInterface,
     RuntimeSecretFile,
     RuntimeConfigFile,
     HttpObservation,
     RuntimeHttpFailureRule,
+    RuntimeHttpSetupRequest,
+    LocalHttpAuth,
     known_modalities,
+    generated_chat_interface_problem,
     validate_contract,
 )
 from .instrumentation_evidence import detect_instrumentation
@@ -134,7 +138,11 @@ def unwrapped(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def accept_contract(
-    payload: dict[str, Any], destination: Path, *, source_root: Path | None = None
+    payload: dict[str, Any],
+    destination: Path,
+    *,
+    source_root: Path | None = None,
+    require_setup_contract: bool = False,
 ) -> dict[str, Any]:
     """The gate itself: validate, and write only if it passes.
 
@@ -149,6 +157,20 @@ def accept_contract(
         return _problems([f"schema:{invalid}"[:600]], arrived)
 
     problems = validate_contract(contract)
+    if (
+        require_setup_contract
+        and contract.modality != "voice"
+        and (contract.data_store is None or not contract.data_store.kind.strip())
+    ):
+        problems.append(
+            "missing-storage-decision: inspect the source and declare data_store.kind. "
+            "Use its actual storage engine, filesystem for file-backed state, in_process "
+            "for memory-only state, or none when there is no state store. "
+            "Omitting data_store does not declare a stateless agent."
+        )
+    if require_setup_contract and contract.modality == "chat":
+        if problem := generated_chat_interface_problem(contract.runtime):
+            problems.append(problem)
     if source_root is not None:
         from .source_tool_evidence import tool_evidence_problems
 
@@ -220,12 +242,17 @@ def contract_tools(
     available_evals: list[dict[str, Any]] | None = None,
     *,
     source_root: Path | None = None,
+    require_setup_contract: bool = False,
 ) -> Any:
     """A server exposing ``submit_contract``, writing to ``destination`` on acceptance.
 
     ``available_evals`` is the platform's own eval catalogue when the job carried one. Absent, the
     contract simply chooses none, which is what every job did before the catalogue existed.
     """
+    events_schema = CompletedToolEvents.model_json_schema()
+    events_schema["properties"]["failure_events"]["items"] = (
+        events_schema.pop("$defs")["CompletedToolFailureEvent"]
+    )
     observation_schema = HttpObservation.model_json_schema()
     observation_schema["properties"]["parameters"]["additionalProperties"] = (
         observation_schema.pop("$defs")["ObservationParameter"]
@@ -624,12 +651,13 @@ def contract_tools(
                 "data_store": {
                     "type": "object",
                     "description": "What the agent's tools read and write, and how to point them "
-                    "at a different one.",
+                    "at a different one. Explicitly declare kind, including none for a stateless "
+                    "agent, during autonomous source setup.",
                     "properties": {
                         "kind": {
                             "type": "string",
                             "description": "postgres, clickhouse, mysql, sqlite, in_process for "
-                            "state held in memory, or none.",
+                            "state held in memory, filesystem for file-backed state, or none.",
                         },
                         "configured_by": {
                             "type": "string",
@@ -783,6 +811,17 @@ def contract_tools(
                             "description": "Repository-relative path to the submitted Compose file to run "
                             "when the repository contains more than one. Never invent one.",
                         },
+                        "compose_image_services": {
+                            "type": "array",
+                            "maxItems": 64,
+                            "uniqueItems": True,
+                            "items": {
+                                "type": "string",
+                                "maxLength": 128,
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
+                            },
+                            "description": Runtime.model_fields["compose_image_services"].description,
+                        },
                         "compose_overrides": {
                             "type": "array",
                             "maxItems": 8,
@@ -806,7 +845,8 @@ def contract_tools(
                             "type": "array",
                             "items": {"type": "string"},
                             "description": "Repository-relative large generated outputs or "
-                            "documentation to omit from a generated build context. Never omit "
+                            "documentation or repeated test-only patterns to omit from a generated "
+                            "build context. Simple * and ** patterns are supported. Never omit "
                             "runtime source, dependency manifests, seed data, or tool data.",
                         },
                         "platform": {
@@ -823,16 +863,13 @@ def contract_tools(
                             "properties": {
                                 "kind": {
                                     "type": "string",
-                                    "enum": ["http", "websocket", "callable"],
-                                    "description": "How the simulator reaches the running "
-                                    "agent. HTTP is currently the hosted repository path.",
+                                    "enum": ["http", "websocket", "callable", "command"],
+                                    "description": RuntimeInterface.model_fields["kind"].description,
                                 },
                                 "protocol": {
                                     "type": "string",
                                     "enum": ["fi.alk", "openai_chat", "json_template"],
-                                    "description": "The submitted endpoint's request/response "
-                                    "envelope. Use json_template for any other source-owned JSON "
-                                    "API and describe its exact envelope below.",
+                                    "description": RuntimeInterface.model_fields["protocol"].description,
                                 },
                                 "model": {
                                     "type": "string",
@@ -874,12 +911,11 @@ def contract_tools(
                                 },
                                 "response_path": {
                                     "type": "string",
-                                    "description": "For json_template only: optional dotted path "
-                                    "to assistant text in the JSON response, including numeric "
-                                    "list indexes such as '-1.content.parts.0.text'.",
+                                    "description": RuntimeInterface.model_fields["response_path"].description,
                                 },
                                 "completed_tools": CompletedToolRows.model_json_schema(),
-                                "completed_tool_events": CompletedToolEvents.model_json_schema(),
+                                "completed_tool_events": events_schema,
+                                "local_auth": LocalHttpAuth.model_json_schema(),
                                 "setup_secrets": {
                                     "type": "object",
                                     "additionalProperties": {"type": "string"},
@@ -937,7 +973,7 @@ def contract_tools(
                                     "type": "object",
                                     "additionalProperties": {"type": "string"},
                                     "maxProperties": 32,
-                                    "description": "Chat request headers using prior setup captures. Session cookies are preserved automatically in an isolated cookie jar.",
+                                    "description": RuntimeInterface.model_fields["headers_template"].description,
                                 },
                                 "setup_requests": {
                                     "type": "array",
@@ -963,6 +999,7 @@ def contract_tools(
                                             },
                                             "headers_template": {
                                                 "type": "object",
+                                                "description": RuntimeHttpSetupRequest.model_fields["headers_template"].description,
                                                 "additionalProperties": {
                                                     "type": "string"
                                                 },
@@ -1197,14 +1234,14 @@ def contract_tools(
             (
                 "data",
                 bool(payload.get("tools"))
+                and structured_seed_store
                 and not payload.get("data_schema")
                 and not payload.get("base_environment"),
-                "no data_schema and no base_environment, for an agent that has tools. The world "
-                "every test runs against is built from exactly these two, so without them the "
-                "next stage has no schema to create and no rows to seed, and every tool call it "
-                "makes will refuse. Record the shape of each kind of record the tools read or "
-                "write, and enough real rows to reach every branch those tools have — a "
-                "representative sample for a large dataset, the whole thing for a small one.",
+                "no data_schema and no base_environment, although data_store declares a "
+                "structured database. Record the source-owned schema and any existing records "
+                "the tools require, using real source identifiers and values. An initially "
+                "empty database may be correct; do not invent records or schema to satisfy "
+                "this warning.",
             ),
             (
                 "starting-data",
@@ -1240,7 +1277,12 @@ def contract_tools(
             return _problems(
                 say + ["If any of these genuinely does not apply, submit again as is."]
             )
-        return accept_contract(payload, destination, source_root=source_root)
+        return accept_contract(
+            payload,
+            destination,
+            source_root=source_root,
+            require_setup_contract=require_setup_contract,
+        )
 
     return tool_server(name=CONTRACT_SERVER, version="0.1.0", tools=[submit_contract])
 
