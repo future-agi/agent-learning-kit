@@ -3476,7 +3476,11 @@ class LiveKitEngine(BaseEngine):
             await player.play(
                 AudioConfig(_stream_at_mixer_rate(level), volume=1.0)
             ).wait_for_playout()
-            await heard(f"{name} said nearby, and you heard it: {text}")
+            await heard(
+                f"{name} said nearby, and you heard it: {text} React as you would in person: if it calls"
+                f" for an answer, answer {name} briefly in your next line, then carry on with the call."
+                " What you want from the call stays your own."
+            )
 
         voices = []
         for actor in _bound_sub_actor_voices():
