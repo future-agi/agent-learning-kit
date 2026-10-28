@@ -3576,6 +3576,7 @@ def author_bundle_v2(
             metadata={
                 "packaging": plan.packaging,
                 "environment_plan_version": "2",
+                **_adk_web_app(source_root, contract_body),
                 **({"generic_harness": "v1"} if generic_pipeline else {}),
                 **(
                     {
@@ -3769,7 +3770,9 @@ def _interface_edited(authored: dict[str, Any], sealed: dict[str, Any]) -> bool:
     return isinstance(named, dict) and _interface(authored) != _interface(sealed)
 
 
-def _built_by_older_alk(sealed: dict[str, Any], processes: list[Any], staging: Path) -> bool:
+def _built_by_older_alk(
+    sealed: dict[str, Any], processes: list[Any], metadata: dict[str, Any]
+) -> bool:
     """Whether an older build compiled this bundle: one that bridged a ``callable`` command,
     traced tool callables, or kept a written HTTP interface for ``adk web``, none of which a
     build does now."""
@@ -3781,15 +3784,23 @@ def _built_by_older_alk(sealed: dict[str, Any], processes: list[Any], staging: P
             _interface(sealed) == bridged
             and any("ALK_SUBPROCESS_COMMAND" in env for env in environments)
         )
-        or _adk_interface_written(sealed, processes, staging)
+        or _adk_interface_written(sealed, metadata)
     )
 
 
-def _adk_interface_written(
-    sealed: dict[str, Any], processes: list[Any], staging: Path
-) -> bool:
-    """Whether a chat ``adk web`` bundle seals an HTTP interface other than the one a build
-    now derives from the single ADK app in its packaged source."""
+def _adk_web_app(source: Path, contract: dict[str, Any]) -> dict[str, str]:
+    """The ADK app a build resolves for an ``adk web`` runtime, as manifest metadata."""
+    runtime = contract.get("runtime")
+    runtime = runtime if isinstance(runtime, dict) else {}
+    if not _is_adk_web_command([str(item) for item in (runtime.get("command") or [])]):
+        return {}
+    app_name = _adk_app_name(source, str(runtime.get("workdir") or ""))
+    return {"adk_web_app": app_name or ""}
+
+
+def _adk_interface_written(sealed: dict[str, Any], metadata: dict[str, Any]) -> bool:
+    """Whether a chat ``adk web`` bundle seals an HTTP interface other than the one its
+    build derived from the app it resolved. A bundle that recorded no app predates that."""
     runtime = sealed.get("runtime") or {}
     command = [str(item) for item in (runtime.get("command") or [])]
     interface = runtime.get("interface")
@@ -3800,14 +3811,14 @@ def _adk_interface_written(
         or str(interface.get("kind") or "").strip().lower() not in {"", "http"}
     ):
         return False
-    for process in processes:
-        directory = getattr(process, "working_directory", None)
-        app_name = _adk_app_name(staging / directory, "") if directory else None
-        if app_name is not None:
-            own = {"runtime": {"interface": _adk_interface_for(command, app_name)}}
-            return _interface(sealed) != _interface(own)
-    # Without one resolvable app a build keeps the written interface too.
-    return False
+    app_name = metadata.get("adk_web_app")
+    if not isinstance(app_name, str):
+        return True
+    if not app_name:
+        # With no resolvable app a build keeps the written interface too.
+        return False
+    own = {"runtime": {"interface": _adk_interface_for(command, app_name)}}
+    return _interface(sealed) != _interface(own)
 
 
 def _carry_contract(
@@ -3834,7 +3845,7 @@ def _carry_contract(
             and isinstance(sealed, dict)
             and _built_from(authored) == _built_from(sealed)
             and not _interface_edited(authored, sealed)
-            and not _built_by_older_alk(sealed, processes, staging)
+            and not _built_by_older_alk(sealed, processes, metadata)
         )
     except ValueError:
         compiles = False

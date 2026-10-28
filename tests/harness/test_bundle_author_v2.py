@@ -3855,6 +3855,74 @@ def test_a_reseal_stamps_an_adk_bundle_only_when_it_seals_adks_interface(
     assert ("sealed_from" in metadata) is not written
 
 
+@pytest.mark.parametrize(
+    ("written", "root_app", "stamped"),
+    [(True, False, False), (False, False, True), (False, True, True)],
+)
+def test_a_reseal_judges_an_adk_bundle_by_the_app_in_its_workdir(
+    tmp_path: Path, written: bool, root_app: bool, stamped: bool
+) -> None:
+    from fi.alk.harness.bundle_author_v2 import _files
+    from fi.alk.harness.bundle_v2 import BUNDLE_V2_MANIFEST, seal_bundle_v2
+
+    # ``adk web`` runs in agents/, below the project root; a root package is not its app.
+    source = tmp_path / "source"
+    for app in ["agents/bug_agent", *(["other_agent"] if root_app else [])]:
+        (source / app).mkdir(parents=True)
+        (source / app / "__init__.py").write_text("", encoding="utf-8")
+        (source / app / "agent.py").write_text("root_agent = object()\n", encoding="utf-8")
+    (source / "pyproject.toml").write_text("[project]\nname='x'\nversion='1'\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring, command=["uv", "run", "adk", "web", "--port=9090"], workdir="agents"
+    )
+    contract = json.loads((authoring / "contract.json").read_text(encoding="utf-8"))
+    contract["tools"] = [{"name": "status", "args": []}]
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+    bundle = authoring / "environment-bundle"
+    author_bundle_v2(source=source, job=_job(connector="auto"), authoring=authoring, output=bundle)
+    if written:
+        stale = {"kind": "http", "port": 9090, "path": "/run"}
+        sealed = json.loads((bundle / "contract.json").read_text(encoding="utf-8"))
+        sealed["runtime"]["interface"] = stale
+        (bundle / "contract.json").write_text(json.dumps(sealed), encoding="utf-8")
+        contract["runtime"]["interface"] = stale
+        manifest = load_bundle_v2(bundle).model_copy(update={"files": _files(bundle)})
+        manifest = manifest.model_copy(update={"digest": seal_bundle_v2(manifest)})
+        (bundle / BUNDLE_V2_MANIFEST).write_text(
+            json.dumps(manifest.model_dump(mode="json"), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    contract["tools"].append({"name": "history", "args": []})
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+
+    reseal_scenarios(authoring)
+
+    assert ("contract_compiled" in load_bundle_v2(bundle).metadata) is stamped
+
+
+def test_a_reseal_leaves_an_adk_bundle_that_recorded_no_app_unstamped(tmp_path: Path) -> None:
+    from fi.alk.harness.bundle_author_v2 import _files
+    from fi.alk.harness.bundle_v2 import BUNDLE_V2_MANIFEST, seal_bundle_v2
+
+    authoring, contract = _adk_build(tmp_path)
+    bundle = authoring / "environment-bundle"
+    manifest = load_bundle_v2(bundle)
+    metadata = {k: v for k, v in manifest.metadata.items() if k != "adk_web_app"}
+    manifest = manifest.model_copy(update={"metadata": metadata, "files": _files(bundle)})
+    manifest = manifest.model_copy(update={"digest": seal_bundle_v2(manifest)})
+    (bundle / BUNDLE_V2_MANIFEST).write_text(
+        json.dumps(manifest.model_dump(mode="json"), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    contract["tools"].append({"name": "history", "args": []})
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+
+    reseal_scenarios(authoring)
+
+    assert "contract_compiled" not in load_bundle_v2(bundle).metadata
+
+
 @pytest.mark.parametrize("template", [{"message": "{{new_message}}"}, "{{new_message}}"])
 def test_a_reseal_stamps_an_adk_bundle_whose_build_kept_the_written_interface(
     tmp_path: Path, template: object
