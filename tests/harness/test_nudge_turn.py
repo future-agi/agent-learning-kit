@@ -868,6 +868,17 @@ def test_a_failing_user_draft_scenario_is_not_checked(tmp_path):
     assert load_proofs(root)["adds-a-big-mac"]["holds"] is False
 
 
+def test_a_deferred_scenario_is_not_checked_rather_than_a_problem(tmp_path, monkeypatch):
+    from fi.alk.harness.prove import Proof
+
+    root = _suite(tmp_path, "adds-a-big-mac")
+    monkeypatch.setattr(nudge, "prove", lambda *_args: Proof(deferred=True))
+
+    problems, not_checked, _ = nudge.suite_gate(root, set())
+
+    assert problems == [] and not_checked == ["adds-a-big-mac"]
+
+
 def test_a_failing_generated_scenario_is_a_problem(tmp_path):
     root = _suite(tmp_path, "adds-a-big-mac")
     _break_scenario(root, "adds-a-big-mac")

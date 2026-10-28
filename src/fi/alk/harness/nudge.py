@@ -416,6 +416,10 @@ def suite_gate(
             holds, why = False, type(exc).__name__
         else:
             record_proof(workspace, key, proof)
+            if proof.deferred and not proof.broken:
+                # Only the live runtime can prove it; that is not a failure.
+                not_checked.append(key)
+                continue
             holds, why = proof.holds, ("" if proof.holds else proof.why())
         if holds:
             continue
