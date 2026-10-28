@@ -29,7 +29,8 @@ CHANNELS: dict[str, dict[str, Any]] = {
         "about": "someone who takes the phone from the person for a few turns, then hands it back",
         "tells_person": "{who} may take the phone from you for a few turns. While they have it, say nothing; carry on once they hand it back.",
         "setting": "You have just taken the phone from the person, partway through their call with an automated "
-        "agent, to say something of your own before you hand it back.",
+        "agent, to say something of your own. Keep it while you still have something of your own to say or to "
+        "answer, then hand it back.",
     },
     "ivr": {
         "modalities": {"voice"},
@@ -131,8 +132,8 @@ TAKEOVER_AFTER_TURNS = 4
 # Someone can only take the phone from a person who already has it: not before the agent's second turn, by
 # which point the person has spoken at least once. A trigger that fires earlier waits for that turn.
 TAKES_PHONE_FROM_TURN = 2
-# Wall-clock for all sub-actors together, from the first trigger: turns stop advancing while a line
-# is written or the agent is slow, so time bounds what turns cannot.
+# Time all sub-actors together may take in one call: writing and speaking their own lines. The agent's
+# turns and the person's never count, so a slow agent does not cut a sub-actor short.
 SUB_ACTOR_SECONDS = 60.0
 # Lines asked for and not yet ready; one more is dropped rather than queued behind them.
 MAX_WAITING_LINES = 2
@@ -260,6 +261,8 @@ class Cast:
         self.seed = seed
         self.clock = clock
         self._started_at: float | None = None
+        self._spent = 0.0
+        self._budget_bound = False
         self._time_up = False
         self._waiting_lines = 0
         self._state = {
@@ -286,13 +289,11 @@ class Cast:
 
     def remaining(self) -> float:
         """Seconds left of the call's sub-actor time; all of it until the first trigger."""
-        if self._started_at is None:
-            return SUB_ACTOR_SECONDS
-        return max(0.0, SUB_ACTOR_SECONDS - (self.clock() - self._started_at))
+        return max(0.0, SUB_ACTOR_SECONDS - self._spent)
 
     def out_of_time(self) -> bool:
         """Whether the call's sub-actor time is used up; the first time it is, every sub-actor stops."""
-        if not self._time_up and self._started_at is not None and not self.remaining():
+        if not self._time_up and not self.remaining():
             self._time_up = True
             for actor in self.actors:
                 if self._state[str(actor["id"])]["entered"]:
@@ -304,7 +305,9 @@ class Cast:
 
     def line_limit(self, seconds: float) -> float:
         """How long the next line may take to be ready: its own limit, never past the call's time."""
-        return min(seconds, self.remaining())
+        left = self.remaining()
+        self._budget_bound = left < seconds
+        return min(seconds, left)
 
     def line_wanted(self, actor: dict[str, Any]) -> bool:
         """Room for one more line to be written; a line due while the queue is full is dropped."""
@@ -320,6 +323,9 @@ class Cast:
 
     def late(self, actor: dict[str, Any]) -> None:
         """A line not ready within its limit, or cut off by the call's sub-actor time."""
+        if self._budget_bound:
+            # It waited out the rest of the call's sub-actor time.
+            self._spent = SUB_ACTOR_SECONDS
         self.dropped(actor, TIME_UP if self.out_of_time() else "not ready in time")
 
     def entering(self, moment: Moment) -> list[dict[str, Any]]:
@@ -387,6 +393,7 @@ class Cast:
         state = self._state[str(actor["id"])]
         state["lines"] += 1
         state["last_turn"] = agent_turns
+        self._spent += max(0.0, ended_at - (at if asked_at is None else asked_at))
         # asked_at: when the line was asked for, so the time it took to be ready is on record.
         self._record(
             str(actor["id"]),

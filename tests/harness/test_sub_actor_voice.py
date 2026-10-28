@@ -679,14 +679,15 @@ def test_the_call_s_sub_actor_time_runs_out_and_every_sub_actor_stops_with_the_r
         "run",
         clock=lambda: now[0],
     )
-    now[0] = 500.0
-    # The clock starts at the first trigger, not when the call does.
-    assert cast.remaining() == registry.SUB_ACTOR_SECONDS
     assert len(cast.entering(Moment(2))) == 2
-    now[0] = 530.0
+    # Time passing in the agent's and the person's turns uses none of it.
+    now[0] = 500.0
+    assert cast.remaining() == registry.SUB_ACTOR_SECONDS
+    # Only the sub-actors' own lines do: asked for at 500, ready and spoken by 530.
+    cast.delivered(cast.actors[0], "a line", 2, 510.0, 530.0, 500.0)
     assert cast.remaining() == 30.0 and cast.line_limit(45.0) == 30.0
     assert cast.entering(Moment(2)) == []  # the third waits for room
-    now[0] = 560.0
+    cast.delivered(cast.actors[1], "another", 3, 540.0, 560.0, 530.0)
     assert cast.out_of_time()
     assert cast.entering(Moment(3)) == []
     assert not cast.may_speak(cast.actors[0], 3)
@@ -744,8 +745,10 @@ def test_lines_cut_off_by_the_call_s_sub_actor_time_say_so():
             [phone], clock=lambda: time.monotonic() + offset[0]
         )
         call.cast.entering(Moment(2))
-        # The first trigger was 59.95 s ago, so the line has 50 ms left.
-        offset[0] = registry.SUB_ACTOR_SECONDS - 0.05
+        # Earlier lines used all but 50 ms of the call's sub-actor time.
+        call.cast.delivered(
+            call.cast.actors[0], "earlier", 1, 0.0, registry.SUB_ACTOR_SECONDS - 0.05
+        )
         holding = await call.agent_turn("Hello")
         await call.close()
         return holding, said, call.summary()

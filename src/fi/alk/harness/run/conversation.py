@@ -293,6 +293,7 @@ class _ChatSubActors:
                 actor
             ):
                 continue
+            asked = time.time()
             try:
                 text, tokens = await asyncio.wait_for(
                     self._write(actor, conversation),
@@ -313,7 +314,7 @@ class _ChatSubActors:
                 continue
             now = time.time()
             self.said.setdefault(str(actor["id"]), []).append(text)
-            self.cast.delivered(actor, text, turns, now, now)
+            self.cast.delivered(actor, text, turns, now, now, asked)
             written.append(
                 Exchange(
                     "sub_actor",
