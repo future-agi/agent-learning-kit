@@ -646,7 +646,9 @@ that sub-actor in `sub_actors`, with two things written for this scenario:
 
 - `instruction`: who they are here and what they do, written to them like a situation text ("You are
   with <the person>. You want <something other than what they ask for> and say so once the agent
-  <does what the person asked>"). Give them a part, never the person's goal: the person still pursues it and gives
+  <does what the person asked>"). What they do is what the scenario's level for them names: a voice
+  nearby speaks to the person, never into the phone; someone who takes the phone takes it and speaks
+  to the agent. Give them a part, never the person's goal: the person still pursues it and gives
   every value the agent asks for, and a sub-actor never confirms or chooses for them. What they say is
   their own: something they want, know or worry about. Never the person's request, address, details or
   answers, which the agent must get from the person. Someone who takes the phone does it partway
