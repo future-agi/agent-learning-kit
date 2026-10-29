@@ -16,7 +16,7 @@ def _login(cli, platform, *extra, base_url=None, api_key=None, secret_key=None):
     return cli(
         "auth",
         "login",
-        "--base-url",
+        "--api-url",
         base_url or platform.base_url,
         "--non-interactive",
         "--output",
@@ -54,11 +54,11 @@ def test_login_then_doctor_pass_and_never_show_the_secret(cli, platform):
 @pytest.mark.parametrize(
     ("failure", "category", "exit_code"),
     [
-        ("bad_key", "auth", 4),
+        ("bad_key", "auth", 3),
         # The platform answers an unusable workspace with its default one; acting
         # there instead would be worse than failing.
-        ("unknown_workspace", "not_found", 7),
-        ("unreachable", "infrastructure", 9),
+        ("unknown_workspace", "validation", 2),
+        ("unreachable", "infrastructure", 5),
     ],
 )
 def test_each_failure_has_one_shape_in_the_cli_and_the_sdk(
@@ -82,7 +82,17 @@ def test_each_failure_has_one_shape_in_the_cli_and_the_sdk(
 
     assert login.code == exit_code
     error = login.json()["error"]
-    assert set(error) == {"category", "code", "message", "fix", "status"}
+    assert set(error) == {
+        "category",
+        "code",
+        "message",
+        "field",
+        "retryable",
+        "request_id",
+        "fix",
+    }
+    assert error["retryable"] is (category == "infrastructure")
+    assert error["request_id"]
     assert error["category"] == category
     assert (
         cli("auth", "status", "--output", "json").json()["error"]["code"]
@@ -90,7 +100,7 @@ def test_each_failure_has_one_shape_in_the_cli_and_the_sdk(
     )
 
     sdk = Client(
-        base_url=given.get("base_url", platform.base_url),
+        api_url=given.get("base_url", platform.base_url),
         api_key=given.get("api_key", platform.api_key),
         secret_key=given.get("secret_key", platform.secret_key),
         workspace_id=given.get("workspace_id"),

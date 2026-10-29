@@ -50,7 +50,7 @@ def flaky_platform():
 
 
 def _client(base_url):
-    return Client(base_url=base_url, api_key="key", secret_key="secret")
+    return Client(api_url=base_url, api_key="key", secret_key="secret")
 
 
 def test_a_lost_response_is_retried_with_the_same_header_key(flaky_platform):

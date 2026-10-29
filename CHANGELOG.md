@@ -12,10 +12,13 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
   owner-only file, and only ever show a key's last four characters. `doctor` now checks this
   machine against the platform (signed in, workspace resolved, platform reachable); the kit's
   module-boundary check moved to `doctor --boundary`, whose file flag is now `--write PATH`.
-  The commands are built on `fi.alk.platform.Client`, which Python code uses directly. Every
-  failure is a `PlatformError` with one of seven categories and a documented exit code, a
-  workspace the platform cannot use is refused rather than silently replaced, and submissions
-  carry a retry key that is reused when a lost answer is retried.
+  The commands are built on `fi.alk.platform.Client`, which Python code uses directly, and
+  take the CLI reference's global options (`--profile`, `--workspace`, `--api-url`,
+  `--request-timeout`, `--output`, `--non-interactive`, `--yes`). Every failure is a
+  `PlatformError` with one of five categories, the reference's exit codes (2-5) and the
+  `request_id` the platform logged it under; a workspace the platform cannot use is refused
+  rather than silently replaced, and submissions carry a retry key that is reused when a lost
+  answer is retried. `agent-learn --version` prints the CLI version.
 - Builder chat: `edit_scenario` changes a kept scenario by its key with only the fields that change
   (`clear` resets a field), keeping its key, number, place and history; a rename alone is not
   proved again. A new scenario never takes a key the environment has used, a dropped scenario's

@@ -46,7 +46,7 @@ class Client:
     def __init__(
         self,
         *,
-        base_url: str,
+        api_url: str,
         api_key: str,
         secret_key: str,
         workspace_id: str | None = None,
@@ -59,7 +59,7 @@ class Client:
                 "An API key and a secret key are both required.",
                 code="credentials_missing",
             )
-        self.base_url = base_url.rstrip("/")
+        self.api_url = api_url.rstrip("/")
         self.workspace_id = workspace_id
         headers = {
             "X-Api-Key": api_key,
@@ -69,7 +69,7 @@ class Client:
         if workspace_id:
             headers["X-Workspace-Id"] = workspace_id
         self._http = httpx.Client(
-            base_url=self.base_url,
+            base_url=self.api_url,
             headers=headers,
             timeout=timeout,
             transport=transport,
@@ -79,13 +79,21 @@ class Client:
         self._identity: Identity | None = None
 
     @classmethod
-    def from_profile(cls, name: str | None = None, **options: Any) -> "Client":
+    def from_profile(
+        cls,
+        name: str | None = None,
+        *,
+        api_url: str | None = None,
+        workspace_id: str | None = None,
+        **options: Any,
+    ) -> "Client":
+        """A client signed in as a saved profile; `api_url`/`workspace_id` override it."""
         profile = profiles.load(name)
         return cls(
-            base_url=profile.base_url,
+            api_url=api_url or profile.api_url,
             api_key=profile.api_key,
             secret_key=profile.secret_key,
-            workspace_id=profile.workspace_id,
+            workspace_id=workspace_id or profile.workspace_id,
             **options,
         )
 
@@ -108,19 +116,36 @@ class Client:
             self.whoami()
         return self._send(method, path, **kwargs)
 
-    def _send(self, method: str, path: str, **kwargs: Any) -> Any:
+    def _send(
+        self,
+        method: str,
+        path: str,
+        *,
+        headers: dict[str, str] | None = None,
+        request_id: str | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        # The platform logs a request under the X-Request-ID it receives, so an
+        # error's request_id finds that request in the platform's logs.
+        request_id = request_id or str(uuid.uuid4())
         try:
-            response = self._http.request(method, path, **kwargs)
+            response = self._http.request(
+                method,
+                path,
+                headers={**(headers or {}), "X-Request-ID": request_id},
+                **kwargs,
+            )
         except httpx.HTTPError as exc:
             raise PlatformError(
                 "infrastructure",
-                f"Could not reach the platform at {self.base_url}: {exc}",
+                f"Could not reach the platform at {self.api_url}: {exc}",
                 code="unreachable",
+                request_id=request_id,
             ) from exc
         body = _decode(response)
         if response.is_success:
             return body
-        raise from_response(response.status_code, body)
+        raise from_response(response.status_code, body, request_id=request_id)
 
     def submit(
         self,
@@ -158,7 +183,8 @@ class Client:
         raise AssertionError("unreachable")  # pragma: no cover
 
     def whoami(self) -> Identity:
-        info = self._send("GET", "/accounts/user-info/")
+        request_id = str(uuid.uuid4())
+        info = self._send("GET", "/accounts/user-info/", request_id=request_id)
         organization = info.get("organization") or {}
         identity = Identity(
             user={
@@ -180,10 +206,12 @@ class Client:
         resolved = identity.workspace["id"]
         if self.workspace_id and resolved != self.workspace_id:
             raise PlatformError(
-                "not_found",
+                "validation",
                 f"Workspace {self.workspace_id} is not one this key can act in; "
                 f"the platform would have used {resolved} instead.",
                 code="workspace_not_found",
+                field="workspace",
+                request_id=request_id,
                 fix="Copy the workspace id from the platform's workspace switcher, or use "
                 "a key that is not bound to another workspace.",
             )
@@ -191,21 +219,21 @@ class Client:
         return identity
 
 
-def reachable(base_url: str, *, timeout: float = 10.0) -> None:
+def reachable(api_url: str, *, timeout: float = 10.0) -> None:
     """Raise an infrastructure `PlatformError` unless the platform answers its health check."""
-    url = f"{base_url.rstrip('/')}/health/"
+    url = f"{api_url.rstrip('/')}/health/"
     try:
         response = httpx.get(url, timeout=timeout)
     except httpx.HTTPError as exc:
         raise PlatformError(
             "infrastructure",
-            f"Could not reach the platform at {base_url}: {exc}",
+            f"Could not reach the platform at {api_url}: {exc}",
             code="unreachable",
         ) from exc
     if not response.is_success:
         raise PlatformError(
             "infrastructure",
-            f"The platform at {base_url} answered its health check with HTTP "
+            f"The platform at {api_url} answered its health check with HTTP "
             f"{response.status_code}.",
             code="unhealthy",
             status=response.status_code,

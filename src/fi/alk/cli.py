@@ -47,6 +47,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     command = args[0]
     if command in {"-h", "--help", "help"}:
         return _help()
+    if command == "--version":
+        from fi.alk import __version__
+
+        print(f"agent-learn {__version__}")
+        return 0
     if command == "doctor":
         if "--boundary" in args[1:]:
             return _doctor([arg for arg in args[1:] if arg != "--boundary"])

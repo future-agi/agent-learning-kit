@@ -55,7 +55,7 @@ The command surface, one row per command (aliases from the `main()` dispatch):
 | --- | --- | --- | --- |
 | `doctor` | — | platform checks: signed in, workspace resolved, platform reachable (`--boundary`: the kit's module-boundary diagnostics, `--write PATH` for the JSON) | (checks; `--boundary`: `agent-learning.doctor.v1`) |
 | `auth` | — | `login` / `status` / `logout` against a FutureAGI platform | (platform output) |
-| `profile` | — | saved sign-ins: `list` / `show` / `use` / `set base_url\|workspace` | (platform output) |
+| `profile` | — | saved profiles: `list` / `show` / `use` / `set NAME` | (platform output) |
 | `release-check` | `v1-check`, `release` | run the full local gate matrix | `agent-learning.release-check.v1` |
 | `release-proof` | `v1-proof` | cut the seven-check release proof | `agent-learning.release-proof.v1` |
 | `init` | — | scaffold manifests for a preset: `ci` (default), `run`, `redteam`, `optimize`, `all` | `agent-learning.init.v1` |
@@ -96,35 +96,48 @@ The command surface, one row per command (aliases from the `main()` dispatch):
 
 ```python
 from fi.alk.platform import Client
-with Client.from_profile() as client:   # or Client(base_url=..., api_key=..., secret_key=...)
+with Client.from_profile() as client:   # or Client(api_url=..., api_key=..., secret_key=...)
     print(client.whoami().workspace)
 ```
 
-`agent-learn auth login` asks for an API key and a secret key (from the
-platform's Keys page), checks them, and saves a profile: the platform URL and
-workspace in `$AGENT_LEARNING_HOME/profiles.json` (default `~/.agent-learning`),
-the key pair in the OS keychain, or, without one, in `credentials.json` there,
-readable only by you. With `--non-interactive` it reads `FI_API_KEY` and
-`FI_SECRET_KEY` instead of prompting. Only the key's last four characters are
-ever shown.
+`agent-learn auth login` takes an API key and a secret key from the platform's
+Keys page, checks them, and saves them to a profile. In a terminal it prompts;
+otherwise, or with `--method token-env`, it reads `FI_API_KEY` and `FI_SECRET_KEY`
+(other names with `--token-env NAME` / `--secret-env NAME`). The profile's
+platform URL, workspace and run defaults go to `$AGENT_LEARNING_HOME/profiles.json`
+(default `~/.agent-learning`); the key pair goes to the OS keychain, or, without
+one, to `credentials.json` there, readable only by you. Only a key's last four
+characters are ever shown. `auth logout` erases the current profile's key pair
+and keeps its settings; `--all-profiles` signs out of every profile after
+confirmation (`--yes`). `profile set NAME` creates or updates a profile from
+`--api-url`, `--workspace`, `--default-mode`, `--default-budget` and
+`--default-budget-unit`, and prints what changed.
 
-Every platform command takes `--output human|json|jsonl`. With `json` or `jsonl`
-the result, or the error, is one JSON document on stdout. An error always has
-the same shape, `{"error": {"category", "code", "message", "fix", "status"}}`,
-and exits with its category's code:
+Every platform command accepts these options after its name:
+
+| Option | Default | Effect |
+| --- | --- | --- |
+| `--profile NAME` | the current profile | the saved profile to use |
+| `--workspace ID` | the profile's workspace | the workspace to act in |
+| `--api-url URL` | the profile's URL | the platform to talk to |
+| `--request-timeout SECONDS` | 30 | timeout for one platform request |
+| `--output human\|json\|jsonl` | human in a terminal, json otherwise | result format |
+| `--non-interactive` | off | never prompt; missing input is an error |
+| `--yes` | off | accept the shown confirmation |
+
+With `json` or `jsonl` the result, or the error, is one JSON document on stdout.
+An error is always `{"error": {"category", "code", "message", "field",
+"retryable", "request_id", "fix"}}`. `request_id` is the `X-Request-ID` the
+client sent, under which the platform logged the request. The exit code is the
+category's:
 
 | Exit code | Category | For example |
 | --- | --- | --- |
 | 0 | — | success |
-| 1 | — | an unexpected failure in the CLI itself |
-| 2 | — | a usage error (unknown flag or command) |
-| 3 | `validation` | a missing key pair with `--non-interactive`; a request the platform rejected as invalid |
-| 4 | `auth` | a bad or missing key pair; not signed in |
-| 5 | `permission` | no access to the workspace, or no write access |
-| 6 | `allowance` | the plan's limit or credit is used up |
-| 7 | `not_found` | a workspace the key cannot act in; an unknown profile |
-| 8 | `conflict` | a retry key reused for a different request |
-| 9 | `infrastructure` | the platform is unreachable or unavailable |
+| 2 | `validation` | invalid arguments or input; a missing key pair; a workspace the key cannot act in; a retry key reused for a different request |
+| 3 | `auth`, `permission` | a bad key pair; not signed in; no access to the workspace |
+| 4 | `allowance` | the plan's limit or credit is used up |
+| 5 | `infrastructure` | the platform is unreachable or unavailable (`retryable: true`) |
 
 A workspace the platform cannot use is refused, never silently replaced by its
 default one. Requests that create something carry a retry key (generated per
