@@ -202,7 +202,8 @@ def _sub_actor_field() -> dict[str, Any]:
             + described(TRIGGER_ABOUT)
             + ". Give them a part of their own, never the person's goal: they never make, confirm, "
             "change or cancel the person's request, and never give a detail the agent needs from the "
-            "person. Leave it out for the person alone.",
+            "person. The person's own instruction never names them or says what they will say. Leave it "
+            "out for the person alone.",
             "items": {
                 "type": "object",
                 "properties": {
