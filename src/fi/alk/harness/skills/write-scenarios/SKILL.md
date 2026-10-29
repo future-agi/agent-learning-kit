@@ -671,6 +671,23 @@ only what the person asked for was done. The run tells the person who else is th
 one said once they have said it; the person's instruction never names them, what they will say, or
 what the person does because of it. Most scenarios include none.
 
+## File prerequisites must exist in the target workspace
+
+Read the workspace bindings in the world summary before writing file tasks. A repository used
+to implement the agent is not the project that its tools see. Never ask it to modify a named
+file, run an existing test or search for an existing symbol unless setup creates that prerequisite
+in a declared target workspace and ready reads it back and checks the contents. Use
+`world.write_file("binding", "relative/path", "content")` and `world.read_file` with declared
+binding names and relative paths. Read `references/world-api.md` for the full example. A fixture manifest,
+a database table named files, `setup: pass` or `ready: return None` does not establish a file.
+
+Without a declared workspace, choose a self-contained task. Give the entire input content in the
+conversation and ask the agent to create the file before using it, or choose a task that needs no
+existing files. Do not invent a directory binding or assume files from the uploaded source exist
+in the target's task directory. Keep tasks bounded; do not request broad filesystem searches.
+File setup and readiness are deferred until the actual private runtime is available. Saving a
+scenario or assuming a reference tool result does not prove the agent completed it.
+
 ## The tools, and the order to use them
 
 | Tool | What it does |

@@ -15,7 +15,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .contract import AgentContract
+from .contract import AgentContract, runtime_owns_tools
 
 TOOL_CERTIFICATION_SCHEMA_VERSION = "futureagi.tool-certification.v1"
 
@@ -103,12 +103,19 @@ def certify_tool_inventory(
     bundle_dir: Path,
     *,
     external_provider: bool,
+    source: Path | None = None,
+    native_observation: bool = False,
 ) -> ToolCertificationReport:
-    """Classify every declared tool, rejecting missing or ambiguous implementation seams."""
+    """Classify every declared tool, rejecting missing or ambiguous implementation seams.
+
+    With ``source``, a voice worker that owns its tools needs no entrypoint for a tool its
+    source defines; one it does not define is rejected.
+    """
 
     entries: dict[str, list[Any]] = {}
     for entry in contract.tool_entrypoints:
         entries.setdefault(entry.tool, []).append(entry)
+    defined: set[str] | None = None
 
     results: list[ToolCertification] = []
     for tool in contract.tools:
@@ -123,6 +130,33 @@ def certify_tool_inventory(
                     schema_validated=True,
                     implementation_validated=False,
                     reason="implementation is owned by the connected provider agent",
+                )
+            )
+            continue
+        if not matches and source is not None and runtime_owns_tools(contract):
+            if defined is None:
+                from .source_tool_evidence import defined_tool_names
+
+                defined = defined_tool_names(source)
+            found = tool.name in defined
+            results.append(
+                ToolCertification(
+                    tool=tool.name,
+                    entrypoint_mode="runtime" if found else "missing",
+                    probe_mode=ToolProbeMode.RUNTIME_ONLY,
+                    availability=(
+                        ToolAvailability.RUNTIME_ONLY
+                        if found
+                        else ToolAvailability.REJECTED
+                    ),
+                    schema_validated=True,
+                    implementation_validated=False,
+                    reason=(
+                        "the submitted voice worker runs this tool; effects are captured "
+                        "during calls"
+                        if found
+                        else f"the submitted source defines no {tool.name}"
+                    ),
                 )
             )
             continue
@@ -145,7 +179,34 @@ def certify_tool_inventory(
             continue
 
         entry = matches[0]
-        if entry.mode in {"import", "construct"}:
+        if native_observation and entry.mode in {"import", "construct", "service"}:
+            if entry.mode == "service":
+                declared = bool(
+                    (entry.endpoint.strip() or entry.service.strip()) and entry.method.strip()
+                )
+            else:
+                declared = bool(
+                    entry.module.strip()
+                    and entry.callable.strip()
+                    and (entry.mode != "construct" or entry.factory.strip())
+                )
+            results.append(
+                ToolCertification(
+                    tool=tool.name,
+                    entrypoint_mode=entry.mode,
+                    probe_mode=ToolProbeMode.RUNTIME_ONLY,
+                    availability=(
+                        ToolAvailability.RUNTIME_ONLY if declared else ToolAvailability.REJECTED
+                    ),
+                    schema_validated=True,
+                    implementation_validated=False,
+                    reason=(
+                        "native implementation is declared; execution is observed only in agent responses"
+                        if declared else "native implementation declaration is incomplete"
+                    ),
+                )
+            )
+        elif entry.mode in {"import", "construct"}:
             handler = bundle_dir / "handlers" / f"{tool.name}.py"
             reachable = handler.is_file() and not handler.is_symlink()
             results.append(
@@ -167,7 +228,7 @@ def certify_tool_inventory(
                     ),
                 )
             )
-        elif entry.mode == "service" and entry.endpoint and entry.method:
+        elif entry.mode == "service" and (entry.endpoint or entry.service) and entry.method:
             results.append(
                 ToolCertification(
                     tool=tool.name,

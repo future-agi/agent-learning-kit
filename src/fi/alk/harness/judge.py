@@ -32,6 +32,7 @@ from .catalogue import criteria_text
 from .config import chosen_model, provider_env
 from .session import Stage, record_turn
 from .tools import schema
+from .world.observation import ObservationWorld
 
 logger = logging.getLogger(__name__)
 
@@ -74,8 +75,9 @@ JUDGE_METHOD = """
 How to decide:
 1. Read the criteria.
 2. Read the evidence. Read the conversation for what was said, the actions for what the agent did,
-   and inspect the records when the criteria are about what changed. The records are PostgreSQL;
-   use inspect_world to discover them rather than guessing names. When listen is offered, listen
+   and inspect the records when the criteria are about what changed. Use inspect_world to discover
+   what the environment supports. Only query records when a query tool is available; never invent
+   records or infer unobserved state from capability names. When listen is offered, listen
    to the recording: it is the fullest record of what was said. Use the transcript where it is
    unclear, and judge from the transcript and the actions when it cannot be heard.
 3. Establish whether the sub-goal's situation arose. If it did not, work out why from the evidence:
@@ -198,12 +200,29 @@ class CallEvidence:
         (self.fetched if self.batched else self.looked).add(what)
 
     def tools(self) -> list[Any]:
+        native = isinstance(self.world, ObservationWorld)
+
         @tool(
             "inspect_world",
-            "The world's tables: without a name, every table and its row count; with one, its rows.",
-            schema({"table": str}, []),
+            (
+                "The native environment's declared capabilities and evidence limits; no database state."
+                if native
+                else "The world's tables: without a name, every table and its row count; with one, its rows."
+            ),
+            schema({} if native else {"table": str}, []),
         )
         async def inspect_world(args: dict[str, Any]) -> dict[str, Any]:
+            if native:
+                return _say(
+                    _dump(
+                        {
+                            "kind": "native_observation",
+                            "capabilities": list(self.world.capabilities),
+                            "state_access": "No local database or SQL query is available to the judge. Capability names are not state evidence.",
+                            "evidence": "Use recorded actions and their results, and read_transcript for the captured conversation.",
+                        }
+                    )
+                )
             table = str(args.get("table") or "").strip()
             state = self.world.state(table or None)
             if table:
@@ -256,7 +275,11 @@ class CallEvidence:
                 self.audio = "asked"
             return _say("The recording follows.")
 
-        return [inspect_world, query_world, read_transcript] + ([listen] if self.recording else [])
+        tools = [inspect_world]
+        if not native:
+            tools.append(query_world)
+        tools.append(read_transcript)
+        return tools + ([listen] if self.recording else [])
 
     def verdict_problem(self, args: dict[str, Any]) -> str | None:
         """Why this `decide` call cannot be accepted, or None when it is a complete, informed verdict."""

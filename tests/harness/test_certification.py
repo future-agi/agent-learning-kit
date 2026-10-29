@@ -62,6 +62,7 @@ def _certificate() -> HarnessCertification:
             static=CheckStatus.PASSED,
             schema_and_seed=CheckStatus.PASSED,
             processes=CheckStatus.PASSED,
+            chat_ingress=CheckStatus.PASSED,
             source_invariants=CheckStatus.PASSED,
             scenario_setup_ready="5/5",
             tool_contract="3/3",
@@ -315,3 +316,115 @@ def test_artifact_store_refuses_symlinks(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="symlink_forbidden"):
         GenericHarnessArtifactStore(root).read_source_model()
+
+
+@pytest.mark.parametrize(
+    "status", [CheckStatus.NOT_RUN, CheckStatus.FAILED, CheckStatus.NOT_APPLICABLE]
+)
+def test_chat_certificate_requires_explicit_pass(tmp_path, status):
+    certificate = _certificate()
+    altered = HarnessCertification.create(
+        status=certificate.status,
+        source=certificate.source,
+        authoring=certificate.authoring,
+        compiler=certificate.compiler,
+        runtime=certificate.runtime,
+        checks=certificate.checks.model_copy(update={"chat_ingress": status}),
+        repairs=certificate.repairs,
+        limitations=certificate.limitations,
+    )
+    path = tmp_path / "certificate.json"
+    path.write_text(altered.model_dump_json())
+    with pytest.raises(CertificationGateError, match="chat_ingress"):
+        verify_runtime_certification(
+            path, bundle_digest=_digest("f"), source_digest=_digest("a")
+        )
+    if status is CheckStatus.NOT_APPLICABLE:
+        assert verify_runtime_certification(
+            path,
+            bundle_digest=_digest("f"),
+            source_digest=_digest("a"),
+            chat_ingress_required=False,
+        )
+
+
+def _predating_chat_ingress(tmp_path: Path) -> Path:
+    """A certificate as written before chat readiness was certified: no chat_ingress key."""
+    from fi.alk.harness.certification import _fingerprint
+
+    raw = _certificate().model_dump(mode="json")
+    del raw["checks"]["chat_ingress"]
+    del raw["fingerprint"]
+    raw["fingerprint"] = _fingerprint(raw)
+    path = tmp_path / "certificate.json"
+    path.write_text(json.dumps(raw))
+    return path
+
+
+def test_a_certificate_predating_the_chat_check_still_runs(tmp_path):
+    path = _predating_chat_ingress(tmp_path)
+
+    held = verify_runtime_certification(
+        path, bundle_digest=_digest("f"), source_digest=_digest("a")
+    )
+
+    assert not held.checks.records_chat_ingress
+    reissued = HarnessCertification.create(
+        status=held.status,
+        source=held.source,
+        authoring=held.authoring,
+        compiler=held.compiler,
+        runtime=held.runtime,
+        checks=held.checks.model_copy(update={"scenario_setup_ready": "5/5"}),
+        repairs=held.repairs,
+        limitations=held.limitations,
+    )
+    assert "chat_ingress" not in json.loads(reissued.model_dump_json())["checks"]
+    path.write_text(reissued.model_dump_json())
+    assert verify_runtime_certification(
+        path, bundle_digest=_digest("f"), source_digest=_digest("a")
+    )
+
+
+@pytest.mark.parametrize("status", ["not_run", "failed"])
+def test_a_written_chat_check_that_did_not_pass_is_still_rejected(tmp_path, status):
+    path = _predating_chat_ingress(tmp_path)
+    from fi.alk.harness.certification import _fingerprint
+
+    raw = json.loads(path.read_text())
+    raw["checks"]["chat_ingress"] = status
+    del raw["fingerprint"]
+    raw["fingerprint"] = _fingerprint(raw)
+    path.write_text(json.dumps(raw))
+
+    with pytest.raises(CertificationGateError, match="chat_ingress"):
+        verify_runtime_certification(
+            path, bundle_digest=_digest("f"), source_digest=_digest("a")
+        )
+
+
+def test_missing_chat_check_defaults_to_not_run():
+    assert CertificationChecks.model_validate({}).chat_ingress is CheckStatus.NOT_RUN
+
+
+@pytest.mark.parametrize(
+    "mode,modality,required",
+    [("repo", "chat", True), ("repo", "voice", False), ("external", "chat", False)],
+)
+def test_chat_applicability_uses_bound_contract_and_provider_mode(
+    tmp_path, mode, modality, required
+):
+    from types import SimpleNamespace
+    from fi.alk.harness.certification import requires_chat_ingress
+    from fi.alk.harness.job import SourceKind, ProviderExecutionMode
+
+    (tmp_path / "contract.json").write_text(json.dumps({"modality": modality}))
+    job = SimpleNamespace(
+        source=SimpleNamespace(
+            kind=SourceKind.PROVIDER
+            if mode == "external"
+            else SourceKind.LOCAL_REPOSITORY
+        ),
+        agent=SimpleNamespace(mode=ProviderExecutionMode.CONNECT_ONLY),
+    )
+    assert requires_chat_ingress(job, tmp_path) is required

@@ -20,6 +20,7 @@ import asyncio
 import json
 import logging
 import re
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +36,7 @@ from ..catalogue import (
     CRITERIA_RULES,
     SUB_GOAL_RULES,
     already_claimed,
+    Catalogue,
     SubGoal,
     load_catalogue,
     save_catalogue,
@@ -54,6 +56,7 @@ from ..sub_actor import (
 )
 from ..checks import reference_of, run_check, run_world_check
 from ..contract import AgentContract, is_data_free_conversation
+from ..seed_rows import only_seed_rows
 from ..simulator import (
     load_simulator_prompt,
     save_simulator_prompt,
@@ -70,6 +73,10 @@ from .snapshot import MANIFEST, read_manifest, restore, save
 from .stores.written import API as OPS_API
 
 WORLD_SERVER = "world"
+NATIVE_RUNTIME_HELP = (
+    "Native runtime owns state and tools. Author scenario setup/ready using the real API "
+    "and native response checks; local mutation/replay is unsupported."
+)
 
 # What a handler is actually given. Said again here, and not only in the skill, because this is
 # where the mistake surfaces: a handler that crashed has a model reading *this* message, and an
@@ -393,9 +400,61 @@ def _world_columns(world: Any, table: str) -> dict[str, bool] | None:
             "WHERE table_name = %s",
             (table,),
         )
-        return {str(r["column_name"]).lower(): r["is_nullable"] == "NO" for r in rows} or None
+        return {
+            str(r["column_name"]).lower(): r["is_nullable"] == "NO" for r in rows
+        } or None
     except Exception:  # noqa: BLE001 - an engine that cannot say is not refused for it
         return None
+
+
+def _unreadable_arrays(world: Any, destination: Path) -> list[str]:
+    """Rewrite Postgres array literals in array columns as JSON; the columns left unreadable.
+
+    Uses the source model and the converter the seed import uses, so what saves also seeds.
+    """
+    from ..certification import GenericHarnessArtifactStore
+    from ..source_model import LogicalType
+    from ..world_import.sqlite import array_value
+
+    store = getattr(world, "store", None)
+    artifacts = GenericHarnessArtifactStore(destination / "generic-harness")
+    if getattr(store, "engine", "") != "sqlite" or not (
+        artifacts.root / artifacts.SOURCE_MODEL
+    ).is_file():
+        return []
+    try:
+        source = artifacts.read_source_model()
+    except (OSError, ValueError):
+        return []
+    held = set(store.collections())
+    problems: list[str] = []
+    for table in source.tables:
+        if table.name not in held:
+            continue
+        info = store.query(f'PRAGMA table_info("{table.name}")')
+        columns = {row["name"] for row in info}
+        for column in table.columns:
+            if column.logical_type is not LogicalType.ARRAY:
+                continue
+            if column.name not in columns:
+                continue
+            found = store.query(
+                f'SELECT DISTINCT "{column.name}" AS value FROM "{table.name}" '
+                f'WHERE "{column.name}" IS NOT NULL'
+            )
+            for value in (row["value"] for row in found):
+                try:
+                    items = array_value(value, column.element_type)
+                except ValueError:
+                    problems.append(f"{table.name}.{column.name}")
+                    break
+                if isinstance(value, str) and value.startswith("{"):
+                    store.execute(
+                        f'UPDATE "{table.name}" SET "{column.name}" = ? '
+                        f'WHERE "{column.name}" = ?',
+                        [items, value],
+                    )
+    return problems
 
 
 def _still_refusing(counts: dict[str, int], gate: str, problems: list[str]) -> bool:
@@ -415,23 +474,23 @@ def _tables_the_source_lacks(
         return []
     from pathlib import Path as _Path
 
-    from ..bundle_author_v2 import _source_schema_paths
+    from ..bundle_author_v2 import _source_schema_artifacts
 
     try:
-        paths = _source_schema_paths(
+        artifacts = _source_schema_artifacts(
             _Path(source_root),
             contract=contract.model_dump() if hasattr(contract, "model_dump") else None,
         )
     except Exception:
         return []
-    if not paths:
+    if not artifacts:
         return []
     declared: dict[str, set[str]] = {}
     required: dict[str, set[str]] = {}
     cites: dict[str, dict[str, tuple[str, str]]] = {}
-    for path in paths:
+    for artifact in artifacts:
         # Comments first: a trailing `-- matched against caller_ani` is prose, not a column.
-        sql = re.sub(r"--[^\n]*", "", path.read_text(encoding="utf-8"))
+        sql = re.sub(r"--[^\n]*", "", artifact.sql)
         for found in re.finditer(
             r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:"?\w+"?\.)?"?([A-Za-z_]\w*)"?\s*\(',
             sql,
@@ -460,7 +519,10 @@ def _tables_the_source_lacks(
                     re.IGNORECASE,
                 )
                 if cite:
-                    points_at[word.lower()] = (cite.group(1).lower(), cite.group(2).lower())
+                    points_at[word.lower()] = (
+                        cite.group(1).lower(),
+                        cite.group(2).lower(),
+                    )
             declared.setdefault(found.group(1).lower(), set()).update(columns)
             required.setdefault(found.group(1).lower(), set()).update(must)
             cites.setdefault(found.group(1).lower(), {}).update(points_at)
@@ -504,7 +566,9 @@ def _tables_the_source_lacks(
         for row in rows if isinstance(rows, list) else list(rows.values()):
             if isinstance(row, dict):
                 for key, value in row.items():
-                    held.setdefault(f"{name.lower()}.{str(key).lower()}", set()).add(str(value))
+                    held.setdefault(f"{name.lower()}.{str(key).lower()}", set()).add(
+                        str(value)
+                    )
     for name, rows in state.items():
         for column, (target, target_column) in cites.get(name.lower(), {}).items():
             # An empty target table is still checked: that is exactly the dangling case.
@@ -614,12 +678,17 @@ def world_tools(
     source_root: str = "",
     deferred_runtime: bool = False,
     external_runtime: bool = False,
+    catalogue: Catalogue | None = None,
+    native_runtime: bool = False,
 ) -> Any:
     """A server exposing the world-building surface for one agent.
 
     ``source_root`` is where the agent's own code lives. With it, a tool can be bound to the
     agent's own implementation; without it the agent was given as a specification and its
     tools have to be written here.
+
+    ``catalogue`` shares one catalogue object with the session's other servers; without it the
+    catalogue is read from disk.
     """
     # An existing world is picked up rather than replaced. Amending one is the ordinary case
     # once it has been built once, and starting empty every time would mean rebuilding a
@@ -631,6 +700,9 @@ def world_tools(
     named = str(getattr(getattr(contract, "data_store", None), "kind", "") or "")
     if existing:
         world = restore(destination)
+    elif native_runtime:
+        world = GeneratedWorld(kind="in_process")
+        world.runtime_tools = set(contract.tool_names())
     elif (destination / "environment.json").exists():
         from ..provision import ProvisionedEnvironment, attached_postgres_store
 
@@ -688,6 +760,10 @@ def world_tools(
         world.runtime_tools = set(contract.tool_names())
     else:
         world = GeneratedWorld(":memory:", kind=named)
+    native_runtime = native_runtime or bool(getattr(world, "native_runtime", False))
+    world.native_runtime = native_runtime
+    if native_runtime and (world.state() or world.handlers):
+        raise ValueError("native_authoring_shadow_state_forbidden")
     world.name = contract.agent
     world.external_runtime = external_runtime or bool(
         getattr(world, "external_runtime", False)
@@ -696,7 +772,7 @@ def world_tools(
     if source_root:
         world.reach(source_root)
     kind = for_contract(contract)
-    catalogue = load_catalogue(destination)
+    catalogue = catalogue if catalogue is not None else load_catalogue(destination)
     scores: list[float] = []
     # The checks that decide whether this world is usable, written here rather than fixed in
     # advance, because what makes a world usable is a judgement about this agent.
@@ -714,6 +790,8 @@ def world_tools(
         if existing
         else dict(draft.get("world_checks") or {})
     )
+    if native_runtime and world_checks:
+        raise ValueError("native_authoring_local_world_checks_forbidden")
     # How many times each tool has been attempted, so a binding that cannot be made to work
     # is told to stop rather than tried indefinitely.
     tried: dict[str, int] = {}
@@ -733,6 +811,13 @@ def world_tools(
             ),
             encoding="utf-8",
         )
+
+    def _runtime_owned() -> set[str]:
+        # The submitted runtime owns exactly the contract's tools: tools declared since a
+        # restore join them, and tools the contract no longer has leave.
+        if deferred_runtime or external_runtime:
+            world.runtime_tools = set(contract.tool_names())
+        return set(getattr(world, "runtime_tools", set()))
 
     def _verified() -> tuple[list[str], list[str], dict[str, list[str]]]:
         """How the world's own checks fare, and which of them cannot fail.
@@ -785,6 +870,8 @@ def world_tools(
         {"sql": str},
     )
     async def create_schema(args: dict[str, Any]) -> dict[str, Any]:
+        if native_runtime:
+            return _err(NATIVE_RUNTIME_HELP)
         if external_runtime:
             return _err(
                 "The connected provider owns its external state. A local schema would be a "
@@ -817,6 +904,8 @@ def world_tools(
         {"table": str, "rows": list},
     )
     async def seed(args: dict[str, Any]) -> dict[str, Any]:
+        if native_runtime:
+            return _err(NATIVE_RUNTIME_HELP)
         if external_runtime:
             return _err(
                 "The connected provider owns its external state. Local seed data cannot reach "
@@ -850,6 +939,8 @@ def world_tools(
         {"sql": str},
     )
     async def change_data(args: dict[str, Any]) -> dict[str, Any]:
+        if native_runtime:
+            return _err(NATIVE_RUNTIME_HELP)
         if external_runtime:
             return _err(
                 "There is no harness-controlled provider datastore to change in connect-only "
@@ -881,6 +972,8 @@ def world_tools(
         schema({"module": str, "callable": str}, ["module", "callable"]),
     )
     async def adopt_state(args: dict[str, Any]) -> dict[str, Any]:
+        if native_runtime:
+            return _err(NATIVE_RUNTIME_HELP)
         if external_runtime:
             return _err(
                 "A source-free provider connection has no local state loader to adopt."
@@ -915,6 +1008,8 @@ def world_tools(
         schema({"path": str, "note": str}, ["path"]),
     )
     async def adopt_store(args: dict[str, Any]) -> dict[str, Any]:
+        if native_runtime:
+            return _err(NATIVE_RUNTIME_HELP)
         if external_runtime:
             return _err(
                 "A source-free provider connection has no local store to adopt."
@@ -984,13 +1079,15 @@ def world_tools(
         ),
     )
     async def adopt_tool(args: dict[str, Any]) -> dict[str, Any]:
+        if native_runtime:
+            return _err(NATIVE_RUNTIME_HELP)
         name = str(args["tool_name"])
         if name not in contract.tool_names():
             return _err(
                 f"{name!r} is not a tool this agent has. It has: "
                 f"{', '.join(sorted(contract.tool_names()))}"
             )
-        if name in set(getattr(world, "runtime_tools", set())):
+        if name in _runtime_owned():
             return _ok(
                 f"{name} is owned by the submitted runtime. Its dependencies and callable are "
                 "built and exercised inside the isolated execution process; no control-plane "
@@ -1063,6 +1160,8 @@ def world_tools(
         schema({"tool_name": str, "arguments": dict}, ["tool_name"]),
     )
     async def run_tool(args: dict[str, Any]) -> dict[str, Any]:
+        if native_runtime:
+            return _err(NATIVE_RUNTIME_HELP)
         call = world.call(str(args["tool_name"]), args.get("arguments") or {})
         if call.refused:
             return _ok(f"refused: {call.error}")
@@ -1083,7 +1182,9 @@ def world_tools(
     async def try_check(args: dict[str, Any]) -> dict[str, Any]:
         source = str(args.get("check") or "")
         if "def check(" not in source:
-            return _err("give the check's Python, defining check(world, calls, reference)")
+            return _err(
+                "give the check's Python, defining check(world, calls, reference)"
+            )
         try:
             calls = [
                 Call(
@@ -1094,7 +1195,9 @@ def world_tools(
                 )
                 for one in args.get("calls") or []
             ]
-            reference = reference_of([Step.model_validate(one) for one in args.get("reference") or []])
+            reference = reference_of(
+                [Step.model_validate(one) for one in args.get("reference") or []]
+            )
         except Exception as invalid:
             return _err(f"invalid call or step: {invalid}"[:600])
         outcome = run_check(source, world, calls, name="trial", reference=reference)
@@ -1113,6 +1216,8 @@ def world_tools(
         schema({"name": str, "calls": list, "expect_state": dict}, ["name", "calls"]),
     )
     async def declare_sequence(args: dict[str, Any]) -> dict[str, Any]:
+        if native_runtime:
+            return _err(NATIVE_RUNTIME_HELP)
         if external_runtime:
             return _err(
                 "Provider tools execute only during the live conversation. Do not invent a "
@@ -1242,6 +1347,10 @@ def world_tools(
         schema({"table": str, "limit": int, "matching": str}, []),
     )
     async def inspect_world(args: dict[str, Any]) -> dict[str, Any]:
+        if native_runtime:
+            return _ok(
+                "Native state is unavailable during authoring. Live API fixture checks are required."
+            )
         state = world.state()
         table = str(args.get("table") or "")
         if not table:
@@ -1337,7 +1446,9 @@ def world_tools(
             description=str(args.get("description") or ""),
             refuses=str(args.get("refuses") or ""),
             effects=str(args.get("effects") or ""),
-            inputs_from={str(k): str(v) for k, v in (args.get("inputs_from") or {}).items()},
+            inputs_from={
+                str(k): str(v) for k, v in (args.get("inputs_from") or {}).items()
+            },
             remove=bool(args.get("remove")),
         )
         return _ok(said) if done else _err(said)
@@ -1387,7 +1498,15 @@ def world_tools(
         "mishandled, so this is what makes one available. Leave it empty for an ordinary "
         "task sub-goal.",
         schema(
-            {"name": str, "what": str, "check": str, "judged": str, "output": str, "overlay": str, **CONTRACT_SCHEMA},
+            {
+                "name": str,
+                "what": str,
+                "check": str,
+                "judged": str,
+                "output": str,
+                "overlay": str,
+                **CONTRACT_SCHEMA,
+            },
             ["name", "what"],
         ),
     )
@@ -1402,13 +1521,18 @@ def world_tools(
             **{field: str(args.get(field) or "") for field in CONTRACT_FIELDS},
         )
         problems = validate_sub_goal(sub_goal)
+        if native_runtime and sub_goal.deterministic():
+            from ..prove import native_source_problem
+
+            if problem := native_source_problem(sub_goal.check, "check"):
+                problems.append(problem)
         if problems:
             return _err("Not added:\n  - " + "\n  - ".join(problems))
         sub_goal, cleared = without_delivery_overlay(sub_goal)
         # Run it here, the same way a handler is run the moment it is defined. A check that raises
         # is not a check, and accepting one now means every scenario that names it is refused later
         # for a reason that looks like the scenario's fault rather than this one's.
-        if sub_goal.deterministic():
+        if sub_goal.deterministic() and not native_runtime:
             outcome = run_check(
                 sub_goal.check, world, list(world.calls), name=sub_goal.name
             )
@@ -1452,6 +1576,8 @@ def world_tools(
         schema({"path": str, "contents": str}, ["path", "contents"]),
     )
     async def write_env_file(args: dict[str, Any]) -> dict[str, Any]:
+        if native_runtime:
+            return _err(NATIVE_RUNTIME_HELP)
         from .workspace import listing, write
 
         try:
@@ -1473,6 +1599,8 @@ def world_tools(
         schema({"command": str}, ["command"]),
     )
     async def run_env_command(args: dict[str, Any]) -> dict[str, Any]:
+        if native_runtime:
+            return _err(NATIVE_RUNTIME_HELP)
         from .workspace import run
 
         # Off the event loop: a docker build takes minutes, and run synchronously
@@ -1507,6 +1635,8 @@ def world_tools(
         ),
     )
     async def write_store_ops(args: dict[str, Any]) -> dict[str, Any]:
+        if native_runtime:
+            return _err(NATIVE_RUNTIME_HELP)
         from .stores import StoreError, supported
         from .stores.written import register_written
 
@@ -1538,12 +1668,19 @@ def world_tools(
         schema({"name": str, "code": str, "what": str}, ["name", "code"]),
     )
     async def add_world_check(args: dict[str, Any]) -> dict[str, Any]:
-        runtime_tools = set(getattr(world, "runtime_tools", set()))
+        if native_runtime:
+            return _err(NATIVE_RUNTIME_HELP)
+        runtime_tools = _runtime_owned()
         runtime_only = bool(contract.tools) and set(contract.tool_names()).issubset(
             runtime_tools
         )
         if (
-            (is_data_free_conversation(contract) or external_runtime or runtime_only)
+            (
+                is_data_free_conversation(contract)
+                or external_runtime
+                or native_runtime
+                or runtime_only
+            )
             and not world.state()
             and not world.handlers
         ):
@@ -1579,6 +1716,11 @@ def world_tools(
         {},
     )
     async def check_world(_args: dict[str, Any]) -> dict[str, Any]:
+        if native_runtime:
+            return _ok(
+                "DEFERRED: native state, tool behavior and fixture readiness require live validation."
+            )
+        _runtime_owned()
         report = probe(world, contract, sequences=sequences, kind=kind)
         scores.append(report.score)
         # Saying the score is going nowhere, rather than leaving it to be noticed. A stage that
@@ -1635,7 +1777,7 @@ def world_tools(
         schema({"notes": str}, []),
     )
     async def save_world(args: dict[str, Any]) -> dict[str, Any]:
-        runtime_tools = set(getattr(world, "runtime_tools", set()))
+        runtime_tools = _runtime_owned()
         runtime_only = bool(contract.tools) and set(contract.tool_names()).issubset(
             runtime_tools
         )
@@ -1643,18 +1785,35 @@ def world_tools(
         if strayed and _still_refusing(unmovable, "schema", strayed):
             return _err(
                 "Not saved. This world does not match the agent's own schema: "
-                + ", ".join(strayed) + ". The runtime seed is that schema followed by "
+                + ", ".join(strayed)
+                + ". The runtime seed is that schema followed by "
                 "rows from this world, so an insert naming any of these fails and the environment "
                 "never stands up. Use the agent's own names, or drop what it does not have. A "
                 "column it never declares is one its code never reads."
             )
+        if unreadable := _unreadable_arrays(world, destination):
+            return _err(
+                "Not saved. These array columns hold values that are not lists: "
+                + ", ".join(unreadable)
+                + '. The runtime seed reads an array as a JSON list, such as [] or ["a"]. '
+                "Set them with change_data."
+            )
         data_free = (
-            (is_data_free_conversation(contract) or external_runtime or runtime_only)
+            (
+                is_data_free_conversation(contract)
+                or external_runtime
+                or native_runtime
+                or runtime_only
+            )
             and not world.state()
             and not world.handlers
         )
-        report = probe(world, contract, sequences=sequences, kind=kind)
-        if report.score < ACCEPTABLE and not data_free:
+        report = (
+            None
+            if native_runtime
+            else probe(world, contract, sequences=sequences, kind=kind)
+        )
+        if not native_runtime and report.score < ACCEPTABLE and not data_free:
             return _err(
                 f"Not saved, the world does not hold up yet.\n{report.summary()}\n"
                 f"score {report.score:.2f}, needs {ACCEPTABLE:.2f}"
@@ -1729,7 +1888,15 @@ def world_tools(
                     "Not saved. The simulator prompt is incomplete:\n  - "
                     + "\n  - ".join(problems)
                 )
-        dirty = dirty_state(world, sequences, kind)
+        dirty = [] if native_runtime else dirty_state(world, sequences, kind)
+        connection = getattr(world.store, "connection", None)
+        if dirty and source_root and isinstance(connection, sqlite3.Connection):
+            # The agent's own seed rows, even in-flight ones, are its starting state.
+            dirty = [
+                name
+                for name in dirty
+                if not only_seed_rows(connection, Path(source_root), name)
+            ]
         if dirty:
             counts = world.state()
             listed = ", ".join(f"{name} ({len(counts[name])} rows)" for name in dirty)
@@ -1781,7 +1948,9 @@ def world_tools(
             "rest only test that an argument was present, which an agent acting on a misheard "
             "detail would pass.\n"
             + (
-                "Tool/data probes not applicable; conversational runtime proof remains required."
+                "DEFERRED: live fixture readiness and native response checks remain required."
+                if native_runtime
+                else "Tool/data probes not applicable; conversational runtime proof remains required."
                 if data_free
                 else f"score {report.score:.2f}"
             )
