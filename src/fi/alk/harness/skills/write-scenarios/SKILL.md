@@ -641,8 +641,11 @@ called. Assert on what the world looks like afterwards and on what the caller wa
 
 ### When someone else is in the scene
 
-Only when the environment lists sub-actors. A coordinate whose level is named for a sub-actor includes
-that sub-actor in `sub_actors`, with two things written for this scenario:
+Only when the environment lists sub-actors. Write the scenario first as if no one else were there: the
+person's situation, request, details, sub-goals and answer key complete on their own. Then add the
+sub-actor on top; nothing written before changes, and the scenario still stands if they never come in.
+A coordinate whose level is named for a sub-actor includes that sub-actor in `sub_actors`, with two
+things written for this scenario:
 
 - `instruction`: who they are here and what they do, written to them like a situation text ("You are
   with <the person>. You want <something other than what they ask for> and say so once the agent
