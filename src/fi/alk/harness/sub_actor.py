@@ -61,7 +61,7 @@ class SubActorList(BaseModel):
         return "\n".join(
             f"- {one.id}: {one.name}"
             + (f" ({one.role})" if one.role else "")
-            + f", {one.channel}"
+            + f", {one.channel}: {(CHANNELS.get(one.channel) or {}).get('about', '')}"
             for one in self.sub_actors
         )
 

@@ -9242,7 +9242,7 @@ def test_the_coverage_plan_and_the_world_view_name_the_environment_s_sub_actors(
     aimed, seen = replies(["quiet_line"])
     assert (
         "no level is named for them yet. Keep them" in aimed
-        and "- second: Rowan (someone who takes the phone), audio_handoff" in aimed
+        and "- second: Rowan (someone who takes the phone), audio_handoff: someone who takes the phone from the person" in aimed
     )
     assert "sub-actors a scenario can include:\n- second: Rowan" in seen
     aimed, _seen = replies(["quiet_line", "with_second"])
