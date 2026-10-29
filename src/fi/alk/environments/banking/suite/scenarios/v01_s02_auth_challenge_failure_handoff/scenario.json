@@ -1,6 +1,6 @@
 {
-  "name": "auth_challenge_failure_handoff",
-  "scenario_key": "auth-challenge-failure-handoff",
+  "name": "v01_s02_auth_challenge_failure_handoff",
+  "scenario_key": "v01-s02-auth-challenge-failure-handoff",
   "scenario_id": "",
   "use_case": "Handle policy boundaries, pending charges, and unverified customer handoffs",
   "branch": "Customer attempts to access balance and lock card but fails the security passcode verification challenge, prompting a fraud specialist handoff.",

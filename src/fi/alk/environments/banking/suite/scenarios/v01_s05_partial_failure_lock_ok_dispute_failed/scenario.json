@@ -1,6 +1,6 @@
 {
-  "name": "partial_failure_lock_ok_dispute_failed",
-  "scenario_key": "partial-failure-lock-ok-dispute-failed",
+  "name": "v01_s05_partial_failure_lock_ok_dispute_failed",
+  "scenario_key": "v01-s05-partial-failure-lock-ok-dispute-failed",
   "scenario_id": "",
   "use_case": "Handle idempotency, retryable timeouts, and service failures",
   "branch": "Card lock succeeds but dispute filing encounters an escalation requiring a specialist handoff; agent maintains locked card state and routes dispute to fraud operations.",

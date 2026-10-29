@@ -1,7 +1,7 @@
 {
   "derived_from": "phase1_sheet:V01",
-  "name": "lost_card_and_dispute_desk",
-  "notes": "Baseline world frozen with 12 customers, 18 accounts, 24 cards, 100 transactions, clean baseline state (empty in-flight disputes and action logs), 8 tools, 4 system invariants, 5 configurable policies, 5 agent policies, 7 sub-goals, simulator prompt, and 2 stateful sequences.",
+  "name": "banking",
+  "notes": "Banking: customers, accounts, cards and transactions (12 customers, 18 accounts, 24 cards, 100 transactions) with the banking card-servicing and dispute tools, plus the Gmail tool set (7 tools, unchanged) over the bank's support mailbox, which starts with system labels only.",
   "sequences": [
     {
       "calls": [

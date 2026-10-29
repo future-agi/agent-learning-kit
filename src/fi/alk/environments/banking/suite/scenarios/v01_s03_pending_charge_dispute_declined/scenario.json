@@ -1,6 +1,6 @@
 {
-  "name": "pending_charge_dispute_declined",
-  "scenario_key": "pending-charge-dispute-declined",
+  "name": "v01_s03_pending_charge_dispute_declined",
+  "scenario_key": "v01-s03-pending-charge-dispute-declined",
   "scenario_id": "",
   "use_case": "Handle policy boundaries, pending charges, and unverified customer handoffs",
   "branch": "Customer attempts to dispute a pending transaction TX103 ($20.00 at Corner Cafe); agent explains bank policy prohibiting disputes on pending charges and declines filing.",

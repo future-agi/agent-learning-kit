@@ -263,3 +263,53 @@ INSERT INTO "transactions" VALUES('TX97','ACC10','CARD13','Walgreens',1950,'USD'
 INSERT INTO "transactions" VALUES('TX98','ACC12','CARD15','Bed Bath & Beyond',7400,'USD','posted','2026-10-14T14:30:00Z','Home goods');
 INSERT INTO "transactions" VALUES('TX99','ACC12','CARD15','Shake Shack',2300,'USD','posted','2026-10-24T18:00:00Z','Dining');
 INSERT INTO "transactions" VALUES('TX100','ACC13','CARD17','Home Depot',4100,'USD','posted','2026-10-20T12:00:00Z','Hardware');
+
+-- Gmail tool set (from gmail_inbox_triage): the bank's support mailbox.
+CREATE TABLE labels (
+    id TEXT PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL
+);
+CREATE TABLE threads (
+    id TEXT PRIMARY KEY NOT NULL,
+    subject TEXT NOT NULL,
+    snippet TEXT NOT NULL,
+    history_id TEXT NOT NULL,
+    is_restricted BOOLEAN NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE thread_labels (
+    thread_id TEXT NOT NULL,
+    label_id TEXT NOT NULL,
+    PRIMARY KEY (thread_id, label_id)
+);
+CREATE TABLE messages (
+    id TEXT PRIMARY KEY NOT NULL,
+    thread_id TEXT NOT NULL,
+    sender TEXT NOT NULL,
+    recipient TEXT NOT NULL,
+    cc TEXT NOT NULL DEFAULT '',
+    subject TEXT NOT NULL,
+    body TEXT NOT NULL,
+    date TEXT NOT NULL,
+    snippet TEXT NOT NULL
+);
+CREATE TABLE drafts (
+    id TEXT PRIMARY KEY NOT NULL,
+    thread_id TEXT NOT NULL,
+    recipient TEXT NOT NULL,
+    cc TEXT NOT NULL DEFAULT '',
+    bcc TEXT NOT NULL DEFAULT '',
+    subject TEXT NOT NULL,
+    body TEXT NOT NULL,
+    is_human_edited BOOLEAN NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+INSERT INTO "labels" VALUES('INBOX','INBOX','system');
+INSERT INTO "labels" VALUES('UNREAD','UNREAD','system');
+INSERT INTO "labels" VALUES('SENT','SENT','system');
+INSERT INTO "labels" VALUES('SPAM','SPAM','system');
+INSERT INTO "labels" VALUES('TRASH','TRASH','system');
+INSERT INTO "labels" VALUES('IMPORTANT','IMPORTANT','system');
+INSERT INTO "environment_policy" VALUES('lookback_days','7');

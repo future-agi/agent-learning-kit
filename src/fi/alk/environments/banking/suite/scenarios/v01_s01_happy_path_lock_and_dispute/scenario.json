@@ -1,6 +1,6 @@
 {
-  "name": "happy_path_lock_and_dispute",
-  "scenario_key": "happy-path-lock-and-dispute",
+  "name": "v01_s01_happy_path_lock_and_dispute",
+  "scenario_key": "v01-s01-happy-path-lock-and-dispute",
   "scenario_id": "",
   "use_case": "Evaluate dispute eligibility and file or track transaction dispute",
   "branch": "Customer discovers lost card ending 4821 with an unauthorized posted charge of $84.20 on TX101, confirms card lock, and requests dispute filing.",

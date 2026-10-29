@@ -1,6 +1,6 @@
 {
-  "name": "idempotent_dispute_retry_timeout",
-  "scenario_key": "idempotent-dispute-retry-timeout",
+  "name": "v01_s04_idempotent_dispute_retry_timeout",
+  "scenario_key": "v01-s04-idempotent-dispute-retry-timeout",
   "scenario_id": "",
   "use_case": "Handle idempotency, retryable timeouts, and service failures",
   "branch": "Customer resubmits a dispute request for TX104 following a connection timeout; agent submits dispute with existing request key and reuses dispute record D104 idempotently.",
