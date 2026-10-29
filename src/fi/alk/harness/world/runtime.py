@@ -152,6 +152,9 @@ class Call:
     # read as one thing: without it the UI can show what the agent did but not when, and "when"
     # is the whole question for a spoken run.
     at: float = 0.0
+    # Native multi-agent runtimes may identify which worker and task made the call.
+    by: str = ""
+    task: str = ""
 
 
 class GeneratedWorld(EnvironmentAdapter):

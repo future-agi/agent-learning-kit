@@ -543,6 +543,8 @@ def _calls_of(calls: Any) -> list[dict[str, Any]]:
             "refused": call.refused,
             "error": call.error,
             "at": getattr(call, "at", 0.0),
+            **({"by": call.by} if getattr(call, "by", "") else {}),
+            **({"task": call.task} if getattr(call, "task", "") else {}),
         }
         for call in calls
     ]
@@ -991,6 +993,13 @@ def _semantic_calls(path: Path, *, contract: AgentContract | None = None) -> lis
             ok=not failed,
             refused=failed,
             error=str(output) if failed else "",
+            by=str(
+                record.get("agent_key")
+                or record.get("agent_role")
+                or record.get("agent_id")
+                or ""
+            ),
+            task=str(record.get("task_name") or record.get("task_id") or ""),
             at=float(record.get("at") or 0.0),
         )
         # A harness-aware worker may mirror a local state-machine action to the world for

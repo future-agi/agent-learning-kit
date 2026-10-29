@@ -1,0 +1,111 @@
+diff --git a/graphs/python/pyproject.toml b/graphs/python/pyproject.toml
+index 73a1df4..5de1777 100644
+--- a/graphs/python/pyproject.toml
++++ b/graphs/python/pyproject.toml
+@@ -4,9 +4,9 @@ version = "0.1.0"
+ description = "Async subagents reference architecture for LangGraph Platform"
+ requires-python = ">=3.11"
+ dependencies = [
+-    "deepagents>=0.5.0",
++    "deepagents==0.7.32",
+     "langchain>=1.2.12",
+-    "langchain-anthropic>=1.4.0",
++    "langchain-openai==1.7.3",
+     "langchain-core>=1.2.19",
+     "langgraph>=1.1.2",
+     "langgraph-sdk>=0.4.4,<0.5",
+@@ -22,3 +22,6 @@ dev = [
+ [build-system]
+ requires = ["hatchling"]
+ build-backend = "hatchling.build"
++
++[tool.hatch.build.targets.wheel]
++packages = ["src"]
+diff --git a/graphs/python/src/agent.py b/graphs/python/src/agent.py
+index 5f230bb..fa1ea4b 100644
+--- a/graphs/python/src/agent.py
++++ b/graphs/python/src/agent.py
+@@ -12,8 +12,10 @@ supervisor, no external networking required.
+ 
+ from __future__ import annotations
+ 
++import os
++
+ from deepagents import AsyncSubAgent, create_deep_agent
+-from langchain_anthropic import ChatAnthropic
++from langchain_openai import ChatOpenAI
+ 
+ SYSTEM_PROMPT = """\
+ ## How to work:
+@@ -51,10 +53,13 @@ ASYNC_SUBAGENTS: list[AsyncSubAgent] = [
+     },
+ ]
+ 
+-model = ChatAnthropic(model="claude-sonnet-4-6-20250514")
++model = ChatOpenAI(
++    model=os.getenv("OPENAI_MODEL", "vertex_ai/gemini-3.7-flash"),
++    base_url=os.getenv("OPENAI_BASE_URL"),
++)
+ 
+ graph = create_deep_agent(
+     model=model,
+     system_prompt=SYSTEM_PROMPT,
+-    async_subagents=ASYNC_SUBAGENTS,
++    subagents=ASYNC_SUBAGENTS,
+ )
+diff --git a/graphs/python/src/coder.py b/graphs/python/src/coder.py
+index 2539505..831f42d 100644
+--- a/graphs/python/src/coder.py
++++ b/graphs/python/src/coder.py
+@@ -16,8 +16,10 @@ completion notifier wiring below. See `completion_notifier.py` for details.
+ 
+ from __future__ import annotations
+ 
++import os
++
+ from langchain.agents import create_agent
+-from langchain_anthropic import ChatAnthropic
++from langchain_openai import ChatOpenAI
+ from langchain_core.tools import tool
+ 
+ SYSTEM_PROMPT = """\
+@@ -76,7 +78,10 @@ def generate_tests(code: str, language: str, framework: str = "auto") -> str:
+     )
+ 
+ 
+-model = ChatAnthropic(model="claude-sonnet-4-6-20250514")
++model = ChatOpenAI(
++    model=os.getenv("OPENAI_MODEL", "vertex_ai/gemini-3.7-flash"),
++    base_url=os.getenv("OPENAI_BASE_URL"),
++)
+ 
+ 
+ # --- Static graph (no completion notifications) ---
+diff --git a/graphs/python/src/researcher.py b/graphs/python/src/researcher.py
+index 77833b2..fa50b2b 100644
+--- a/graphs/python/src/researcher.py
++++ b/graphs/python/src/researcher.py
+@@ -16,8 +16,10 @@ completion notifier wiring below. See `completion_notifier.py` for details.
+ 
+ from __future__ import annotations
+ 
++import os
++
+ from langchain.agents import create_agent
+-from langchain_anthropic import ChatAnthropic
++from langchain_openai import ChatOpenAI
+ from langchain_core.tools import tool
+ 
+ # Uncomment to enable completion notifications:
+@@ -74,7 +76,10 @@ def summarize_findings(content: str, format: str = "bullet_points") -> str:
+     )
+ 
+ 
+-model = ChatAnthropic(model="claude-sonnet-4-6-20250514")
++model = ChatOpenAI(
++    model=os.getenv("OPENAI_MODEL", "vertex_ai/gemini-3.7-flash"),
++    base_url=os.getenv("OPENAI_BASE_URL"),
++)
+ 
+ 
+ # --- Static graph (no completion notifications) ---

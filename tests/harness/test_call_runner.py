@@ -143,6 +143,8 @@ def test_file_tool_trace_is_collected_from_runtime_metadata(tmp_path: Path) -> N
                 "arguments": '{"destination":"airport"}',
                 "output": {"booking_id": "ride-1"},
                 "is_error": False,
+                "agent_key": "booking_worker",
+                "task_name": "Book requested ride",
             }
         )
         + "\n"
@@ -163,6 +165,8 @@ def test_file_tool_trace_is_collected_from_runtime_metadata(tmp_path: Path) -> N
     assert [call.name for call in calls] == ["book_ride", "charge_card"]
     assert calls[0].arguments == {"destination": "airport"}
     assert calls[0].ok is True
+    assert calls[0].by == "booking_worker"
+    assert calls[0].task == "Book requested ride"
     assert calls[1].ok is False
     assert calls[1].error == "declined"
 

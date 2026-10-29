@@ -3277,6 +3277,8 @@ def test_semantic_worker_trace_preserves_agent_facing_arguments(tmp_path):
                 },
                 "output": json.dumps({"booking_ref": "UBR-71904"}),
                 "is_error": False,
+                "agent_role": "Booking worker",
+                "task_id": "task-8",
             }
         )
         + "\n"
@@ -3289,6 +3291,8 @@ def test_semantic_worker_trace_preserves_agent_facing_arguments(tmp_path):
     assert calls[0].name == "book_ride"
     assert calls[0].arguments["caller_explicitly_confirmed"] is True
     assert calls[0].result == {"booking_ref": "UBR-71904"}
+    assert calls[0].by == "Booking worker"
+    assert calls[0].task == "task-8"
 
 
 def test_semantic_worker_trace_collapses_only_local_telemetry_mirror(tmp_path):

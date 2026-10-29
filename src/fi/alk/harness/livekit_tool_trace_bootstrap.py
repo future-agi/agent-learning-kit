@@ -350,4 +350,12 @@ def _install_declared_python_tools() -> None:
     threading.setprofile(profile)
 
 
-_install_declared_python_tools()
+try:
+    import crewai_runtime_observer_bootstrap
+
+    crewai_runtime_observer_bootstrap.install()
+except Exception:  # noqa: BLE001 - optional observation must not affect customer execution
+    pass
+
+if os.environ.get("ALK_CREWAI_TOOL_TRACE") != "1":
+    _install_declared_python_tools()

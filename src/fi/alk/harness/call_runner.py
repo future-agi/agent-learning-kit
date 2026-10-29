@@ -846,6 +846,13 @@ def _collect_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
             result=None if is_error else _structured(output),
             ok=not is_error,
             error=str(output) if is_error and output is not None else None,
+            by=str(
+                record.get("agent_key")
+                or record.get("agent_role")
+                or record.get("agent_id")
+                or ""
+            ),
+            task=str(record.get("task_name") or record.get("task_id") or ""),
             at=float(raw_at) if isinstance(raw_at, (int, float)) else 0.0,
         )
         if record.get("source") != _LIVEKIT_HOOK_SOURCE:

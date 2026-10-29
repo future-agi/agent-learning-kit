@@ -9032,6 +9032,20 @@ def _sdk_reads(variable: str) -> dict[str, Any]:
         return dict(OTELResourceDetector().detect().attributes)
 
 
+def test_crewai_observer_is_copied_per_world_and_preserved_on_reset(tmp_path: Path) -> None:
+    process = _source_process(environment={
+        "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/calls.jsonl", "ALK_CREWAI_TOOL_TRACE": "1",
+    })
+    expected = Path(pr.__file__).with_name("crewai_runtime_observer_bootstrap.py").read_bytes()
+    for name in ("first", "second", "first"):
+        captured = _spawn(tmp_path / name, process)
+        observer = captured["world_dir"] / "crewai_runtime_observer_bootstrap.py"
+        assert observer.read_bytes() == expected
+        assert observer.stat().st_mode & 0o777 == 0o444
+        assert captured["env"]["HARNESS_TOOL_TRACE"] == str(captured["world_dir"] / "calls.jsonl")
+        assert (captured["world_dir"] / "sitecustomize.py").read_bytes() == _LIVEKIT_HOOK.read_bytes()
+
+
 def _hosted_job(secret_refs: dict[str, SecretRef]) -> HarnessJob:
     return HarnessJob(
         job_id="job-1",
