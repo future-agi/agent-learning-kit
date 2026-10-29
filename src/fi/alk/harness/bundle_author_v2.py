@@ -58,7 +58,7 @@ from .bundle_v2 import (
     load_bundle_v2,
     seal_bundle_v2,
 )
-from .contract import Runtime, ToolEntry, runtime_public_environment
+from .contract import DataStore, Runtime, ToolEntry, runtime_public_environment
 from .generated_runtime import (
     GeneratedRuntimeError,
     _python_language_version,
@@ -200,6 +200,17 @@ def _reuse_certified_bundle(
         expected["source_schema"] = store.read_source_model().fingerprint
         actual["source_schema"] = certificate.source.schema_hash
     mismatched = sorted(name for name in expected if expected[name] != actual[name])
+    world, seed = authoring / "world.sqlite", frozen / "seed"
+    if world.is_file() and (
+        (seed / "world.sqlite").is_file()
+        and (seed / "world.sqlite").read_bytes() != world.read_bytes()
+        or (seed / "world-ir.json").is_file()
+        and not _imports_to(
+            world, seed / "source-model.json", seed / "world-ir.json"
+        )
+    ):
+        # The frozen bundle must seed the world.sqlite the environment is known by.
+        mismatched.append("world.sqlite")
     if mismatched:
         raise BundleAuthorError(
             "certified_bundle_inputs_changed: " + ", ".join(mismatched)
@@ -1059,7 +1070,9 @@ def _generic_postgres_seed_artifacts(
             include_rows=False,
         )
     schema_path.write_text(prefix + schema_sql, encoding="utf-8")
-    if canonical_world.is_file():
+    if canonical_world.is_file() and (
+        not legacy_world.is_file() or world_ir_is_imported(authoring)
+    ):
         world_path = seed / "world-ir.json"
         shutil.copy2(canonical_world, world_path)
         adopted_world = "generic-harness/world-ir.json"
@@ -1822,6 +1835,10 @@ def _adk_web_interface(root: Path, runtime: dict[str, Any]) -> dict[str, Any] | 
     app_name = _adk_app_name(root, str(runtime.get("workdir") or ""))
     if app_name is None:
         return None
+    return _adk_interface_for(command, app_name)
+
+
+def _adk_interface_for(command: list[str], app_name: str) -> dict[str, Any]:
     port = _command_port(command, default=8000)
     return {
         "kind": "http",
@@ -3225,6 +3242,16 @@ def _compile_source_tool_handlers(contract: dict[str, Any], staging: Path) -> li
     return written
 
 
+def _environment_tools(contract: dict[str, Any]) -> list[str]:
+    return sorted(
+        {
+            str(tool.get("name") or "").strip()
+            for tool in contract.get("tools", [])
+            if isinstance(tool, dict) and str(tool.get("name") or "").strip()
+        }
+    )
+
+
 def _files(root: Path) -> list[BundleFileV2]:
     records: list[BundleFileV2] = []
     for path in sorted(root.rglob("*")):
@@ -3561,14 +3588,7 @@ def author_bundle_v2(
                 type=provider,
                 source_target_id=str(job.agent.config[target_key]),
                 public_capability=public_capability,
-                environment_tools=sorted(
-                    {
-                        str(tool.get("name") or "").strip()
-                        for tool in contract_body.get("tools", [])
-                        if isinstance(tool, dict)
-                        and str(tool.get("name") or "").strip()
-                    }
-                ),
+                environment_tools=_environment_tools(contract_body),
                 event_path=str(
                     job.agent.config.get("event_path") or "/provider/events"
                 ),
@@ -3615,6 +3635,7 @@ def author_bundle_v2(
             metadata={
                 "packaging": plan.packaging,
                 "environment_plan_version": "2",
+                **_adk_web_app(source_root, contract_body),
                 **({"generic_harness": "v1"} if generic_pipeline else {}),
                 **(
                     {
@@ -3722,11 +3743,31 @@ def reseal_scenarios(authoring: str | Path) -> str | None:
         _copy_scenarios(authoring_root, staging, count=count)
         if (authoring_root / CATALOGUE).is_file():
             shutil.copy2(authoring_root / CATALOGUE, staging / CATALOGUE)
-        if (staging / "contract.json").is_file() and (authoring_root / "contract.json").is_file():
-            shutil.copy2(authoring_root / "contract.json", staging / "contract.json")
+        compiled, processes, metadata = _carry_contract(authoring_root, staging, manifest)
         seed = _reseeded(manifest, authoring_root, staging)
         world_changed = seed is not manifest.seed
-        resealed = manifest.model_copy(update={"files": _files(staging), "seed": seed})
+        metadata = {
+            key: value
+            for key, value in metadata.items()
+            if key not in {"sealed_from", "contract_compiled"}
+        }
+        if compiled and _carries_world(authoring_root, staging):
+            # Unstamped, the platform never replays this bundle for an edit.
+            metadata["sealed_from"] = sealed_from(authoring_root)
+            contract = authoring_root / "contract.json"
+            if contract.is_file():
+                # Tells the platform this reseal compiled what the contract derives.
+                metadata["contract_compiled"] = hashlib.sha256(
+                    contract.read_bytes()
+                ).hexdigest()
+        resealed = manifest.model_copy(
+            update={
+                "files": _files(staging),
+                "seed": seed,
+                "metadata": metadata,
+                "processes": processes,
+            }
+        )
         resealed = resealed.model_copy(update={"digest": seal_bundle_v2(resealed)})
         (staging / BUNDLE_V2_MANIFEST).write_text(
             json.dumps(resealed.model_dump(mode="json"), indent=2, sort_keys=True) + "\n",
@@ -3746,6 +3787,190 @@ def reseal_scenarios(authoring: str | Path) -> str | None:
             authoring_root, bundle_digest=resealed.digest, count=count, world_changed=world_changed
         )
     return resealed.digest
+
+
+def _built_from(contract: dict[str, Any]) -> tuple[Any, ...]:
+    """What a build derives from a contract other than its tools' handlers."""
+    runtime = Runtime.model_validate(contract.get("runtime") or {})
+    store = contract.get("data_store")
+    tools = contract.get("tools")
+    return (
+        str(contract.get("modality") or "").strip().lower(),
+        runtime.model_dump(mode="json", exclude={"interface"}),
+        DataStore.model_validate(store).model_dump(mode="json")
+        if isinstance(store, dict)
+        else store,
+        contract.get("data_schema") or None,
+        isinstance(tools, list) and not tools,
+        contract.get("runtime_dependencies") or None,
+    )
+
+
+# What an older build sealed as the interface of a command it bridged.
+_COMMAND_BRIDGE_INTERFACE = {
+    "kind": "callable",
+    "protocol": "fi.alk",
+    "path": "",
+    "health_path": "",
+    "include_tools": False,
+}
+
+
+def _interface(contract: dict[str, Any]) -> Any:
+    return Runtime.model_validate(contract.get("runtime") or {}).model_dump(mode="json")[
+        "interface"
+    ]
+
+
+def _interface_edited(authored: dict[str, Any], sealed: dict[str, Any]) -> bool:
+    """Whether the authored contract names an interface the build did not seal: one only
+    a build applies. A build replaces an omitted one."""
+    named = (authored.get("runtime") or {}).get("interface")
+    return isinstance(named, dict) and _interface(authored) != _interface(sealed)
+
+
+def _built_by_older_alk(
+    sealed: dict[str, Any], processes: list[Any], metadata: dict[str, Any]
+) -> bool:
+    """Whether an older build compiled this bundle: one that bridged a ``callable`` command,
+    traced tool callables, or kept a written HTTP interface for ``adk web``, none of which a
+    build does now."""
+    environments = [getattr(process, "environment", None) or {} for process in processes]
+    bridged = _interface({"runtime": {"interface": _COMMAND_BRIDGE_INTERFACE}})
+    return (
+        any("ALK_TOOL_TRACE_BINDINGS" in env for env in environments)
+        or (
+            _interface(sealed) == bridged
+            and any("ALK_SUBPROCESS_COMMAND" in env for env in environments)
+        )
+        or _adk_interface_written(sealed, metadata)
+    )
+
+
+def _adk_web_app(source: Path, contract: dict[str, Any]) -> dict[str, str]:
+    """The ADK app a build resolves for an ``adk web`` runtime, as manifest metadata."""
+    runtime = contract.get("runtime")
+    runtime = runtime if isinstance(runtime, dict) else {}
+    if not _is_adk_web_command([str(item) for item in (runtime.get("command") or [])]):
+        return {}
+    app_name = _adk_app_name(source, str(runtime.get("workdir") or ""))
+    return {"adk_web_app": app_name or ""}
+
+
+def _adk_interface_written(sealed: dict[str, Any], metadata: dict[str, Any]) -> bool:
+    """Whether a chat ``adk web`` bundle seals an HTTP interface other than the one its
+    build derived from the app it resolved. A bundle that recorded no app predates that."""
+    runtime = sealed.get("runtime") or {}
+    command = [str(item) for item in (runtime.get("command") or [])]
+    interface = runtime.get("interface")
+    if (
+        str(sealed.get("modality") or "").strip().lower() != "chat"
+        or not _is_adk_web_command(command)
+        or not isinstance(interface, dict)
+        or str(interface.get("kind") or "").strip().lower() not in {"", "http"}
+    ):
+        return False
+    app_name = metadata.get("adk_web_app")
+    if not isinstance(app_name, str):
+        return True
+    if not app_name:
+        # With no resolvable app a build keeps the written interface too.
+        return False
+    own = {"runtime": {"interface": _adk_interface_for(command, app_name)}}
+    return _interface(sealed) != _interface(own)
+
+
+def _carry_contract(
+    authoring: Path, staging: Path, manifest: EnvironmentBundleV2
+) -> tuple[bool, list[Any], dict[str, Any]]:
+    """Carry an edited contract.json into the staged bundle with what a build compiles from
+    it: the runtime interface the build sealed, the tool handlers and a provider import's
+    tools. Returns whether the bundle now runs the contract, with the manifest's processes
+    and metadata to seal. An edit to anything else a build derives from the contract, or
+    any edit to a bundle an older build compiled, is carried as written and left for a build.
+    """
+    processes, metadata = list(manifest.processes), dict(manifest.metadata)
+    authored_path, sealed_path = authoring / "contract.json", staging / "contract.json"
+    if not authored_path.is_file() or not sealed_path.is_file():
+        # A contract added after a build reaches the bundle only through a build.
+        return not authored_path.is_file(), processes, metadata
+    try:
+        authored = json.loads(authored_path.read_text(encoding="utf-8"))
+        sealed = json.loads(sealed_path.read_text(encoding="utf-8"))
+        compiles = (
+            # A contract an earlier reseal copied is not what the bundle was built from.
+            not metadata.get("contract_copied")
+            and isinstance(authored, dict)
+            and isinstance(sealed, dict)
+            and _built_from(authored) == _built_from(sealed)
+            and not _interface_edited(authored, sealed)
+            and not _built_by_older_alk(sealed, processes, metadata)
+        )
+    except ValueError:
+        compiles = False
+    if not compiles:
+        shutil.copy2(authored_path, sealed_path)
+        # Until a build, whose metadata drops this, no reseal stamps the bundle again.
+        metadata["contract_copied"] = True
+        return False, processes, metadata
+    # The build may choose the runtime's interface from the source; a reseal keeps its choice.
+    body = authored
+    built = (sealed.get("runtime") or {}).get("interface")
+    if built is not None and _interface(authored) != _interface(sealed):
+        body = {**authored, "runtime": {**(authored.get("runtime") or {}), "interface": built}}
+    sealed_path.write_text(json.dumps(body, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if body == sealed:
+        return True, processes, metadata
+    # As a build makes them: the authoring handlers, then one for each source tool entry.
+    shutil.rmtree(staging / "handlers", ignore_errors=True)
+    if (authoring / "handlers").is_dir():
+        shutil.copytree(authoring / "handlers", staging / "handlers")
+    _compile_source_tool_handlers(body, staging)
+    if isinstance(metadata.get("provider_import"), dict):
+        metadata["provider_import"] = {
+            **metadata["provider_import"],
+            "environment_tools": _environment_tools(body),
+        }
+    return True, processes, metadata
+
+
+# What a reseal carries from the authoring folders into the bundle.
+RESEAL_INPUTS = ("contract.json", CATALOGUE, "world.sqlite")
+
+
+def sealed_from(authoring: Path) -> str:
+    """A digest of the authoring files a reseal carries, as the platform reads them from a
+    checkpoint of the same folder, so it can tell which content a bundle was sealed from."""
+    from .hosted_conversation import _canonical_digest
+
+    held: dict[str, str] = {}
+    for path in [
+        *(authoring / "scenarios").rglob("*"),
+        *(authoring / n for n in RESEAL_INPUTS),
+    ]:
+        relative = path.relative_to(authoring)
+        if path.is_symlink() or not path.is_file():
+            continue
+        if any(
+            part in {"__pycache__", "outbound-spool", "telemetry"}
+            for part in relative.parts
+        ):
+            continue
+        held[relative.as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return _canonical_digest(held)
+
+
+def _carries_world(authoring: Path, staging: Path) -> bool:
+    """Whether a reseal can carry the authoring world.sqlite into this bundle's seed."""
+    seed = staging / "seed"
+    return (
+        not (authoring / "world.sqlite").is_file()
+        or (seed / "world.sqlite").is_file()
+        or (
+            (seed / "world-ir.json").is_file()
+            and (seed / "source-model.json").is_file()
+        )
+    )
 
 
 def _reseeded(manifest: EnvironmentBundleV2, authoring: Path, staging: Path) -> Seed:
@@ -3781,6 +4006,35 @@ def _reseeded(manifest: EnvironmentBundleV2, authoring: Path, staging: Path) -> 
             )
         )
     return manifest.seed.model_copy(update={"stores": stores})
+
+
+def _imports_to(world: Path, source_model: Path, ir: Path) -> bool:
+    """Whether a SQLite world imports, under a source model, exactly to a World IR."""
+    from .source_model import SourceModel
+    from .world_import.sqlite import import_sqlite_world
+
+    try:
+        source = SourceModel.model_validate_json(
+            source_model.read_text(encoding="utf-8")
+        )
+        with closing(sqlite3.connect(f"file:{world}?mode=ro", uri=True)) as connection:
+            imported = import_sqlite_world(connection, source, validate=False).world
+        held = json.loads(ir.read_text(encoding="utf-8"))
+    except (OSError, ValueError, sqlite3.Error):
+        return False
+    return imported.model_dump(mode="json") == held
+
+
+def world_ir_is_imported(authoring: Path) -> bool:
+    """Whether the canonical World IR is exactly what authoring world.sqlite imports to.
+
+    world.sqlite is what world edits write and what an environment is known by; any
+    other IR, or one beside a world.sqlite that does not import, seeds another world.
+    """
+    root = authoring / "generic-harness"
+    return _imports_to(
+        authoring / "world.sqlite", root / "source-model.json", root / "world-ir.json"
+    )
 
 
 def _carried_world(authoring: Path, staging: Path) -> set[str]:
@@ -3825,6 +4079,11 @@ def _recertify_scenarios(
     if not path.is_file():
         return
     held = HarnessCertification.model_validate_json(path.read_text(encoding="utf-8"))
+    update = {"scenario_set_hash": _artifact_digest(authoring / "scenarios")}
+    artifacts = GenericHarnessArtifactStore(authoring / "generic-harness")
+    if world_changed and (artifacts.root / "world-ir.json").is_file():
+        # A world edit rewrote the canonical IR along with the seed.
+        update["world_ir_hash"] = artifacts.read_world_ir().fingerprint
     note = (
         "scenarios changed after runtime validation were proved against the authoring world, "
         "not the runtime"
@@ -3832,9 +4091,7 @@ def _recertify_scenarios(
     certificate = HarnessCertification.create(
         status=held.status,
         source=held.source,
-        authoring=held.authoring.model_copy(
-            update={"scenario_set_hash": _artifact_digest(authoring / "scenarios")}
-        ),
+        authoring=held.authoring.model_copy(update=update),
         compiler=held.compiler.model_copy(update={"bundle_digest": bundle_digest}),
         runtime=held.runtime,
         checks=held.checks.model_copy(update={"scenario_setup_ready": f"{count}/{count}"}),

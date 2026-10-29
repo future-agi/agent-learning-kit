@@ -53,6 +53,7 @@ from .folder import (
     write_index,
 )
 from .checks import reference_of, run_check
+from .proofs import record_proof, record_unprovable
 from .prove import (
     executes,
     native_runtime,
@@ -172,8 +173,10 @@ def _no_longer_hold(
         try:
             proof = prove(scenario, catalogue, world_root)
         except Exception as exc:  # noqa: BLE001 - a scenario that cannot be proved is the finding
+            record_unprovable(destination, scenario.scenario_key, type(exc).__name__)
             failed.append((scenario.name, type(exc).__name__))
             continue
+        record_proof(destination, scenario.scenario_key, proof)
         if not proof.holds and not (proof.deferred and not proof.broken):
             why = "not ready" if not proof.ready else (
                 "the reference solution no longer passes it"
@@ -1100,6 +1103,10 @@ def accept_scenario(
     # A proved scenario is already valuable work. Persist it immediately so a stopped model,
     # browser refresh, process restart, or later scenario failure cannot make the UI say none
     # were written. ``save_scenarios`` remains the suite-level diversity/finality gate.
+    # Saved on both paths: parallel writers share this process, so the proof file is safe to
+    # write even where the folders are not. A rename is not proved again: its key keeps its proof.
+    if proof is not None:
+        record_proof(world_root, scenario.scenario_key or _slug(scenario.name), proof)
     if persist:
         write_scenarios(kept, world_root, catalogue)
     else:
@@ -1270,6 +1277,7 @@ def scenario_tools(
     rename_on_collision: bool | None = None,
     can_grow: bool = False,
     scenario_problem: Callable[[dict[str, Any]], str] | None = None,
+    catalogue: Catalogue | None = None,
 ) -> tuple[Any, list[Scenario]]:
     """A server for writing scenarios against one built environment.
 
@@ -1281,6 +1289,9 @@ def scenario_tools(
     ``start_from`` seeds that list. A parallel writer starts empty rather than from disk, so it
     is never counted as already having what a sibling wrote.
 
+    ``catalogue`` shares one catalogue object with the session's other servers; without it the
+    catalogue is read from disk.
+
     ``can_grow`` lets ``aim_for`` move the cap. Only chat sets it: "add five" reopens a finished
     suite, so the size it was opened with is exactly what the person asked to go past. Authoring
     keeps the cap it was given, because a model raising its own target is how 200 became 559.
@@ -1291,7 +1302,7 @@ def scenario_tools(
     kept: list[Scenario] = (
         list(start_from) if start_from is not None else load_scenarios(destination)
     )
-    catalogue = load_catalogue(destination)
+    catalogue = catalogue if catalogue is not None else load_catalogue(destination)
     simulator_prompt = load_simulator_prompt(destination)
     target = {"count": wanted}
     # Keys this environment has given out, a dropped scenario's included: never given to a new one.

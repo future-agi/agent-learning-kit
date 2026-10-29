@@ -20,6 +20,7 @@ import asyncio
 import json
 import logging
 import re
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,7 @@ from ..catalogue import (
     CRITERIA_RULES,
     SUB_GOAL_RULES,
     already_claimed,
+    Catalogue,
     SubGoal,
     load_catalogue,
     save_catalogue,
@@ -44,6 +46,7 @@ from ..catalogue import (
 )
 from ..checks import reference_of, run_check, run_world_check
 from ..contract import AgentContract, is_data_free_conversation
+from ..seed_rows import only_seed_rows
 from ..simulator import (
     load_simulator_prompt,
     save_simulator_prompt,
@@ -394,6 +397,56 @@ def _world_columns(world: Any, table: str) -> dict[str, bool] | None:
         return None
 
 
+def _unreadable_arrays(world: Any, destination: Path) -> list[str]:
+    """Rewrite Postgres array literals in array columns as JSON; the columns left unreadable.
+
+    Uses the source model and the converter the seed import uses, so what saves also seeds.
+    """
+    from ..certification import GenericHarnessArtifactStore
+    from ..source_model import LogicalType
+    from ..world_import.sqlite import array_value
+
+    store = getattr(world, "store", None)
+    artifacts = GenericHarnessArtifactStore(destination / "generic-harness")
+    if getattr(store, "engine", "") != "sqlite" or not (
+        artifacts.root / artifacts.SOURCE_MODEL
+    ).is_file():
+        return []
+    try:
+        source = artifacts.read_source_model()
+    except (OSError, ValueError):
+        return []
+    held = set(store.collections())
+    problems: list[str] = []
+    for table in source.tables:
+        if table.name not in held:
+            continue
+        info = store.query(f'PRAGMA table_info("{table.name}")')
+        columns = {row["name"] for row in info}
+        for column in table.columns:
+            if column.logical_type is not LogicalType.ARRAY:
+                continue
+            if column.name not in columns:
+                continue
+            found = store.query(
+                f'SELECT DISTINCT "{column.name}" AS value FROM "{table.name}" '
+                f'WHERE "{column.name}" IS NOT NULL'
+            )
+            for value in (row["value"] for row in found):
+                try:
+                    items = array_value(value, column.element_type)
+                except ValueError:
+                    problems.append(f"{table.name}.{column.name}")
+                    break
+                if isinstance(value, str) and value.startswith("{"):
+                    store.execute(
+                        f'UPDATE "{table.name}" SET "{column.name}" = ? '
+                        f'WHERE "{column.name}" = ?',
+                        [items, value],
+                    )
+    return problems
+
+
 def _still_refusing(counts: dict[str, int], gate: str, problems: list[str]) -> bool:
     key = f"{gate}:{sorted(problems)}"
     counts[key] = counts.get(key, 0) + 1
@@ -537,6 +590,7 @@ def world_tools(
     source_root: str = "",
     deferred_runtime: bool = False,
     external_runtime: bool = False,
+    catalogue: Catalogue | None = None,
     native_runtime: bool = False,
 ) -> Any:
     """A server exposing the world-building surface for one agent.
@@ -544,6 +598,9 @@ def world_tools(
     ``source_root`` is where the agent's own code lives. With it, a tool can be bound to the
     agent's own implementation; without it the agent was given as a specification and its
     tools have to be written here.
+
+    ``catalogue`` shares one catalogue object with the session's other servers; without it the
+    catalogue is read from disk.
     """
     # An existing world is picked up rather than replaced. Amending one is the ordinary case
     # once it has been built once, and starting empty every time would mean rebuilding a
@@ -627,7 +684,7 @@ def world_tools(
     if source_root:
         world.reach(source_root)
     kind = for_contract(contract)
-    catalogue = load_catalogue(destination)
+    catalogue = catalogue if catalogue is not None else load_catalogue(destination)
     scores: list[float] = []
     # The checks that decide whether this world is usable, written here rather than fixed in
     # advance, because what makes a world usable is a judgement about this agent.
@@ -666,6 +723,13 @@ def world_tools(
             ),
             encoding="utf-8",
         )
+
+    def _runtime_owned() -> set[str]:
+        # The submitted runtime owns exactly the contract's tools: tools declared since a
+        # restore join them, and tools the contract no longer has leave.
+        if deferred_runtime or external_runtime:
+            world.runtime_tools = set(contract.tool_names())
+        return set(getattr(world, "runtime_tools", set()))
 
     def _verified() -> tuple[list[str], list[str], dict[str, list[str]]]:
         """How the world's own checks fare, and which of them cannot fail.
@@ -935,7 +999,7 @@ def world_tools(
                 f"{name!r} is not a tool this agent has. It has: "
                 f"{', '.join(sorted(contract.tool_names()))}"
             )
-        if name in set(getattr(world, "runtime_tools", set())):
+        if name in _runtime_owned():
             return _ok(
                 f"{name} is owned by the submitted runtime. Its dependencies and callable are "
                 "built and exercised inside the isolated execution process; no control-plane "
@@ -1518,7 +1582,7 @@ def world_tools(
     async def add_world_check(args: dict[str, Any]) -> dict[str, Any]:
         if native_runtime:
             return _err(NATIVE_RUNTIME_HELP)
-        runtime_tools = set(getattr(world, "runtime_tools", set()))
+        runtime_tools = _runtime_owned()
         runtime_only = bool(contract.tools) and set(contract.tool_names()).issubset(
             runtime_tools
         )
@@ -1568,6 +1632,7 @@ def world_tools(
             return _ok(
                 "DEFERRED: native state, tool behavior and fixture readiness require live validation."
             )
+        _runtime_owned()
         report = probe(world, contract, sequences=sequences, kind=kind)
         scores.append(report.score)
         # Saying the score is going nowhere, rather than leaving it to be noticed. A stage that
@@ -1614,7 +1679,7 @@ def world_tools(
         schema({"notes": str}, []),
     )
     async def save_world(args: dict[str, Any]) -> dict[str, Any]:
-        runtime_tools = set(getattr(world, "runtime_tools", set()))
+        runtime_tools = _runtime_owned()
         runtime_only = bool(contract.tools) and set(contract.tool_names()).issubset(
             runtime_tools
         )
@@ -1627,6 +1692,13 @@ def world_tools(
                 "rows from this world, so an insert naming any of these fails and the environment "
                 "never stands up. Use the agent's own names, or drop what it does not have. A "
                 "column it never declares is one its code never reads."
+            )
+        if unreadable := _unreadable_arrays(world, destination):
+            return _err(
+                "Not saved. These array columns hold values that are not lists: "
+                + ", ".join(unreadable)
+                + '. The runtime seed reads an array as a JSON list, such as [] or ["a"]. '
+                "Set them with change_data."
             )
         data_free = (
             (
@@ -1719,6 +1791,14 @@ def world_tools(
                     + "\n  - ".join(problems)
                 )
         dirty = [] if native_runtime else dirty_state(world, sequences, kind)
+        connection = getattr(world.store, "connection", None)
+        if dirty and source_root and isinstance(connection, sqlite3.Connection):
+            # The agent's own seed rows, even in-flight ones, are its starting state.
+            dirty = [
+                name
+                for name in dirty
+                if not only_seed_rows(connection, Path(source_root), name)
+            ]
         if dirty:
             counts = world.state()
             listed = ", ".join(f"{name} ({len(counts[name])} rows)" for name in dirty)
