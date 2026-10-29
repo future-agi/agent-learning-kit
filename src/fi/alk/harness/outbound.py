@@ -769,6 +769,11 @@ class TerminalPayload(BaseModel):
     reason: TerminalReason | None
     failure: TerminalFailure | None
     scenario_counts: ScenarioCounts
+    # Campaign provenance echo: when the submitted job's `metadata` carries a
+    # `certification` block (production certification campaigns), the terminal
+    # event returns it verbatim so the platform can bind the terminal attempt
+    # to the campaign/case that ordered it. Optional — absent on ordinary runs.
+    certification: dict[str, JsonValue] | None = None
 
     @model_validator(mode="after")
     def _terminal_stage(self) -> "TerminalPayload":

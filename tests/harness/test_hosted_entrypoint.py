@@ -12,7 +12,7 @@ import random
 import stat
 import tempfile
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -702,6 +702,7 @@ class Harness:
 def _build_harness(
     *,
     scenarios: list[FakeScenario],
+    job: HarnessJob | None = None,
     fence_after: int | None = None,
     fence_on_url_substring: str | None = None,
     fence_on_terminal_event: bool = False,
@@ -733,7 +734,7 @@ def _build_harness(
         corrupt_bundle(bundle_dir)
 
     job_path = tmp / "job.json"
-    _write_job(job_path, _job(parallelism=parallelism, artifacts=artifacts))
+    _write_job(job_path, job or _job(parallelism=parallelism, artifacts=artifacts))
 
     if build_output is not None:
         # `write_build_output` (process_runtime.py) writes here; no test previously did, so
@@ -2262,6 +2263,101 @@ def test_e2e_two_scenarios_one_pass_one_fail_reaches_completed_and_exits_0() -> 
     asyncio.run(scenario())
 
 
+def test_certification_chat_two_scenarios_emit_bound_transcripts_and_provenance() -> None:
+    async def scenario() -> None:
+        certification = {
+            "campaign_id": "campaign-1",
+            "case_key": "chat-case",
+            "suite_digest": "a" * 64,
+        }
+        job = _job(connector="retell_chat").model_copy(
+            update={"metadata": {"certification": certification}}
+        )
+        scenarios = [
+            FakeScenario(
+                f"chat-{index}",
+                f"platform-chat-{index}",
+                [FakeSubGoal("holds", True)],
+            )
+            for index in range(2)
+        ]
+        harness = _build_harness(scenarios=scenarios, instances=1, job=job)
+
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
+        assert code == he.EXIT_OK
+        terminal = harness.transport.terminal_events()[0]
+        assert terminal["payload"]["certification"] == certification
+        for expected in scenarios:
+            receipt = harness.transport.receipts[("job-1", expected.scenario_key)]
+            transcript = receipt["call"]["transcript_artifact"]
+            assert receipt["status"] == "passed"
+            assert transcript is not None
+            assert transcript.removeprefix("sha256:") in harness.transport.artifacts
+            assert receipt["call"]["recording_artifacts"] == []
+
+    asyncio.run(scenario())
+
+
+def test_certification_voice_two_scenarios_emit_transcripts_and_recordings() -> None:
+    async def scenario() -> None:
+        certification = {
+            "campaign_id": "campaign-1",
+            "case_key": "voice-case",
+            "suite_digest": "b" * 64,
+        }
+
+        class RecordingCallRunner(FakeCallRunner):
+            async def run(
+                self, scenario: FakeScenario, runtime: EnvironmentRuntime
+            ) -> CallOutcome:
+                outcome = await super().run(scenario, runtime)
+                recording = await self._adapter.upload_artifact(
+                    b"voice-recording",
+                    kind=ob.ArtifactKind.RECORDING_COMBINED,
+                    scenario_key=scenario.scenario_key,
+                )
+                return replace(
+                    outcome, recording_artifacts=(recording,) if recording else ()
+                )
+
+        job = _job(
+            connector="vapi",
+            artifacts=HarnessArtifactPolicy(level=ArtifactLevel.FULL),
+        ).model_copy(update={"metadata": {"certification": certification}})
+        scenarios = [
+            FakeScenario(
+                f"voice-{index}",
+                f"platform-voice-{index}",
+                [FakeSubGoal("holds", True)],
+            )
+            for index in range(2)
+        ]
+        harness = _build_harness(scenarios=scenarios, instances=1, job=job)
+        harness.deps.build_call_runner = lambda adapter, context: RecordingCallRunner(
+            adapter
+        )
+
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
+        assert code == he.EXIT_OK
+        terminal = harness.transport.terminal_events()[0]
+        assert terminal["payload"]["certification"] == certification
+        for expected in scenarios:
+            receipt = harness.transport.receipts[("job-1", expected.scenario_key)]
+            transcript = receipt["call"]["transcript_artifact"]
+            recordings = receipt["call"]["recording_artifacts"]
+            assert receipt["status"] == "passed"
+            assert transcript is not None
+            assert transcript.removeprefix("sha256:") in harness.transport.artifacts
+            assert len(recordings) == 1
+            assert recordings[0].removeprefix("sha256:") in harness.transport.artifacts
+
+    asyncio.run(scenario())
+
+
 # =================================================================================================
 # Additional tests closing mutation-honesty gaps -- cases where mutating the guarded code paths
 # would have passed the suite unnoticed.
@@ -2638,6 +2734,47 @@ def test_redaction_end_to_end_secret_never_crosses_any_channel() -> None:
         assert "***" in terminal["payload"]["failure"]["message"]
         receipt_body = transport.receipts[("job-1", "s1")]
         assert "***" in receipt_body["failure"]["message"]
+
+    asyncio.run(scenario())
+
+
+def test_terminal_event_echoes_the_jobs_certification_metadata() -> None:
+    # Campaign provenance passthrough: `run_job` wires `job.metadata.certification`
+    # into the adapter after job.json parses; the terminal event must return it
+    # verbatim so the platform can bind the terminal attempt to the campaign/case.
+    async def scenario() -> None:
+        transport = FakeTransport()
+        adapter = _build_adapter(transport)
+        adapter.set_certification_metadata(
+            {
+                "campaign_id": "cmp-123",
+                "case_key": "cert-case",
+                "suite_digest": "a" * 64,
+            }
+        )
+        await adapter.emit_terminal(stage=HarnessStage.COMPLETED)
+        await adapter.drain(complete=True)
+        terminal = transport.terminal_events()[0]
+        assert terminal["payload"]["certification"] == {
+            "campaign_id": "cmp-123",
+            "case_key": "cert-case",
+            "suite_digest": "a" * 64,
+        }
+
+    asyncio.run(scenario())
+
+
+def test_terminal_event_omits_certification_on_ordinary_runs() -> None:
+    # Ordinary (non-certification) jobs carry no `metadata.certification` — the
+    # key must be absent entirely, keeping their terminal payload byte-identical
+    # to before the echo existed.
+    async def scenario() -> None:
+        transport = FakeTransport()
+        adapter = _build_adapter(transport)
+        await adapter.emit_terminal(stage=HarnessStage.COMPLETED)
+        await adapter.drain(complete=True)
+        terminal = transport.terminal_events()[0]
+        assert "certification" not in terminal["payload"]
 
     asyncio.run(scenario())
 
