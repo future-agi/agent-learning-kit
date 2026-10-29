@@ -84,7 +84,7 @@ base failure layer on each weak cell.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | `voice_loss_guard_missing` | config fault | a single-timing or guardless voice objective |
 | `objective_guards_missing` | config fault | the loss has no sentinel/canary guard |
 | public boundary error | config fault | `summary.public_boundary_passed` |

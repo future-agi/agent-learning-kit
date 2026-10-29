@@ -98,8 +98,8 @@ selection survives into a replayable simulation.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `Set AGENT_LEARNING_SDK_EVALUATION_HOOK_KEY ...` | keys | `agent-learn doctor` → `summary.api_key_configured` |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `Set AGENT_LEARNING_SDK_EVALUATION_HOOK_KEY ...` | keys | `agent-learn doctor --boundary` → `summary.api_key_configured` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | 401 from the hook | auth fault | bearer token sent does not match what the endpoint expects |
 | hook returns non-JSON or missing score | contract fault | your service must return JSON with a score the metric can read |
 

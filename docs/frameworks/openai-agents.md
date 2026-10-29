@@ -88,8 +88,8 @@ replayable record, not a log line: the same file feeds `baseline`, `compare`, an
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
-| `missing required environment variable(s)` | config fault | set the placeholder key shown above; `agent-learn doctor` → `summary.public_boundary_passed` confirms the install surface |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
+| `missing required environment variable(s)` | config fault | set the placeholder key shown above; `agent-learn doctor --boundary` → `summary.public_boundary_passed` confirms the install surface |
 | transcript keeps only the final answer (handoff/review entries dropped) | behavior regression | re-run the twin and compare the handoff-transcript evidence against the flattened fallback |
 
 ## 5. Prove it / keep it

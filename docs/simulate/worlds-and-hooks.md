@@ -98,7 +98,7 @@ transition/invariant evidence behind each score.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | `Set AGENT_LEARNING_SDK_..._KEY before running` | env not exported | `summary.api_key_configured` is about the kit key; the example key is set inline as shown in §2 |
 | world ends non-terminal / transitions missing | agent never called `apply_world_transition` | inspect the world contract evidence in the artifact's case records |
 

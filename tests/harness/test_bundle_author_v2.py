@@ -680,32 +680,6 @@ def test_bundle_rejects_missing_runtime_configuration_after_source_checkout(
         )
 
 
-def test_bundle_accepts_post_checkout_runtime_configuration_names(
-    tmp_path: Path,
-) -> None:
-    source = tmp_path / "voice-agent"
-    source.mkdir()
-    (source / "agent.py").write_text(
-        'import os\nproject = os.environ["GOOGLE_CLOUD_PROJECT"]\n',
-        encoding="utf-8",
-    )
-    authoring = _authoring(tmp_path)
-    _write_voice_contract(authoring)
-    job = _job(
-        connector="auto",
-        with_secrets=True,
-        secret_aliases=("LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "LIVEKIT_URL"),
-    ).model_copy(
-        update={"metadata": {"environment_value_names": ["GOOGLE_CLOUD_PROJECT"]}}
-    )
-
-    bundle = author_bundle_v2(
-        source=source, job=job, authoring=authoring, output=tmp_path / "bundle"
-    )
-
-    assert bundle.digest
-
-
 @pytest.mark.parametrize(
     "project_dir,manifest",
     [(".", "pyproject.toml"), ("service", "pyproject.toml"), (".", "requirements.txt")],

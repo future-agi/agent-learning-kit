@@ -88,8 +88,8 @@ file feeds `baseline`, `compare`, and `replay`.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
-| manifest replay rejected | config fault | `agent-learn doctor` → `summary.public_boundary_passed` plus the manifest error line |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
+| manifest replay rejected | config fault | `agent-learn doctor --boundary` → `summary.public_boundary_passed` plus the manifest error line |
 | actions report `matched: false` or `prompt_injection_touched: true` | behavior regression | re-run the twin and diff the action flags against the previous artifact |
 
 ## 5. Prove it / keep it

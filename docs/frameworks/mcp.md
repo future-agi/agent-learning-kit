@@ -84,8 +84,8 @@ replayable record, not a log line: the same file feeds `baseline`, `compare`, an
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
-| manifest replay rejected | config fault | `agent-learn doctor` → `summary.public_boundary_passed` plus the manifest error line |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
+| manifest replay rejected | config fault | `agent-learn doctor --boundary` → `summary.public_boundary_passed` plus the manifest error line |
 | export missing tools/resources/session events (weak text path) | behavior regression | re-run the twin promotion and compare the session export against the text fallback |
 
 ## 5. Prove it / keep it

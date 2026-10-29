@@ -106,7 +106,7 @@ gitignored output, `regressions/` is where promoted baselines live.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | `summary.ready: false` | a named gate regressed | read the failing entry in `checks[]` — `reason` names the gate, `evidence` shows why |
 | run/redteam artifacts not where expected | path resolution | a relative `--output` lands in your current working directory — use absolute paths if your CI step changes directories |
 | scaffold files already exist | re-init without `--force` | rerun with `--force`, or init into a fresh directory |

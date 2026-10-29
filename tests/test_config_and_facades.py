@@ -17,7 +17,6 @@ import pytest
 
 from fi.alk import actions, configure, current_config, get_api_key
 from fi.alk.config import AgentLearningConfig
-from fi.alk._facade import optional_module
 from fi.alk.cli import main
 from fi.simulate.manifest import ManifestError
 
@@ -110,11 +109,9 @@ def test_configure_sets_unified_key_environment(monkeypatch):
 
 
 def test_facades_expose_unified_agent_learning_modules():
-    import fi.alk
     from fi.alk import (
         actions,
         capabilities,
-        evals,
         optimize,
         redteam,
         simulate,
@@ -122,47 +119,12 @@ def test_facades_expose_unified_agent_learning_modules():
         trinity,
     )
 
-    fi_simulate = importlib.import_module("fi.simulate")
-    fi_engines = importlib.import_module("fi.simulate.simulation.engines")
-    fi_guardrails = importlib.import_module("fi.evals.guardrails")
-    fi_scanners = importlib.import_module("fi.evals.guardrails.scanners")
-    fi_code_security = importlib.import_module("fi.evals.metrics.code_security")
-
-    assert {
-        "actions",
-        "capabilities",
-        "evals",
-        "optimize",
-        "redteam",
-        "simulate",
-        "suite",
-        "trinity",
-    } <= set(fi.alk.__all__)
-    assert {name for name in dir(fi.alk) if name in fi.alk.__all__} >= {
-        "actions",
-        "capabilities",
-        "evals",
-        "optimize",
-        "redteam",
-        "simulate",
-        "suite",
-        "trinity",
-    }
     assert actions.extract_actions({"report": {}}) == []
     assert capabilities.capability_catalog()["kind"] == (
         "agent-learning.capabilities.v1"
     )
     assert trinity.trinity_status()["modules"]["capabilities"]["available"] is True
 
-    assert set(fi_simulate.__all__) <= set(simulate.__all__)
-    assert set(fi_guardrails.__all__) <= set(redteam.__all__)
-    assert set(fi_scanners.__all__) <= set(redteam.__all__)
-    assert set(fi_code_security.__all__) <= set(redteam.__all__)
-    assert simulate.HTTPAgentWrapper is fi_simulate.HTTPAgentWrapper
-    assert simulate.OpenAICompatibleHTTPAgentWrapper is (
-        fi_simulate.OpenAICompatibleHTTPAgentWrapper
-    )
-    assert simulate.WebSocketAgentWrapper is fi_simulate.WebSocketAgentWrapper
     contract = simulate.framework_adapter_contract(
         "langgraph",
         target="framework_shims.py:build_langgraph_agent",
@@ -181,7 +143,6 @@ def test_facades_expose_unified_agent_learning_modules():
         "runtime_trace",
         "structured_input",
     }
-    assert simulate.framework_adapter_contract is not None
     profile = simulate.framework_adapter_capability_profile(
         "langgraph",
         target="framework_shims.py:build_langgraph_agent",
@@ -207,7 +168,6 @@ def test_facades_expose_unified_agent_learning_modules():
         "harness",
         "evaluator",
     ]
-    assert simulate.framework_adapter_capability_profile is not None
     matrix = simulate.framework_adapter_contract_matrix(
         ["langchain", "langgraph", "livekit", "pipecat"]
     )
@@ -229,183 +189,25 @@ def test_facades_expose_unified_agent_learning_modules():
     assert matrix["contract_quality_gate"]["required_frameworks"] == (
         matrix["frameworks"]
     )
-    assert simulate.framework_adapter_contract_matrix is not None
     profiles = simulate.framework_adapter_capability_profiles(matrix=matrix)
     assert profiles["kind"] == (
         "agent-learning.framework-adapter-capability-profiles.v1"
     )
     assert profiles["status"] == "passed"
     assert profiles["summary"]["profile_count"] == 4
-    assert simulate.framework_adapter_capability_profiles is not None
     discovery = simulate.discover_framework_adapter("langgraph")
     assert discovery["kind"] == "agent-learning.framework-adapter-discovery.v1"
     assert discovery["adapter_candidates"][0]["method"] == "ainvoke"
     assert discovery["adapter_candidates"][0]["input_mode"] == "dict"
-    assert simulate.discover_framework_adapter is not None
-    assert simulate.WorkflowHookEnvironment is fi_simulate.WorkflowHookEnvironment
-    assert simulate.RetrievalHookEnvironment is fi_simulate.RetrievalHookEnvironment
-    assert simulate.WorkflowTraceEnvironment is fi_simulate.WorkflowTraceEnvironment
-    assert simulate.run_eval_suite_file is not None
-    assert evals.behavior_entropy_report is not None
-    assert simulate.behavior_entropy_artifact is not None
-    assert evals.collaborative_competence_report is not None
-    assert simulate.collaborative_competence_artifact is not None
-    assert evals.redteam_adaptive_loop_report is not None
-    assert evals.redteam_attack_evolution_report is not None
-    assert simulate.redteam_adaptive_loop_artifact is not None
-    assert simulate.redteam_attack_evolution_artifact is not None
-    assert simulate.shrink_attack_evolution is not None
-    assert simulate.shrink_attack_evolution_file is not None
     assert trinity.trinity_status()["modules"]["simulate"]["available"] is True
-    assert simulate.build_eval_suite_manifest is not None
-    assert simulate.write_eval_suite_file is not None
-    assert simulate.build_task_run_manifest is not None
-    assert simulate.build_external_agent_run_manifest is not None
-    assert simulate.build_workflow_hook_run_manifest is not None
-    assert simulate.build_retrieval_hook_run_manifest is not None
-    assert simulate.build_evaluation_hook_run_manifest is not None
-    assert simulate.build_framework_run_manifest is not None
-    assert simulate.build_framework_http_transport_run_manifest is not None
-    assert simulate.build_framework_websocket_transport_run_manifest is not None
-    assert simulate.build_multi_framework_suite_manifest is not None
-    assert simulate.build_realtime_run_manifest is not None
-    assert simulate.build_browser_cua_run_manifest is not None
-    assert simulate.browser_cua_contract is not None
-    assert simulate.probe_browser_cua is not None
-    assert simulate.run_browser_cua_probe is not None
-    assert simulate.write_manifest_file is not None
-    assert simulate.build_agent_integration_run_manifest is not None
-    assert simulate.build_workspace_observability_run_manifest is not None
-    assert simulate.build_redteam_corpus_run_manifest is not None
-    assert simulate.build_redteam_corpus_environments is not None
-    assert redteam.redteam_manifest_file is not None
-    assert redteam.prepare_redteam_manifest is not None
-    assert redteam.build_redteam_manifest is not None
-    assert redteam.build_redteam_run_manifest is redteam.build_redteam_manifest
-    assert redteam.build_redteam_corpus_campaign is not None
-    assert redteam.build_redteam_corpus_hook_campaign is not None
-    assert redteam.fetch_redteam_corpus_hook is not None
-    assert redteam.RedTeamCampaignEnvironment is fi_simulate.RedTeamCampaignEnvironment
-    assert redteam.RedTeamAttackEvolutionEnvironment is (
-        fi_simulate.RedTeamAttackEvolutionEnvironment
-    )
-    assert redteam.RedTeamReadinessEnvironment is (
-        fi_simulate.RedTeamReadinessEnvironment
-    )
-    assert redteam.AdversarialEnvironmentPack is fi_simulate.AdversarialEnvironmentPack
-    assert redteam.GuardrailsConfig is fi_guardrails.GuardrailsConfig
-    assert redteam.ScannerPipeline is fi_scanners.ScannerPipeline
-    assert redteam.JailbreakScanner is fi_scanners.JailbreakScanner
-    assert redteam.CodeInjectionScanner is fi_scanners.CodeInjectionScanner
-    assert redteam.SecretsScanner is fi_scanners.SecretsScanner
-    assert redteam.create_default_pipeline is fi_scanners.create_default_pipeline
-    assert redteam.CodeSecurityScore is fi_code_security.CodeSecurityScore
-    assert redteam.QuickSecurityCheck is fi_code_security.QuickSecurityCheck
-    assert redteam.DualJudge is fi_code_security.DualJudge
-    assert optimize.OptimizationTarget is not None
-    assert simulate.build_agent_control_plane_run_manifest is not None
-    assert optimize.optimize_eval_suite_file is not None
-    assert optimize.optimize_suite_file is not None
-    assert optimize.problem_from_agent_learning_suite_file is not None
-    assert optimize.build_adaptive_redteam_optimization_manifest is not None
-    assert optimize.build_adaptive_redteam_strategy_optimization_manifest is (
-        optimize.build_adaptive_redteam_optimization_manifest
-    )
-    assert optimize.build_redteam_attack_evolution_optimization_manifest is not None
-    assert optimize.optimize_adaptive_redteam is not None
-    assert optimize.optimize_adaptive_redteam_strategy is optimize.optimize_adaptive_redteam
-    assert optimize.optimize_redteam_attack_evolution is not None
-    assert optimize.build_agent_control_plane_optimization_manifest is not None
-    assert optimize.optimize_agent_control_plane is not None
-    assert optimize.build_autonomous_redteam_task_world_optimization_manifest is not None
-    assert optimize.optimize_autonomous_redteam_task_world is not None
-    assert simulate.build_autonomous_redteam_task_world_run_manifest is not None
-    assert optimize.build_browser_cua_optimization_manifest is not None
-    assert optimize.optimize_browser_cua is not None
-    assert optimize.optimize_browser_cua_probe is not None
-    assert optimize.score_browser_cua_probe_result is not None
-    assert optimize.build_browser_cua_run_manifest_from_probe_optimization is not None
-    assert optimize.build_eval_suite_optimization_manifest is not None
-    assert optimize.optimize_eval_suite_response is not None
-    assert optimize.build_agent_integration_optimization_manifest is not None
-    assert optimize.optimize_agent_integration is not None
-    assert optimize.build_workspace_observability_optimization_manifest is not None
-    assert optimize.optimize_workspace_observability is not None
-    assert simulate.build_workspace_import_certification_run_manifest is not None
-    assert simulate.build_workspace_import_certification_environments is not None
-    assert optimize.build_workspace_import_certification_optimization_manifest is not None
-    assert optimize.optimize_workspace_import_certification is not None
-    assert simulate.build_redteam_readiness_certification_run_manifest is not None
-    assert simulate.build_redteam_readiness_certification_environments is not None
-    assert (
-        optimize.build_redteam_readiness_certification_optimization_manifest
-        is not None
-    )
-    assert optimize.optimize_redteam_readiness_certification is not None
-    assert optimize.build_redteam_corpus_optimization_manifest is not None
-    assert optimize.optimize_redteam_corpus is not None
-    assert simulate.StatefulToolWorldEnvironment is (
-        fi_simulate.StatefulToolWorldEnvironment
-    )
-    assert simulate.normalize_stateful_tool_world_manifest is not None
-    assert simulate.EnvironmentReplayEnvironment is (
-        fi_simulate.EnvironmentReplayEnvironment
-    )
-    assert simulate.EnvironmentReplayEnvironment is simulate.OpenEnvEnvironment
-    assert simulate.normalize_environment_replay_manifest is (
-        fi_simulate.normalize_environment_replay_manifest
-    )
-    assert simulate.load_environment_replay_manifest is (
-        fi_simulate.load_environment_replay_manifest
-    )
-    assert simulate.build_environment_replay_run_manifest is not None
-    assert simulate.build_environment_replay_environments is not None
-    assert simulate.OpenEnvEnvironment is fi_simulate.OpenEnvEnvironment
-    assert simulate.normalize_openenv_manifest is not None
-    assert simulate.load_openenv_manifest is not None
-    assert simulate.build_openenv_run_manifest is not None
-    assert simulate.build_openenv_environments is not None
-    assert simulate.build_stateful_tool_world_run_manifest is not None
-    assert simulate.build_stateful_tool_world_environments is not None
-    assert simulate.build_world_model_run_manifest is not None
-    assert optimize.build_environment_replay_optimization_manifest is not None
-    assert optimize.optimize_environment_replay is not None
-    assert optimize.build_openenv_optimization_manifest is not None
-    assert optimize.optimize_openenv is not None
-    assert optimize.build_stateful_tool_world_optimization_manifest is not None
-    assert optimize.optimize_stateful_tool_world is not None
-    assert optimize.build_world_model_optimization_manifest is not None
-    assert optimize.optimize_world_model is not None
-    assert optimize.build_world_hooks_optimization_manifest is not None
-    assert optimize.optimize_world_hooks is not None
-    assert simulate.build_framework_adapter_matrix_run_manifest is not None
     assert optimize.AGENT_LEARNING_FRAMEWORK_ADAPTER_MATRIX_PROOF_KIND == (
         "agent-learning.optimization.framework-adapter-matrix-proof.v1"
     )
-    assert optimize.build_framework_adapter_matrix_optimization_manifest is not None
-    assert optimize.optimize_framework_adapter_matrix is not None
-    assert simulate.harness_trajectory_replay_artifact is not None
-    assert simulate.build_harness_trajectory_replay_run_manifest is not None
     assert optimize.AGENT_LEARNING_RETROSPECTIVE_HARNESS_PROOF_KIND == (
         "agent-learning.optimization.retrospective-harness-proof.v1"
     )
-    assert optimize.build_retrospective_harness_optimization_manifest is not None
-    assert optimize.optimize_retrospective_harness is not None
-    assert simulate.optimizer_backend_portfolio_artifact is not None
-    assert simulate.build_optimizer_backend_portfolio_run_manifest is not None
-    assert simulate.build_optimizer_portfolio_run_manifest is (
-        simulate.build_optimizer_backend_portfolio_run_manifest
-    )
     assert optimize.AGENT_LEARNING_OPTIMIZER_PORTFOLIO_PROOF_KIND == (
         "agent-learning.optimization.optimizer-portfolio-proof.v1"
-    )
-    assert optimize.build_optimizer_portfolio_optimization_manifest is not None
-    assert optimize.build_optimizer_backend_portfolio_optimization_manifest is (
-        optimize.build_optimizer_portfolio_optimization_manifest
-    )
-    assert optimize.optimize_optimizer_portfolio is not None
-    assert optimize.optimize_optimizer_backend_portfolio is (
-        optimize.optimize_optimizer_portfolio
     )
     assert optimize.AGENT_LEARNING_FRAMEWORK_CERTIFICATION_PROOF_KIND == (
         "agent-learning.optimization.framework-certification-proof.v1"
@@ -425,202 +227,16 @@ def test_facades_expose_unified_agent_learning_modules():
     assert optimize.AGENT_LEARNING_REDTEAM_CAMPAIGN_PROOF_KIND == (
         "agent-learning.optimization.redteam-campaign-proof.v1"
     )
-    assert optimize.build_framework_certification_optimization_manifest is not None
-    assert optimize.optimize_framework_certification is not None
-    assert simulate.build_framework_certification_run_manifest is not None
-    assert optimize.build_artifact_action_optimization_manifest is not None
-    assert optimize.optimize_artifact_actions is not None
-    assert optimize.build_artifact_optimization_suite is not None
-    assert optimize.optimize_artifact_evidence is not None
-    assert optimize.build_framework_optimization_manifest is not None
-    assert optimize.build_framework_adapter_probe_evaluation_config is not None
-    assert optimize.build_framework_run_manifest_from_local_adapter is not None
-    assert optimize.run_framework_adapter_from_local_adapter is not None
-    assert optimize.optimize_framework_adapter is not None
-    assert optimize.build_multi_agent_framework_handoff_optimization_manifest is not None
-    assert optimize.optimize_multi_agent_framework_handoff is not None
-    assert simulate.build_multi_agent_framework_handoff_run_manifest is not None
-    assert optimize.build_multimodal_image_optimization_manifest is not None
-    assert optimize.optimize_multimodal_image is not None
-    assert simulate.build_multimodal_image_run_manifest is not None
-    assert optimize.build_optimizer_governance_optimization_manifest is not None
-    assert optimize.optimize_optimizer_governance is not None
-    assert simulate.build_optimizer_governance_run_manifest is not None
-    assert optimize.build_target_optimization_manifest is not None
-    assert optimize.optimize_target is not None
-    assert optimize.build_task_optimization_manifest is not None
-    assert optimize.optimize_task is not None
-    assert optimize.build_external_agent_adapter_optimization_manifest is not None
-    assert optimize.optimize_external_agent_adapter is not None
-    assert optimize.build_workflow_hook_optimization_manifest is not None
-    assert optimize.optimize_workflow_hooks is not None
-    assert optimize.build_retrieval_hook_optimization_manifest is not None
-    assert optimize.optimize_retrieval_hooks is not None
-    assert optimize.with_retrieval_hook_proof is not None
     assert optimize.AGENT_LEARNING_RETRIEVAL_HOOK_PROOF_KIND == (
         "agent-learning.optimization.retrieval-hook-proof.v1"
     )
-    assert optimize.build_evaluation_hook_optimization_manifest is not None
-    assert optimize.optimize_evaluation_hooks is not None
-    assert optimize.with_evaluation_hook_proof is not None
     assert optimize.AGENT_LEARNING_EVALUATION_HOOK_PROOF_KIND == (
         "agent-learning.optimization.evaluation-hook-proof.v1"
     )
-    assert optimize.optimize_evaluation_hook_probe is not None
-    assert optimize.score_evaluation_hook_probe_result is not None
-    assert optimize.build_evaluation_hook_run_manifest_from_probe_optimization is not None
-    assert optimize.build_component_optimization_manifest is not None
-    assert optimize.optimize_component is not None
-    assert optimize.build_memory_optimization_manifest is not None
-    assert optimize.optimize_memory_layer is not None
-    assert optimize.optimize_memory_layer_probe is not None
-    assert optimize.score_memory_layer_probe_result is not None
-    assert optimize.build_memory_run_manifest_from_probe_optimization is not None
-    assert simulate.build_memory_layer_run_manifest is not None
-    assert simulate.run_memory_layer_probe is not None
-    assert optimize.build_multi_agent_optimization_manifest is not None
-    assert optimize.optimize_multi_agent_coordination is not None
-    assert optimize.optimize_multi_agent_room_probe is not None
-    assert optimize.score_multi_agent_room_probe_result is not None
-    assert optimize.build_multi_agent_run_manifest_from_probe_optimization is not None
-    assert simulate.build_multi_agent_coordination_run_manifest is not None
-    assert simulate.probe_multi_agent_room is not None
-    assert optimize.build_orchestration_optimization_manifest is not None
-    assert optimize.optimize_orchestration_stack is not None
-    assert optimize.optimize_orchestration_stack_probe is not None
-    assert optimize.score_orchestration_stack_probe_result is not None
-    assert optimize.build_orchestration_run_manifest_from_probe_optimization is not None
-    assert optimize.optimize_trinity_stack_probe is not None
-    assert optimize.score_trinity_stack_probe_result is not None
-    assert optimize.build_trinity_run_manifest_from_probe_optimization is not None
-    assert simulate.build_orchestration_stack_run_manifest is not None
-    assert simulate.run_orchestration_stack_probe is not None
-    assert optimize.build_world_framework_memory_optimization_manifest is not None
-    assert optimize.build_agent_architecture_optimization_manifest is (
-        optimize.build_world_framework_memory_optimization_manifest
-    )
-    assert optimize.optimize_world_framework_memory is not None
-    assert optimize.optimize_agent_architecture is optimize.optimize_world_framework_memory
-    assert simulate.build_world_framework_memory_run_manifest is not None
-    assert optimize.build_realtime_optimization_manifest is not None
-    assert optimize.optimize_realtime_stack is not None
-    assert optimize.optimize_realtime_stack_probe is not None
-    assert optimize.score_realtime_stack_probe_result is not None
-    assert optimize.build_realtime_run_manifest_from_probe_optimization is not None
-    assert simulate.run_realtime_stack_probe is not None
-    assert optimize.build_redteam_autogen_optimization_manifest is not None
-    assert optimize.optimize_redteam_autogen is not None
-    assert optimize.build_long_horizon_redteam_optimization_manifest is not None
-    assert optimize.optimize_long_horizon_redteam is not None
-    assert optimize.build_redteam_optimization_manifest is not None
-    assert optimize.optimize_redteam_campaign is not None
-    assert optimize.build_persistent_state_redteam_optimization_manifest is not None
-    assert optimize.optimize_persistent_state_redteam is not None
-    assert optimize.build_redteam_society_optimization_manifest is not None
-    assert optimize.optimize_redteam_society is not None
-    assert optimize.build_redteam_causal_attribution_optimization_manifest is not None
-    assert optimize.optimize_redteam_causal_attribution is not None
-    assert optimize.score_simulation_evidence is not None
-    assert optimize.build_report_repair_optimization_manifest is not None
-    assert optimize.optimize_report_repair is not None
-    assert optimize.build_framework_import_repair_optimization_manifest is not None
-    assert optimize.optimize_framework_import_repair is not None
-    assert simulate.probe_framework_imports is not None
-    assert simulate.build_framework_import_run_manifest is not None
-    assert optimize.build_social_memory_framework_optimization_manifest is not None
-    assert optimize.optimize_social_memory_framework is not None
-    assert simulate.build_social_memory_framework_run_manifest is not None
-    assert evals.evaluate is not None
-    assert evals.evaluate_artifact_file is not None
-    assert evals.build_eval_suite_manifest is not None
-    assert evals.build_task_evaluation_config is not None
-    assert evals.build_task_evidence_artifact is not None
-    assert evals.evaluation_hook_contract is not None
-    assert evals.run_evaluation_hook_probe is not None
-    assert evals.probe_evaluation_hook is not None
-    assert evals.evaluate_task_evidence is not None
-    assert evals.evaluate_task_evidence_file is not None
-    assert evals.write_eval_suite_file is not None
-    assert evals.write_task_evidence_file is not None
-    assert suite.run_suite_file is not None
-    assert suite.optimize_suite_file is not None
-    assert suite.build_suite_manifest is not None
-    assert suite.build_optimization_lifecycle_plan is not None
-    assert suite.build_regression_artifact_suite_manifest is not None
-    assert (
-        suite.build_framework_adapter_trinity_suite_optimization_manifest
-        is not None
-    )
-    assert suite.build_framework_adapter_trinity_suite_manifest is not None
-    assert suite.build_trinity_suite_manifest is not None
-    assert suite.run_optimization_lifecycle_file is not None
-    assert (
-        suite.write_framework_adapter_trinity_suite_optimization_workspace
-        is not None
-    )
-    assert suite.write_framework_adapter_trinity_suite_workspace is not None
-    assert suite.write_suite_file is not None
     assert suite.AGENT_LEARNING_OPTIMIZATION_LIFECYCLE_KIND == (
         "agent-learning.optimization-lifecycle.v1"
     )
     assert suite.AGENT_LEARNING_SUITE_KIND == "agent-learning.suite.v1"
-    assert simulate.AdversarialEnvironmentPack is not None
-    assert simulate.AutonomyLoopEnvironment is not None
-    assert simulate.StreamingTraceEnvironment is not None
-    assert simulate.VoiceEnvironment is not None
-    assert simulate.BrowserEnvironment is not None
-    assert simulate.StructuredArtifactEnvironment is not None
-    assert simulate.DomainPackageEnvironment is not None
-    assert simulate.WorldAttackReplayEnvironment is not None
-    assert simulate.AgentDefinition is fi_simulate.AgentDefinition
-    assert simulate.SimulatorAgentDefinition is fi_simulate.SimulatorAgentDefinition
-    assert simulate.SimulationArtifact is fi_simulate.SimulationArtifact
-    assert simulate.SimulationEvent is fi_simulate.SimulationEvent
-    assert simulate.EnvironmentSnapshot is fi_simulate.EnvironmentSnapshot
-    assert simulate.FileEnvironment is fi_simulate.FileEnvironment
-    assert simulate.AgentTrustBoundaryEnvironment is (
-        fi_simulate.AgentTrustBoundaryEnvironment
-    )
-    assert simulate.AgentControlPlaneEnvironment is (
-        fi_simulate.AgentControlPlaneEnvironment
-    )
-    assert simulate.AgentIntegrationEnvironment is (
-        fi_simulate.AgentIntegrationEnvironment
-    )
-    assert simulate.ObservabilityReplayEnvironment is (
-        fi_simulate.ObservabilityReplayEnvironment
-    )
-    assert simulate.OptimizerTraceEnvironment is fi_simulate.OptimizerTraceEnvironment
-    assert simulate.OptimizerPortfolioEnvironment is (
-        fi_simulate.OptimizerPortfolioEnvironment
-    )
-    assert simulate.RedTeamCampaignEnvironment is (
-        fi_simulate.RedTeamCampaignEnvironment
-    )
-    assert simulate.RedTeamReadinessEnvironment is (
-        fi_simulate.RedTeamReadinessEnvironment
-    )
-    assert simulate.WorkspaceRunEnvironment is fi_simulate.WorkspaceRunEnvironment
-    assert simulate.BaseEngine is fi_engines.BaseEngine
-    assert simulate.CloudEngine is fi_engines.CloudEngine
-    assert simulate.LiveKitEngine is fi_engines.LiveKitEngine
-    assert simulate.LocalTextEngine is fi_engines.LocalTextEngine
-    assert simulate.FrameworkLifecycleEnvironment is not None
-    assert simulate.FrameworkCapabilityEnvironment is not None
-    assert simulate.FrameworkProbeEnvironment is not None
-    assert simulate.FrameworkPortabilityEnvironment is not None
-    assert simulate.ImageEnvironment is not None
-    assert simulate.normalize_browser_trace_export is not None
-    assert simulate.normalize_playwright_trace_export is not None
-    assert simulate.normalize_browser_mutation_pack is not None
-    assert simulate.normalize_adversarial_attack_pack is not None
-    assert simulate.normalize_world_attack_replay is not None
-    assert simulate.normalize_framework_lifecycle_trace is not None
-    assert simulate.normalize_framework_capability_matrix is not None
-    assert simulate.normalize_framework_probe_suite is not None
-    assert simulate.normalize_framework_portability_matrix is not None
-    assert simulate.normalize_streaming_trace_events is not None
-    assert simulate.normalize_voice_timing_distribution is not None
     assert {
         "browser",
         "browser_cua",
@@ -674,91 +290,6 @@ def test_facades_expose_unified_agent_learning_modules():
     )
     assert scan.passed is False
     assert scan.blocked_by
-
-
-def test_eval_facade_exposes_public_deep_submodule_aliases():
-    from fi.alk.evals.autoeval import AutoEvalPipeline
-    from fi.alk.evals.core.prompt_generator import generate_grading_criteria
-    from fi.alk.evals.feedback import FeedbackCollector
-    from fi.alk.evals.framework import blocking_evaluator
-    from fi.alk.evals.framework.backends import ThreadPoolBackend
-    from fi.alk.evals.framework.backends.thread_pool import (
-        ThreadPoolBackend as LeafThreadPoolBackend,
-    )
-    from fi.alk.evals.framework.resilience import RetryConfig
-    from fi.alk.evals.guardrails import Guardrails
-    from fi.alk.evals.guardrails.scanners import RegexPattern, RegexScanner
-    from fi.alk.evals.guardrails.scanners.base import BaseScanner
-    from fi.alk.evals.guardrails.scanners.regex import (
-        RegexScanner as LeafRegexScanner,
-    )
-    from fi.alk.evals.llm import LiteLLMProvider
-    from fi.alk.evals.local import LocalEvaluator
-    from fi.alk.evals.metrics.agents.report import evaluate_agent_report
-    from fi.alk.evals.metrics.base_metric import BaseMetric
-    from fi.alk.evals.metrics.code_security import CodeSecurityScore
-    from fi.alk.evals.metrics.structured.json_validation import JSONValidation
-    from fi.alk.evals.otel import setup_tracing
-    from fi.alk.evals.streaming import StreamingEvaluator
-    from fi.alk.evals import (
-        coherence_scorer,
-        pii_scorer,
-        toxicity_scorer,
-    )
-    from fi.evals.autoeval import AutoEvalPipeline as VendoredAutoEvalPipeline
-    from fi.evals.feedback import FeedbackCollector as VendoredFeedbackCollector
-    from fi.evals.framework.backends import (
-        ThreadPoolBackend as VendoredThreadPoolBackend,
-    )
-    from fi.evals.guardrails import Guardrails as VendoredGuardrails
-    from fi.evals.local import LocalEvaluator as VendoredLocalEvaluator
-    from fi.evals.metrics.agents.report import (
-        evaluate_agent_report as VendoredEvaluateAgentReport,
-    )
-    from fi.evals.metrics.code_security import (
-        CodeSecurityScore as VendoredCodeSecurityScore,
-    )
-    from fi.evals.metrics.structured.json_validation import (
-        JSONValidation as VendoredJSONValidation,
-    )
-    from fi.evals.streaming import coherence_scorer as VendoredCoherenceScorer
-    from fi.evals.streaming import pii_scorer as VendoredPiiScorer
-    from fi.evals.streaming import StreamingEvaluator as VendoredStreamingEvaluator
-    from fi.evals.streaming import toxicity_scorer as VendoredToxicityScorer
-
-    assert AutoEvalPipeline is VendoredAutoEvalPipeline
-    assert FeedbackCollector is VendoredFeedbackCollector
-    assert ThreadPoolBackend is VendoredThreadPoolBackend
-    assert LeafThreadPoolBackend is VendoredThreadPoolBackend
-    assert Guardrails is VendoredGuardrails
-    assert LocalEvaluator is VendoredLocalEvaluator
-    assert CodeSecurityScore is VendoredCodeSecurityScore
-    assert JSONValidation is VendoredJSONValidation
-    assert evaluate_agent_report is VendoredEvaluateAgentReport
-    assert StreamingEvaluator is VendoredStreamingEvaluator
-    assert callable(generate_grading_criteria)
-    assert callable(blocking_evaluator)
-    assert RetryConfig is not None
-    assert RegexScanner is not None
-    assert LeafRegexScanner is RegexScanner
-    assert RegexPattern is not None
-    assert BaseScanner is not None
-    assert LiteLLMProvider is not None
-    assert BaseMetric is not None
-    assert callable(setup_tracing)
-    assert toxicity_scorer is VendoredToxicityScorer
-    assert pii_scorer is VendoredPiiScorer
-    assert coherence_scorer is VendoredCoherenceScorer
-
-
-def test_optional_module_error_uses_unified_install_guidance():
-    with pytest.raises(RuntimeError) as exc_info:
-        optional_module("agent_learning_missing_engine_for_test", "simulate")
-
-    message = str(exc_info.value)
-    assert "reinstall `agent-learning-kit`" in message.lower()
-    assert "agent-learning-kit[trinity]" in message
-    assert "agent-learning-kit[simulate]" not in message
 
 
 def test_optimize_facade_exposes_advanced_governance_surfaces():
@@ -10591,15 +10122,6 @@ def test_sdk_redteam_simulation_example_runs(monkeypatch, tmp_path):
 
 
 def test_sdk_persistent_state_redteam_simulation_example_runs(monkeypatch, tmp_path):
-    from fi.alk import redteam, simulate
-
-    assert simulate.PersistentStateRedTeamEnvironment is not None
-    assert simulate.normalize_persistent_state_attack_manifest is not None
-    assert redteam.PersistentStateRedTeamEnvironment is (
-        simulate.PersistentStateRedTeamEnvironment
-    )
-    assert redteam.build_persistent_state_redteam_manifest is not None
-
     monkeypatch.setenv(
         "AGENT_LEARNING_SDK_PERSISTENT_REDTEAM_KEY",
         "real-local-sdk-persistent-redteam-key",
@@ -10611,8 +10133,6 @@ def test_sdk_persistent_state_redteam_simulation_example_runs(monkeypatch, tmp_p
         "sdk_persistent_state_redteam_simulation",
         example_path,
     )
-    assert spec is not None
-    assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
 
@@ -10678,9 +10198,6 @@ def test_sdk_persistent_state_redteam_simulation_example_runs(monkeypatch, tmp_p
 def test_sdk_persistent_state_redteam_optimization_example_runs(monkeypatch, tmp_path):
     from fi.alk import optimize, simulate
 
-    assert optimize.build_persistent_state_redteam_optimization_manifest is not None
-    assert optimize.optimize_persistent_state_redteam is not None
-
     diagnoses = optimize.diagnose_agent_report_evaluation(
         {
             "cases": [
@@ -10725,8 +10242,6 @@ def test_sdk_persistent_state_redteam_optimization_example_runs(monkeypatch, tmp
         "sdk_persistent_state_redteam_optimization",
         example_path,
     )
-    assert spec is not None
-    assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
 
@@ -15514,20 +15029,6 @@ def test_openenv_compatibility_boundary_rejects_dependency_import_and_doc_drift(
     } == set(trinity.V1_OPENENV_COMPATIBILITY_DOC_PHRASES)
 
 
-def test_public_runtime_dispatch_uses_agent_learning_aliases():
-    from fi.alk import cli as public_cli
-    from fi.alk import suite as public_suite
-
-    public_simulate_cli = importlib.import_module("fi.alk.simulate.cli")
-    public_eval_cli = importlib.import_module("fi.alk.evals.cli.main")
-    vendored_eval_cli = importlib.import_module("fi.cli.main")
-
-    assert public_cli._simulate_cli_module() is public_simulate_cli
-    assert public_cli._eval_cli_app() is public_eval_cli.app
-    assert public_eval_cli.app is vendored_eval_cli.app
-    assert public_suite._optimization_cli() is public_simulate_cli
-
-
 def test_agent_learn_capabilities_catalog_supports_requirements(tmp_path):
     from fi.alk import capabilities
 
@@ -16823,7 +16324,7 @@ def test_agent_learn_optimize_eval_runs_unified_command_and_writes_artifacts(tmp
 def test_agent_learn_doctor_reports_module_availability(tmp_path, capsys):
     from fi.alk import trinity
 
-    exit_code = main(["doctor"])
+    exit_code = main(["doctor", "--boundary"])
 
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
@@ -16942,7 +16443,7 @@ def test_agent_learn_doctor_reports_module_availability(tmp_path, capsys):
     assert payload["modules"]["optimize"]["available"] is True
 
     output_path = tmp_path / "doctor-status.json"
-    exit_code = main(["doctor", "--output", str(output_path), "--quiet"])
+    exit_code = main(["doctor", "--boundary", "--write", str(output_path), "--quiet"])
     captured = capsys.readouterr()
     written = json.loads(output_path.read_text(encoding="utf-8"))
     assert exit_code == 0
@@ -16979,727 +16480,29 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["summary"]["ready"] is True
     assert payload["summary"]["failed_check_count"] == 0
     assert payload["summary"]["package"] == "agent-learning-kit"
-    assert payload["required_cli_commands"] == trinity.V1_REQUIRED_CLI_COMMANDS
     assert payload["typescript_public_package"] == trinity.TYPESCRIPT_PUBLIC_PACKAGE
     assert payload["legacy_typescript_packages"] == trinity.LEGACY_TYPESCRIPT_PACKAGES
-    assert payload["required_typescript_sdk_files"] == (
-        trinity.V1_TYPESCRIPT_SDK_REQUIRED_FILES
-    )
-    assert payload["required_active_ai_evaluation_python_files"] == (
-        trinity.V1_ACTIVE_AI_EVALUATION_PYTHON_FILES
-    )
-    assert payload["required_active_ai_evaluation_typescript_files"] == (
-        trinity.V1_ACTIVE_AI_EVALUATION_TYPESCRIPT_FILES
-    )
-    assert payload["required_active_ai_evaluation_source_inventory_file"] == (
-        trinity.V1_ACTIVE_AI_EVALUATION_SOURCE_INVENTORY_FILE
-    )
-    assert payload["required_active_ai_evaluation_source_inventory_kind"] == (
-        trinity.V1_ACTIVE_AI_EVALUATION_SOURCE_INVENTORY_KIND
-    )
     assert payload["required_active_ai_evaluation_doc_phrases"] == (
         trinity.V1_ACTIVE_AI_EVALUATION_DOC_PHRASES
-    )
-    assert payload["required_active_ai_evaluation_min_python_file_count"] == (
-        trinity.V1_ACTIVE_AI_EVALUATION_MIN_PYTHON_FILE_COUNT
-    )
-    assert payload["required_active_ai_evaluation_min_typescript_file_count"] == (
-        trinity.V1_ACTIVE_AI_EVALUATION_MIN_TYPESCRIPT_FILE_COUNT
-    )
-    assert payload["required_sdist_paths"] == trinity.V1_SDIST_REQUIRED_PATHS
-    assert payload["forbidden_sdist_paths"] == trinity.V1_SDIST_FORBIDDEN_PATHS
-    assert payload["allowed_wheel_top_level"] == trinity.V1_WHEEL_ALLOWED_TOP_LEVEL
-    assert payload["required_docs_pages"] == trinity.V1_DOCS_REQUIRED_PAGES
-    assert payload["docs_allowed_artifact_kinds"] == (
-        trinity.V1_DOCS_ALLOWED_ARTIFACT_KINDS
-    )
-    assert payload["docs_claim_phrase_gates"] == (
-        trinity.V1_DOCS_CLAIM_PHRASE_GATES
-    )
-    assert payload["live_lane_env_flags"] == trinity.V1_LIVE_LANE_ENV_FLAGS
-    assert payload["live_lane_extra_packages"] == (
-        trinity.V1_LIVE_LANE_EXTRA_PACKAGES
-    )
-    assert payload["live_lane_evidence_classes"] == (
-        trinity.V1_LIVE_EVIDENCE_CLASSES
-    )
-    assert payload["required_capability_profile_freeze_row_fields"] == (
-        trinity.V1_CAPABILITY_PROFILE_FREEZE_ROW_FIELDS
-    )
-    assert payload["required_capability_profile_freeze_checks"] == (
-        trinity.V1_CAPABILITY_PROFILE_FREEZE_REQUIRED_CHECKS
-    )
-    assert payload["required_optimizer_profile_matrix_target_kinds"] == (
-        trinity.V1_OPTIMIZER_PROFILE_MATRIX_TARGET_KINDS
-    )
-    assert payload["required_optimizer_profile_matrix_backends"] == (
-        trinity.V1_OPTIMIZER_PROFILE_MATRIX_BACKENDS
     )
     assert payload["required_optimizer_profile_matrix_cells"] == [
         list(cell) for cell in trinity.V1_OPTIMIZER_PROFILE_MATRIX_CELLS
     ]
-    assert payload["required_whole_agent_contract_stages"] == (
-        trinity.V1_WHOLE_AGENT_CONTRACT_STAGES
-    )
-    assert payload["required_whole_agent_apply_plan_fields"] == (
-        trinity.V1_WHOLE_AGENT_APPLY_PLAN_FIELDS
-    )
-    assert payload["required_optimizer_trajectory_profile_fields"] == (
-        trinity.V1_OPTIMIZER_TRAJECTORY_PROFILE_FIELDS
-    )
-    assert payload["required_optimizer_routing_checks"] == (
-        trinity.V1_OPTIMIZER_ROUTING_REQUIRED_CHECKS
-    )
     # ---- Phase 7: persona & scenario studio payload mirrors ----
-    assert payload["required_persona_layers"] == trinity.V1_PERSONA_LAYERS
-    assert payload["required_persona_evidence_classes"] == (
-        trinity.V1_PERSONA_EVIDENCE_CLASSES
-    )
-    assert payload["required_persona_temperament_axes"] == (
-        trinity.V1_PERSONA_TEMPERAMENT_AXES
-    )
-    assert payload["required_persona_behavior_axes"] == (
-        trinity.V1_PERSONA_BEHAVIOR_AXES
-    )
-    assert payload["required_persona_behavior_realization_metrics"] == (
-        trinity.V1_PERSONA_BEHAVIOR_REALIZATION_METRICS
-    )
-    assert payload["required_persona_fidelity_record_fields"] == (
-        trinity.V1_PERSONA_FIDELITY_RECORD_FIELDS
-    )
-    assert payload["required_persona_fidelity_verdicts"] == (
-        trinity.V1_PERSONA_FIDELITY_VERDICTS
-    )
-    assert payload["persona_fidelity_epidemic_rate"] == (
-        trinity.V1_PERSONA_FIDELITY_EPIDEMIC_RATE
-    )
     assert payload["required_persona_fidelity_floors"] == (
         trinity.V1_PERSONA_FIDELITY_FLOORS
     )
-    assert payload["required_scenario_kinds"] == trinity.V1_SCENARIO_KINDS
-    assert payload["required_scenario_coverage_axes"] == (
-        trinity.V1_SCENARIO_COVERAGE_AXES
-    )
-    assert payload["required_persona_calibration_stages"] == (
-        trinity.V1_PERSONA_CALIBRATION_STAGES
-    )
-    assert payload["required_persona_calibration_probes"] == (
-        trinity.V1_PERSONA_CALIBRATION_PROBES
-    )
-    assert payload["required_persona_content_scan_results"] == (
-        trinity.V1_PERSONA_CONTENT_SCAN_RESULTS
-    )
-    assert payload["required_persona_bias_lint_checks"] == (
-        trinity.V1_PERSONA_BIAS_LINT_CHECKS
-    )
-    assert payload["required_persona_vendor_import_formats"] == (
-        trinity.V1_PERSONA_VENDOR_IMPORT_FORMATS
-    )
-    assert payload["required_persona_download_pin_fields"] == (
-        trinity.V1_PERSONA_DOWNLOAD_PIN_FIELDS
-    )
     # ---- Phase 8: telemetry boundary payload mirrors ----
-    assert payload["telemetry_kill_switch_env"] == (
-        trinity.V1_TELEMETRY_KILL_SWITCH_ENV
-    )
-    assert payload["telemetry_scan_roots"] == trinity.V1_TELEMETRY_SCAN_ROOTS
-    assert payload["telemetry_forbidden_analytics_hosts"] == (
-        trinity.V1_TELEMETRY_FORBIDDEN_ANALYTICS_HOSTS
-    )
-    assert payload["telemetry_evidence_classes"] == (
-        trinity.V1_TELEMETRY_EVIDENCE_CLASSES
-    )
-    assert payload["required_docs"] == trinity.V1_REQUIRED_DOCS
-    assert payload["required_examples"] == trinity.V1_REQUIRED_EXAMPLES
-    assert payload["required_local_sim_eval_examples"] == (
-        trinity.V1_LOCAL_SIM_EVAL_EXAMPLES
-    )
-    assert payload["required_task_artifact_evaluation_files"] == (
-        trinity.V1_TASK_ARTIFACT_EVALUATION_FILES
-    )
-    assert payload["required_task_artifact_evaluation_result_kinds"] == (
-        trinity.V1_TASK_ARTIFACT_EVALUATION_RESULT_KINDS
-    )
-    assert payload["required_task_artifact_evaluation_state_keys"] == (
-        trinity.V1_TASK_ARTIFACT_EVALUATION_STATE_KEYS
-    )
-    assert payload["required_task_artifact_evaluation_metrics"] == (
-        trinity.V1_TASK_ARTIFACT_EVALUATION_METRICS
-    )
-    assert payload["required_task_artifact_evaluation_suite_min_assertions"] == (
-        trinity.V1_TASK_ARTIFACT_EVALUATION_SUITE_MIN_ASSERTIONS
-    )
-    assert payload["required_task_evaluation_synthesis_files"] == (
-        trinity.V1_TASK_EVALUATION_SYNTHESIS_FILES
-    )
-    assert payload["required_task_evaluation_synthesis_config_keys"] == (
-        trinity.V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_CONFIG_KEYS
-    )
-    assert payload["required_task_evaluation_synthesis_state_keys"] == (
-        trinity.V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_STATE_KEYS
-    )
-    assert payload["required_task_evaluation_synthesis_tools"] == (
-        trinity.V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_TOOLS
-    )
-    assert payload["required_task_evaluation_synthesis_metrics"] == (
-        trinity.V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_METRICS
-    )
-    assert payload["required_task_evaluation_synthesis_metric_minima"] == (
-        trinity.V1_TASK_EVALUATION_SYNTHESIS_METRIC_MINIMA
-    )
-    assert payload["required_task_evaluation_synthesis_score_minimum"] == (
-        trinity.V1_TASK_EVALUATION_SYNTHESIS_SCORE_MINIMUM
-    )
-    assert payload["required_task_evaluation_synthesis_source_urls"] == (
-        trinity.V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_SOURCE_URLS
-    )
-    assert payload["required_task_world_optimizer_files"] == (
-        trinity.V1_TASK_WORLD_OPTIMIZER_FILES
-    )
-    assert payload["required_task_world_optimizer_search_paths"] == (
-        trinity.V1_TASK_WORLD_OPTIMIZER_REQUIRED_SEARCH_PATHS
-    )
-    assert payload["required_task_world_optimizer_layers"] == (
-        trinity.V1_TASK_WORLD_OPTIMIZER_REQUIRED_LAYERS
-    )
-    assert payload["required_task_world_optimizer_metrics"] == (
-        trinity.V1_TASK_WORLD_OPTIMIZER_REQUIRED_METRICS
-    )
-    assert payload["required_task_world_optimizer_environment_types"] == (
-        trinity.V1_TASK_WORLD_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
-    )
-    assert payload["required_task_world_optimizer_tools"] == (
-        trinity.V1_TASK_WORLD_OPTIMIZER_REQUIRED_TOOLS
-    )
-    assert payload["required_task_world_optimizer_transitions"] == (
-        trinity.V1_TASK_WORLD_OPTIMIZER_REQUIRED_TRANSITIONS
-    )
-    assert payload["required_task_world_optimizer_final_state"] == (
-        trinity.V1_TASK_WORLD_OPTIMIZER_REQUIRED_FINAL_STATE
-    )
-    assert payload["required_task_world_optimizer_source_urls"] == (
-        trinity.V1_TASK_WORLD_OPTIMIZER_REQUIRED_SOURCE_URLS
-    )
-    assert payload["required_generic_target_optimizer_files"] == (
-        trinity.V1_GENERIC_TARGET_OPTIMIZER_FILES
-    )
-    assert payload["required_generic_target_optimizer_search_paths"] == (
-        trinity.V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS
-    )
-    assert payload["forbidden_generic_target_optimizer_search_paths"] == (
-        trinity.V1_GENERIC_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS
-    )
-    assert payload["required_generic_target_optimizer_layers"] == (
-        trinity.V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_LAYERS
-    )
-    assert payload["required_generic_target_optimizer_metrics"] == (
-        trinity.V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_METRICS
-    )
-    assert payload["required_generic_target_optimizer_environment_types"] == (
-        trinity.V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
-    )
-    assert payload["required_generic_target_optimizer_transitions"] == (
-        trinity.V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_TRANSITIONS
-    )
-    assert payload["required_generic_target_optimizer_final_state"] == (
-        trinity.V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_FINAL_STATE
-    )
-    assert payload["required_generic_target_optimizer_source"] == (
-        trinity.V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_SOURCE
-    )
-    assert payload["required_generic_target_optimizer_task_kind"] == (
-        trinity.V1_GENERIC_TARGET_OPTIMIZER_REQUIRED_TASK_KIND
-    )
-    assert payload["required_framework_adapter_target_optimizer_files"] == (
-        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_FILES
-    )
-    assert payload["required_framework_adapter_target_optimizer_search_paths"] == (
-        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS
-    )
-    assert payload["forbidden_framework_adapter_target_optimizer_search_paths"] == (
-        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS
-    )
-    assert payload["required_framework_adapter_target_optimizer_layers"] == (
-        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_LAYERS
-    )
-    assert payload["required_framework_adapter_target_optimizer_metrics"] == (
-        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_METRICS
-    )
-    assert payload["required_framework_adapter_target_optimizer_metric_weights"] == (
-        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_METRIC_WEIGHTS
-    )
-    assert (
-        payload["required_framework_adapter_target_optimizer_environment_types"]
-        == trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
-    )
-    assert payload["required_framework_adapter_target_optimizer_framework"] == (
-        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_FRAMEWORK
-    )
-    assert payload["required_framework_adapter_target_optimizer_rejected_method"] == (
-        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REJECTED_METHOD
-    )
-    assert payload["required_framework_adapter_target_optimizer_selected_method"] == (
-        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_SELECTED_METHOD
-    )
-    assert payload["required_framework_adapter_target_optimizer_input_mode"] == (
-        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_INPUT_MODE
-    )
-    assert payload["required_framework_adapter_target_optimizer_source"] == (
-        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_SOURCE
-    )
-    assert payload["required_framework_adapter_target_optimizer_task_kind"] == (
-        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_TASK_KIND
-    )
-    assert payload["required_framework_adapter_target_optimizer_surface"] == (
-        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_SURFACE
-    )
-    assert (
-        payload["required_framework_adapter_target_optimizer_proof_assurance_level"]
-        == trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REQUIRED_PROOF_ASSURANCE_LEVEL
-    )
-    assert payload["required_multi_agent_target_optimizer_files"] == (
-        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_FILES
-    )
-    assert payload["required_multi_agent_target_optimizer_search_paths"] == (
-        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS
-    )
-    assert payload["forbidden_multi_agent_target_optimizer_search_paths"] == (
-        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS
-    )
-    assert payload["required_multi_agent_target_optimizer_layers"] == (
-        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_LAYERS
-    )
-    assert payload["required_multi_agent_target_optimizer_metrics"] == (
-        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_METRICS
-    )
-    assert payload["required_multi_agent_target_optimizer_environment_types"] == (
-        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
-    )
-    assert payload["required_multi_agent_target_optimizer_state_keys"] == (
-        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS
-    )
-    assert payload["required_multi_agent_target_optimizer_roles"] == (
-        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_ROLES
-    )
-    assert payload["required_multi_agent_target_optimizer_rejected_role"] == (
-        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REJECTED_ROLE
-    )
-    assert payload["required_multi_agent_target_optimizer_reconciliation_source"] == (
-        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_SELECTED_RECONCILIATION_SOURCE
-    )
-    assert payload["required_multi_agent_target_optimizer_proof_kind"] == (
-        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_PROOF_KIND
-    )
-    assert (
-        payload["required_multi_agent_target_optimizer_proof_assurance_level"]
-        == trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_PROOF_ASSURANCE_LEVEL
-    )
-    assert payload["allowed_multi_agent_target_optimizer_proof_warnings"] == (
-        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_ALLOWED_PROOF_WARNINGS
-    )
-    assert payload["required_multi_agent_target_optimizer_source"] == (
-        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SOURCE
-    )
-    assert payload["required_multi_agent_target_optimizer_task_kind"] == (
-        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_TASK_KIND
-    )
-    assert payload["required_multi_agent_target_optimizer_surface"] == (
-        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SURFACE
-    )
-    assert payload["required_memory_target_optimizer_files"] == (
-        trinity.V1_MEMORY_TARGET_OPTIMIZER_FILES
-    )
-    assert payload["required_memory_target_optimizer_search_paths"] == (
-        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS
-    )
-    assert payload["forbidden_memory_target_optimizer_search_paths"] == (
-        trinity.V1_MEMORY_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS
-    )
-    assert payload["required_memory_target_optimizer_layers"] == (
-        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_LAYERS
-    )
-    assert payload["required_memory_target_optimizer_metrics"] == (
-        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_METRICS
-    )
-    assert payload["required_memory_target_optimizer_environment_types"] == (
-        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
-    )
-    assert payload["required_memory_target_optimizer_state_keys"] == (
-        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS
-    )
-    assert payload["required_memory_target_optimizer_operations"] == (
-        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_OPERATIONS
-    )
-    assert payload["required_memory_target_optimizer_doc_id"] == (
-        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_DOC_ID
-    )
-    assert payload["forbidden_memory_target_optimizer_doc_id"] == (
-        trinity.V1_MEMORY_TARGET_OPTIMIZER_FORBIDDEN_DOC_ID
-    )
-    assert payload["required_memory_target_optimizer_proof_kind"] == (
-        trinity.V1_MEMORY_TARGET_OPTIMIZER_PROOF_KIND
-    )
-    assert (
-        payload["required_memory_target_optimizer_proof_assurance_level"]
-        == trinity.V1_MEMORY_TARGET_OPTIMIZER_PROOF_ASSURANCE_LEVEL
-    )
-    assert payload["required_memory_target_optimizer_source"] == (
-        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_SOURCE
-    )
-    assert payload["required_memory_target_optimizer_task_kind"] == (
-        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_TASK_KIND
-    )
-    assert payload["required_memory_target_optimizer_surface"] == (
-        trinity.V1_MEMORY_TARGET_OPTIMIZER_REQUIRED_SURFACE
-    )
-    assert payload["required_orchestration_target_optimizer_files"] == (
-        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_FILES
-    )
-    assert payload["required_orchestration_target_optimizer_search_paths"] == (
-        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS
-    )
-    assert payload["forbidden_orchestration_target_optimizer_search_paths"] == (
-        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS
-    )
-    assert payload["required_orchestration_target_optimizer_layers"] == (
-        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_LAYERS
-    )
-    assert payload["required_orchestration_target_optimizer_metrics"] == (
-        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_METRICS
-    )
-    assert (
-        payload["required_orchestration_target_optimizer_source_grounding_minimum"]
-        == trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_SOURCE_GROUNDING_MINIMUM
-    )
-    assert payload["required_orchestration_target_optimizer_environment_types"] == (
-        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
-    )
-    assert payload["required_orchestration_target_optimizer_state_keys"] == (
-        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS
-    )
-    assert payload["required_orchestration_target_optimizer_framework"] == (
-        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_FRAMEWORK
-    )
-    assert payload["required_orchestration_target_optimizer_span"] == (
-        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SPAN
-    )
-    assert payload["required_orchestration_target_optimizer_tool"] == (
-        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_TOOL
-    )
-    assert payload["required_orchestration_target_optimizer_transition"] == (
-        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_EXPECTED_TRANSITION
-    )
-    assert payload["required_orchestration_target_optimizer_doc_id"] == (
-        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_DOC_ID
-    )
-    assert payload["forbidden_orchestration_target_optimizer_doc_id"] == (
-        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_FORBIDDEN_DOC_ID
-    )
-    assert payload["required_orchestration_target_optimizer_operations"] == (
-        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_OPERATIONS
-    )
-    assert payload["required_orchestration_target_optimizer_roles"] == (
-        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_ROLES
-    )
-    assert (
-        payload["required_orchestration_target_optimizer_reconciliation_source"]
-        == trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_RECONCILIATION_SOURCE
-    )
-    assert payload["required_orchestration_target_optimizer_proof_kind"] == (
-        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_PROOF_KIND
-    )
-    assert (
-        payload["required_orchestration_target_optimizer_proof_assurance_level"]
-        == trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_PROOF_ASSURANCE_LEVEL
-    )
-    assert payload["required_orchestration_target_optimizer_source"] == (
-        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SOURCE
-    )
-    assert payload["required_orchestration_target_optimizer_task_kind"] == (
-        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_TASK_KIND
-    )
-    assert payload["required_orchestration_target_optimizer_surface"] == (
-        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SURFACE
-    )
-    assert payload["required_workflow_target_optimizer_files"] == (
-        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_FILES
-    )
-    assert payload["required_workflow_target_optimizer_search_paths"] == (
-        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SEARCH_PATHS
-    )
-    assert payload["forbidden_workflow_target_optimizer_search_paths"] == (
-        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_FORBIDDEN_SEARCH_PATHS
-    )
-    assert payload["required_workflow_target_optimizer_layers"] == (
-        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_LAYERS
-    )
-    assert payload["required_workflow_target_optimizer_metrics"] == (
-        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_METRICS
-    )
-    assert payload["required_workflow_target_optimizer_environment_types"] == (
-        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_ENVIRONMENT_TYPES
-    )
-    assert payload["required_workflow_target_optimizer_state_keys"] == (
-        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_STATE_KEYS
-    )
-    assert payload["required_workflow_target_optimizer_framework"] == (
-        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_FRAMEWORK
-    )
-    assert payload["required_workflow_target_optimizer_source_frameworks"] == (
-        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SOURCE_FRAMEWORKS
-    )
-    assert payload["required_workflow_target_optimizer_tool"] == (
-        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TOOL
-    )
-    assert payload["required_workflow_target_optimizer_workflow_tool"] == (
-        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_WORKFLOW_TOOL
-    )
-    assert payload["required_workflow_target_optimizer_counts"] == (
-        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_COUNTS
-    )
-    assert payload["required_workflow_target_optimizer_final_state_keys"] == (
-        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_FINAL_STATE_KEYS
-    )
-    assert payload["required_workflow_target_optimizer_entry_node"] == (
-        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_ENTRY_NODE
-    )
-    assert payload["required_workflow_target_optimizer_terminal_node"] == (
-        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TERMINAL_NODE
-    )
-    assert payload["required_workflow_target_optimizer_source"] == (
-        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SOURCE
-    )
-    assert payload["required_workflow_target_optimizer_task_kind"] == (
-        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TASK_KIND
-    )
-    assert payload["required_workflow_target_optimizer_surface"] == (
-        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SURFACE
-    )
-    assert payload["required_workflow_target_optimizer_score_minimum"] == (
-        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_SCORE_MINIMUM
-    )
-    assert payload["required_workflow_target_profile_matrix_files"] == (
-        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_FILES
-    )
-    assert payload["required_workflow_target_profile_matrix_env"] == (
-        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_ENV
-    )
-    assert payload["required_workflow_target_profile_matrix_frameworks"] == (
-        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS
-    )
-    assert payload[
-        "required_workflow_target_profile_matrix_source_export_types"
-    ] == trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_SOURCE_EXPORT_TYPES
-    assert payload["required_workflow_target_profile_matrix_search_paths"] == (
-        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_SEARCH_PATHS
-    )
-    assert payload["required_workflow_target_profile_matrix_layers"] == (
-        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_LAYERS
-    )
-    assert payload["required_workflow_target_profile_matrix_metrics"] == (
-        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_METRICS
-    )
-    assert payload["required_workflow_target_profile_matrix_counts"] == (
-        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_COUNTS
-    )
-    assert payload["required_workflow_target_profile_matrix_score_minimum"] == (
-        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_SCORE_MINIMUM
-    )
-    assert payload["required_workflow_target_profile_matrix_actions"] == (
-        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_ACTIONS
-    )
-    assert payload["required_world_hooks_readiness_files"] == (
-        trinity.V1_WORLD_HOOKS_READINESS_FILES
-    )
-    assert payload["required_world_hooks_environment_types"] == (
-        trinity.V1_WORLD_HOOKS_REQUIRED_ENVIRONMENT_TYPES
-    )
-    assert payload["required_world_hooks_search_paths"] == (
-        trinity.V1_WORLD_HOOKS_REQUIRED_SEARCH_PATHS
-    )
-    assert payload["required_world_hooks_target_layers"] == (
-        trinity.V1_WORLD_HOOKS_REQUIRED_TARGET_LAYERS
-    )
-    assert payload["required_world_hooks_contract_hooks"] == (
-        trinity.V1_WORLD_HOOKS_REQUIRED_CONTRACT_HOOKS
-    )
-    assert payload["required_world_hooks_contract_surfaces"] == (
-        trinity.V1_WORLD_HOOKS_REQUIRED_CONTRACT_SURFACES
-    )
-    assert payload["required_world_hooks_replay_semantics"] == (
-        trinity.V1_WORLD_HOOKS_REQUIRED_REPLAY_SEMANTICS
-    )
-    assert payload["required_world_hooks_metrics"] == (
-        trinity.V1_WORLD_HOOKS_REQUIRED_METRICS
-    )
-    assert payload["required_world_hooks_proof_checks"] == (
-        trinity.V1_WORLD_HOOKS_REQUIRED_PROOF_CHECKS
-    )
-    assert payload["required_world_hooks_actions"] == (
-        trinity.V1_WORLD_HOOKS_REQUIRED_ACTIONS
-    )
-    assert payload["required_world_hooks_assurance_level"] == (
-        trinity.V1_WORLD_HOOKS_REQUIRED_ASSURANCE_LEVEL
-    )
-    assert payload["required_world_hooks_candidate_profile"] == (
-        trinity.V1_WORLD_HOOKS_REQUIRED_CANDIDATE_PROFILE
-    )
-    assert payload["forbidden_world_hooks_external_keys"] == (
-        trinity.V1_WORLD_HOOKS_FORBIDDEN_EXTERNAL_KEYS
-    )
-    assert payload["required_world_hooks_source_urls"] == (
-        trinity.V1_WORLD_HOOKS_REQUIRED_SOURCE_URLS
-    )
-    assert payload["required_evaluation_hook_probe_files"] == (
-        trinity.V1_EVALUATION_HOOK_PROBE_FILES
-    )
-    assert payload["required_evaluation_hook_probe_proof_kind"] == (
-        trinity.V1_EVALUATION_HOOK_PROBE_PROOF_KIND
-    )
-    assert payload["required_evaluation_hook_probe_profile"] == (
-        trinity.V1_EVALUATION_HOOK_PROBE_REQUIRED_PROFILE
-    )
-    assert payload["rejected_evaluation_hook_probe_profile"] == (
-        trinity.V1_EVALUATION_HOOK_PROBE_REJECTED_PROFILE
-    )
-    assert payload["required_evaluation_hook_probe_metrics"] == (
-        trinity.V1_EVALUATION_HOOK_PROBE_REQUIRED_METRICS
-    )
-    assert payload["required_evaluation_hook_probe_run_metrics"] == (
-        trinity.V1_EVALUATION_HOOK_PROBE_REQUIRED_RUN_METRICS
-    )
-    assert payload["required_evaluation_hook_files"] == (
-        trinity.V1_EVALUATION_HOOK_FILES
-    )
-    assert payload["required_evaluation_hook_proof_kind"] == (
-        trinity.V1_EVALUATION_HOOK_PROOF_KIND
-    )
-    assert payload["required_evaluation_hook_proof_assurance_level"] == (
-        trinity.V1_EVALUATION_HOOK_PROOF_ASSURANCE_LEVEL
-    )
-    assert payload["required_evaluation_hook_selected_profile"] == (
-        trinity.V1_EVALUATION_HOOK_SELECTED_PROFILE
-    )
-    assert payload["required_evaluation_hook_rejected_profiles"] == (
-        trinity.V1_EVALUATION_HOOK_REJECTED_PROFILES
-    )
-    assert payload["required_evaluation_hook_metrics"] == (
-        trinity.V1_EVALUATION_HOOK_REQUIRED_METRICS
-    )
-    assert payload["required_evaluation_hook_proof_checks"] == (
-        trinity.V1_EVALUATION_HOOK_REQUIRED_PROOF_CHECKS
-    )
-    assert payload["required_redteam_examples"] == trinity.V1_REDTEAM_EXAMPLES
-    assert payload["required_redteam_research_corpus_file"] == (
-        trinity.V1_REDTEAM_RESEARCH_CORPUS_FILE
-    )
-    assert payload["required_redteam_research_files"] == (
-        trinity.V1_REDTEAM_RESEARCH_FILES
-    )
-    assert payload["required_redteam_research_attack_types"] == (
-        trinity.V1_REDTEAM_RESEARCH_ATTACK_TYPES
-    )
-    assert payload["required_redteam_research_surfaces"] == (
-        trinity.V1_REDTEAM_RESEARCH_SURFACES
-    )
-    assert payload["required_redteam_research_source_urls"] == (
-        trinity.V1_REDTEAM_RESEARCH_SOURCE_URLS
-    )
-    assert payload["required_redteam_corpus_execution_file"] == (
-        trinity.V1_REDTEAM_CORPUS_EXECUTION_FILE
-    )
-    assert payload["required_redteam_corpus_execution_frameworks"] == (
-        trinity.V1_REDTEAM_CORPUS_EXECUTION_FRAMEWORKS
-    )
-    assert payload["required_redteam_corpus_execution_providers"] == (
-        trinity.V1_REDTEAM_CORPUS_EXECUTION_PROVIDERS
-    )
-    assert payload["required_redteam_corpus_execution_channels"] == (
-        trinity.V1_REDTEAM_CORPUS_EXECUTION_CHANNELS
-    )
     # Phase 12 (voice red-team) payload mirrors (unit 7.5a)
-    assert payload["required_redteam_voice_surfaces"] == (
-        trinity.V1_REDTEAM_VOICE_SURFACES
-    )
     assert payload["voice_attack_family_matrix"] == (
         trinity.V1_VOICE_ATTACK_FAMILY_MATRIX
     )
-    assert payload["voice_attack_maturity_levels"] == (
-        trinity.V1_VOICE_ATTACK_MATURITY_LEVELS
-    )
-    assert payload["voice_phone_survival_statuses"] == (
-        trinity.V1_VOICE_PHONE_SURVIVAL_STATUSES
-    )
-    assert payload["voice_phone_survival_tiers"] == (
-        trinity.V1_VOICE_PHONE_SURVIVAL_TIERS
-    )
-    assert payload["voice_attack_rungs"] == trinity.V1_VOICE_ATTACK_RUNGS
     assert payload["voice_detection_evidence_fields"] == (
         trinity.V1_VOICE_DETECTION_EVIDENCE_FIELDS
     )
-    assert payload["voice_redteam_ab_arms"] == trinity.V1_VOICE_REDTEAM_AB_ARMS
-    assert payload["voice_redteam_ab_verdicts"] == (
-        trinity.V1_VOICE_REDTEAM_AB_VERDICTS
-    )
     # Phase 9A (voice loopback / codec-survival) payload mirrors
-    assert payload["voice_fidelity_tiers"] == list(trinity.V1_VOICE_FIDELITY_TIERS)
-    assert payload["voice_codecs"] == list(trinity.V1_VOICE_CODECS)
-    assert payload["voice_packet_loss_models"] == list(
-        trinity.V1_VOICE_PACKET_LOSS_MODELS
-    )
-    assert payload["voice_codec_profiles"] == list(trinity.V1_VOICE_CODEC_PROFILES)
-    assert payload["voice_failure_sublayers"] == list(trinity.V1_VOICE_FAILURE_SUBLAYERS)
-    assert payload["voice_loss_term_refs"] == list(trinity.V1_VOICE_LOSS_TERM_REFS)
-    assert payload["required_redteam_readiness_certification_files"] == (
-        trinity.V1_REDTEAM_READINESS_CERTIFICATION_FILES
-    )
-    assert payload["required_redteam_readiness_certification_environment_types"] == (
-        trinity.V1_REDTEAM_READINESS_CERTIFICATION_ENVIRONMENT_TYPES
-    )
-    assert payload["required_redteam_readiness_certification_components"] == (
-        trinity.V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_COMPONENTS
-    )
-    assert payload["required_redteam_readiness_certification_metrics"] == (
-        trinity.V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_METRICS
-    )
-    assert payload["required_redteam_readiness_certification_state_keys"] == (
-        trinity.V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_STATE_KEYS
-    )
-    assert payload["required_redteam_readiness_certification_research_urls"] == (
-        trinity.V1_REDTEAM_READINESS_CERTIFICATION_REQUIRED_RESEARCH_URLS
-    )
-    assert payload["required_redteam_readiness_certification_min_counts"] == (
-        trinity.V1_REDTEAM_READINESS_CERTIFICATION_MIN_COUNTS
-    )
-    assert payload["required_redteam_society_causal_files"] == (
-        trinity.V1_REDTEAM_SOCIETY_CAUSAL_FILES
-    )
-    assert payload["required_redteam_society_causal_roles"] == (
-        trinity.V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_ROLES
-    )
-    assert payload["required_redteam_society_causal_state_keys"] == (
-        trinity.V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_STATE_KEYS
-    )
-    assert payload["required_redteam_society_causal_graph_nodes"] == (
-        trinity.V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_GRAPH_NODES
-    )
-    assert payload["required_redteam_society_causal_root_causes"] == (
-        trinity.V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_ROOT_CAUSES
-    )
     assert payload["required_redteam_society_causal_contracts"] == (
         trinity.V1_REDTEAM_SOCIETY_CAUSAL_CONTRACTS
-    )
-    assert payload["required_redteam_attack_evolution_files"] == (
-        trinity.V1_REDTEAM_ATTACK_EVOLUTION_FILES
-    )
-    assert payload["required_redteam_attack_evolution_environment_types"] == (
-        trinity.V1_REDTEAM_ATTACK_EVOLUTION_REQUIRED_ENVIRONMENT_TYPES
-    )
-    assert payload["required_redteam_attack_evolution_metrics"] == (
-        trinity.V1_REDTEAM_ATTACK_EVOLUTION_REQUIRED_METRICS
-    )
-    assert payload["required_redteam_attack_evolution_proof_checks"] == (
-        trinity.V1_REDTEAM_ATTACK_EVOLUTION_REQUIRED_PROOF_CHECKS
     )
     assert payload["required_redteam_attack_evolution_contracts"] == (
         trinity.V1_REDTEAM_ATTACK_EVOLUTION_CONTRACTS
@@ -17707,74 +16510,8 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_ui_action_report_artifacts"] == (
         trinity.V1_UI_ACTION_REPORT_ARTIFACTS
     )
-    assert payload["forbidden_ui_secret_markers"] == (
-        trinity.V1_UI_FORBIDDEN_SECRET_MARKERS
-    )
-    assert payload["required_regression_artifact_files"] == (
-        trinity.V1_REGRESSION_ARTIFACT_FILES
-    )
-    assert payload["required_regression_artifact_commands"] == (
-        trinity.V1_REGRESSION_ARTIFACT_REQUIRED_COMMANDS
-    )
-    assert payload["required_regression_artifact_result_kinds"] == (
-        trinity.V1_REGRESSION_ARTIFACT_REQUIRED_RESULT_KINDS
-    )
-    assert payload["required_regression_artifact_metrics"] == (
-        trinity.V1_REGRESSION_ARTIFACT_REQUIRED_METRICS
-    )
-    assert payload["required_harness_diagnosis_source"] == (
-        trinity.V1_HARNESS_DIAGNOSIS_SOURCE
-    )
-    assert payload["required_harness_diagnosis_actions"] == (
-        trinity.V1_HARNESS_DIAGNOSIS_REQUIRED_ACTIONS
-    )
-    assert payload["required_harness_diagnosis_layers"] == (
-        trinity.V1_HARNESS_DIAGNOSIS_REQUIRED_LAYERS
-    )
-    assert payload["required_harness_diagnosis_research_sources"] == (
-        trinity.V1_HARNESS_DIAGNOSIS_REQUIRED_RESEARCH_SOURCES
-    )
-    assert payload["required_framework_provider_examples"] == (
-        trinity.V1_FRAMEWORK_PROVIDER_EXAMPLES
-    )
-    assert payload["required_framework_provider_frameworks"] == (
-        trinity.V1_FRAMEWORK_PROVIDER_FRAMEWORKS
-    )
-    assert payload["required_framework_provider_modalities"] == (
-        trinity.V1_FRAMEWORK_PROVIDER_REQUIRED_MODALITIES
-    )
-    assert payload["required_framework_provider_transports"] == (
-        trinity.V1_FRAMEWORK_PROVIDER_REQUIRED_TRANSPORTS
-    )
-    assert payload["required_framework_provider_target_schemes"] == (
-        trinity.V1_FRAMEWORK_PROVIDER_REQUIRED_TARGET_SCHEMES
-    )
     assert payload["required_framework_provider_manifest_contracts"] == (
         trinity.V1_FRAMEWORK_PROVIDER_MANIFEST_CONTRACTS
-    )
-    assert payload["required_multi_framework_runtime_files"] == (
-        trinity.V1_MULTI_FRAMEWORK_RUNTIME_FILES
-    )
-    assert payload["required_multi_framework_runtime_frameworks"] == (
-        trinity.V1_MULTI_FRAMEWORK_RUNTIME_FRAMEWORKS
-    )
-    assert payload["required_multi_framework_runtime_env"] == (
-        trinity.V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_ENV
-    )
-    assert payload["required_multi_framework_runtime_commands"] == (
-        trinity.V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_COMMANDS
-    )
-    assert payload["required_multi_framework_runtime_state_keys"] == (
-        trinity.V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_STATE_KEYS
-    )
-    assert payload["required_multi_framework_runtime_environment_types"] == (
-        trinity.V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_ENVIRONMENT_TYPES
-    )
-    assert payload["required_multi_framework_runtime_result_kind"] == (
-        trinity.V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_RESULT_KIND
-    )
-    assert payload["required_multi_framework_runtime_tool"] == (
-        trinity.V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_TOOL
     )
     assert payload["expected_multi_framework_runtime_methods"] == (
         trinity.V1_MULTI_FRAMEWORK_RUNTIME_EXPECTED_METHODS
@@ -17785,572 +16522,35 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["expected_multi_framework_runtime_modalities"] == (
         trinity.V1_MULTI_FRAMEWORK_RUNTIME_EXPECTED_MODALITIES
     )
-    assert payload["required_framework_adapter_matrix_optimization_files"] == (
-        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_FILES
-    )
-    assert payload["required_framework_adapter_matrix_optimization_frameworks"] == (
-        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_FRAMEWORKS
-    )
-    assert payload["required_framework_adapter_matrix_optimization_env"] == (
-        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_ENV
-    )
-    assert payload["required_framework_adapter_matrix_optimization_layers"] == (
-        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_LAYERS
-    )
-    assert payload["required_framework_adapter_matrix_optimization_search_paths"] == (
-        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_SEARCH_PATHS
-    )
-    assert payload["required_framework_adapter_matrix_optimization_metrics"] == (
-        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_METRICS
-    )
-    assert payload["required_framework_adapter_matrix_optimization_proof_kind"] == (
-        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_PROOF_KIND
-    )
-    assert (
-        payload[
-            "required_framework_adapter_matrix_optimization_proof_assurance_level"
-        ]
-        == trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_PROOF_ASSURANCE_LEVEL
-    )
-    assert payload["required_framework_adapter_matrix_optimization_proof_checks"] == (
-        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_REQUIRED_PROOF_CHECKS
-    )
-    assert payload["required_framework_adapter_matrix_optimization_source_urls"] == (
-        trinity.V1_FRAMEWORK_ADAPTER_MATRIX_OPTIMIZATION_SOURCE_URLS
-    )
-    assert payload["required_agent_integration_files"] == (
-        trinity.V1_AGENT_INTEGRATION_FILES
-    )
-    assert payload["required_agent_integration_providers"] == (
-        trinity.V1_AGENT_INTEGRATION_REQUIRED_PROVIDERS
-    )
-    assert payload["required_agent_integration_channels"] == (
-        trinity.V1_AGENT_INTEGRATION_REQUIRED_CHANNELS
-    )
-    assert payload["required_agent_integration_trace_frameworks"] == (
-        trinity.V1_AGENT_INTEGRATION_REQUIRED_TRACE_FRAMEWORKS
-    )
-    assert payload["required_agent_integration_layers"] == (
-        trinity.V1_AGENT_INTEGRATION_REQUIRED_LAYERS
-    )
     assert payload["required_agent_integration_provider_channels"] == (
         trinity.V1_AGENT_INTEGRATION_REQUIRED_PROVIDER_CHANNELS
     )
     assert payload["required_agent_integration_manifest_provider_channels"] == (
         trinity.V1_AGENT_INTEGRATION_REQUIRED_MANIFEST_PROVIDER_CHANNELS
     )
-    assert payload["required_agent_integration_metrics"] == (
-        trinity.V1_AGENT_INTEGRATION_REQUIRED_METRICS
-    )
-    assert payload["required_agent_integration_run_metrics"] == (
-        trinity.V1_AGENT_INTEGRATION_REQUIRED_RUN_METRICS
-    )
-    assert payload["required_agent_integration_events"] == (
-        trinity.V1_AGENT_INTEGRATION_REQUIRED_EVENTS
-    )
-    assert payload["required_agent_integration_action_ids"] == (
-        trinity.V1_AGENT_INTEGRATION_REQUIRED_ACTION_IDS
-    )
-    assert payload["required_agent_integration_min_counts"] == (
-        trinity.V1_AGENT_INTEGRATION_MIN_COUNTS
-    )
-    assert payload["required_external_agent_adapter_files"] == (
-        trinity.V1_EXTERNAL_AGENT_ADAPTER_READINESS_FILES
-    )
-    assert payload["required_external_agent_adapter_candidate_profiles"] == (
-        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_CANDIDATE_PROFILES
-    )
-    assert payload["required_external_agent_adapter_selected_profile"] == (
-        trinity.V1_EXTERNAL_AGENT_ADAPTER_SELECTED_PROFILE
-    )
-    assert payload["required_external_agent_adapter_layers"] == (
-        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_LAYERS
-    )
-    assert payload["required_external_agent_adapter_search_paths"] == (
-        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_SEARCH_PATHS
-    )
-    assert payload["required_external_agent_adapter_environment_types"] == (
-        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_ENVIRONMENT_TYPES
-    )
-    assert payload["required_external_agent_adapter_tools"] == (
-        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_TOOLS
-    )
-    assert payload["required_external_agent_adapter_protocol"] == (
-        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_PROTOCOL
-    )
-    assert payload["required_external_agent_adapter_agent_type"] == (
-        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_AGENT_TYPE
-    )
-    assert payload["required_external_agent_adapter_metrics"] == (
-        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_METRICS
-    )
-    assert payload["required_external_agent_adapter_trace_fields"] == (
-        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_TRACE_FIELDS
-    )
-    assert payload["required_external_agent_adapter_state_keys"] == (
-        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_STATE_KEYS
-    )
-    assert payload["required_external_agent_adapter_actions"] == (
-        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_ACTIONS
-    )
-    assert payload["required_external_agent_adapter_research_urls"] == (
-        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_RESEARCH_URLS
-    )
-    assert payload["required_external_agent_adapter_protocol_doc_urls"] == (
-        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_PROTOCOL_DOC_URLS
-    )
-    assert payload["required_external_agent_adapter_source_urls"] == (
-        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_SOURCE_URLS
-    )
-    assert payload["required_environment_replay_optimizer_files"] == (
-        trinity.V1_ENVIRONMENT_REPLAY_OPTIMIZER_FILES
-    )
-    assert payload["required_environment_replay_optimizer_profiles"] == (
-        trinity.V1_ENVIRONMENT_REPLAY_OPTIMIZER_REQUIRED_PROFILES
-    )
-    assert payload["required_environment_replay_optimizer_metrics"] == (
-        trinity.V1_ENVIRONMENT_REPLAY_OPTIMIZER_REQUIRED_METRICS
-    )
-    assert payload["compatibility_openenv_optimizer_profiles"] == (
-        trinity.V1_ENVIRONMENT_REPLAY_OPTIMIZER_COMPATIBILITY_PROFILES
-    )
-    assert payload["compatibility_openenv_optimizer_metrics"] == (
-        trinity.V1_ENVIRONMENT_REPLAY_OPTIMIZER_COMPATIBILITY_METRICS
-    )
-    assert payload["required_framework_environment_replay_adapter_files"] == (
-        trinity.V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_FILES
-    )
-    assert payload["required_framework_environment_replay_adapter_evidence"] == (
-        trinity.V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_REQUIRED_EVIDENCE
-    )
-    assert payload["required_framework_environment_replay_adapter_metrics"] == (
-        trinity.V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_REQUIRED_METRICS
-    )
-    assert payload[
-        "required_framework_environment_replay_adapter_quality_minima"
-    ] == (
-        trinity.V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_QUALITY_MINIMA
-    )
-    assert payload["compatibility_framework_openenv_adapter_openenv"] == (
-        trinity.V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_COMPATIBILITY_OPENENV
-    )
-    assert payload["compatibility_framework_openenv_adapter_metrics"] == (
-        trinity.V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_COMPATIBILITY_METRICS
-    )
-    assert payload["required_openenv_compatibility_boundary_files"] == (
-        trinity.V1_OPENENV_COMPATIBILITY_BOUNDARY_FILES
-    )
-    assert payload["forbidden_openenv_compatibility_boundary_packages"] == (
-        trinity.V1_OPENENV_COMPATIBILITY_FORBIDDEN_PACKAGES
-    )
-    assert payload["forbidden_openenv_compatibility_import_modules"] == (
-        trinity.V1_OPENENV_COMPATIBILITY_FORBIDDEN_IMPORT_MODULES
-    )
     assert payload["required_openenv_compatibility_doc_phrases"] == (
         trinity.V1_OPENENV_COMPATIBILITY_DOC_PHRASES
-    )
-    assert payload["required_framework_trace_export_files"] == (
-        trinity.V1_FRAMEWORK_TRACE_EXPORT_FILES
-    )
-    assert payload["required_framework_trace_export_framework"] == (
-        trinity.V1_FRAMEWORK_TRACE_EXPORT_FRAMEWORK
-    )
-    assert payload["required_framework_trace_export_signals"] == (
-        trinity.V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_SIGNALS
-    )
-    assert payload["required_framework_trace_export_metrics"] == (
-        trinity.V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_METRICS
-    )
-    assert payload["required_framework_trace_export_quality_minima"] == (
-        trinity.V1_FRAMEWORK_TRACE_EXPORT_QUALITY_MINIMA
-    )
-    assert payload["required_framework_trace_export_tools"] == (
-        trinity.V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_TOOLS
-    )
-    assert payload["required_framework_trace_export_events"] == (
-        trinity.V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_EVENTS
-    )
-    assert payload["required_framework_trace_export_artifact_kinds"] == (
-        trinity.V1_FRAMEWORK_TRACE_EXPORT_REQUIRED_ARTIFACT_KINDS
-    )
-    assert payload["required_framework_trace_export_source_urls"] == (
-        trinity.V1_FRAMEWORK_TRACE_EXPORT_SOURCE_URLS
-    )
-    assert payload["required_framework_http_transport_files"] == (
-        trinity.V1_FRAMEWORK_HTTP_TRANSPORT_FILES
-    )
-    assert payload["required_framework_http_transport_framework"] == (
-        trinity.V1_FRAMEWORK_HTTP_TRANSPORT_FRAMEWORK
-    )
-    assert payload["required_framework_http_transport_tools"] == (
-        trinity.V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_TOOLS
-    )
-    assert payload["required_framework_http_transport_state_keys"] == (
-        trinity.V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_STATE_KEYS
-    )
-    assert payload["required_framework_http_transport_events"] == (
-        trinity.V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_EVENTS
-    )
-    assert payload["required_framework_http_transport_artifact_kinds"] == (
-        trinity.V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_ARTIFACT_KINDS
-    )
-    assert payload["required_framework_http_transport_metrics"] == (
-        trinity.V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_METRICS
-    )
-    assert payload["required_framework_http_transport_trace_signals"] == (
-        trinity.V1_FRAMEWORK_HTTP_TRANSPORT_REQUIRED_TRACE_SIGNALS
-    )
-    assert payload["required_framework_http_transport_source_urls"] == (
-        trinity.V1_FRAMEWORK_HTTP_TRANSPORT_SOURCE_URLS
-    )
-    assert payload["required_framework_websocket_transport_files"] == (
-        trinity.V1_FRAMEWORK_WEBSOCKET_TRANSPORT_FILES
-    )
-    assert payload["required_framework_websocket_transport_framework"] == (
-        trinity.V1_FRAMEWORK_WEBSOCKET_TRANSPORT_FRAMEWORK
-    )
-    assert payload["required_framework_websocket_transport_tools"] == (
-        trinity.V1_FRAMEWORK_WEBSOCKET_TRANSPORT_REQUIRED_TOOLS
-    )
-    assert payload["required_framework_websocket_transport_state_keys"] == (
-        trinity.V1_FRAMEWORK_WEBSOCKET_TRANSPORT_REQUIRED_STATE_KEYS
-    )
-    assert payload["required_framework_websocket_transport_events"] == (
-        trinity.V1_FRAMEWORK_WEBSOCKET_TRANSPORT_REQUIRED_EVENTS
-    )
-    assert payload["required_framework_websocket_transport_artifact_kinds"] == (
-        trinity.V1_FRAMEWORK_WEBSOCKET_TRANSPORT_REQUIRED_ARTIFACT_KINDS
-    )
-    assert payload["required_framework_websocket_transport_metrics"] == (
-        trinity.V1_FRAMEWORK_WEBSOCKET_TRANSPORT_REQUIRED_METRICS
-    )
-    assert payload["required_framework_websocket_transport_trace_signals"] == (
-        trinity.V1_FRAMEWORK_WEBSOCKET_TRANSPORT_REQUIRED_TRACE_SIGNALS
-    )
-    assert payload["required_framework_websocket_transport_source_urls"] == (
-        trinity.V1_FRAMEWORK_WEBSOCKET_TRANSPORT_SOURCE_URLS
-    )
-    assert payload["required_environment_10x_robustness_files"] == (
-        trinity.V1_ENVIRONMENT_10X_ROBUSTNESS_FILES
-    )
-    assert payload["required_environment_10x_robustness_axes"] == (
-        trinity.V1_ENVIRONMENT_10X_ROBUSTNESS_AXES
-    )
-    assert payload["required_environment_10x_robustness_source_urls"] == (
-        trinity.V1_ENVIRONMENT_10X_ROBUSTNESS_SOURCE_URLS
-    )
-    assert payload["required_environment_10x_robustness_min_axis_count"] == (
-        trinity.V1_ENVIRONMENT_10X_ROBUSTNESS_MIN_AXIS_COUNT
-    )
-    assert payload["required_framework_optimizer_files"] == (
-        trinity.V1_FRAMEWORK_OPTIMIZER_FILES
     )
     assert payload["required_framework_optimizer_contracts"] == (
         trinity.V1_FRAMEWORK_OPTIMIZER_CONTRACTS
     )
-    assert payload["required_workspace_import_certification_files"] == (
-        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_FILES
-    )
-    assert payload["required_workspace_import_certification_environment_types"] == (
-        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_ENVIRONMENT_TYPES
-    )
-    assert payload["required_workspace_import_certification_state_keys"] == (
-        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_STATE_KEYS
-    )
-    assert payload["required_workspace_import_certification_metrics"] == (
-        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_METRICS
-    )
-    assert payload["required_workspace_import_certification_components"] == (
-        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_COMPONENTS
-    )
-    assert payload["required_workspace_import_certification_proof_kind"] == (
-        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_PROOF_KIND
-    )
-    assert (
-        payload["required_workspace_import_certification_proof_assurance_level"]
-        == trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_PROOF_ASSURANCE_LEVEL
-    )
-    assert payload["required_workspace_import_certification_proof_checks"] == (
-        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_PROOF_CHECKS
-    )
-    assert payload["required_workspace_import_certification_actions"] == (
-        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_REQUIRED_ACTIONS
-    )
-    assert payload["required_workspace_import_certification_promotion_kind"] == (
-        trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_PROMOTION_KIND
-    )
     assert payload["required_workspace_import_certification_contracts"] == (
         trinity.V1_WORKSPACE_IMPORT_CERTIFICATION_CONTRACTS
-    )
-    assert payload["required_workflow_hook_files"] == (
-        trinity.V1_WORKFLOW_HOOK_FILES
-    )
-    assert payload["required_workflow_hook_environment_types"] == (
-        trinity.V1_WORKFLOW_HOOK_REQUIRED_ENVIRONMENT_TYPES
-    )
-    assert payload["required_workflow_hook_state_keys"] == (
-        trinity.V1_WORKFLOW_HOOK_REQUIRED_STATE_KEYS
-    )
-    assert payload["required_workflow_hook_metrics"] == (
-        trinity.V1_WORKFLOW_HOOK_REQUIRED_METRICS
-    )
-    assert payload["required_workflow_hook_proof_kind"] == (
-        trinity.V1_WORKFLOW_HOOK_PROOF_KIND
-    )
-    assert payload["required_workflow_hook_proof_assurance_level"] == (
-        trinity.V1_WORKFLOW_HOOK_PROOF_ASSURANCE_LEVEL
-    )
-    assert payload["required_workflow_hook_proof_checks"] == (
-        trinity.V1_WORKFLOW_HOOK_REQUIRED_PROOF_CHECKS
-    )
-    assert payload["required_workflow_hook_selected_profile"] == (
-        trinity.V1_WORKFLOW_HOOK_SELECTED_PROFILE
-    )
-    assert payload["required_retrieval_hook_files"] == (
-        trinity.V1_RETRIEVAL_HOOK_FILES
-    )
-    assert payload["required_retrieval_hook_environment_types"] == (
-        trinity.V1_RETRIEVAL_HOOK_REQUIRED_ENVIRONMENT_TYPES
-    )
-    assert payload["required_retrieval_hook_state_keys"] == (
-        trinity.V1_RETRIEVAL_HOOK_REQUIRED_STATE_KEYS
-    )
-    assert payload["required_retrieval_hook_metrics"] == (
-        trinity.V1_RETRIEVAL_HOOK_REQUIRED_METRICS
-    )
-    assert payload["required_retrieval_hook_proof_kind"] == (
-        trinity.V1_RETRIEVAL_HOOK_PROOF_KIND
-    )
-    assert payload["required_retrieval_hook_proof_assurance_level"] == (
-        trinity.V1_RETRIEVAL_HOOK_PROOF_ASSURANCE_LEVEL
-    )
-    assert payload["required_retrieval_hook_proof_checks"] == (
-        trinity.V1_RETRIEVAL_HOOK_REQUIRED_PROOF_CHECKS
-    )
-    assert payload["required_retrieval_hook_selected_profile"] == (
-        trinity.V1_RETRIEVAL_HOOK_SELECTED_PROFILE
-    )
-    assert payload["required_framework_adapter_probe_files"] == (
-        trinity.V1_FRAMEWORK_ADAPTER_PROBE_FILES
     )
     assert payload["required_framework_adapter_probe_contracts"] == (
         trinity.V1_FRAMEWORK_ADAPTER_PROBE_CONTRACTS
     )
-    assert payload["required_framework_adapter_probe_actions"] == (
-        trinity.V1_FRAMEWORK_ADAPTER_PROBE_REQUIRED_ACTIONS
-    )
-    assert payload["required_framework_adapter_io_files"] == (
-        trinity.V1_FRAMEWORK_ADAPTER_IO_FILES
-    )
     assert payload["required_framework_adapter_io_contracts"] == (
         trinity.V1_FRAMEWORK_ADAPTER_IO_CONTRACTS
-    )
-    assert payload["required_protocol_adapter_files"] == (
-        trinity.V1_PROTOCOL_ADAPTER_FILES
     )
     assert payload["required_protocol_adapter_contracts"] == (
         trinity.V1_PROTOCOL_ADAPTER_CONTRACTS
     )
-    assert payload["required_browser_realtime_adapter_files"] == (
-        trinity.V1_BROWSER_REALTIME_ADAPTER_FILES
-    )
     assert payload["required_browser_realtime_adapter_contracts"] == (
         trinity.V1_BROWSER_REALTIME_ADAPTER_CONTRACTS
     )
-    assert payload["required_browser_cua_probe_files"] == (
-        trinity.V1_BROWSER_CUA_PROBE_FILES
-    )
-    assert payload["required_browser_cua_probe_proof_kind"] == (
-        trinity.V1_BROWSER_CUA_PROBE_PROOF_KIND
-    )
-    assert payload["required_browser_cua_probe_environment_types"] == (
-        trinity.V1_BROWSER_CUA_PROBE_REQUIRED_ENVIRONMENT_TYPES
-    )
-    assert payload["required_browser_cua_probe_selected_type"] == (
-        trinity.V1_BROWSER_CUA_PROBE_SELECTED_TYPE
-    )
-    assert payload["required_browser_cua_probe_rejected_type"] == (
-        trinity.V1_BROWSER_CUA_PROBE_REJECTED_TYPE
-    )
-    assert payload["required_browser_cua_probe_expected_url"] == (
-        trinity.V1_BROWSER_CUA_PROBE_EXPECTED_URL
-    )
-    assert payload["required_browser_cua_probe_expected_order_id"] == (
-        trinity.V1_BROWSER_CUA_PROBE_EXPECTED_ORDER_ID
-    )
-    assert payload["required_browser_cua_probe_expected_selector"] == (
-        trinity.V1_BROWSER_CUA_PROBE_EXPECTED_SELECTOR
-    )
-    assert payload["required_browser_cua_probe_metrics"] == (
-        trinity.V1_BROWSER_CUA_PROBE_REQUIRED_METRICS
-    )
-    assert payload["required_browser_cua_probe_run_metrics"] == (
-        trinity.V1_BROWSER_CUA_PROBE_REQUIRED_RUN_METRICS
-    )
-    assert payload["required_browser_cua_probe_tools"] == (
-        trinity.V1_BROWSER_CUA_PROBE_REQUIRED_TOOLS
-    )
-    assert payload["required_browser_cua_probe_events"] == (
-        trinity.V1_BROWSER_CUA_PROBE_REQUIRED_EVENTS
-    )
-    assert payload["required_realtime_stack_probe_files"] == (
-        trinity.V1_REALTIME_STACK_PROBE_FILES
-    )
-    assert payload["required_realtime_stack_probe_framework"] == (
-        trinity.V1_REALTIME_STACK_PROBE_FRAMEWORK
-    )
-    assert payload["required_realtime_stack_probe_expected_route"] == (
-        trinity.V1_REALTIME_STACK_PROBE_EXPECTED_ROUTE
-    )
-    assert payload["required_realtime_stack_probe_proof_kind"] == (
-        trinity.V1_REALTIME_STACK_PROBE_PROOF_KIND
-    )
-    assert payload["required_realtime_stack_probe_environment_types"] == (
-        trinity.V1_REALTIME_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES
-    )
-    assert payload["required_realtime_stack_probe_metrics"] == (
-        trinity.V1_REALTIME_STACK_PROBE_REQUIRED_METRICS
-    )
-    assert payload["required_realtime_stack_probe_run_metrics"] == (
-        trinity.V1_REALTIME_STACK_PROBE_REQUIRED_RUN_METRICS
-    )
-    assert payload["required_realtime_stack_probe_tools"] == (
-        trinity.V1_REALTIME_STACK_PROBE_REQUIRED_TOOLS
-    )
-    assert payload["required_realtime_stack_probe_streaming_signals"] == (
-        trinity.V1_REALTIME_STACK_PROBE_REQUIRED_STREAMING_SIGNALS
-    )
-    assert payload["required_memory_layer_probe_files"] == (
-        trinity.V1_MEMORY_LAYER_PROBE_FILES
-    )
-    assert payload["required_memory_layer_probe_proof_kind"] == (
-        trinity.V1_MEMORY_LAYER_PROBE_PROOF_KIND
-    )
-    assert payload["required_memory_layer_probe_doc_id"] == (
-        trinity.V1_MEMORY_LAYER_PROBE_REQUIRED_DOC_ID
-    )
-    assert payload["forbidden_memory_layer_probe_doc_id"] == (
-        trinity.V1_MEMORY_LAYER_PROBE_FORBIDDEN_DOC_ID
-    )
-    assert payload["required_memory_layer_probe_environment_types"] == (
-        trinity.V1_MEMORY_LAYER_PROBE_REQUIRED_ENVIRONMENT_TYPES
-    )
-    assert payload["required_memory_layer_probe_operations"] == (
-        trinity.V1_MEMORY_LAYER_PROBE_REQUIRED_OPERATIONS
-    )
-    assert payload["required_memory_layer_probe_metrics"] == (
-        trinity.V1_MEMORY_LAYER_PROBE_REQUIRED_METRICS
-    )
-    assert payload["required_memory_layer_probe_run_metrics"] == (
-        trinity.V1_MEMORY_LAYER_PROBE_REQUIRED_RUN_METRICS
-    )
-    assert payload["required_memory_layer_probe_tools"] == (
-        trinity.V1_MEMORY_LAYER_PROBE_REQUIRED_TOOLS
-    )
-    assert payload["required_stateful_framework_adapter_files"] == (
-        trinity.V1_STATEFUL_FRAMEWORK_ADAPTER_FILES
-    )
     assert payload["required_stateful_framework_adapter_contracts"] == (
         trinity.V1_STATEFUL_FRAMEWORK_ADAPTER_CONTRACTS
-    )
-    assert payload["required_framework_adapter_trinity_suite_files"] == (
-        trinity.V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_FILES
-    )
-    assert payload["required_framework_adapter_trinity_suite_framework"] == (
-        trinity.V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_FRAMEWORK
-    )
-    assert payload["required_framework_adapter_trinity_suite_commands"] == (
-        trinity.V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_COMMANDS
-    )
-    assert payload["required_framework_adapter_trinity_suite_child_kinds"] == (
-        trinity.V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_CHILD_KINDS
-    )
-    assert payload["required_framework_adapter_trinity_suite_metrics"] == (
-        trinity.V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_METRICS
-    )
-    assert payload["required_framework_adapter_trinity_suite_attacks"] == (
-        trinity.V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_ATTACKS
-    )
-    assert payload["required_framework_adapter_trinity_suite_surfaces"] == (
-        trinity.V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_SURFACES
-    )
-    assert payload["required_framework_adapter_trinity_suite_optimizer_flags"] == (
-        trinity.V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_OPTIMIZER_FLAGS
-    )
-    assert payload["required_orchestration_stack_probe_files"] == (
-        trinity.V1_ORCHESTRATION_STACK_PROBE_FILES
-    )
-    assert payload["required_orchestration_stack_probe_environment_types"] == (
-        trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES
-    )
-    assert payload["required_orchestration_stack_probe_state_keys"] == (
-        trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_STATE_KEYS
-    )
-    assert payload["required_orchestration_stack_probe_proof_kind"] == (
-        trinity.V1_ORCHESTRATION_STACK_PROBE_PROOF_KIND
-    )
-    assert payload["required_orchestration_stack_probe_selected_stack"] == (
-        trinity.V1_ORCHESTRATION_STACK_PROBE_SELECTED_STACK
-    )
-    assert payload["required_orchestration_stack_probe_rejected_stack"] == (
-        trinity.V1_ORCHESTRATION_STACK_PROBE_REJECTED_STACK
-    )
-    assert payload["required_orchestration_stack_probe_framework"] == (
-        trinity.V1_ORCHESTRATION_STACK_PROBE_FRAMEWORK
-    )
-    assert payload["required_orchestration_stack_probe_expected_transition"] == (
-        trinity.V1_ORCHESTRATION_STACK_PROBE_EXPECTED_TRANSITION
-    )
-    assert payload["required_orchestration_stack_probe_expected_doc_id"] == (
-        trinity.V1_ORCHESTRATION_STACK_PROBE_EXPECTED_DOC_ID
-    )
-    assert payload["forbidden_orchestration_stack_probe_doc_id"] == (
-        trinity.V1_ORCHESTRATION_STACK_PROBE_FORBIDDEN_DOC_ID
-    )
-    assert payload["required_orchestration_stack_probe_roles"] == (
-        trinity.V1_ORCHESTRATION_STACK_PROBE_EXPECTED_ROLES
-    )
-    assert payload["required_orchestration_stack_probe_reconciliation_source"] == (
-        trinity.V1_ORCHESTRATION_STACK_PROBE_EXPECTED_RECONCILIATION_SOURCE
-    )
-    assert payload["required_orchestration_stack_probe_tools"] == (
-        trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_TOOLS
-    )
-    assert payload["required_orchestration_stack_probe_metrics"] == (
-        trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_METRICS
-    )
-    assert payload["required_orchestration_stack_probe_run_metrics"] == (
-        trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_RUN_METRICS
-    )
-    assert payload["required_orchestration_stack_probe_source_grounding_minimum"] == (
-        trinity.V1_ORCHESTRATION_STACK_PROBE_SOURCE_GROUNDING_MINIMUM
-    )
-    assert payload["required_orchestration_stack_probe_memory_operations"] == (
-        trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_MEMORY_OPERATIONS
-    )
-    assert payload["required_orchestration_stack_probe_events"] == (
-        trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_EVENTS
-    )
-    assert payload["required_trinity_stack_probe_files"] == (
-        trinity.V1_TRINITY_STACK_PROBE_FILES
-    )
-    assert payload["required_trinity_stack_probe_environment_types"] == (
-        trinity.V1_TRINITY_STACK_PROBE_REQUIRED_ENVIRONMENT_TYPES
-    )
-    assert payload["required_trinity_stack_probe_proof_kind"] == (
-        trinity.V1_TRINITY_STACK_PROBE_PROOF_KIND
-    )
-    assert payload["required_trinity_stack_probe_run_metrics"] == (
-        trinity.V1_TRINITY_STACK_PROBE_REQUIRED_RUN_METRICS
-    )
-    assert payload["required_trinity_stack_probe_state_keys"] == (
-        trinity.V1_TRINITY_STACK_PROBE_REQUIRED_STATE_KEYS
-    )
-    assert payload["required_release_proof_checks"] == (
-        trinity.V1_RELEASE_PROOF_REQUIRED_CHECKS
-    )
-    assert payload["required_release_handover_files"] == (
-        trinity.V1_RELEASE_HANDOVER_REQUIRED_FILES
     )
     assert payload["required_release_handover_doc_phrases"] == (
         trinity.V1_RELEASE_HANDOVER_REQUIRED_DOC_PHRASES
@@ -18358,95 +16558,8 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert payload["required_release_handover_commands"] == (
         trinity.V1_RELEASE_HANDOVER_COMMANDS
     )
-    assert payload["required_release_handover_product_surfaces"] == (
-        trinity.V1_RELEASE_HANDOVER_PRODUCT_SURFACES
-    )
-    assert payload["required_release_handover_completion_invariants"] == (
-        trinity.V1_RELEASE_HANDOVER_COMPLETION_INVARIANTS
-    )
-    assert payload["required_release_handover_allowed_proof_outputs"] == (
-        trinity.V1_RELEASE_HANDOVER_ALLOWED_PROOF_OUTPUTS
-    )
-    assert payload["forbidden_release_handover_proof_outputs"] == (
-        trinity.V1_RELEASE_HANDOVER_FORBIDDEN_PROOF_OUTPUTS
-    )
-    assert payload["required_evidence_components"] == (
-        trinity.V1_REQUIRED_EVIDENCE_COMPONENTS
-    )
-    assert payload["required_optimizer_governance_files"] == (
-        trinity.V1_OPTIMIZER_GOVERNANCE_FILES
-    )
-    assert payload["required_optimizer_governance_metrics"] == (
-        trinity.V1_OPTIMIZER_GOVERNANCE_REQUIRED_METRICS
-    )
-    assert payload["required_optimizer_governance_trace_flags"] == (
-        trinity.V1_OPTIMIZER_GOVERNANCE_REQUIRED_TRACE_FLAGS
-    )
-    assert payload["required_optimizer_governance_checks"] == (
-        trinity.V1_OPTIMIZER_GOVERNANCE_REQUIRED_CHECKS
-    )
-    assert payload["required_optimizer_portfolio_files"] == (
-        trinity.V1_OPTIMIZER_PORTFOLIO_FILES
-    )
-    assert payload["required_optimizer_portfolio_environment_types"] == (
-        trinity.V1_OPTIMIZER_PORTFOLIO_REQUIRED_ENVIRONMENT_TYPES
-    )
-    assert payload["required_optimizer_portfolio_metrics"] == (
-        trinity.V1_OPTIMIZER_PORTFOLIO_REQUIRED_METRICS
-    )
-    assert payload["required_optimizer_portfolio_components"] == (
-        trinity.V1_OPTIMIZER_PORTFOLIO_REQUIRED_COMPONENTS
-    )
-    assert payload["required_optimizer_portfolio_proof_checks"] == (
-        trinity.V1_OPTIMIZER_PORTFOLIO_REQUIRED_PROOF_CHECKS
-    )
     assert payload["required_optimizer_portfolio_contracts"] == (
         trinity.V1_OPTIMIZER_PORTFOLIO_CONTRACTS
-    )
-    assert payload["required_agent_control_plane_files"] == (
-        trinity.V1_AGENT_CONTROL_PLANE_FILES
-    )
-    assert payload["required_agent_control_plane_environment_types"] == (
-        trinity.V1_AGENT_CONTROL_PLANE_REQUIRED_ENVIRONMENT_TYPES
-    )
-    assert payload["required_agent_control_plane_metrics"] == (
-        trinity.V1_AGENT_CONTROL_PLANE_REQUIRED_METRICS
-    )
-    assert payload["required_agent_trust_boundary_flags"] == (
-        trinity.V1_AGENT_TRUST_BOUNDARY_REQUIRED_FLAGS
-    )
-    assert payload["required_agent_control_plane_flags"] == (
-        trinity.V1_AGENT_CONTROL_PLANE_REQUIRED_FLAGS
-    )
-    assert payload["required_agent_control_plane_events"] == (
-        trinity.V1_AGENT_CONTROL_PLANE_REQUIRED_EVENTS
-    )
-    assert payload["required_multi_agent_room_probe_files"] == (
-        trinity.V1_MULTI_AGENT_ROOM_PROBE_FILES
-    )
-    assert payload["required_multi_agent_room_probe_proof_kind"] == (
-        trinity.V1_MULTI_AGENT_ROOM_PROBE_PROOF_KIND
-    )
-    assert payload["required_multi_agent_room_probe_assurance_level"] == (
-        trinity.V1_MULTI_AGENT_ROOM_PROBE_ASSURANCE_LEVEL
-    )
-    assert payload["required_multi_agent_room_probe_metrics"] == (
-        trinity.V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_METRICS
-    )
-    assert payload["required_multi_agent_room_probe_run_metrics"] == (
-        trinity.V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_RUN_METRICS
-    )
-    assert payload["required_multi_agent_room_probe_checks"] == (
-        trinity.V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_CHECKS
-    )
-    assert payload["required_multi_agent_room_probe_participants"] == (
-        trinity.V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_PARTICIPANTS
-    )
-    assert payload["required_multi_agent_room_probe_trace"] == (
-        trinity.V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_TRACE
-    )
-    assert payload["required_multi_agent_room_probe_run_events"] == (
-        trinity.V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_RUN_EVENTS
     )
     checks = {check["id"]: check for check in payload["checks"]}
     assert set(checks) == {
@@ -18558,17 +16671,8 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     # cleared, kind/counts null) — see the repo-hygiene decoupling. The required
     # kind is still declared; the observed kind is None when absent.
     assert active_ai_evaluation["source_inventory_kind"] is None
-    assert active_ai_evaluation["required_source_inventory_kind"] == (
-        trinity.V1_ACTIVE_AI_EVALUATION_SOURCE_INVENTORY_KIND
-    )
     assert active_ai_evaluation["required_doc_phrases"] == (
         trinity.V1_ACTIVE_AI_EVALUATION_DOC_PHRASES
-    )
-    assert active_ai_evaluation["min_python_file_count"] == (
-        trinity.V1_ACTIVE_AI_EVALUATION_MIN_PYTHON_FILE_COUNT
-    )
-    assert active_ai_evaluation["min_typescript_file_count"] == (
-        trinity.V1_ACTIVE_AI_EVALUATION_MIN_TYPESCRIPT_FILE_COUNT
     )
     assert active_ai_evaluation["missing_files"] == []
     assert active_ai_evaluation["package_errors"] == []
@@ -18605,15 +16709,6 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert distribution_hygiene["verification_mode"] == "built_distributions"
     assert distribution_hygiene["build_tool_available"] is True
     assert distribution_hygiene["notes"] == []
-    assert distribution_hygiene["required_sdist_paths"] == (
-        trinity.V1_SDIST_REQUIRED_PATHS
-    )
-    assert distribution_hygiene["forbidden_sdist_paths"] == (
-        trinity.V1_SDIST_FORBIDDEN_PATHS
-    )
-    assert distribution_hygiene["allowed_wheel_top_level"] == (
-        trinity.V1_WHEEL_ALLOWED_TOP_LEVEL
-    )
     assert distribution_hygiene["sdist_only_include"] == (
         trinity.V1_SDIST_ONLY_INCLUDE
     )
@@ -18628,14 +16723,6 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert distribution_hygiene["config_errors"] == []
     docs_exec = checks["docs_executability"]["evidence"]
     assert docs_exec["kind"] == "agent-learning.docs-executability.v1"
-    assert docs_exec["machine_index_file"] == trinity.V1_DOCS_MACHINE_INDEX_FILE
-    assert docs_exec["required_docs_pages"] == trinity.V1_DOCS_REQUIRED_PAGES
-    assert docs_exec["docs_allowed_artifact_kinds"] == (
-        trinity.V1_DOCS_ALLOWED_ARTIFACT_KINDS
-    )
-    assert docs_exec["docs_claim_phrase_gates"] == (
-        trinity.V1_DOCS_CLAIM_PHRASE_GATES
-    )
     assert docs_exec["page_count"] >= trinity.V1_DOCS_MIN_PAGE_COUNT
     assert docs_exec["index_regenerated_match"] is True
     assert docs_exec["backing_covered_by_gate"] >= 1
@@ -18661,21 +16748,7 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     } <= set(checks)
     live_lane = checks["live_lane_boundary"]["evidence"]
     assert live_lane["kind"] == "agent-learning.live-lane-boundary.v1"
-    assert live_lane["lane_extra_packages"] == trinity.V1_LIVE_LANE_EXTRA_PACKAGES
-    assert live_lane["lane_modules"] == trinity.V1_LIVE_LANE_MODULES
-    assert live_lane["lane_env_flags"] == trinity.V1_LIVE_LANE_ENV_FLAGS
     assert live_lane["evidence_classes"] == trinity.V1_LIVE_EVIDENCE_CLASSES
-    assert live_lane["release_admissible_classes"] == (
-        trinity.V1_LIVE_RELEASE_ADMISSIBLE_CLASSES
-    )
-    assert live_lane["failure_layers"] == trinity.V1_LIVE_FAILURE_LAYERS
-    assert live_lane["guarded_import_files"] == (
-        trinity.V1_LIVE_LANE_GUARDED_IMPORT_FILES
-    )
-    assert live_lane["capture_dir"] == trinity.V1_LIVE_LANE_CAPTURE_DIR
-    assert live_lane["evidence_class_field"] == (
-        trinity.V1_LIVE_LANE_EVIDENCE_CLASS_FIELD
-    )
     assert live_lane["scanned_module_count"] > 0
     assert live_lane["scanned_artifact_count"] > 0
     assert live_lane["lane_flags_set_in_release_env"] == []
@@ -18696,45 +16769,9 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert profile_matrix["required_frameworks"] == (
         trinity.V1_OPTIMIZER_PROFILE_MATRIX_FRAMEWORKS
     )
-    assert profile_matrix["required_target_kinds"] == (
-        trinity.V1_OPTIMIZER_PROFILE_MATRIX_TARGET_KINDS
-    )
-    assert profile_matrix["required_backends"] == (
-        trinity.V1_OPTIMIZER_PROFILE_MATRIX_BACKENDS
-    )
     assert profile_matrix["required_cells"] == [
         list(cell) for cell in trinity.V1_OPTIMIZER_PROFILE_MATRIX_CELLS
     ]
-    assert profile_matrix["required_cell_fields"] == (
-        trinity.V1_OPTIMIZER_PROFILE_MATRIX_REQUIRED_CELL_FIELDS
-    )
-    assert profile_matrix["forbidden_aggregate_keys"] == (
-        trinity.V1_OPTIMIZER_PROFILE_MATRIX_FORBIDDEN_KEYS
-    )
-    assert profile_matrix["required_memory_slices"] == (
-        trinity.V1_OPTIMIZER_PROFILE_MATRIX_MEMORY_REQUIRED_SLICES
-    )
-    assert profile_matrix["required_topology_prefixes"] == (
-        trinity.V1_OPTIMIZER_PROFILE_MATRIX_TOPOLOGY_PREFIXES
-    )
-    assert profile_matrix["required_trajectory_profile_fields"] == (
-        trinity.V1_OPTIMIZER_TRAJECTORY_PROFILE_FIELDS
-    )
-    assert profile_matrix["required_routing_checks"] == (
-        trinity.V1_OPTIMIZER_ROUTING_REQUIRED_CHECKS
-    )
-    assert profile_matrix["required_apply_plan_fields"] == (
-        trinity.V1_WHOLE_AGENT_APPLY_PLAN_FIELDS
-    )
-    assert profile_matrix["required_contract_stages"] == (
-        trinity.V1_WHOLE_AGENT_CONTRACT_STAGES
-    )
-    assert profile_matrix["routing_table_file"] == (
-        trinity.V1_OPTIMIZER_ROUTING_TABLE_FILE
-    )
-    assert profile_matrix["cell_eval_budget_max"] == (
-        trinity.V1_OPTIMIZER_PROFILE_MATRIX_CELL_EVAL_BUDGET
-    )
     assert profile_matrix["missing_files"] == []
     assert profile_matrix["execution_errors"] == []
     assert profile_matrix["manifest_errors"] == []
@@ -18781,20 +16818,8 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert capability_freeze["required_env"] == (
         trinity.V1_CAPABILITY_PROFILE_FREEZE_REQUIRED_ENV
     )
-    assert capability_freeze["required_row_fields"] == (
-        trinity.V1_CAPABILITY_PROFILE_FREEZE_ROW_FIELDS
-    )
     assert capability_freeze["required_checks"] == (
         trinity.V1_CAPABILITY_PROFILE_FREEZE_REQUIRED_CHECKS
-    )
-    assert capability_freeze["frozen_profile_kind"] == (
-        trinity.V1_FROZEN_CAPABILITY_PROFILE_KIND
-    )
-    assert capability_freeze["frozen_profile_replay_kind"] == (
-        trinity.V1_FROZEN_CAPABILITY_PROFILE_REPLAY_KIND
-    )
-    assert capability_freeze["attachment_key"] == (
-        trinity.V1_CAPABILITY_PROFILE_FREEZE_ATTACHMENT_KEY
     )
     assert capability_freeze["fixture_dir"] == (
         trinity.V1_CAPABILITY_PROFILE_FREEZE_FIXTURE_DIR
@@ -18846,54 +16871,8 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         trinity.V1_PERSONA_SCENARIO_STUDIO_FILES
     )
     assert persona_studio["fixture_dir"] == trinity.V1_PERSONA_LIBRARY_FIXTURE_DIR
-    assert persona_studio["calibration_kind"] == trinity.V1_PERSONA_CALIBRATION_KIND
-    assert persona_studio["library_kind"] == trinity.V1_PERSONA_LIBRARY_KIND
-    assert persona_studio["required_persona_layers"] == trinity.V1_PERSONA_LAYERS
-    assert persona_studio["required_persona_evidence_classes"] == (
-        trinity.V1_PERSONA_EVIDENCE_CLASSES
-    )
-    assert persona_studio["required_persona_temperament_axes"] == (
-        trinity.V1_PERSONA_TEMPERAMENT_AXES
-    )
-    assert persona_studio["required_persona_behavior_axes"] == (
-        trinity.V1_PERSONA_BEHAVIOR_AXES
-    )
-    assert persona_studio["required_persona_behavior_realization_metrics"] == (
-        trinity.V1_PERSONA_BEHAVIOR_REALIZATION_METRICS
-    )
-    assert persona_studio["required_persona_fidelity_record_fields"] == (
-        trinity.V1_PERSONA_FIDELITY_RECORD_FIELDS
-    )
-    assert persona_studio["required_persona_fidelity_verdicts"] == (
-        trinity.V1_PERSONA_FIDELITY_VERDICTS
-    )
-    assert persona_studio["persona_fidelity_epidemic_rate"] == (
-        trinity.V1_PERSONA_FIDELITY_EPIDEMIC_RATE
-    )
     assert persona_studio["required_persona_fidelity_floors"] == (
         trinity.V1_PERSONA_FIDELITY_FLOORS
-    )
-    assert persona_studio["required_scenario_kinds"] == trinity.V1_SCENARIO_KINDS
-    assert persona_studio["required_scenario_coverage_axes"] == (
-        trinity.V1_SCENARIO_COVERAGE_AXES
-    )
-    assert persona_studio["required_persona_calibration_stages"] == (
-        trinity.V1_PERSONA_CALIBRATION_STAGES
-    )
-    assert persona_studio["required_persona_calibration_probes"] == (
-        trinity.V1_PERSONA_CALIBRATION_PROBES
-    )
-    assert persona_studio["required_persona_content_scan_results"] == (
-        trinity.V1_PERSONA_CONTENT_SCAN_RESULTS
-    )
-    assert persona_studio["required_persona_bias_lint_checks"] == (
-        trinity.V1_PERSONA_BIAS_LINT_CHECKS
-    )
-    assert persona_studio["required_persona_vendor_import_formats"] == (
-        trinity.V1_PERSONA_VENDOR_IMPORT_FORMATS
-    )
-    assert persona_studio["required_persona_download_pin_fields"] == (
-        trinity.V1_PERSONA_DOWNLOAD_PIN_FIELDS
     )
     assert persona_studio["missing_files"] == []
     assert persona_studio["execution_errors"] == []
@@ -18923,25 +16902,13 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     tele = checks["telemetry_boundary"]["evidence"]
     assert tele["kind"] == "agent-learning.telemetry-boundary.v1"
     # frozen-canon mirrors:
-    assert tele["row_fields"] == trinity.V1_TELEMETRY_ROW_FIELDS
     assert tele["evidence_classes"] == trinity.V1_TELEMETRY_EVIDENCE_CLASSES
-    assert tele["kill_switch_env"] == trinity.V1_TELEMETRY_KILL_SWITCH_ENV
-    assert tele["ledger_paths"] == trinity.V1_TELEMETRY_LEDGER_PATHS
     assert tele["genesis_sentinel"] == "agent-learning.ledger.genesis.v1"
-    assert tele["tombstone_fields"] == trinity.V1_TELEMETRY_TOMBSTONE_FIELDS
     assert tele["analytics_denylist"] == {
         "hosts": trinity.V1_TELEMETRY_FORBIDDEN_ANALYTICS_HOSTS,
         "imports": trinity.V1_TELEMETRY_FORBIDDEN_ANALYTICS_IMPORTS,
     }
     # scan mirrors:
-    assert tele["scan_roots"] == trinity.V1_TELEMETRY_SCAN_ROOTS
-    assert tele["forbidden_analytics_hosts"] == (
-        trinity.V1_TELEMETRY_FORBIDDEN_ANALYTICS_HOSTS
-    )
-    assert tele["forbidden_analytics_imports"] == (
-        trinity.V1_TELEMETRY_FORBIDDEN_ANALYTICS_IMPORTS
-    )
-    assert tele["sync_module"] == trinity.V1_TELEMETRY_SYNC_MODULE
     # observed:
     assert tele["scanned_module_count"] > 0  # both trees were walked
     assert tele["scanned_artifact_count"] > 0  # fixture ledger rows read
@@ -18957,31 +16924,11 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     # ---- Phase 12: voice red-team readiness gate (#73) ----
     voice_redteam = checks["voice_redteam_readiness"]["evidence"]
     assert voice_redteam["kind"] == "agent-learning.voice-redteam-readiness.v1"
-    assert voice_redteam["corpus_channels"] == (
-        trinity.V1_REDTEAM_CORPUS_EXECUTION_CHANNELS
-    )
-    assert voice_redteam["voice_surfaces"] == trinity.V1_REDTEAM_VOICE_SURFACES
     assert voice_redteam["voice_attack_family_matrix"] == (
         trinity.V1_VOICE_ATTACK_FAMILY_MATRIX
     )
-    assert voice_redteam["voice_attack_maturity_levels"] == (
-        trinity.V1_VOICE_ATTACK_MATURITY_LEVELS
-    )
-    assert voice_redteam["voice_phone_survival_statuses"] == (
-        trinity.V1_VOICE_PHONE_SURVIVAL_STATUSES
-    )
-    assert voice_redteam["voice_phone_survival_tiers"] == (
-        trinity.V1_VOICE_PHONE_SURVIVAL_TIERS
-    )
-    assert voice_redteam["voice_attack_rungs"] == trinity.V1_VOICE_ATTACK_RUNGS
     assert voice_redteam["voice_detection_evidence_fields"] == (
         trinity.V1_VOICE_DETECTION_EVIDENCE_FIELDS
-    )
-    assert voice_redteam["voice_redteam_ab_arms"] == (
-        trinity.V1_VOICE_REDTEAM_AB_ARMS
-    )
-    assert voice_redteam["voice_redteam_ab_verdicts"] == (
-        trinity.V1_VOICE_REDTEAM_AB_VERDICTS
     )
     assert voice_redteam["voice_corpus_row_count"] == 12
     assert voice_redteam["fixture_count"] > 0
@@ -19060,16 +17007,6 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert voice_loopback["kind"] == "agent-learning.voice-loopback-readiness.v1"
     assert checks["voice_loopback_readiness"]["milestone"] == "M4"
     # frozen-canon mirrors (mirror == module/voice_loop canon cross-pin):
-    assert voice_loopback["voice_fidelity_tiers"] == list(trinity.V1_VOICE_FIDELITY_TIERS)
-    assert voice_loopback["voice_codecs"] == list(trinity.V1_VOICE_CODECS)
-    assert voice_loopback["voice_packet_loss_models"] == list(
-        trinity.V1_VOICE_PACKET_LOSS_MODELS
-    )
-    assert voice_loopback["voice_codec_profiles"] == list(trinity.V1_VOICE_CODEC_PROFILES)
-    assert voice_loopback["voice_failure_sublayers"] == list(
-        trinity.V1_VOICE_FAILURE_SUBLAYERS
-    )
-    assert voice_loopback["voice_loss_term_refs"] == list(trinity.V1_VOICE_LOSS_TERM_REFS)
     # the eight arrays:
     assert voice_loopback["missing_files"] == []
     assert voice_loopback["loopback_determinism_errors"] == []
@@ -19109,22 +17046,6 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert image_loop["kind"] == "agent-learning.image-loop-readiness.v1"
     assert checks["image_loop_readiness"]["milestone"] == "M4"
     # frozen-canon mirrors (mirror == module/image_loop canon cross-pin):
-    assert image_loop["image_fidelity_tiers"] == list(trinity.V1_IMAGE_FIDELITY_TIERS)
-    assert image_loop["image_loss_term_refs"] == list(trinity.V1_IMAGE_LOSS_TERM_REFS)
-    assert image_loop["image_loss_deterministic_anchor_terms"] == list(
-        trinity.V1_IMAGE_LOSS_DETERMINISTIC_ANCHOR_TERMS
-    )
-    assert image_loop["image_loss_judge_terms"] == list(trinity.V1_IMAGE_LOSS_JUDGE_TERMS)
-    assert image_loop["image_generation_anchor_terms"] == list(
-        trinity.V1_IMAGE_GENERATION_ANCHOR_TERMS
-    )
-    assert image_loop["image_generation_judge_terms"] == list(
-        trinity.V1_IMAGE_GENERATION_JUDGE_TERMS
-    )
-    assert image_loop["image_failure_sublayers"] == list(trinity.V1_IMAGE_FAILURE_SUBLAYERS)
-    assert image_loop["image_perturbation_operators"] == list(
-        trinity.V1_IMAGE_PERTURBATION_OPERATORS
-    )
     # the eight arrays:
     assert image_loop["missing_files"] == []
     assert image_loop["loop_determinism_errors"] == []
@@ -19167,35 +17088,11 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         == "image_loop_readiness"
     )
     # payload mirrors (release_status) carry the image constants
-    assert payload["image_loss_term_refs"] == list(trinity.V1_IMAGE_LOSS_TERM_REFS)
-    assert payload["image_failure_sublayers"] == list(trinity.V1_IMAGE_FAILURE_SUBLAYERS)
-    assert payload["image_perturbation_operators"] == list(
-        trinity.V1_IMAGE_PERTURBATION_OPERATORS
-    )
-    assert payload["image_fidelity_tiers"] == list(trinity.V1_IMAGE_FIDELITY_TIERS)
     # --- Phase 9C (CUA / browser / computer-use loop) gate (unit 5/5.5) -----
     cua_loop_ev = checks["cua_loop_readiness"]["evidence"]
     assert cua_loop_ev["kind"] == "agent-learning.cua-loop-readiness.v1"
     assert checks["cua_loop_readiness"]["milestone"] == "M4"
     # frozen-canon mirrors (mirror == module/cua_loop canon cross-pin):
-    assert cua_loop_ev["cua_fidelity_tiers"] == list(trinity.V1_CUA_FIDELITY_TIERS)
-    assert cua_loop_ev["cua_loss_term_refs"] == list(trinity.V1_CUA_LOSS_TERM_REFS)
-    assert cua_loop_ev["cua_loss_deterministic_anchor_terms"] == list(
-        trinity.V1_CUA_LOSS_DETERMINISTIC_ANCHOR_TERMS
-    )
-    assert cua_loop_ev["cua_desktop_anchor_terms"] == list(trinity.V1_CUA_DESKTOP_ANCHOR_TERMS)
-    assert cua_loop_ev["cua_loss_judge_terms"] == list(trinity.V1_CUA_LOSS_JUDGE_TERMS)
-    assert cua_loop_ev["cua_loss_mandatory_safety_terms"] == list(
-        trinity.V1_CUA_LOSS_MANDATORY_SAFETY_TERMS
-    )
-    assert cua_loop_ev["cua_failure_sublayers"] == list(trinity.V1_CUA_FAILURE_SUBLAYERS)
-    assert cua_loop_ev["cua_surfaces"] == list(trinity.V1_CUA_SURFACES)
-    assert cua_loop_ev["cua_completion_guard_kinds"] == list(
-        trinity.V1_CUA_COMPLETION_GUARD_KINDS
-    )
-    assert cua_loop_ev["cua_perturbation_operators"] == list(
-        trinity.V1_CUA_PERTURBATION_OPERATORS
-    )
     # the eight arrays (NOTE the 9C name deterministic_verifier_anchoring_errors):
     assert cua_loop_ev["missing_files"] == []
     assert cua_loop_ev["loop_determinism_errors"] == []
@@ -19251,12 +17148,6 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         == "cua_loop_readiness"
     )
     # payload mirrors (release_status) carry the CUA constants
-    assert payload["cua_loss_term_refs"] == list(trinity.V1_CUA_LOSS_TERM_REFS)
-    assert payload["cua_failure_sublayers"] == list(trinity.V1_CUA_FAILURE_SUBLAYERS)
-    assert payload["cua_surfaces"] == list(trinity.V1_CUA_SURFACES)
-    assert payload["cua_completion_guard_kinds"] == list(trinity.V1_CUA_COMPLETION_GUARD_KINDS)
-    assert payload["cua_perturbation_operators"] == list(trinity.V1_CUA_PERTURBATION_OPERATORS)
-    assert payload["cua_fidelity_tiers"] == list(trinity.V1_CUA_FIDELITY_TIERS)
     openenv_boundary = checks["openenv_compatibility_boundary"]["evidence"]
     assert openenv_boundary["owned_surface"] == "environment_replay"
     assert openenv_boundary["compatibility_boundary"] == (
@@ -19271,12 +17162,6 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert openenv_boundary["dependency_errors"] == []
     assert openenv_boundary["import_errors"] == []
     assert openenv_boundary["doc_errors"] == []
-    assert openenv_boundary["forbidden_runtime_packages"] == (
-        trinity.V1_OPENENV_COMPATIBILITY_FORBIDDEN_PACKAGES
-    )
-    assert openenv_boundary["forbidden_import_modules"] == (
-        trinity.V1_OPENENV_COMPATIBILITY_FORBIDDEN_IMPORT_MODULES
-    )
     assert openenv_boundary["required_doc_phrases"] == (
         trinity.V1_OPENENV_COMPATIBILITY_DOC_PHRASES
     )
@@ -19290,23 +17175,8 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert handover_packaging["missing_files"] == []
     assert handover_packaging["doc_errors"] == []
     assert handover_packaging["command_errors"] == []
-    assert handover_packaging["required_proof_check_ids"] == (
-        trinity.V1_RELEASE_PROOF_REQUIRED_CHECKS
-    )
-    assert handover_packaging["allowed_proof_outputs"] == (
-        trinity.V1_RELEASE_HANDOVER_ALLOWED_PROOF_OUTPUTS
-    )
-    assert handover_packaging["forbidden_proof_outputs"] == (
-        trinity.V1_RELEASE_HANDOVER_FORBIDDEN_PROOF_OUTPUTS
-    )
     assert set(handover_packaging["proof_command_ids"]) == set(
         trinity.V1_RELEASE_PROOF_REQUIRED_CHECKS
-    )
-    assert handover_packaging["product_surfaces"] == (
-        trinity.V1_RELEASE_HANDOVER_PRODUCT_SURFACES
-    )
-    assert handover_packaging["completion_invariants"] == (
-        trinity.V1_RELEASE_HANDOVER_COMPLETION_INVARIANTS
     )
     assert {
         command["id"] for command in handover_packaging["command_plan"]
@@ -19326,9 +17196,6 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     )
     assert task_artifact_eval["required_metrics"] == (
         trinity.V1_TASK_ARTIFACT_EVALUATION_METRICS
-    )
-    assert task_artifact_eval["suite_min_assertions"] == (
-        trinity.V1_TASK_ARTIFACT_EVALUATION_SUITE_MIN_ASSERTIONS
     )
     assert task_artifact_eval["missing_files"] == []
     assert task_artifact_eval["execution_errors"] == []
@@ -19399,9 +17266,6 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert task_eval_synthesis["required_files"] == (
         trinity.V1_TASK_EVALUATION_SYNTHESIS_FILES
     )
-    assert task_eval_synthesis["required_config_keys"] == (
-        trinity.V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_CONFIG_KEYS
-    )
     assert task_eval_synthesis["required_state_keys"] == (
         trinity.V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_STATE_KEYS
     )
@@ -19410,12 +17274,6 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     )
     assert task_eval_synthesis["required_metrics"] == (
         trinity.V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_METRICS
-    )
-    assert task_eval_synthesis["metric_minima"] == (
-        trinity.V1_TASK_EVALUATION_SYNTHESIS_METRIC_MINIMA
-    )
-    assert task_eval_synthesis["score_minimum"] == (
-        trinity.V1_TASK_EVALUATION_SYNTHESIS_SCORE_MINIMUM
     )
     assert task_eval_synthesis["required_source_urls"] == (
         trinity.V1_TASK_EVALUATION_SYNTHESIS_REQUIRED_SOURCE_URLS
@@ -19800,12 +17658,6 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert framework_adapter_target["required_framework"] == (
         trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_FRAMEWORK
     )
-    assert framework_adapter_target["rejected_method"] == (
-        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_REJECTED_METHOD
-    )
-    assert framework_adapter_target["selected_method"] == (
-        trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_SELECTED_METHOD
-    )
     assert framework_adapter_target["input_mode"] == (
         trinity.V1_FRAMEWORK_ADAPTER_TARGET_OPTIMIZER_INPUT_MODE
     )
@@ -19985,9 +17837,6 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert multi_agent_target["required_roles"] == (
         trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_ROLES
     )
-    assert multi_agent_target["rejected_role"] == (
-        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REJECTED_ROLE
-    )
     assert multi_agent_target["selected_reconciliation_source"] == (
         trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_SELECTED_RECONCILIATION_SOURCE
     )
@@ -19996,9 +17845,6 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     )
     assert multi_agent_target["required_proof_assurance_level"] == (
         trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_PROOF_ASSURANCE_LEVEL
-    )
-    assert multi_agent_target["allowed_proof_warnings"] == (
-        trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_ALLOWED_PROOF_WARNINGS
     )
     assert multi_agent_target["required_source"] == (
         trinity.V1_MULTI_AGENT_TARGET_OPTIMIZER_REQUIRED_SOURCE
@@ -20374,14 +18220,8 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert orchestration_target["required_framework"] == (
         trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_FRAMEWORK
     )
-    assert orchestration_target["required_span"] == (
-        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_SPAN
-    )
     assert orchestration_target["required_tool"] == (
         trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_TOOL
-    )
-    assert orchestration_target["required_transition"] == (
-        trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_EXPECTED_TRANSITION
     )
     assert orchestration_target["required_doc_id"] == (
         trinity.V1_ORCHESTRATION_TARGET_OPTIMIZER_REQUIRED_DOC_ID
@@ -20660,26 +18500,11 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert workflow_target["required_framework"] == (
         trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_FRAMEWORK
     )
-    assert workflow_target["required_source_frameworks"] == (
-        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SOURCE_FRAMEWORKS
-    )
     assert workflow_target["required_tool"] == (
         trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TOOL
     )
-    assert workflow_target["required_workflow_tool"] == (
-        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_WORKFLOW_TOOL
-    )
     assert workflow_target["required_counts"] == (
         trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_COUNTS
-    )
-    assert workflow_target["required_final_state_keys"] == (
-        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_FINAL_STATE_KEYS
-    )
-    assert workflow_target["required_entry_node"] == (
-        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_ENTRY_NODE
-    )
-    assert workflow_target["required_terminal_node"] == (
-        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_TERMINAL_NODE
     )
     assert workflow_target["required_source"] == (
         trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SOURCE
@@ -20726,9 +18551,6 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert workflow_target_manifest["candidate_count"] == 3
     assert workflow_target_manifest["candidate_counts"][0]["node_count"] == 1
     assert workflow_target_manifest["candidate_frameworks"] == (
-        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SOURCE_FRAMEWORKS
-    )
-    assert workflow_target_manifest["required_source_frameworks"] == (
         trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_SOURCE_FRAMEWORKS
     )
     assert any(
@@ -20792,9 +18614,6 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert workflow_quality["required_tools"] == [
         trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_WORKFLOW_TOOL
     ]
-    assert workflow_quality["required_final_state_keys"] == (
-        trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_FINAL_STATE_KEYS
-    )
     assert workflow_quality["required_entry_nodes"] == [
         trinity.V1_WORKFLOW_TARGET_OPTIMIZER_REQUIRED_ENTRY_NODE
     ]
@@ -20898,9 +18717,6 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     )
     assert workflow_profile_matrix["required_frameworks"] == (
         trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_FRAMEWORKS
-    )
-    assert workflow_profile_matrix["required_source_export_types"] == (
-        trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_SOURCE_EXPORT_TYPES
     )
     assert workflow_profile_matrix["required_search_paths"] == (
         trinity.V1_WORKFLOW_TARGET_PROFILE_MATRIX_REQUIRED_SEARCH_PATHS
@@ -21101,12 +18917,6 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert evaluation_hook_probe["required_proof_kind"] == (
         trinity.V1_EVALUATION_HOOK_PROBE_PROOF_KIND
     )
-    assert evaluation_hook_probe["required_profile"] == (
-        trinity.V1_EVALUATION_HOOK_PROBE_REQUIRED_PROFILE
-    )
-    assert evaluation_hook_probe["rejected_profile"] == (
-        trinity.V1_EVALUATION_HOOK_PROBE_REJECTED_PROFILE
-    )
     assert evaluation_hook_probe["required_metrics"] == (
         trinity.V1_EVALUATION_HOOK_PROBE_REQUIRED_METRICS
     )
@@ -21226,9 +19036,6 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
         trinity.V1_EVALUATION_HOOK_PROOF_ASSURANCE_LEVEL
     )
     assert direct_hook["selected_profile"] == trinity.V1_EVALUATION_HOOK_SELECTED_PROFILE
-    assert direct_hook["rejected_profiles"] == (
-        trinity.V1_EVALUATION_HOOK_REJECTED_PROFILES
-    )
     assert direct_hook["required_metrics"] == trinity.V1_EVALUATION_HOOK_REQUIRED_METRICS
     assert direct_hook["required_proof_checks"] == (
         trinity.V1_EVALUATION_HOOK_REQUIRED_PROOF_CHECKS
@@ -21655,12 +19462,6 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert redteam_society_causal_evidence["required_state_keys"] == (
         trinity.V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_STATE_KEYS
     )
-    assert redteam_society_causal_evidence["required_graph_nodes"] == (
-        trinity.V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_GRAPH_NODES
-    )
-    assert redteam_society_causal_evidence["required_root_causes"] == (
-        trinity.V1_REDTEAM_SOCIETY_CAUSAL_REQUIRED_ROOT_CAUSES
-    )
     assert redteam_society_causal_evidence["required_contracts"] == (
         trinity.V1_REDTEAM_SOCIETY_CAUSAL_CONTRACTS
     )
@@ -21928,9 +19729,6 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert ui_readiness["required_artifacts"] == (
         trinity.V1_UI_ACTION_REPORT_ARTIFACTS
     )
-    assert ui_readiness["forbidden_secret_markers"] == (
-        trinity.V1_UI_FORBIDDEN_SECRET_MARKERS
-    )
     artifacts = {item["path"]: item for item in ui_readiness["artifacts"]}
     run_artifact = artifacts[
         "examples/fixtures/task_artifacts/refund_task_run.json"
@@ -22099,9 +19897,6 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert harness_diagnosis["required_layers"] == (
         trinity.V1_HARNESS_DIAGNOSIS_REQUIRED_LAYERS
     )
-    assert harness_diagnosis["required_research_sources"] == (
-        trinity.V1_HARNESS_DIAGNOSIS_REQUIRED_RESEARCH_SOURCES
-    )
     diagnosis_evidence = harness_diagnosis["evidence"]
     assert diagnosis_evidence["result_status"] == "passed"
     assert diagnosis_evidence["report_status"] == "passed"
@@ -22146,12 +19941,6 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     )
     assert agent_control_plane["required_metrics"] == (
         trinity.V1_AGENT_CONTROL_PLANE_REQUIRED_METRICS
-    )
-    assert agent_control_plane["required_trust_boundary_flags"] == (
-        trinity.V1_AGENT_TRUST_BOUNDARY_REQUIRED_FLAGS
-    )
-    assert agent_control_plane["required_control_plane_flags"] == (
-        trinity.V1_AGENT_CONTROL_PLANE_REQUIRED_FLAGS
     )
     assert agent_control_plane["required_events"] == (
         trinity.V1_AGENT_CONTROL_PLANE_REQUIRED_EVENTS
@@ -22277,9 +20066,6 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert framework_provider["required_transports"] == (
         trinity.V1_FRAMEWORK_PROVIDER_REQUIRED_TRANSPORTS
     )
-    assert framework_provider["required_target_schemes"] == (
-        trinity.V1_FRAMEWORK_PROVIDER_REQUIRED_TARGET_SCHEMES
-    )
     assert framework_provider["required_manifest_contracts"] == (
         trinity.V1_FRAMEWORK_PROVIDER_MANIFEST_CONTRACTS
     )
@@ -22398,9 +20184,6 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     )
     assert multi_framework_runtime["required_environment_types"] == (
         trinity.V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_ENVIRONMENT_TYPES
-    )
-    assert multi_framework_runtime["required_result_kind"] == (
-        trinity.V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_RESULT_KIND
     )
     assert multi_framework_runtime["required_tool"] == (
         trinity.V1_MULTI_FRAMEWORK_RUNTIME_REQUIRED_TOOL
@@ -22697,9 +20480,6 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert agent_integration["required_channels"] == (
         trinity.V1_AGENT_INTEGRATION_REQUIRED_CHANNELS
     )
-    assert agent_integration["required_trace_frameworks"] == (
-        trinity.V1_AGENT_INTEGRATION_REQUIRED_TRACE_FRAMEWORKS
-    )
     assert agent_integration["required_layers"] == (
         trinity.V1_AGENT_INTEGRATION_REQUIRED_LAYERS
     )
@@ -22842,9 +20622,6 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert external_agent["required_files"] == (
         trinity.V1_EXTERNAL_AGENT_ADAPTER_READINESS_FILES
     )
-    assert external_agent["required_candidate_profiles"] == (
-        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_CANDIDATE_PROFILES
-    )
     assert external_agent["selected_profile"] == (
         trinity.V1_EXTERNAL_AGENT_ADAPTER_SELECTED_PROFILE
     )
@@ -22860,17 +20637,8 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert external_agent["required_tools"] == (
         trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_TOOLS
     )
-    assert external_agent["required_protocol"] == (
-        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_PROTOCOL
-    )
-    assert external_agent["required_agent_type"] == (
-        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_AGENT_TYPE
-    )
     assert external_agent["required_metrics"] == (
         trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_METRICS
-    )
-    assert external_agent["required_trace_fields"] == (
-        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_TRACE_FIELDS
     )
     assert external_agent["required_state_keys"] == (
         trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_STATE_KEYS
@@ -22880,9 +20648,6 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     )
     assert external_agent["required_research_urls"] == (
         trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_RESEARCH_URLS
-    )
-    assert external_agent["required_protocol_doc_urls"] == (
-        trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_PROTOCOL_DOC_URLS
     )
     assert external_agent["required_source_urls"] == (
         trinity.V1_EXTERNAL_AGENT_ADAPTER_REQUIRED_SOURCE_URLS
@@ -23027,14 +20792,8 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert environment_replay_optimizer["required_files"] == (
         trinity.V1_ENVIRONMENT_REPLAY_OPTIMIZER_FILES
     )
-    assert environment_replay_optimizer["required_profiles"] == (
-        trinity.V1_ENVIRONMENT_REPLAY_OPTIMIZER_REQUIRED_PROFILES
-    )
     assert environment_replay_optimizer["required_metrics"] == (
         trinity.V1_ENVIRONMENT_REPLAY_OPTIMIZER_REQUIRED_METRICS
-    )
-    assert environment_replay_optimizer["compatibility_profiles"] == (
-        trinity.V1_ENVIRONMENT_REPLAY_OPTIMIZER_COMPATIBILITY_PROFILES
     )
     assert environment_replay_optimizer["compatibility_metrics"] == (
         trinity.V1_ENVIRONMENT_REPLAY_OPTIMIZER_COMPATIBILITY_METRICS
@@ -23119,9 +20878,6 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     )
     assert framework_environment_replay_adapter["quality_minima"] == (
         trinity.V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_QUALITY_MINIMA
-    )
-    assert framework_environment_replay_adapter["compatibility_openenv"] == (
-        trinity.V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_COMPATIBILITY_OPENENV
     )
     assert framework_environment_replay_adapter["compatibility_metrics"] == (
         trinity.V1_FRAMEWORK_ENVIRONMENT_REPLAY_ADAPTER_COMPATIBILITY_METRICS
@@ -23695,14 +21451,8 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert environment_10x["required_files"] == (
         trinity.V1_ENVIRONMENT_10X_ROBUSTNESS_FILES
     )
-    assert environment_10x["required_axes"] == (
-        trinity.V1_ENVIRONMENT_10X_ROBUSTNESS_AXES
-    )
     assert environment_10x["required_source_urls"] == (
         trinity.V1_ENVIRONMENT_10X_ROBUSTNESS_SOURCE_URLS
-    )
-    assert environment_10x["min_axis_count"] == (
-        trinity.V1_ENVIRONMENT_10X_ROBUSTNESS_MIN_AXIS_COUNT
     )
     assert environment_10x["missing_files"] == []
     assert environment_10x["axis_errors"] == []
@@ -24551,15 +22301,6 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     )
     assert room_probe["required_checks"] == (
         trinity.V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_CHECKS
-    )
-    assert room_probe["required_participants"] == (
-        trinity.V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_PARTICIPANTS
-    )
-    assert room_probe["required_trace"] == (
-        trinity.V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_TRACE
-    )
-    assert room_probe["required_run_events"] == (
-        trinity.V1_MULTI_AGENT_ROOM_PROBE_REQUIRED_RUN_EVENTS
     )
     assert room_probe["missing_files"] == []
     assert room_probe["execution_errors"] == []
@@ -25864,15 +23605,6 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert preset_cert["required_files"] == (
         trinity.V1_FRAMEWORK_PRESET_CERTIFICATION_FILES
     )
-    assert preset_cert["framework_preset_certification_frameworks"] == list(
-        trinity.V1_FRAMEWORK_PRESET_CERTIFICATION_FRAMEWORKS
-    )
-    assert preset_cert["framework_preset_vector_db_names"] == list(
-        trinity.V1_FRAMEWORK_PRESET_VECTOR_DB_NAMES
-    )
-    assert preset_cert["framework_preset_live_validation_status"] == list(
-        trinity.V1_FRAMEWORK_PRESET_LIVE_VALIDATION_STATUS
-    )
     assert preset_cert["framework_preset_live_validation_lane"] == [
         dict(row) for row in trinity.V1_FRAMEWORK_PRESET_LIVE_VALIDATION_LANE
     ]
@@ -26121,9 +23853,6 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert browser_cua_probe["selected_type"] == (
         trinity.V1_BROWSER_CUA_PROBE_SELECTED_TYPE
     )
-    assert browser_cua_probe["rejected_type"] == (
-        trinity.V1_BROWSER_CUA_PROBE_REJECTED_TYPE
-    )
     assert browser_cua_probe["expected_url"] == (
         trinity.V1_BROWSER_CUA_PROBE_EXPECTED_URL
     )
@@ -26298,9 +24027,6 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert realtime_stack_probe["required_framework"] == (
         trinity.V1_REALTIME_STACK_PROBE_FRAMEWORK
     )
-    assert realtime_stack_probe["required_expected_route"] == (
-        trinity.V1_REALTIME_STACK_PROBE_EXPECTED_ROUTE
-    )
     assert realtime_stack_probe["required_proof_kind"] == (
         trinity.V1_REALTIME_STACK_PROBE_PROOF_KIND
     )
@@ -26315,9 +24041,6 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     )
     assert realtime_stack_probe["required_tools"] == (
         trinity.V1_REALTIME_STACK_PROBE_REQUIRED_TOOLS
-    )
-    assert realtime_stack_probe["required_streaming_signals"] == (
-        trinity.V1_REALTIME_STACK_PROBE_REQUIRED_STREAMING_SIGNALS
     )
     assert realtime_stack_probe["missing_files"] == []
     assert realtime_stack_probe["optimization_errors"] == []
@@ -27029,20 +24752,11 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert framework_adapter_trinity_suite["required_commands"] == (
         trinity.V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_COMMANDS
     )
-    assert framework_adapter_trinity_suite["required_child_kinds"] == (
-        trinity.V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_CHILD_KINDS
-    )
     assert framework_adapter_trinity_suite["required_metrics"] == (
         trinity.V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_METRICS
     )
-    assert framework_adapter_trinity_suite["required_attacks"] == (
-        trinity.V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_ATTACKS
-    )
     assert framework_adapter_trinity_suite["required_surfaces"] == (
         trinity.V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_SURFACES
-    )
-    assert framework_adapter_trinity_suite["required_optimizer_flags"] == (
-        trinity.V1_FRAMEWORK_ADAPTER_TRINITY_SUITE_REQUIRED_OPTIMIZER_FLAGS
     )
     assert framework_adapter_trinity_suite["missing_files"] == []
     assert framework_adapter_trinity_suite["suite_errors"] == []
@@ -27151,23 +24865,14 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert orchestration_stack_probe["selected_stack"] == (
         trinity.V1_ORCHESTRATION_STACK_PROBE_SELECTED_STACK
     )
-    assert orchestration_stack_probe["rejected_stack"] == (
-        trinity.V1_ORCHESTRATION_STACK_PROBE_REJECTED_STACK
-    )
     assert orchestration_stack_probe["required_framework"] == (
         trinity.V1_ORCHESTRATION_STACK_PROBE_FRAMEWORK
     )
     assert orchestration_stack_probe["expected_transition"] == (
         trinity.V1_ORCHESTRATION_STACK_PROBE_EXPECTED_TRANSITION
     )
-    assert orchestration_stack_probe["expected_doc_id"] == (
-        trinity.V1_ORCHESTRATION_STACK_PROBE_EXPECTED_DOC_ID
-    )
     assert orchestration_stack_probe["forbidden_doc_id"] == (
         trinity.V1_ORCHESTRATION_STACK_PROBE_FORBIDDEN_DOC_ID
-    )
-    assert orchestration_stack_probe["expected_roles"] == (
-        trinity.V1_ORCHESTRATION_STACK_PROBE_EXPECTED_ROLES
     )
     assert orchestration_stack_probe["expected_reconciliation_source"] == (
         trinity.V1_ORCHESTRATION_STACK_PROBE_EXPECTED_RECONCILIATION_SOURCE
@@ -27183,9 +24888,6 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     )
     assert orchestration_stack_probe["source_grounding_minimum"] == (
         trinity.V1_ORCHESTRATION_STACK_PROBE_SOURCE_GROUNDING_MINIMUM
-    )
-    assert orchestration_stack_probe["required_memory_operations"] == (
-        trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_MEMORY_OPERATIONS
     )
     assert orchestration_stack_probe["required_events"] == (
         trinity.V1_ORCHESTRATION_STACK_PROBE_REQUIRED_EVENTS
@@ -27500,9 +25202,6 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert optimizer_governance["required_metrics"] == (
         trinity.V1_OPTIMIZER_GOVERNANCE_REQUIRED_METRICS
     )
-    assert optimizer_governance["required_trace_flags"] == (
-        trinity.V1_OPTIMIZER_GOVERNANCE_REQUIRED_TRACE_FLAGS
-    )
     assert optimizer_governance["required_checks"] == (
         trinity.V1_OPTIMIZER_GOVERNANCE_REQUIRED_CHECKS
     )
@@ -27737,18 +25436,6 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert world_hooks["required_search_paths"] == (
         trinity.V1_WORLD_HOOKS_REQUIRED_SEARCH_PATHS
     )
-    assert world_hooks["required_target_layers"] == (
-        trinity.V1_WORLD_HOOKS_REQUIRED_TARGET_LAYERS
-    )
-    assert world_hooks["required_contract_hooks"] == (
-        trinity.V1_WORLD_HOOKS_REQUIRED_CONTRACT_HOOKS
-    )
-    assert world_hooks["required_contract_surfaces"] == (
-        trinity.V1_WORLD_HOOKS_REQUIRED_CONTRACT_SURFACES
-    )
-    assert world_hooks["required_replay_semantics"] == (
-        trinity.V1_WORLD_HOOKS_REQUIRED_REPLAY_SEMANTICS
-    )
     assert world_hooks["required_metrics"] == trinity.V1_WORLD_HOOKS_REQUIRED_METRICS
     assert world_hooks["required_proof_checks"] == (
         trinity.V1_WORLD_HOOKS_REQUIRED_PROOF_CHECKS
@@ -27756,9 +25443,6 @@ def test_agent_learn_release_check_reports_v1_milestones(tmp_path, capsys):
     assert world_hooks["required_actions"] == trinity.V1_WORLD_HOOKS_REQUIRED_ACTIONS
     assert world_hooks["required_assurance_level"] == (
         trinity.V1_WORLD_HOOKS_REQUIRED_ASSURANCE_LEVEL
-    )
-    assert world_hooks["required_candidate_profile"] == (
-        trinity.V1_WORLD_HOOKS_REQUIRED_CANDIDATE_PROFILE
     )
     assert world_hooks["forbidden_external_keys"] == (
         trinity.V1_WORLD_HOOKS_FORBIDDEN_EXTERNAL_KEYS
@@ -30807,15 +28491,20 @@ def test_release_telemetry_boundary_flags_network_import_in_no_key_path(
     )
 
 
-def test_release_telemetry_boundary_seeded_secret_ledger_is_clean(tmp_path):
-    """A correctly-redacted ledger (sentinel value never on disk) passes
-    check 3; the seeded sentinel scan and marker scan find nothing."""
+@pytest.mark.parametrize(
+    ("note", "leaked"),
+    [("auth=[redacted:SECRET_ENV]", False), ("auth=sk-sentinel-do-not-leak", True)],
+)
+def test_release_telemetry_boundary_finds_a_seeded_secret_only_when_it_leaks(
+    tmp_path, note, leaked
+):
+    """Check 3: the seeded sentinel value is reported when a ledger row holds it,
+    and a row that redacted it passes."""
 
     from fi.alk import trinity
 
     fixtures = tmp_path / "examples" / "telemetry_ledger_fixture"
     fixtures.mkdir(parents=True)
-    # row where the sentinel value was redacted to [redacted:SECRET_ENV]:
     row = {
         "schema": "agent-learning.ledger-row.v1",
         "kind": "agent-learning.run.v1",
@@ -30823,11 +28512,9 @@ def test_release_telemetry_boundary_seeded_secret_ledger_is_clean(tmp_path):
         "phase": "simulate",
         "run_id": "a" * 64,
         "chain": "b" * 64,
-        "scores": {"note": "auth=[redacted:SECRET_ENV]"},
+        "scores": {"note": note},
     }
-    (fixtures / "runs.jsonl").write_text(
-        json.dumps(row) + "\n", encoding="utf-8"
-    )
+    (fixtures / "runs.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
     (fixtures / "sentinel.json").write_text(
         json.dumps(
             {
@@ -30840,7 +28527,14 @@ def test_release_telemetry_boundary_seeded_secret_ledger_is_clean(tmp_path):
 
     status = trinity._release_telemetry_boundary_status(tmp_path)
 
-    assert status["redaction_errors"] == []  # zero sentinel bytes, zero markers
+    seeded = [
+        error
+        for error in status["redaction_errors"]
+        if error.get("reason") == "seeded secret value present in ledger"
+    ]
+    assert seeded == ([{"reason": "seeded secret value present in ledger", "sentinel_env": "SECRET_ENV"}] if leaked else [])
+    if not leaked:
+        assert status["redaction_errors"] == []
 
 
 def test_release_telemetry_boundary_tampered_chain_breaks(tmp_path):

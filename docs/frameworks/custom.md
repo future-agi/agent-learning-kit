@@ -100,8 +100,8 @@ configuration. Both are replayable records that feed `baseline`, `compare`, and
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
-| `missing required environment variable(s)` | config fault | set the placeholder keys shown above; `agent-learn doctor` → `summary.public_boundary_passed` confirms the install surface |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
+| `missing required environment variable(s)` | config fault | set the placeholder keys shown above; `agent-learn doctor --boundary` → `summary.public_boundary_passed` confirms the install surface |
 | discovery selects the weak `run(text)` candidate | behavior regression | re-run the auto-discovery optimization twin and compare `execute_task` evidence against the text fallback |
 
 ## 5. Prove it / keep it

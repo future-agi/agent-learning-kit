@@ -90,7 +90,7 @@ the suite is CI-ready with no wrapper script.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | suite rejected at load | config fault | run `--dry-run`; the error line names the bad field |
 | assertion fails on the echo provider | test fault | the asserted value is not in the rendered prompt itself |
 

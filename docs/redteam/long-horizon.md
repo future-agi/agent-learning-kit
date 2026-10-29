@@ -95,8 +95,8 @@ exactly the sensitivity a long-horizon gate needs.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
-| `missing required env` | config fault | `agent-learn doctor` → `summary.api_key_configured`; any local value works offline |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
+| `missing required env` | config fault | `agent-learn doctor --boundary` → `summary.api_key_configured`; any local value works offline |
 | canary string in late-trajectory output | a real breach | the trajectory crossed the escalation line — find the step with causal attribution |
 | score just under threshold, no single bad turn | the long-horizon class itself | compare early- vs late-trajectory metric averages in `summary` |
 

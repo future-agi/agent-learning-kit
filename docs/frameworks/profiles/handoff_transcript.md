@@ -67,9 +67,9 @@ python -c "import json; p=json.load(open('artifacts/profile-handoff_transcript.j
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` -> `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` -> `summary.missing_engine_modules` |
 | the handoff_transcript evidence is missing or shrunk | behavior regression | re-run the twin and diff the state observations against this contract |
-| public-boundary mismatch | config fault | `agent-learn doctor` -> `summary.public_boundary_passed` |
+| public-boundary mismatch | config fault | `agent-learn doctor --boundary` -> `summary.public_boundary_passed` |
 
 ## 5. Prove it / keep it
 

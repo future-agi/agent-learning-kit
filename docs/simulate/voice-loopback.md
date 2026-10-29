@@ -90,7 +90,7 @@ record.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | `LoopbackFixtureMissing` | config fault | a committed WAV fixture path is missing/unreadable |
 | `loopback_fidelity_overclaim` in the gate | overclaim | a rung-2 artifact stamped `evidence_class: live_lane` |
 | public boundary error | config fault | `summary.public_boundary_passed` |

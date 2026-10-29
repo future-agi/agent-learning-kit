@@ -95,7 +95,7 @@ carries — the permission surface you ship is the one the artifact proves.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | manifest rejected | config fault | `summary.public_boundary_passed` + the manifest error line |
 | best candidate still over-permissive | candidate fault | tighten the autonomy candidates under `simulation.environments` |
 

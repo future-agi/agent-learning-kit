@@ -119,7 +119,7 @@ deliberation itself is auditable after the fact.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | manifest rejected | config fault | `summary.public_boundary_passed` + the manifest error line |
 | no candidate beats the seed | search-space fault | widen the candidate lists under `simulation.environments` |
 

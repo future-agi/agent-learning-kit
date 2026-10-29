@@ -4,7 +4,7 @@ track: reference
 backing: []
 artifact_kinds: []
 commands:
-  - agent-learn doctor
+  - agent-learn doctor --boundary
 postcondition: python -c "from fi.alk.config import API_KEY_ENV_NAMES; assert API_KEY_ENV_NAMES[0] == 'AGENT_LEARNING_API_KEY'; print('ok')"
 claims: []
 doctor_checks:
@@ -35,7 +35,7 @@ each tuple wins.
 
 ```bash
 export AGENT_LEARNING_API_KEY="..."   # optional — omit for offline mode
-agent-learn doctor
+agent-learn doctor --boundary
 ```
 
 ```python
@@ -85,7 +85,7 @@ Behavior worth knowing before you wire CI:
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `RuntimeError: Missing Future AGI API key. Set one of: ...` | keys — a platform-backed step ran in offline mode | `agent-learn doctor` → `summary.api_key_configured` |
+| `RuntimeError: Missing Future AGI API key. Set one of: ...` | keys — a platform-backed step ran in offline mode | `agent-learn doctor --boundary` → `summary.api_key_configured` |
 | key exported but `api_key_configured` is `false` | config fault — set after import, or empty string (empty values are skipped) | rerun `doctor` in the shell that exported the key |
 | two different keys behave inconsistently | config fault — a higher-precedence alias is shadowing; check the table order | `config.api_key_configured` plus `env \| grep -E 'AGENT_LEARNING\|FUTURE_AGI\|FI_'` |
 

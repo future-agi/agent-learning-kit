@@ -91,10 +91,10 @@ where every row came from.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | `provide exactly one of --corpus/--corpus-file or --hook` | config fault | pick one source mode per invocation |
 | status `failed` with `blocking_gap_count > 0` | real gap | inspect `summary` for the missing coverage/mitigation cells |
-| hook returns no rows | config fault | `agent-learn doctor` → `summary.public_boundary_passed`, then check the hook trace in the artifact |
+| hook returns no rows | config fault | `agent-learn doctor --boundary` → `summary.public_boundary_passed`, then check the hook trace in the artifact |
 
 ## 5. Prove it / keep it
 

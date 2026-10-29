@@ -18,4 +18,4 @@ def test_doctor_returns_nonzero_when_boundary_fails(monkeypatch) -> None:
         },
     )
 
-    assert main(["doctor", "--quiet"]) == 1
+    assert main(["doctor", "--boundary", "--quiet"]) == 1

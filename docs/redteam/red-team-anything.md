@@ -98,9 +98,9 @@ swap in your agent and the same matrix becomes an honest gate.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | `missing required env` on the manifest | config fault | set the manifest's `required_env` (any local value works offline) |
-| key errors on a platform-connected lane | config fault | `agent-learn doctor` → `summary.api_key_configured` |
+| key errors on a platform-connected lane | config fault | `agent-learn doctor --boundary` → `summary.api_key_configured` |
 
 ## 5. Prove it / keep it
 

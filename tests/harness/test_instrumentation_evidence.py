@@ -339,19 +339,31 @@ def test_a_deeply_nested_file_does_not_stop_the_contract_being_written(
     assert saved["instrumentation"] == "traceai"
 
 
+DEEP = "import traceai_openai  # nests deeper than the parser can go\n"
+
+
+@pytest.mark.parametrize(
+    ("files", "expected"),
+    [
+        ({"deep.py": DEEP}, "none"),
+        ({"agent.py": "import traceai_openai\n", "deep.py": DEEP}, "traceai"),
+    ],
+    ids=["only_import_is_unparseable", "other_files_still_scanned"],
+)
 def test_a_file_the_parser_cannot_nest_through_counts_for_nothing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    files: dict[str, str],
+    expected: str,
 ) -> None:
-    source = _repository(
-        tmp_path, {"agent.py": "import traceai_openai\n", "deep.py": "x = 1\n"}
-    )
+    source = _repository(tmp_path, files)
     real_parse = ast.parse
 
     def parse(text: str, *args: object, **kwargs: object) -> ast.AST:
-        if text == "x = 1\n":
+        if text == DEEP:
             raise RecursionError
         return real_parse(text, *args, **kwargs)
 
     monkeypatch.setattr(ast, "parse", parse)
 
-    assert detect_instrumentation(source) == "traceai"
+    assert detect_instrumentation(source) == expected

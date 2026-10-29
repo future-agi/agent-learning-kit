@@ -97,7 +97,7 @@ the lineage metrics that decided it.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | adapter target rejected | config fault | `summary.public_boundary_passed` + the manifest error line |
 | memory case scores low | lineage evidence missing (no checkpoints, no `source_ids`, stale retrievals) | read the memory operations in the artifact's case record |
 

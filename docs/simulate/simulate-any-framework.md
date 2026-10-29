@@ -91,7 +91,7 @@ plus a roll-up summary with per-job status and exit code.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | manifest rejected / `required_env` missing | config fault | `summary.public_boundary_passed` + the manifest error line |
 | one framework job fails, others pass | framework trace evidence gap | inspect that job's child result inside the suite artifact |
 

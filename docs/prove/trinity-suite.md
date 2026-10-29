@@ -90,7 +90,7 @@ is the human report for the same run.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | `missing required environment variable(s)` | config fault | export the listed keys with any placeholder value (step 1 above) |
 | `capability_gate_passed: false` in the summary | manifest/kit mismatch | `summary.public_boundary_passed` + the `required_capabilities` block |
 | verdict `conditional` instead of `approved` | evidence gap | read `trust_certificate.conditions` and the failing job's child result |
