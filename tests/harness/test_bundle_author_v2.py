@@ -80,6 +80,81 @@ def test_source_tool_handler_rejects_path_separator(tmp_path: Path) -> None:
         )
 
 
+@pytest.mark.parametrize("dependency", ["requirements", "selected", "unselected", "extra", "supplemental"])
+@pytest.mark.parametrize("mode", ["import", "construct", "none", "http"])
+def test_native_command_tool_trace_uses_executable_source_bindings(
+    tmp_path: Path, dependency: str, mode: str,
+) -> None:
+    (tmp_path / "agent.py").write_text("print('ready')\n")
+    dependencies = '["crewai==1.6.1"]' if dependency == "selected" else "[]"
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="agent"\nversion="1"\n'
+        f'dependencies={dependencies}\n'
+        '[project.optional-dependencies]\ncrew=["crewai==1.6.1"]\n'
+    )
+    (tmp_path / "requirements.txt").write_text("crewai==1.6.1\n")
+    if dependency == "requirements":
+        (tmp_path / "pyproject.toml").unlink()
+    runtime = {
+        "language": "python", "execution": "native", "command": ["python", "agent.py"],
+        "extras": ["crew"] if dependency == "extra" else [],
+        "requirements_files": ["requirements.txt"] if dependency == "supplemental" else [],
+    }
+    entries = [] if mode == "none" else [{
+        "tool": "Lookup tool", "mode": mode, "module": "agent_tools", "callable": "lookup",
+    }]
+    plan = resolve_environment_plan(
+        tmp_path, _job(connector="auto"), contract_runtime=runtime,
+        tool_entrypoints=entries, contract_interface_kind="command", contract_modality="chat",
+    )
+    control = next(p for p in plan.processes if p.name == plan.control_service)
+    if mode in {"none", "http"}:
+        assert "HARNESS_TOOL_TRACE" not in control.environment
+        assert "ALK_TOOL_TRACE_BINDINGS" not in control.environment
+        assert "ALK_CREWAI_TOOL_TRACE" not in control.environment
+        return
+    assert control.environment["HARNESS_TOOL_TRACE"] == "{{WORLD_DIR}}/agent-tool-calls.jsonl"
+    assert json.loads(control.environment["ALK_TOOL_TRACE_BINDINGS"]) == [{
+        "name": "Lookup tool", "module": "agent_tools", "callable": "lookup",
+    }]
+    assert (control.environment.get("ALK_CREWAI_TOOL_TRACE") == "1") == (
+        dependency in {"requirements", "selected", "extra", "supplemental"}
+    )
+    assert all(
+        "HARNESS_TOOL_TRACE" not in getattr(p, "environment", {})
+        for p in plan.processes if p.name != plan.control_service
+    )
+
+
+def test_bundle_author_carries_command_tool_trace_bindings(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ready')\n")
+    (source / "agent_tools.py").write_text("def lookup(query): return query\n")
+    (source / "requirements.txt").write_text("crewai==1.6.1\n")
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring, command=["python", "agent.py"],
+        interface={"kind": "command", "protocol": "fi.alk"},
+    )
+    contract_path = authoring / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract["tool_entrypoints"] = [{
+        "tool": "lookup", "mode": "import", "module": "agent_tools", "callable": "lookup",
+    }]
+    contract_path.write_text(json.dumps(contract))
+    bundle = author_bundle_v2(
+        source=source, job=_job(connector="auto"), authoring=authoring,
+        output=tmp_path / "bundle",
+    )
+    process = next(p for p in bundle.processes if p.name == bundle.runtime.control_service)
+    assert process.environment["HARNESS_TOOL_TRACE"] == "{{WORLD_DIR}}/agent-tool-calls.jsonl"
+    assert process.environment["ALK_CREWAI_TOOL_TRACE"] == "1"
+    assert json.loads(process.environment["ALK_TOOL_TRACE_BINDINGS"]) == [{
+        "name": "lookup", "module": "agent_tools", "callable": "lookup",
+    }]
+
+
 def _job(
     *,
     connector: str,
