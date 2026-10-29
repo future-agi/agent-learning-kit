@@ -585,7 +585,7 @@ def test_a_scenario_s_sub_actors_reach_the_call_resolved_in_voices_no_one_else_h
         ),
     )
     doc = {
-        "instruction": "You want a refund.",
+        "instruction": "You want a refund.\n\nYour details:\n- Name: Sam\n- Verification code: 638204",
         "persona": {"name": "Sam", "gender": "female", "languages": ["English"]},
         "sub_actors": [
             {

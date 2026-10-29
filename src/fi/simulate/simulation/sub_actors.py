@@ -54,6 +54,11 @@ def someone_else(name: str) -> str:
     return f"{name or 'Someone else'} (not the customer)"
 
 
+def known_to_others(instruction: str) -> str:
+    """The person's situation as someone with them knows it: without the person's own details."""
+    return instruction.split("Your details:", 1)[0].rstrip()
+
+
 def with_others(situation: str, actors: list[dict[str, Any]]) -> str:
     """The person's situation, saying who else is there and what the person does around them."""
     told = [

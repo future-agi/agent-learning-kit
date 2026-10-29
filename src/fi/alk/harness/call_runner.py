@@ -56,6 +56,7 @@ from fi.simulate.simulation.sub_actors import (
     CHANNELS,
     SUB_ACTOR_VOICES_ALIAS,
     SUB_ACTOR_WORLD_ALIAS,
+    known_to_others,
     loudness_ratio,
     with_others,
 )
@@ -732,7 +733,7 @@ def _voiced_sub_actors(
                 "voice": voice,
                 "speed": persona_speech_rate(persona),
                 "emotion": persona_emotion(persona),
-                "situation": str(doc.get("instruction") or ""),
+                "situation": known_to_others(str(doc.get("instruction") or "")),
                 "language": ", ".join(caller.get("languages") or []),
             }
         )
