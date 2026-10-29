@@ -115,7 +115,7 @@ LIMITS: dict[str, int] = {
     "audio_handoff": 3,
     "ivr": 3,
 }
-HANDOFF_LINE_SECONDS = 30.0
+HANDOFF_LINE_SECONDS = 15.0
 TOOLS_READ_SECONDS = 1.0
 # How much of the conversation a sub-actor hears before writing a line.
 CONVERSATION_LINES = 12
