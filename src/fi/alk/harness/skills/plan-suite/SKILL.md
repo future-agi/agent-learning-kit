@@ -393,9 +393,9 @@ proportions rather than spreading every level evenly.
 ### Someone else in the scene is a level, not another axis
 
 When the environment lists sub-actors, their presence is a condition on some scenarios, so it is planned
-as levels on the axes that already hold conditions: a second voice, someone taking over, a menu in the
-way is a competing signal on `interface`, and a sub-actor pushing the agent to act for someone who
-is not the person it serves is an `overlay`. Give each sub-actor such a level, named for it. Together,
+as levels on the axes that already hold conditions: someone else speaking or taking over is a competing
+signal on `interface`, in the forms the kind file gives this channel, and a sub-actor pushing the agent
+to act for someone who is not the person it serves is an `overlay`. Give each sub-actor such a level, named for it. Together,
 the scenarios that include a sub-actor reach the share `aim_for` reports, never the two or three a rare
 level gets; when the person asks for another share, none included, pass it to `aim_for` as
 `sub_actor_share`. Deal them to scenarios whose situation has someone else around, never to one where
@@ -925,8 +925,7 @@ The worker is called `scenario_writer`. **Every brief MUST carry, for each cell 
   would use;
 - where the environment lists sub-actors, which of this slice's scenarios include which sub-actor, on
   top of their other conditions and with the moment each enters, so that across all slices the suite
-  reaches its sub-actor share, each with a part of their own, never the person's request; a writer never
-  adds one it was not dealt;
+  reaches its sub-actor share; a sub-agent never adds one it was not dealt;
 - the one difficulty each scenario carries, distinct from every other in the brief, stated as
   something that happens in the call that a competent agent could get wrong; the person's place,
   accent, surroundings or the venue they name are never the difficulty, and two scenarios that differ

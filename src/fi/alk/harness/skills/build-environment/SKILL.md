@@ -735,14 +735,8 @@ these the first time.
 Only when `add_sub_actor` is offered. A sub-actor is someone on the person's side who is not the
 person, whom the agent has to cope with: someone with them who speaks up, or takes over from them for a
 while. Never anyone on the agent's side: the agent, its staff and its systems are what is being
-tested, so the run never plays them. Read the contract and add one for each of these this agent's users
-could have around them:
-
-- a voice agent: someone near the person (`audio_mix`), and someone who could take the phone from them
-  (`audio_handoff`);
-- an agent that places calls: the person's own phone menu, which answers before they do and puts the
-  call through to them (`ivr`). A voicemail or answering machine is not one: nobody is put through, and
-  a scenario sets it with `answered_by`.
+tested, so the run never plays them. Read the contract and add one for each channel `add_sub_actor` offers
+that this agent's users could have around them.
 
 The list says who each one is: a name that is never the person's, a `role` (who they are to the
 person: a friend, a relative, a colleague; never someone there to help with the person's request), and a
@@ -780,7 +774,7 @@ Never work around a contract you believe is wrong. Everything after you inherits
    before adding a check, run it with `try_check` against three agents you write yourself, one that
    does it right the way the reference does, one that does it right another way its instructions
    allow, and one that gets a fixed value wrong. The first two must hold and the third must fail;
-   if any verdict is wrong, the check is wrong. Where `add_sub_actor` is offered, add the sub-actors too.
+   if any verdict is wrong, the check is wrong.
 9. `write_env_file` and `run_env_command`, where this agent's code needs a store or a service
    stood up. Nothing to do when it keeps its state in its own process.
 10. `add_world_check` for what has to be true of the environment itself.

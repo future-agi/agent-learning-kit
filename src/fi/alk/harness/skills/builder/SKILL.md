@@ -157,10 +157,8 @@ what the gates check. Then:
   environment's list of who might be around its users, and no scenario changes with it. Including one
   in scenarios changes what they test: give each its `sub_actors` entry and resubmit it. A share the person
   asks for ("in 40% of scenarios", "none") goes to `aim_for` as `sub_actor_share` and replaces the
-  default; brief the writers with it. When a request does not
-  say whether it means the list or scenarios, ask. An entry you write follows the same rules as one a
-  writer writes: the sub-actor has a part, never the person's goal, so it never confirms, chooses or
-  gives a value for them and never says what the agent must hear from the person, and its trigger brings it in at a moment its part can happen. When a sub-actor
+  default; brief the sub-agents with it. When a request does not say whether it means the list or
+  scenarios, ask. An entry you write follows the write-scenarios rules for sub-actors. When a sub-actor
   or trigger the person asked for cannot be used with this agent, or a check refuses it, stop: tell them
   which one and why, offer what can be used instead, and change it only once they agree.
 - **The contract's reading of the agent**: `amend_contract`, `add_rule`, `drop_rule`, `fix_tool`, and

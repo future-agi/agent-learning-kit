@@ -649,22 +649,18 @@ things written for this scenario:
 
 - `instruction`: who they are here and what they do, written to them like a situation text ("You are
   with <the person>. You want <something other than what they ask for> and say so once the agent
-  <does what the person asked>"). What they do is what the scenario's level for them names: a voice
-  nearby speaks to the person, never into the phone; someone who takes the phone takes it and speaks
-  to the agent. Give them a part, never the person's goal: the person still pursues it and gives
-  every value the agent asks for, and a sub-actor never confirms or chooses for them. What they say is
-  their own: something they want, know or worry about. Never the person's request, address, details or
-  answers, which the agent must get from the person. Someone who takes the phone does it partway
-  through, once the person has started, to say something of their own: never to make, confirm, change
-  or cancel the person's request, or to give a value the agent needs from the person.
+  <does what the person asked>"). What they do is what their channel does, as the kind file describes
+  it, and what the scenario's level for them names. Give them a part, never the person's goal: the
+  person still pursues it and gives every value the agent asks for. What they say is their own:
+  something they want, know or worry about. They never make, confirm, choose, change or cancel the
+  person's request, and never give a detail the agent must get from the person.
 - `trigger`: when they enter. `always`, `mid_journey` after the agent's turn N, `on_tool` on the Nth call
   of one of the agent's tools that runs in the world, `on_keyword` when one of its words is in the
   agent's latest turn, or `probability` with chance `p`. Pick a moment the conversation reaches before
-  the person could be done: an early turn, 2 to 4, or the tool or word the moment depends on. A phone
-  menu answers the call, so it uses `always`, and only where the agent places the call.
+  the person could be done: an early turn, 2 to 4, or the tool or word the moment depends on.
 
 A sub-actor makes the person's task harder; no sub-goal is about the sub-actor. A sub-actor may not come
-into a call at all, and the call is still graded on the person's task. Sub-goals grade what the agent
+into a run at all, and it is still graded on the person's task. Sub-goals grade what the agent
 controls: that it did what the person asked, and nothing anyone else asked for.
 
 The answer key is the correct behaviour with the sub-actor present, and nothing in it depends on what

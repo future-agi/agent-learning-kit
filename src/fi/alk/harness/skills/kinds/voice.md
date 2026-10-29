@@ -65,7 +65,7 @@ here.
 | how clean is the input | quiet line · background noise (the places this deployment plays) · accent · non-native speech |
 | what channel it arrives on | inbound call · outbound call, and whoever picks up |
 | how reliable and timely it is | fluent speech · disfluency and self-correction · long pauses |
-| what competing signal exists | the ambience bed behind the caller · where the environment lists sub-actors, someone near the caller who speaks up and someone who takes the phone; nothing else the call can render |
+| what competing signal exists | the ambience bed behind the caller · where the environment lists sub-actors, someone near the caller who speaks up and someone who takes the phone, and on calls the agent places, the caller's own phone menu; nothing else the call can render |
 | how state is exposed | audio only: nothing can be shown, every value has to be said and heard back |
 
 **Interaction, this modality's tempo.** Single request or multi-turn; fresh or resumed; a correction
@@ -298,3 +298,10 @@ about the accent or spells out an impression of one, which is not what a person 
 Measured on a hosted 100: 7 restated it. Where they live is a fair thing to say; how they sound is not.
 
 Never tell the caller what the agent should do. They are on the phone, not reading the contract.
+
+**Sub-actors on a call.** Where `add_sub_actor` is offered: someone near the person (`audio_mix`), who
+speaks to the person, never into the phone; someone who could take the phone from them
+(`audio_handoff`), who takes it, speaks to the agent and hands it back; and, for an agent that places
+calls, the person's own phone menu (`ivr`), which answers before they do and puts the call through,
+so it enters with `always`. A voicemail or answering machine is not a sub-actor: nobody is put
+through, and a scenario sets it with `answered_by`.
