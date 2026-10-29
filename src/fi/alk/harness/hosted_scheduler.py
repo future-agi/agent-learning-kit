@@ -316,8 +316,7 @@ class SubGoalResult:
     held: bool | None
     reason: str | None
     judged: bool
-    # pass, fail, not_applicable or inconclusive; `held` stays as older readers know it. Always
-    # derived from held and reason, so a result changed with `replace` can never disagree with it.
+    # Derived from held and reason, so a result changed with `replace` never disagrees with it.
     verdict: str | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:

@@ -714,7 +714,7 @@ def _voiced_sub_actors(
     for entry in doc.get("sub_actors") or []:
         included = ScenarioSubActor.model_validate(entry)
         actor = listing.get(included.id)
-        if actor is None or "voice" not in CHANNELS[actor.channel]["modalities"]:
+        if actor is None or "voice" not in CHANNELS.get(actor.channel, {}).get("modalities", ()):
             continue
         persona = {**actor.persona, "name": actor.name}
         voice = persona_voice(persona, tts_provider, frozenset(taken), cartesia_key)
@@ -1647,7 +1647,6 @@ class CallRunnerImpl:
                     "messages": result.messages,
                 }
                 if sub_actors:
-                    # The run keeps who its sub-actors were and what happened, so a later edit never changes it.
                     transcript_document["sub_actors"] = {
                         "resolved": sub_actors,
                         "summary": took_part.get("sub_actors") or [],

@@ -401,7 +401,6 @@ class Cast:
         state["lines"] += 1
         state["last_turn"] = agent_turns
         self._spent += max(0.0, ended_at - (at if asked_at is None else asked_at))
-        # asked_at: when the line was asked for, so the time it took to be ready is on record.
         self._record(
             str(actor["id"]),
             "delivered",

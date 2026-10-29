@@ -7,33 +7,23 @@ All notable release changes for Agent Learning Kit are tracked here.
 Post-rc.1 increments on the release branch. Each one adds gates on top of the
 66 proved at rc.1; the rc.1 entry below is historical and unchanged.
 
-- Sub-actors share 60 seconds of wall-clock per call and at most two lines waiting to be written; a line
-  that is late, cut off by that time or due while the queue is full is dropped with the reason, and the
-  simulated user takes back over. A complication sub-actor that never reached the agent makes the call
-  inconclusive with the reason, never a pass. A chat sub-actor's tokens count in the call's simulator
-  tokens and are kept on its message. A background voice is set as a ratio of the simulated user's
-  measured level on each line (`loudness_ratio`), with a limiter so the mix never clips.
+- Sub-actors on voice calls, behind `HARNESS_SUB_ACTORS` (off by default): an environment keeps a list of
+  people on the simulated user's side (`sub_actors.json`), and a scenario includes them with its own
+  instruction and trigger. A background voice near the simulated user, someone who takes the phone and hands
+  it back, and the simulated user's own phone menu on calls the agent places; each line is written from the
+  conversation so far in a voice of its own, and a background line is set as a ratio of the simulated user's
+  measured level, with a limiter. Per-sub-actor and call-wide limits keep the simulated user in charge, and
+  each call records whether every sub-actor was triggered, delivered or dropped, and why. Scenarios and
+  catalogues without sub-actors are written as before.
+- A build gives a sub-actor to between 15% and 25% of its scenarios by default; `aim_for` takes the share
+  the person asks for (`sub_actor_share`, 0 for none) in its place.
+- No sub-goal is about a sub-actor: a call is graded on its sub-goals whether or not a sub-actor came in,
+  and the judge reads a sub-actor's turns as someone other than the customer. Sub-goal results carry their
+  `verdict` (pass, fail, not applicable, inconclusive) alongside `held`; a scenario with sub-actors is
+  skipped with its reason while they are switched off.
 - Sub-actors in the builder chat: adding or dropping one from the environment's list, or changing which
   scenarios include one, waits for the person's yes, and an automatic repair cannot change a scenario's
   sub-actors.
-- Sub-goal results say which of pass, fail, not applicable or inconclusive they are (`verdict`, alongside
-  `held`). A sub-goal about a sub-actor reads not applicable when it never triggered and inconclusive when
-  it was triggered but did not take part, with the reason; a scenario with sub-actors is skipped with
-  that reason while they are switched off; the judge reads sub-actor turns as someone other than the
-  customer. Each call's transcript keeps who its sub-actors were and what happened to each.
-- Sub-actors in chats: a second participant writes after its trigger, from the conversation so far; the
-  agent receives it as its own named message, or at the start of the simulated user's next message where
-  a target cannot take one, and the simulated user sees it too.
-- Sub-actors on voice calls: a background voice that speaks up as soon as its line is ready, which the
-  simulated user hears too, someone who takes the phone and hands it back, and the simulated user's own
-  phone menu on calls the agent places. Each line is written from the conversation so far, and each voice
-  is connected when the call starts; per-sub-actor and call-wide limits keep the simulated user in charge,
-  and each call records whether every sub-actor was triggered, delivered or dropped, why, and how long
-  each line took to be ready.
-- Sub-actors, behind `HARNESS_SUB_ACTORS` (off by default): an environment keeps a list of people on
-  the simulated user's side (`sub_actors.json`), a scenario includes them with its own instruction and
-  trigger, and a sub-goal can name the one it is about. Scenarios and catalogues without them are
-  written as before.
 - Builder chat: `edit_scenario` changes a kept scenario by its key with only the fields that change
   (`clear` resets a field), keeping its key, number, place and history; a rename alone is not
   proved again. A new scenario never takes a key the environment has used, a dropped scenario's

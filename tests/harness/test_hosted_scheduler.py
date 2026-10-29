@@ -4661,7 +4661,7 @@ def test_a_sub_actor_that_never_came_in_leaves_the_call_graded_on_its_sub_goals(
         assert [(one.name, one.verdict) for one in receipt.sub_goals] == [("booked", "pass")]
 
 
-def test_a_complication_that_took_part_leaves_the_call_s_result_as_graded(
+def test_a_sub_actor_that_came_in_leaves_the_call_s_result_as_graded(
     monkeypatch,
 ) -> None:
     receipt = _run_with_friend(
