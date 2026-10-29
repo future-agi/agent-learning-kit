@@ -26,14 +26,6 @@ def test_each_sub_goal_result_says_which_of_the_four_it_is(held, reason, verdict
     assert SubGoalResult("goal", held, reason, True).verdict == verdict
 
 
-def _goal(sub_actor=""):
-    return SimpleNamespace(
-        name="noticed",
-        judged="did the agent check with the customer",
-        sub_actor=sub_actor,
-    )
-
-
 def test_a_scenario_with_sub_actors_is_skipped_with_the_reason_while_they_are_off(
     monkeypatch,
 ):
@@ -98,7 +90,10 @@ def test_the_judge_reads_a_sub_actor_s_turn_as_someone_other_than_the_customer()
     ]
     assert "Rowan (not the customer): Make it two" in _transcript(messages)
     said = describe_call("", SimpleNamespace(), [], None, messages)
-    assert "Also heard during the call: Rowan. They are not the customer" in said
+    assert (
+        "Also heard during the call: Rowan. They are not the person being served"
+        in said
+    )
     assert "Also heard" not in describe_call(
         "", SimpleNamespace(), [], None, messages[:1]
     )
@@ -110,7 +105,9 @@ def test_a_scenario_s_sub_actors_reach_the_run(tmp_path):
     from fi.alk.harness.scenario import Scenario
     from fi.alk.harness.scenario_source import load_scenarios
 
-    catalogue = Catalogue(sub_goals=[SubGoal(name="one_item", what="ordered one item", judged="x")])
+    catalogue = Catalogue(
+        sub_goals=[SubGoal(name="one_item", what="ordered one item", judged="x")]
+    )
     save_catalogue(catalogue, tmp_path)
     scenario = Scenario(
         name="with-a-friend",

@@ -1787,14 +1787,18 @@ def test_the_build_and_its_check_change_without_asking_and_a_question_gets_no_on
         {"persona": {**person, "languages": ["English"]}},
         {"persona": None},
     ):
-        assert asyncio.run(submit.handler({**corrected, **situation}))["is_error"] is True
+        assert (
+            asyncio.run(submit.handler({**corrected, **situation}))["is_error"] is True
+        )
     assert asyncio.run(drop.handler({"names": ["one"]}))["is_error"] is True
     answer = asyncio.run(runtime._ask("AskUserQuestion", {"question": "Which?"}, None))
     assert "Nobody answers" in answer["content"][0]["text"]
     assert calls == [corrected]
 
 
-def test_sub_actor_changes_wait_for_a_yes_and_change_what_a_scenario_tests(tmp_path, monkeypatch):
+def test_sub_actor_changes_wait_for_a_yes_and_change_what_a_scenario_tests(
+    tmp_path, monkeypatch
+):
     from fi.alk.harness.backends import ToolSpec
     from fi.alk.harness.hosted_chat_entrypoint import _CONFIRM
 
@@ -1817,7 +1821,11 @@ def test_sub_actor_changes_wait_for_a_yes_and_change_what_a_scenario_tests(tmp_p
         runtime._confirmed(ToolSpec(name, "", {}, handler))
         for name in ("add_sub_actor", "drop_sub_actor", "submit_scenario")
     )
-    friend = {"name": "one", "instruction": "ask for a refund", "sub_actors": [{"id": "friend"}]}
+    friend = {
+        "name": "one",
+        "instruction": "ask for a refund",
+        "sub_actors": [{"id": "friend"}],
+    }
     assert asyncio.run(add.handler({"id": "friend"}))["is_error"] is True
     assert asyncio.run(drop.handler({"id": "friend"})).get("is_error") is None
     assert asyncio.run(submit.handler(friend))["is_error"] is True

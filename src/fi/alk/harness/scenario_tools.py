@@ -616,7 +616,11 @@ def _red_team_short(
 
 
 def _sub_actors_short(
-    args: dict[str, Any], kept: list[Scenario], wanted: int, share: float, usable: list[str]
+    args: dict[str, Any],
+    kept: list[Scenario],
+    wanted: int,
+    share: float,
+    usable: list[str],
 ) -> str:
     """Why this scenario without a sub-actor would leave the suite short of its share of scenarios that
     include one, or "" when it would not."""
@@ -1113,12 +1117,16 @@ def accept_scenario(
                 allow_empty_solution=allow_empty_solution or workspace,
                 spoken=spoken,
             )
-            problems.extend(contract_sequence_problems(scenario, hard_constraints or []))
+            problems.extend(
+                contract_sequence_problems(scenario, hard_constraints or [])
+            )
             problems.extend(_steps_the_contract_refuses(scenario, world_root))
             problems.extend(_overlay_asserts_nothing(scenario, catalogue))
             problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
             problems.extend(
-                _sub_actors_that_cannot_run(scenario, sub_actor_list, None, spoken, tools)
+                _sub_actors_that_cannot_run(
+                    scenario, sub_actor_list, None, spoken, tools
+                )
             )
         else:
             # Read against the world this scenario actually runs in, so a setup that creates the
@@ -1133,15 +1141,23 @@ def accept_scenario(
                     allow_empty_solution=allow_empty_solution,
                     spoken=spoken,
                 )
-                problems.extend(contract_sequence_problems(scenario, hard_constraints or []))
+                problems.extend(
+                    contract_sequence_problems(scenario, hard_constraints or [])
+                )
                 problems.extend(_credentials_the_world_lacks(scenario, trial))
                 problems.extend(_identifiers_the_instruction_invents(scenario, trial))
-                problems.extend(_fixed_sources_that_do_not_hold(scenario, trial, instructions))
+                problems.extend(
+                    _fixed_sources_that_do_not_hold(scenario, trial, instructions)
+                )
                 problems.extend(_steps_the_contract_refuses(scenario, world_root))
                 problems.extend(_overlay_asserts_nothing(scenario, catalogue))
-                problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
                 problems.extend(
-                    _sub_actors_that_cannot_run(scenario, sub_actor_list, trial, spoken, tools)
+                    _shared_check_bound_to_one_task(scenario, catalogue, kept)
+                )
+                problems.extend(
+                    _sub_actors_that_cannot_run(
+                        scenario, sub_actor_list, trial, spoken, tools
+                    )
                 )
             finally:
                 trial.close()
@@ -1453,7 +1469,11 @@ def scenario_tools(
         if not sub_actors_enabled():
             return []
         channels = available_channels("voice" if _is_spoken(contract) else "chat")
-        return [one.id for one in load_sub_actors(destination).sub_actors if one.channel in channels]
+        return [
+            one.id
+            for one in load_sub_actors(destination).sub_actors
+            if one.channel in channels
+        ]
 
     exploration = {"since_submit": 0}
     # Identical-refusal counts per scenario, so an unsatisfiable gate ends the stage.
@@ -1998,7 +2018,9 @@ def scenario_tools(
             if short:
                 return _refuse(short)
         # Held in every build; the person's own share replaces it.
-        short = _sub_actors_short(args, kept, cap(), sub_actor_share(), usable_sub_actors())
+        short = _sub_actors_short(
+            args, kept, cap(), sub_actor_share(), usable_sub_actors()
+        )
         if short:
             return _refuse(short)
         twin = _already_in_the_suite(
@@ -2265,9 +2287,13 @@ def scenario_tools(
                 else ". No accent, language or location may dominate the suite"
             )
         if args.get("sub_actor_share") is not None:
-            target["sub_actor_share"] = min(max(float(args["sub_actor_share"]), 0.0), 100.0) / 100
+            target["sub_actor_share"] = (
+                min(max(float(args["sub_actor_share"]), 0.0), 100.0) / 100
+            )
         asked = {
-            level_name(str(axis)): [str(one).strip() for one in levels if str(one).strip()]
+            level_name(str(axis)): [
+                str(one).strip() for one in levels if str(one).strip()
+            ]
             for axis, levels in (args.get("asked_for") or {}).items()
             if isinstance(levels, list)
         }
@@ -2347,18 +2373,19 @@ def scenario_tools(
                 else ". No scenario includes a sub-actor, as the person asked"
             )
         listing = load_sub_actors(destination) if usable and share > 0 else None
-        named = " ".join(
-            level for levels in (target.get("axes") or {}).values() for level in levels
-        )
+        named = {
+            level_name(level)
+            for levels in (target.get("axes") or {}).values()
+            for level in levels
+        }
         unplaced = [
             one
             for one in (listing.sub_actors if listing else [])
-            if one.id in usable and one.id not in named
+            if one.id in usable and level_name(one.id) not in named
         ]
         if unplaced:
             said += (
-                ". The environment lists these sub-actors and no level is named for them yet. Keep them: "
-                "dropping one leaves the suite with no test of how the agent copes with them. Call aim_for "
+                ". The environment lists these sub-actors and no level is named for them yet. Call aim_for "
                 "again with a level for each, named for it, with a share like any other; at a small count "
                 "that share can be a single scenario:\n"
                 + SubActorList(sub_actors=unplaced).summary()

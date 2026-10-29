@@ -52,7 +52,13 @@ from fi.simulate.results.futureagi import target_provider_usage
 from fi.simulate.runtime.report import SimulationReport
 from fi.simulate.runtime.run import TestCaseStatus
 from fi.simulate.runtime.runner import SimulationRunner
-from fi.simulate.simulation.sub_actors import CHANNELS, loudness_ratio, with_others
+from fi.simulate.simulation.sub_actors import (
+    CHANNELS,
+    SUB_ACTOR_VOICES_ALIAS,
+    SUB_ACTOR_WORLD_ALIAS,
+    loudness_ratio,
+    with_others,
+)
 
 from .background_noise import place_of, scenario_source
 from .bundle_v2 import EvidenceSeam
@@ -163,10 +169,6 @@ _OUTER_WAIT_FOR_PAD_SECONDS = 60.0
 # constant + two functions (`_clear_tool_trace_calls`, `_collect_tool_trace_calls`) so a real
 # producer's disagreement on the name/shape is a one-line change.
 _TOOL_TRACE_TABLE = "_alk_tool_trace"
-# The speaking sub-actors one call carries, as JSON. Set per call and cleared otherwise.
-SUB_ACTOR_VOICES_ALIAS = "HARNESS_SUB_ACTOR_VOICES"
-# Where the engine reads the live tool trace. Set per call, never logged.
-SUB_ACTOR_WORLD_ALIAS = "HARNESS_SUB_ACTOR_WORLD"
 
 _RESULT_TRUNCATE_CHARS = 2000
 
@@ -714,7 +716,9 @@ def _voiced_sub_actors(
     for entry in doc.get("sub_actors") or []:
         included = ScenarioSubActor.model_validate(entry)
         actor = listing.get(included.id)
-        if actor is None or "voice" not in CHANNELS.get(actor.channel, {}).get("modalities", ()):
+        if actor is None or "voice" not in CHANNELS.get(actor.channel, {}).get(
+            "modalities", ()
+        ):
             continue
         persona = {**actor.persona, "name": actor.name}
         voice = persona_voice(persona, tts_provider, frozenset(taken), cartesia_key)

@@ -52,13 +52,18 @@ def _actor(key: str, channel: str = "audio_handoff", **trigger) -> dict:
             True,
         ),
         (
-            {"kind": "on_keyword", "words": ["total"]},
-            Moment(2, last_text="Your totals are ready"),
+            {"kind": "on_keyword", "words": ["refund"]},
+            Moment(2, last_text="Your total is ready."),
             False,
         ),
         (
-            {"kind": "on_keyword", "words": ["total"]},
+            {"kind": "on_keyword", "words": ["TOTAL"]},
             Moment(2, last_text="Your total is ready."),
+            True,
+        ),
+        (
+            {"kind": "on_keyword", "words": ["合計"]},
+            Moment(2, last_text="お会計の合計は千円です"),
             True,
         ),
         ({"kind": "probability", "p": 1}, Moment(1), True),
@@ -238,9 +243,7 @@ def test_a_sub_actor_s_brief_carries_the_situation_its_part_and_the_conversation
         conversation=["The agent: Hi there"] + ["The person: ok"] * 12,
         language="",
     )
-    told = with_others(
-        "The person's situation.", [_actor("one"), _actor("two", "ivr")]
-    )
+    told = with_others("The person's situation.", [_actor("one"), _actor("two", "ivr")])
     assert (
         "One (someone with the person) may take the phone" in told
         and "Two (someone with the person) answers your line first" in told

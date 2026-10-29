@@ -4363,27 +4363,43 @@ def test_a_sub_goal_settled_by_both_fails_when_either_fails(monkeypatch) -> None
         return {goal.name: (True, f"{goal.name} said right") for goal in goals}
 
     goals = [
-        FakeSubGoal("saved_feedback", lambda w, c: "no feedback row", judged="judge", both=True),
-        FakeSubGoal("confirmed", lambda w, c: "ignored for a judged-only sub-goal", judged="judge"),
+        FakeSubGoal(
+            "saved_feedback", lambda w, c: "no feedback row", judged="judge", both=True
+        ),
+        FakeSubGoal(
+            "confirmed",
+            lambda w, c: "ignored for a judged-only sub-goal",
+            judged="judge",
+        ),
     ]
     receipt, _ = _two_judged(monkeypatch, _all, goals=goals)
     held = {g.name: (g.held, g.reason, g.verdict) for g in receipt.sub_goals}
-    assert held["saved_feedback"] == (False, "no feedback row saved_feedback said right", "fail")
+    assert held["saved_feedback"] == (
+        False,
+        "no feedback row saved_feedback said right",
+        "fail",
+    )
     assert held["confirmed"] == (True, "confirmed said right", "pass")
     assert receipt.status == "failed"
 
 
-def test_a_sub_goal_settled_by_both_takes_the_judge_when_the_check_holds(monkeypatch) -> None:
+def test_a_sub_goal_settled_by_both_takes_the_judge_when_the_check_holds(
+    monkeypatch,
+) -> None:
     async def _all(goals, world, calls, *, messages=()):
         return {"saved_feedback": (False, "the saved text left out the charging fault")}
 
-    goals = [FakeSubGoal("saved_feedback", lambda w, c: None, judged="judge", both=True)]
+    goals = [
+        FakeSubGoal("saved_feedback", lambda w, c: None, judged="judge", both=True)
+    ]
     receipt, _ = _two_judged(monkeypatch, _all, goals=goals)
     assert receipt.sub_goals[0].held is False
     assert receipt.sub_goals[0].reason == "the saved text left out the charging fault"
 
 
-def test_a_customer_off_script_marks_the_call_invalid_and_keeps_its_verdicts(monkeypatch) -> None:
+def test_a_customer_off_script_marks_the_call_invalid_and_keeps_its_verdicts(
+    monkeypatch,
+) -> None:
     from fi.alk.harness.joint_judge import OFF_SCRIPT
 
     async def _all(goals, world, calls, *, messages=()):
@@ -4699,7 +4715,9 @@ def test_a_sub_actor_that_never_came_in_leaves_the_call_graded_on_its_sub_goals(
             monkeypatch, seen, [FakeSubGoal("booked", lambda w, c: None)]
         )
         assert (receipt.status, receipt.reason) == ("passed", None)
-        assert [(one.name, one.verdict) for one in receipt.sub_goals] == [("booked", "pass")]
+        assert [(one.name, one.verdict) for one in receipt.sub_goals] == [
+            ("booked", "pass")
+        ]
 
 
 def test_a_sub_actor_that_came_in_leaves_the_call_s_result_as_graded(

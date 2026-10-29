@@ -121,6 +121,10 @@ from fi.simulate.runtime import (
 from fi.simulate.simulation.engines.base import BaseEngine
 from fi.simulate.simulation.generator import ScenarioGenerator
 from fi.simulate.simulation.models import Persona, Scenario, TestCaseResult, TestReport
+from fi.simulate.simulation.sub_actors import (
+    SUB_ACTOR_VOICES_ALIAS,
+    SUB_ACTOR_WORLD_ALIAS,
+)
 from fi.simulate.simulation.voice_prompt import (
     HOLD_MARKER,
     CallType,
@@ -3512,7 +3516,7 @@ class LiveKitEngine(BaseEngine):
             seed=seed,
             play=play if player is not None else None,
             say=say,
-            tools_called=world_access(os.environ.get("HARNESS_SUB_ACTOR_WORLD", "")),
+            tools_called=world_access(os.environ.get(SUB_ACTOR_WORLD_ALIAS, "")),
             conversation=conversation,
         )
 
@@ -4479,7 +4483,7 @@ def _with_voice(tts_config: Any, voice: str, **delivery: Any) -> Any:
 def _bound_sub_actor_voices() -> list[dict[str, Any]]:
     """The speaking sub-actors this call carries; set per scenario by the call runner."""
     try:
-        voices = json.loads(os.environ.get("HARNESS_SUB_ACTOR_VOICES", "") or "[]")
+        voices = json.loads(os.environ.get(SUB_ACTOR_VOICES_ALIAS, "") or "[]")
     except ValueError:
         return []
     return (

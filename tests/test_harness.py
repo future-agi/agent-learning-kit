@@ -9454,8 +9454,7 @@ def test_the_list_keeps_one_entry_per_sub_actor_and_refuses_what_no_run_can_deli
     ]
     assert (
         said(add, _ON_A_PAGE)[0]
-        and "a voice agent cannot be reached through page_content"
-        in said(add, _ON_A_PAGE)[1]
+        and "channel 'page_content' is not one of" in said(add, _ON_A_PAGE)[1]
     )
     assert "an id, a name and a role" in said(add, {**_NEARBY, "role": ""})[1]
     assert (
@@ -9610,11 +9609,15 @@ def test_the_coverage_plan_and_the_world_view_name_the_environment_s_sub_actors(
     monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
     aimed, seen = replies(["quiet_line"])
     assert (
-        "no level is named for them yet. Keep them" in aimed
-        and "- second: Rowan (someone who takes the phone), audio_handoff: someone who takes the phone from the person" in aimed
+        "no level is named for them yet" in aimed
+        and "- second: Rowan (someone who takes the phone), audio_handoff: someone who takes the phone from the person"
+        in aimed
     )
-    assert "SUB-ACTORS a scenario can include (the person's side, not the person):\n- second: Rowan" in seen
-    aimed, _seen = replies(["quiet_line", "with_second"])
+    assert (
+        "SUB-ACTORS a scenario can include (the person's side, not the person):\n- second: Rowan"
+        in seen
+    )
+    aimed, _seen = replies(["quiet_line", "second"])
     assert "no level is named" not in aimed
 
 
@@ -9628,8 +9631,21 @@ def test_a_suite_keeps_its_share_of_scenarios_with_a_sub_actor_unless_the_person
     plain = {"name": "next"}
     # 9 written of 10, one with a sub-actor; a 20% share needs 2, so the last one must include one.
     refused = _sub_actors_short(plain, [with_one, *alone], 10, 0.2, ["near"])
-    assert "1 of the 10 scenarios" in refused and "at least 2 must" in refused and "near" in refused
-    assert _sub_actors_short({**plain, "sub_actors": [{"id": "near"}]}, [with_one, *alone], 10, 0.2, ["near"]) == ""
+    assert (
+        "1 of the 10 scenarios" in refused
+        and "at least 2 must" in refused
+        and "near" in refused
+    )
+    assert (
+        _sub_actors_short(
+            {**plain, "sub_actors": [{"id": "near"}]},
+            [with_one, *alone],
+            10,
+            0.2,
+            ["near"],
+        )
+        == ""
+    )
     # Room left: the share can still be met by the scenarios still to come.
     assert _sub_actors_short(plain, [with_one, *alone[:3]], 10, 0.2, ["near"]) == ""
     # None asked for, or nothing this agent can be reached by: no share to keep.
@@ -9637,7 +9653,9 @@ def test_a_suite_keeps_its_share_of_scenarios_with_a_sub_actor_unless_the_person
     assert _sub_actors_short(plain, [with_one, *alone], 10, 0.2, []) == ""
 
 
-def test_aim_for_reports_the_default_share_and_takes_the_person_s_own(tmp_path, monkeypatch):
+def test_aim_for_reports_the_default_share_and_takes_the_person_s_own(
+    tmp_path, monkeypatch
+):
     import asyncio
 
     from fi.alk.harness.scenario_tools import CANONICAL_AXES, scenario_tools
@@ -9653,10 +9671,17 @@ def test_aim_for_reports_the_default_share_and_takes_the_person_s_own(tmp_path, 
     axes = {axis: ["plain", "with_second"] for axis in CANONICAL_AXES}
 
     def said(**extra):
-        return asyncio.run(aim({"count": 40, "axes": axes, **extra}))["content"][0]["text"]
+        return asyncio.run(aim({"count": 40, "axes": axes, **extra}))["content"][0][
+            "text"
+        ]
 
     share = default_share(str(root))
     assert SHARE_RANGE[0] <= share <= SHARE_RANGE[1]
-    assert f"At least {at_least(share, 40)} of the 40 scenarios include a sub-actor" in said()
+    assert (
+        f"At least {at_least(share, 40)} of the 40 scenarios include a sub-actor"
+        in said()
+    )
     assert "At least 16 of the 40" in said(sub_actor_share=40)
-    assert "No scenario includes a sub-actor, as the person asked" in said(sub_actor_share=0)
+    assert "No scenario includes a sub-actor, as the person asked" in said(
+        sub_actor_share=0
+    )

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import hashlib
 import random
-import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -17,7 +16,6 @@ from typing import Any, Callable
 CHANNELS: dict[str, dict[str, Any]] = {
     "audio_mix": {
         "modalities": {"voice"},
-        "available": True,
         "about": "a voice near the person that speaks up whenever it has something to say, which the agent may hear",
         "tells_person": "With you, and may speak during the call: {who}.",
         "setting": "You are near someone who is on a phone call with an automated agent. You are not on "
@@ -25,7 +23,6 @@ CHANNELS: dict[str, dict[str, Any]] = {
     },
     "audio_handoff": {
         "modalities": {"voice"},
-        "available": True,
         "about": "someone who takes the phone from the person for a few turns, then hands it back",
         "tells_person": "{who} may take the phone from you for a few turns. While they have it, say nothing; carry on once they hand it back.",
         "setting": "You have just taken the phone from the person, partway through their call with an automated "
@@ -34,31 +31,10 @@ CHANNELS: dict[str, dict[str, Any]] = {
     },
     "ivr": {
         "modalities": {"voice"},
-        "available": True,
         "about": "a phone menu on the person's own line that answers a call the agent places, before the person, "
         "and puts the call through to them",
         "tells_person": "{who} answers your line first. Say nothing until it has put the call through to you.",
         "setting": "You are the automated phone menu that answers this line before a person does.",
-    },
-    "ui_event": {
-        "modalities": {"computer_use"},
-        "available": False,
-        "about": "something on the screen",
-    },
-    "page_content": {
-        "modalities": {"browser"},
-        "available": False,
-        "about": "content on a page",
-    },
-    "repo_change": {
-        "modalities": {"coding"},
-        "available": False,
-        "about": "a change in the repository",
-    },
-    "peer_agent": {
-        "modalities": {"multi_agent"},
-        "available": False,
-        "about": "a message from another agent",
     },
 }
 
@@ -101,7 +77,7 @@ def available_channels(modality: str = "") -> list[str]:
     return [
         name
         for name, entry in CHANNELS.items()
-        if entry["available"] and (not modality or modality in entry["modalities"])
+        if not modality or modality in entry["modalities"]
     ]
 
 
@@ -116,6 +92,10 @@ LIMITS: dict[str, int] = {
     "ivr": 3,
 }
 HANDOFF_LINE_SECONDS = 15.0
+# The speaking sub-actors one call carries, as JSON. Set per call and cleared otherwise.
+SUB_ACTOR_VOICES_ALIAS = "HARNESS_SUB_ACTOR_VOICES"
+# Where the engine reads the live tool trace. Set per call, never logged.
+SUB_ACTOR_WORLD_ALIAS = "HARNESS_SUB_ACTOR_WORLD"
 TOOLS_READ_SECONDS = 1.0
 # How much of the conversation a sub-actor hears before writing a line.
 CONVERSATION_LINES = 12
@@ -211,8 +191,8 @@ def due(
             for one in trigger.get("words") or []
             if str(one).strip()
         ]
-        said = moment.last_text.lower()
-        return any(re.search(rf"\b{re.escape(word)}\b", said) for word in words)
+        said = moment.last_text.casefold()
+        return any(word.casefold() in said for word in words)
     if kind == "probability":
         drawn = seeded(seed, sub_actor_id, "enters").random() < float(
             trigger.get("p") or 0
@@ -236,7 +216,7 @@ def line_brief(
         f"You are {actor.get('name') or 'someone'}{role}. {setting}",
         f"What is going on (this is the other person's situation, not yours):\n{situation}",
         f"What you do:\n{actor.get('instruction') or ''}",
-        "You are not the other person. Never give their codes, numbers, addresses or account details, never "
+        "You are not the other person. Never give any detail the agent needs from them, never "
         "make their request or answer a question put to them, and never confirm or choose anything for them: "
         "what they came for is theirs to say. Say only what you yourself want or know.",
         f"Speak {language}." if language else "",

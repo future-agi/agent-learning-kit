@@ -616,20 +616,43 @@ class HostedChatRuntime:
         """Whether a submission changes what an existing scenario tests, not how it is graded."""
         return self._changes(
             args,
-            ("instruction", "use_case", "branch", "tests", "coverage", "fixture", "sub_actors"),
+            (
+                "instruction",
+                "use_case",
+                "branch",
+                "tests",
+                "coverage",
+                "fixture",
+                "sub_actors",
+            ),
             whole_persona=True,
         )
 
     def _replaces_sub_goal(self, args: dict[str, Any]) -> bool:
         from .catalogue import load_catalogue
 
-        return any(one.name == args.get("name") for one in load_catalogue(self.workspace).sub_goals)
+        return any(
+            one.name == args.get("name")
+            for one in load_catalogue(self.workspace).sub_goals
+        )
 
     def _changes_meaning(self, args: dict[str, Any]) -> bool:
         """Whether a submission rewrites an existing scenario's test rather than its surface."""
-        return self._changes(args, ("instruction", "use_case", "branch", "sub_goals", "solution", "sub_actors"))
+        return self._changes(
+            args,
+            (
+                "instruction",
+                "use_case",
+                "branch",
+                "sub_goals",
+                "solution",
+                "sub_actors",
+            ),
+        )
 
-    def _changes(self, args: dict[str, Any], fields: tuple[str, ...], whole_persona: bool = False) -> bool:
+    def _changes(
+        self, args: dict[str, Any], fields: tuple[str, ...], whole_persona: bool = False
+    ) -> bool:
         """Whether a submission changes any of these fields of an existing scenario, or who its person is.
 
         `whole_persona` compares the persona the submission would save, so a changed language or a

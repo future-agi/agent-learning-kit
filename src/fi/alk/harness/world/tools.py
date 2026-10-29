@@ -647,8 +647,7 @@ def sub_actor_tools(contract: AgentContract, destination: Path) -> list[Any]:
     @tool(
         "drop_sub_actor",
         "Remove a sub-actor from the environment's list, when the person you work with asks for it or "
-        "this agent's users would never have them around. Never to make room in the suite: give each "
-        "a level in `aim_for` instead. Refused while any scenario includes it.",
+        "this agent's users would never have them around. Refused while any scenario includes it.",
         schema({"id": str}, ["id"]),
     )
     async def drop_sub_actor(args: dict[str, Any]) -> dict[str, Any]:

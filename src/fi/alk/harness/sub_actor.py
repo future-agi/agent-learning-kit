@@ -120,8 +120,6 @@ def entry_problems(actor: SubActor, *, modality: str) -> list[str]:
         problems.append(f"channel {actor.channel!r} is not one of {sorted(CHANNELS)}")
     elif modality not in channel["modalities"]:
         problems.append(f"a {modality} agent cannot be reached through {actor.channel}")
-    elif not channel["available"]:
-        problems.append(f"no run can deliver {actor.channel} yet")
     named = str(actor.persona.get("name") or "").strip()
     if named and named != actor.name:
         problems.append(
