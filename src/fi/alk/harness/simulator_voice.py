@@ -1119,7 +1119,9 @@ def _cartesia_voice_served(voice: str, key: str) -> bool | None:
     return served
 
 
-def served_cartesia_voice(persona: dict, key: str | None = None) -> str:
+def served_cartesia_voice(
+    persona: dict, key: str | None = None, avoid: frozenset[str] = frozenset()
+) -> str:
     """This caller's voice, or the next one Cartesia still serves when it has removed theirs.
 
     `key` is the call's own Cartesia key; None reads this process's. Without one (a gateway-relayed
@@ -1127,6 +1129,7 @@ def served_cartesia_voice(persona: dict, key: str | None = None) -> str:
     """
     key = os.environ.get("CARTESIA_API_KEY", "") if key is None else key
     candidates = _cartesia_voice_candidates(persona)
+    candidates = [one for one in candidates if one not in avoid] or candidates
     last = candidates[-1]
     for voice in [*candidates[:_VOICE_TRIES], *candidates[-_VOICE_TRIES - 1 :]]:
         if _cartesia_voice_served(voice, key) is not False:
@@ -1217,7 +1220,7 @@ _AURA_BY_ACCENT: dict[str, dict[str, list[str]]] = {
 }
 
 
-def aura_voice_for(persona: dict) -> str:
+def aura_voice_for(persona: dict, avoid: frozenset[str] = frozenset()) -> str:
     """A stable aura voice for one caller, chosen by accent and gender.
 
     Callers who share an accent still differ: the voice within the accent's set is picked by the
@@ -1235,7 +1238,26 @@ def aura_voice_for(persona: dict) -> str:
     index = sum(ord(character) for character in str(persona.get("name") or "")) % len(
         voices
     )
-    return voices[index]
+    rotated = voices[index:] + voices[:index]
+    return next((one for one in rotated if one not in avoid), voices[index])
+
+
+def persona_voice(
+    persona: Mapping[str, Any],
+    tts_provider: str,
+    avoid: frozenset[str] = frozenset(),
+    cartesia_key: str | None = None,
+) -> str:
+    """The voice this person speaks in on this provider, never one in `avoid` while the provider has another.
+
+    Empty when the provider has no voices to choose from, so everyone keeps its default voice.
+    """
+    provider = (tts_provider or "").lower()
+    if provider == "cartesia":
+        return served_cartesia_voice(dict(persona), cartesia_key, avoid)
+    if provider == "deepgram":
+        return aura_voice_for(dict(persona), avoid)
+    return ""
 
 
 def simulator_definition(

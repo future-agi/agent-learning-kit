@@ -279,6 +279,8 @@ class _CompiledScenario:
     # One correct way through the call: handed to reference checks and shown to the judge.
     solution: tuple[dict[str, Any], ...] = ()
     call_execution_id: str | None = None
+    # The ids of the sub-actors the scenario includes; it is skipped while sub-actors are off.
+    sub_actors: tuple[str, ...] = ()
 
 
 def _read_text(path: Path, *, label: str) -> str:
@@ -558,6 +560,9 @@ def _load_one(
         ready=ready,
         presented=_presented(body, scenario_key=scenario_key),
         solution=tuple(solution),
+        sub_actors=tuple(
+            str((one or {}).get("id") or "") for one in body.get("sub_actors") or []
+        ),
     )
 
 

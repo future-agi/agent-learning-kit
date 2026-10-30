@@ -7,6 +7,23 @@ All notable release changes for Agent Learning Kit are tracked here.
 Post-rc.1 increments on the release branch. Each one adds gates on top of the
 66 proved at rc.1; the rc.1 entry below is historical and unchanged.
 
+- Sub-actors on voice calls, behind `HARNESS_SUB_ACTORS` (off by default): an environment keeps a list of
+  people on the simulated user's side (`sub_actors.json`), and a scenario includes them with its own
+  instruction and trigger. A background voice near the simulated user, someone who takes the phone and hands
+  it back, and the simulated user's own phone menu on calls the agent places; each line is written from the
+  conversation so far in a voice of its own, and a background line is set as a ratio of the simulated user's
+  measured level, with a limiter. Per-sub-actor and call-wide limits keep the simulated user in charge, and
+  each call records whether every sub-actor was triggered, delivered or dropped, and why. Scenarios and
+  catalogues without sub-actors are written as before.
+- A build gives a sub-actor to between 15% and 25% of its scenarios by default; `aim_for` takes the share
+  the person asks for (`sub_actor_share`, 0 for none) in its place.
+- No sub-goal is about a sub-actor: a call is graded on its sub-goals whether or not a sub-actor came in,
+  and the judge reads a sub-actor's turns as someone other than the customer. Sub-goal results carry their
+  `verdict` (pass, fail, not applicable, inconclusive) alongside `held`; a scenario with sub-actors is
+  skipped with its reason while they are switched off.
+- Sub-actors in the builder chat: adding or dropping one from the environment's list, or changing which
+  scenarios include one, waits for the person's yes, and an automatic repair cannot change a scenario's
+  sub-actors.
 - Builder chat: `edit_scenario` changes a kept scenario by its key with only the fields that change
   (`clear` resets a field), keeping its key, number, place and history; a rename alone is not
   proved again. A new scenario never takes a key the environment has used, a dropped scenario's

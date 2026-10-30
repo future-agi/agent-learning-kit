@@ -4364,6 +4364,25 @@ def test_a_changed_world_reaches_the_sealed_seed_on_reseal(
     assert reseal_scenarios(authoring) == digest
 
 
+def test_the_bundle_seals_the_environment_s_sub_actors(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    (authoring / "sub_actors.json").write_text('{"sub_actors": []}\n', encoding="utf-8")
+
+    output = tmp_path / "bundle"
+    author_bundle_v2(
+        source=source,
+        job=_job(connector="http", scenario_count=1),
+        authoring=authoring,
+        output=output,
+    )
+    manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    assert (output / "sub_actors.json").is_file()
+    assert "sub_actors.json" in {one["path"] for one in manifest["files"]}
+
+
 # The platform pins the same digest for the same files (test_harness_versioning_reseal.py).
 GOLDEN_SEALED_FROM = (
     "sha256:402ed05450abe6c943865dd538ebd78e94d15c7e7a15d9b6a934e51cf4d26d3e"

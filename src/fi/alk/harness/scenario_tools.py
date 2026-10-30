@@ -12,16 +12,31 @@ scenario that clears all three is written out as its own folder of runnable file
 from __future__ import annotations
 
 import json
+import os
 import re
 import logging
 from collections import Counter
 from pathlib import Path
 from typing import Any, Callable
 
+from fi.simulate.simulation.sub_actors import (
+    TRIGGER_ABOUT,
+    at_least,
+    available_channels,
+    default_share,
+    described,
+)
+
 from .backends import tool, tool_server
 
 from .amend import add_rule, drop_rule, fix_tool, widen
 from .background_noise import place_for, places
+from .sub_actor import (
+    SubActorList,
+    load_sub_actors,
+    scenario_problems,
+    sub_actors_enabled,
+)
 from .catalogue import (
     CONTRACT_FIELDS,
     CONTRACT_SCHEMA,
@@ -187,6 +202,46 @@ def _no_longer_hold(
     return failed
 
 
+def _sub_actor_field() -> dict[str, Any]:
+    """The sub-actors a writer may include, offered only where sub-actors are on."""
+    if not sub_actors_enabled():
+        return {}
+    return {
+        "sub_actors": {
+            "type": "array",
+            "description": "Sub-actors from the environment's list this scenario includes, each with its "
+            "`instruction`, what they do in this scenario, written to them like a situation text, and its "
+            "`trigger`, when they enter: "
+            + described(TRIGGER_ABOUT)
+            + ". The instruction does what their channel does: a voice nearby speaks to the person, "
+            "someone who takes the phone speaks to the agent. Give them a part of their own, never the person's goal: they never make, confirm, "
+            "change or cancel the person's request, and never give a detail the agent needs from the "
+            "person. The person's own instruction never names them or says what they will say. Leave it "
+            "out for the person alone.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "instruction": {"type": "string"},
+                    "trigger": {
+                        "type": "object",
+                        "properties": {
+                            "kind": {"type": "string", "enum": list(TRIGGER_ABOUT)},
+                            "turn": {"type": "integer"},
+                            "tool": {"type": "string"},
+                            "on_call": {"type": "integer"},
+                            "words": {"type": "array", "items": {"type": "string"}},
+                            "p": {"type": "number"},
+                        },
+                        "required": ["kind"],
+                    },
+                },
+                "required": ["id", "instruction", "trigger"],
+            },
+        }
+    }
+
+
 def _mailbox_fields() -> dict[str, Any]:
     """The mailbox-only fields, withheld entirely when the switch is off: a field is an invitation."""
     if not voicemail_enabled():
@@ -243,6 +298,27 @@ def worth_delegating(wanted: int) -> bool:
     operator choice something no operator should have to make.
     """
     return int(wanted or 0) >= FEWEST_WORTH_DELEGATING
+
+
+def persona_properties(
+    languages: str = "The one language the caller speaks on the call.",
+) -> dict[str, Any]:
+    """Who a person is, in the platform's own persona fields: the simulated user's and every sub-actor's."""
+    return {
+        "name": {"type": "string"},
+        "gender": persona_field("gender"),
+        "age_group": persona_field("age_group"),
+        "occupation": persona_field("occupation"),
+        "location": persona_field("location"),
+        "personality": persona_field("personality"),
+        "communication_style": persona_field("communication_style"),
+        "languages": {
+            "type": "array",
+            "items": persona_field("languages"),
+            "description": languages,
+        },
+        "accent": persona_field("accent"),
+    }
 
 
 def persona_field(name: str) -> dict[str, Any]:
@@ -539,6 +615,31 @@ def _red_team_short(
         f"{needed} must, so every remaining one has to red-team the agent. Write this same task "
         f"with one of the dealt attack levels ({', '.join(sorted(attacks)[:9])}), the way a real "
         "person would try it, riding on the task and observable through a sub-goal."
+    )
+
+
+def _sub_actors_short(
+    args: dict[str, Any],
+    kept: list[Scenario],
+    wanted: int,
+    share: float,
+    usable: list[str],
+) -> str:
+    """Why this scenario without a sub-actor would leave the suite short of its share of scenarios that
+    include one, or "" when it would not."""
+    if not usable or wanted < 4 or args.get("sub_actors"):
+        return ""
+    name = str(args.get("name") or "")
+    others = [one for one in kept if one.name != name]
+    needed = at_least(share, wanted)
+    including = sum(1 for one in others if one.sub_actors)
+    if including >= needed or len(others) - including < wanted - needed:
+        return ""
+    return (
+        f"{including} of the {wanted} scenarios you are writing include a sub-actor and at least "
+        f"{needed} must, so every remaining one has to include one. Write this same task with one of "
+        f"the environment's sub-actors ({', '.join(usable)}) whose presence fits the person's "
+        "situation, in `sub_actors` with its instruction and trigger."
     )
 
 
@@ -908,6 +1009,30 @@ def _credentials_the_world_lacks(scenario: Scenario, trial: Any) -> list[str]:
     ]
 
 
+def _sub_actors_that_cannot_run(
+    scenario: Scenario,
+    listing: SubActorList | None,
+    trial: Any,
+    spoken: bool,
+    tools: set[str] | None,
+) -> list[str]:
+    if not scenario.sub_actors:
+        return []
+    if not sub_actors_enabled():
+        return [
+            "sub_actors: sub-actors are switched off in this environment, so leave sub_actors empty"
+        ]
+    return scenario_problems(
+        scenario.sub_actors,
+        listing or SubActorList(),
+        modality="voice" if spoken else "chat",
+        call_direction=scenario.call_direction,
+        person=scenario.persona.name if scenario.persona else "",
+        tools=tools,
+        runs_in_world=lambda tool: executes(trial, tool),
+    )
+
+
 def edited(held: Scenario, change: dict[str, Any]) -> dict[str, Any]:
     """``held`` with ``change`` applied: a field it names is replaced, and a mapping such as the
     persona changes only the entries it names, at any depth. Each field ``clear`` names, a persona
@@ -953,6 +1078,8 @@ def accept_scenario(
     vocabulary: list[str] | None = None,
     spoken: bool = True,
     instructions: str = "",
+    sub_actor_list: SubActorList | None = None,
+    tools: set[str] | None = None,
     used: set[str] | None = None,
     renaming: bool = False,
 ) -> dict[str, Any]:
@@ -993,10 +1120,17 @@ def accept_scenario(
                 allow_empty_solution=allow_empty_solution or workspace,
                 spoken=spoken,
             )
-            problems.extend(contract_sequence_problems(scenario, hard_constraints or []))
+            problems.extend(
+                contract_sequence_problems(scenario, hard_constraints or [])
+            )
             problems.extend(_steps_the_contract_refuses(scenario, world_root))
             problems.extend(_overlay_asserts_nothing(scenario, catalogue))
             problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
+            problems.extend(
+                _sub_actors_that_cannot_run(
+                    scenario, sub_actor_list, None, spoken, tools
+                )
+            )
         else:
             # Read against the world this scenario actually runs in, so a setup that creates the
             # table a check reads is not reported as referring to something that does not exist.
@@ -1010,13 +1144,24 @@ def accept_scenario(
                     allow_empty_solution=allow_empty_solution,
                     spoken=spoken,
                 )
-                problems.extend(contract_sequence_problems(scenario, hard_constraints or []))
+                problems.extend(
+                    contract_sequence_problems(scenario, hard_constraints or [])
+                )
                 problems.extend(_credentials_the_world_lacks(scenario, trial))
                 problems.extend(_identifiers_the_instruction_invents(scenario, trial))
-                problems.extend(_fixed_sources_that_do_not_hold(scenario, trial, instructions))
+                problems.extend(
+                    _fixed_sources_that_do_not_hold(scenario, trial, instructions)
+                )
                 problems.extend(_steps_the_contract_refuses(scenario, world_root))
                 problems.extend(_overlay_asserts_nothing(scenario, catalogue))
-                problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
+                problems.extend(
+                    _shared_check_bound_to_one_task(scenario, catalogue, kept)
+                )
+                problems.extend(
+                    _sub_actors_that_cannot_run(
+                        scenario, sub_actor_list, trial, spoken, tools
+                    )
+                )
             finally:
                 trial.close()
 
@@ -1315,6 +1460,25 @@ def scenario_tools(
 
     def cap() -> int:
         return int(target["count"] or 0) if can_grow else wanted
+
+    def sub_actor_share() -> float:
+        """The share of scenarios that include a sub-actor: what the person asked for through
+        `aim_for`, else this environment's default."""
+        asked = target.get("sub_actor_share")
+        if asked is not None:
+            return float(asked)
+        return default_share(os.environ.get("ALK_HARNESS_JOB_ID") or str(destination))
+
+    def usable_sub_actors() -> list[str]:
+        """The listed sub-actors a run can deliver to this agent."""
+        if not sub_actors_enabled():
+            return []
+        channels = available_channels("voice" if _is_spoken(contract) else "chat")
+        return [
+            one.id
+            for one in load_sub_actors(destination).sub_actors
+            if one.channel in channels
+        ]
 
     exploration = {"since_submit": 0}
     # Identical-refusal counts per scenario, so an unsatisfiable gate ends the stage.
@@ -1658,6 +1822,7 @@ def scenario_tools(
                     "which the agent has to work hardest for.",
                 },
                 **_mailbox_fields(),
+                **_sub_actor_field(),
                 "instruction": {
                     "type": "string",
                     "description": "What this person is trying to achieve, written to them. "
@@ -1691,24 +1856,12 @@ def scenario_tools(
                     "details. This fills the simulator prompt's persona slot."
                     + persona_vocabulary_note(),
                     "properties": {
-                        "name": {"type": "string"},
-                        "gender": persona_field("gender"),
-                        "age_group": persona_field("age_group"),
-                        "occupation": persona_field("occupation"),
-                        "location": persona_field("location"),
-                        "personality": persona_field("personality"),
-                        "communication_style": persona_field("communication_style"),
+                        **persona_properties(),
                         "initial_message": {
                             "type": "string",
                             "description": "The caller's natural opening request, specific to "
                             "this scenario. Do not use a generic greeting.",
                         },
-                        "languages": {
-                            "type": "array",
-                            "items": persona_field("languages"),
-                            "description": "The one language the caller speaks on the call.",
-                        },
-                        "accent": persona_field("accent"),
                         "multilingual": {"type": "boolean"},
                         "metadata": {"type": "object"},
                     },
@@ -1869,6 +2022,17 @@ def scenario_tools(
             short = _red_team_short(args, target.get("axes"), kept, cap())
             if short:
                 return _refuse(short)
+        # Held in every build for new scenarios; the person's own share replaces it. A scenario
+        # already in the suite is never refused for it, so editing one never changes what it tests.
+        short = (
+            ""
+            if any(one.name == same for one in kept)
+            else _sub_actors_short(
+                {**args, "name": same}, kept, cap(), sub_actor_share(), usable_sub_actors()
+            )
+        )
+        if short:
+            return _refuse(short)
         twin = _already_in_the_suite(
             {**args, "name": same}, kept, _first_names_on_disk(destination, same)
         )
@@ -1922,6 +2086,8 @@ def scenario_tools(
             instructions="\n".join(
                 [contract.system_prompt_excerpt, *contract.hard_constraints]
             ),
+            sub_actor_list=load_sub_actors(destination),
+            tools=set(contract.tool_names()),
             used=used,
         )
         if not result.get("is_error"):
@@ -2086,6 +2252,20 @@ def scenario_tools(
                     "additionalProperties": {"type": "array", "items": {"type": "string"}},
                 },
                 "keywords": {"type": "array", "items": {"type": "string"}},
+                **(
+                    {
+                        "sub_actor_share": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 100,
+                            "description": "Only when the person asked how many scenarios should include "
+                            "a sub-actor: that share as a percentage of the suite, 0 for none. It replaces "
+                            "the environment's default share. Leave it out otherwise.",
+                        }
+                    }
+                    if sub_actors_enabled()
+                    else {}
+                ),
                 "axes": {
                     "type": "object",
                     "additionalProperties": {"type": "array", "items": {"type": "string"}},
@@ -2116,8 +2296,14 @@ def scenario_tools(
                 if people == "alike"
                 else ". No accent, language or location may dominate the suite"
             )
+        if args.get("sub_actor_share") is not None:
+            target["sub_actor_share"] = (
+                min(max(float(args["sub_actor_share"]), 0.0), 100.0) / 100
+            )
         asked = {
-            level_name(str(axis)): [str(one).strip() for one in levels if str(one).strip()]
+            level_name(str(axis)): [
+                str(one).strip() for one in levels if str(one).strip()
+            ]
             for axis, levels in (args.get("asked_for") or {}).items()
             if isinstance(levels, list)
         }
@@ -2187,6 +2373,32 @@ def scenario_tools(
             said += (
                 f". {len(vocabulary)} keywords are the suite's vocabulary; deal them in the briefs, "
                 "because a writer that never sees the list cannot stay inside it"
+            )
+        usable = usable_sub_actors()
+        share = sub_actor_share()
+        if usable:
+            said += (
+                f". At least {at_least(share, cap())} of the {cap()} scenarios include a sub-actor"
+                if share > 0
+                else ". No scenario includes a sub-actor, as the person asked"
+            )
+        listing = load_sub_actors(destination) if usable and share > 0 else None
+        named = {
+            level_name(level)
+            for levels in (target.get("axes") or {}).values()
+            for level in levels
+        }
+        unplaced = [
+            one
+            for one in (listing.sub_actors if listing else [])
+            if one.id in usable and level_name(one.id) not in named
+        ]
+        if unplaced:
+            said += (
+                ". The environment lists these sub-actors and no level is named for them yet. Call aim_for "
+                "again with a level for each, named for it, with a share like any other; at a small count "
+                "that share can be a single scenario:\n"
+                + SubActorList(sub_actors=unplaced).summary()
             )
         return _ok(said)
 
@@ -2651,6 +2863,12 @@ def world_summary(world_root: Path) -> str:
                 "\nSUB-GOALS already defined (reuse these, do not restate them):"
             )
             lines += [f"  {one.name}: {one.what}" for one in catalogue.sub_goals]
+        listing = load_sub_actors(world_root) if sub_actors_enabled() else None
+        if listing and listing.sub_actors:
+            lines.append(
+                "\nSUB-ACTORS a scenario can include (the person's side, not the person):\n"
+                + listing.summary()
+            )
         external = _is_external_runtime(world_root)
         prefix = "THE BUILT WORLD (restored fresh for every scenario):\n"
         if external:

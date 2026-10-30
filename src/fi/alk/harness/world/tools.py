@@ -24,6 +24,8 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from fi.simulate.simulation.sub_actors import CHANNELS, available_channels, described
+
 from ..backends import tool, tool_server
 
 from ..amend import add_rule, drop_rule, fix_tool, set_modality, widen
@@ -43,6 +45,14 @@ from ..catalogue import (
     judged_wording_advisory,
     weak_check_advisory,
     without_delivery_overlay,
+)
+from ..sub_actor import (
+    SubActor,
+    entry_problems,
+    load_sub_actors,
+    save_sub_actors,
+    scenarios_using,
+    sub_actors_enabled,
 )
 from ..checks import reference_of, run_check, run_world_check
 from ..contract import AgentContract, is_data_free_conversation
@@ -581,6 +591,88 @@ def _tables_the_source_lacks(
                     f"exist: {', '.join(dangling[:5])}"
                 )
     return problems
+
+
+def sub_actor_tools(contract: AgentContract, destination: Path) -> list[Any]:
+    """The tools that keep the environment's list of sub-actors: for the build and the builder chat."""
+    from ..scenario_tools import persona_properties
+
+    modality = str(contract.modality or "")
+    if not available_channels(modality):
+        return []
+
+    @tool(
+        "add_sub_actor",
+        "Add or replace someone on the person's side who is not the person, on the environment's "
+        "list: someone with them who may speak up or take over for a while, never anyone on "
+        "the agent's side. The same person, with the same voice, in every scenario that includes them; "
+        "each scenario writes what they do there. Give `role`: who they are to the person in a few words "
+        "(a friend, a relative, a colleague), never what they do in a call or a part in the person's "
+        "request. Give `persona` "
+        "in the person's fields (the voice is chosen from it) and `channel`: "
+        + described(
+            {name: CHANNELS[name]["about"] for name in available_channels(modality)}
+        )
+        + ". Adding one changes no scenario.",
+        schema(
+            {
+                "id": str,
+                "name": str,
+                "role": str,
+                "channel": {"type": "string", "enum": available_channels(modality)},
+                "persona": {
+                    "type": "object",
+                    "properties": persona_properties(
+                        "The one language this person speaks in the conversation."
+                    ),
+                },
+            },
+            ["id", "name", "role", "channel"],
+        ),
+    )
+    async def add_sub_actor(args: dict[str, Any]) -> dict[str, Any]:
+        try:
+            actor = SubActor.model_validate(
+                {key: value for key, value in args.items() if value is not None}
+            )
+        except Exception as invalid:  # noqa: BLE001 - the model is told what was wrong
+            return _err(f"Not added. {invalid}"[:600])
+        problems = entry_problems(actor, modality=modality)
+        if problems:
+            return _err("Not added:\n  - " + "\n  - ".join(problems))
+        listing = load_sub_actors(destination)
+        listing.sub_actors = [
+            one for one in listing.sub_actors if one.id != actor.id
+        ] + [actor]
+        save_sub_actors(destination, listing)
+        return _ok(
+            f"{actor.id} added. The list has {len(listing.sub_actors)}:\n{listing.summary()}"
+        )
+
+    @tool(
+        "drop_sub_actor",
+        "Remove a sub-actor from the environment's list, when the person you work with asks for it or "
+        "this agent's users would never have them around. Refused while any scenario includes it.",
+        schema({"id": str}, ["id"]),
+    )
+    async def drop_sub_actor(args: dict[str, Any]) -> dict[str, Any]:
+        sub_actor_id = str(args.get("id") or "")
+        listing = load_sub_actors(destination)
+        if listing.get(sub_actor_id) is None:
+            return _err(f"Not dropped. {sub_actor_id!r} is not on the list.")
+        using = scenarios_using(destination, sub_actor_id)
+        if using:
+            return _err(
+                f"Not dropped. These scenarios include {sub_actor_id}: "
+                + ", ".join(using)
+            )
+        listing.sub_actors = [
+            one for one in listing.sub_actors if one.id != sub_actor_id
+        ]
+        save_sub_actors(destination, listing)
+        return _ok(f"{sub_actor_id} dropped. The list has {len(listing.sub_actors)}.")
+
+    return [add_sub_actor, drop_sub_actor]
 
 
 def world_tools(
@@ -1671,7 +1763,17 @@ def world_tools(
                 and not world.handlers
                 else "\nNo world checks of your own yet. Add them with add_world_check."
             )
-        return _ok(f"{report.summary()}\nscore {report.score:.2f}{own}{stuck}")
+        listed = ""
+        if (
+            sub_actors_enabled()
+            and available_channels(str(contract.modality or ""))
+            and not load_sub_actors(destination).sub_actors
+        ):
+            listed = (
+                "\nNo sub-actors on the list yet. Add who this agent's users could have around "
+                "them with add_sub_actor."
+            )
+        return _ok(f"{report.summary()}\nscore {report.score:.2f}{own}{listed}{stuck}")
 
     @tool(
         "save_world",
@@ -1886,7 +1988,8 @@ def world_tools(
             run_env_command,
             check_world,
             save_world,
-        ],
+        ]
+        + (sub_actor_tools(contract, destination) if sub_actors_enabled() else []),
     )
     return server, world
 

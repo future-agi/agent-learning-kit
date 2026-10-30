@@ -2055,3 +2055,75 @@ def test_a_tool_result_sent_as_text_is_read_back_into_its_shape():
     assert _structured("[INFO] booked") == "[INFO] booked"
     assert _structured({"id": 7}) == {"id": 7}
     assert len(_structured("x" * 5000)) == 2000
+
+
+def test_a_call_keeps_who_its_sub_actors_were_and_what_happened_to_each(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from fi.alk.harness.sub_actor import SubActor, SubActorList, save_sub_actors
+    from fi.simulate.simulation.sub_actors import LOUDNESS_RANGE
+
+    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+    _job_obj, context = _context(tmp_path=tmp_path)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    document = context.bundle_dir / "scenarios" / "k1" / "scenario.json"
+    body = json.loads(document.read_text())
+    body["sub_actors"] = [
+        {
+            "id": "near",
+            "instruction": "You want them to hurry.",
+            "trigger": {"kind": "always"},
+        }
+    ]
+    document.write_text(json.dumps(body))
+    save_sub_actors(
+        context.bundle_dir,
+        SubActorList(
+            sub_actors=[
+                SubActor(
+                    id="near",
+                    name="Rowan",
+                    role="someone with the person",
+                    channel="audio_mix",
+                )
+            ]
+        ),
+    )
+    summary = [
+        {
+            "sub_actor": "near",
+            "name": "Rowan",
+            "triggered": True,
+            "delivered": 1,
+            "dropped": [],
+        }
+    ]
+    events = [{"sub_actor": "near", "kind": "delivered", "text": "Hurry up"}]
+
+    async def place_call(spec):
+        return _report(
+            result_metadata={"sub_actors": summary, "sub_actor_events": events}
+        )
+
+    adapter = FakeAdapter()
+    runner = cr.CallRunnerImpl(adapter, context, place_call=place_call)
+    outcome = _run(
+        runner,
+        _FakeScenario("k1"),
+        _runtime(metadata={"livekit_agent_name": "agent-w0"}),
+    )
+    assert outcome.sub_actors == tuple(summary)
+    [transcript] = [
+        json.loads(data)
+        for kind, _key, data in adapter.uploads
+        if kind is cr.ArtifactKind.TRANSCRIPT
+    ]
+    record = transcript["sub_actors"]
+    assert record["summary"] == summary and record["events"] == events
+    [resolved] = record["resolved"]
+    assert (resolved["id"], resolved["instruction"]) == (
+        "near",
+        "You want them to hurry.",
+    )
+    low, high = LOUDNESS_RANGE
+    assert low <= resolved["loudness_ratio"] <= high

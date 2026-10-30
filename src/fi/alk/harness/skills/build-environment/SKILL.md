@@ -730,6 +730,20 @@ fixed value wrong at a time. A check that fails a correct agent is refused as to
 value that no check notices when wrong is refused as unchecked. The five steps above are how you pass
 these the first time.
 
+## Sub-actors
+
+Only when `add_sub_actor` is offered. A sub-actor is someone on the person's side who is not the
+person, whom the agent has to cope with: someone with them who speaks up, or takes over from them for a
+while. Never anyone on the agent's side: the agent, its staff and its systems are what is being
+tested, so the run never plays them. Read the contract and add one for each channel `add_sub_actor` offers
+that this agent's users could have around them.
+
+The list says who each one is: a name that is never the person's, a `role` (who they are to the
+person: a friend, a relative, a colleague; never someone there to help with the person's request), and a
+`persona` in the person's fields, true to who they are in this world, from which their
+voice is chosen. What they do is written by each scenario that includes them, so the list carries no
+script. Never add one for a situation the agent's users would not be in.
+
 ## If the contract is wrong
 
 You will sometimes find the contract does not match the source: a tool recorded with the wrong

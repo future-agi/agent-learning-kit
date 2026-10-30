@@ -40,14 +40,16 @@ import re
 import threading
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol, Sequence
 
 from . import observability
 from .job import FailureDomain, HarnessStage
+from .sub_actor import sub_actors_enabled
 from .checks import reference_of, takes_reference
 from .joint_judge import OFF_SCRIPT
+from .judge import INCONCLUSIVE, NOT_APPLICABLE
 from .judge import judge_sub_goal as _judge
 from .outbound import (
     HostedAttemptSupersededError,
@@ -252,6 +254,8 @@ class CallOutcome:
     target_metrics: dict[str, Any] | None = None
     # A local path the judge can play; the artifacts above are ids the sandbox cannot read back.
     recording: str | None = None
+    # Per sub-actor in the call: whether it was triggered, how much it delivered, and why any was dropped.
+    sub_actors: tuple[dict[str, Any], ...] = ()
 
 
 class CallAborted(RuntimeError):
@@ -321,6 +325,18 @@ class SubGoalResult:
     held: bool | None
     reason: str | None
     judged: bool
+    # Derived from held and reason, so a result changed with `replace` never disagrees with it.
+    verdict: str | None = field(default=None, init=False)
+
+    def __post_init__(self) -> None:
+        reason = self.reason or ""
+        # The judge marks these in the reason with the held value it gives them; both must agree.
+        if self.held is True and reason.startswith(NOT_APPLICABLE):
+            object.__setattr__(self, "verdict", "not_applicable")
+        elif self.held is None and reason.startswith(INCONCLUSIVE):
+            object.__setattr__(self, "verdict", "inconclusive")
+        elif self.held is not None:
+            object.__setattr__(self, "verdict", "pass" if self.held else "fail")
 
 
 @dataclass(frozen=True)
@@ -363,6 +379,8 @@ class ResultReceipt:
     evaluations: tuple[Evaluation, ...]
     call: CallSummary | None
     failure: ReceiptFailure | None
+    # Why a scenario was skipped, when there is a reason to give.
+    reason: str | None = None
 
 
 # --- outbound (this module's own minimal sink; see the module docstring's decoupling note) ----
@@ -408,6 +426,7 @@ _CODE_DOMAIN: dict[str, FailureDomain] = {
     "judge_undecided": FailureDomain.SIMULATOR,
     "caller_off_script": FailureDomain.SIMULATOR,
     "evidence_missing": FailureDomain.SIMULATOR,
+    "sub_actor_missing": FailureDomain.SIMULATOR,
     "world_usage": FailureDomain.SIMULATOR,
     "world_unavailable": FailureDomain.ENVIRONMENT,
     "state_too_large": FailureDomain.SIMULATOR,
@@ -1519,6 +1538,28 @@ class RunResult:
     fenced: BaseException | None = None
 
 
+def _sub_actors_missing(scenario: Scenario, outcome: CallOutcome) -> str:
+    """Which of the scenario's sub-actors never said a line, and why; one a `probability` draw left out is absent
+    by design and not counted."""
+    reports = {str(one.get("sub_actor")): one for one in outcome.sub_actors}
+    missing = []
+    for sub_actor_id in getattr(scenario, "sub_actors", ()):
+        report = reports.get(sub_actor_id) or {}
+        if not report.get("delivered") and report.get("drawn", True):
+            name = report.get("name") or sub_actor_id
+            why = "; ".join(report.get("dropped") or ()) or (
+                "never triggered" if not report.get("triggered") else "no line"
+            )
+            missing.append(f"{name} did not join the call ({why})")
+    return ", ".join(missing)
+
+
+def _switched_off(scenario: Scenario) -> bool:
+    """A scenario with sub-actors while they are off: running it without them would look like a normal
+    result for a test that never happened."""
+    return bool(getattr(scenario, "sub_actors", ())) and not sub_actors_enabled()
+
+
 def _skipped_receipt(scenario: Scenario) -> ResultReceipt:
     # Exact body per outbound-channels.md Channel 2, "skipped receipt body (exact)".
     return ResultReceipt(
@@ -1531,6 +1572,7 @@ def _skipped_receipt(scenario: Scenario) -> ResultReceipt:
         evaluations=(),
         call=None,
         failure=None,
+        reason="sub-actors are switched off" if _switched_off(scenario) else None,
     )
 
 
@@ -1717,6 +1759,8 @@ class HostedScheduler:
                     or self._pool.fenced is not None
                     or self._cancel_requested()
                 ):
+                    return
+                if _switched_off(scenario):
                     return
                 context = _ScenarioContext()
                 try:
@@ -2232,6 +2276,17 @@ class HostedScheduler:
         # Set the moment the call step returns, so a crash later in this method (e.g.
         # `world.read_only()` below) still reports the call that genuinely ran, not `null`.
         context.call = self._call_summary(call_outcome)
+        missing = _sub_actors_missing(scenario, call_outcome)
+        if missing:
+            # The scenario's sub-actor is part of the test; a call it never reached tested something else.
+            return self._fault(
+                scenario,
+                world_index,
+                attempt,
+                _failure("sub_actor_missing", missing),
+                sub_goals=_unjudged(scenario.sub_goals),
+                call=self._call_summary(call_outcome),
+            )
         calls = list(
             call_outcome.calls
         )  # m12: `folder.py::_RUNNABLE` expects a list, not a tuple.

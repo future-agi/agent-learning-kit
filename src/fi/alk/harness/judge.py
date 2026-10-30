@@ -25,6 +25,8 @@ from typing import Any, Callable, Sequence
 
 import requests
 
+from fi.simulate.simulation.sub_actors import someone_else
+
 from .backends import SessionSpec, tool, tool_server
 from .catalogue import criteria_text
 from .config import chosen_model, provider_env
@@ -121,6 +123,10 @@ recording, the transcript, the actions or the records.
 """.strip()
 
 
+NOT_APPLICABLE = "Not applicable: "
+INCONCLUSIVE = "Inconclusive: "
+
+
 def verdict_of(args: dict[str, Any]) -> tuple[bool | None, str]:
     """A `decide` call as (held, explanation); inconclusive is undecided."""
     explanation = str(args.get("explanation") or "").strip()
@@ -128,9 +134,9 @@ def verdict_of(args: dict[str, Any]) -> tuple[bool | None, str]:
     if not verdict and isinstance(args.get("passed"), bool):
         verdict = "pass" if args["passed"] else "fail"
     if verdict == "not_applicable":
-        return True, f"Not applicable: {explanation}"
+        return True, f"{NOT_APPLICABLE}{explanation}"
     if verdict == "inconclusive":
-        return None, f"Inconclusive: {explanation}"
+        return None, f"{INCONCLUSIVE}{explanation}"
     return verdict == "pass", explanation
 
 
@@ -395,11 +401,18 @@ async def request_final_verdicts(
         logger.warning("judge's final request for %s could not run: %s", evidence.label, exc)
 
 
-def describe_call(agent_instructions: str, scenario: Any, calls: Sequence[Any], recording: str | None) -> str:
+def describe_call(
+    agent_instructions: str,
+    scenario: Any,
+    calls: Sequence[Any],
+    recording: str | None,
+    messages: Sequence[Any] = (),
+) -> str:
     """What every judging mode tells the judge about the call, after the sub-goals themselves."""
     return (
         f"The agent's own instructions:\n{agent_instructions.strip() or '(not given)'}\n\n"
         f"{_customer_side(scenario)}"
+        f"{_others_present(messages)}"
         f"{_reference_solution(scenario)}"
         f"Actions the agent took:\n{_dump_calls(calls)}\n\n"
         + (
@@ -448,7 +461,7 @@ async def judge_sub_goal(
         f"Sub-goal {name!r}: {getattr(goal, 'what', '') or '(no summary)'}\n\n"
         + compared(goal)
         + f"Criteria:\n{criteria_text(getattr(goal, 'judged', ''))}\n\n"
-        + describe_call(agent_instructions, scenario, calls, recording)
+        + describe_call(agent_instructions, scenario, calls, recording, messages)
         + "Look as needed, then call decide."
     )
     ask = "Everything needed is above. Call decide now with its verdict."
@@ -545,11 +558,34 @@ def _reference_solution(scenario: Any) -> str:
 _SPEAKERS = {"user": "Customer", "assistant": "Agent"}
 
 
+def _speaker(message: dict[str, Any]) -> str:
+    role = str(message.get("role") or "")
+    if role == "sub_actor":
+        return someone_else(str(message.get("name") or ""))
+    return _SPEAKERS.get(role, role or "unknown")
+
+
+def _others_present(messages: Sequence[Any]) -> str:
+    """Who else spoke, so a request is attributed to the person who made it."""
+    names = sorted(
+        {
+            str(m.get("name") or "someone else")
+            for m in messages
+            if isinstance(m, dict) and m.get("role") == "sub_actor"
+        }
+    )
+    if not names:
+        return ""
+    return (
+        f"Also heard during the call: {', '.join(names)}. They are not the person being served: the agent "
+        "acts on that person's requests, and a request from anyone else is ignored or checked with them.\n\n"
+    )
+
+
 def _transcript(messages: Sequence[Any]) -> str:
     """The turns as spoken, oldest first. A long call keeps its tail, where a readback would be."""
     body = "\n".join(
-        f"{_SPEAKERS.get(str(m.get('role')), m.get('role') or 'unknown')}: "
-        f"{str(m.get('content') or '').strip()}"
+        f"{_speaker(m)}: {str(m.get('content') or '').strip()}"
         for m in messages
         if isinstance(m, dict)
     )

@@ -4363,27 +4363,43 @@ def test_a_sub_goal_settled_by_both_fails_when_either_fails(monkeypatch) -> None
         return {goal.name: (True, f"{goal.name} said right") for goal in goals}
 
     goals = [
-        FakeSubGoal("saved_feedback", lambda w, c: "no feedback row", judged="judge", both=True),
-        FakeSubGoal("confirmed", lambda w, c: "ignored for a judged-only sub-goal", judged="judge"),
+        FakeSubGoal(
+            "saved_feedback", lambda w, c: "no feedback row", judged="judge", both=True
+        ),
+        FakeSubGoal(
+            "confirmed",
+            lambda w, c: "ignored for a judged-only sub-goal",
+            judged="judge",
+        ),
     ]
     receipt, _ = _two_judged(monkeypatch, _all, goals=goals)
-    held = {g.name: (g.held, g.reason) for g in receipt.sub_goals}
-    assert held["saved_feedback"] == (False, "no feedback row saved_feedback said right")
-    assert held["confirmed"] == (True, "confirmed said right")
+    held = {g.name: (g.held, g.reason, g.verdict) for g in receipt.sub_goals}
+    assert held["saved_feedback"] == (
+        False,
+        "no feedback row saved_feedback said right",
+        "fail",
+    )
+    assert held["confirmed"] == (True, "confirmed said right", "pass")
     assert receipt.status == "failed"
 
 
-def test_a_sub_goal_settled_by_both_takes_the_judge_when_the_check_holds(monkeypatch) -> None:
+def test_a_sub_goal_settled_by_both_takes_the_judge_when_the_check_holds(
+    monkeypatch,
+) -> None:
     async def _all(goals, world, calls, *, messages=()):
         return {"saved_feedback": (False, "the saved text left out the charging fault")}
 
-    goals = [FakeSubGoal("saved_feedback", lambda w, c: None, judged="judge", both=True)]
+    goals = [
+        FakeSubGoal("saved_feedback", lambda w, c: None, judged="judge", both=True)
+    ]
     receipt, _ = _two_judged(monkeypatch, _all, goals=goals)
     assert receipt.sub_goals[0].held is False
     assert receipt.sub_goals[0].reason == "the saved text left out the charging fault"
 
 
-def test_a_customer_off_script_marks_the_call_invalid_and_keeps_its_verdicts(monkeypatch) -> None:
+def test_a_customer_off_script_marks_the_call_invalid_and_keeps_its_verdicts(
+    monkeypatch,
+) -> None:
     from fi.alk.harness.joint_judge import OFF_SCRIPT
 
     async def _all(goals, world, calls, *, messages=()):
@@ -4610,3 +4626,130 @@ def test_job_tool_requirement_uses_observed_calls(required, with_calls, expected
         await pool.close()
 
     asyncio.run(scenario())
+
+
+def test_a_scenario_with_sub_actors_is_never_run_while_they_are_off_and_says_why(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("HARNESS_SUB_ACTORS", raising=False)
+
+    async def scenario() -> tuple[hs.RunResult, FakeCallRunner]:
+        outbound = FakeOutbound()
+        pool, _ = _pool(1, outbound=outbound)
+        await pool.start()
+        runner = FakeCallRunner({"plain": _call_outcome()})
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=runner,
+            outbound=outbound,
+            job_seed=1,
+        )
+        with_one = FakeScenario(
+            "with-one", "id-1", sub_goals=[FakeSubGoal("g", lambda w, c: None)]
+        )
+        with_one.sub_actors = ("friend",)
+        plain = FakeScenario(
+            "plain",
+            "id-2",
+            sub_goals=[FakeSubGoal("g", lambda w, c: None)],
+            requires_tool_evidence=False,
+        )
+        result = await asyncio.wait_for(scheduler.run([with_one, plain]), timeout=5.0)
+        await pool.close()
+        return result, runner
+
+    result, runner = asyncio.run(scenario())
+    assert [call[0] for call in runner.calls] == ["plain"]
+    skipped, ran = result.receipts
+    assert (skipped.status, skipped.reason) == (
+        "skipped",
+        "sub-actors are switched off",
+    )
+    assert ran.status == "passed" and ran.reason is None
+
+
+def _run_with_friend(monkeypatch, summary, sub_goals) -> hs.ResultReceipt:
+    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+
+    async def scenario() -> hs.ResultReceipt:
+        outbound = FakeOutbound()
+        pool, _ = _pool(1, outbound=outbound)
+        await pool.start()
+        outcome = replace(_call_outcome(), sub_actors=(summary,) if summary else ())
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=FakeCallRunner({"s1": outcome}),
+            outbound=outbound,
+            job_seed=1,
+        )
+        one = FakeScenario(
+            "s1", "id-1", sub_goals=sub_goals, requires_tool_evidence=False
+        )
+        # As `scenario_source` compiles it for a hosted run: the ids alone.
+        one.sub_actors = ("friend",)
+        result = await asyncio.wait_for(scheduler.run([one]), timeout=5.0)
+        await pool.close()
+        return result.receipts[0]
+
+    return asyncio.run(scenario())
+
+
+def _friend(**seen) -> dict:
+    return {
+        "sub_actor": "friend",
+        "name": "Rowan",
+        "triggered": True,
+        "delivered": 0,
+        "dropped": [],
+        **seen,
+    }
+
+
+def test_a_sub_actor_that_never_joined_errors_the_call_instead_of_grading_it(
+    monkeypatch,
+) -> None:
+    for seen, why in (
+        (
+            _friend(dropped=["not ready in time"]),
+            "Rowan did not join the call (not ready in time)",
+        ),
+        (_friend(triggered=False), "Rowan did not join the call (never triggered)"),
+        (None, "friend did not join the call (never triggered)"),
+    ):
+        receipt = _run_with_friend(
+            monkeypatch, seen, [FakeSubGoal("booked", lambda w, c: None)]
+        )
+        assert receipt.status == "errored"
+        assert (receipt.failure.code, receipt.failure.message) == (
+            "sub_actor_missing",
+            why,
+        )
+        assert [one.verdict for one in receipt.sub_goals] == [None]
+
+
+def test_a_sub_actor_a_probability_draw_left_out_leaves_the_call_graded(monkeypatch) -> None:
+    receipt = _run_with_friend(
+        monkeypatch,
+        _friend(triggered=False, drawn=False),
+        [FakeSubGoal("booked", lambda w, c: None)],
+    )
+    assert (receipt.status, receipt.failure) == ("passed", None)
+
+
+def test_a_sub_actor_that_came_in_leaves_the_call_s_result_as_graded(
+    monkeypatch,
+) -> None:
+    receipt = _run_with_friend(
+        monkeypatch,
+        _friend(delivered=1),
+        [FakeSubGoal("booked", lambda w, c: None)],
+    )
+    assert (receipt.status, receipt.reason) == ("passed", None)
+    failed = _run_with_friend(
+        monkeypatch,
+        _friend(delivered=1, dropped=["voice failed"]),
+        [FakeSubGoal("booked", lambda w, c: "booked for the wrong time")],
+    )
+    assert failed.status == "failed"
