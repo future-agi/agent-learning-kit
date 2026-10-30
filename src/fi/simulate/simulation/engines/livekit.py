@@ -1348,7 +1348,8 @@ class _TestRunnerAgent(Agent):
                         time.monotonic() - started,
                     )
                 frames += 1
-                self._hear_own_voice(frame)
+                if self._sub_actor_turn is not None:
+                    self._hear_own_voice(frame)
                 yield frame
         except asyncio.CancelledError:
             state = "cancelled"
@@ -3780,7 +3781,12 @@ async def _forward_target_transcription(
                     getattr(session, "current_agent", None), message
                 )
                 return
-        if sub_actor_turn is not None and await sub_actor_turn(transcript):
+        ended = conversation_ended is not None and conversation_ended.is_set()
+        if (
+            sub_actor_turn is not None
+            and not ended
+            and await sub_actor_turn(transcript)
+        ):
             # Someone else holds the line and has answered this turn; the person stays silent.
             message = session.history.add_message(role="user", content=transcript)
             await _remember_answered_turn(

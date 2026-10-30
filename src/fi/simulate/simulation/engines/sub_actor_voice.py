@@ -249,7 +249,7 @@ class SubActorsOnCall:
         """One agent turn. True while a sub-actor holds the phone, so the person stays silent."""
         self.agent_turns += 1
         tools = []
-        if self.tools_called:
+        if self.tools_called and self.cast.waits_on_tools():
             try:
                 tools = list(
                     await asyncio.wait_for(
@@ -305,13 +305,13 @@ class SubActorsOnCall:
             self.cast.finish(voice.actor)
             return False
         asked = self.clock()
+        limit = self.cast.line_limit(HANDOFF_LINE_SECONDS)
         try:
             text, frames, done = await asyncio.wait_for(
-                written or self._written(voice, heard),
-                self.cast.line_limit(HANDOFF_LINE_SECONDS),
+                written or self._written(voice, heard), limit
             )
         except asyncio.TimeoutError:
-            self.cast.late(voice.actor)
+            self.cast.late(voice.actor, cut_by_call_time=limit < HANDOFF_LINE_SECONDS)
             self.cast.finish(voice.actor)
             return False
         except Exception as exc:  # noqa: BLE001 - a failed line hands the phone back, never fails the call
@@ -350,11 +350,11 @@ class SubActorsOnCall:
             self._pending.pop(key, None)
             return
         asked = self.clock()
+        limit = self.cast.line_limit(HANDOFF_LINE_SECONDS)
         try:
             try:
                 text, frames, _done = await asyncio.wait_for(
-                    self._written(voice, heard),
-                    self.cast.line_limit(HANDOFF_LINE_SECONDS),
+                    self._written(voice, heard), limit
                 )
             finally:
                 self.cast.line_settled()
@@ -373,7 +373,7 @@ class SubActorsOnCall:
                 voice.actor, text, self.agent_turns, started, self.clock(), asked
             )
         except asyncio.TimeoutError:
-            self.cast.late(voice.actor)
+            self.cast.late(voice.actor, cut_by_call_time=limit < HANDOFF_LINE_SECONDS)
         except asyncio.CancelledError:
             self.cast.dropped(voice.actor, "call ended before it was said")
         except Exception as exc:  # noqa: BLE001 - a quiet background voice is a weaker test, never a failed call
@@ -440,7 +440,7 @@ def world_access(dsn: str) -> Callable[[], list[str]] | None:
 
     def tools_called() -> list[str]:
         try:
-            return [str(record.get("name")) for record in read_tool_trace(dsn)]
+            return [str(record.get("name")) for record in read_tool_trace(dsn, timeout_ms=2000)]
         except Exception:  # noqa: BLE001 - not knowing the tools so far never holds up the call
             logger.warning("sub-actors could not read the tool trace", exc_info=True)
             return []

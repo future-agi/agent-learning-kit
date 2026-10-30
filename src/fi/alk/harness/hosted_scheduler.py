@@ -330,9 +330,10 @@ class SubGoalResult:
 
     def __post_init__(self) -> None:
         reason = self.reason or ""
-        if reason.startswith(NOT_APPLICABLE):
+        # The judge marks these in the reason with the held value it gives them; both must agree.
+        if self.held is True and reason.startswith(NOT_APPLICABLE):
             object.__setattr__(self, "verdict", "not_applicable")
-        elif reason.startswith(INCONCLUSIVE):
+        elif self.held is None and reason.startswith(INCONCLUSIVE):
             object.__setattr__(self, "verdict", "inconclusive")
         elif self.held is not None:
             object.__setattr__(self, "verdict", "pass" if self.held else "fail")

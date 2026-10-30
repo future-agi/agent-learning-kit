@@ -117,21 +117,6 @@ async def complete_text(model: Any, context: Any) -> str:
     return "".join(parts)
 
 
-async def synthesize_frames(tts: Any, text: str) -> list[Any]:
-    """The audio frames this voice speaks the text in, streamed when the voice can stream: the
-    gateway relays a speech vendor's stream, not its one-shot endpoint."""
-    if not getattr(getattr(tts, "capabilities", None), "streaming", False):
-        async with tts.synthesize(text) as spoken:
-            return [item.frame async for item in spoken]
-    stream = tts.stream()
-    try:
-        stream.push_text(text)
-        stream.end_input()
-        return [item.frame async for item in stream]
-    finally:
-        await stream.aclose()
-
-
 def caller_language(persona: Any) -> str | None:
     data = getattr(persona, "persona", {}) or {}
     language = data.get("language") or data.get("languages")
@@ -408,7 +393,8 @@ class CallerBargeIn:
                     )
                     continue
                 break
-            frames = await synthesize_frames(self.tts, phrase)
+            async with self.tts.synthesize(phrase) as stream:
+                frames = [item.frame async for item in stream]
             if frames and not self._closed:
                 await self.audio_output.prepare(frames[0])
                 self._candidate = (phrase, frames)

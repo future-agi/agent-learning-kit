@@ -720,6 +720,11 @@ def _voiced_sub_actors(
         if actor is None or "voice" not in CHANNELS.get(actor.channel, {}).get(
             "modalities", ()
         ):
+            logger.warning(
+                "sub-actor %s does not enter: %s",
+                included.id,
+                "not in the environment's list" if actor is None else "not a voice channel",
+            )
             continue
         persona = {**actor.persona, "name": actor.name}
         voice = persona_voice(persona, tts_provider, frozenset(taken), cartesia_key)
@@ -793,15 +798,15 @@ def _clear_tool_trace_calls(dsn: str) -> None:
         )
 
 
-def read_tool_trace(dsn: str) -> list[dict[str, Any]]:
+def read_tool_trace(dsn: str, *, timeout_ms: int | None = None) -> list[dict[str, Any]]:
     """The world's tool trace so far, in call order, read without writing."""
     import psycopg
 
+    options = "-c default_transaction_read_only=on"
+    if timeout_ms is not None:
+        options += f" -c statement_timeout={timeout_ms}"
     with psycopg.connect(
-        dsn,
-        autocommit=True,
-        connect_timeout=5,
-        options="-c default_transaction_read_only=on -c statement_timeout=2000",
+        dsn, autocommit=True, connect_timeout=5, options=options
     ) as connection:
         cursor = connection.execute(
             f'SELECT name, arguments, result, ok, error, at FROM "{_TOOL_TRACE_TABLE}" '  # noqa: S608
@@ -1368,12 +1373,16 @@ class CallRunnerImpl:
             call_environ.pop("HARNESS_BACKGROUND_PLACE", None)
 
         setting = _setting(self._context.job.agent.config, call_environ)
-        voices = _voiced_sub_actors(
-            doc,
-            self._context.bundle_dir,
-            voice_providers(setting)[1],
-            setting("CARTESIA_API_KEY"),
-            run_id,
+        voices = (
+            _voiced_sub_actors(
+                doc,
+                self._context.bundle_dir,
+                voice_providers(setting)[1],
+                setting("CARTESIA_API_KEY"),
+                run_id,
+            )
+            if doc.get("sub_actors") and sub_actors_enabled()
+            else []
         )
         call_environ.pop(SUB_ACTOR_WORLD_ALIAS, None)
         if voices:

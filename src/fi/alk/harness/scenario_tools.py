@@ -12,6 +12,7 @@ scenario that clears all three is written out as its own folder of runnable file
 from __future__ import annotations
 
 import json
+import os
 import re
 import logging
 from collections import Counter
@@ -299,7 +300,9 @@ def worth_delegating(wanted: int) -> bool:
     return int(wanted or 0) >= FEWEST_WORTH_DELEGATING
 
 
-def persona_properties() -> dict[str, Any]:
+def persona_properties(
+    languages: str = "The one language the caller speaks on the call.",
+) -> dict[str, Any]:
     """Who a person is, in the platform's own persona fields: the simulated user's and every sub-actor's."""
     return {
         "name": {"type": "string"},
@@ -312,7 +315,7 @@ def persona_properties() -> dict[str, Any]:
         "languages": {
             "type": "array",
             "items": persona_field("languages"),
-            "description": "The one language this person speaks in the conversation.",
+            "description": languages,
         },
         "accent": persona_field("accent"),
     }
@@ -1462,7 +1465,9 @@ def scenario_tools(
         """The share of scenarios that include a sub-actor: what the person asked for through
         `aim_for`, else this environment's default."""
         asked = target.get("sub_actor_share")
-        return float(asked) if asked is not None else default_share(str(destination))
+        if asked is not None:
+            return float(asked)
+        return default_share(os.environ.get("ALK_HARNESS_JOB_ID") or str(destination))
 
     def usable_sub_actors() -> list[str]:
         """The listed sub-actors a run can deliver to this agent."""
@@ -2017,9 +2022,14 @@ def scenario_tools(
             short = _red_team_short(args, target.get("axes"), kept, cap())
             if short:
                 return _refuse(short)
-        # Held in every build; the person's own share replaces it.
-        short = _sub_actors_short(
-            args, kept, cap(), sub_actor_share(), usable_sub_actors()
+        # Held in every build for new scenarios; the person's own share replaces it. A scenario
+        # already in the suite is never refused for it, so editing one never changes what it tests.
+        short = (
+            ""
+            if any(one.name == same for one in kept)
+            else _sub_actors_short(
+                {**args, "name": same}, kept, cap(), sub_actor_share(), usable_sub_actors()
+            )
         )
         if short:
             return _refuse(short)

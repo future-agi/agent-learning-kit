@@ -9621,6 +9621,51 @@ def test_the_coverage_plan_and_the_world_view_name_the_environment_s_sub_actors(
     assert "no level is named" not in aimed
 
 
+def test_editing_a_scenario_written_before_sub_actors_existed_is_never_refused_for_the_share(
+    tmp_path, monkeypatch
+):
+    import asyncio
+
+    from fi.alk.harness.scenario_tools import scenario_tools
+    from fi.alk.harness.sub_actor import save_sub_actors
+
+    root, contract, _catalogue = _built_environment(tmp_path)
+    voice = contract.model_copy(update={"modality": "voice"})
+    monkeypatch.delenv("HARNESS_SUB_ACTORS", raising=False)
+    server, kept = scenario_tools(voice, root, root, wanted=4)
+    submit = next(one for one in server.tools if one.name == "submit_scenario")
+    persona = {
+        "name": "Asha Rao",
+        "personality": "Friendly and cooperative",
+        "communication_style": "Direct and concise",
+        "initial_message": "Hi, I want a Big Mac.",
+        "languages": ["English"],
+        "accent": "Neutral",
+        "gender": "female",
+        "age_group": "25-32",
+    }
+    for name, caller in (
+        ("adds-one", "Asha Rao"),
+        ("adds-two", "Ravi Kumar"),
+        ("adds-three", "Lena Park"),
+        ("adds-four", "Omar Haddad"),
+    ):
+        said = asyncio.run(
+            submit.handler(_delta(name=name, persona={**persona, "name": caller}))
+        )
+        assert not said.get("is_error"), said
+
+    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+    save_sub_actors(root, _listed(_SECOND))
+    server, kept = scenario_tools(voice, root, root, wanted=4)
+    edit = next(one for one in server.tools if one.name == "edit_scenario")
+    said = asyncio.run(
+        edit.handler({"scenario_key": kept[0].scenario_key, "persona": {"name": "Meera Iyer"}})
+    )
+    assert not said.get("is_error"), said
+    assert kept[0].persona.name == "Meera Iyer"
+
+
 def test_a_suite_keeps_its_share_of_scenarios_with_a_sub_actor_unless_the_person_set_another():
     from types import SimpleNamespace
 
@@ -9681,6 +9726,15 @@ def test_aim_for_reports_the_default_share_and_takes_the_person_s_own(
         f"At least {at_least(share, 40)} of the 40 scenarios include a sub-actor"
         in said()
     )
+    job = next(
+        f"job-{n}" for n in range(100) if at_least(default_share(f"job-{n}"), 40) != at_least(share, 40)
+    )
+    monkeypatch.setenv("ALK_HARNESS_JOB_ID", job)
+    assert (
+        f"At least {at_least(default_share(job), 40)} of the 40 scenarios include a sub-actor"
+        in said()
+    )
+    monkeypatch.delenv("ALK_HARNESS_JOB_ID")
     assert "At least 16 of the 40" in said(sub_actor_share=40)
     assert "No scenario includes a sub-actor, as the person asked" in said(
         sub_actor_share=0

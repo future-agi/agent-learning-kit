@@ -66,6 +66,21 @@ def _actor(key: str, channel: str = "audio_handoff", **trigger) -> dict:
             Moment(2, last_text="お会計の合計は千円です"),
             True,
         ),
+        (
+            {"kind": "on_keyword", "words": ["no"]},
+            Moment(2, last_text="I know the way."),
+            False,
+        ),
+        (
+            {"kind": "on_keyword", "words": ["no"]},
+            Moment(2, last_text="No, that is not right."),
+            True,
+        ),
+        (
+            {"kind": "on_keyword", "words": ["card on file"]},
+            Moment(2, last_text="I will use the card on file."),
+            True,
+        ),
         ({"kind": "probability", "p": 1}, Moment(1), True),
     ],
 )
@@ -246,7 +261,8 @@ def test_a_sub_actor_s_brief_carries_the_situation_its_part_and_the_conversation
     told = with_others("The person's situation.", [_actor("one"), _actor("two", "ivr")])
     assert (
         "One (someone with the person) may take the phone" in told
-        and "Two (someone with the person) answers your line first" in told
+        and "Two (someone with the person) may answer your line before you do" in told
+        and "if the agent speaks to you first, answer as yourself" in told
     )
 
 
@@ -559,7 +575,7 @@ def test_delivered_lines_land_in_the_transcript_where_they_were_heard():
 
 
 def test_a_scenario_s_sub_actors_reach_the_call_resolved_in_voices_no_one_else_has(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, caplog
 ):
     from fi.alk.harness.call_runner import _voiced_sub_actors
     from fi.alk.harness.sub_actor import SubActor, SubActorList, save_sub_actors
@@ -594,6 +610,7 @@ def test_a_scenario_s_sub_actors_reach_the_call_resolved_in_voices_no_one_else_h
                 "trigger": {"kind": "mid_journey", "turn": 2},
             },
             {"id": "writer", "instruction": "x"},
+            {"id": "gone", "instruction": "x"},
         ],
     }
     monkeypatch.delenv("HARNESS_SUB_ACTORS", raising=False)
@@ -601,6 +618,8 @@ def test_a_scenario_s_sub_actors_reach_the_call_resolved_in_voices_no_one_else_h
     monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
     voiced = _voiced_sub_actors(doc, tmp_path, "deepgram", "", "run")
     assert [one["id"] for one in voiced] == ["near"]
+    assert "sub-actor writer does not enter: not a voice channel" in caplog.text
+    assert "sub-actor gone does not enter: not in the environment's list" in caplog.text
     near = voiced[0]
     from fi.alk.harness.simulator_voice import persona_voice
 
@@ -627,7 +646,7 @@ def test_a_voice_already_on_the_call_is_avoided_while_the_provider_has_another()
 def test_a_tool_trace_that_cannot_be_read_never_holds_up_the_call(monkeypatch):
     from fi.alk.harness import call_runner
 
-    def unreadable(_dsn):
+    def unreadable(_dsn, **_):
         raise RuntimeError("relation does not exist")
 
     monkeypatch.setattr(call_runner, "read_tool_trace", unreadable)
@@ -651,6 +670,19 @@ def test_the_tool_trace_is_read_only_for_a_sub_actor_that_enters_on_a_tool_call(
     asyncio.run(turn({"kind": "mid_journey", "turn": 5}))
     assert reads == []
     asyncio.run(turn({"kind": "on_tool", "tool": "lookup"}))
+    assert reads == [1]
+
+    async def two_turns():
+        call, _said, _played = _on_call(
+            [_Voice(_actor("one", kind="on_tool", tool="lookup"), ["Hi"])],
+            tools_called=tools_called,
+        )
+        await call.agent_turn("Hello")
+        await call.agent_turn("Anything else?")
+        await call.close()
+
+    reads.clear()
+    asyncio.run(two_turns())
     assert reads == [1]
 
 
@@ -841,3 +873,47 @@ def test_a_sub_actor_is_never_told_it_may_answer_for_the_person():
     )
     assert "unless" not in brief
     assert "what they came for is theirs to say" in brief
+
+
+def test_only_the_per_turn_read_is_bounded_and_evidence_reads_are_not(monkeypatch):
+    from types import SimpleNamespace
+
+    import psycopg
+
+    from fi.alk.harness import call_runner
+
+    seen = []
+
+    class _Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def execute(self, _sql):
+            return SimpleNamespace(description=[], fetchall=lambda: [])
+
+    def connect(_dsn, **kwargs):
+        seen.append(kwargs["options"])
+        return _Connection()
+
+    monkeypatch.setattr(psycopg, "connect", connect)
+    call_runner.read_tool_trace("postgresql://world")
+    voice_engine.world_access("postgresql://world")()
+    assert "statement_timeout" not in seen[0]
+    assert "statement_timeout=2000" in seen[1]
+
+
+def test_a_line_late_on_its_own_limit_never_ends_the_call_s_sub_actor_time():
+    now = [0.0]
+    cast = Cast([_actor("one"), _actor("two")], "run", clock=lambda: now[0])
+    cast.entering(Moment(2))
+    first = cast.line_limit(registry.HANDOFF_LINE_SECONDS)
+    cast.delivered(cast.actors[1], "a line", 2, 0.0, 50.0, 0.0)
+    second = cast.line_limit(registry.HANDOFF_LINE_SECONDS)
+    assert first == registry.HANDOFF_LINE_SECONDS and second < first
+    cast.late(cast.actors[0], cut_by_call_time=first < registry.HANDOFF_LINE_SECONDS)
+    assert not cast.out_of_time()
+    cast.late(cast.actors[1], cut_by_call_time=second < registry.HANDOFF_LINE_SECONDS)
+    assert cast.out_of_time()

@@ -620,7 +620,12 @@ def sub_actor_tools(contract: AgentContract, destination: Path) -> list[Any]:
                 "name": str,
                 "role": str,
                 "channel": {"type": "string", "enum": available_channels(modality)},
-                "persona": {"type": "object", "properties": persona_properties()},
+                "persona": {
+                    "type": "object",
+                    "properties": persona_properties(
+                        "The one language this person speaks in the conversation."
+                    ),
+                },
             },
             ["id", "name", "role", "channel"],
         ),

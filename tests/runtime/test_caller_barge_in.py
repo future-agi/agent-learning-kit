@@ -488,36 +488,3 @@ def test_audio_overlap_requires_energy_on_both_recorded_channels(tmp_path) -> No
     controller.measure_audio(str(path), started)
     assert controller.events[0]["audio_overlap_ms"] >= 250
     assert controller.summary()["audio_verified_overlaps"] == 1
-
-
-def test_a_voice_that_streams_is_spoken_over_its_stream():
-    """The gateway relays a speech vendor's stream and not its one-shot endpoint."""
-    from fi.simulate.simulation.engines.caller_barge_in import synthesize_frames
-
-    class _Stream:
-        def __init__(self):
-            self.text, self.ended, self.closed = "", False, False
-
-        def push_text(self, text):
-            self.text += text
-
-        def end_input(self):
-            self.ended = True
-
-        def __aiter__(self):
-            async def frames():
-                yield SimpleNamespace(frame=self.text)
-
-            return frames()
-
-        async def aclose(self):
-            self.closed = True
-
-    stream = _Stream()
-    tts = SimpleNamespace(
-        capabilities=SimpleNamespace(streaming=True),
-        stream=lambda: stream,
-        synthesize=None,
-    )
-    assert asyncio.run(synthesize_frames(tts, "Hello")) == ["Hello"]
-    assert stream.ended and stream.closed

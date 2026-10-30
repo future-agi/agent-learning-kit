@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import random
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -33,7 +34,8 @@ CHANNELS: dict[str, dict[str, Any]] = {
         "modalities": {"voice"},
         "about": "a phone menu on the person's own line that answers a call the agent places, before the person, "
         "and puts the call through to them",
-        "tells_person": "{who} answers your line first. Say nothing until it has put the call through to you.",
+        "tells_person": "{who} may answer your line before you do. If it does, say nothing until it has put the call "
+        "through to you; if the agent speaks to you first, answer as yourself.",
         "setting": "You are the automated phone menu that answers this line before a person does.",
     },
 }
@@ -177,6 +179,14 @@ class Moment:
     tools_called: list[str] = field(default_factory=list)
 
 
+def _whole(word: str) -> str:
+    """A keyword as a pattern that never matches inside a longer word; scripts written without
+    spaces between words match anywhere, as they have no word edge to stop at."""
+    start = r"\b" if word[0].isascii() and word[0].isalnum() else ""
+    end = r"\b" if word[-1].isascii() and word[-1].isalnum() else ""
+    return f"{start}{re.escape(word)}{end}"
+
+
 def due(
     trigger: dict[str, Any], moment: Moment, *, seed: str, sub_actor_id: str
 ) -> bool:
@@ -192,12 +202,12 @@ def due(
         )
     if kind == "on_keyword":
         words = [
-            str(one).strip().lower()
+            str(one).strip().casefold()
             for one in trigger.get("words") or []
             if str(one).strip()
         ]
         said = moment.last_text.casefold()
-        return any(word.casefold() in said for word in words)
+        return any(re.search(_whole(word), said) for word in words)
     if kind == "probability":
         drawn = seeded(seed, sub_actor_id, "enters").random() < float(
             trigger.get("p") or 0
@@ -254,7 +264,6 @@ class Cast:
         self.clock = clock
         self._started_at: float | None = None
         self._spent = 0.0
-        self._budget_bound = False
         self._time_up = False
         self._waiting_lines = 0
         self._state = {
@@ -295,11 +304,20 @@ class Cast:
             self._waiting.clear()
         return self._time_up
 
+    def waits_on_tools(self) -> bool:
+        """Whether a sub-actor that enters on a tool call has yet to be triggered."""
+        return any(
+            str((actor.get("trigger") or {}).get("kind")) == "on_tool"
+            and not self._state[str(actor["id"])]["entered"]
+            and not self._state[str(actor["id"])]["done"]
+            and str(actor["id"]) not in self._waiting
+            and str(actor["id"]) not in self._held
+            for actor in self.actors
+        )
+
     def line_limit(self, seconds: float) -> float:
         """How long the next line may take to be ready: its own limit, never past the call's time."""
-        left = self.remaining()
-        self._budget_bound = left < seconds
-        return min(seconds, left)
+        return min(seconds, self.remaining())
 
     def line_wanted(self, actor: dict[str, Any]) -> bool:
         """Room for one more line to be written; a line due while the queue is full is dropped."""
@@ -313,9 +331,9 @@ class Cast:
         """A line asked for is ready, or dropped."""
         self._waiting_lines = max(0, self._waiting_lines - 1)
 
-    def late(self, actor: dict[str, Any]) -> None:
+    def late(self, actor: dict[str, Any], *, cut_by_call_time: bool) -> None:
         """A line not ready within its limit, or cut off by the call's sub-actor time."""
-        if self._budget_bound:
+        if cut_by_call_time:
             # It waited out the rest of the call's sub-actor time.
             self._spent = SUB_ACTOR_SECONDS
         self.dropped(actor, TIME_UP if self.out_of_time() else "not ready in time")
