@@ -440,7 +440,10 @@ def world_access(dsn: str) -> Callable[[], list[str]] | None:
 
     def tools_called() -> list[str]:
         try:
-            return [str(record.get("name")) for record in read_tool_trace(dsn, timeout_ms=2000)]
+            return [
+                str(record.get("name"))
+                for record in read_tool_trace(dsn, timeout_ms=2000)
+            ]
         except Exception:  # noqa: BLE001 - not knowing the tools so far never holds up the call
             logger.warning("sub-actors could not read the tool trace", exc_info=True)
             return []

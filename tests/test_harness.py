@@ -9660,7 +9660,9 @@ def test_editing_a_scenario_written_before_sub_actors_existed_is_never_refused_f
     server, kept = scenario_tools(voice, root, root, wanted=4)
     edit = next(one for one in server.tools if one.name == "edit_scenario")
     said = asyncio.run(
-        edit.handler({"scenario_key": kept[0].scenario_key, "persona": {"name": "Meera Iyer"}})
+        edit.handler(
+            {"scenario_key": kept[0].scenario_key, "persona": {"name": "Meera Iyer"}}
+        )
     )
     assert not said.get("is_error"), said
     assert kept[0].persona.name == "Meera Iyer"
@@ -9727,7 +9729,9 @@ def test_aim_for_reports_the_default_share_and_takes_the_person_s_own(
         in said()
     )
     job = next(
-        f"job-{n}" for n in range(100) if at_least(default_share(f"job-{n}"), 40) != at_least(share, 40)
+        f"job-{n}"
+        for n in range(100)
+        if at_least(default_share(f"job-{n}"), 40) != at_least(share, 40)
     )
     monkeypatch.setenv("ALK_HARNESS_JOB_ID", job)
     assert (

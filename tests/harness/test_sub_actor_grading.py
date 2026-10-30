@@ -20,7 +20,11 @@ from fi.alk.harness.hosted_scheduler import (
         (True, "Not applicable: the situation never arose.", "not_applicable"),
         (None, "Inconclusive: the recording could not be played.", "inconclusive"),
         (None, None, None),
-        (False, "Not applicable: was the agent's own answer, and it was wrong.", "fail"),
+        (
+            False,
+            "Not applicable: was the agent's own answer, and it was wrong.",
+            "fail",
+        ),
         (True, "Inconclusive: at first, then the record showed the change.", "pass"),
     ],
 )
