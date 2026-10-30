@@ -303,5 +303,4 @@ Never tell the caller what the agent should do. They are on the phone, not readi
 speaks to the person, never into the phone; someone who could take the phone from them
 (`audio_handoff`), who takes it, speaks to the agent and hands it back; and, for an agent that places
 calls, the person's own phone menu (`ivr`), which answers before they do and puts the call through,
-so it enters with `always`. A voicemail or answering machine is not a sub-actor: nobody is put
-through, and a scenario sets it with `answered_by`.
+so it enters with `always`.

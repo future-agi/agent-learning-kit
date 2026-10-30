@@ -9,7 +9,8 @@ description: What a scenario has to account for when a mailbox answers an outbou
 An outbound call reaches voicemail often, and an agent that runs its interactive script at a
 recording is a real defect nobody hears about until a customer does. Set `answered_by: voicemail` on
 an outbound scenario and the person is replaced by a mailbox: it plays its greeting once and then
-says nothing at all, whatever the agent asks.
+says nothing at all, whatever the agent asks. A mailbox is never a sub-actor: nobody is put through,
+so it is set with `answered_by`, not `add_sub_actor`.
 
 What is being tested is entirely on the agent's side. Does it notice it is talking to a machine
 rather than waiting for answers that will never come. Does it leave a message that stands on its own,
