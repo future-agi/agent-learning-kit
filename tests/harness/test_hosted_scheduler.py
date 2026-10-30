@@ -4676,7 +4676,7 @@ def _run_with_friend(monkeypatch, summary, sub_goals) -> hs.ResultReceipt:
         outbound = FakeOutbound()
         pool, _ = _pool(1, outbound=outbound)
         await pool.start()
-        outcome = replace(_call_outcome(), sub_actors=(summary,))
+        outcome = replace(_call_outcome(), sub_actors=(summary,) if summary else ())
         scheduler = hs.HostedScheduler(
             pool=pool,
             world_factory=FakeWorldFactory(),
@@ -4707,17 +4707,35 @@ def _friend(**seen) -> dict:
     }
 
 
-def test_a_sub_actor_that_never_came_in_leaves_the_call_graded_on_its_sub_goals(
+def test_a_sub_actor_that_never_joined_errors_the_call_instead_of_grading_it(
     monkeypatch,
 ) -> None:
-    for seen in (_friend(dropped=["voice failed"]), _friend(triggered=False)):
+    for seen, why in (
+        (
+            _friend(dropped=["not ready in time"]),
+            "Rowan did not join the call (not ready in time)",
+        ),
+        (_friend(triggered=False), "Rowan did not join the call (never triggered)"),
+        (None, "friend did not join the call (never triggered)"),
+    ):
         receipt = _run_with_friend(
             monkeypatch, seen, [FakeSubGoal("booked", lambda w, c: None)]
         )
-        assert (receipt.status, receipt.reason) == ("passed", None)
-        assert [(one.name, one.verdict) for one in receipt.sub_goals] == [
-            ("booked", "pass")
-        ]
+        assert receipt.status == "errored"
+        assert (receipt.failure.code, receipt.failure.message) == (
+            "sub_actor_missing",
+            why,
+        )
+        assert [one.verdict for one in receipt.sub_goals] == [None]
+
+
+def test_a_sub_actor_a_probability_draw_left_out_leaves_the_call_graded(monkeypatch) -> None:
+    receipt = _run_with_friend(
+        monkeypatch,
+        _friend(triggered=False, drawn=False),
+        [FakeSubGoal("booked", lambda w, c: None)],
+    )
+    assert (receipt.status, receipt.failure) == ("passed", None)
 
 
 def test_a_sub_actor_that_came_in_leaves_the_call_s_result_as_graded(
@@ -4731,7 +4749,7 @@ def test_a_sub_actor_that_came_in_leaves_the_call_s_result_as_graded(
     assert (receipt.status, receipt.reason) == ("passed", None)
     failed = _run_with_friend(
         monkeypatch,
-        _friend(dropped=["voice failed"]),
+        _friend(delivered=1, dropped=["voice failed"]),
         [FakeSubGoal("booked", lambda w, c: "booked for the wrong time")],
     )
     assert failed.status == "failed"

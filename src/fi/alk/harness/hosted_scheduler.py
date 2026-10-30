@@ -426,6 +426,7 @@ _CODE_DOMAIN: dict[str, FailureDomain] = {
     "judge_undecided": FailureDomain.SIMULATOR,
     "caller_off_script": FailureDomain.SIMULATOR,
     "evidence_missing": FailureDomain.SIMULATOR,
+    "sub_actor_missing": FailureDomain.SIMULATOR,
     "world_usage": FailureDomain.SIMULATOR,
     "world_unavailable": FailureDomain.ENVIRONMENT,
     "state_too_large": FailureDomain.SIMULATOR,
@@ -1537,6 +1538,22 @@ class RunResult:
     fenced: BaseException | None = None
 
 
+def _sub_actors_missing(scenario: Scenario, outcome: CallOutcome) -> str:
+    """Which of the scenario's sub-actors never said a line, and why; one a `probability` draw left out is absent
+    by design and not counted."""
+    reports = {str(one.get("sub_actor")): one for one in outcome.sub_actors}
+    missing = []
+    for sub_actor_id in getattr(scenario, "sub_actors", ()):
+        report = reports.get(sub_actor_id) or {}
+        if not report.get("delivered") and report.get("drawn", True):
+            name = report.get("name") or sub_actor_id
+            why = "; ".join(report.get("dropped") or ()) or (
+                "never triggered" if not report.get("triggered") else "no line"
+            )
+            missing.append(f"{name} did not join the call ({why})")
+    return ", ".join(missing)
+
+
 def _switched_off(scenario: Scenario) -> bool:
     """A scenario with sub-actors while they are off: running it without them would look like a normal
     result for a test that never happened."""
@@ -2259,6 +2276,17 @@ class HostedScheduler:
         # Set the moment the call step returns, so a crash later in this method (e.g.
         # `world.read_only()` below) still reports the call that genuinely ran, not `null`.
         context.call = self._call_summary(call_outcome)
+        missing = _sub_actors_missing(scenario, call_outcome)
+        if missing:
+            # The scenario's sub-actor is part of the test; a call it never reached tested something else.
+            return self._fault(
+                scenario,
+                world_index,
+                attempt,
+                _failure("sub_actor_missing", missing),
+                sub_goals=_unjudged(scenario.sub_goals),
+                call=self._call_summary(call_outcome),
+            )
         calls = list(
             call_outcome.calls
         )  # m12: `folder.py::_RUNNABLE` expects a list, not a tuple.

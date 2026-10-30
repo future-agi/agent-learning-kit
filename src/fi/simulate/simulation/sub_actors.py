@@ -44,8 +44,8 @@ TRIGGER_ABOUT: dict[str, str] = {
     "always": "after the agent's first turn (a phone menu answers the call itself)",
     "mid_journey": "after the agent's turn `turn`",
     "on_tool": "on call `on_call` of the agent's tool `tool`, a tool that runs in the simulated world "
-    "(one that runs only inside the agent cannot be seen)",
-    "on_keyword": "when one of `words` is in the agent's latest turn",
+    "(one that runs only inside the agent cannot be seen), or after the agent's turn 4 if that call never comes",
+    "on_keyword": "when one of `words` is in the agent's latest turn, or after the agent's turn 4 if none is said",
     "probability": "with chance `p`, drawn once per call from the run's seed",
 }
 TRIGGERS = tuple(TRIGGER_ABOUT)
@@ -108,6 +108,8 @@ TOOLS_READ_SECONDS = 1.0
 CONVERSATION_LINES = 12
 MAX_ACTIVE = 2
 TAKEOVER_AFTER_TURNS = 4
+# A sub-actor in a scenario always joins: one waiting on a tool call or a word enters at this turn if it never comes.
+LATEST_ENTRY_TURN = 4
 # Someone can only take the phone from a person who already has it: not before the agent's second turn, by
 # which point the person has spoken at least once. A trigger that fires earlier waits for that turn.
 TAKES_PHONE_FROM_TURN = 2
@@ -187,6 +189,13 @@ def _whole(word: str) -> str:
     return f"{start}{re.escape(word)}{end}"
 
 
+def drawn(trigger: dict[str, Any], *, seed: str, sub_actor_id: str) -> bool:
+    """Whether this call is one a `probability` sub-actor comes into; every other kind always does."""
+    if str(trigger.get("kind")) != "probability":
+        return True
+    return seeded(seed, sub_actor_id, "enters").random() < float(trigger.get("p") or 0)
+
+
 def due(
     trigger: dict[str, Any], moment: Moment, *, seed: str, sub_actor_id: str
 ) -> bool:
@@ -197,8 +206,9 @@ def due(
         return moment.agent_turns >= int(trigger.get("turn") or 0) >= 1
     if kind == "on_tool":
         tool = str(trigger.get("tool") or "")
-        return bool(tool) and moment.tools_called.count(tool) >= int(
-            trigger.get("on_call") or 1
+        return moment.agent_turns >= LATEST_ENTRY_TURN or (
+            bool(tool)
+            and moment.tools_called.count(tool) >= int(trigger.get("on_call") or 1)
         )
     if kind == "on_keyword":
         words = [
@@ -207,12 +217,13 @@ def due(
             if str(one).strip()
         ]
         said = moment.last_text.casefold()
-        return any(re.search(_whole(word), said) for word in words)
-    if kind == "probability":
-        drawn = seeded(seed, sub_actor_id, "enters").random() < float(
-            trigger.get("p") or 0
+        return moment.agent_turns >= LATEST_ENTRY_TURN or any(
+            re.search(_whole(word), said) for word in words
         )
-        return moment.agent_turns >= 1 and drawn
+    if kind == "probability":
+        return moment.agent_turns >= 1 and drawn(
+            trigger, seed=seed, sub_actor_id=sub_actor_id
+        )
     return False
 
 
@@ -462,6 +473,12 @@ class Cast:
                     for e in self.events
                 ),
                 "delivered": self._state[str(actor["id"])]["lines"],
+                # False only for a `probability` sub-actor this call's draw left out: absent by design.
+                "drawn": drawn(
+                    dict(actor.get("trigger") or {}),
+                    seed=self.seed,
+                    sub_actor_id=str(actor["id"]),
+                ),
                 "dropped": [
                     e["reason"]
                     for e in self.events

@@ -43,14 +43,26 @@ def _actor(key: str, channel: str = "audio_handoff", **trigger) -> dict:
         ({"kind": "mid_journey", "turn": 3}, Moment(3), True),
         (
             {"kind": "on_tool", "tool": "lookup", "on_call": 2},
-            Moment(4, tools_called=["lookup"]),
+            Moment(3, tools_called=["lookup"]),
             False,
         ),
         (
             {"kind": "on_tool", "tool": "lookup", "on_call": 2},
-            Moment(4, tools_called=["lookup", "lookup"]),
+            Moment(3, tools_called=["lookup", "lookup"]),
             True,
         ),
+        ({"kind": "on_tool", "tool": "lookup"}, Moment(4), True),
+        (
+            {"kind": "on_keyword", "words": ["refund"]},
+            Moment(3, last_text="Your total is ready."),
+            False,
+        ),
+        (
+            {"kind": "on_keyword", "words": ["refund"]},
+            Moment(4, last_text="Your total is ready."),
+            True,
+        ),
+        ({"kind": "probability", "p": 0.0001}, Moment(9), False),
         (
             {"kind": "on_keyword", "words": ["refund"]},
             Moment(2, last_text="Your total is ready."),
@@ -209,6 +221,7 @@ def test_the_summary_tells_triggered_delivered_and_dropped_apart():
             "name": "One",
             "triggered": True,
             "delivered": 1,
+            "drawn": True,
             "dropped": [],
         },
         {
@@ -216,6 +229,7 @@ def test_the_summary_tells_triggered_delivered_and_dropped_apart():
             "name": "Two",
             "triggered": True,
             "delivered": 0,
+            "drawn": True,
             "dropped": ["not ready in time"],
         },
         {
@@ -223,6 +237,7 @@ def test_the_summary_tells_triggered_delivered_and_dropped_apart():
             "name": "Three",
             "triggered": False,
             "delivered": 0,
+            "drawn": True,
             "dropped": [],
         },
     ]
@@ -543,6 +558,7 @@ def test_the_person_s_menu_answers_first_or_never_enters_when_the_agent_spoke_fi
         "name": "Menu",
         "triggered": False,
         "delivered": 0,
+        "drawn": True,
         "dropped": [],
     }
     assert call.events()[0]["kind"] == "not_entered"
