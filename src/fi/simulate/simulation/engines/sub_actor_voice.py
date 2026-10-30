@@ -36,6 +36,10 @@ _HOW = {
     "ivr": "Say the menu's next prompt, under 30 words. Output only the prompt. When the agent's reply is what "
     f"you are waiting for, output only {_DONE} and the call is put through.",
 }
+# Someone who has just taken the phone always says something of their own before handing it back.
+_FIRST_HANDOFF = (
+    "You have just taken the phone: say your line now, never only " + _DONE + "."
+)
 
 
 async def voiced(tts: Any, text: str) -> AsyncIterator[Any] | None:
@@ -161,7 +165,10 @@ class SubActorVoice:
             conversation=conversation,
             language=self.language,
         )
-        context.add_message(role="user", content=brief + "\n\n" + _HOW[self.channel])
+        how = _HOW[self.channel]
+        if self.channel == "audio_handoff" and not self.said:
+            how += " " + _FIRST_HANDOFF
+        context.add_message(role="user", content=brief + "\n\n" + how)
         written = await complete_text(self.model, context)
         # Wherever the model put the marker, it is never spoken.
         done = _DONE in written
@@ -323,6 +330,8 @@ class SubActorsOnCall:
         if not frames:
             if text:
                 self.cast.dropped(voice.actor, "voice failed")
+            elif not voice.said:
+                self.cast.dropped(voice.actor, "wrote no line")
             self.cast.finish(voice.actor)
             return False
         started = self.clock()

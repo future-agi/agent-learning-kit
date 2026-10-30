@@ -457,6 +457,28 @@ def test_someone_who_takes_the_phone_holds_it_until_done_and_only_one_holds_it_a
     assert [one["delivered"] for one in summary] == [2, 1]
 
 
+def test_someone_who_just_took_the_phone_is_never_offered_to_say_nothing(monkeypatch):
+    briefs = []
+
+    async def complete(model, context):
+        briefs.append(context.items[-1].text_content)
+        return "Is the six-seater free?"
+
+    async def voice(tts, said):
+        return said or None
+
+    monkeypatch.setattr(voice_engine, "complete_text", complete)
+    monkeypatch.setattr(voice_engine, "voiced", voice)
+    speaker = voice_engine.SubActorVoice(
+        actor=_actor("one"), model=None, tts="voice", situation="s", language=""
+    )
+    asyncio.run(speaker.line([]))
+    speaker.said.append("Is the six-seater free?")
+    asyncio.run(speaker.line([]))
+    assert voice_engine._FIRST_HANDOFF in briefs[0]
+    assert voice_engine._FIRST_HANDOFF not in briefs[1]
+
+
 class _StatusError(Exception):
     status_code = 429
 
@@ -465,6 +487,7 @@ class _StatusError(Exception):
     "lines, delay, reason",
     [
         (["silent"], 0.0, "voice failed"),
+        (["[DONE]"], 0.0, "wrote no line"),
         ([RuntimeError("model down")], 0.0, "line failed: RuntimeError"),
         ([_StatusError("quota")], 0.0, "line failed: _StatusError 429"),
         (["too late"], 0.05, "not ready in time"),
