@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 import json
 import os
 import shutil
@@ -5905,3 +5906,27 @@ def test_limited_workers_seed_the_action_log_that_keeps_whose_attempt_was_refuse
 
     assert _action_log_seed(tmp_path) == _AGENT_TRACE_DDL
     assert _action_log_seed(tmp_path, workers=True).startswith(_TOOL_TRACE_DDL)
+
+
+def test_a_separately_wired_worker_s_tool_address_points_at_its_own_channel_on_the_tool_proxy(tmp_path):
+    from fi.alk.harness.bundle_author_v2 import EnvironmentPlanV2, _tool_proxy_process, _with_worker_channels
+
+    agent = _tool_proxy_process().model_copy(update={"name": "agent", "environment": {"A": "1"}, "depends_on": []})
+    plan = EnvironmentPlanV2(
+        packaging="process",
+        control_service="agent",
+        processes=(agent, _tool_proxy_process().model_copy(update={"depends_on": []})),
+        capabilities={},
+        readiness=(),
+    )
+    contract = {
+        "workers": [
+            {"id": "refund", "binding": "separate", "address_env": "REFUND_API_URL"},
+            {"id": "order_lookup", "binding": "shared", "address_env": "LOOKUP_API_URL"},
+        ]
+    }
+    wired = {p.name: p.environment for p in _with_worker_channels(plan, contract).processes}
+    assert wired["agent"] == {"A": "1", "REFUND_API_URL": "{{TOOLS_API_URL}}/w/{{WORKER_CHANNEL_refund}}"}
+    assert "REFUND_API_URL" not in wired["tool-proxy"]
+    without_proxy = replace(plan, processes=(agent,))
+    assert _with_worker_channels(without_proxy, contract) is without_proxy

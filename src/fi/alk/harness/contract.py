@@ -210,6 +210,10 @@ class DeclaredWorker(BaseModel):
     name: str = ""
     # The contract tools this worker holds, by name.
     tools: list[str] = Field(default_factory=list)
+    # separate: the worker's tools can be told apart from the others' at the world; shared: they cannot.
+    binding: Literal["separate", "shared"] = "shared"
+    # For a separate worker, the environment variable its tool client reads as the base address of its tools.
+    address_env: str = ""
 
 
 class PromptSource(BaseModel):

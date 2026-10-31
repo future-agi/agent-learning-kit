@@ -60,8 +60,12 @@ Find, in roughly this order:
    schema, a tool array. Record the exact callable name the model would emit, not a friendly
    label.
 
-   If the agent hands work to other agents, record each one in `workers`: an `id`, the `name` the
-   app gives it, and the contract tools it holds. Every worker tool is also in `tools`.
+   If the agent hands work to other agents (a sub-agent called as a tool, a hand-off, graph nodes,
+   a crew), record each one in `workers`: an `id`, the `name` the app gives it, the contract tools
+   it holds, and `binding: separate` when its tools are reached through code of their own rather
+   than code the agents share, with `address_env` naming the environment variable that code reads
+   for its tools' base address. Every worker tool is also in `tools`. If the repository carries a
+   multi-agent reference manifest, read its topology.
 
 2. **Argument names and types.** Read the signature. An argument declared as a list is a
    different tool from one declared as a single value, and an environment built on the wrong one
