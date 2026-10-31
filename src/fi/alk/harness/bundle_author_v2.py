@@ -1623,6 +1623,27 @@ def _hands_off_to_livekit_cli(root: Path, entry: str) -> bool:
     return "cli.run_app" in path.read_text(encoding="utf-8", errors="replace")
 
 
+_PORT_ENVIRONMENT_READ = re.compile(
+    r"""(?:environ(?:\.get\(\s*|\[\s*)|getenv\(\s*)["']PORT["']"""
+    r"""|(?:process|Bun)\.env\.PORT\b"""
+)
+_SOURCE_SUFFIXES = {".py", ".js", ".mjs", ".cjs", ".ts", ".tsx"}
+
+
+def _reads_port_from_environment(root: Path) -> bool:
+    """Whether the source reads ``PORT``. Without that read its port may be hard-coded."""
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root)
+        if path.suffix not in _SOURCE_SUFFIXES or not path.is_file():
+            continue
+        if any(part in _IGNORED_ARTIFACT_PARTS for part in relative.parts):
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if _PORT_ENVIRONMENT_READ.search(text):
+            return True
+    return False
+
+
 def _discover_callback_entrypoint(root: Path) -> str | None:
     """Return the repository's unique module-level ``agent_callback``, if present.
 
@@ -2762,6 +2783,20 @@ def resolve_environment_plan(
             process = _consumable_source_process(
                 process, "PORT", f"{{{{PORT_{control_name}}}}}"
             )
+        if (
+            port is not None
+            and not process.fixed_port_consumable
+            and (
+                is_graph
+                or is_callback
+                or is_command_adapter
+                or _reads_port_from_environment(component)
+            )
+        ):
+            # ``PORT`` already carries this world's port and the listener reads it: our adapter
+            # or the agent's own source. Kept as ``fixed_port``, the contract's port would force
+            # one world. Source with no such read keeps it, because it may hard-code that port.
+            process = process.model_copy(update={"fixed_port": None})
         if is_livekit:
             update: dict[str, Any] = {
                 "started_check": StartedCheck(

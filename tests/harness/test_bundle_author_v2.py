@@ -40,6 +40,7 @@ from fi.alk.harness.certification import (
 )
 from fi.alk.harness.job import HarnessJob, ProviderExecutionMode
 from fi.alk.harness.process_preflight import preflight_bundle
+from fi.alk.harness.process_runtime import plan_ports
 from fi.alk.harness.provision import source_fingerprint
 from fi.alk.harness.repair_controller import RepairHistory
 from fi.alk.harness.source_model import SourceModel
@@ -839,6 +840,7 @@ def test_callable_contract_compiles_repository_callback_adapter(
     assert "ThreadingHTTPServer" in agent.run_command[2]
     assert agent.environment["ALK_CALLBACK_ENTRYPOINT"] == "app.agent:agent_callback"
     assert agent.environment["PORT"] == "{{PORT_agent}}"
+    assert agent.fixed_port is None
     assert bundle.capabilities["target_http"].service == "agent"
     assert any(probe.capability == "target_http" for probe in bundle.readiness)
     preflight_bundle(
@@ -2791,6 +2793,7 @@ def test_chat_command_runtime_compiles_generic_subprocess_bridge(
     agent = next(process for process in manifest.processes if process.name == "agent")
     assert agent.source_origin == "bundle"
     assert agent.working_directory == "generated/source/agent"
+    assert agent.fixed_port is None
     assert agent.environment["ALK_SUBPROCESS_COMMAND"] == json.dumps(
         [".venv/bin/python", "main.py"]
     )
@@ -2885,6 +2888,7 @@ def test_declared_langgraph_graph_compiles_without_agent_script(tmp_path: Path) 
 
     agent = next(process for process in manifest.processes if process.name == "agent")
     assert agent.environment["ALK_LANGGRAPH_ENTRYPOINT"] == "src/example/graph.py:graph"
+    assert agent.fixed_port is None
     assert "ThreadingHTTPServer" in agent.run_command[-1]
     sealed_contract = json.loads((output / "contract.json").read_text())
     assert sealed_contract["runtime"]["interface"]["kind"] == "callable"
@@ -3033,6 +3037,106 @@ def test_declared_http_runtime_uses_contract_command_port_and_health(
         item for item in plan.readiness if item.capability == "target_http"
     )
     assert readiness.path == "/docs"
+
+
+_PLAIN_HTTP_RUNTIME = {
+    "language": "python",
+    "command": ["python", "agent.py"],
+    "workdir": ".",
+    "interface": {
+        "kind": "http",
+        "protocol": "openai_chat",
+        "path": "/chat",
+        "health_path": "/health",
+        "port": 8080,
+    },
+}
+
+
+def _plain_http_agent(source: Path, files: dict[str, str]):
+    for name, text in {"agent.py": "", **files}.items():
+        path = source / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    plan = resolve_environment_plan(
+        source,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime=_PLAIN_HTTP_RUNTIME,
+    )
+    return next(process for process in plan.processes if process.name == "agent")
+
+
+@pytest.mark.parametrize(
+    ("name", "text"),
+    [
+        ("agent.py", 'port = int(os.environ.get("PORT", "8080"))\n'),
+        ("agent.py", "port = int(os.environ['PORT'])\n"),
+        ("agent.py", 'port = int(os.getenv("PORT", 8080))\n'),
+        ("app/server.py", 'port = os.environ.get(\n    "PORT",\n    "8080",\n)\n'),
+        ("server.ts", "const port = Number(process.env.PORT ?? 8080);\n"),
+        ("server.ts", "const port = Number(Bun.env.PORT ?? 8080);\n"),
+    ],
+)
+def test_http_agent_that_reads_port_has_no_fixed_port(
+    tmp_path: Path, name: str, text: str
+) -> None:
+    agent = _plain_http_agent(tmp_path / "source", {name: text})
+    assert agent.fixed_port is None
+    assert agent.environment["PORT"] == "{{PORT_agent}}"
+    assert agent.started_check is not None and agent.started_check.port is True
+
+
+@pytest.mark.parametrize(
+    "files",
+    [
+        {"agent.py": 'ThreadingHTTPServer(("0.0.0.0", 8080), Handler)\n'},
+        {"agent.py": 'db_port = os.environ.get("DB_PORT", "5432")\n'},
+        {"agent.py": "port = process.env.PORT_ADMIN\n"},
+        {".venv/lib/uvicorn.py": 'port = os.environ.get("PORT")\n'},
+        {"node_modules/server.js": "const port = process.env.PORT;\n"},
+    ],
+)
+def test_http_agent_without_a_port_read_keeps_its_fixed_port(
+    tmp_path: Path, files: dict[str, str]
+) -> None:
+    assert _plain_http_agent(tmp_path / "source", files).fixed_port == 8080
+
+
+def test_http_agent_that_reads_port_passes_preflight_at_several_worlds(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text(
+        'port = int(os.environ.get("PORT", "8080"))\n', encoding="utf-8"
+    )
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring,
+        command=_PLAIN_HTTP_RUNTIME["command"],
+        interface=_PLAIN_HTTP_RUNTIME["interface"],
+    )
+    output = tmp_path / "bundle"
+    job = _job(connector="auto")
+
+    bundle = author_bundle_v2(
+        source=source, job=job, authoring=authoring, output=output
+    )
+
+    preflight_bundle(
+        output,
+        load_bundle_v2(output),
+        parallelism=4,
+        secret_refs={
+            alias: ref.purpose for alias, ref in job.agent.secret_refs.items()
+        },
+    )
+    plan = plan_ports(bundle, instances=4)
+    assert plan.effective_instances == 4
+    assert plan.degraded_reason is None
+    assert plan.port_for("agent", 0) != plan.port_for("agent", 1)
 
 
 @pytest.mark.parametrize("declare_mount_root", [False, True])
