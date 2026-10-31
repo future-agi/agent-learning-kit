@@ -2795,3 +2795,18 @@ def test_a_coded_sub_goal_marked_both_carries_its_criteria_and_a_legacy_one_stay
     saved, legacy = _with_claims(scenario, claims).sub_goals
     assert saved.both and saved.judged == "Pass when: it says what was reported" and saved.compares == "Reference: c"
     assert not legacy.both and legacy.judged == ""
+
+
+def test_a_catalogued_worker_subject_reaches_the_graded_sub_goal(tmp_path: Path) -> None:
+    _write_scenario(
+        tmp_path / ss.SCENARIOS_DIRNAME,
+        "coded",
+        scenario_key="coded",
+        sub_goals=["coded"],
+        checks={"coded": "def check(world, calls):\n    return None\n"},
+    )
+    scenario = ss.load_scenarios(tmp_path)[0]
+    as_task = ss._with_claims(scenario, {"coded": {"what": "x"}}).sub_goals[0]
+    as_worker = ss._with_claims(scenario, {"coded": {"what": "x", "subject": "worker:refund"}}).sub_goals[0]
+    assert (as_task.subject, as_task.worker) == ("task", "")
+    assert (as_worker.subject, as_worker.worker) == ("worker:refund", "refund")
