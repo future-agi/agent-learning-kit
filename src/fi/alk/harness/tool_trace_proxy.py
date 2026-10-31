@@ -22,6 +22,9 @@ WORKER_CHANNELS_FILE = os.environ.get("WORKER_CHANNELS_FILE", "")
 # The sealed per-worker allow-lists beside this file, {"worker:<id>": {"allow": [...]}}; a bundle without it does not
 # limit workers.
 WORKER_PERMISSIONS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "permissions.json")
+# The tool each world action is, {"orders.get": "get_order"}, sealed beside this file; a route without one is named by
+# its last path segment.
+ACTIONS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "actions.json")
 _CHANNEL_PREFIX = "/w/"
 
 
@@ -361,7 +364,8 @@ class Handler(BaseHTTPRequestHandler):
         self._reply(504, {"detail": "tool_upstream_timeout"})
 
     def _name(self) -> str:
-        return self.path.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1] or "unknown"
+        named = (_read_json(ACTIONS_FILE) or {}).get(self._action())
+        return str(named) if named else self.path.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1] or "unknown"
 
     def _send(self, body: bytes, arguments: object, key: str | None) -> None:
         outgoing = request.Request(

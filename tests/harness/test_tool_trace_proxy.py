@@ -427,3 +427,11 @@ def test_without_a_permissions_seal_a_worker_s_action_is_attributed_but_not_limi
     (tmp_path / "permissions.json").unlink()
     assert _post(url, "/w/c-lookup/records/approve", {"deal": "1"})[0] == 201
     assert [(r["worker_id"], r["outcome"]) for r in rows()] == [("order_lookup", "committed")]
+
+
+def test_a_route_named_differently_from_its_tool_is_logged_as_the_tool(worker_proxy):
+    url, rows, tmp_path = worker_proxy
+    (tmp_path / "actions.json").write_text(json.dumps({"crm.approve_discount": "grant_discount"}), encoding="utf-8")
+    assert _post(url, "/w/c-refund/crm/approve_discount", {"deal": "1"})[0] == 201
+    assert _post(url, "/ok", {"deal": "1"})[0] == 201
+    assert [r["name"] for r in rows()] == ["grant_discount", "ok"]

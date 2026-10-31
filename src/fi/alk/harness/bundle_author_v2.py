@@ -2023,16 +2023,22 @@ def _tool_proxy_process() -> SourceProcess:
     )
 
 
-def _worker_permissions(contract_body: dict[str, Any] | None) -> dict[str, dict[str, list[str]]]:
-    """Each declared worker's allow-list, as the tool proxy names world actions: the path its tool calls, dotted."""
-    contract = AgentContract.model_validate(contract_body or {})
-    endpoints = {entry.tool: entry.endpoint for entry in contract.tool_entrypoints if entry.endpoint.strip()}
+def _tool_actions(contract: AgentContract) -> dict[str, str]:
+    """Each service-backed tool's world action, as the tool proxy names it (the path the tool calls, dotted), mapped
+    to the tool's own name. A route is often named differently from its tool (`get_order` -> `/orders/get`)."""
     return {
-        f"worker:{worker.id}": {
-            "allow": sorted(
-                {endpoints.get(tool, tool).strip("/").replace("/", ".") for tool in worker.allowed_tools or worker.tools}
-            )
-        }
+        entry.endpoint.strip("/").replace("/", "."): entry.tool
+        for entry in contract.tool_entrypoints
+        if entry.endpoint.strip()
+    }
+
+
+def _worker_permissions(contract_body: dict[str, Any] | None) -> dict[str, dict[str, list[str]]]:
+    """Each declared worker's allow-list, as the tool proxy names world actions."""
+    contract = AgentContract.model_validate(contract_body or {})
+    action_of = {tool: action for action, tool in _tool_actions(contract).items()}
+    return {
+        f"worker:{worker.id}": {"allow": sorted({action_of.get(tool, tool) for tool in worker.allowed_tools or worker.tools})}
         for worker in contract.workers
     }
 
@@ -3721,7 +3727,13 @@ def author_bundle_v2(
                 Path(__file__).with_name("tool_trace_proxy.py"),
                 generated / "proxy.py",
             )
-            # Only with declared workers, so a bundle without them seals exactly as before.
+            # Only when routes and tools are recorded, so a bundle without them seals exactly as before.
+            actions = _tool_actions(AgentContract.model_validate(contract_body or {}))
+            if actions:
+                (generated / "actions.json").write_text(
+                    json.dumps(actions, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+                )
+            # Only with declared workers, likewise.
             permissions = _worker_permissions(contract_body)
             if permissions:
                 (generated / "permissions.json").write_text(

@@ -5900,6 +5900,10 @@ def test_each_declared_worker_is_sealed_with_the_world_actions_its_tools_call():
         "worker:refund": {"allow": ["list_refunds", "refunds.issue"]},
     }
     assert _worker_permissions({"tools": [{"name": "a"}]}) == {}
+    from fi.alk.harness.bundle_author_v2 import _tool_actions
+    from fi.alk.harness.contract import AgentContract
+
+    assert _tool_actions(AgentContract.model_validate(contract)) == {"orders.get": "get_order", "refunds.issue": "issue_refund"}
 
 
 def test_limited_workers_seed_the_action_log_that_keeps_whose_attempt_was_refused(tmp_path: Path) -> None:
