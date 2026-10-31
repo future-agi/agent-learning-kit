@@ -258,3 +258,20 @@ def test_a_sub_goal_names_the_task_or_one_worker_and_a_task_subject_is_saved_as_
     path = save_catalogue(Catalogue(sub_goals=[SubGoal(name="a"), SubGoal(name="b", subject="worker:refund")]), tmp_path)
     saved = json.loads(path.read_text())["sub_goals"]
     assert "subject" not in saved[0] and saved[1]["subject"] == "worker:refund"
+
+
+def test_a_worker_allowed_a_tool_it_does_not_hold_is_returned_to_authoring():
+    contract = AgentContract.model_validate(
+        {
+            "agent": "returns",
+            "real_use_cases": ["refund an order"],
+            "tools": [{"name": "get_order"}, {"name": "issue_refund"}],
+            "workers": [
+                {"id": "order_lookup", "tools": ["get_order"], "allowed_tools": ["get_order"]},
+                {"id": "refund", "tools": ["issue_refund"], "allowed_tools": ["get_order"]},
+            ],
+        }
+    )
+    assert [one.split(": ")[0] for one in validate_contract(contract)] == [
+        "worker[1]:allowed-tools-it-does-not-hold:get_order"
+    ]

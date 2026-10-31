@@ -2029,7 +2029,9 @@ def _worker_permissions(contract_body: dict[str, Any] | None) -> dict[str, dict[
     endpoints = {entry.tool: entry.endpoint for entry in contract.tool_entrypoints if entry.endpoint.strip()}
     return {
         f"worker:{worker.id}": {
-            "allow": sorted({endpoints.get(tool, tool).strip("/").replace("/", ".") for tool in worker.tools})
+            "allow": sorted(
+                {endpoints.get(tool, tool).strip("/").replace("/", ".") for tool in worker.allowed_tools or worker.tools}
+            )
         }
         for worker in contract.workers
     }

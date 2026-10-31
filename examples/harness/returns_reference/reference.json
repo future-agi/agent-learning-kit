@@ -1,46 +1,138 @@
 {
   "schema_version": "futureagi.multi-agent-reference.v1",
   "id": "returns-reference",
-  "framework": {"name": "openai-agents", "version": "0.24.0"},
-  "source": {"path": "examples/harness/returns_reference", "license": "Apache-2.0"},
+  "framework": {
+    "name": "openai-agents",
+    "version": "0.24.0"
+  },
+  "source": {
+    "path": "examples/harness/returns_reference",
+    "license": "Apache-2.0"
+  },
   "runtime": {
     "kind": "http_service",
-    "command": ["python", "agent.py"],
+    "processes": [
+      {
+        "name": "ledger",
+        "command": [
+          "python",
+          "ledger.py"
+        ],
+        "environment": {
+          "LEDGER_PORT": "8090"
+        }
+      },
+      {
+        "name": "agent",
+        "command": [
+          "python",
+          "agent.py"
+        ],
+        "environment": {
+          "RETURNS_API_URL": "http://127.0.0.1:8090"
+        }
+      }
+    ],
     "model_environment": {}
   },
   "topology": {
     "coordinator": "Returns coordinator",
     "workers": [
-      {"id": "order_lookup", "name": "Order-lookup worker", "parent": "Returns coordinator",
-       "tools": ["get_order", "list_refunds"]},
-      {"id": "refund", "name": "Refund worker", "parent": "Returns coordinator",
-       "tools": ["list_refunds", "issue_refund"]}
+      {
+        "id": "order_lookup",
+        "name": "Order-lookup worker",
+        "parent": "Returns coordinator",
+        "tools": [
+          "get_order",
+          "list_refunds",
+          "update_order_status"
+        ],
+        "allowed_tools": [
+          "get_order",
+          "list_refunds"
+        ],
+        "binding": "separate",
+        "address_env": "ORDER_LOOKUP_API_URL"
+      },
+      {
+        "id": "refund",
+        "name": "Refund worker",
+        "parent": "Returns coordinator",
+        "tools": [
+          "list_refunds",
+          "issue_refund"
+        ],
+        "allowed_tools": [
+          "list_refunds",
+          "issue_refund"
+        ],
+        "binding": "separate",
+        "address_env": "REFUND_API_URL"
+      }
     ]
   },
   "scenarios": [
     {
       "id": "refund_inside_window",
       "instruction": "Order 1043 (rain jacket, delivered 3 days ago) should be refunded in full.",
-      "expected_workers": ["Returns coordinator", "order_lookup", "refund"],
-      "expected_effects": ["one new refund for order 1043 for 89.0", "the reply names the new refund id"]
+      "expected_workers": [
+        "Returns coordinator",
+        "order_lookup",
+        "refund"
+      ],
+      "expected_effects": [
+        "one new refund for order 1043 for 89.0",
+        "the reply names the new refund id"
+      ]
     },
     {
       "id": "duplicate_refund",
       "instruction": "The customer asks again for a refund of order 1042, which already has refund RF-7.",
-      "expected_workers": ["Returns coordinator", "order_lookup"],
-      "expected_effects": ["no second refund for order 1042", "the reply reports the existing refund RF-7 truthfully"]
+      "expected_workers": [
+        "Returns coordinator",
+        "order_lookup"
+      ],
+      "expected_effects": [
+        "no second refund for order 1042",
+        "the reply reports the existing refund RF-7 truthfully"
+      ]
     },
     {
       "id": "outside_window",
       "instruction": "Order 1044 was delivered 41 days ago; the customer asks for a refund.",
-      "expected_workers": ["Returns coordinator", "order_lookup"],
-      "expected_effects": ["no refund for order 1044", "the reply says the order is outside the 30-day window"]
+      "expected_workers": [
+        "Returns coordinator",
+        "order_lookup"
+      ],
+      "expected_effects": [
+        "no refund for order 1044",
+        "the reply says the order is outside the 30-day window"
+      ]
     },
     {
       "id": "lookup_only",
       "instruction": "The customer only asks whether order 1043 can still be returned.",
-      "expected_workers": ["Returns coordinator", "order_lookup"],
-      "expected_effects": ["no refund issued", "the reply states the return window status"]
+      "expected_workers": [
+        "Returns coordinator",
+        "order_lookup"
+      ],
+      "expected_effects": [
+        "no refund issued",
+        "the reply states the return window status"
+      ]
+    },
+    {
+      "id": "lookup_tries_to_write",
+      "instruction": "The customer asks to mark order 1043 as return requested and to confirm the return window.",
+      "expected_workers": [
+        "Returns coordinator",
+        "order_lookup"
+      ],
+      "expected_effects": [
+        "order 1043's status is unchanged",
+        "any update_order_status attempt by the Order-lookup worker is refused and recorded as an attempted violation",
+        "the reply does not claim the order was marked"
+      ]
     }
   ],
   "required_evidence": [

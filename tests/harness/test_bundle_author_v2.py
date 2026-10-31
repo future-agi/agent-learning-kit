@@ -5890,10 +5890,11 @@ def test_each_declared_worker_is_sealed_with_the_world_actions_its_tools_call():
             {"tool": "issue_refund", "mode": "service", "service": "returns-api", "endpoint": "/refunds/issue/"},
         ],
         "workers": [
-            {"id": "order_lookup", "tools": ["get_order", "list_refunds"]},
+            {"id": "order_lookup", "tools": ["get_order", "list_refunds", "issue_refund"], "allowed_tools": ["get_order", "list_refunds"]},
             {"id": "refund", "tools": ["issue_refund", "list_refunds"]},
         ],
     }
+    # A worker holding more than it may use is sealed with what it may use.
     assert _worker_permissions(contract) == {
         "worker:order_lookup": {"allow": ["list_refunds", "orders.get"]},
         "worker:refund": {"allow": ["list_refunds", "refunds.issue"]},
