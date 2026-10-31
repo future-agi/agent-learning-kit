@@ -12,6 +12,7 @@ import uuid
 from collections.abc import Awaitable
 from contextlib import suppress
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -352,6 +353,8 @@ class HostedChatRuntime:
         # asked for a small repair: then consequential writes are allowed.
         self._opened_with: tuple[bool, bool] | None = None
         self._last_progress: Any = None
+        # The person's message the current turn answers, for the review's record of where a change came from.
+        self._turn_message_id = ""
         self._idle_turns = 0
         self.conversation = self._conversation()
         if isinstance(self.conversation, BuilderConversation):
@@ -567,7 +570,7 @@ class HostedChatRuntime:
 
         def guarded(servers: dict[str, Any]) -> dict[str, Any]:
             return {
-                name: replace(server, tools=[self._confirmed(one) for one in server.tools])
+                name: replace(server, tools=[self._cited(self._confirmed(one)) for one in server.tools])
                 for name, server in servers.items()
             }
 
@@ -576,6 +579,32 @@ class HostedChatRuntime:
             name: replace(worker, servers=guarded(worker.servers))
             for name, worker in spec.workers.items()
         }
+
+    def _cited(self, spec: Any) -> Any:
+        """A tool that changes the workspace notes which reviewable items it moved, and for which of the person's
+        messages, so the review can say where each change came from."""
+        if spec.name not in _WRITING_TOOLS:
+            return spec
+        handler = spec.handler
+
+        async def cited(args: dict[str, Any]) -> Any:
+            from .review_items import PROVENANCE_FILE, item_digests, moved_items
+
+            before = item_digests(self.workspace)
+            result = await handler(args)
+            moved = moved_items(before, item_digests(self.workspace))
+            if moved and not (isinstance(result, dict) and result.get("is_error")):
+                line = {
+                    "message_id": self._turn_message_id,
+                    "tool": spec.name,
+                    "items": moved,
+                    "at": datetime.now(timezone.utc).isoformat(),
+                }
+                with (self.workspace / PROVENANCE_FILE).open("a", encoding="utf-8") as out:
+                    out.write(json.dumps(line, sort_keys=True) + "\n")
+            return result
+
+        return replace(spec, handler=cited)
 
     def _confirmed(self, spec: Any) -> Any:
         """A consequential tool that runs only once the person has said yes to this very call,
@@ -1402,6 +1431,7 @@ class HostedChatRuntime:
     async def _handle_command(self, command: dict[str, Any]) -> None:
         sequence = int(command["sequence"])
         message_id = str(command["message_id"])
+        self._turn_message_id = message_id
         kind = str(command["kind"])
         payload = command.get("payload") or {}
         if kind in {"user_response", "approval"}:
