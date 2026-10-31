@@ -243,3 +243,18 @@ def test_contract_without_workers_is_unchanged():
     )
     assert contract.workers == []
     assert "WORKERS" not in contract.brief()
+
+
+def test_a_sub_goal_names_the_task_or_one_worker_and_a_task_subject_is_saved_as_before(tmp_path):
+    import json
+
+    from fi.alk.harness.catalogue import Catalogue, SubGoal, save_catalogue
+
+    assert SubGoal(name="a").subject == "task" and SubGoal(name="a").worker == ""
+    assert SubGoal(name="b", subject="worker:refund").worker == "refund"
+    for bad in ("refund", "worker:", "agent:x"):
+        with pytest.raises(ValidationError, match="subject is task or worker"):
+            SubGoal(name="c", subject=bad)
+    path = save_catalogue(Catalogue(sub_goals=[SubGoal(name="a"), SubGoal(name="b", subject="worker:refund")]), tmp_path)
+    saved = json.loads(path.read_text())["sub_goals"]
+    assert "subject" not in saved[0] and saved[1]["subject"] == "worker:refund"

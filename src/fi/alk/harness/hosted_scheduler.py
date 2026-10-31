@@ -2354,10 +2354,23 @@ class HostedScheduler:
                     )
                 )
                 continue
+            worker = getattr(goal, "worker", "")
+            lane = [one for one in calls if getattr(one, "worker_id", "") == worker] if worker else calls
+            if worker and not lane:
+                # A worker's own check with none of its calls recorded: never a pass, never a fail.
+                sub_goal_results.append(
+                    SubGoalResult(
+                        name=goal.name,
+                        held=None,
+                        reason=f"{INCONCLUSIVE}worker {worker} made no tool call the world recorded",
+                        judged=goal.judged != "",
+                    )
+                )
+                continue
             outcome = await _run_phase(
                 goal.check,
                 check_handle,
-                calls,
+                lane,
                 *((reference_of(getattr(scenario, "solution", None) or ()),) if takes_reference(goal.check) else ()),
                 timeout=CHECK_TIMEOUT_SECONDS,
                 phase="check",
