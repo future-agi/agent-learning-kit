@@ -457,6 +457,7 @@ def _load_catalogue_claims(bundle_dir: Path) -> dict[str, dict[str, str]]:
             "contract": goal.contract(),
             "both": "yes" if goal.both else "",
             "actor": goal.actor,
+            "subject": goal.subject,
         }
     return claims
 
