@@ -4841,6 +4841,10 @@ def _graded(goals, outcome):
 class _WorkerGoal(FakeSubGoal):
     worker: str = ""
 
+    @property
+    def subject(self) -> str:
+        return f"worker:{self.worker}" if self.worker else "task"
+
 
 def test_a_worker_s_check_reads_only_that_worker_s_calls_and_without_any_is_inconclusive() -> None:
     calls = (
@@ -4867,6 +4871,7 @@ def test_a_worker_s_check_reads_only_that_worker_s_calls_and_without_any_is_inco
     assert seen == {"lookup": ["get_order"], "task": ["get_order", "issue_refund", "send_reply"]}
     lookup, task, audit = receipt.sub_goals
     assert (lookup.verdict, task.verdict) == ("pass", "pass")
+    assert (lookup.subject, task.subject, audit.subject) == ("worker:order_lookup", "task", "worker:audit")
     # Absence is never a pass: a worker with nothing in the world's log cannot be graded.
     assert (audit.verdict, audit.held) == ("inconclusive", None)
     assert audit.reason == "Inconclusive: worker audit made no tool call the world recorded"

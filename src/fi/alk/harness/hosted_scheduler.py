@@ -325,6 +325,8 @@ class SubGoalResult:
     held: bool | None
     reason: str | None
     judged: bool
+    # Whose result: the task, or `worker:<id>`; reported beside the task verdict, never folded into it.
+    subject: str = "task"
     # Derived from held and reason, so a result changed with `replace` never disagrees with it.
     verdict: str | None = field(default=None, init=False)
 
@@ -2496,6 +2498,11 @@ class HostedScheduler:
                     )
                 )
                 sub_goal_results[slot] = replace(judged, held=False, reason=reason or None)
+
+        subjects = {goal.name: getattr(goal, "subject", "task") or "task" for goal in scenario.sub_goals}
+        sub_goal_results = [
+            replace(result, subject=subjects.get(result.name, "task")) for result in sub_goal_results
+        ]
 
         if broken_failure is not None:
             return self._fault(
