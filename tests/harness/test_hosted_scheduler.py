@@ -4893,3 +4893,22 @@ def test_a_worker_s_failed_check_is_reported_beside_the_task_s_verdict_not_folde
     assert (worker.verdict, audit.verdict, task.verdict, receipt.status) == ("fail", "inconclusive", "pass", "passed")
     failed = _graded([_WorkerGoal("reply_truthful", lambda w, c: "claimed a refund")], outcome)
     assert failed.status == "failed"
+
+
+def test_a_worker_that_passed_its_deadline_has_its_own_checks_inconclusive_and_the_task_still_graded() -> None:
+    calls = (
+        hs.Call(name="get_order", arguments={}, worker_id="order_lookup"),
+        hs.Call(name="issue_refund", arguments={}, worker_id="refund", ok=False, refused=True,
+                refusal_code="deadline_passed"),
+    )
+    receipt = _graded(
+        [
+            _WorkerGoal("refund_done", lambda w, c: "no refund", worker="refund"),
+            _WorkerGoal("lookup_done", lambda w, c: None, worker="order_lookup"),
+            _WorkerGoal("reply_truthful", lambda w, c: None),
+        ],
+        _call_outcome(turns=2, calls=calls),
+    )
+    refund, lookup, task = receipt.sub_goals
+    assert (refund.verdict, lookup.verdict, task.verdict) == ("inconclusive", "pass", "pass")
+    assert refund.reason == "Inconclusive: worker refund passed its deadline, so its result is partial"

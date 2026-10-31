@@ -2358,13 +2358,20 @@ class HostedScheduler:
                 continue
             worker = getattr(goal, "worker", "")
             lane = [one for one in calls if getattr(one, "worker_id", "") == worker] if worker else calls
-            if worker and not lane:
-                # A worker's own check with none of its calls recorded: never a pass, never a fail.
+            inconclusive = (
+                f"worker {worker} made no tool call the world recorded"
+                if not lane
+                else f"worker {worker} passed its deadline, so its result is partial"
+                if any(getattr(one, "refusal_code", "") == "deadline_passed" for one in lane)
+                else ""
+            ) if worker else ""
+            if inconclusive:
+                # A worker's own check with nothing, or only part, of its work recorded: never a pass, never a fail.
                 sub_goal_results.append(
                     SubGoalResult(
                         name=goal.name,
                         held=None,
-                        reason=f"{INCONCLUSIVE}worker {worker} made no tool call the world recorded",
+                        reason=f"{INCONCLUSIVE}{inconclusive}",
                         judged=goal.judged != "",
                     )
                 )

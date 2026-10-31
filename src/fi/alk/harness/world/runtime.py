@@ -172,6 +172,8 @@ class Call:
     # Part of the arguments or the result was left out to keep the record bounded.
     input_omitted: bool = False
     output_omitted: bool = False
+    # Why the world refused it, as its action log coded it (`not_permitted`, `deadline_passed`); empty otherwise.
+    refusal_code: str = ""
 
 
 def tool_call_attribution(record: Mapping[str, Any]) -> dict[str, Any]:
