@@ -37,6 +37,7 @@ import json
 import random
 import logging
 import os
+import time
 import secrets
 import stat
 import tempfile
@@ -1150,15 +1151,29 @@ def _write_trial_token(path: Path, token: str) -> None:
             raise PrivateTokenUnavailable(str(error)) from error
 
 
-def _write_trial_state(runtime: EnvironmentRuntime, faults: list[Any]) -> None:
-    """This trial's faults, beside the actor token where the world's door reads them; written by the runner only."""
+def _write_trial_state(
+    runtime: EnvironmentRuntime,
+    faults: list[Any],
+    worker_deadline_at: float | None = None,
+) -> None:
+    """This trial's faults and its workers' deadline, beside the actor token where the world's door reads them;
+    written by the runner only. Past the deadline the world refuses every worker's call (`deadline_passed`)."""
     token_path = runtime.metadata.get("actor_proof_path")
     if not isinstance(token_path, str):
-        if faults:
-            logger.warning("faults cannot be set: this world has no tool proxy reading trial state")
+        if faults or worker_deadline_at:
+            logger.warning("trial state cannot be set: this world has no tool proxy reading it")
         return
     path = Path(token_path).with_name("trial.json")
-    path.write_text(json.dumps({"faults": list(faults)}), encoding="utf-8")
+    state: dict[str, Any] = {"faults": list(faults)}
+    if worker_deadline_at:
+        state["worker_deadline_at"] = worker_deadline_at
+    path.write_text(json.dumps(state), encoding="utf-8")
+
+
+def worker_deadline(document: Mapping[str, Any]) -> float | None:
+    """When this trial's workers stop being allowed to act: its start plus the scenario's worker budget, if any."""
+    budget = document.get("worker_budget_seconds")
+    return time.time() + budget if isinstance(budget, (int, float)) and budget > 0 else None
 
 
 def _actor_dispatcher(
@@ -2022,12 +2037,14 @@ class CallRunnerImpl:
 
         async def place_with_actors() -> SimulationReport:
             faults = list(doc.get("faults") or [])
-            if faults:
-                _write_trial_state(runtime, faults)
+            deadline = worker_deadline(doc)
+            if faults or deadline:
+                _write_trial_state(runtime, faults, deadline)
             try:
                 return await place_with_world_actors()
             finally:
-                if faults:
+                if faults or deadline:
+                    # One trial's faults and deadline never carry into the next.
                     _write_trial_state(runtime, [])
 
         async def place_with_world_actors() -> SimulationReport:

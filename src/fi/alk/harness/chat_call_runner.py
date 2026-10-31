@@ -22,7 +22,9 @@ from .call_runner import (
     CallRunnerContext,
     _clear_file_tool_calls,
     _with_scenario_edits,
+    _write_trial_state,
     collect_seam_calls,
+    worker_deadline,
 )
 from .contract import AgentContract
 from .hosted_scheduler import CallAborted, CallOutcome, Scenario, World
@@ -615,6 +617,9 @@ class HostedChatCallRunner:
         transcript: Transcript | None = None
         failure: CallAborted | None = None
         _clear_file_tool_calls(runtime)
+        deadline = worker_deadline(document)
+        if deadline:
+            _write_trial_state(runtime, [], deadline)
         try:
             transcript = await _drive_conversation(
                 _HostedChatTarget(
@@ -667,6 +672,9 @@ class HostedChatCallRunner:
                     scenario_key=scenario.scenario_key,
                 )
         finally:
+            if deadline:
+                # One trial's deadline never carries into the next.
+                _write_trial_state(runtime, [])
             await _record_text_usage(
                 self._context.usage_reporter,
                 scenario_key=scenario.scenario_key,

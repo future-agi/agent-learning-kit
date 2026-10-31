@@ -83,16 +83,17 @@ def _trial_token() -> str:
         return ""
 
 
-def _trial_faults() -> list[dict]:
-    """This trial's faults on the agent's calls, written by the runner beside the token; never from a request."""
+def _trial_state() -> dict:
+    """This trial's state, written by the runner beside the token; never from a request."""
     if not ACTOR_PROOF_FILE:
-        return []
-    try:
-        with open(os.path.join(os.path.dirname(ACTOR_PROOF_FILE), "trial.json"), encoding="utf-8") as handle:
-            faults = json.load(handle).get("faults") or []
-    except (OSError, ValueError, AttributeError):
-        return []
-    return [one for one in faults if isinstance(one, dict)]
+        return {}
+    return _read_json(os.path.join(os.path.dirname(ACTOR_PROOF_FILE), "trial.json")) or {}
+
+
+def _trial_faults() -> list[dict]:
+    """This trial's faults on the agent's calls."""
+    faults = _trial_state().get("faults") or []
+    return [one for one in faults if isinstance(one, dict)] if isinstance(faults, list) else []
 
 
 def _agent_calls(name: str) -> int:
@@ -241,6 +242,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._refuse(arguments, "identity_conflict", "this channel does not belong to a worker of this trial")
                 return
             self._as["worker_id"] = worker
+            deadline = _trial_state().get("worker_deadline_at")
+            if isinstance(deadline, (int, float)) and time.time() > deadline:
+                self._refuse(arguments, "deadline_passed", f"the deadline for {worker} has passed")
+                return
             if os.path.exists(WORKER_PERMISSIONS_FILE):
                 # Present and unreadable denies: a broken seal never widens what a worker may do. A worker is
                 # checked as an actor is, through permitted(), and refused into the same action log.

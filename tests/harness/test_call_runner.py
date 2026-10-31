@@ -2804,3 +2804,22 @@ def test_a_trial_token_that_cannot_be_given_to_the_proxy_user_is_never_widened(t
     with pytest.raises(cr.PrivateTokenUnavailable):
         cr._write_trial_token(token_path, "secret")
     assert not token_path.exists()
+
+
+def test_each_trial_writes_its_worker_deadline_beside_its_faults_and_clears_it_after(tmp_path) -> None:
+    import json
+    import time
+    from types import SimpleNamespace
+
+    token = tmp_path / "tool-proxy" / "actor-token"
+    token.parent.mkdir(parents=True)
+    runtime = SimpleNamespace(metadata={"actor_proof_path": str(token)})
+    before = time.time()
+    deadline = cr.worker_deadline({"worker_budget_seconds": 30})
+    assert before + 30 <= deadline <= time.time() + 30
+    assert cr.worker_deadline({}) is None
+    cr._write_trial_state(runtime, [{"action": "ok"}], deadline)
+    state = json.loads((token.parent / "trial.json").read_text())
+    assert state == {"faults": [{"action": "ok"}], "worker_deadline_at": deadline}
+    cr._write_trial_state(runtime, [])
+    assert json.loads((token.parent / "trial.json").read_text()) == {"faults": []}

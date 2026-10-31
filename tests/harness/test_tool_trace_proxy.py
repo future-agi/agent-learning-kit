@@ -435,3 +435,24 @@ def test_a_route_named_differently_from_its_tool_is_logged_as_the_tool(worker_pr
     assert _post(url, "/w/c-refund/records/approve", {"deal": "1"})[0] == 201
     assert _post(url, "/ok", {"deal": "1"})[0] == 201
     assert [r["name"] for r in rows()] == ["grant_discount", "ok"]
+
+
+
+def test_past_its_deadline_a_worker_s_call_is_refused_and_before_it_goes_through(worker_proxy):
+    import time
+
+    url, rows, tmp_path = worker_proxy
+    # The runner writes the deadline in the trial state beside the actor token, as it writes faults.
+    state = tmp_path / "trial.json"
+    state.write_text(json.dumps({"faults": [], "worker_deadline_at": time.time() + 600}), encoding="utf-8")
+    assert _post(url, "/w/c-refund/records/approve", {"deal": "1"})[0] == 201
+    state.write_text(json.dumps({"faults": [], "worker_deadline_at": time.time() - 1}), encoding="utf-8")
+    status, payload = _post(url, "/w/c-refund/records/approve", {"deal": "2"})
+    assert status == 403 and payload == {"detail": "the deadline for refund has passed"}
+    # The agent's own calls, outside any worker's channel, are not a worker's to time out.
+    assert _post(url, "/ok", {"deal": "3"})[0] == 201
+    assert [(r["worker_id"], r["outcome"], r["refusal_code"]) for r in rows()] == [
+        ("refund", "committed", None),
+        ("refund", "refused", "deadline_passed"),
+        (None, "committed", None),
+    ]
