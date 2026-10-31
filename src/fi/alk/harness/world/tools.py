@@ -28,6 +28,7 @@ from fi.simulate.simulation.sub_actors import CHANNELS, available_channels, desc
 
 from ..backends import tool, tool_server
 
+from ..actors import Actor, ActorList, actors_enabled, load_actors, save_actors
 from ..amend import add_rule, drop_rule, fix_tool, set_modality, widen
 from ..catalogue import (
     CONTRACT_FIELDS,
@@ -1960,6 +1961,47 @@ def world_tools(
             )
         )
 
+    @tool(
+        "add_actor",
+        "Add or replace a person or system in the world who acts through the world's own actions, "
+        "never by speaking to the agent. `permitted_actions` is what the world lets them do, each "
+        "named `<service>.<action>` as the world's own route; anything else they attempt is "
+        "refused and recorded as their attempt. Who may take an action is decided by this list, "
+        "never by what anyone says.",
+        schema(
+            {"id": str, "name": str, "role": str, "kind": str, "permitted_actions": list, "identities": dict},
+            ["id", "name", "role"],
+        ),
+    )
+    async def add_actor(args: dict[str, Any]) -> dict[str, Any]:
+        listing = load_actors(destination)
+        try:
+            actor = Actor.model_validate(
+                {
+                    "id": str(args.get("id") or ""),
+                    "name": str(args.get("name") or ""),
+                    "role": str(args.get("role") or ""),
+                    "kind": str(args.get("kind") or "person"),
+                    "permitted_actions": [str(one) for one in args.get("permitted_actions") or []],
+                    "identities": {str(k): str(v) for k, v in (args.get("identities") or {}).items()},
+                }
+            )
+            kept = [one for one in listing.actors if one.id != actor.id]
+            save_actors(destination, ActorList(actors=[*kept, actor]))
+        except ValueError as exc:
+            return _err(f"Not added: {exc}")
+        return _ok(f"{actor.id} may {', '.join(actor.permitted_actions) or 'do nothing in the world'}")
+
+    @tool("drop_actor", "Remove a world actor by id.", {"id": str})
+    async def drop_actor(args: dict[str, Any]) -> dict[str, Any]:
+        listing = load_actors(destination)
+        gone = str(args.get("id") or "")
+        kept = [one for one in listing.actors if one.id != gone]
+        if len(kept) == len(listing.actors):
+            return _err(f"no actor {gone!r}. Listed: {', '.join(one.id for one in kept) or 'none'}")
+        save_actors(destination, ActorList(actors=kept))
+        return _ok(f"{gone} dropped")
+
     server = tool_server(
         name=WORLD_SERVER,
         version="0.1.0",
@@ -1988,6 +2030,7 @@ def world_tools(
             run_env_command,
             check_world,
             save_world,
+            *([add_actor, drop_actor] if actors_enabled() else []),
         ]
         + (sub_actor_tools(contract, destination) if sub_actors_enabled() else []),
     )

@@ -31,11 +31,13 @@ from __future__ import annotations
 import ast
 import atexit
 import asyncio
+import contextlib
 import gc
 import json
 import random
 import logging
 import os
+import secrets
 import stat
 import tempfile
 from dataclasses import dataclass, field, replace
@@ -61,6 +63,8 @@ from fi.simulate.simulation.sub_actors import (
     with_others,
 )
 
+from .actor_dispatch import ActorDispatcher
+from .actors import AGENT, ScenarioActor, actors_enabled, load_actors
 from .background_noise import place_of, scenario_source
 from .bundle_v2 import EvidenceSeam
 from .sub_actor import ScenarioSubActor, load_sub_actors, sub_actors_enabled
@@ -839,6 +843,9 @@ def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
 
     calls: list[Call] = []
     for record in records:
+        # Only the agent's own actions are its calls; a row from before `actor_id` existed is the agent's.
+        if (record.get("actor_id") or "agent") != "agent":
+            continue
         name = record.get("name")
         if not isinstance(name, str) or not name:
             continue
@@ -862,6 +869,106 @@ def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
             )
         )
     return tuple(calls)
+
+
+def _read_action_log(dsn: str) -> list[dict[str, Any]]:
+    """Every row of this trial's action log, every column, oldest first."""
+    import psycopg
+
+    with psycopg.connect(
+        dsn, autocommit=True, connect_timeout=5, options="-c default_transaction_read_only=on"
+    ) as connection:
+        cursor = connection.execute(f'SELECT * FROM "{_TOOL_TRACE_TABLE}" ORDER BY at ASC')  # noqa: S608
+        columns = [description[0] for description in cursor.description or []]
+        return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
+
+
+def _actor_rows(runtime: EnvironmentRuntime, bundle_dir: Path) -> list[dict[str, Any]]:
+    """This trial's actions by world actors, named and with their outcome; none for a world without actors."""
+    listed = load_actors(bundle_dir).by_id()
+    database = _find_postgres_endpoint(runtime)
+    if not listed or database is None:
+        return []
+    try:
+        log = _read_action_log(database.address)
+    except Exception as exc:  # noqa: BLE001 - no actor evidence, never a failed call
+        logger.debug("actor rows unreadable: %s", type(exc).__name__)
+        return []
+    rows = []
+    for row in log:
+        actor = listed.get(str(row.get("actor_id") or AGENT))
+        if actor is None:
+            continue
+        rows.append(
+            {
+                "name": row.get("name"),
+                "arguments": row.get("arguments") or {},
+                "result": row.get("result"),
+                "ok": bool(row.get("ok")),
+                "error": _truncate(str(row.get("error") or "")),
+                "refused": row.get("outcome") == "refused",
+                "at": row.get("at"),
+                "action_id": row.get("action_id"),
+                "actor_id": actor.id,
+                "actor_name": actor.name,
+                "actor_role": actor.role,
+                "outcome": row.get("outcome"),
+                "refusal_code": row.get("refusal_code"),
+                "parent_event_id": row.get("parent_event_id"),
+                "on_behalf_of": row.get("on_behalf_of"),
+            }
+        )
+    return rows
+
+
+def _agent_marks(runtime: EnvironmentRuntime, bundle_dir: Path, calls: Sequence[Call]) -> list[dict[str, Any]]:
+    """Each of the agent's calls' own action id and outcome, so an actor's action can name the call that
+    caused it; none unless every call is found in the log, in order."""
+    database = _find_postgres_endpoint(runtime)
+    if database is None:
+        return []
+    try:
+        log = _read_action_log(database.address)
+    except Exception:  # noqa: BLE001 - the calls are sealed as before
+        return []
+    rows = iter(row for row in log if (row.get("actor_id") or AGENT) == AGENT)
+    marks = []
+    for call in calls:
+        # In order; a row the agent's own trace does not count as a call (a lookup at start) is skipped.
+        row = next((one for one in rows if one.get("name") == call.name), None)
+        if row is None:
+            return []
+        marks.append({"action_id": row.get("action_id"), "outcome": row.get("outcome")})
+    return marks
+
+
+def _actor_dispatcher(
+    doc: Mapping[str, Any], bundle_dir: Path, runtime: EnvironmentRuntime, trial_id: str
+) -> ActorDispatcher | None:
+    """The scenario's world actors for this trial, with a fresh token only they and the proxy hold."""
+    if not doc.get("actors") or not actors_enabled():
+        return None
+    proxy = runtime.endpoints.get("tool_proxy")
+    database = _find_postgres_endpoint(runtime)
+    token_path = runtime.metadata.get("actor_proof_path")
+    if proxy is None or database is None or not isinstance(token_path, str):
+        logger.warning("world actors cannot act: this world has no tool proxy taking actor requests")
+        return None
+    token = secrets.token_hex(32)
+    path = Path(token_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(token, encoding="utf-8")
+    path.chmod(0o644)
+    cast = [ScenarioActor.model_validate(entry) for entry in doc.get("actors") or []]
+    return ActorDispatcher(
+        load_actors(bundle_dir).by_id(),
+        cast,
+        trial_id=trial_id,
+        proxy_url=proxy.address,
+        token=token,
+        read_log=lambda: _read_action_log(database.address),
+        seed=trial_id,
+    )
 
 
 def _tool_trace_file(runtime: EnvironmentRuntime) -> Path | None:
@@ -1510,6 +1617,11 @@ class CallRunnerImpl:
                     # The engine reads the live trace for on_tool triggers.
                     call_environ[SUB_ACTOR_WORLD_ALIAS] = endpoint.address
 
+        actors = (
+            _actor_dispatcher(doc, self._context.bundle_dir, runtime, spec.run_id)
+            if self._context.evidence_seam is EvidenceSeam.TOOL_TRACE
+            else None
+        )
         started_at = datetime.now(timezone.utc)
         outer_timeout = run_seconds + _OUTER_WAIT_FOR_PAD_SECONDS
 
@@ -1529,8 +1641,19 @@ class CallRunnerImpl:
             )
             return SimulationReport.model_validate(result)
 
+        async def place_with_actors() -> SimulationReport:
+            if actors is None:
+                return await place()
+            acting = asyncio.create_task(actors.run())
+            try:
+                return await place()
+            finally:
+                acting.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await acting
+
         try:
-            report = await asyncio.wait_for(place(), timeout=outer_timeout)
+            report = await asyncio.wait_for(place_with_actors(), timeout=outer_timeout)
         except asyncio.CancelledError:
             raise
         except asyncio.TimeoutError as exc:
@@ -1628,7 +1751,13 @@ class CallRunnerImpl:
         # from transcript prose.
         if not calls and case is not None:
             calls = _collect_provider_tool_calls(case)
-        if calls:
+        acted = (
+            _actor_rows(runtime, self._context.bundle_dir)
+            if case is not None and self._context.evidence_seam is EvidenceSeam.TOOL_TRACE
+            else []
+        )
+        marks = _agent_marks(runtime, self._context.bundle_dir, calls) if acted else []
+        if calls or acted:
             tool_trace = "\n".join(
                 json.dumps(
                     {
@@ -1639,12 +1768,19 @@ class CallRunnerImpl:
                         "error": call.error,
                         "refused": call.refused,
                         "at": call.at,
+                        **(marks[index] if marks else {}),
                     },
                     sort_keys=True,
                     default=str,
                 )
-                for call in calls
-            ).encode("utf-8")
+                for index, call in enumerate(calls)
+            )
+            if acted:
+                # Who else acted in the world, after the agent's own calls, each with what came of it.
+                tool_trace = "\n".join(
+                    [*([tool_trace] if tool_trace else []), *(json.dumps(row, sort_keys=True, default=str) for row in acted)]
+                )
+            tool_trace = tool_trace.encode("utf-8")
             await self._adapter.upload_artifact(
                 tool_trace,
                 kind=ArtifactKind.TOOL_TRACE,

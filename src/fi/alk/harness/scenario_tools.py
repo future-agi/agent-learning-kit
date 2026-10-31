@@ -79,6 +79,7 @@ from .prove import (
     workspace_bindings,
     workspace_fixture,
 )
+from .actors import actors_enabled, load_actors
 from .scenario import (
     ANSWERED_BY,
     CALLER_AWARENESS,
@@ -240,6 +241,70 @@ def _sub_actor_field() -> dict[str, Any]:
             },
         }
     }
+
+
+def _actor_fields() -> dict[str, Any]:
+    """The world-actor field, withheld entirely when the switch is off."""
+    if not actors_enabled():
+        return {}
+    return {
+        "actors": {
+            "type": "array",
+            "description": "World actors in this scenario, by id from add_actor, each with the "
+            "actions it takes here in order. Each way they can respond is its own scenario: they "
+            "act, they refuse, they never respond, or someone without the permission acts in their "
+            "place. An action is a world action with its arguments and when it fires: `on_tool` on "
+            "the agent's `on_call`th call of `tool` (a response to something the agent asks for "
+            "always fires this way, since before the request there is nothing to respond to), "
+            "`contacted` when the agent reaches one of the actor's identities, `after_seconds`, "
+            "`probability`, or `always`, at the very start of the run before the agent has done "
+            "anything. An action the actor is not permitted is allowed here on purpose: the world "
+            "refuses it and records it as their attempt, which is how acting without permission "
+            "is tested.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "actions": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "action": {"type": "string"},
+                                "arguments": {"type": "object"},
+                                "trigger": {
+                                    "type": "object",
+                                    "properties": {
+                                        "kind": {
+                                            "type": "string",
+                                            "enum": ["on_tool", "contacted", "after_seconds", "probability", "always"],
+                                        },
+                                        "tool": {"type": "string", "description": "on_tool: the agent's tool"},
+                                        "on_call": {"type": "integer", "description": "on_tool: which call of it, from 1"},
+                                        "seconds": {"type": "number", "description": "after_seconds"},
+                                        "p": {"type": "number", "description": "probability, 0 to 1"},
+                                    },
+                                    "required": ["kind"],
+                                    "additionalProperties": False,
+                                },
+                            },
+                            "required": ["action"],
+                        },
+                    },
+                },
+                "required": ["id", "actions"],
+            },
+        }
+    }
+
+
+def _unlisted_actors(scenario: Scenario, world_root: Path) -> list[str]:
+    listed = load_actors(world_root).by_id()
+    return [
+        f"actors: {entry.id!r} is not a world actor; add it with add_actor first"
+        for entry in scenario.actors
+        if entry.id not in listed
+    ]
 
 
 def _mailbox_fields() -> dict[str, Any]:
@@ -1097,6 +1162,8 @@ def accept_scenario(
         scenario = Scenario.model_validate(payload)
     except Exception as invalid:
         return _err(f"Not kept. {invalid}"[:600])
+    if unlisted := _unlisted_actors(scenario, world_root):
+        return _err("Not kept. " + " ".join(unlisted))
     scenario.branch = _without_kind_label(scenario.branch)
     if not spoken:
         scenario.background_noise = False
@@ -1823,6 +1890,7 @@ def scenario_tools(
                 },
                 **_mailbox_fields(),
                 **_sub_actor_field(),
+                **_actor_fields(),
                 "instruction": {
                     "type": "string",
                     "description": "What this person is trying to achieve, written to them. "
@@ -2869,6 +2937,13 @@ def world_summary(world_root: Path) -> str:
                 "\nSUB-ACTORS a scenario can include (the person's side, not the person):\n"
                 + listing.summary()
             )
+        acting = load_actors(world_root).actors if actors_enabled() else []
+        if acting:
+            lines.append("\nWORLD ACTORS (include one in a scenario's `actors`, by id, with its actions):")
+            lines += [
+                f"  {one.id}: {one.name}, {one.role or one.kind}; may {', '.join(one.permitted_actions) or 'do nothing in the world'}"
+                for one in acting
+            ]
         external = _is_external_runtime(world_root)
         prefix = "THE BUILT WORLD (restored fresh for every scenario):\n"
         if external:

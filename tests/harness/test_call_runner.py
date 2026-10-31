@@ -1646,6 +1646,27 @@ def test_tool_trace_translates_rows_and_applies_v1_refused_rule(monkeypatch) -> 
     )
 
 
+def test_tool_trace_reads_only_the_agent_s_own_actions_as_its_calls(monkeypatch) -> None:
+    old = ["name", "arguments", "result", "ok", "error", "at"]
+    agent_rows = [
+        ("lookup_order", {"id": "1"}, {"status": "shipped"}, True, "", 100.5),
+        ("cancel_order", {"id": "2"}, None, False, "not found", 101.0),
+    ]
+    runtime = _runtime(endpoints={"database": _postgres_endpoint()})
+    monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(agent_rows, old))
+    before = cr._collect_tool_trace_calls(runtime)
+
+    columns = [*old, "action_id", "actor_id", "worker_id", "outcome"]
+    rows = [
+        (*agent_rows[0], "a1", "agent", None, "committed"),
+        ("approve_discount", {"deal": "1"}, {"ok": True}, True, "", 100.7, "a2", "manager", None, "committed"),
+        (*agent_rows[1], "a3", "agent", None, "refused"),
+    ]
+    monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
+    assert cr._collect_tool_trace_calls(runtime) == before
+    assert [one.name for one in before] == ["lookup_order", "cancel_order"]
+
+
 def test_tool_trace_read_failure_degrades_to_no_calls_never_crashes(
     monkeypatch,
 ) -> None:
@@ -2127,3 +2148,75 @@ def test_a_call_keeps_who_its_sub_actors_were_and_what_happened_to_each(
     )
     low, high = LOUDNESS_RANGE
     assert low <= resolved["loudness_ratio"] <= high
+def _with_actors(tmp_path: Path) -> Path:
+    from fi.alk.harness.actors import Actor, ActorList, save_actors
+
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    save_actors(
+        tmp_path,
+        ActorList(actors=[Actor(id="manager", name="Priya", role="sales manager", permitted_actions=["crm.approve"])]),
+    )
+    return tmp_path
+
+
+def test_world_actors_act_only_when_switched_on_with_a_proxy_taking_actor_requests(tmp_path, monkeypatch) -> None:
+    bundle = _with_actors(tmp_path / "bundle")
+    doc = {"actors": [{"id": "manager", "actions": [{"action": "crm.approve"}]}]}
+    token = tmp_path / "w0" / "tool-proxy" / "actor-token"
+    proxy = RuntimeEndpoint(capability="tool_proxy", protocol="http", address="http://127.0.0.1:9")
+    ready = _runtime(
+        endpoints={"tool_proxy": proxy, "database": _postgres_endpoint()},
+        metadata={"actor_proof_path": str(token)},
+    )
+    monkeypatch.delenv("HARNESS_SUB_ACTORS", raising=False)
+    assert cr._actor_dispatcher(doc, bundle, ready, "t1") is None
+    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+    assert cr._actor_dispatcher({}, bundle, ready, "t1") is None
+    assert cr._actor_dispatcher(doc, bundle, _runtime(endpoints={"database": _postgres_endpoint()}), "t1") is None
+    dispatcher = cr._actor_dispatcher(doc, bundle, ready, "t1")
+    assert dispatcher is not None and dispatcher.proxy_url == "http://127.0.0.1:9"
+    assert token.read_text() == dispatcher.token and len(dispatcher.token) == 64
+    assert cr._actor_dispatcher(doc, bundle, ready, "t2").token != dispatcher.token
+
+
+def test_actor_rows_are_sealed_named_and_with_their_outcome_and_the_agent_s_are_left_to_its_calls(
+    tmp_path, monkeypatch
+) -> None:
+    bundle = _with_actors(tmp_path)
+    columns = ["name", "arguments", "result", "ok", "error", "at", "action_id", "actor_id", "outcome",
+               "refusal_code", "parent_event_id", "on_behalf_of"]
+    rows = [
+        ("request_approval", {"deal": "d1"}, {"ok": True}, True, "", 1.0, "a1", "agent", "committed", None, None, None),
+        ("approve", {"deal": "d1"}, {"ok": True}, True, "", 2.0, "a2", "manager", "committed", None, "a1", None),
+    ]
+    monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
+    runtime = _runtime(endpoints={"database": _postgres_endpoint()})
+    assert cr._actor_rows(runtime, bundle) == [
+        {
+            "name": "approve", "arguments": {"deal": "d1"}, "result": {"ok": True}, "ok": True, "error": "",
+            "refused": False, "at": 2.0, "action_id": "a2", "actor_id": "manager", "actor_name": "Priya",
+            "actor_role": "sales manager", "outcome": "committed", "refusal_code": None, "parent_event_id": "a1",
+            "on_behalf_of": None,
+        }
+    ]
+    assert [call.name for call in cr._collect_tool_trace_calls(runtime)] == ["request_approval"]
+    assert cr._actor_rows(runtime, tmp_path / "no-actors") == []
+
+
+def test_with_actors_the_agent_s_sealed_calls_carry_their_own_action_ids_to_link_a_cause(tmp_path, monkeypatch) -> None:
+    bundle = _with_actors(tmp_path)
+    columns = ["name", "arguments", "result", "ok", "error", "at", "action_id", "actor_id", "outcome"]
+    rows = [
+        ("request_approval", {}, None, True, "", 1.0, "a1", "agent", "committed"),
+        ("approve", {}, None, True, "", 2.0, "a2", "manager", "committed"),
+        ("update_deal", {}, None, False, "no", 3.0, "a3", "agent", "refused"),
+    ]
+    monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
+    runtime = _runtime(endpoints={"database": _postgres_endpoint()})
+    calls = cr._collect_tool_trace_calls(runtime)
+    assert cr._agent_marks(runtime, bundle, calls) == [
+        {"action_id": "a1", "outcome": "committed"},
+        {"action_id": "a3", "outcome": "refused"},
+    ]
+    assert cr._agent_marks(runtime, bundle, calls[1:]) == [{"action_id": "a3", "outcome": "refused"}]
+    assert cr._agent_marks(runtime, bundle, [*calls, calls[0]]) == []

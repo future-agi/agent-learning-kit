@@ -33,6 +33,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Sequence
 
+from .actors import load_actors
 from .catalogue import Catalogue
 from .checks import Outcome, reference_of, run_check
 from .folder import apply_setup, check_ready
@@ -306,11 +307,15 @@ def _run(
     world, _applied, _ready = prepared(scenario, world_root)
     refused: list[str] = []
     assumed: list[str] = []
+    by_actors: set[int] = set()
     if with_solution:
+        acting = _WorldActors(scenario, world_root, world, by_actors)
+        acting.act_on(None)
         for step in scenario.solution if steps is None else steps:
             call = play_reference_step(world, step)
             if not call.ok:
                 refused.append(f"{call.name}({step.arguments}): {call.error}")
+            acting.act_on(step)
         assumed = [
             str(getattr(step, "tool", ""))
             for step in (scenario.solution if steps is None else steps)
@@ -331,7 +336,48 @@ def _run(
                 scenario.name,
                 len(scenario.solution),
             )
-    return world, list(world.calls), refused, sorted(set(assumed))
+    calls = [call for index, call in enumerate(world.calls) if index not in by_actors]
+    return world, calls, refused, sorted(set(assumed))
+
+
+class _WorldActors:
+    """A scenario's world actors during a proof: each permitted action played when its trigger is
+    met by the reference solution, the way the run plays it at the world's door. A refused action
+    changes nothing, and none of their calls is the agent's."""
+
+    def __init__(self, scenario: Scenario, world_root: Path, world: GeneratedWorld, by_actors: set[int]) -> None:
+        listed = load_actors(world_root).by_id()
+        self.pending = [(listed[entry.id], action) for entry in scenario.actors if entry.id in listed for action in entry.actions]
+        self.world = world
+        self.by_actors = by_actors
+        self.counts: dict[str, int] = {}
+
+    def _due(self, actor: Any, action: Any, step: Any) -> bool:
+        trigger = action.trigger
+        if step is None:
+            return trigger.kind == "always"
+        if trigger.kind == "on_tool":
+            return trigger.tool.rsplit(".", 1)[-1] == step.tool and self.counts.get(step.tool) == trigger.on_call
+        if trigger.kind == "contacted":
+            said = json.dumps(step.arguments, default=str)
+            return any(identity and f'"{identity}"' in said for identity in actor.identities.values())
+        return False
+
+    def act_on(self, step: Any) -> None:
+        if step is not None:
+            self.counts[step.tool] = self.counts.get(step.tool, 0) + 1
+        for actor, action in list(self.pending):
+            if not self._due(actor, action, step):
+                continue
+            self.pending.remove((actor, action))
+            if action.action not in actor.permitted_actions:
+                continue
+            before = len(self.world.calls)
+            # A source-hosted world knows the action by its route; a generated one by its name.
+            route = action.action.replace(".", "/")
+            known = route in getattr(self.world, "endpoints", ())
+            self.world.call(route if known else action.action.rsplit(".", 1)[-1], dict(action.arguments))
+            self.by_actors.update(range(before, len(self.world.calls)))
 
 
 def native_runtime(world_root: Path) -> bool:

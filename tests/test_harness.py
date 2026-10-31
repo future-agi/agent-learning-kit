@@ -9743,3 +9743,139 @@ def test_aim_for_reports_the_default_share_and_takes_the_person_s_own(
     assert "No scenario includes a sub-actor, as the person asked" in said(
         sub_actor_share=0
     )
+
+
+def test_world_actors_are_offered_only_when_switched_on_and_kept_in_the_environment_s_list(
+    tmp_path, monkeypatch
+):
+    import asyncio
+
+    from fi.alk.harness.actors import load_actors
+    from fi.alk.harness.world import tools as world_tools
+
+    _root, contract = _saved_world(tmp_path)
+    monkeypatch.delenv("HARNESS_SUB_ACTORS", raising=False)
+    server, _world = world_tools.world_tools(contract, tmp_path)
+    assert "add_actor" not in _published(server)
+    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+    server, _world = world_tools.world_tools(contract, tmp_path)
+    assert {"add_actor", "drop_actor"} <= set(_published(server))
+
+    async def call(name, payload):
+        from mcp.types import CallToolRequestParams
+
+        handler = _request_handler(_instance(server), "tools/call")
+        result = await handler.handler(None, CallToolRequestParams(name=name, arguments=payload))
+        return result.content[0].text
+
+    manager = {"id": "manager", "name": "Priya", "role": "sales manager", "permitted_actions": ["crm.approve_discount"]}
+    assert "crm.approve_discount" in asyncio.run(call("add_actor", manager))
+    assert "Not added" in asyncio.run(call("add_actor", {"id": "agent", "name": "x", "role": "y"}))
+    asyncio.run(call("add_actor", {**manager, "permitted_actions": ["crm.approve_discount", "crm.reject_discount"]}))
+    [kept] = load_actors(tmp_path).actors
+    assert kept.permitted_actions == ["crm.approve_discount", "crm.reject_discount"]
+    assert "dropped" in asyncio.run(call("drop_actor", {"id": "manager"}))
+    assert load_actors(tmp_path).actors == []
+
+
+def test_a_scenario_naming_an_actor_the_world_does_not_list_is_not_kept(tmp_path, monkeypatch):
+    from fi.alk.harness.actors import Actor, ActorList, save_actors
+    from fi.alk.harness.scenario_tools import _actor_fields, _unlisted_actors
+
+    monkeypatch.delenv("HARNESS_SUB_ACTORS", raising=False)
+    assert _actor_fields() == {}
+    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+    assert "actors" in _actor_fields()
+    save_actors(tmp_path, ActorList(actors=[Actor(id="manager", name="Priya")]))
+    scenario = Scenario(
+        name="wrong-person-approval",
+        actors=[{"id": "manager", "actions": [{"action": "crm.approve_discount"}]}, {"id": "ghost"}],
+    )
+    assert _unlisted_actors(scenario, tmp_path) == [
+        "actors: 'ghost' is not a world actor; add it with add_actor first"
+    ]
+    from fi.alk.harness.folder import document_for
+
+    assert "actors" not in document_for(Scenario(name="plain"))
+    assert document_for(scenario)["actors"][0]["actions"][0]["trigger"]["kind"] == "always"
+
+
+def test_the_switch_stops_the_writer_being_told_world_actors_exist():
+    from fi.alk.harness.config import discovered_skills
+
+    assert "add_actor" in discovered_skills(modality="voice", actors="on")
+    assert "add_actor" not in discovered_skills(modality="voice", actors="off")
+
+
+def test_a_proof_plays_permitted_actor_actions_at_their_triggers_and_keeps_them_out_of_the_agent_s_calls(
+    tmp_path,
+):
+    from fi.alk.harness.actors import Actor, ActorList, save_actors
+    from fi.alk.harness.prove import _WorldActors
+    from fi.alk.harness.scenario import Step
+    from fi.alk.harness.world.runtime import Call
+
+    class World:
+        def __init__(self):
+            self.calls = []
+
+        def call(self, name, arguments):
+            self.calls.append(Call(name=name, arguments=arguments, result=None, ok=True, error="", refused=False))
+
+    save_actors(
+        tmp_path,
+        ActorList(
+            actors=[
+                Actor(id="manager", name="Priya", permitted_actions=["crm.approve_discount"]),
+                Actor(id="coworker", name="Sam", identities={"slack": "@sam"}, permitted_actions=["slack.post_message"]),
+            ]
+        ),
+    )
+    scenario = Scenario(
+        name="approval",
+        actors=[
+            {"id": "coworker", "actions": [
+                {"action": "crm.approve_discount"},
+                {"action": "slack.post_message", "trigger": {"kind": "contacted"}},
+            ]},
+            {"id": "manager", "actions": [
+                {"action": "crm.approve_discount", "arguments": {"deal": "d1"},
+                 "trigger": {"kind": "on_tool", "tool": "crm.request_approval", "on_call": 2}},
+            ]},
+        ],
+    )
+    world, by_actors = World(), set()
+    acting = _WorldActors(scenario, tmp_path, world, by_actors)
+    acting.act_on(None)
+    assert world.calls == []  # the coworker may not approve, so nothing happened
+    for step in [Step(tool="request_approval"), Step(tool="post_message", arguments={"to": "@sam"}),
+                 Step(tool="request_approval")]:
+        world.call(step.tool, step.arguments)
+        acting.act_on(step)
+    assert [call.name for call in world.calls] == [
+        "request_approval", "post_message", "post_message", "request_approval", "approve_discount"
+    ]
+    assert by_actors == {2, 4}
+
+    # A source-hosted world takes the action at its own route, which the agent's tools never name.
+    world, by_actors = World(), set()
+    world.endpoints = {"crm/approve_discount", "crm/request_approval"}
+    acting = _WorldActors(scenario, tmp_path, world, by_actors)
+    for _ in range(2):
+        step = Step(tool="request_approval")
+        world.call(step.tool, step.arguments)
+        acting.act_on(step)
+    assert [call.name for call in world.calls][-1] == "crm/approve_discount"
+
+
+def test_the_writer_is_told_which_world_actors_there_are_only_when_switched_on(tmp_path, monkeypatch):
+    from fi.alk.harness.actors import Actor, ActorList, save_actors
+    from fi.alk.harness.scenario_tools import world_summary
+
+    _saved_world(tmp_path)
+    save_actors(tmp_path, ActorList(actors=[Actor(id="manager", name="Priya", role="sales manager",
+                                                   permitted_actions=["crm.approve_discount"])]))
+    monkeypatch.delenv("HARNESS_SUB_ACTORS", raising=False)
+    assert "WORLD ACTORS" not in world_summary(tmp_path)
+    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+    assert "  manager: Priya, sales manager; may crm.approve_discount" in world_summary(tmp_path)
