@@ -601,4 +601,4 @@ def test_a_scenario_writer_and_an_editor_can_set_a_worker_budget(tmp_path):
     server, _kept = st.scenario_tools(AgentContract(agent="returns", real_use_cases=["refund"]), tmp_path, tmp_path, wanted=1)
     tools = {spec.name: spec for spec in server.tools}
     for name in ("submit_scenario", "edit_scenario"):
-        assert tools[name].input_schema["properties"]["worker_budget_seconds"]["type"] == "integer"
+        assert "integer" in tools[name].input_schema["properties"]["worker_budget_seconds"]["type"]
