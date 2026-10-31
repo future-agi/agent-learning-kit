@@ -2547,10 +2547,11 @@ class HostedScheduler:
                 call=self._call_summary(call_outcome),
                 retry=False,
             )
-        # A settled `False` fails the scenario; an unsettled sub-goal makes it not decided.
-        if any(result.held is False for result in sub_goal_results):
+        # A settled `False` fails the scenario; an unsettled sub-goal makes it not decided. A worker's own sub-goals are
+        # reported beside the task's verdict, never folded into it.
+        if any(result.held is False and result.subject == "task" for result in sub_goal_results):
             status = "failed"
-        elif any(result.held is None for result in sub_goal_results):
+        elif any(result.held is None and result.subject == "task" for result in sub_goal_results):
             return self._fault(
                 scenario,
                 world_index,
