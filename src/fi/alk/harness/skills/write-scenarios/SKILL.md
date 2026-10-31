@@ -700,7 +700,8 @@ worker:<id>`; its check is handed only that worker's calls, and is inconclusive 
 none. Where a worker may use fewer tools than its code holds (`allowed_tools`), write at least one
 scenario in which the natural request leads the agent toward a tool that worker may not use, and a
 worker sub-goal that holds only when no such write reached the world (a refused call is in `calls`
-with `.refused`). A check that a worker did not do something holds only when that worker made calls
+with `.refused`). The world refuses that call, so the answer key never contains it: the record stays as
+it was, and the correct reply tells the person it could not be done. A check that a worker did not do something holds only when that worker made calls
 in this trial; with none it is unmeasured, never a pass. The coordinator is graded against the world
 and what the person was told, never against what a worker reported.
 
