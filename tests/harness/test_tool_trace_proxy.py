@@ -363,3 +363,67 @@ def test_a_fault_never_applies_to_an_actor_s_action(proxy, tmp_path):
     url, rows = proxy
     _faults(tmp_path, [{"action": "records.approve", "mode": "timeout_before_commit", "delay_seconds": 0}])
     assert _post(url, "/records/approve", {"item": "1"}, key="k-1", **_as("reviewer"))[0] == 201
+
+
+CHANNELS = {"c-lookup": "order_lookup", "c-refund": "refund"}
+PERMISSIONS = {"worker:order_lookup": {"allow": ["ok"]}, "worker:refund": {"allow": ["records.approve"]}}
+
+
+@pytest.fixture()
+def worker_proxy(proxy, monkeypatch, tmp_path):
+    # As the bundle ships it: the proxy with its sealed permissions beside it.
+    (tmp_path / "proxy.py").write_bytes(_PROXY.read_bytes())
+    (tmp_path / "permissions.json").write_text(json.dumps(PERMISSIONS), encoding="utf-8")
+    (tmp_path / "channels.json").write_text(json.dumps(CHANNELS), encoding="utf-8")
+    monkeypatch.setenv("WORKER_CHANNELS_FILE", str(tmp_path / "channels.json"))
+    url, rows = proxy
+    spec = importlib.util.spec_from_file_location("tool_trace_proxy_workers", tmp_path / "proxy.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    server = _serve(module.Handler)
+    try:
+        yield f"http://127.0.0.1:{server.server_port}", rows, tmp_path
+    finally:
+        server.shutdown()
+
+
+def test_a_worker_s_allowed_action_reaches_the_world_through_its_channel_and_names_the_worker(worker_proxy):
+    url, rows, _ = worker_proxy
+    assert _post(url, "/w/c-refund/records/approve", {"deal": "1"})[0] == 201
+    # The world sees the action's own path; the channel token never leaves the proxy.
+    assert _World.seen == ["/records/approve"]
+    [row] = rows()
+    assert (row["actor_id"], row["worker_id"], row["outcome"], row["name"]) == ("agent", "refund", "committed", "approve")
+    assert "c-refund" not in json.dumps(row, default=str)
+
+
+def test_a_worker_s_out_of_permission_write_is_refused_before_the_world_and_kept_as_an_attempt(worker_proxy):
+    url, rows, _ = worker_proxy
+    status, payload = _post(url, "/w/c-lookup/records/approve", {"deal": "1"})
+    assert status == 403 and payload == {"detail": "records.approve is not permitted for order_lookup"}
+    assert _World.seen == []
+    [row] = rows()
+    assert (row["worker_id"], row["outcome"], row["refusal_code"], row["ok"]) == ("order_lookup", "refused", "not_permitted", False)
+
+
+def test_a_channel_this_trial_did_not_issue_is_refused_as_an_identity_conflict(worker_proxy):
+    url, rows, _ = worker_proxy
+    assert _post(url, "/w/guess/records/approve", {"deal": "1"})[0] == 403
+    assert _post(url, "/w//records/approve", {"deal": "1"})[0] == 403
+    assert _World.seen == []
+    assert [(r["actor_id"], r["worker_id"], r["refusal_code"]) for r in rows()] == [("agent", None, "identity_conflict")] * 2
+
+
+def test_an_unreadable_permissions_seal_denies_rather_than_widens(worker_proxy):
+    url, rows, tmp_path = worker_proxy
+    (tmp_path / "permissions.json").write_text("not json", encoding="utf-8")
+    assert _post(url, "/w/c-refund/records/approve", {"deal": "1"})[0] == 403
+    assert _World.seen == []
+    assert rows()[0]["refusal_code"] == "not_permitted"
+
+
+def test_without_a_permissions_seal_a_worker_s_action_is_attributed_but_not_limited(worker_proxy):
+    url, rows, tmp_path = worker_proxy
+    (tmp_path / "permissions.json").unlink()
+    assert _post(url, "/w/c-lookup/records/approve", {"deal": "1"})[0] == 201
+    assert [(r["worker_id"], r["outcome"]) for r in rows()] == [("order_lookup", "committed")]

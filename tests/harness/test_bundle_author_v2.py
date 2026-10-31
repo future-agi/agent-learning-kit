@@ -5877,3 +5877,31 @@ def test_python_selection_preserves_uv_alternatives_and_target_only_constraints(
         f"environments={json.dumps(environments)}\n"
     )
     assert _python_language_version(tmp_path, "3.11", interpreter_selector=True) == "==3.11.*,>=3.11"
+
+
+def test_each_declared_worker_is_sealed_with_the_world_actions_its_tools_call():
+    from fi.alk.harness.bundle_author_v2 import _worker_permissions
+
+    contract = {
+        "tools": [{"name": "get_order"}, {"name": "list_refunds"}, {"name": "issue_refund"}],
+        "tool_entrypoints": [
+            {"tool": "get_order", "mode": "service", "service": "returns-api", "endpoint": "/orders/get"},
+            {"tool": "issue_refund", "mode": "service", "service": "returns-api", "endpoint": "/refunds/issue/"},
+        ],
+        "workers": [
+            {"id": "order_lookup", "tools": ["get_order", "list_refunds"]},
+            {"id": "refund", "tools": ["issue_refund", "list_refunds"]},
+        ],
+    }
+    assert _worker_permissions(contract) == {
+        "worker:order_lookup": {"allow": ["list_refunds", "orders.get"]},
+        "worker:refund": {"allow": ["list_refunds", "refunds.issue"]},
+    }
+    assert _worker_permissions({"tools": [{"name": "a"}]}) == {}
+
+
+def test_limited_workers_seed_the_action_log_that_keeps_whose_attempt_was_refused(tmp_path: Path) -> None:
+    from fi.alk.harness.bundle_author_v2 import _AGENT_TRACE_DDL, _TOOL_TRACE_DDL, _action_log_seed
+
+    assert _action_log_seed(tmp_path) == _AGENT_TRACE_DDL
+    assert _action_log_seed(tmp_path, workers=True).startswith(_TOOL_TRACE_DDL)
