@@ -2132,6 +2132,12 @@ def scenario_tools(
                     "existing names wherever one fits, so results add up across the suite.",
                 },
                 "max_turns": {"type": "integer"},
+                "worker_budget_seconds": {
+                    "type": "integer",
+                    "description": "Only for an agent with workers: how long each worker may act in this "
+                    "trial, in seconds. Past it the world refuses that worker's calls and it ends timed "
+                    "out. Leave out to use the run's own limit.",
+                },
                 "coverage": {
                     "type": "object",
                     "additionalProperties": {"type": "string"},
