@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from .backends import GOOGLE_ADK_APPROVAL_ENV
+from .bundle_v2 import EvidenceSeam
 from .call_runner import ArtifactUploader, CallRunnerContext
 from .hosted_scheduler import CallAborted, CallOutcome, Scenario, World
 from .isolated_process import run_json_worker, run_worker
@@ -86,6 +87,7 @@ class IsolatedChatCallRunner:
                 "target_secrets": dict(context.target_provider_secret_values),
                 "local_auth_values": dict(runtime._local_auth_values),
                 "attempt_number": context.attempt_number,
+                "evidence_seam": context.evidence_seam.value if context.evidence_seam else None,
                 "runtime": runtime.model_dump(mode="json"),
                 "scenario_key": scenario.scenario_key,
                 "source_scenario_key": getattr(scenario, "source_scenario_key", None),
@@ -154,7 +156,7 @@ async def main() -> None:
             job=job,
             bundle_dir=Path(payload["bundle_dir"]),
             work_directory=Path(payload["work_directory"]),
-            evidence_seam=None,
+            evidence_seam=EvidenceSeam(payload["evidence_seam"]) if payload.get("evidence_seam") else None,
             target_provider_secret_values=payload["target_secrets"],
             attempt_number=payload["attempt_number"],
             source_directory=Path(payload["source_directory"])

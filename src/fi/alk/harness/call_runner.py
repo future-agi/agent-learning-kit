@@ -944,6 +944,25 @@ def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
     return tuple(calls)
 
 
+def collect_seam_calls(
+    runtime: EnvironmentRuntime,
+    seam: EvidenceSeam | None,
+    observed: Sequence[Call] = (),
+) -> tuple[Call, ...]:
+    """The calls a world observed for one attempt: calls another source saw, else the agent's own in-process trace,
+    else where its bundle says evidence lands, joined with the trace file's span lines. Every runner reads them here,
+    so a voice and a chat call agree."""
+    written, from_spans = _read_file_tool_calls(runtime)
+    calls = list(observed) or written
+    if not calls and seam is EvidenceSeam.HTTP_TOOL:
+        calls = list(_collect_http_tool_calls(runtime))
+    elif not calls and seam is EvidenceSeam.TOOL_TRACE:
+        calls = list(_collect_tool_trace_calls(runtime))
+    # Unrecognized/None (should not happen for a `kind: process` bundle past preflight) degrades to the span lines
+    # alone, keeping this on the scheduler's own evidence_missing path, never a raw exception.
+    return _merge_span_calls(calls, from_spans)
+
+
 def _read_action_log(
     dsn: str, *, timeout_ms: int | None = None
 ) -> list[dict[str, Any]]:
@@ -2366,20 +2385,4 @@ class CallRunnerImpl:
         return replace(base, calls=calls)
 
     def _collect_calls(self, runtime: EnvironmentRuntime) -> tuple[Call, ...]:
-        seam = self._context.evidence_seam
-        written, from_spans = _read_file_tool_calls(runtime)
-        if written:
-            return _merge_span_calls(written, from_spans)
-        if seam is EvidenceSeam.HTTP_TOOL:
-            return _merge_span_calls(
-                list(_collect_http_tool_calls(runtime)), from_spans
-            )
-        if seam is EvidenceSeam.TOOL_TRACE:
-            return _merge_span_calls(
-                list(_collect_tool_trace_calls(runtime)), from_spans
-            )
-        # Unrecognized/None (should not happen for a `kind: process` bundle past preflight --
-        # bundle_v2.py requires `evidence_seam` whenever `kind is PROCESS` -- but degrading rather
-        # than crashing keeps this on the scheduler's own evidence_missing path, never a raw
-        # exception).
-        return _merge_span_calls([], from_spans)
+        return collect_seam_calls(runtime, self._context.evidence_seam)
