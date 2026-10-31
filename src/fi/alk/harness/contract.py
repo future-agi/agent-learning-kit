@@ -199,6 +199,23 @@ class ToolEntry(BaseModel):
     notes: str = ""
 
 
+class DeclaredWorker(BaseModel):
+    """An agent the app hands work to, as its source declares it.
+
+    Declared is not observed: a run shows whether the worker actually took part, from the spans the app exports.
+    ``name`` is the name the app gives the agent, because that is the name its spans carry.
+    """
+
+    id: str
+    name: str = ""
+    # Where the source declares it, as path:line.
+    framework_ref: str = ""
+    # The contract tools this worker holds, by name.
+    tools: list[str] = Field(default_factory=list)
+    # separate: the worker's tools can be told apart from the others' at the world; shared: they cannot.
+    binding: Literal["separate", "shared"] = "shared"
+
+
 class PromptSource(BaseModel):
     """Lines of the agent's source that hold part of its prompt."""
 
@@ -1116,6 +1133,8 @@ class AgentContract(BaseModel):
     system_prompt_from: list[PromptSource] = Field(default_factory=list)
     hard_constraints: list[str] = Field(default_factory=list)
     tools: list[ToolSpec] = Field(default_factory=list)
+    # Empty for an agent that hands no work to other agents.
+    workers: list[DeclaredWorker] = Field(default_factory=list)
     data_schema: dict[str, Any] = Field(default_factory=dict)
     base_environment: dict[str, Any] = Field(default_factory=dict)
     # What the environment stage has to build before any tool can be answered.
@@ -1247,6 +1266,13 @@ class AgentContract(BaseModel):
                     for one in self.dependencies
                 )
                 + "\nThe agent's code is never edited; the environment must match its existing seam."
+            )
+        if self.workers:
+            parts.append(
+                "WORKERS (agents this one hands work to, and the tools each holds):\n  - "
+                + "\n  - ".join(
+                    f"{one.id} ({one.name or one.id}): {', '.join(one.tools) or 'no tools'}" for one in self.workers
+                )
             )
         if self.real_use_cases:
             # Every one of them. A scenario writer covers what it is shown, so a truncated
@@ -1455,6 +1481,20 @@ def validate_contract(contract: AgentContract) -> list[str]:
             "give the importable module path and the callable name, or record a mode that "
             "matches what the repository actually exposes."
         )
+    ids = [one.id for one in contract.workers]
+    repeated = sorted({one for one in ids if ids.count(one) > 1})
+    if repeated:
+        problems.append(f"duplicate-worker-ids:{','.join(repeated)}")
+    for worker in contract.workers:
+        if not worker.id.strip():
+            problems.append("worker:no-id")
+            continue
+        unknown_tools = sorted(set(worker.tools) - contract.tool_names())
+        if unknown_tools:
+            problems.append(
+                f"worker[{worker.id}]:unknown-tools:{','.join(unknown_tools)}: "
+                "a worker's tools are named from the contract's own tools."
+            )
     # Iterate the tools, not tool_names(): that returns a set, so duplicates collapse before
     # they can be counted and the check silently never fires.
     names = [tool.name for tool in contract.tools if tool.name.strip()]
