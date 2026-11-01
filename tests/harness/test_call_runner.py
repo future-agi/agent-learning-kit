@@ -171,6 +171,22 @@ def test_file_tool_trace_is_collected_from_runtime_metadata(tmp_path: Path) -> N
     assert calls[1].error == "declined"
 
 
+
+def test_the_sealed_trace_row_keeps_the_runtime_worker_task_and_event_ids(tmp_path: Path) -> None:
+    from fi.alk.harness.world.runtime import trace_row
+
+    trace = _trace_lines(
+        tmp_path / "agent-tool-calls.jsonl",
+        {"name": "lookup", "arguments": {}, "output": "found", "is_error": False, "source": "crewai",
+         "agent_key": "researcher", "task_name": "Find weather", "event_id": "e2", "parent_event_id": "e1"},
+        {"name": "lookup", "arguments": {}, "output": "found", "is_error": False},
+    )
+    observed, plain = (trace_row(call) for call in cr._collect_file_tool_calls(_runtime(metadata={"tool_trace_path": str(trace)})))
+
+    assert (observed["by"], observed["task"]) == ("researcher", "Find weather")
+    assert observed["runtime_ids"] == {"event_id": "e2", "parent_event_id": "e1"}
+    assert not {"by", "task", "runtime_ids"} & set(plain)
+
 def test_a_result_traced_as_the_text_of_a_dict_reaches_checks_as_the_dict(tmp_path: Path) -> None:
     trace = tmp_path / "agent-tool-calls.jsonl"
     trace.write_text(

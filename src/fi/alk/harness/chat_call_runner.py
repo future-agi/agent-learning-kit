@@ -35,7 +35,7 @@ from .usage import (
     failure_domain_for_code,
     simulator_funding,
 )
-from .world.runtime import Call, GeneratedWorld
+from .world.runtime import Call, GeneratedWorld, trace_row
 from .world.stores.postgres import AttachedPostgresStore
 
 logger = logging.getLogger(__name__)
@@ -620,20 +620,7 @@ class HostedChatCallRunner:
         calls = tuple(transcript.calls)
         if calls:
             tool_trace = "\n".join(
-                json.dumps(
-                    {
-                        "name": call.name,
-                        "arguments": call.arguments,
-                        "result": call.result,
-                        "ok": call.ok,
-                        "error": call.error,
-                        "refused": call.refused,
-                        "at": call.at,
-                    },
-                    sort_keys=True,
-                    default=str,
-                )
-                for call in calls
+                json.dumps(trace_row(call), sort_keys=True, default=str) for call in calls
             ).encode("utf-8")
             await self._adapter.upload_artifact(
                 tool_trace,

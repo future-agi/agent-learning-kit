@@ -81,7 +81,7 @@ from .simulator_voice import (
     simulator_definition,
 )
 from .world.errors import WorldUnavailable
-from .world.runtime import Call
+from .world.runtime import Call, runtime_ids, trace_row
 
 logger = logging.getLogger(__name__)
 
@@ -853,6 +853,7 @@ def _collect_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
                 or ""
             ),
             task=str(record.get("task_name") or record.get("task_id") or ""),
+            runtime_ids=runtime_ids(record),
             at=float(raw_at) if isinstance(raw_at, (int, float)) else 0.0,
         )
         if record.get("source") != _LIVEKIT_HOOK_SOURCE:
@@ -1524,19 +1525,7 @@ class CallRunnerImpl:
             calls = _collect_provider_tool_calls(case)
         if calls:
             tool_trace = "\n".join(
-                json.dumps(
-                    {
-                        "name": call.name,
-                        "arguments": call.arguments,
-                        "result": call.result,
-                        "ok": call.ok,
-                        "error": call.error,
-                        "refused": call.refused,
-                        "at": call.at,
-                    },
-                    sort_keys=True,
-                    default=str,
-                )
+                json.dumps(trace_row(call), sort_keys=True, default=str)
                 for call in calls
             ).encode("utf-8")
             await self._adapter.upload_artifact(

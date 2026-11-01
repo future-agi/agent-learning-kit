@@ -155,7 +155,33 @@ class Call:
     # Native multi-agent runtimes may identify which worker and task made the call.
     by: str = ""
     task: str = ""
+    # The runtime's own ids for the event (`event_id`, `parent_event_id`, `started_event_id`), as it reported them.
+    runtime_ids: dict[str, str] = field(default_factory=dict)
 
+
+
+_RUNTIME_ID_FIELDS = ("event_id", "parent_event_id", "started_event_id")
+
+
+def runtime_ids(record: dict[str, Any]) -> dict[str, str]:
+    """The ids a runtime's own event carries on a traced call, kept as it wrote them."""
+    return {key: str(record[key]) for key in _RUNTIME_ID_FIELDS if record.get(key)}
+
+
+def trace_row(call: Call) -> dict[str, Any]:
+    """One call as the sealed tool trace keeps it, with who in the agent made it when the runtime said."""
+    return {
+        "name": call.name,
+        "arguments": call.arguments,
+        "result": call.result,
+        "ok": call.ok,
+        "error": call.error,
+        "refused": call.refused,
+        "at": call.at,
+        **({"by": call.by} if call.by else {}),
+        **({"task": call.task} if call.task else {}),
+        **({"runtime_ids": call.runtime_ids} if call.runtime_ids else {}),
+    }
 
 class GeneratedWorld(EnvironmentAdapter):
     """A database-backed world whose tools are generated per agent.

@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..contract import AgentContract
 from ..scenario import Scenario
-from ..world.runtime import Call
+from ..world.runtime import Call, runtime_ids
 from .grade import Judgement, Result
 
 if TYPE_CHECKING:
@@ -1000,6 +1000,7 @@ def _semantic_calls(path: Path, *, contract: AgentContract | None = None) -> lis
                 or ""
             ),
             task=str(record.get("task_name") or record.get("task_id") or ""),
+            runtime_ids=runtime_ids(record),
             at=float(record.get("at") or 0.0),
         )
         # A harness-aware worker may mirror a local state-machine action to the world for
