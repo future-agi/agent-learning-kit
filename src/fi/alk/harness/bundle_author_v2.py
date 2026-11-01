@@ -30,7 +30,7 @@ import yaml
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.version import Version
 
-from .actors import ACTORS_FILE, actors_seed, load_actors
+from .actors import ACTORS_FILE, EVALUATOR_ONLY_FILE, actors_seed, load_actors, write_evaluator_only
 from .bundle import CapabilityProtocol
 from .catalogue import CATALOGUE
 from .sub_actor import SUB_ACTORS_FILE
@@ -3423,7 +3423,9 @@ def author_bundle_v2(
             adopted_catalogue += _copy_sub_actor_list(authoring_root, temporary)
             if (authoring_root / ACTORS_FILE).is_file():
                 shutil.copy2(authoring_root / ACTORS_FILE, temporary / ACTORS_FILE)
-                adopted_catalogue.append(ACTORS_FILE)
+                # Only with actors, so a bundle without them seals exactly as before.
+                write_evaluator_only(temporary)
+                adopted_catalogue += [ACTORS_FILE, EVALUATOR_ONLY_FILE]
         adopted_chat_files = _copy_chat_authoring(
             authoring_root, temporary, include_simulator=include_scenarios
         )
