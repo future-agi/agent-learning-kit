@@ -14,8 +14,6 @@ from .failure_file import write_failure_file
 from .job import FailureDomain, HarnessFailure, HarnessStage
 
 SUBFOLDER_NOT_FOUND = "subfolder_not_found"
-# EX_CONFIG, which the platform doesn't retry even if it can't read the file.
-EXIT_REFUSED = 78
 
 # A link loop or an over-long name is a fault in the path the customer named, not in our disk.
 _PATH_ERRNOS = {errno.ELOOP, errno.ENAMETOOLONG}

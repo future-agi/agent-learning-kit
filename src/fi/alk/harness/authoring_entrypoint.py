@@ -29,7 +29,7 @@ from .job import HarnessJob, ProviderExecutionMode, SourceKind
 from .hosted_compose_bootstrap import initialize_hosted_compose
 from .provider_import import inspect_provider_target
 from .scenarios import load as load_written
-from .source_folder import EXIT_REFUSED, refuse_unusable_folder, saved_runtime
+from .source_folder import refuse_unusable_folder, saved_runtime
 from .understand import PROVIDER_IMPORT_PROFILE_PATH_ENV
 
 PROVIDER_MANAGED_CONNECTORS = frozenset({"vapi", "retell", "retell_chat"})

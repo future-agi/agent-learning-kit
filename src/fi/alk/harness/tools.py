@@ -322,6 +322,17 @@ def _second_look(claimed: str, found: list[str]) -> str:
     )
 
 
+def _tools_in_agent_folder(scan_root: Path | None, subfolder: str | None) -> list[str]:
+    """What the agent's own folder uses: a sibling's browser tool says nothing about this agent."""
+    try:
+        return browser_tools_found(
+            agent_folder(scan_root, subfolder) if scan_root and subfolder else scan_root
+        )
+    except SubfolderNotFound:
+        # The folder check reports this; the model's reading shouldn't be refused for it too.
+        return []
+
+
 def contract_tools(
     destination: Path,
     available_evals: list[dict[str, Any]] | None = None,
@@ -1147,7 +1158,7 @@ def contract_tools(
         # having read the second look.
         had_second_look = looked_again
         if found is None:
-            found = await asyncio.to_thread(browser_tools_found, scan_root)
+            found = await asyncio.to_thread(_tools_in_agent_folder, scan_root, subfolder)
             # A call running alongside this one may have refused while this one waited.
             if refused or (destination / FAILURE_FILE).is_file():
                 return _ok(_stop_message(destination))

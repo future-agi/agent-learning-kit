@@ -72,13 +72,13 @@ from .generated_runtime import (
 from .credentials import assess_configuration, discover_credentials
 from .secrets import process_secret_environment_names
 from .runtime_selection import ComposeSelection, select_runtime
+from .agent_type_check import EXIT_REFUSED
 from .source_folder import (
     SubfolderNotFound,
     agent_folder,
     bind_runtime,
     recorded_folder,
     recorded_root,
-    EXIT_REFUSED,
     refuse_unusable_folder,
     saved_runtime,
 )
