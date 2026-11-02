@@ -385,6 +385,7 @@ _AGENT_NAME_KEYS = (
     "autogen.agent.name",
     "claude_agent.subagent_type",
     "graph.node.id",
+    "recipient_agent_type",
 )
 _GRAPH_NAMESPACE = "langgraph_checkpoint_ns"
 _TOOL_NAME_KEYS = ("gen_ai.tool.name", "tool.name")
@@ -410,6 +411,9 @@ def _kind(span):
     operation = _first(attributes, ("gen_ai.operation.name",))
     if operation in _OPERATION_KINDS:
         return _OPERATION_KINDS[operation]
+    if attributes.get("messaging.operation") == "process" and _first(attributes, ("recipient_agent_type",)):
+        # AutoGen Core's runtime handing a message to the agent that handles it.
+        return "AGENT"
     return _OWN_KINDS.get(_first(attributes, ("claude_agent.span_kind",)) or "")
 
 

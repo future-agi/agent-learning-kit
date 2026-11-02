@@ -682,6 +682,9 @@ FRAMEWORK_INSTRUMENTORS = (
     ("llama-index-core", "traceai-llamaindex"),
     ("pydantic-ai-slim", "traceai-pydantic-ai"),
     ("strands-agents", "traceai-strands"),
+    # A framework that makes its own spans through the OpenTelemetry API alone, as AutoGen Core
+    # does, has them recorded only once the SDK is there.
+    ("opentelemetry-api", "opentelemetry-sdk"),
 )
 
 

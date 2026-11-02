@@ -125,6 +125,21 @@ def test_one_call_wrapped_by_two_instrumentations_is_written_once_and_a_failure_
     ]
 
 
+def test_an_autogen_core_tool_is_the_agent_the_runtime_handed_the_message_to(tmp_path: Path) -> None:
+    records = _run(tmp_path, """
+        process = {"messaging.operation": "process", "recipient_agent_type": "Writer", "sender_agent_type": "Triage"}
+        with span("autogen process Writer.(s1)-A", **process):
+            with span("execute_tool look_up_tide", **{"gen_ai.operation.name": "execute_tool",
+                                                      "gen_ai.tool.name": "look_up_tide"}):
+                pass
+        with span("autogen publish Writer.(s1)-T", **{"messaging.operation": "publish"}):
+            with span("execute_tool draft_note", **{"gen_ai.operation.name": "execute_tool",
+                                                    "gen_ai.tool.name": "draft_note"}):
+                pass
+    """)
+    assert _by_tool(records) == {"look_up_tide": ("Writer", None), "draft_note": (None, None)}
+
+
 def test_a_process_that_sets_no_provider_is_still_observed(tmp_path: Path) -> None:
     records = _run(tmp_path, """
         with span("Worker", **{"gen_ai.span.kind": "AGENT", "agent.name": "Worker"}):
