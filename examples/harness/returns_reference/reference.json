@@ -1,0 +1,54 @@
+{
+  "schema_version": "futureagi.multi-agent-reference.v1",
+  "id": "returns-reference",
+  "framework": {"name": "openai-agents", "version": "0.24.0"},
+  "source": {"path": "examples/harness/returns_reference", "license": "Apache-2.0"},
+  "runtime": {
+    "kind": "http_service",
+    "command": ["python", "agent.py"],
+    "model_environment": {}
+  },
+  "topology": {
+    "coordinator": "Returns coordinator",
+    "workers": [
+      {"id": "order_lookup", "name": "Order-lookup worker", "parent": "Returns coordinator",
+       "tools": ["get_order", "list_refunds"], "binding": "shared"},
+      {"id": "refund", "name": "Refund worker", "parent": "Returns coordinator",
+       "tools": ["list_refunds", "issue_refund"], "binding": "shared"}
+    ]
+  },
+  "scenarios": [
+    {
+      "id": "refund_inside_window",
+      "instruction": "Order 1043 (rain jacket, delivered 3 days ago) should be refunded in full.",
+      "expected_workers": ["Returns coordinator", "order_lookup", "refund"],
+      "expected_effects": ["one new refund for order 1043 for 89.0", "the reply names the new refund id"]
+    },
+    {
+      "id": "duplicate_refund",
+      "instruction": "The customer asks again for a refund of order 1042, which already has refund RF-7.",
+      "expected_workers": ["Returns coordinator", "order_lookup"],
+      "expected_effects": ["no second refund for order 1042", "the reply reports the existing refund RF-7 truthfully"]
+    },
+    {
+      "id": "outside_window",
+      "instruction": "Order 1044 was delivered 41 days ago; the customer asks for a refund.",
+      "expected_workers": ["Returns coordinator", "order_lookup"],
+      "expected_effects": ["no refund for order 1044", "the reply says the order is outside the 30-day window"]
+    },
+    {
+      "id": "lookup_only",
+      "instruction": "The customer only asks whether order 1043 can still be returned.",
+      "expected_workers": ["Returns coordinator", "order_lookup"],
+      "expected_effects": ["no refund issued", "the reply states the return window status"]
+    }
+  ],
+  "required_evidence": [
+    "stable parent and child IDs under one run ID",
+    "delegation and return events for every handoff",
+    "every tool call attributed to its worker",
+    "separate tool permissions per worker",
+    "independent results for each exercised worker and the whole task",
+    "missing child evidence reported as unmeasured"
+  ]
+}

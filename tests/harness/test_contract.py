@@ -180,3 +180,31 @@ def test_http_server_keeps_source_owned_message_template_argument():
     command = ["server", "--chat-template", "{{messages}}"]
     runtime = Runtime(command=command, interface={"kind": "http", "protocol": "openai_chat", "port": 8080, "path": "/v1/chat/completions"})
     assert runtime.command == command
+
+
+def test_declared_workers_name_contract_tools_and_reach_the_brief():
+    contract = AgentContract.model_validate(
+        {
+            "agent": "returns",
+            "real_use_cases": ["refund an order"],
+            "tools": [{"name": "get_order"}, {"name": "issue_refund"}],
+            "workers": [
+                {"id": "order_lookup", "name": "Order-lookup worker", "tools": ["get_order"], "binding": "separate"},
+                {"id": "refund", "name": "Refund worker", "tools": ["issue_refund"]},
+            ],
+        }
+    )
+    assert validate_contract(contract) == []
+    assert contract.workers[1].binding == "shared"
+    assert "order_lookup (Order-lookup worker): get_order" in contract.brief()
+
+    contract.workers.append(contract.workers[0].model_copy(update={"tools": ["send_email"]}))
+    problems = validate_contract(contract)
+    assert "duplicate-worker-ids:order_lookup" in problems
+    assert any(problem.startswith("worker[order_lookup]:unknown-tools:send_email") for problem in problems)
+
+
+def test_contract_without_workers_is_unchanged():
+    contract = AgentContract.model_validate({"agent": "plain", "real_use_cases": ["answer"], "tools": [{"name": "a"}]})
+    assert contract.workers == []
+    assert "WORKERS" not in contract.brief()
