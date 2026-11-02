@@ -1109,6 +1109,18 @@ def _render_template(value: Any, context: Mapping[str, Any]) -> Any:
     return _PLACEHOLDER.sub(replacement, value)
 
 
+class _StreamedEvents(list):
+    """The events of a streamed reply (server-sent events or JSON lines), in the order sent."""
+
+
+def _streamed_text(pieces: list[str]) -> str:
+    """A reply streamed as text deltas is their concatenation; one streamed as the text so far
+    keeps its last piece."""
+    if all(later.startswith(earlier) for earlier, later in zip(pieces, pieces[1:])):
+        return pieces[-1]
+    return "".join(pieces)
+
+
 def _decode_json_or_sse(text: str) -> Any:
     try:
         return json.loads(text)
@@ -1125,12 +1137,12 @@ def _decode_json_or_sse(text: str) -> Any:
             except json.JSONDecodeError:
                 events.append(data)
         if events:
-            return events
+            return _StreamedEvents(events)
         # Newline-delimited JSON, one object per line, as some agent servers stream.
         lines = [line for line in text.splitlines() if line.strip()]
         if lines:
             try:
-                return [json.loads(line) for line in lines]
+                return _StreamedEvents(json.loads(line) for line in lines)
             except json.JSONDecodeError:
                 pass
         raise ValueError(
@@ -1184,7 +1196,17 @@ def _select_response_value(payload: Any, path: str) -> Any:
                 # response schema describes one event.  A path such as ``content.parts.0.text``
                 # is therefore still meaningful: select the latest event matching that shape.
                 # This is envelope-driven rather than framework-specific and leaves explicit
-                # numeric paths (including negative indexes) unchanged.
+                # numeric paths (including negative indexes) unchanged. A streamed reply's
+                # text is spread over its events instead.
+                if isinstance(current, _StreamedEvents):
+                    pieces = []
+                    for item in current:
+                        try:
+                            pieces.append(select(item, offset))
+                        except ValueError:
+                            continue
+                    if pieces and all(isinstance(piece, str) for piece in pieces):
+                        return _streamed_text(pieces)
                 last_error: ValueError | None = None
                 for item in reversed(current):
                     try:

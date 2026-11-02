@@ -11,7 +11,7 @@ from fi.alk.harness.chat_call_runner import _HostedChatTarget
 from fi.alk.harness.chat_transport import create_chat_wrapper
 from fi.alk.harness.contract import RuntimeInterface, RuntimeHttpFailureRule
 from fi.simulate.agent.wrapper import AgentInput
-from fi.simulate.agent.wrappers.http import HTTPAgentWrapper, _decode_json_or_sse
+from fi.simulate.agent.wrappers.http import HTTPAgentWrapper, _decode_json_or_sse, _select_response_value
 from fi.simulate.agent.wrappers.http_events import CompletedToolEvents, CompletedToolRows
 
 
@@ -674,3 +674,12 @@ def test_a_reply_reads_as_json_server_sent_events_or_json_lines_and_nothing_else
     for body in ("plain words\n", "", '{"content": "a"}\nnot json\n'):
         with pytest.raises(ValueError, match="JSON lines"):
             _decode_json_or_sse(body)
+
+
+@pytest.mark.parametrize(("body", "reply"), [
+    ('{"content": {"text": "Tides "}}\n{"content": {"text": "turn"}}\n{"content": {"kind": "end"}}\n', "Tides turn"),
+    ('data: {"content": {"text": "Tides"}}\n\ndata: {"content": {"text": "Tides turn"}}\n\n', "Tides turn"),
+    ('[{"content": {"text": "first"}}, {"content": {"text": "last"}}]', "last"),
+])
+def test_a_streamed_reply_is_its_text_deltas_joined_or_its_last_whole_text(body, reply):
+    assert _select_response_value(_decode_json_or_sse(body), "content.text") == reply
