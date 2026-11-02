@@ -433,6 +433,17 @@ class BundleProvenanceV2(BaseModel):
     adopted_files: list[str] = Field(default_factory=list)
     generated_files: list[str] = Field(default_factory=list)
 
+    @model_serializer(mode="wrap")
+    def _without_unrecorded_admissions(
+        self, handler: SerializerFunctionWrapHandler
+    ) -> dict[str, Any]:
+        data = handler(self)
+        if "public_material_admissions" not in self.model_fields_set:
+            data.pop("public_material_admissions", None)
+        if "public_test_fixture_admissions" not in self.model_fields_set:
+            data.pop("public_test_fixture_admissions", None)
+        return data
+
     @model_validator(mode="after")
     def _valid_source_digest(self) -> "BundleProvenanceV2":
         if any(

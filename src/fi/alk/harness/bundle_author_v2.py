@@ -3554,6 +3554,8 @@ def author_bundle_v2(
             readiness=list(plan.readiness),
             files=_files(temporary),
             provenance=BundleProvenanceV2(
+                public_material_admissions=[],
+                public_test_fixture_admissions=[],
                 source_kind=job.source.kind.value,
                 repository=job.source.repository,
                 commit=job.source.commit_sha,
