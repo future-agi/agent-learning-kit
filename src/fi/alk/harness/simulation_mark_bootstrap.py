@@ -629,6 +629,25 @@ def _instrument(module, target) -> None:
     if getattr(instrumentor, "is_instrumented_by_opentelemetry", False):
         return
     instrumentor.instrument()
+    if module.__name__ == "agents":
+        _keep_agents_processors()
+
+
+def _keep_agents_processors() -> None:
+    """The OpenAI Agents SDK lets a process replace its trace processors, often only to stop
+    exporting to OpenAI, which would also drop ours; keep ours unless the new list has its own."""
+    from agents.tracing import get_trace_provider, provider
+
+    ours = tuple(get_trace_provider()._multi_processor._processors)
+    cls = provider.SynchronousMultiTracingProcessor
+    original = cls.set_processors
+
+    def wrapper(self, processors, __original=original):
+        kinds = {type(one) for one in processors}
+        return __original(self, [*processors, *(one for one in ours if type(one) not in kinds)])
+
+    functools.update_wrapper(wrapper, original)
+    cls.set_processors = wrapper
 
 
 def _patch_tracer(module, path, tool_trace) -> None:

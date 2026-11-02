@@ -774,13 +774,15 @@ def test_hook_module_imports_only_the_standard_library_and_uses_python_39_syntax
         "opentelemetry.sdk.trace",
         "opentelemetry.sdk.trace.export",
         "opentelemetry.exporter.otlp.proto.http.trace_exporter",
+        # Imported only inside a process that has just imported the OpenAI Agents SDK.
+        "agents.tracing",
     }
     top_level = {
         node.names[0].name if isinstance(node, ast.Import) else node.module
         for node in tree.body
         if isinstance(node, (ast.Import, ast.ImportFrom))
     }
-    assert not {name for name in top_level if name and name.startswith("opentelemetry")}
+    assert not {name for name in top_level if name and name.startswith(("opentelemetry", "agents"))}
 
 
 COLLECTOR = "http://collector.test:4318"

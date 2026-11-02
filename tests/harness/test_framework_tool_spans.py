@@ -162,3 +162,44 @@ def test_span_lines_alone_read_in_the_order_the_calls_started() -> None:
     late_end = Call(name="ask_research", arguments={}, result=None, ok=True, at=1.0)
     inner = Call(name="search_notes", arguments={}, result=None, ok=True, at=1.5)
     assert [c.name for c in call_runner._merge_span_calls([], [inner, late_end])] == ["ask_research", "search_notes"]
+
+
+_AGENTS_SDK = {
+    "agents/__init__.py": "from agents.tracing import get_trace_provider\n\n"
+    "def set_trace_processors(processors):\n    get_trace_provider().set_processors(processors)\n",
+    "agents/tracing/__init__.py": "from agents.tracing.provider import DefaultTraceProvider\n_PROVIDER = DefaultTraceProvider()\n\n"
+    "def get_trace_provider():\n    return _PROVIDER\n",
+    "agents/tracing/provider.py": "class SynchronousMultiTracingProcessor:\n    _processors = ()\n\n"
+    "    def set_processors(self, processors):\n        self._processors = tuple(processors)\n\n\n"
+    "class DefaultTraceProvider:\n    def __init__(self):\n        self._multi_processor = SynchronousMultiTracingProcessor()\n\n"
+    "    def set_processors(self, processors):\n        self._multi_processor.set_processors(processors)\n",
+    "traceai_openai_agents/__init__.py": "class FiTracingProcessor:\n    pass\n\n\nclass OpenAIAgentsInstrumentor:\n"
+    "    def instrument(self):\n        from agents import set_trace_processors\n"
+    "        set_trace_processors([FiTracingProcessor()])\n",
+}
+
+
+@pytest.mark.parametrize(("app", "kept"), [
+    ("set_trace_processors([])", ["FiTracingProcessor"]),
+    ("set_trace_processors([Own()])", ["Own", "FiTracingProcessor"]),
+    ("from traceai_openai_agents import FiTracingProcessor\nset_trace_processors([FiTracingProcessor()])", ["FiTracingProcessor"]),
+])
+def test_an_openai_agents_app_that_sets_its_own_trace_processors_is_still_observed_once(
+    tmp_path: Path, app: str, kept: list[str]
+) -> None:
+    for path, source in {**_AGENTS_SDK, "hook/sitecustomize.py": "import simulation_mark_bootstrap\n"
+                         "simulation_mark_bootstrap.install()\n"}.items():
+        (tmp_path / path).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / path).write_text(source)
+    (tmp_path / "hook/simulation_mark_bootstrap.py").write_bytes(Path(simulation_mark_bootstrap.__file__).read_bytes())
+    script = f"from agents import get_trace_provider, set_trace_processors\nclass Own: pass\n{app}\n" \
+        "print([type(p).__name__ for p in get_trace_provider()._multi_processor._processors])"
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        env={**os.environ, "PYTHONPATH": f"{tmp_path / 'hook'}:{tmp_path}", "ALK_OBSERVE_FRAMEWORKS": "1",
+             "HARNESS_TOOL_TRACE": str(tmp_path / "calls.jsonl")},
+        capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "hook: failed" not in result.stderr
+    assert json.loads(result.stdout.strip().replace("'", '"')) == kept
