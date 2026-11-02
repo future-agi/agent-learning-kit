@@ -3515,6 +3515,7 @@ def author_bundle_v2(
         # credential needed by the selected generic-runtime path.
         template_secrets_required=job.metadata.get("generic_harness_v1") is not True,
         agent_subfolder=subfolder or None,
+        agent_compose_file=str(runtime.get("compose_file") or "") or None,
     )
     output_root.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(

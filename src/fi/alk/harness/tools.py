@@ -20,6 +20,7 @@ from fi.simulate.agent.wrappers.http_events import (
 from .agent_type_check import (
     agent_type_failure,
     browser_tools_found,
+    browser_tools_in_agent,
     decide,
     failure_message,
     is_browser,
@@ -323,11 +324,11 @@ def _second_look(claimed: str, found: list[str]) -> str:
 
 
 def _tools_in_agent_folder(scan_root: Path | None, subfolder: str | None) -> list[str]:
-    """What the agent's own folder uses: a sibling's browser tool says nothing about this agent."""
+    """The browser tools this agent uses, which a sibling's aren't."""
+    if not scan_root or not subfolder:
+        return browser_tools_found(scan_root)
     try:
-        return browser_tools_found(
-            agent_folder(scan_root, subfolder) if scan_root and subfolder else scan_root
-        )
+        return browser_tools_in_agent(scan_root, subfolder)
     except SubfolderNotFound:
         # The folder check reports this; the model's reading shouldn't be refused for it too.
         return []

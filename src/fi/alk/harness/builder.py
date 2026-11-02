@@ -27,6 +27,7 @@ from .catalogue import Catalogue
 from .config import SKILLS_ROOT, chosen_model, discovered_skills, load_skill
 from .contract import AgentContract
 from .scenario import Scenario, voicemail_enabled
+from .source_folder import contract_folder
 from .scenario_tools import SCENARIO_SERVER, load_scenarios, scenario_tools, world_summary
 from .scenarios import writer_worker
 from .session import Stage
@@ -279,7 +280,7 @@ def suite_server(
     async def declare_tool(args: dict[str, Any]) -> dict[str, Any]:
         from .amend import _persist
         from .contract import ToolSpec, validate_contract
-        from .source_folder import agent_scope, contract_folder, in_agent_scope
+        from .source_folder import agent_scope, in_agent_scope
 
         if contract is None:
             return _err("there is no contract loaded to add a tool to")
@@ -670,7 +671,7 @@ def open_builder(
             "tell the person what you found and fixed:\n- " + "\n- ".join(health[:40])
         )
     )
-    folder = contract.runtime.source_subfolder if contract.runtime else ""
+    folder = contract_folder(contract)
     where = (
         f"\n\nThe environment's files are in {out}: contract.json, sub_goals.json, coverage.json, "
         "simulator_prompt.md, scenarios/ and the sealed environment-bundle/."

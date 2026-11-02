@@ -5834,6 +5834,48 @@ def test_subfolder_ignores_root_compose_with_broker(tmp_path, monkeypatch):
     assert plan.control_service == "agent"
 
 
+def test_subfolder_requires_a_named_root_compose_files_values(tmp_path, monkeypatch):
+    from fi.alk.harness import bundle_author_v2
+
+    source = _repo(
+        tmp_path,
+        {
+            "agents/a/agent.py": "x = 1\n",
+            "compose.yaml": (
+                "services:\n  agent:\n    build: agents/a\n    command: [python, agent.py]\n"
+                "    ports: ['8080:8080']\n"
+            ),
+        },
+    )
+    seen: dict = {}
+
+    class _Seen(Exception):
+        pass
+
+    def stop(*args, **kwargs):
+        seen.update(kwargs)
+        raise _Seen
+
+    monkeypatch.setattr(bundle_author_v2, "discover_credentials", stop)
+
+    with pytest.raises(_Seen):
+        _bundle(
+            tmp_path,
+            source,
+            "agents/a",
+            runtime={
+                "language": "python",
+                "execution": "compose",
+                "compose_file": "compose.yaml",
+                "service": "agent",
+                "interface": {"kind": "http", "port": 8080, "path": "/chat"},
+            },
+        )
+
+    assert seen["agent_compose_file"] == "compose.yaml"
+    assert seen["agent_subfolder"] == "agents/a"
+
+
 def test_subfolder_finds_its_own_compose_with_broker(tmp_path, monkeypatch):
     monkeypatch.setenv("ALK_COMPOSE_BROKER_SOCKET", "/private/alk/broker.sock")
     source = _repo(

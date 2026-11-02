@@ -14,14 +14,16 @@ import json
 import os
 import re
 import tokenize
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
+from .credentials import imported_by_agent
 from .failure_file import FAILURE_FILE
 from .instrumentation_evidence import _SKIPPED_DIRECTORIES, _imports
 from .job import FailureDomain, HarnessFailure, HarnessStage
+from .source_folder import agent_folder
 
 AGENT_TYPE_UNSUPPORTED = "agent_type_unsupported"
 # EX_CONFIG, which the platform doesn't retry even if it can't read the file.
@@ -285,10 +287,14 @@ def _signature(root: Path) -> tuple[int, int, int]:
 @lru_cache(maxsize=8)
 def _scan(root: Path, _files: tuple[int, int, int]) -> tuple[str, ...]:
     """One scan per state of the files: every builder reopen in a process asks again."""
+    return _tools_in(_agent_files(root), _modules_at_top(root))
+
+
+def _tools_in(paths: Iterable[Path], local: set[str]) -> tuple[str, ...]:
     found: set[str] = set()
     imported: set[str] = set()
     scanned = 0
-    for path in _agent_files(root):
+    for path in paths:
         if not _is_read(path):
             continue
         size = _file_size(path)
@@ -304,7 +310,6 @@ def _scan(root: Path, _files: tuple[int, int, int]) -> tuple[str, ...]:
             found |= _markers_in(path)
             if path.suffix == ".py":
                 imported |= _imports_in(path)
-    local = _modules_at_top(root)
     for name in imported:
         top = name.split(".")[0]
         if top in local:
@@ -314,6 +319,41 @@ def _scan(root: Path, _files: tuple[int, int, int]) -> tuple[str, ...]:
         elif name.endswith(f".{_TOOLKIT}"):
             found.add(_TOOLKIT)
     return tuple(sorted({name.replace("_", "-") for name in found}))
+
+
+def browser_tools_in_agent(source_root: Path, subfolder: str) -> list[str]:
+    """What one agent of a repository uses: its folder, what it imports, and the files directly
+    in the folders above it. A sibling's browser tool says nothing about this agent.
+
+    Raises ``SubfolderNotFound`` for a folder that can't be used.
+    """
+    root = Path(source_root).resolve()
+    folder = agent_folder(root, subfolder)
+    above = [
+        path
+        for parent in folder.parents
+        if parent.is_relative_to(root)
+        for path in sorted(parent.iterdir())
+        if path.is_file() and not path.is_symlink() and not _not_the_agent_file(path.name)
+    ]
+    shared = [
+        path
+        for path in sorted(imported_by_agent(root, subfolder))
+        if not _not_the_agent_file(path.name)
+        and not any(_not_the_agent_dir(part) for part in path.relative_to(root).parent.parts)
+    ]
+    # A shared script's dependencies are declared beside it, not in the script.
+    manifests = [
+        path.parent / "package.json"
+        for path in shared
+        if path.suffix != ".py" and (path.parent / "package.json").is_file()
+    ]
+    return list(
+        _tools_in(
+            dict.fromkeys((*_agent_files(folder), *above, *shared, *manifests)),
+            _modules_at_top(folder) | _modules_at_top(root),
+        )
+    )
 
 
 def modality_text(value: Any) -> str:
