@@ -693,14 +693,15 @@ def framework_instrumentation_command() -> list[str]:
     skipped: that framework's calls are then unobserved, and the build still succeeds.
     """
     script = (
-        "import importlib.metadata as m, re, subprocess, sys, tempfile\n"
+        "import importlib.metadata as m, re, shutil, subprocess, sys, tempfile\n"
         "n = lambda s: re.sub(r'[-_.]+', '-', s).lower()\n"
         "have = {n(d.metadata['Name']): d.version for d in m.distributions() if d.metadata['Name']}\n"
         f"want = [t for f, t in {FRAMEWORK_INSTRUMENTORS!r} if f in have and t not in have]\n"
         "f = tempfile.NamedTemporaryFile(mode='w', suffix='.txt')\n"
         "f.write(''.join(k + '==' + v + '\\n' for k, v in have.items())); f.flush()\n"
         "for t in want:\n"
-        "    r = subprocess.run(['uv', 'pip', 'install', '--python', sys.executable, '--constraint', f.name, t])\n"
+        "    pip = ['uv', 'pip', 'install', '--python', sys.executable] if shutil.which('uv') else [sys.executable, '-m', 'pip', 'install']\n"
+        "    r = subprocess.run([*pip, '--constraint', f.name, t])\n"
         "    if r.returncode: print('framework instrumentor not installed: ' + t, file=sys.stderr)\n"
     )
     return [
