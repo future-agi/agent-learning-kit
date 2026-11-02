@@ -7,6 +7,7 @@ the next turn instead of surfacing once the session is already over.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,14 @@ from fi.simulate.agent.wrappers.http_events import (
     CompletedToolRows,
 )
 
+from .agent_type_check import (
+    agent_type_failure,
+    browser_tools_found,
+    decide,
+    failure_message,
+    is_browser,
+    modality_text,
+)
 from .backends import qualified as qualified  # noqa: F401  (re-export; callers import it here)
 from .backends import tool, tool_server
 
@@ -34,6 +43,7 @@ from .contract import (
     generated_chat_interface_problem,
     validate_contract,
 )
+from .failure_file import FAILURE_FILE, write_failure_file
 from .instrumentation_evidence import detect_instrumentation
 
 CONTRACT_SERVER = "contract"
@@ -237,11 +247,35 @@ def _without_nulls(value: Any) -> Any:
 MOST_CHOSEN_EVALS = 6
 
 
+def _stop_message(destination: Path) -> str:
+    said = failure_message(destination) or "This build can't go on."
+    return f"{said} Don't submit again or do more work; tell the person."
+
+
+def _second_look(claimed: str, found: list[str]) -> str:
+    if is_browser(claimed):
+        return (
+            "second-look: you recorded modality browser, which stops this build as not "
+            "supported, and no browser, crawling or computer-use tool was found in the source. "
+            "Does a person come to this agent for a conversation, or to have it carry out work "
+            "on websites or a computer? For a conversation, submit again as chat or voice. If "
+            "you're sure, submit again as browser. Decide this from the source; don't ask anyone."
+        )
+    return (
+        f"second-look: you recorded modality {claimed or 'chat'}, and the source uses "
+        f"{', '.join(found)}. If that's a helper and a person comes to this agent for a "
+        "conversation, submit again as is. If its main job is carrying out work on websites or "
+        "a computer, submit again as browser, which stops this build as not supported. Decide "
+        "this from the source; don't ask anyone."
+    )
+
+
 def contract_tools(
     destination: Path,
     available_evals: list[dict[str, Any]] | None = None,
     *,
     source_root: Path | None = None,
+    scan_root: Path | None = None,
     require_setup_contract: bool = False,
 ) -> Any:
     """A server exposing ``submit_contract``, writing to ``destination`` on acceptance.
@@ -272,6 +306,9 @@ def contract_tools(
     # A gate with no way through would permanently block the rare agent that genuinely lacks it,
     # and this stage cannot tell those two apart from the outside.
     nudged: set[str] = set()
+    refused = False
+    looked_again = False
+    found: list[str] | None = None
 
     @tool(
         "submit_contract",
@@ -305,9 +342,10 @@ def contract_tools(
                 "modality": {
                     "type": "string",
                     "enum": list(known_modalities()),
-                    "description": "How a person reaches it, read from its runtime. A voice "
-                    "session (LiveKit, telephony, TTS/STT) is voice; a text interface is chat; "
-                    "a browser-driving agent is browser. This decides how it is later run.",
+                    "description": "How this agent is run, read from its runtime. A voice "
+                    "session (LiveKit, telephony, TTS/STT) is voice; a text conversation is chat; "
+                    "an agent a person uses to carry out work on websites or a computer is "
+                    "browser. This decides how it is later run.",
                 },
                 "call_direction": {
                     "type": "string",
@@ -1049,6 +1087,31 @@ def contract_tools(
     )
     async def submit_contract(args: dict[str, Any]) -> dict[str, Any]:
         payload = unwrapped(args)
+        nonlocal refused, looked_again, found
+        if refused or (destination / FAILURE_FILE).is_file():
+            return _ok(_stop_message(destination))
+        if found is None:
+            found = await asyncio.to_thread(browser_tools_found, scan_root)
+            # A call running alongside this one may have refused while this one waited.
+            if refused or (destination / FAILURE_FILE).is_file():
+                return _ok(_stop_message(destination))
+        claimed = modality_text(payload.get("modality"))
+        if claimed and not is_browser(claimed) and claimed not in known_modalities():
+            return _problems(
+                [
+                    f"{claimed!r} is not a modality. Use voice or chat, or browser if its main "
+                    "job is work on websites or a computer."
+                ]
+            )
+        verdict = decide(claimed, found, looked_again=looked_again)
+        if verdict == "refuse":
+            # Set first: if the write fails, the model must not get a resubmission through.
+            refused = True
+            write_failure_file(agent_type_failure(found), destination)
+            return _ok(_stop_message(destination))
+        if verdict == "second_look":
+            looked_again = True
+            return _problems([_second_look(claimed, found)])
         data_store = payload.get("data_store")
         if not isinstance(data_store, dict):
             data_store = {}

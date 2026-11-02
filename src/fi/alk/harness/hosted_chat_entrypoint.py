@@ -24,6 +24,7 @@ from .backends import (
     tool_server,
 )
 from .authoring_entrypoint import _load_provider_import_profile, agent_source_kind
+from .failure_file import FAILURE_FILE
 from .understand import PROVIDER_IMPORT_PROFILE_PATH_ENV
 from .chat_policy import EffectiveChatPolicy, apply_chat_policy, load_chat_policy
 from .hosted_conversation import (
@@ -1030,6 +1031,14 @@ class HostedChatRuntime:
         capabilities = self.client.turn_context.get("capabilities") or {}
         return bool(capabilities.get("control_only"))
 
+    def _build_is_over(self) -> bool:
+        """A control-only build conversation has nothing left to build: it was refused, or its job ended."""
+        if not self._control_only():
+            return False
+        # Not "completed": the post-build check is a platform command on a completed job.
+        status = self.client.turn_context.get("status") or {}
+        return status.get("state") in {"failed", "canceled"} or (self.workspace / FAILURE_FILE).is_file()
+
     def _side_chat(self) -> bool:
         capabilities = self.client.turn_context.get("capabilities") or {}
         return self._control_only() and capabilities.get("builder_session") is False
@@ -1193,6 +1202,8 @@ class HostedChatRuntime:
         finish_build: when it has saved something that opens more tools, it is reopened with
         them and resumes; otherwise it is told the build is not finished. Waits on the person
         while a question is open, and gives up after a few turns that change nothing."""
+        if self._build_is_over():
+            return False
         if not self._control_only() or self._side_chat() or (self.workspace / _BUILD_FINISHED).is_file():
             return False
         if (self.workspace / _PENDING_QUESTION).is_file():
@@ -1367,6 +1378,16 @@ class HostedChatRuntime:
                 payload={"command_message_id": message_id, "outcome": "failed"},
                 acknowledge_through=sequence,
             )
+            return
+        # A restart can redeliver the build command to a fresh sandbox after its job has ended.
+        if self._from_platform and self._build_is_over():
+            await self.client.emit(
+                "turn_completed",
+                stage=self.conversation.stage_name,
+                payload={"command_message_id": message_id, "ignored": "the build is over"},
+                acknowledge_through=sequence,
+            )
+            self._journal_unsuccessful(journal, message_id)
             return
         resume_invocation_id: str | None = None
         if state == "started":
