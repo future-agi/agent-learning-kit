@@ -158,6 +158,45 @@ def test_bundle_author_carries_command_tool_trace_bindings(tmp_path: Path) -> No
     }]
 
 
+def test_reseal_compiles_tools_added_to_a_traced_command_agent(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ready')\n")
+    (source / "agent_tools.py").write_text(
+        "def lookup(query): return query\n"
+        "def update(value): return value\n"
+    )
+    (source / "requirements.txt").write_text("requests==2.32.5\n")
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring, command=["python", "agent.py"],
+        interface={"kind": "command", "protocol": "fi.alk"},
+    )
+    contract_path = authoring / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract["tools"] = [{"name": "lookup", "args": ["query"]}]
+    contract["tool_entrypoints"] = [{
+        "tool": "lookup", "mode": "import", "module": "agent_tools", "callable": "lookup",
+    }]
+    contract_path.write_text(json.dumps(contract))
+    bundle = authoring / "environment-bundle"
+    author_bundle_v2(
+        source=source, job=_job(connector="auto"), authoring=authoring, output=bundle,
+    )
+    contract["tools"].append({"name": "update", "args": ["value"]})
+    contract["tool_entrypoints"].append({
+        "tool": "update", "mode": "import", "module": "agent_tools", "callable": "update",
+    })
+    contract_path.write_text(json.dumps(contract))
+
+    reseal_scenarios(authoring)
+
+    resealed = load_bundle_v2(bundle)
+    assert resealed.metadata["source_tool_trace_version"] == 1
+    assert "handlers/update.py" in {file.path for file in resealed.files}
+    assert "contract_copied" not in resealed.metadata
+
+
 def _job(
     *,
     connector: str,

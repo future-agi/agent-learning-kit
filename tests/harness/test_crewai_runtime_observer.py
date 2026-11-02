@@ -171,7 +171,7 @@ bus.emit(None, ToolUsageFinishedEvent(
     assert records[0]["output"] == "provider rejected the call"
 
 
-def test_missing_crewai_does_not_fabricate_generic_tool_evidence(
+def test_missing_crewai_falls_back_to_generic_tool_evidence(
     tmp_path: Path,
 ) -> None:
     (tmp_path / "crewai.py").write_text("raise ImportError('CrewAI unavailable')\n")
@@ -183,7 +183,8 @@ def test_missing_crewai_does_not_fabricate_generic_tool_evidence(
         "from agent_tools import lookup\ntry:\n lookup('Paris')\nexcept ValueError:\n print('failed')",
     )
     assert result.stdout.strip() == "failed"
-    assert records == []
+    assert len(records) == 1
+    assert records[0]["name"] == "lookup"
 
 
 def test_disabled_crewai_observer_keeps_generic_trace(tmp_path: Path) -> None:
@@ -235,3 +236,25 @@ finally:
     assert record["parent_event_id"] == "parent-id"
     assert "started_event_id" not in record
     assert not {"agent", "from_task", "from_agent"}.intersection(record)
+
+
+def test_string_values_are_bounded_before_the_record_limit(tmp_path: Path) -> None:
+    _fake_crewai(tmp_path)
+    script = """
+from crewai.events.event_bus import CrewAIEventsBus
+from crewai.events.types.tool_usage_events import ToolUsageFinishedEvent
+bus = CrewAIEventsBus()
+try:
+    event = ToolUsageFinishedEvent(
+        tool_name='lookup', tool_args={'query': 'x' * 100000},
+        output={'result': 'y' * 100000},
+    )
+    assert bus.emit(None, event) is bus.future
+finally:
+    bus.release.set()
+    bus.executor.shutdown()
+"""
+    _, records = _run(tmp_path, script)
+
+    assert len(records[0]["arguments"]["query"]) == 4096
+    assert len(records[0]["output"]["result"]) == 4096

@@ -152,9 +152,23 @@ class Call:
     # read as one thing: without it the UI can show what the agent did but not when, and "when"
     # is the whole question for a spoken run.
     at: float = 0.0
-    # Native multi-agent runtimes may identify which worker and task made the call.
-    by: str = ""
-    task: str = ""
+    worker_id: str = ""
+    worker_label: str = ""
+    task_id: str = ""
+    task_label: str = ""
+
+
+def tool_call_attribution(record: Mapping[str, Any]) -> dict[str, str]:
+    def text(key: str) -> str:
+        value = record.get(key)
+        return value if isinstance(value, str) else ""
+
+    return {
+        "worker_id": text("agent_key") or text("agent_id"),
+        "worker_label": text("agent_role"),
+        "task_id": text("task_id"),
+        "task_label": text("task_name"),
+    }
 
 
 class GeneratedWorld(EnvironmentAdapter):
