@@ -17,6 +17,11 @@ existing application through AgentCC or update an obsolete dependency API.
 Each patch is checksummed and leaves the native prompts, coordinator, workers,
 and execution flow unchanged.
 
+Python command agents with declared import or construct tools receive the
+framework-neutral tool tracer. CrewAI command agents use terminal framework
+events when the CrewAI observer installs successfully and otherwise fall back
+to the same generic tracer.
+
 The Google reference is the full Travel Concierge application. Its top-level
 agents are `inspiration_agent`, `planning_agent`, `booking_agent`,
 `pre_trip_agent`, `in_trip_agent`, and `post_trip_agent`. The manifest also
@@ -61,5 +66,5 @@ python examples/harness/multi_agent_compatibility/verify_references.py \
 Submit each materialized directory through the existing source-repository or
 source-upload flow. A valid hosted result must retain the framework's raw child
 IDs, delegation events, return events, worker-attributed tool calls, and state
-effects. TH-8886 through TH-8888 own normalized storage, worker-level
-evaluation, and timeout or cancellation behavior.
+effects. Later work owns normalized storage, worker-level evaluation, and
+timeout or cancellation behavior.

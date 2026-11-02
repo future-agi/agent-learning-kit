@@ -3277,8 +3277,10 @@ def test_semantic_worker_trace_preserves_agent_facing_arguments(tmp_path):
                 },
                 "output": json.dumps({"booking_ref": "UBR-71904"}),
                 "is_error": False,
-                "agent_role": "Booking worker",
+                "agent_key": "worker-a",
+                "agent_role": "Request processor",
                 "task_id": "task-8",
+                "task_name": "Process request",
             }
         )
         + "\n"
@@ -3291,8 +3293,47 @@ def test_semantic_worker_trace_preserves_agent_facing_arguments(tmp_path):
     assert calls[0].name == "book_ride"
     assert calls[0].arguments["caller_explicitly_confirmed"] is True
     assert calls[0].result == {"booking_ref": "UBR-71904"}
-    assert calls[0].by == "Booking worker"
-    assert calls[0].task == "task-8"
+    assert calls[0].worker_id == "worker-a"
+    assert calls[0].worker_label == "Request processor"
+    assert calls[0].task_id == "task-8"
+    assert calls[0].task_label == "Process request"
+
+
+def test_transcript_actions_identify_the_worker_and_task() -> None:
+    from fi.alk.harness.run.conversation import Transcript
+    from fi.alk.harness.run.simulation import _calls_of
+    from fi.alk.harness.world.runtime import Call
+
+    transcript = Transcript(
+        calls=[
+            Call(
+                name="process_request",
+                arguments={"request": "example"},
+                result={"request_id": "request-1"},
+                worker_id="worker-a",
+                worker_label="Request processor",
+                task_id="task-4",
+                task_label="Process request",
+            )
+        ]
+    )
+
+    assert transcript.actions().startswith(
+        "[Request processor/Process request] process_request("
+    )
+    assert _calls_of(transcript.calls)[0] == {
+        "name": "process_request",
+        "arguments": {"request": "example"},
+        "result": "{'request_id': 'request-1'}",
+        "ok": True,
+        "refused": False,
+        "error": "",
+        "at": 0.0,
+        "worker_id": "worker-a",
+        "worker_label": "Request processor",
+        "task_id": "task-4",
+        "task_label": "Process request",
+    }
 
 
 def test_semantic_worker_trace_collapses_only_local_telemetry_mirror(tmp_path):

@@ -23,7 +23,7 @@ import tempfile
 import tomllib
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 from urllib.parse import urlsplit
 
 import yaml
@@ -3031,6 +3031,16 @@ def _source_tool_trace_environment(
     return environment
 
 
+_SOURCE_TOOL_TRACE_VERSION = 1
+
+
+def _uses_source_tool_trace(processes: Sequence[Any]) -> bool:
+    return any(
+        "ALK_TOOL_TRACE_BINDINGS" in (getattr(process, "environment", None) or {})
+        for process in processes
+    )
+
+
 def _package_process_sources(
     source: Path,
     staging: Path,
@@ -3635,6 +3645,11 @@ def author_bundle_v2(
             metadata={
                 "packaging": plan.packaging,
                 "environment_plan_version": "2",
+                **(
+                    {"source_tool_trace_version": _SOURCE_TOOL_TRACE_VERSION}
+                    if _uses_source_tool_trace(plan.processes)
+                    else {}
+                ),
                 **_adk_web_app(source_root, contract_body),
                 **({"generic_harness": "v1"} if generic_pipeline else {}),
                 **(
@@ -3838,7 +3853,11 @@ def _built_by_older_alk(
     environments = [getattr(process, "environment", None) or {} for process in processes]
     bridged = _interface({"runtime": {"interface": _COMMAND_BRIDGE_INTERFACE}})
     return (
-        any("ALK_TOOL_TRACE_BINDINGS" in env for env in environments)
+        (
+            any("ALK_TOOL_TRACE_BINDINGS" in env for env in environments)
+            and metadata.get("source_tool_trace_version")
+            != _SOURCE_TOOL_TRACE_VERSION
+        )
         or (
             _interface(sealed) == bridged
             and any("ALK_SUBPROCESS_COMMAND" in env for env in environments)

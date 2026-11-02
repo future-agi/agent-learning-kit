@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..contract import AgentContract
 from ..scenario import Scenario
-from ..world.runtime import Call, runtime_ids
+from ..world.runtime import Call, runtime_ids, tool_call_attribution
 from .grade import Judgement, Result
 
 if TYPE_CHECKING:
@@ -543,8 +543,11 @@ def _calls_of(calls: Any) -> list[dict[str, Any]]:
             "refused": call.refused,
             "error": call.error,
             "at": getattr(call, "at", 0.0),
-            **({"by": call.by} if getattr(call, "by", "") else {}),
-            **({"task": call.task} if getattr(call, "task", "") else {}),
+            **{
+                field: getattr(call, field)
+                for field in ("worker_id", "worker_label", "task_id", "task_label")
+                if getattr(call, field, "")
+            },
         }
         for call in calls
     ]
@@ -993,13 +996,7 @@ def _semantic_calls(path: Path, *, contract: AgentContract | None = None) -> lis
             ok=not failed,
             refused=failed,
             error=str(output) if failed else "",
-            by=str(
-                record.get("agent_key")
-                or record.get("agent_role")
-                or record.get("agent_id")
-                or ""
-            ),
-            task=str(record.get("task_name") or record.get("task_id") or ""),
+            **tool_call_attribution(record),
             runtime_ids=runtime_ids(record),
             at=float(record.get("at") or 0.0),
         )
