@@ -12,6 +12,7 @@ import pytest
 import fi.alk
 from fi.alk.harness import scenario_source as ss
 from fi.alk.harness.contract import AgentContract
+from fi.alk.harness.framework_detection import FrameworkFolders
 from fi.alk.harness.job import SourceKind
 from fi.alk.providers.agent import AgentBuildError, build_authored_agent
 
@@ -57,7 +58,11 @@ def _contract(prompt: str) -> dict[str, Any]:
 
 
 def _provision(
-    bundle_dir: Path, kind: SourceKind, subfolder: str | None = None
+    bundle_dir: Path,
+    kind: SourceKind,
+    source: ss.BundleScenarioSource | None = None,
+    *,
+    subfolder: str | None = None,
 ) -> dict[str, Any]:
     client = _RecordingClient()
     job = SimpleNamespace(
@@ -66,7 +71,7 @@ def _provision(
         source=SimpleNamespace(kind=kind, repository="org/clinic", subfolder=subfolder),
     )
     asyncio.run(
-        ss.BundleScenarioSource().build(
+        (source or ss.BundleScenarioSource()).build(
             job,
             object(),
             client,
@@ -233,3 +238,129 @@ def test_no_subfolder_setup_hash_is_pinned(tmp_path: Path) -> None:
         payload["agent"]["agent"]["setup_hash"]
         == "sh1:27408adef9319e5f760d442d8e1e4c34ca2787f736e49ede86bc7398b323dd7b"
     )
+
+
+def _source_with_crew(tmp_path: Path) -> ss.BundleScenarioSource:
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    (agent / "main.py").write_text(
+        "from crewai import Crew\nCrew()\n", encoding="utf-8"
+    )
+    return ss.BundleScenarioSource(
+        framework_folders=FrameworkFolders(agent, agent, None)
+    )
+
+
+def _framework_log_lines(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("framework")
+    ]
+
+
+def test_agent_document_carries_framework(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    bundle = tmp_path / "bundle"
+    contract = _contract("p")
+    _write_bundle(bundle, contract)
+
+    with caplog.at_level(logging.INFO, logger="fi.alk.harness"):
+        payload = _provision(bundle, SourceKind.GITHUB, _source_with_crew(tmp_path))
+
+    lines = _framework_log_lines(caplog)
+    assert any("name=crewai" in line for line in lines)
+    assert not any(str(tmp_path) in line or "main.py" in line for line in lines)
+    framework = {"name": "crewai", "version": None}
+    assert payload["agent"]["agent"]["extension"]["framework"] == framework
+    assert payload["agent"]["agent"] == build_authored_agent(
+        contract, framework=framework
+    )
+
+
+def test_detector_crash_keeps_document(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    bundle = tmp_path / "bundle"
+    _write_bundle(bundle, _contract("p"))
+    secret = "/customer/private/path"
+
+    def _raise(*_: Any, **__: Any) -> dict[str, Any]:
+        raise RuntimeError(secret)
+
+    monkeypatch.setattr(ss, "detect_framework", _raise)
+
+    with caplog.at_level(logging.INFO, logger="fi.alk.harness"):
+        payload = _provision(bundle, SourceKind.GITHUB, _source_with_crew(tmp_path))
+
+    lines = _framework_log_lines(caplog)
+    assert any("class=RuntimeError" in line for line in lines)
+    assert not any(secret in line for line in lines)
+    assert payload["agent"]["agent"]["extension"]["framework"] == {
+        "name": "unknown",
+        "version": None,
+    }
+
+
+def test_no_folders_omits_framework(tmp_path: Path) -> None:
+    _write_bundle(tmp_path, _contract("p"))
+
+    payload = _provision(tmp_path, SourceKind.GITHUB)
+
+    assert set(payload["agent"]["agent"]["extension"]) == {"contract"}
+
+
+@pytest.mark.parametrize(
+    ("kind", "expected_calls"),
+    [(SourceKind.GITHUB, 1), (SourceKind.ARCHIVE, 1), (SourceKind.REMOTE, 0)],
+    ids=["github", "archive", "not_for_a_remote_source"],
+)
+def test_detection_runs_once_off_the_event_loop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: SourceKind,
+    expected_calls: int,
+) -> None:
+    bundle = tmp_path / "bundle"
+    _write_bundle(bundle, _contract("p"))
+    detections: list[Any] = []
+    real_to_thread = asyncio.to_thread
+
+    async def spy(function: Any, /, *args: Any, **kwargs: Any) -> Any:
+        if function is ss.detect_framework:
+            detections.append(args)
+        return await real_to_thread(function, *args, **kwargs)
+
+    monkeypatch.setattr(ss.asyncio, "to_thread", spy)
+
+    _provision(bundle, kind, _source_with_crew(tmp_path))
+
+    assert len(detections) == expected_calls
+
+
+def test_detection_gets_all_three_folders(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle = tmp_path / "bundle"
+    _write_bundle(bundle, _contract("p"))
+    calls: list[tuple[Any, dict[str, Any]]] = []
+
+    def record(folder: Any, **kwargs: Any) -> dict[str, Any]:
+        calls.append((folder, kwargs))
+        return {"name": "none", "version": None}
+
+    monkeypatch.setattr(ss, "detect_framework", record)
+    folders = FrameworkFolders(tmp_path / "a", tmp_path / "b", tmp_path / "c")
+
+    _provision(
+        bundle,
+        SourceKind.GITHUB,
+        ss.BundleScenarioSource(framework_folders=folders),
+    )
+
+    assert calls == [
+        (tmp_path / "a", {"repo_root": tmp_path / "b", "package_dir": tmp_path / "c"})
+    ]

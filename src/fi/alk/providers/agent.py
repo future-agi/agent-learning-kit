@@ -145,7 +145,10 @@ class AgentBuildError(ValueError):
 
 
 def build_authored_agent(
-    document: Mapping[str, Any], *, subfolder: str | None = None
+    document: Mapping[str, Any],
+    *,
+    subfolder: str | None = None,
+    framework: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     contract = _redact(
         {key: value for key, value in document.items() if key != "base_environment"}
@@ -181,7 +184,10 @@ def build_authored_agent(
         "direction_answer": None,
         "gaps": ["flow_not_described"],
         "instrumentation": contract.get("instrumentation") or "none",
-        "extension": {"contract": contract},
+        "extension": {
+            "contract": contract,
+            **({"framework": dict(framework)} if framework is not None else {}),
+        },
     }
     if subfolder:
         # The platform compares this to what it sent, so it is never trimmed or normalised.

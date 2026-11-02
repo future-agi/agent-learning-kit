@@ -5089,3 +5089,121 @@ def test_bad_subfolder_fails_terminal_before_compose(monkeypatch):
         "code": "subfolder_not_found",
         "message": subfolder_not_found("agents/missing").message,
     }
+
+
+def _harness_with_a_packaged_agent(
+    packaged_main: bytes = b"from crewai import Crew\nCrew()\n",
+) -> Harness:
+    real_body = _base_manifest_body
+
+    def packaged_body() -> dict[str, Any]:
+        body = real_body()
+        body["processes"][1]["working_directory"] = "generated/source/agent"
+        return body
+
+    files = {
+        **_scenario_doc_files(
+            "passing",
+            scenario_key="passing",
+            scenario_id="platform-passing",
+            sub_goals=["holds"],
+            checks={"holds": "def check(world, calls):\n    return None\n"},
+        ),
+        "contract.json": json.dumps({"agent": "crew-bot", "tools": []}).encode("utf-8"),
+        "generated/source/agent/main.py": packaged_main,
+    }
+    with mock.patch.dict(globals(), {"_base_manifest_body": packaged_body}):
+        return _build_harness(
+            scenarios=[],
+            instances=1,
+            use_default_scenario_source=True,
+            bundle_writer=lambda bundle_dir: _write_bundle_with_scenario_files(
+                bundle_dir, files
+            ),
+        )
+
+
+def _posted_framework(harness: Harness) -> dict[str, Any]:
+    [document] = [
+        body["agent"]["agent"]
+        for _, body in harness.transport.scenarios_calls
+        if "agent" in body
+    ]
+    return document["extension"]["framework"]
+
+
+def _install_crewai(package_dir: Path) -> None:
+    dist_info = (
+        package_dir
+        / ".venv"
+        / "lib"
+        / "python3.12"
+        / "site-packages"
+        / "crewai-0.86.0.dist-info"
+    )
+    dist_info.mkdir(parents=True)
+    (dist_info / "METADATA").write_bytes(
+        b"Metadata-Version: 2.1\nName: crewai\nVersion: 0.86.0\n"
+    )
+
+
+def _framework_log_lines(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("framework")
+    ]
+
+
+def test_run_job_gives_bundle_source_its_folders(caplog) -> None:
+    async def scenario() -> None:
+        harness = _harness_with_a_packaged_agent()
+        _install_crewai(harness.work / "build" / "agent")
+
+        with mock.patch.object(
+            he, "framework_folders_for", wraps=he.framework_folders_for
+        ) as folders_for:
+            code = await he.run_job(
+                harness.job_path, harness.source, harness.output, deps=harness.deps
+            )
+
+        assert code == he.EXIT_OK
+        assert _posted_framework(harness) == {"name": "crewai", "version": "0.86.0"}
+        assert folders_for.call_args.kwargs["source"] == harness.source
+        lines = _framework_log_lines(caplog)
+        assert any("name=crewai" in line for line in lines)
+        assert not any("0.86.0" in line for line in lines)
+
+    with caplog.at_level("INFO", logger="fi.alk.harness"):
+        asyncio.run(scenario())
+
+
+def test_folder_step_failure_keeps_the_run_going(caplog) -> None:
+    secret = "/customer/private/path"
+
+    async def scenario() -> None:
+        # The crew only in `source`, and a version where each wrong fallback would read
+        # one: the fallback is the source, with no build tree.
+        harness = _harness_with_a_packaged_agent(packaged_main=b"print('plain')\n")
+        (harness.source / "main.py").write_text(
+            "from crewai import Crew\nCrew()\n", encoding="utf-8"
+        )
+        _install_crewai(harness.work / "build" / "agent")
+        _install_crewai(harness.work)
+
+        with mock.patch.object(
+            he, "framework_folders_for", side_effect=RuntimeError(secret)
+        ):
+            code = await he.run_job(
+                harness.job_path, harness.source, harness.output, deps=harness.deps
+            )
+
+        assert code == he.EXIT_OK
+        assert _posted_framework(harness) == {"name": "crewai", "version": None}
+        assert len(harness.transport.terminal_events()) == 1
+        lines = _framework_log_lines(caplog)
+        assert any("class=RuntimeError" in line for line in lines)
+        assert not any(secret in line for line in lines)
+
+    with caplog.at_level("INFO", logger="fi.alk.harness"):
+        asyncio.run(scenario())
