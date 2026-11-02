@@ -4,8 +4,15 @@ from __future__ import annotations
 
 import random
 from enum import Enum
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+)
 
 from .diagnostics import HarnessDiagnostic, RepairOwner
 from .job import HarnessStage
@@ -105,6 +112,15 @@ class RepairHistory(BaseModel):
     runtime_patches_used: int = 0
     environment_patches_used: int
     scenario_patches_used: int
+
+    @model_serializer(mode="wrap")
+    def _without_unrecorded_runtime_patches(
+        self, handler: SerializerFunctionWrapHandler
+    ) -> dict[str, Any]:
+        data = handler(self)
+        if "runtime_patches_used" not in self.model_fields_set:
+            data.pop("runtime_patches_used", None)
+        return data
 
 
 class RepairController:
