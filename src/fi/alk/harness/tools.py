@@ -1090,6 +1090,9 @@ def contract_tools(
         nonlocal refused, looked_again, found
         if refused or (destination / FAILURE_FILE).is_file():
             return _ok(_stop_message(destination))
+        # Read before the wait: a call running alongside this one mustn't count as the model
+        # having read the second look.
+        had_second_look = looked_again
         if found is None:
             found = await asyncio.to_thread(browser_tools_found, scan_root)
             # A call running alongside this one may have refused while this one waited.
@@ -1103,11 +1106,13 @@ def contract_tools(
                     "job is work on websites or a computer."
                 ]
             )
-        verdict = decide(claimed, found, looked_again=looked_again)
+        verdict = decide(claimed, found, looked_again=had_second_look)
         if verdict == "refuse":
             # Set first: if the write fails, the model must not get a resubmission through.
             refused = True
             write_failure_file(agent_type_failure(found), destination)
+            # An earlier reading in this folder would otherwise build the agent just refused.
+            (destination / "contract.json").unlink(missing_ok=True)
             return _ok(_stop_message(destination))
         if verdict == "second_look":
             looked_again = True

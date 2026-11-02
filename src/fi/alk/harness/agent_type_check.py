@@ -15,6 +15,7 @@ import os
 import re
 import tokenize
 from collections.abc import Iterator, Sequence
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
@@ -81,11 +82,12 @@ BROWSER_PACKAGES = frozenset(
         "apify-client",
     }
 )
+# The tools' own API names only: the bare words turn up in prompts and tracing attributes.
 TOOL_MARKER = re.compile(
-    r"\bcomputer[_-]use(?:[_-]preview)?\b|\bComputerUse\b|\bcomputer_\d{8}\b"
-    r"|@playwright/mcp|mcp-server-playwright"
+    r"\bcomputer[_-]use[_-]preview\b|\bcomputer-use-20\d\d-\d\d-\d\d\b|\bComputerUse\b"
+    r"|\bcomputer_\d{8}\b|@playwright/mcp|mcp-server-playwright"
 )
-# Hidden folders and anything named for tests or e2e describe the developer's setup too.
+# Hidden folders and folders named for tests or e2e describe the developer's setup too.
 NOT_THE_AGENT = frozenset(
     {"docs", "doc", "examples", "example", "samples", "vendor", "third_party", "evals"}
 )
@@ -96,6 +98,9 @@ _TOOLKIT = "PlayWrightBrowserToolkit"
 _TEST_FILES = ("test_*.py", "*_test.py", "conftest.py", "*.test.*", "*.spec.*")
 _SCRIPT_SUFFIXES = frozenset({".js", ".ts", ".mjs", ".cjs", ".tsx", ".jsx"})
 _LARGEST_CODE_FILE = 1024 * 1024
+# Past this a repository holds the conversation up for longer than the rest of the scan is worth.
+_LARGEST_SCAN = 128 * 1024 * 1024
+_LARGEST_RECORD = 1024 * 1024
 # Strings are matched first and kept, so "https://..." or "src/**/*.ts" isn't read as a comment.
 # An unclosed one ends at its line or the file: a start that could fail makes a customer's odd file
 # cost the square of its size, which holds up the build's conversation until it's done.
@@ -106,8 +111,11 @@ _SCRIPT_COMMENT_OR_STRING = re.compile(
 )
 
 
-# A whole word only: "latest" and "contest" hold real code.
-_TEST_FOLDER = re.compile(r"(?:^|[^a-z0-9])(?:tests?|testing|testdata|unittests?|integrationtests?|e2e(?:tests?)?)(?:$|[^a-z0-9])")
+# The whole name: "e2e_agent" and "testing_agent" hold agents, and test automation is a main kind
+# of browser agent.
+_TEST_FOLDER = re.compile(
+    r"_*(?:(?:unit|integration|e2e)[_-]?)?(?:tests?|testing|test[_-]?data)_*|e2e"
+)
 
 
 def _not_the_agent_dir(name: str) -> bool:
@@ -116,7 +124,7 @@ def _not_the_agent_dir(name: str) -> bool:
         name in _SKIPPED_DIRECTORIES
         or lowered in NOT_THE_AGENT
         or name.startswith(".")
-        or _TEST_FOLDER.search(lowered) is not None
+        or _TEST_FOLDER.fullmatch(lowered) is not None
     )
 
 
@@ -125,13 +133,34 @@ def _not_the_agent_file(name: str) -> bool:
     return any(fnmatch.fnmatchcase(lowered, pattern) for pattern in _TEST_FILES)
 
 
+def _unpacked_at_top(root: Path) -> set[str]:
+    """What ``pip install -t .`` put beside the agent's code, by each distribution's own record."""
+    names: set[str] = set()
+    try:
+        records = [entry for entry in root.iterdir() if entry.name.endswith(".dist-info")]
+    except OSError:
+        return names
+    for entry in records:
+        try:
+            record = entry / "RECORD"
+            if record.stat().st_size > _LARGEST_RECORD:
+                continue
+            text = record.read_text(encoding="utf-8")
+        except (OSError, ValueError):
+            continue
+        names.update(line.split(",", 1)[0].split("/", 1)[0] for line in text.splitlines())
+    return names
+
+
 def _agent_files(root: Path) -> Iterator[Path]:
+    unpacked = _unpacked_at_top(root)
     for directory, subdirectories, files in os.walk(root):
+        if Path(directory) == root:
+            subdirectories[:] = [name for name in subdirectories if name not in unpacked]
+            files = [name for name in files if name not in unpacked]
         # A folder of unpacked distributions holds other people's code, whose SDKs name these
         # tools whether or not this agent uses them.
-        if Path(directory) != root and any(
-            name.endswith(".dist-info") for name in subdirectories
-        ):
+        elif any(name.endswith(".dist-info") for name in subdirectories):
             subdirectories[:] = []
             continue
         subdirectories[:] = [
@@ -168,11 +197,13 @@ def _imports_in(path: Path) -> set[str]:
 
 def _modules_at_top(root: Path) -> set[str]:
     """What sits ahead of an installed package on the import path, so isn't that package."""
+    unpacked = _unpacked_at_top(root)
     try:
         return {
             entry.stem if entry.is_file() else entry.name
             for entry in root.iterdir()
-            if entry.suffix == ".py" or (entry / "__init__.py").is_file()
+            if entry.name not in unpacked
+            and (entry.suffix == ".py" or (entry / "__init__.py").is_file())
         }
     except OSError:
         return set()
@@ -186,6 +217,14 @@ def _python_code(text: str) -> str:
     )
 
 
+def _script_kept(hit: re.Match[str]) -> str:
+    kept = hit.group(1) or ""
+    # A lone apostrophe, as in JSX text, isn't a string, so it can't protect a comment after it.
+    if kept.startswith("'") and (len(kept) == 1 or not kept.endswith("'")):
+        return kept.split("//", 1)[0]
+    return kept
+
+
 def _markers_in(path: Path) -> set[str]:
     try:
         if not path.is_file() or path.stat().st_size > _LARGEST_CODE_FILE:
@@ -194,7 +233,7 @@ def _markers_in(path: Path) -> set[str]:
         code = (
             _python_code(text)
             if path.suffix == ".py"
-            else _SCRIPT_COMMENT_OR_STRING.sub(lambda hit: hit.group(1) or "", text)
+            else _SCRIPT_COMMENT_OR_STRING.sub(_script_kept, text)
         )
     except (OSError, ValueError, SyntaxError, tokenize.TokenError):
         return set()
@@ -202,6 +241,13 @@ def _markers_in(path: Path) -> set[str]:
         "Playwright MCP" if "playwright" in hit.group() else "computer-use tool"
         for hit in TOOL_MARKER.finditer(code)
     }
+
+
+def _file_size(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
 
 
 def browser_tools_found(source_root: Path | None) -> list[str]:
@@ -213,12 +259,31 @@ def browser_tools_found(source_root: Path | None) -> list[str]:
     if source_root is None:
         return []
     root = Path(source_root).resolve()
+    try:
+        # A new checkout at the same path has a new time, so it doesn't get the old answer.
+        checked_out = root.stat().st_mtime_ns
+    except OSError:
+        return []
+    return list(_scan(root, checked_out))
+
+
+@lru_cache(maxsize=8)
+def _scan(root: Path, _checked_out: int) -> tuple[str, ...]:
+    """One scan per checkout: every builder reopen in a process asks again."""
     found: set[str] = set()
     imported: set[str] = set()
+    scanned = 0
     for path in _agent_files(root):
+        if path.name != "package.json" and not (
+            path.suffix == ".py" or path.suffix in _SCRIPT_SUFFIXES
+        ):
+            continue
+        scanned += _file_size(path)
+        if scanned > _LARGEST_SCAN:
+            break
         if path.name == "package.json":
             found |= _packages_used(path)
-        elif path.suffix == ".py" or path.suffix in _SCRIPT_SUFFIXES:
+        else:
             found |= _markers_in(path)
             if path.suffix == ".py":
                 imported |= _imports_in(path)
@@ -231,7 +296,7 @@ def browser_tools_found(source_root: Path | None) -> list[str]:
             found.add(top)
         elif name.endswith(f".{_TOOLKIT}"):
             found.add(_TOOLKIT)
-    return sorted({name.replace("_", "-") for name in found})
+    return tuple(sorted({name.replace("_", "-") for name in found}))
 
 
 def modality_text(value: Any) -> str:

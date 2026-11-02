@@ -4,7 +4,9 @@ from pathlib import Path
 
 import pytest
 
+from fi.alk.harness.agent_type_check import agent_type_failure
 from fi.alk.harness.executor import HarnessExecutor
+from fi.alk.harness.failure_file import FAILURE_FILE, write_failure_file
 from fi.alk.harness.job import HarnessJob, HarnessStage
 from fi.alk.harness.local_certified_runtime import LocalCertifiedRunError
 from fi.alk.harness.process_runtime import ProcessRuntimeError
@@ -46,3 +48,41 @@ def test_authored_scenarios_are_not_completed_calls(tmp_path, monkeypatch, parti
     assert status.total_scenarios == 1
     assert status.completed_scenarios == (1 if partial_run else 0)
     assert status.failure.code == ("runtime_stopped" if partial_run else "resource_capacity_unknown")
+
+
+def _job(source):
+    return HarnessJob(
+        job_id="refused", run_id="refused-run", execution="local",
+        source={"kind": "local_repository", "local_path": str(source)},
+        agent={"connector": "auto"}, scenario_count=1,
+    )
+
+
+def test_the_failure_a_build_left_is_the_jobs_failure(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    source.mkdir()
+    output = tmp_path / "output"
+
+    async def refused(args):
+        write_failure_file(agent_type_failure(["playwright"]), Path(args.out))
+        return 78
+
+    monkeypatch.setattr("fi.alk.harness.cli._auto", refused)
+    status = asyncio.run(HarnessExecutor().run(_job(source), source=source, output=output))
+    assert status.stage is HarnessStage.FAILED
+    assert status.failure == agent_type_failure(["playwright"])
+
+
+def test_an_unreadable_failure_file_falls_back_to_the_events(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    source.mkdir()
+    output = tmp_path / "output"
+
+    async def crashed(args):
+        Path(args.out).mkdir()
+        (Path(args.out) / FAILURE_FILE).write_text("{")
+        return 1
+
+    monkeypatch.setattr("fi.alk.harness.cli._auto", crashed)
+    status = asyncio.run(HarnessExecutor().run(_job(source), source=source, output=output))
+    assert status.failure.code == "running_failed"

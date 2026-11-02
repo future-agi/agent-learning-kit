@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import os
 import stat
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -14,10 +16,12 @@ from types import SimpleNamespace
 import pytest
 
 from fi.alk.harness import (
+    agent_type_check,
     amend,
     authoring_entrypoint,
     chat,
     cli,
+    failure_file,
     tools,
 )
 from fi.alk.harness import hosted_authoring_entrypoint as hosted_authoring
@@ -157,6 +161,58 @@ def test_writer_leaves_no_temp_file(tmp_path):
     assert [path.name for path in tmp_path.iterdir()] == [FAILURE_FILE]
 
 
+def _no_hard_links(monkeypatch):
+    def refuse(*_args, **_kwargs):
+        raise OSError(errno.EXDEV, "cross-device link")
+
+    monkeypatch.setattr(failure_file.os, "link", refuse)
+
+
+def test_a_disk_with_no_hard_links_still_gets_the_whole_file(tmp_path, monkeypatch):
+    _no_hard_links(monkeypatch)
+    path = write_failure_file(_a_failure(), tmp_path)
+    assert HarnessFailure.model_validate_json(path.read_text()) == _a_failure()
+    assert stat.S_IMODE(path.stat().st_mode) == 0o644
+    assert [item.name for item in tmp_path.iterdir()] == [FAILURE_FILE]
+
+
+def test_first_failure_stands_with_no_hard_links(tmp_path, monkeypatch):
+    _no_hard_links(monkeypatch)
+    write_failure_file(_a_failure(), tmp_path)
+    write_failure_file(agent_type_failure([]), tmp_path)
+    assert HarnessFailure.model_validate_json((tmp_path / FAILURE_FILE).read_text()) == _a_failure()
+
+
+def test_a_write_that_fails_on_a_disk_with_no_hard_links_leaves_nothing(tmp_path, monkeypatch):
+    _no_hard_links(monkeypatch)
+
+    def disk_full(*_args, **_kwargs):
+        raise OSError(errno.ENOSPC, "no space")
+
+    monkeypatch.setattr(failure_file.os, "fdopen", disk_full)
+    with pytest.raises(OSError):
+        write_failure_file(_a_failure(), tmp_path)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_full_disk_leaves_no_temporary_file(tmp_path, monkeypatch):
+    real = tempfile.NamedTemporaryFile
+
+    def filling(*args, **kwargs):
+        opened = real(*args, **kwargs)
+
+        def disk_full(_text):
+            raise OSError(errno.ENOSPC, "no space")
+
+        opened.write = disk_full
+        return opened
+
+    monkeypatch.setattr(failure_file.tempfile, "NamedTemporaryFile", filling)
+    with pytest.raises(OSError):
+        write_failure_file(_a_failure(), tmp_path)
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_failure_message_is_empty_when_the_file_cannot_be_read(tmp_path):
     assert failure_message(tmp_path) == ""
     for body in ("{", "[1]", '{"message": 3}'):
@@ -178,6 +234,8 @@ def test_failure_message_is_empty_when_the_file_cannot_be_read(tmp_path):
         ),
         ({"agent.py": 'TOOL = {"type": "computer_20241022"}\n'}, ["computer-use tool"]),
         ({"agent.ts": 'const tool = {type: "computer_use_preview"};\n'}, ["computer-use tool"]),
+        ({"agent.py": 'BETA = "computer-use-2025-01-24"\n'}, ["computer-use tool"]),
+        ({"agent.py": 'MODEL = "gemini-2.5-computer-use-preview-10-2025"\n'}, ["computer-use tool"]),
         (
             {"agent.py": 'from google.genai import types\nTOOL = types.ComputerUse(environment="x")\n'},
             ["computer-use tool"],
@@ -210,7 +268,8 @@ def test_browser_tools_found_is_sorted_and_names_each_tool_once(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "folder", ["e2eTests", "testdata", "unittests", "integrationtests", "Test_A"]
+    "folder",
+    ["e2e", "e2eTests", "e2e_tests", "testdata", "unittests", "integration_tests", "Test", "__tests__"],
 )
 def test_tools_found_skips_these_test_folders(tmp_path, folder):
     (tmp_path / folder).mkdir()
@@ -251,9 +310,11 @@ def test_an_odd_script_file_stays_quick(tmp_path, body):
     assert time.monotonic() - started < 5
 
 
-@pytest.mark.parametrize("folder", ["latest", "contest"])
+@pytest.mark.parametrize(
+    "folder", ["latest", "contest", "e2e_agent", "testing_agent", "src/testing_agent", "test_runner"]
+)
 def test_tools_found_reads_a_folder_with_test_inside_a_word(tmp_path, folder):
-    (tmp_path / folder).mkdir()
+    (tmp_path / folder).mkdir(parents=True)
     (tmp_path / folder / "a.py").write_text("import playwright\n", encoding="utf-8")
     assert browser_tools_found(tmp_path) == ["playwright"]
 
@@ -284,6 +345,9 @@ def test_tools_found_reads_a_folder_with_test_inside_a_word(tmp_path, folder):
         ("tests/package.json", json.dumps({"dependencies": {"playwright": "1"}})),
         ("a.py", "# unlike computer_20241022, this only talks\n"),
         ("a.ts", '// see @playwright/mcp\n/* computer_use\n and ComputerUse */\nconst a = 1;\n'),
+        ("a.py", 'PROMPT = "never do computer-use"\n'),
+        ("a.py", 'SPAN = "gen_ai.computer_use.action"\n'),
+        ("a.jsx", "export const A = () => <p>Don't</p> // ComputerUse\n"),
     ],
 )
 def test_browser_tools_found_ignores_what_is_not_the_agent(tmp_path, name, body):
@@ -300,6 +364,64 @@ def test_unpacked_distributions_are_not_the_agent(tmp_path):
         },
     )
     assert browser_tools_found(tmp_path) == []
+
+
+def _unpacked_at_the_top(root: Path) -> None:
+    _tree(
+        root,
+        {
+            "openai-1.0.dist-info/RECORD": "openai/x.py,sha256=a,1\nsix.py,sha256=b,2\n",
+            "openai/__init__.py": "",
+            "openai/x.py": 'NAME = "computer_use_preview"\n',
+            "six.py": 'NAME = "computer_20241022"\n',
+        },
+    )
+
+
+def test_packages_unpacked_beside_the_agent_are_not_the_agent(tmp_path):
+    _unpacked_at_the_top(tmp_path)
+    _tree(tmp_path, {"handler.py": "import openai\n"})
+    assert browser_tools_found(tmp_path) == []
+
+
+def test_the_agents_own_folder_is_read_beside_unpacked_packages(tmp_path):
+    _unpacked_at_the_top(tmp_path)
+    _tree(tmp_path, {"app/run.py": "import playwright\n"})
+    assert browser_tools_found(tmp_path) == ["playwright"]
+
+
+def test_a_browser_package_unpacked_at_the_top_still_counts_when_imported(tmp_path):
+    _tree(
+        tmp_path,
+        {
+            "playwright-1.0.dist-info/RECORD": "playwright/__init__.py,sha256=a,1\n",
+            "playwright/__init__.py": "",
+            "handler.py": "import playwright\n",
+        },
+    )
+    assert browser_tools_found(tmp_path) == ["playwright"]
+
+
+def test_the_scan_stops_at_its_limit_with_what_it_found(tmp_path, monkeypatch):
+    _tree(tmp_path, {f"m{n}.py": f"import {name}\n" for n, name in enumerate(["playwright", "selenium", "scrapy"])})
+    monkeypatch.setattr(agent_type_check, "_LARGEST_SCAN", 20)
+    assert len(browser_tools_found(tmp_path)) == 1
+
+
+def test_a_second_scan_of_a_checkout_reuses_the_first(tmp_path, monkeypatch):
+    _tree(tmp_path, {"a.py": "import playwright\n"})
+    assert browser_tools_found(tmp_path) == ["playwright"]
+    monkeypatch.setattr(agent_type_check, "_agent_files", lambda root: pytest.fail("scanned again"))
+    assert browser_tools_found(tmp_path) == ["playwright"]
+
+
+def test_a_new_checkout_at_the_same_path_is_scanned_again(tmp_path):
+    _tree(tmp_path, {"a.py": "import playwright\n"})
+    assert browser_tools_found(tmp_path) == ["playwright"]
+    (tmp_path / "a.py").unlink()
+    (tmp_path / "b.py").write_text("import selenium\n", encoding="utf-8")
+    os.utime(tmp_path, ns=(1, 1))
+    assert browser_tools_found(tmp_path) == ["selenium"]
 
 
 def test_a_customers_other_package_names_never_appear(tmp_path):
@@ -503,6 +625,30 @@ def test_browser_with_tool_is_refused_on_the_first_submission(tmp_path, browser_
     assert not (output / "contract.json").exists()
 
 
+def test_two_submissions_at_once_both_get_the_second_look(tmp_path, plain_repo):
+    output = tmp_path / "out"
+    tool = _submit_tool(contract_tools(output, scan_root=plain_repo))
+
+    async def both():
+        return await asyncio.gather(
+            tool.handler(_reading("browser")), tool.handler(_reading("browser"))
+        )
+
+    for answer in asyncio.run(both()):
+        assert answer.get("is_error")
+    assert not (output / FAILURE_FILE).exists()
+
+
+def test_a_refused_new_reading_removes_the_earlier_one(tmp_path, browser_repo):
+    output = tmp_path / "out"
+    output.mkdir()
+    (output / "contract.json").write_text("{}", encoding="utf-8")
+    _submitter(output, browser_repo)(_reading("browser"))
+    assert (output / FAILURE_FILE).exists()
+    assert not (output / "contract.json").exists()
+    assert load(output) is None
+
+
 # After a refusal
 
 
@@ -559,8 +705,8 @@ def test_writer_failure_blocks_resubmission(tmp_path, browser_repo, monkeypatch)
 
 
 def test_writer_failure_leaves_the_handler(tmp_path, browser_repo, monkeypatch):
-    # The MCP server turns what leaves the handler into a tool error the model reads, so it has to
-    # leave: swallowed here, the model would be told nothing.
+    # Swallowed here, nothing would say the refusal was lost: the model would be told nothing, and
+    # with no file the build would end as a crash.
     output = tmp_path / "out"
     submit = _submitter(output, browser_repo)
     _failing_write(monkeypatch)
