@@ -20,7 +20,7 @@ from .call_runner import (
     ArtifactUploader,
     CallRunnerContext,
     _clear_file_tool_calls,
-    _collect_file_tool_calls,
+    _with_span_calls,
     _with_scenario_edits,
 )
 from .contract import AgentContract
@@ -607,9 +607,7 @@ class HostedChatCallRunner:
         # The submitted agent may execute tools entirely inside its Python process instead
         # of returning tool requests over HTTP. These observed calls belong to the same attempt;
         # do not replay the tool through the generated world or fabricate evidence from text.
-        traced_calls = _collect_file_tool_calls(runtime)
-        if traced_calls and not transcript.calls:
-            transcript.calls.extend(traced_calls)
+        transcript.calls[:] = _with_span_calls(transcript.calls, runtime)
 
         ended = datetime.now(timezone.utc)
         transcript_id = await self._adapter.upload_artifact(

@@ -281,14 +281,13 @@ async def probe_chat_workflow(
     async def retain_interrupted_conversation(exc):
         from dataclasses import asdict
 
-        from .call_runner import _collect_file_tool_calls
+        from .call_runner import _with_span_calls
         from .outbound import ArtifactKind
 
         transcript = getattr(exc, "partial_transcript", None)
         if transcript is None:
             return
-        if not transcript.calls:
-            transcript.calls.extend(_collect_file_tool_calls(runtime))
+        transcript.calls[:] = _with_span_calls(transcript.calls, runtime)
         receipt["tool_call_count"] = len(transcript.calls)
         receipt["turns"] = len(transcript.exchanges)
         await artifacts.upload_artifact(transcript.artifact(), kind=ArtifactKind.TRANSCRIPT)

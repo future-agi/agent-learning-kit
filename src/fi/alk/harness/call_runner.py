@@ -41,7 +41,7 @@ import tempfile
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Mapping, Protocol
+from typing import Any, Awaitable, Callable, Mapping, Protocol, Sequence
 
 from fi import agentcc, simulate
 from fi.simulate.runtime import (
@@ -810,9 +810,20 @@ _MISSING = object()
 
 
 def _collect_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
+    return _with_span_calls((), runtime)
+
+
+def _with_span_calls(observed: Sequence[Call], runtime: EnvironmentRuntime) -> tuple[Call, ...]:
+    """Calls another source observed, joined with the agent's trace file: its written lines only
+    when no other source saw a call, and its span lines always, as they name each call's agent."""
+    written, from_spans = _read_file_tool_calls(runtime)
+    return _merge_span_calls(list(observed) or written, from_spans)
+
+
+def _read_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[list[Call], list[Call]]:
     path = _tool_trace_file(runtime)
     if path is None or not path.is_file():
-        return ()
+        return [], []
     calls: list[Call] = []
     # Agent-written calls not yet timed by the hook line for the same call.
     untimed: list[Call] = []
@@ -820,7 +831,7 @@ def _collect_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:
-        return ()
+        return [], []
     for line in lines:
         try:
             record = json.loads(line)
@@ -888,7 +899,7 @@ def _collect_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
             continue
         untimed.remove(written)
         written.at = call.at
-    return _merge_span_calls(calls, from_spans)
+    return calls, from_spans
 
 
 def _tool_key(name: str) -> str:
@@ -916,6 +927,8 @@ def _merge_span_calls(calls: list[Call], from_spans: list[Call]) -> tuple[Call, 
         unpaired.remove(other)
         if not (other.worker_id or other.worker_label):
             other.worker_id, other.worker_label = span.worker_id, span.worker_label
+        other.delegated_to = other.delegated_to or span.delegated_to
+        other.ended_at = other.ended_at or span.ended_at
     return tuple(sorted(merged, key=lambda call: call.at))
 
 
@@ -1770,15 +1783,15 @@ class CallRunnerImpl:
 
     def _collect_calls(self, runtime: EnvironmentRuntime) -> tuple[Call, ...]:
         seam = self._context.evidence_seam
-        file_calls = _collect_file_tool_calls(runtime)
-        if file_calls:
-            return file_calls
+        written, from_spans = _read_file_tool_calls(runtime)
+        if written:
+            return _merge_span_calls(written, from_spans)
         if seam is EvidenceSeam.HTTP_TOOL:
-            return _collect_http_tool_calls(runtime)
+            return _merge_span_calls(list(_collect_http_tool_calls(runtime)), from_spans)
         if seam is EvidenceSeam.TOOL_TRACE:
-            return _collect_tool_trace_calls(runtime)
+            return _merge_span_calls(list(_collect_tool_trace_calls(runtime)), from_spans)
         # Unrecognized/None (should not happen for a `kind: process` bundle past preflight --
         # bundle_v2.py requires `evidence_seam` whenever `kind is PROCESS` -- but degrading rather
         # than crashing keeps this on the scheduler's own evidence_missing path, never a raw
         # exception).
-        return ()
+        return _merge_span_calls([], from_spans)

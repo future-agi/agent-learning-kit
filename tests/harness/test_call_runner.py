@@ -192,6 +192,42 @@ def test_the_sealed_trace_row_keeps_the_runtime_worker_task_and_event_ids(tmp_pa
     assert observed["runtime_ids"] == {"event_id": "e2", "parent_event_id": "e1"}
     assert not {"worker_id", "worker_label", "task_id", "task_label", "runtime_ids"} & set(plain)
 
+_SPAN_LINES = (
+    {"name": "ask_writer", "arguments": {}, "output": None, "is_error": False, "source": "otel",
+     "agent_key": "Coordinator", "delegated_to": "Writer", "at": 1.0, "ended_at": 3.0},
+    {"name": "draft_note", "arguments": {}, "output": None, "is_error": False, "source": "otel",
+     "agent_key": "Writer", "at": 2.0},
+)
+
+
+def _observed() -> list[Call]:
+    return [Call(name="ask_writer", arguments={"topic": "tides"}, result="done", ok=True, at=1.1),
+            Call(name="draft_note", arguments={"topic": "tides"}, result="drafted", ok=True, at=2.1)]
+
+
+def test_span_lines_name_the_agent_of_calls_another_source_observed_and_add_none(tmp_path: Path) -> None:
+    trace = _trace_lines(tmp_path / "agent-tool-calls.jsonl", *_SPAN_LINES,
+                         {"name": "draft_note", "arguments": {}, "output": "written", "is_error": False})
+    calls = cr._with_span_calls(_observed(), _runtime(metadata={"tool_trace_path": str(trace)}))
+    assert [(c.name, c.arguments, c.worker_id, c.delegated_to, c.ended_at) for c in calls] == [
+        ("ask_writer", {"topic": "tides"}, "Coordinator", "Writer", 3.0),
+        ("draft_note", {"topic": "tides"}, "Writer", "", 0.0),
+    ]
+
+
+def test_a_process_agent_s_seam_calls_keep_their_evidence_and_take_the_agent_from_its_spans(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    trace = _trace_lines(tmp_path / "agent-tool-calls.jsonl", *_SPAN_LINES)
+    monkeypatch.setattr(cr, "_collect_tool_trace_calls", lambda runtime: tuple(_observed()))
+    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE)
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=None)
+    calls = runner._collect_calls(_runtime(metadata={"tool_trace_path": str(trace)}))
+    assert [(c.name, c.result, c.worker_id) for c in calls] == [
+        ("ask_writer", "done", "Coordinator"), ("draft_note", "drafted", "Writer"),
+    ]
+
+
 def test_a_result_traced_as_the_text_of_a_dict_reaches_checks_as_the_dict(tmp_path: Path) -> None:
     trace = tmp_path / "agent-tool-calls.jsonl"
     trace.write_text(
