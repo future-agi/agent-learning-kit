@@ -55,46 +55,46 @@ def _by_tool(records: list[dict]) -> dict[str, tuple]:
 
 def test_a_tool_call_names_the_agent_above_it_and_a_hand_off_names_the_worker(tmp_path: Path) -> None:
     records = _run(tmp_path, """
-        with span("Coordinator", **{"gen_ai.span.kind": "AGENT", "graph.node.id": "Coordinator"}):
-            with span("order_lookup", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "order_lookup"}):
-                with span("Lookup worker", **{"gen_ai.span.kind": "AGENT", "graph.node.id": "Lookup worker"}):
-                    with span("get_order", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "get_order",
-                                              "input.value": '{"order_id": "1043"}', "output.value": "delivered"}):
+        with span("Lead agent", **{"gen_ai.span.kind": "AGENT", "graph.node.id": "Lead agent"}):
+            with span("ask_research", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "ask_research"}):
+                with span("Research worker", **{"gen_ai.span.kind": "AGENT", "graph.node.id": "Research worker"}):
+                    with span("search_notes", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "search_notes",
+                                              "input.value": '{"query": "q"}', "output.value": "found"}):
                         pass
     """)
-    assert _by_tool(records) == {"get_order": ("Lookup worker", None), "order_lookup": ("Coordinator", "Lookup worker")}
-    lookup = next(r for r in records if r["name"] == "get_order")
-    assert (lookup["arguments"], lookup["output"], lookup["is_error"]) == ('{"order_id": "1043"}', "delivered", False)
+    assert _by_tool(records) == {"search_notes": ("Research worker", None), "ask_research": ("Lead agent", "Research worker")}
+    lookup = next(r for r in records if r["name"] == "search_notes")
+    assert (lookup["arguments"], lookup["output"], lookup["is_error"]) == ('{"query": "q"}', "found", False)
 
 
 def test_a_langgraph_tool_is_the_subgraph_above_the_node_that_ran_it(tmp_path: Path) -> None:
     records = _run(tmp_path, """
-        with span("tools", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "issue_refund",
+        with span("tools", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "publish_note",
                               "gen_ai.agent.name": "tools", "langgraph_node": "tools",
-                              "langgraph_checkpoint_ns": "refund_worker:1|tools:2"}):
+                              "langgraph_checkpoint_ns": "writer_worker:1|tools:2"}):
             pass
         with span("tools", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "lookup",
                               "langgraph_node": "tools", "langgraph_checkpoint_ns": "tools:3"}):
             pass
     """)
-    assert _by_tool(records) == {"issue_refund": ("refund_worker", None), "lookup": (None, None)}
+    assert _by_tool(records) == {"publish_note": ("writer_worker", None), "lookup": (None, None)}
 
 
 def test_an_agent_named_on_the_tool_span_or_by_operation_name_is_read(tmp_path: Path) -> None:
     records = _run(tmp_path, """
-        with span("execute_tool get_order", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "get_order",
-                                              "gen_ai.agent.name": "order_lookup_worker"}):
+        with span("execute_tool search_notes", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "search_notes",
+                                              "gen_ai.agent.name": "research_worker"}):
             pass
-        with span("invoke_agent", **{"gen_ai.operation.name": "invoke_agent", "gen_ai.agent.name": "refund_worker"}):
-            with span("execute_tool", **{"gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "issue_refund"}):
+        with span("invoke_agent", **{"gen_ai.operation.name": "invoke_agent", "gen_ai.agent.name": "writer_worker"}):
+            with span("execute_tool", **{"gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "publish_note"}):
                 pass
         with span("Task", **{"claude_agent.span_kind": "subagent", "claude_agent.subagent_type": "researcher"}):
             with span("WebSearch", **{"claude_agent.span_kind": "tool", "tool.name": "WebSearch"}):
                 pass
     """)
     assert _by_tool(records) == {
-        "get_order": ("order_lookup_worker", None),
-        "issue_refund": ("refund_worker", None),
+        "search_notes": ("research_worker", None),
+        "publish_note": ("writer_worker", None),
         "WebSearch": ("researcher", None),
     }
 
@@ -113,15 +113,15 @@ def test_an_unnamed_agent_takes_the_tool_that_handed_it_work_and_otherwise_stays
 def test_one_call_wrapped_by_two_instrumentations_is_written_once_and_a_failure_is_an_error(tmp_path: Path) -> None:
     records = _run(tmp_path, """
         with span("Worker", **{"gen_ai.span.kind": "AGENT", "agent.name": "Worker"}):
-            with span("ToolUsage._use", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "Issue refund"}):
-                with span("issue_refund", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "issue_refund"}) as inner:
+            with span("ToolUsage._use", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "Publish note"}):
+                with span("publish_note", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "publish_note"}) as inner:
                     inner.set_status(Status(StatusCode.ERROR))
             with span("Delegate work", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "Delegate work"}):
-                with span("get_order", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "get_order"}):
+                with span("search_notes", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "search_notes"}):
                     pass
     """)
     assert [(r["name"], r["is_error"]) for r in records] == [
-        ("issue_refund", True), ("get_order", False), ("Delegate work", False),
+        ("publish_note", True), ("search_notes", False), ("Delegate work", False),
     ]
 
 
@@ -147,18 +147,18 @@ def test_a_process_that_sets_its_own_provider_later_keeps_it(tmp_path: Path) -> 
     assert [r["name"] for r in records] == ["lookup"]
 
 
-@pytest.mark.parametrize("native_worker", ["", "Refund worker"])
+@pytest.mark.parametrize("native_worker", ["", "Writer worker"])
 def test_a_span_line_lends_its_agent_to_another_tracer_s_line_for_the_same_call(native_worker: str) -> None:
-    native = Call(name="issue_refund", arguments={}, result=None, ok=True, worker_label=native_worker, at=2.0)
-    span_line = Call(name="Issue refund", arguments={}, result=None, ok=True, worker_id="w", worker_label="From span", at=2.1)
-    other = Call(name="get_order", arguments={}, result=None, ok=True, worker_id="w", worker_label="From span", at=1.0)
+    native = Call(name="publish_note", arguments={}, result=None, ok=True, worker_label=native_worker, at=2.0)
+    span_line = Call(name="Publish note", arguments={}, result=None, ok=True, worker_id="w", worker_label="From span", at=2.1)
+    other = Call(name="search_notes", arguments={}, result=None, ok=True, worker_id="w", worker_label="From span", at=1.0)
     merged = call_runner._merge_span_calls([native], [span_line, other])
     assert [(c.name, c.worker_label) for c in merged] == [
-        ("get_order", "From span"), ("issue_refund", native_worker or "From span"),
+        ("search_notes", "From span"), ("publish_note", native_worker or "From span"),
     ]
 
 
 def test_span_lines_alone_read_in_the_order_the_calls_started() -> None:
-    late_end = Call(name="order_lookup", arguments={}, result=None, ok=True, at=1.0)
-    inner = Call(name="get_order", arguments={}, result=None, ok=True, at=1.5)
-    assert [c.name for c in call_runner._merge_span_calls([], [inner, late_end])] == ["order_lookup", "get_order"]
+    late_end = Call(name="ask_research", arguments={}, result=None, ok=True, at=1.0)
+    inner = Call(name="search_notes", arguments={}, result=None, ok=True, at=1.5)
+    assert [c.name for c in call_runner._merge_span_calls([], [inner, late_end])] == ["ask_research", "search_notes"]
