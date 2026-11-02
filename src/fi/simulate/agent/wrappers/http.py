@@ -1126,8 +1126,15 @@ def _decode_json_or_sse(text: str) -> Any:
                 events.append(data)
         if events:
             return events
+        # Newline-delimited JSON, one object per line, as some agent servers stream.
+        lines = [line for line in text.splitlines() if line.strip()]
+        if lines:
+            try:
+                return [json.loads(line) for line in lines]
+            except json.JSONDecodeError:
+                pass
         raise ValueError(
-            "HTTP target returned neither JSON nor JSON server-sent events"
+            "HTTP target returned neither JSON, JSON server-sent events nor JSON lines"
         )
 
 
