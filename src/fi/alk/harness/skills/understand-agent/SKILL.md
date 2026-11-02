@@ -64,7 +64,7 @@ Find, in roughly this order:
    a crew), record each one in `workers`: an `id`, the `name` the app gives it, where it is declared
    in `framework_ref`, the contract tools it holds, and `binding: separate` when its tools are
    reached through code of their own rather than code the agents share. Every worker tool is also
-   in `tools`. If the repository carries a multi-agent reference manifest, read its topology.
+   in `tools`.
 
 2. **Argument names and types.** Read the signature. An argument declared as a list is a
    different tool from one declared as a single value, and an environment built on the wrong one
