@@ -679,7 +679,10 @@ def test_a_reply_reads_as_json_server_sent_events_or_json_lines_and_nothing_else
 @pytest.mark.parametrize(("body", "reply"), [
     ('{"content": {"text": "Tides "}}\n{"content": {"text": "turn"}}\n{"content": {"kind": "end"}}\n', "Tides turn"),
     ('data: {"content": {"text": "Tides"}}\n\ndata: {"content": {"text": "Tides turn"}}\n\n', "Tides turn"),
+    ('data: {"choices": [{"delta": {"content": "Tides "}}]}\n\ndata: {"choices": [{"delta": {"content": "turn"}}]}\n\n'
+     'data: {"choices": [{"delta": {"content": null}}]}\n\ndata: [DONE]\n\n', "Tides turn"),
     ('[{"content": {"text": "first"}}, {"content": {"text": "last"}}]', "last"),
 ])
 def test_a_streamed_reply_is_its_text_deltas_joined_or_its_last_whole_text(body, reply):
-    assert _select_response_value(_decode_json_or_sse(body), "content.text") == reply
+    path = "choices.0.delta.content" if "choices" in body else "content.text"
+    assert _select_response_value(_decode_json_or_sse(body), path) == reply

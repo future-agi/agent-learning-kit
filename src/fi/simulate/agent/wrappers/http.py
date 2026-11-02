@@ -1202,9 +1202,11 @@ def _select_response_value(payload: Any, path: str) -> Any:
                     pieces = []
                     for item in current:
                         try:
-                            pieces.append(select(item, offset))
+                            piece = select(item, offset)
                         except ValueError:
                             continue
+                        if piece is not None:
+                            pieces.append(piece)
                     if pieces and all(isinstance(piece, str) for piece in pieces):
                         return _streamed_text(pieces)
                 last_error: ValueError | None = None
