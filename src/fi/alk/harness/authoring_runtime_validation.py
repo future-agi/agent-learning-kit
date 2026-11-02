@@ -939,11 +939,12 @@ async def validate_once(
             if generic:
                 from .action_certification import certify_actions
                 from .bundle_author_v2 import _runtime_component
+                from .source_folder import contract_folder
 
                 contract = AgentContract.model_validate_json(
                     (bundle / "contract.json").read_text(encoding="utf-8")
                 )
-                folder = contract.runtime.source_subfolder if contract.runtime else ""
+                folder = contract_folder(contract)
                 tool_report = certify_tool_inventory(
                     contract,
                     bundle,

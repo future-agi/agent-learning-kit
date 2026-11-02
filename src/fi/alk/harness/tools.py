@@ -189,7 +189,7 @@ def accept_contract(
     if source_root is not None:
         from .source_tool_evidence import tool_evidence_problems
 
-        problems.extend(tool_evidence_problems(contract, source_root))
+        problems.extend(tool_evidence_problems(contract, source_root, subfolder))
         problems.extend(_copy_prompt(contract, source_root))
     runtime = contract.runtime
     if subfolder and source_root is not None:

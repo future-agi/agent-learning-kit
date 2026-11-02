@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 import yaml
 
 from .contract import Runtime
+from .source_folder import contains_or_is_above
 
 
 class RuntimeSelectionError(ValueError):
@@ -181,7 +182,7 @@ def _builds_outside_folder(
         # A root context with a sibling's Dockerfile still builds the sibling.
         places.append((built / str(dockerfile)).resolve().parent)
     return any(
-        not (place.is_relative_to(folder) or folder.is_relative_to(place))
+        not contains_or_is_above(place, folder)
         for place in places
     )
 

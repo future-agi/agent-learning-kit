@@ -4,6 +4,7 @@ import asyncio
 import pytest
 
 from fi.alk.harness.contract import AgentContract, validate_contract
+from fi.alk.harness.source_tool_evidence import tool_evidence_problems
 from fi.alk.harness.tools import accept_contract
 
 
@@ -778,3 +779,41 @@ def test_a_contract_without_a_prompt_source_keeps_its_quoted_excerpt():
     contract = AgentContract.model_validate(payload() | {"system_prompt_excerpt": "Be brief."})
     assert contract.system_prompt_from == []
     assert "Be brief." in contract.brief()
+
+
+def _entry_contract() -> AgentContract:
+    return AgentContract.model_validate(
+        {
+            "agent": "a",
+            "tool_entrypoints": [
+                {"tool": "lookup", "mode": "import", "module": "agent", "callable": "lookup"}
+            ],
+        }
+    )
+
+
+_REAL = "def lookup():\n    return 1\n"
+_COMMENTED = "# def lookup():\n#     return 1\n"
+
+
+def test_tool_check_reads_the_agents_folder_first(tmp_path):
+    (tmp_path / "agents" / "a").mkdir(parents=True)
+    (tmp_path / "agent.py").write_text(_REAL)
+    (tmp_path / "agents" / "a" / "agent.py").write_text(_COMMENTED)
+
+    assert tool_evidence_problems(_entry_contract(), tmp_path, "agents/a")
+    assert not tool_evidence_problems(_entry_contract(), tmp_path)
+
+
+def test_tool_check_falls_back_to_the_root_under_a_folder(tmp_path):
+    (tmp_path / "agents" / "a").mkdir(parents=True)
+    (tmp_path / "agents" / "a" / "other.py").write_text("x = 1\n")
+    (tmp_path / "agent.py").write_text(_COMMENTED)
+
+    assert tool_evidence_problems(_entry_contract(), tmp_path, "agents/a")
+
+
+def test_tool_check_with_a_bad_folder_reads_the_root(tmp_path):
+    (tmp_path / "agent.py").write_text(_REAL)
+
+    assert not tool_evidence_problems(_entry_contract(), tmp_path, "agents/missing")

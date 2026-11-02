@@ -29,6 +29,7 @@ from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime
 from .run.conversation import TargetConversationEnded, Transcript, converse
 from .scenario import Scenario as ConversationScenario
+from .source_folder import contract_folder
 from .usage import (
     UsageDenied,
     UsageUnavailable,
@@ -189,7 +190,7 @@ def _tool_world(
     if source_directory is not None:
         world.reach(
             str(source_directory),
-            contract.runtime.source_subfolder if contract.runtime else "",
+            contract_folder(contract),
         )
     return world
 

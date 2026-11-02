@@ -5243,7 +5243,27 @@ def test_subfolder_scopes_credentials_with_the_project_above(tmp_path):
 
     _, output = _bundle(tmp_path, source, "agents/a")
 
-    assert "B_ONLY_API_KEY" not in (output / "credentials.json").read_text()
+    manifest = json.loads((output / "credentials.json").read_text())
+    required = {item["environment_name"]: item["required"] for item in manifest["requirements"]}
+    assert required["B_ONLY_API_KEY"] is False
+
+
+def test_subfolder_requires_what_its_shared_code_reads(tmp_path):
+    source = _repo(
+        tmp_path,
+        {
+            "pyproject.toml": _PROJECT,
+            "common/__init__.py": "",
+            "common/llm.py": 'import os\nKEY = os.environ["SHARED_API_KEY"]\n',
+            "agents/a/agent.py": "from common import llm\n" + _callback(),
+        },
+    )
+
+    _, output = _bundle(tmp_path, source, "agents/a")
+
+    manifest = json.loads((output / "credentials.json").read_text())
+    required = {item["environment_name"]: item["required"] for item in manifest["requirements"]}
+    assert required["SHARED_API_KEY"] is True
 
 
 def test_callable_without_its_own_callback_ignores_a_siblings(tmp_path):

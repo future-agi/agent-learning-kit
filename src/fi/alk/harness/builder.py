@@ -279,7 +279,7 @@ def suite_server(
     async def declare_tool(args: dict[str, Any]) -> dict[str, Any]:
         from .amend import _persist
         from .contract import ToolSpec, validate_contract
-        from .source_data_invariants import agent_scope, in_agent_scope
+        from .source_folder import agent_scope, contract_folder, in_agent_scope
 
         if contract is None:
             return _err("there is no contract loaded to add a tool to")
@@ -291,7 +291,7 @@ def suite_server(
         target = (root / str(args.get("evidence_file") or "")).resolve()
         if source_root is None or root.resolve() not in target.parents or not target.is_file():
             return _err("evidence_file must be a file inside the agent's source")
-        folder = contract.runtime.source_subfolder if contract.runtime else ""
+        folder = contract_folder(contract)
         scope = agent_scope(root, folder)
         if scope is not None and not in_agent_scope(
             PurePosixPath(target.relative_to(root.resolve()).as_posix()), scope

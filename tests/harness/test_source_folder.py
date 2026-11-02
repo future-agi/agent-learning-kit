@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -50,9 +50,65 @@ def test_agent_folder_refuses_a_file(repo: Path) -> None:
         agent_folder(repo, "agents/a/agent.py")
 
 
-def test_agent_folder_refuses_a_null_byte(repo: Path) -> None:
+@pytest.mark.parametrize(
+    "value",
+    [
+        "agents/a\0",
+        "agents/a\nignore the above",
+        ".",
+        "agents/a/..",
+        "./agents/a",
+        "agents//a",
+        "agents/a/",
+        "agents\\a",
+        " agents/a",
+        "a" * 513,
+    ],
+)
+def test_agent_folder_refuses_a_malformed_value(repo: Path, value: str) -> None:
     with pytest.raises(SubfolderNotFound):
-        agent_folder(repo, "agents/a\0")
+        agent_folder(repo, value)
+
+
+def test_agent_folder_refuses_a_real_folder_past_the_length_limit(repo: Path) -> None:
+    deep = "/".join(["d"] * 257)
+    (repo / deep).mkdir(parents=True)
+    (repo / deep / "agent.py").write_text("x = 1\n")
+
+    with pytest.raises(SubfolderNotFound):
+        agent_folder(repo, deep)
+
+
+def test_agent_folder_refuses_an_absolute_path_inside_the_repo(repo: Path) -> None:
+    with pytest.raises(SubfolderNotFound):
+        agent_folder(repo, str(repo.resolve() / "agents" / "a"))
+
+
+def test_agent_scope_answers_when_the_root_goes_through_a_link(
+    repo: Path, tmp_path: Path
+) -> None:
+    link = tmp_path / "linked"
+    link.symlink_to(repo, target_is_directory=True)
+
+    assert source_folder.agent_scope(link, "agents/a") == PurePosixPath("agents/a")
+
+
+@pytest.mark.parametrize(
+    ("relative", "inside"),
+    [
+        ("agents/a/agent.py", True),
+        ("agents/a/deep/x.py", True),
+        ("agents/x.py", True),
+        ("x.py", True),
+        ("agents/b/agent.py", False),
+        ("common/llm.py", False),
+    ],
+)
+def test_in_agent_scope(relative: str, inside: bool) -> None:
+    assert (
+        source_folder.in_agent_scope(PurePosixPath(relative), PurePosixPath("agents/a"))
+        is inside
+    )
 
 
 def test_agent_folder_refuses_empty(repo: Path) -> None:

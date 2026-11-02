@@ -172,13 +172,36 @@ def test_provision_payload_has_no_agent_for_remote_or_provider_sources_or_a_miss
     assert not any("private_detail" in message for message in messages)
 
 
-@pytest.mark.parametrize("value", ["agents/a", "my..agent", "agents/a/", " agents/a ", "/abs/x"])
+def _contract_from(prompt: str, folder: str) -> dict[str, Any]:
+    return {
+        **_contract(prompt),
+        "runtime": {"language": "python", "workdir": folder, "source_subfolder": folder},
+    }
+
+
+@pytest.mark.parametrize("value", ["agents/a", "my..agent"])
 def test_document_echoes_subfolder_exactly(tmp_path: Path, value: str) -> None:
-    _write_bundle(tmp_path, _contract("p"))
+    _write_bundle(tmp_path, _contract_from("p", value))
 
     payload = _provision(tmp_path, SourceKind.GITHUB, subfolder=value)
 
     assert payload["agent"]["agent"]["extension"]["source"] == {"subfolder": value}
+
+
+@pytest.mark.parametrize(
+    ("built_from", "job_names"),
+    [("agents/a", "agents/b"), ("agents/a", None), (None, "agents/a")],
+)
+def test_no_document_when_the_bundle_came_from_another_folder(
+    tmp_path: Path, built_from: str | None, job_names: str | None
+) -> None:
+    _write_bundle(
+        tmp_path, _contract_from("p", built_from) if built_from else _contract("p")
+    )
+
+    payload = _provision(tmp_path, SourceKind.GITHUB, subfolder=job_names)
+
+    assert payload.get("agent") is None
 
 
 @pytest.mark.parametrize("subfolder", [None, ""])

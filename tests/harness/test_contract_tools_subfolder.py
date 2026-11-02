@@ -247,6 +247,23 @@ def test_save_tells_the_model_about_a_bad_alk_yaml(tmp_path, repo):
     assert not (tmp_path / "out" / "contract.json").exists()
 
 
+def test_save_checks_a_tool_in_the_folder_the_run_imports_from(tmp_path, repo):
+    (repo / "agent.py").write_text("def lookup():\n    return 1\n")
+    (repo / "agents" / "a" / "agent.py").write_text("# def lookup():\n#     return 1\n")
+    entry = {"tool": "lookup", "mode": "import", "module": "agent", "callable": "lookup"}
+
+    result = accept_contract(
+        payload(tools=[{"name": "lookup"}], tool_entrypoints=[entry]),
+        tmp_path / "out",
+        source_root=repo,
+        subfolder="agents/a",
+    )
+
+    assert result.get("is_error"), result
+    assert "lookup" in result["content"][0]["text"]
+    assert not (tmp_path / "out" / "contract.json").exists()
+
+
 @pytest.mark.parametrize("shell", ["sh", "/bin/sh"])
 def test_save_refuses_a_shell_command_only_under_a_folder(tmp_path, repo, shell):
     runtime = {"language": "python", "command": [shell, "-c", "cd ../b && python agent.py"]}

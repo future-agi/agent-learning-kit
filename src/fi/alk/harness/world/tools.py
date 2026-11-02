@@ -47,7 +47,7 @@ from ..catalogue import (
 from ..checks import reference_of, run_check, run_world_check
 from ..contract import AgentContract, is_data_free_conversation
 from ..seed_rows import only_seed_rows
-from ..source_data_invariants import agent_scope, in_agent_scope
+from ..source_folder import agent_scope, contract_folder, in_agent_scope
 from ..simulator import (
     load_simulator_prompt,
     save_simulator_prompt,
@@ -694,7 +694,7 @@ def world_tools(
     world.refusal_signature = contract.refusal_signature
     if source_root:
         world.reach(
-            source_root, contract.runtime.source_subfolder if contract.runtime else ""
+            source_root, contract_folder(contract)
         )
     kind = for_contract(contract)
     catalogue = catalogue if catalogue is not None else load_catalogue(destination)
@@ -951,7 +951,7 @@ def world_tools(
             if under.exists():
                 found = under
         if not found.exists():
-            folder = contract.runtime.source_subfolder if contract.runtime else ""
+            folder = contract_folder(contract)
             return _err(f"nothing at {found}.\n{_stores_here(source_root, folder)}")
         if found.is_file() and found.stat().st_size == 0:
             return _err(
@@ -1808,7 +1808,7 @@ def world_tools(
         connection = getattr(world.store, "connection", None)
         if dirty and source_root and isinstance(connection, sqlite3.Connection):
             # The agent's own seed rows, even in-flight ones, are its starting state.
-            folder = contract.runtime.source_subfolder if contract.runtime else ""
+            folder = contract_folder(contract)
             dirty = [
                 name
                 for name in dirty
