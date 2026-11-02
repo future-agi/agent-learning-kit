@@ -2315,7 +2315,7 @@ def spawn_source_process(
                         _SIMULATION_MARK_SITECUSTOMIZE, encoding="utf-8"
                     )
                 sitecustomize_hook.chmod(0o444)
-        if mark_hook_due:
+        if mark_hook_due or process.environment.get("ALK_OBSERVE_FRAMEWORKS") == "1":
             # The customer's interpreter has no `fi.alk`, so the module sits beside the hook.
             mark_module = world_dir / "simulation_mark_bootstrap.py"
             if not mark_module.exists():

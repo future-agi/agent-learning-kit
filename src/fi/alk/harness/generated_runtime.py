@@ -670,6 +670,47 @@ def select_python_extras(
     )
 
 
+# A framework's distribution, and the traceAI instrumentor that marks its agent and tool spans.
+FRAMEWORK_INSTRUMENTORS = (
+    ("openai-agents", "traceai-openai-agents"),
+    ("langchain-core", "traceai-langchain"),
+    ("crewai", "traceai-crewai"),
+    ("google-adk", "traceai-google-adk"),
+    ("autogen-agentchat", "traceai-autogen"),
+    ("smolagents", "traceai-smolagents"),
+    ("claude-agent-sdk", "traceai-claude-agent-sdk"),
+    ("llama-index-core", "traceai-llamaindex"),
+    ("pydantic-ai-slim", "traceai-pydantic-ai"),
+    ("strands-agents", "traceai-strands"),
+)
+
+
+def framework_instrumentation_command() -> list[str]:
+    """Install the instrumentor of each agent framework the built environment holds.
+
+    Runs after the source's own install, in its interpreter, with every installed version pinned,
+    so the source's resolution never changes. An instrumentor that cannot be added is reported and
+    skipped: that framework's calls are then unobserved, and the build still succeeds.
+    """
+    script = (
+        "import importlib.metadata as m, re, subprocess, sys, tempfile\n"
+        "n = lambda s: re.sub(r'[-_.]+', '-', s).lower()\n"
+        "have = {n(d.metadata['Name']): d.version for d in m.distributions() if d.metadata['Name']}\n"
+        f"want = [t for f, t in {FRAMEWORK_INSTRUMENTORS!r} if f in have and t not in have]\n"
+        "f = tempfile.NamedTemporaryFile(mode='w', suffix='.txt')\n"
+        "f.write(''.join(k + '==' + v + '\\n' for k, v in have.items())); f.flush()\n"
+        "for t in want:\n"
+        "    r = subprocess.run(['uv', 'pip', 'install', '--python', sys.executable, '--constraint', f.name, t])\n"
+        "    if r.returncode: print('framework instrumentor not installed: ' + t, file=sys.stderr)\n"
+    )
+    return [
+        "sh",
+        "-c",
+        'if [ -x .venv/bin/python ]; then p=.venv/bin/python; else p=python3; fi; "$p" -c "$0" || true',
+        script,
+    ]
+
+
 def supplemental_requirements_command(
     interpreter: str, requirements: tuple[str, ...]
 ) -> list[str]:

@@ -13,6 +13,7 @@ import pytest
 
 from fi.alk.harness.bundle_author_v2 import (
     BundleAuthorError,
+    _SOURCE_TOOL_TRACE_VERSION,
     _carries_world,
     _compile_source_tool_handlers,
     _contract_column_declarations,
@@ -26,6 +27,7 @@ from fi.alk.harness.bundle_author_v2 import (
     resolve_environment_plan,
     sealed_from,
 )
+from fi.alk.harness.generated_runtime import framework_instrumentation_command
 from fi.alk.harness.authoring_runtime_validation import _artifact_digest
 from fi.alk.harness.bundle_v2 import load_bundle_v2
 from fi.alk.harness.certification import (
@@ -111,22 +113,38 @@ def test_native_command_tool_trace_uses_executable_source_bindings(
         tool_entrypoints=entries, contract_interface_kind="command", contract_modality="chat",
     )
     control = next(p for p in plan.processes if p.name == plan.control_service)
-    if mode in {"none", "http"}:
-        assert "HARNESS_TOOL_TRACE" not in control.environment
-        assert "ALK_TOOL_TRACE_BINDINGS" not in control.environment
-        assert "ALK_CREWAI_TOOL_TRACE" not in control.environment
-        return
     assert control.environment["HARNESS_TOOL_TRACE"] == "{{WORLD_DIR}}/agent-tool-calls.jsonl"
-    assert json.loads(control.environment["ALK_TOOL_TRACE_BINDINGS"]) == [{
-        "name": "Lookup tool", "module": "agent_tools", "callable": "lookup",
-    }]
+    assert control.environment["ALK_OBSERVE_FRAMEWORKS"] == "1"
+    assert control.build_commands[-1] == framework_instrumentation_command()
     assert (control.environment.get("ALK_CREWAI_TOOL_TRACE") == "1") == (
         dependency in {"requirements", "selected", "extra", "supplemental"}
     )
+    if mode in {"none", "http"}:
+        assert "ALK_TOOL_TRACE_BINDINGS" not in control.environment
+    else:
+        assert json.loads(control.environment["ALK_TOOL_TRACE_BINDINGS"]) == [{
+            "name": "Lookup tool", "module": "agent_tools", "callable": "lookup",
+        }]
     assert all(
         "HARNESS_TOOL_TRACE" not in getattr(p, "environment", {})
         for p in plan.processes if p.name != plan.control_service
     )
+
+
+def test_an_http_python_agent_is_observed_through_its_framework_spans(tmp_path: Path) -> None:
+    (tmp_path / "agent.py").write_text("print('ready')\n")
+    (tmp_path / "requirements.txt").write_text("openai-agents==0.24.0\n")
+    runtime = {"language": "python", "execution": "native", "command": ["python", "agent.py"]}
+    plan = resolve_environment_plan(
+        tmp_path, _job(connector="auto"), contract_runtime=runtime,
+        tool_entrypoints=[{"tool": "lookup", "mode": "import", "module": "agent", "callable": "lookup"}],
+        contract_interface_kind="http", contract_modality="chat",
+    )
+    control = next(p for p in plan.processes if p.name == plan.control_service)
+    assert control.environment["HARNESS_TOOL_TRACE"] == "{{WORLD_DIR}}/agent-tool-calls.jsonl"
+    assert control.environment["ALK_OBSERVE_FRAMEWORKS"] == "1"
+    assert "ALK_TOOL_TRACE_BINDINGS" not in control.environment
+    assert control.build_commands[-1] == framework_instrumentation_command()
 
 
 def test_bundle_author_carries_command_tool_trace_bindings(tmp_path: Path) -> None:
@@ -192,7 +210,7 @@ def test_reseal_compiles_tools_added_to_a_traced_command_agent(tmp_path: Path) -
     reseal_scenarios(authoring)
 
     resealed = load_bundle_v2(bundle)
-    assert resealed.metadata["source_tool_trace_version"] == 1
+    assert resealed.metadata["source_tool_trace_version"] == _SOURCE_TOOL_TRACE_VERSION
     assert "handlers/update.py" in {file.path for file in resealed.files}
     assert "contract_copied" not in resealed.metadata
 

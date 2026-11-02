@@ -762,11 +762,25 @@ def test_hook_module_imports_only_the_standard_library_and_uses_python_39_syntax
         "functools",
         "importlib.machinery",
         "importlib.util",
+        "importlib",
         "inspect",
+        "json",
         "os",
         "sys",
+        "threading",
         "urllib.parse",
+        # Imported only inside a process that already uses OpenTelemetry, to give a span asked for
+        # before any provider was set one; never at the hook's own import.
+        "opentelemetry.sdk.trace",
+        "opentelemetry.sdk.trace.export",
+        "opentelemetry.exporter.otlp.proto.http.trace_exporter",
     }
+    top_level = {
+        node.names[0].name if isinstance(node, ast.Import) else node.module
+        for node in tree.body
+        if isinstance(node, (ast.Import, ast.ImportFrom))
+    }
+    assert not {name for name in top_level if name and name.startswith("opentelemetry")}
 
 
 COLLECTOR = "http://collector.test:4318"

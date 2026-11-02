@@ -805,6 +805,7 @@ def _clear_file_tool_calls(runtime: EnvironmentRuntime) -> None:
 # Marks lines written by livekit_tool_trace_bootstrap._record. That module is copied into the
 # agent's interpreter as a standalone sitecustomize, so it cannot import this constant.
 _LIVEKIT_HOOK_SOURCE = "livekit"
+_SPAN_SOURCE = "otel"
 _MISSING = object()
 
 
@@ -815,6 +816,7 @@ def _collect_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
     calls: list[Call] = []
     # Agent-written calls not yet timed by the hook line for the same call.
     untimed: list[Call] = []
+    from_spans: list[Call] = []
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:
@@ -850,6 +852,11 @@ def _collect_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
             runtime_ids=runtime_ids(record),
             at=float(raw_at) if isinstance(raw_at, (int, float)) else 0.0,
         )
+        if record.get("source") == _SPAN_SOURCE:
+            ended = record.get("ended_at")
+            call.ended_at = float(ended) if isinstance(ended, (int, float)) else 0.0
+            from_spans.append(call)
+            continue
         if record.get("source") != _LIVEKIT_HOOK_SOURCE:
             calls.append(call)
             if not call.at:
@@ -881,7 +888,35 @@ def _collect_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
             continue
         untimed.remove(written)
         written.at = call.at
-    return tuple(calls)
+    return _merge_span_calls(calls, from_spans)
+
+
+def _tool_key(name: str) -> str:
+    """A tool's name as two tracers of one call may spell it ("Delegate work" or "delegate_work")."""
+    return "".join(ch for ch in name.lower() if ch.isalnum())
+
+
+def _merge_span_calls(calls: list[Call], from_spans: list[Call]) -> tuple[Call, ...]:
+    """Count a call reported by both a framework span and another tracer once.
+
+    Span lines name the agent that made each call; another tracer of the same process reports
+    the same calls, often without the agent. A span line lends its agent to the first unpaired
+    call of the same tool and outcome, in order, and is then dropped; one with no such call stays.
+    """
+    if not calls:
+        # A span is written when it ends, so a hand-off lands after the calls it led to.
+        return tuple(sorted(from_spans, key=lambda call: call.at))
+    merged = list(calls)
+    unpaired = list(calls)
+    for span in from_spans:
+        other = next((c for c in unpaired if _tool_key(c.name) == _tool_key(span.name) and c.ok == span.ok), None)
+        if other is None:
+            merged.append(span)
+            continue
+        unpaired.remove(other)
+        if not (other.worker_id or other.worker_label):
+            other.worker_id, other.worker_label = span.worker_id, span.worker_label
+    return tuple(sorted(merged, key=lambda call: call.at))
 
 
 def _target_metrics(case: Any) -> dict[str, Any] | None:

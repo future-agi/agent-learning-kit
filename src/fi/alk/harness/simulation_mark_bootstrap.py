@@ -2,8 +2,9 @@
 
 The sandbox copies this file into a customer process's world directory beside a
 ``sitecustomize.py`` that calls :func:`install`, so it runs inside the CUSTOMER's interpreter,
-which has no ``fi``. It therefore uses the standard library only, imports nothing of
-OpenTelemetry itself, and is written for Python 3.9 syntax.
+which has no ``fi``. It therefore uses the standard library only and is written for Python 3.9
+syntax. It imports OpenTelemetry only inside a process that already uses it, to give a span asked
+for before any provider was set the sandbox's provider.
 
 Why it exists: OpenTelemetry's own environment parsing reaches ``Resource.create`` only. Code
 that builds ``Resource(attributes=...)`` directly, or that names its own project, never sees
@@ -21,6 +22,12 @@ When the sandbox names a call file, every span the process starts is also stampe
 the call the sandbox is running at that moment. The stamp rides on the SDK tracer rather than a
 span processor, because a provider subclass such as traceAI's may drop processors it did not add.
 
+When the sandbox names a tool trace, each tool span the process ends is written to it with the
+agent that made the call, read from the agent and tool spans any framework instrumentation marks,
+so a multi-agent app is observed without changes to it. With the observe switch on, the traceAI
+instrumentor the build installed for each framework is turned on when that framework is imported,
+unless the process instruments it itself.
+
 It never reads or writes the customer's files and never imports their modules on its own. It does
 run the next ``sitecustomize`` on the path, which is theirs, so a repository's own startup hook is
 not lost behind this one; a failure of that hook is reported as Python reports it, never as ours.
@@ -32,11 +39,14 @@ from __future__ import annotations
 
 import collections.abc
 import functools
+import importlib
 import importlib.machinery
 import importlib.util
 import inspect
+import json
 import os
 import sys
+import threading
 import urllib.parse
 
 _RESOURCES = "opentelemetry.sdk.resources"
@@ -62,6 +72,7 @@ _PATCHED = "_alk_simulation_mark"
 _LOADER = "_alk_simulation_mark_loader"
 _FINDER = "_alk_simulation_mark_finder"
 _CHAINED_NAME = "_alk_chained_sitecustomize"
+_TOOL_END = "_alk_tool_span_end"
 
 _installed = False
 _failed_written = False
@@ -361,22 +372,284 @@ def _restamp_at_end(span, call: str) -> None:
     span.end = end
 
 
-def _patch_tracer(module, path: str) -> None:
+_TOOL_TRACE = "HARNESS_TOOL_TRACE"
+# Where the span kind, the agent's name and a tool call's parts sit, in the conventions the
+# framework instrumentors and the frameworks' own tracing use (traceAI and OpenInference, the
+# OpenTelemetry GenAI names, then names a single framework uses).
+_KIND_KEYS = ("fi.span.kind", "gen_ai.span.kind", "openinference.span.kind")
+_OPERATION_KINDS = {"execute_tool": "TOOL", "invoke_agent": "AGENT", "create_agent": "AGENT"}
+_OWN_KINDS = {"tool": "TOOL", "subagent": "AGENT", "agent": "AGENT"}
+_AGENT_NAME_KEYS = (
+    "gen_ai.agent.name",
+    "agent.name",
+    "autogen.agent.name",
+    "claude_agent.subagent_type",
+    "graph.node.id",
+)
+_GRAPH_NAMESPACE = "langgraph_checkpoint_ns"
+_TOOL_NAME_KEYS = ("gen_ai.tool.name", "tool.name")
+_TOOL_ARGUMENT_KEYS = ("gen_ai.tool.call.arguments", "tool.parameters", "input.value")
+_TOOL_RESULT_KEYS = ("gen_ai.tool.call.result", "output.value")
+_LIVE_SPANS_MAX = 4096
+_TRACE_LINE_MAX = 65536
+
+
+def _first(attributes, keys):
+    for key in keys:
+        value = attributes.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _kind(span):
+    attributes = getattr(span, "attributes", None) or {}
+    value = _first(attributes, _KIND_KEYS)
+    if value:
+        return value.upper()
+    operation = _first(attributes, ("gen_ai.operation.name",))
+    if operation in _OPERATION_KINDS:
+        return _OPERATION_KINDS[operation]
+    return _OWN_KINDS.get(_first(attributes, ("claude_agent.span_kind",)) or "")
+
+
+def _graph_worker(attributes):
+    """The subgraph a LangGraph node ran in. The namespace reads ``graph:id|...|node:id`` and
+    ends with the node that ran the tool, so the worker is the segment above that node."""
+    namespace = _first(attributes, (_GRAPH_NAMESPACE,))
+    if not namespace:
+        return None
+    names = [segment.split(":")[0] for segment in namespace.split("|")]
+    if names and names[-1] == attributes.get("langgraph_node"):
+        names.pop()
+    return names[-1] if names and names[-1] else None
+
+
+def _same_tool(one, other):
+    """Whether two spans name the same tool, as two instrumentations of one call spell it."""
+    def key(span):
+        name = _first(span.attributes or {}, _TOOL_NAME_KEYS) or span.name or ""
+        return "".join(ch for ch in name.lower() if ch.isalnum())
+
+    return key(one) == key(other) != ""
+
+
+class _ToolSpans:
+    """Writes each finished tool span to the harness's tool trace, naming the agent above it.
+
+    Any framework instrumentation that marks agent and tool spans is enough: the worker of a tool
+    call is the nearest agent span above it, and an agent span opened under a tool span is that
+    tool handing the work to it. Spans from other processes are not seen here, so a tool span
+    whose agent ran elsewhere is written without a worker rather than given a wrong one.
+    """
+
+    def __init__(self, path: str) -> None:
+        self._path = path
+        self._live = {}
+        self._handed = {}
+        self._wrapped = set()
+        self._lock = threading.Lock()
+
+    def started(self, span) -> None:
+        context = span.get_span_context()
+        parent = getattr(span, "parent", None)
+        if len(self._live) >= _LIVE_SPANS_MAX:
+            return
+        self._live[context.span_id] = (span, parent.span_id if parent is not None else None)
+        original = span.end
+        if getattr(original, _TOOL_END, False):
+            return
+
+        @functools.wraps(original)
+        def end(*args, **kwargs):
+            result = original(*args, **kwargs)
+            try:
+                self._ended(span)
+            except Exception:
+                pass
+            return result
+
+        setattr(end, _TOOL_END, True)
+        span.end = end
+
+    def _above(self, span_id, kinds):
+        """The nearest open ancestor of one of ``kinds``, stopping at an agent span."""
+        entry = self._live.get(span_id)
+        parent = entry[1] if entry else None
+        while parent is not None:
+            above = self._live.get(parent)
+            if above is None:
+                return None
+            kind = _kind(above[0])
+            if kind in kinds:
+                return above[0]
+            if kind == "AGENT":
+                return None
+            parent = above[1]
+        return None
+
+    def _agent_name(self, agent):
+        """An agent span's own name, else the tool that handed it the work; never a span
+        name, which frameworks often set to a method such as ``Agent.run``."""
+        name = _first(agent.attributes or {}, _AGENT_NAME_KEYS)
+        if name:
+            return name
+        if _first(agent.attributes or {}, _KIND_KEYS) and agent.name and "." not in agent.name:
+            return agent.name
+        handing = self._above(agent.get_span_context().span_id, ("TOOL",))
+        if handing is not None:
+            return _first(handing.attributes or {}, _TOOL_NAME_KEYS) or handing.name
+        return None
+
+    def _ended(self, span) -> None:
+        span_id = span.get_span_context().span_id
+        kind = _kind(span)
+        try:
+            if kind == "AGENT":
+                handing = self._above(span_id, ("TOOL",))
+                name = self._agent_name(span)
+                if handing is not None and name:
+                    self._handed[handing.get_span_context().span_id] = name
+            elif kind == "TOOL":
+                if span_id in self._wrapped:
+                    # Two instrumentations wrapped this one call; the inner span was written.
+                    self._wrapped.discard(span_id)
+                    self._handed.pop(span_id, None)
+                else:
+                    outer = self._above(span_id, ("TOOL",))
+                    if outer is not None and _same_tool(outer, span):
+                        self._wrapped.add(outer.get_span_context().span_id)
+                    self._write(span, span_id)
+        finally:
+            self._live.pop(span_id, None)
+
+    def _write(self, span, span_id) -> None:
+        attributes = span.attributes or {}
+        name = _first(attributes, _TOOL_NAME_KEYS) or span.name
+        if not name:
+            return
+        agent = self._above(span_id, ("AGENT",))
+        status = getattr(getattr(span, "status", None), "status_code", None)
+        record = {
+            "name": name[:256],
+            "arguments": (_first(attributes, _TOOL_ARGUMENT_KEYS) or "")[:4096],
+            "output": (_first(attributes, _TOOL_RESULT_KEYS) or "")[:4096],
+            "is_error": getattr(status, "name", "") == "ERROR",
+            "at": (span.start_time or 0) / 1e9,
+            "ended_at": (span.end_time or 0) / 1e9,
+            "source": "otel",
+            "event_id": format(span_id, "016x"),
+        }
+        worker = (
+            _graph_worker(attributes)
+            or _first(attributes, ("gen_ai.agent.name",))
+            or (self._agent_name(agent) if agent is not None else None)
+        )
+        if worker:
+            record.update(agent_key=worker[:256], agent_role=worker[:256])
+        if agent is not None:
+            record["parent_event_id"] = format(agent.get_span_context().span_id, "016x")
+        delegated = self._handed.pop(span_id, None)
+        if delegated:
+            record["delegated_to"] = delegated[:256]
+        line = json.dumps(record, sort_keys=True)
+        if len(line) > _TRACE_LINE_MAX:
+            record.update(arguments="<truncated>", output="<truncated>")
+            line = json.dumps(record, sort_keys=True)
+        with self._lock:
+            with open(self._path, "a", encoding="utf-8") as trace:
+                trace.write(line + "\n")
+
+
+_OBSERVE = "ALK_OBSERVE_FRAMEWORKS"
+# A framework's top module, and the traceAI instrumentor that marks its agent and tool spans.
+# The build installs the instrumentors beside the frameworks it finds installed; one that is
+# missing or fails leaves that framework untraced, never the process stopped.
+_INSTRUMENTORS = {
+    "agents": ("traceai_openai_agents", "OpenAIAgentsInstrumentor"),
+    "langchain_core": ("traceai_langchain", "LangChainInstrumentor"),
+    "crewai": ("traceai_crewai", "CrewAIInstrumentor"),
+    "google.adk": ("traceai_google_adk", "GoogleADKInstrumentor"),
+    "autogen_agentchat": ("traceai_autogen", "AutogenInstrumentor"),
+    "smolagents": ("traceai_smolagents", "SmolagentsInstrumentor"),
+    "claude_agent_sdk": ("traceai_claude_agent_sdk", "ClaudeAgentInstrumentor"),
+    "llama_index.core": ("traceai_llamaindex", "LlamaIndexInstrumentor"),
+    "pydantic_ai": ("traceai_pydantic_ai", "PydanticAIInstrumentor"),
+    "strands": ("traceai_strands", "StrandsInstrumentor"),
+}
+
+def _sandbox_provider():
+    """A provider for a process that set none, exporting where the sandbox names, as the
+    process's own would, so the platform sees the same spans either way."""
+    from opentelemetry.sdk.trace import TracerProvider
+
+    provider = TracerProvider()
+    if os.environ.get(_TRACES_ENDPOINT) or os.environ.get(_GENERIC_ENDPOINT):
+        try:
+            from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+            from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+            provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+        except Exception:
+            pass
+    return provider
+
+
+def _patch_proxy(module) -> None:
+    """Give a span requested before any provider is set ours, so the process keeps every
+    chance to set its own first and a framework's own tracing is never lost to the no-op one."""
+    cls = module.ProxyTracer
+    for method in ("start_span", "start_as_current_span"):
+        original = getattr(cls, method)
+        if getattr(original, _PATCHED, False):
+            continue
+
+        def wrapper(self, *args, __original=original, **kwargs):
+            try:
+                if getattr(module, "_TRACER_PROVIDER", None) is None:
+                    module.set_tracer_provider(_sandbox_provider())
+            except Exception:
+                pass
+            return __original(self, *args, **kwargs)
+
+        functools.update_wrapper(wrapper, original)
+        setattr(wrapper, _PATCHED, True)
+        setattr(cls, method, wrapper)
+
+
+def _instrument(module, target) -> None:
+    """Turn on the framework's instrumentor unless the process already has. It reads the
+    global provider when it makes a span, so the process's own provider is used if it sets one."""
+    name, attribute = target
+    if name in sys.modules:
+        # The process imports the instrumentor itself, and this framework import is part of
+        # that: it instruments with its own settings.
+        return
+    instrumentor = getattr(importlib.import_module(name), attribute)()
+    if getattr(instrumentor, "is_instrumented_by_opentelemetry", False):
+        return
+    instrumentor.instrument()
+
+
+def _patch_tracer(module, path, tool_trace) -> None:
     cls = module.Tracer
     original = cls.start_span
     if getattr(original, _PATCHED, False):
         return
 
-    call_file = _CallFile(path)
+    call_file = _CallFile(path) if path else None
+    tools = _ToolSpans(tool_trace) if tool_trace else None
 
     @functools.wraps(original)
     def wrapper(self, *args, **kwargs):
         span = original(self, *args, **kwargs)
         try:
-            call = call_file.current()
+            call = call_file.current() if call_file is not None else None
             if call and span.is_recording():
                 span.set_attribute(_CALL_KEY, call)
                 _restamp_at_end(span, call)
+            if tools is not None and span.is_recording():
+                tools.started(span)
         except Exception:
             pass
         return span
@@ -455,8 +728,9 @@ def install() -> None:
         if pairs is not None:
             _PATCHES[_RESOURCES] = functools.partial(_patch, pairs=pairs)
         call_file = os.environ.get(_CALL_FILE)
-        if call_file:
-            _PATCHES[_TRACE] = functools.partial(_patch_tracer, path=call_file)
+        tool_trace = os.environ.get(_TOOL_TRACE)
+        if call_file or tool_trace:
+            _PATCHES[_TRACE] = functools.partial(_patch_tracer, path=call_file, tool_trace=tool_trace)
         ingest = None
         try:
             ingest = _read_ingest()
@@ -467,6 +741,10 @@ def install() -> None:
                 _PATCHES[name] = functools.partial(
                     _patch_exporter, ingest=ingest, lower=lower
                 )
+        if os.environ.get(_OBSERVE) == "1" and tool_trace:
+            _PATCHES["opentelemetry.trace"] = _patch_proxy
+            for name, target in _INSTRUMENTORS.items():
+                _PATCHES.setdefault(name, functools.partial(_instrument, target=target))
         if not _PATCHES:
             return
         # The finder goes in first so that a failed patch of an already imported module still

@@ -156,6 +156,9 @@ class Call:
     worker_label: str = ""
     task_id: str = ""
     task_label: str = ""
+    # The worker this call handed work to, when the call is a hand-off, and when that worker returned.
+    delegated_to: str = ""
+    ended_at: float = 0.0
     # The runtime's own ids for the event (`event_id`, `parent_event_id`, `started_event_id`), as it reported them.
     runtime_ids: dict[str, str] = field(default_factory=dict)
 
@@ -170,6 +173,7 @@ def tool_call_attribution(record: Mapping[str, Any]) -> dict[str, str]:
         "worker_label": text("agent_role"),
         "task_id": text("task_id"),
         "task_label": text("task_name"),
+        "delegated_to": text("delegated_to"),
     }
 
 
@@ -192,7 +196,11 @@ def trace_row(call: Call) -> dict[str, Any]:
         "error": call.error,
         "refused": call.refused,
         "at": call.at,
-        **{key: getattr(call, key) for key in ("worker_id", "worker_label", "task_id", "task_label") if getattr(call, key)},
+        **{
+            key: getattr(call, key)
+            for key in ("worker_id", "worker_label", "task_id", "task_label", "delegated_to", "ended_at")
+            if getattr(call, key)
+        },
         **({"runtime_ids": call.runtime_ids} if call.runtime_ids else {}),
     }
 

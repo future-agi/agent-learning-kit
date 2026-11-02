@@ -61,6 +61,7 @@ from .bundle_v2 import (
 from .contract import DataStore, Runtime, ToolEntry, runtime_public_environment
 from .generated_runtime import (
     GeneratedRuntimeError,
+    framework_instrumentation_command,
     _python_language_version,
     select_python_extras,
     python_workspace_root,
@@ -2965,18 +2966,17 @@ def resolve_environment_plan(
         for process in normalized_processes
     ]
 
-    if (
-        not isinstance(selected, ComposeSelection)
-        and runtime_model.command
-        and contract_interface_kind == "command"
-    ):
+    if not isinstance(selected, ComposeSelection) and runtime_model.command:
         trace_environment = _source_tool_trace_environment(
-            root, runtime_model, tool_entrypoints or []
+            root,
+            runtime_model,
+            (tool_entrypoints or []) if contract_interface_kind == "command" else [],
         )
         if trace_environment:
             processes = [
                 process.model_copy(update={
                     "environment": {**process.environment, **trace_environment},
+                    "build_commands": [*process.build_commands, framework_instrumentation_command()],
                 })
                 if isinstance(process, SourceProcess) and process.name == control_name
                 else process
@@ -3004,12 +3004,14 @@ def _source_tool_trace_environment(
             declared.append({
                 "name": entry.tool, "module": entry.module, "callable": entry.callable,
             })
-    if not declared:
-        return {}
+    # Every Python agent's framework spans are read for its tool calls and the agent that made
+    # each, so any multi-agent source is observed without changes to it.
     environment = {
         "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
-        "ALK_TOOL_TRACE_BINDINGS": json.dumps(declared, sort_keys=True),
+        "ALK_OBSERVE_FRAMEWORKS": "1",
     }
+    if declared:
+        environment["ALK_TOOL_TRACE_BINDINGS"] = json.dumps(declared, sort_keys=True)
     component = _runtime_component(source, runtime.workdir)
     project = _pyproject_document(component / "pyproject.toml").get("project", {})
     requirements = list(project.get("dependencies", []))
@@ -3031,12 +3033,12 @@ def _source_tool_trace_environment(
     return environment
 
 
-_SOURCE_TOOL_TRACE_VERSION = 1
+_SOURCE_TOOL_TRACE_VERSION = 2
 
 
 def _uses_source_tool_trace(processes: Sequence[Any]) -> bool:
     return any(
-        "ALK_TOOL_TRACE_BINDINGS" in (getattr(process, "environment", None) or {})
+        "HARNESS_TOOL_TRACE" in (getattr(process, "environment", None) or {})
         for process in processes
     )
 
