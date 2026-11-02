@@ -2188,6 +2188,81 @@ def test_generic_pipeline_compiles_harness_schema_for_in_process_store(
         assert copied.execute("SELECT status FROM accounts").fetchone() == ("active",)
 
 
+_SQLITE_ORDERS_DDL = (
+    "CREATE TABLE orders (\n"
+    "  id INTEGER PRIMARY KEY AUTOINCREMENT,\n"
+    "  status TEXT NOT NULL\n"
+    ");\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("path", "content", "schema_from"),
+    [
+        ("data/seed.sql", _SQLITE_ORDERS_DDL, "data/seed.sql"),
+        ("schema.sql", _SQLITE_ORDERS_DDL, ""),
+        ("README.md", f"# Orders\n\n```sql\n{_SQLITE_ORDERS_DDL}```\n", ""),
+    ],
+    ids=["declared", "conventional", "readme"],
+)
+def test_generic_pipeline_adopts_a_sqlite_stores_schema_as_postgres(
+    tmp_path: Path, path: str, content: str, schema_from: str
+) -> None:
+    source = tmp_path / "source"
+    (source / path).parent.mkdir(parents=True)
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    (source / path).write_text(content, encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    contract = {
+        "modality": "chat",
+        "data_store": {"kind": "sqlite", "schema_from": schema_from},
+    }
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("CREATE TABLE orders (id INTEGER PRIMARY KEY, status TEXT)")
+        database.execute("INSERT INTO orders VALUES (?, ?)", (1, "shipped"))
+
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source,
+        job=_job(connector="http", metadata={"generic_harness_v1": True}),
+        authoring=authoring,
+        output=output,
+    )
+
+    assert manifest.seed.stores[0].migrations == ["seed/source-schema.sql"]
+    schema = (output / "seed" / "source-schema.sql").read_text(encoding="utf-8")
+    assert "AUTOINCREMENT" not in schema
+    # The source's own columns, not the authored world's: only the source says NOT NULL.
+    assert (
+        'CREATE TABLE IF NOT EXISTS "orders" ("id" bigint PRIMARY KEY, '
+        '"status" text NOT NULL);'
+    ) in schema
+
+
+def test_generic_pipeline_refuses_a_sqlite_store_schema_sqlite_cannot_load(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    (source / "db").mkdir(parents=True)
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    (source / "db" / "schema.sql").write_text("CREATE TABLE (;\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    (authoring / "contract.json").write_text(
+        json.dumps({"modality": "chat", "data_store": {"kind": "sqlite"}}),
+        encoding="utf-8",
+    )
+    sqlite3.connect(authoring / "world.sqlite").close()
+
+    with pytest.raises(BundleAuthorError, match="source_schema_not_sqlite"):
+        author_bundle_v2(
+            source=source,
+            job=_job(connector="http", metadata={"generic_harness_v1": True}),
+            authoring=authoring,
+            output=tmp_path / "bundle",
+        )
+
+
 def test_generic_pipeline_accepts_explicitly_tool_free_agent(tmp_path: Path) -> None:
     source = tmp_path / "source"
     source.mkdir()
