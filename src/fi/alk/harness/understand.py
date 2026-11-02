@@ -139,6 +139,7 @@ def open_stage(
                 scan_root=source.workdir() if source.kind in {"repo", "github"} else None,
                 require_setup_contract=require_setup_contract
                 and source.kind == "repo",
+                subfolder=source.subfolder if source.kind == "repo" else None,
             ),
         },
         extra_builtins=source.builtin_tools(),

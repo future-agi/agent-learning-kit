@@ -1792,3 +1792,60 @@ def test_the_build_and_its_check_change_without_asking_and_a_question_gets_no_on
     answer = asyncio.run(runtime._ask("AskUserQuestion", {"question": "Which?"}, None))
     assert "Nobody answers" in answer["content"][0]["text"]
     assert calls == [corrected]
+
+
+def _two_agent_world(tmp_path: Path, folder: str):
+    """A saved environment whose contract records ``folder``, over a repository of two agents."""
+    from test_nudge_turn import _suite
+
+    from fi.alk.harness.contract import Runtime
+    from fi.alk.harness.scenario_tools import load_scenarios
+    from fi.alk.harness.understand import load
+
+    root = _suite(tmp_path / "ws", "adds-a-big-mac")
+    source = tmp_path / "source"
+    for name in ("a", "b"):
+        (source / "agents" / name).mkdir(parents=True)
+        (source / "agents" / name / "agent.py").write_text(
+            f"def cancel_{name}():\n    return 'ok'\n", encoding="utf-8"
+        )
+    contract = load(root)
+    if folder:
+        contract.runtime = Runtime(source_subfolder=folder, workdir=folder)
+    return root, source, contract, load_scenarios(root)
+
+
+def test_the_builder_is_told_which_folder_is_the_agent(tmp_path):
+    root, source, contract, _ = _two_agent_world(tmp_path, "agents/a")
+
+    named = builder.open_builder(contract, out=root, source_root=source)
+    contract.runtime = None
+    whole = builder.open_builder(contract, out=root, source_root=source)
+
+    assert "The agent lives in its folder agents/a" in named.spec.system_prompt
+    assert "The agent lives in its folder" not in whole.spec.system_prompt
+
+
+def test_declared_tool_evidence_must_be_in_the_agents_folder(tmp_path):
+    root, source, contract, kept = _two_agent_world(tmp_path, "agents/a")
+    server = builder.suite_server(root, kept, contract, source)
+    declare = next(one for one in server.tools if one.name == "declare_tool")
+
+    def declared(path: str, name: str) -> dict:
+        return asyncio.run(
+            declare.handler(
+                {
+                    "name": name,
+                    "description": "cancel",
+                    "evidence_file": path,
+                    "evidence_quote": f"def {name}():",
+                    "why": "the agent has it",
+                }
+            )
+        )
+
+    sibling = declared("agents/b/agent.py", "cancel_b")
+    own = declared("agents/a/agent.py", "cancel_a")
+
+    assert sibling["is_error"] and "agents/a" in sibling["content"][0]["text"]
+    assert not own.get("is_error"), own

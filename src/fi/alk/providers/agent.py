@@ -144,7 +144,9 @@ class AgentBuildError(ValueError):
         self.detail = detail
 
 
-def build_authored_agent(document: Mapping[str, Any]) -> dict[str, Any]:
+def build_authored_agent(
+    document: Mapping[str, Any], *, subfolder: str | None = None
+) -> dict[str, Any]:
     contract = _redact(
         {key: value for key, value in document.items() if key != "base_environment"}
     )
@@ -181,6 +183,9 @@ def build_authored_agent(document: Mapping[str, Any]) -> dict[str, Any]:
         "instrumentation": contract.get("instrumentation") or "none",
         "extension": {"contract": contract},
     }
+    if subfolder:
+        # The platform compares this to what it sent, so it is never trimmed or normalised.
+        agent["extension"]["source"] = {"subfolder": subfolder}
     agent["setup_hash"] = compute_setup_hash(agent)
     try:
         return Agent.model_validate(agent).model_dump(mode="json")

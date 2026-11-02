@@ -60,6 +60,14 @@ jobs:
           tests/test_call_originator_factory.py
           tests/test_retell_evidence.py
           tests/harness/test_process_runtime.py
+          tests/harness/test_source_folder.py
+          tests/harness/test_failure_file.py
+          tests/harness/test_contract_tools_subfolder.py
+          tests/harness/test_import_roots.py
+          tests/harness/test_source_data_invariants_folder.py
+          tests/harness/test_hosted_authoring_entrypoint.py
+          tests/harness/test_certify_only.py
+          tests/harness/test_bundle_author_v2.py
           tests/harness/test_simulation_mark_bootstrap.py
           tests/harness/test_process_preflight.py
           tests/providers

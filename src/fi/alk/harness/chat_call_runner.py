@@ -187,7 +187,10 @@ def _tool_world(
             world.handlers[tool.name] = path.read_text(encoding="utf-8")
     world.refusal_signature = contract.refusal_signature
     if source_directory is not None:
-        world.reach(str(source_directory))
+        world.reach(
+            str(source_directory),
+            contract.runtime.source_subfolder if contract.runtime else "",
+        )
     return world
 
 

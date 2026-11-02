@@ -718,7 +718,9 @@ class BundleScenarioSource:
                 ).model_dump(mode="json")
                 authored_agent = {
                     "sdk_version": _sdk_version,
-                    "agent": build_authored_agent(contract),
+                    "agent": build_authored_agent(
+                        contract, subfolder=job.source.subfolder
+                    ),
                 }
             except Exception as exc:
                 logger.warning(

@@ -45,6 +45,9 @@ class RepoSource:
     name: str
     root: Path
     kind: str = "repo"
+    # The folder of the repository this agent lives in; the root stays the working directory
+    # so a project file above the folder remains reachable.
+    subfolder: str = ""
 
     def workdir(self) -> Path:
         return self.root
@@ -56,16 +59,26 @@ class RepoSource:
         return {}
 
     def briefing(self) -> str:
+        from .source_folder import SubfolderNotFound, agent_folder
+
         ignored = {
             ".git",
             ".venv",
             "node_modules",
             "__pycache__",
         }
-        indexed: list[str] = []
-        for path in sorted(self.root.rglob("*")):
+        base = listed = self.root
+        missing = False
+        if self.subfolder:
+            base = self.root.resolve()
             try:
-                relative = path.relative_to(self.root)
+                listed = agent_folder(self.root, self.subfolder)
+            except SubfolderNotFound:
+                missing = True
+        indexed: list[str] = []
+        for path in [] if missing else sorted(listed.rglob("*")):
+            try:
+                relative = path.relative_to(base)
             except ValueError:
                 continue
             if any(part in ignored for part in relative.parts) or not path.is_file():
@@ -79,8 +92,27 @@ class RepoSource:
             "its data. Read it with Read, Glob and Grep. Documentation describes intent; the "
             "code describes behaviour, and where they disagree the code wins. Never glob the "
             "entire repository: dependency caches such as .venv and node_modules are irrelevant. "
+            f"{self._folder_note(missing)}"
             "Start from this pre-indexed source/config file list and read only relevant files:\n"
             + "\n".join(f"- {name}" for name in indexed)
+        )
+
+    def _folder_note(self, missing: bool) -> str:
+        if not self.subfolder:
+            return ""
+        if missing:
+            return (
+                f"The folder {self.subfolder} was named as this agent, but it is not in this "
+                "repository at the commit being built, is not a folder, or is empty. There is "
+                "no agent to read, and no description can be saved. "
+            )
+        return (
+            f"The agent is the folder {self.subfolder} of this repository. Other folders hold "
+            "other work and are not this agent. Files above it, such as a project file, may "
+            f"apply to it. runtime.workdir is {self.subfolder} or a folder inside it, written "
+            "from the repository root, as are evidence paths and system_prompt_from. "
+            "runtime.command and workspaces are relative to runtime.workdir: the agent starts "
+            "there. "
         )
 
 
@@ -205,7 +237,9 @@ class ProviderSource:
 
 
 _REGISTRY: dict[str, Callable[..., AgentSource]] = {
-    "repo": lambda **kw: RepoSource(name=kw["name"], root=Path(kw["root"])),
+    "repo": lambda **kw: RepoSource(
+        name=kw["name"], root=Path(kw["root"]), subfolder=kw.get("subfolder") or ""
+    ),
     "github": lambda **kw: GitHubSource(
         name=kw["name"], root=Path(kw["root"]), url=kw.get("url", "")
     ),

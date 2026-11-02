@@ -41,10 +41,13 @@ from .contract import (
     LocalHttpAuth,
     known_modalities,
     generated_chat_interface_problem,
+    runtime_public_environment,
     validate_contract,
 )
 from .failure_file import FAILURE_FILE, write_failure_file
 from .instrumentation_evidence import detect_instrumentation
+from .runtime_selection import select_runtime
+from .source_folder import SubfolderNotFound, agent_folder, bind_runtime
 
 CONTRACT_SERVER = "contract"
 
@@ -153,6 +156,7 @@ def accept_contract(
     *,
     source_root: Path | None = None,
     require_setup_contract: bool = False,
+    subfolder: str | None = None,
 ) -> dict[str, Any]:
     """The gate itself: validate, and write only if it passes.
 
@@ -186,10 +190,58 @@ def accept_contract(
 
         problems.extend(tool_evidence_problems(contract, source_root))
         problems.extend(_copy_prompt(contract, source_root))
+    runtime = contract.runtime
+    if subfolder and source_root is not None:
+        from .bundle_author_v2 import BundleAuthorError, _declared_runtime_environment
+
+        try:
+            runtime = Runtime.model_validate(
+                bind_runtime(
+                    runtime.model_dump() if runtime is not None else None,
+                    source_root,
+                    subfolder,
+                )
+            )
+            # A shell can change folder before the program starts, past the check on its
+            # arguments; repair refuses a shell anyway.
+            from .runtime_repair import _SHELL_LAUNCHERS
+
+            if runtime.command and Path(runtime.command[0]).name.casefold() in _SHELL_LAUNCHERS:
+                raise ValueError(
+                    f"runtime_command_shell_forbidden: {runtime.command[0]}; name the program "
+                    f"and its arguments directly so the command stays in {subfolder}"
+                )
+            # What selection would refuse (a service building a sibling) is told to the model
+            # here. It sees the values bundling sees, or it refuses what bundling accepts.
+            select_runtime(
+                source_root,
+                runtime.model_dump(),
+                public_environment={
+                    **_declared_runtime_environment(agent_folder(source_root, subfolder)),
+                    **runtime_public_environment(runtime.model_dump()),
+                },
+                validate_environment_dependencies=False,
+            )
+        except SubfolderNotFound:
+            problems.append(
+                f"subfolder_not_found: {subfolder} is not a folder with files in the source, "
+                "so no description of it can be saved."
+            )
+        except (BundleAuthorError, ValueError) as invalid:
+            problems.append(str(invalid))
+    elif runtime is not None and runtime.source_subfolder:
+        runtime = runtime.model_copy(update={"source_subfolder": ""})
     if problems:
         return _problems(problems, arrived)
     contract = contract.model_copy(
-        update={"instrumentation": detect_instrumentation(source_root)}
+        update={
+            "instrumentation": detect_instrumentation(
+                agent_folder(source_root, subfolder)
+                if source_root and subfolder
+                else source_root
+            ),
+            "runtime": runtime,
+        }
     )
 
     destination.mkdir(parents=True, exist_ok=True)
@@ -277,6 +329,7 @@ def contract_tools(
     source_root: Path | None = None,
     scan_root: Path | None = None,
     require_setup_contract: bool = False,
+    subfolder: str | None = None,
 ) -> Any:
     """A server exposing ``submit_contract``, writing to ``destination`` on acceptance.
 
@@ -1350,6 +1403,7 @@ def contract_tools(
             destination,
             source_root=source_root,
             require_setup_contract=require_setup_contract,
+            subfolder=subfolder,
         )
 
     return tool_server(name=CONTRACT_SERVER, version="0.1.0", tools=[submit_contract])

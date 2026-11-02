@@ -1329,3 +1329,37 @@ def test_source_fingerprint_hashes_symlink_metadata_without_reading_target(
 
     assert first == second
 
+
+def _github_source(**extra):
+    return {
+        "kind": "github",
+        "visibility": "public",
+        "repository": "customer/public-agent",
+        **extra,
+    }
+
+
+def test_repository_source_keeps_subfolder() -> None:
+    from fi.alk.harness.job import RepositorySource
+
+    # Kept exactly as sent: the platform compares the echo, so nothing is trimmed.
+    for value in ("agents/a", "agents/a/", " agents/a", "my..agent", "/abs"):
+        assert RepositorySource(**_github_source(subfolder=value)).subfolder == value
+
+
+def test_empty_subfolder_is_none() -> None:
+    from fi.alk.harness.job import RepositorySource
+
+    assert RepositorySource(**_github_source(subfolder="")).subfolder is None
+    assert RepositorySource(**_github_source()).subfolder is None
+
+
+def test_subfolder_refused_on_other_kinds() -> None:
+    from fi.alk.harness.job import RepositorySource
+
+    with pytest.raises(ValueError, match="subfolder_requires_github_source"):
+        RepositorySource(kind="provider", subfolder="agents/a")
+    with pytest.raises(ValueError, match="subfolder_requires_github_source"):
+        RepositorySource(kind="archive", archive_artifact_id="a", subfolder="agents/a")
+    assert RepositorySource(kind="provider", subfolder="").subfolder is None
+
