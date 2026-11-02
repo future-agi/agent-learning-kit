@@ -26,6 +26,7 @@ from fi.alk.harness import (
 )
 from fi.alk.harness import hosted_authoring_entrypoint as hosted_authoring
 from fi.alk.harness.agent_type_check import (
+    browser_tools_in_agent,
     agent_type_failure,
     browser_tools_found,
     decide,
@@ -957,6 +958,77 @@ def test_scan_finds_the_agents_own_folder(tmp_path):
     _submitter_in(output, _folder_repo(tmp_path), "agents/b")(_reading("browser"))
     assert _failure(output)["code"] == "agent_type_unsupported"
     assert "playwright" in _failure(output)["message"]
+
+
+@pytest.mark.parametrize(
+    ("files", "expected"),
+    [
+        (
+            {
+                "common/web.py": "from playwright.sync_api import sync_playwright\n",
+                "agents/a/agent.py": "from common.web import open_page\n",
+            },
+            ["playwright"],
+        ),
+        (
+            {
+                "lib/browse.js": 'const TOOL = "computer_20241022";\n',
+                "agents/a/index.js": 'const browse = require("../../lib/browse");\n',
+            },
+            ["computer-use tool"],
+        ),
+        (
+            {
+                "lib/browse.js": 'const puppeteer = require("puppeteer");\n',
+                "lib/package.json": json.dumps({"dependencies": {"puppeteer": "1"}}),
+                "agents/a/index.js": 'const browse = require("../../lib/browse");\n',
+            },
+            ["puppeteer"],
+        ),
+        ({"agents/a/x.py": "x = 1\n", "agent.py": "import playwright\n"}, ["playwright"]),
+        (
+            {
+                "agents/a/x.py": "x = 1\n",
+                "package.json": json.dumps({"dependencies": {"puppeteer": "1"}}),
+            },
+            ["puppeteer"],
+        ),
+        ({"agents/a/agent.py": "import playwright\n"}, ["playwright"]),
+        # Nothing the agent imports: a sibling's tool, and a shared test helper, aren't its own.
+        (
+            {
+                "agents/a/agent.py": "x = 1\n",
+                "agents/b/agent.py": "import playwright\n",
+                "common/web.py": "import playwright\n",
+            },
+            [],
+        ),
+        (
+            {
+                "agents/a/agent.py": "import tests.helper\n",
+                "tests/helper.py": "import playwright\n",
+            },
+            [],
+        ),
+    ],
+)
+def test_scan_covers_what_the_agent_reaches(tmp_path, files, expected):
+    assert browser_tools_in_agent(_tree(tmp_path / "repo", files), "agents/a") == expected
+
+
+def test_a_chat_reading_of_an_agent_with_a_shared_browser_tool_gets_a_second_look(tmp_path):
+    repo = _tree(
+        tmp_path / "repo",
+        {
+            "common/web.py": "from playwright.sync_api import sync_playwright\n",
+            "agents/a/agent.py": "from common.web import open_page\n",
+        },
+    )
+    output = tmp_path / "out"
+
+    _submitter_in(output, repo, "agents/a")(_reading("chat"))
+
+    assert not (output / "contract.json").exists()
 
 
 def test_scan_of_a_missing_folder_finds_nothing(tmp_path):

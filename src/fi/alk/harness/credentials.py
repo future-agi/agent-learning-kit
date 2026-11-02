@@ -11,6 +11,7 @@ import ast
 import hashlib
 import json
 import re
+import stat
 from enum import Enum
 from pathlib import Path, PurePosixPath
 from typing import AbstractSet, Iterable, Mapping, TYPE_CHECKING, Literal
@@ -137,6 +138,10 @@ _CONFIG_NAMES = {
 }
 _MAX_FILES = 2_000
 _MAX_FILE_BYTES = 1_000_000
+_SCRIPT_SUFFIXES = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
+_SCRIPT_IMPORT = re.compile(
+    r"""(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)["']([^"'\n]+)["']"""
+)
 
 _ENV_DECLARATION = re.compile(
     r"(?m)^(?:export[ \t]+)?([A-Z][A-Z0-9_]{2,})[ \t]*=[ \t]*([^\r\n#]*)"
@@ -413,12 +418,14 @@ def discover_credentials(
     scan_paths: Iterable[str | Path] | None = None,
     template_secrets_required: bool = True,
     agent_subfolder: str | None = None,
+    agent_compose_file: str | None = None,
 ) -> CredentialManifest:
     """Inspect declarations and environment reads without executing submitted code.
 
     With ``agent_subfolder``, only that agent's own files can require a value: its folder, the
     folders above it, and the code it imports. Anything else shipped alongside it is another
-    agent's, so what it reads is listed as optional.
+    agent's, so what it reads is listed as optional. A Compose file above the folder belongs to
+    the whole repository, so it counts only when ``agent_compose_file`` names it.
     """
     root = Path(root).expanduser().resolve()
     if not root.is_dir():
@@ -435,8 +442,9 @@ def discover_credentials(
     scanned = 0
     truncated = False
     digest = hashlib.sha256()
-    imported = _imported_by_agent(root, agent_subfolder) if agent_subfolder else frozenset()
+    imported = imported_by_agent(root, agent_subfolder) if agent_subfolder else frozenset()
     scope = agent_scope(root, agent_subfolder) if agent_subfolder else None
+    named_compose = (root / agent_compose_file).resolve() if agent_compose_file else None
 
     for path in _candidate_files(root, scan_paths=scan_paths):
         if scanned >= _MAX_FILES:
@@ -462,6 +470,8 @@ def discover_credentials(
             or path in imported
             or in_agent_scope(PurePosixPath(relative), scope)
         )
+        if scope is not None and path.name.lower() in _COMPOSE_NAMES:
+            agents_own = path == named_compose or PurePosixPath(relative).is_relative_to(scope)
         for connector, signals in _CONNECTOR_SIGNALS.items():
             if agents_own and any(signal in lowered for signal in signals):
                 connector_hits.add(connector)
@@ -615,53 +625,102 @@ def discover_credentials(
     )
 
 
-def _imported_by_agent(root: Path, subfolder: str) -> frozenset[Path]:
-    """The Python files the agent's folder imports, followed as far as they go."""
+def _plain_file(path: Path) -> bool:
+    """A regular file small enough to read: a committed link can point at anything."""
+    try:
+        details = path.lstat()
+    except (OSError, ValueError):
+        return False
+    return stat.S_ISREG(details.st_mode) and details.st_size <= _MAX_FILE_BYTES
+
+
+def _python_imports(content: str) -> list[tuple[int, str]]:
+    try:
+        tree = ast.parse(content)
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        return []
+    names: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names.extend((0, alias.name) for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            names.append((node.level, module))
+            names.extend(
+                (node.level, f"{module}.{alias.name}".lstrip(".")) for alias in node.names
+            )
+    return [(level, name) for level, name in names if name]
+
+
+def imported_by_agent(root: Path, subfolder: str) -> frozenset[Path]:
+    """The files the agent's folder imports, followed as far as they go.
+
+    Python imports, and JavaScript or TypeScript imports written as a path. A package name that
+    only a workspace or a path alias can resolve isn't followed.
+    """
+    root = Path(root).resolve()
     try:
         folder = agent_folder(root, subfolder)
     except SubfolderNotFound:
         return frozenset()
-    bases = (folder, folder / "src", root, root / "src")
+    python_bases = (folder, folder / "src", root, root / "src")
 
-    def located(start: Path, parts: list[str]) -> Path | None:
-        module = start.joinpath(*parts)
-        for candidate in (module.with_suffix(".py"), module / "__init__.py"):
-            if candidate.is_file() and candidate.resolve().is_relative_to(root):
+    def found_at(candidates: Iterable[Path]) -> Path | None:
+        for candidate in candidates:
+            if _plain_file(candidate) and candidate.resolve().is_relative_to(root):
                 return candidate.resolve()
+        return None
+
+    def python_module(path: Path, level: int, name: str) -> Path | None:
+        module = name.split(".")
+        for start in (path.parents[level - 1],) if level else python_bases:
+            target = start.joinpath(*module)
+            if hit := found_at((target.with_suffix(".py"), target / "__init__.py")):
+                return hit
+        return None
+
+    def script_module(path: Path, name: str) -> Path | None:
+        for start in (path.parent,) if name.startswith(".") else (folder, root):
+            target = start / name
+            written = [target.with_suffix(suffix) for suffix in (".ts", ".tsx")]
+            if hit := found_at(
+                (
+                    target,
+                    *(written if target.suffix == ".js" else ()),
+                    *(Path(f"{target}{suffix}") for suffix in _SCRIPT_SUFFIXES),
+                    *(target / f"index{suffix}" for suffix in _SCRIPT_SUFFIXES),
+                )
+            ):
+                return hit
         return None
 
     seen: set[Path] = set()
     pending = [
         path
-        for path in folder.rglob("*.py")
-        if not any(part in _IGNORED_PARTS for part in path.relative_to(folder).parts)
+        for path in sorted(folder.rglob("*"))
+        if path.suffix in {".py", *_SCRIPT_SUFFIXES}
+        and not any(part in _IGNORED_PARTS for part in path.relative_to(folder).parts)
     ]
-    while pending:
+    read = 0
+    while pending and read < _MAX_FILES:
         path = pending.pop()
-        try:
-            tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
-        except (OSError, SyntaxError, ValueError, RecursionError):
+        if not _plain_file(path):
             continue
-        for node in ast.walk(tree):
-            names: list[tuple[int, str]] = []
-            if isinstance(node, ast.Import):
-                names = [(0, alias.name) for alias in node.names]
-            elif isinstance(node, ast.ImportFrom):
-                module = node.module or ""
-                names = [(node.level, module)] + [
-                    (node.level, f"{module}.{alias.name}".lstrip(".")) for alias in node.names
-                ]
-            for level, name in names:
-                if not name:
-                    continue
-                parts = name.split(".")
-                starts = (path.parents[level - 1],) if level else bases
-                found = next(
-                    (hit for start in starts if (hit := located(start, parts))), None
-                )
-                if found is not None and found not in seen:
-                    seen.add(found)
-                    pending.append(found)
+        read += 1
+        try:
+            content = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if path.suffix == ".py":
+            hits = [
+                python_module(path, level, name) for level, name in _python_imports(content)
+            ]
+        else:
+            hits = [script_module(path, name) for name in _SCRIPT_IMPORT.findall(content)]
+        for hit in hits:
+            if hit is not None and hit not in seen:
+                seen.add(hit)
+                pending.append(hit)
     return frozenset(seen)
 
 

@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pytest
@@ -680,3 +681,111 @@ def test_no_folder_keeps_every_hit_required(tmp_path):
     )
 
     assert _required(discover_credentials(root))["B_ONLY_API_KEY"] is True
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        'import { llm } from "../../packages/shared/llm";',
+        'const llm = require("../../packages/shared/llm.ts");',
+        'const llm = await import("../../packages/shared/llm");',
+        'import { llm } from "packages/shared/llm";',
+    ],
+)
+def test_shared_scripts_the_folder_imports_require_their_values(tmp_path, line):
+    root = _agents_repo(
+        tmp_path,
+        {
+            "packages/shared/llm.ts": "export const key = process.env.SHARED_API_KEY;\n",
+            "packages/other/x.ts": "export const key = process.env.OTHER_API_KEY;\n",
+            "agents/a/index.ts": f"{line}\n",
+        },
+    )
+
+    required = _required(discover_credentials(root, agent_subfolder="agents/a"))
+
+    assert required["SHARED_API_KEY"] is True
+    assert required["OTHER_API_KEY"] is False
+
+
+def test_a_script_import_reaches_an_index_and_a_compiled_name(tmp_path):
+    root = _agents_repo(
+        tmp_path,
+        {
+            "lib/index.ts": 'export * from "./real.js";\n',
+            "lib/real.ts": "export const key = process.env.REAL_API_KEY;\n",
+            "agents/a/index.js": 'import "../../lib";\n',
+        },
+    )
+
+    assert _required(discover_credentials(root, agent_subfolder="agents/a"))["REAL_API_KEY"] is True
+
+
+@pytest.mark.parametrize("make", ["link", "fifo"])
+def test_the_import_walk_does_not_read_a_link_or_a_pipe(tmp_path, make):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    root = _agents_repo(tmp_path, {"agents/a/agent.py": "x = 1\n"})
+    target = root / "agents" / "a" / "x.py"
+    if make == "link":
+        target.symlink_to("/dev/zero")
+    else:
+        os.mkfifo(target)
+
+    assert imported_by_agent(root, "agents/a") == frozenset()
+
+
+def test_the_import_walk_does_not_follow_a_link_out_or_read_an_oversized_file(tmp_path):
+    from fi.alk.harness import credentials
+
+    outside = tmp_path / "outside.py"
+    outside.write_text("x = 1\n")
+    root = _agents_repo(
+        tmp_path / "repo",
+        {
+            "common/big.py": "#" * (credentials._MAX_FILE_BYTES + 1),
+            "agents/a/agent.py": "import common.big\nimport linked\n",
+        },
+    )
+    (root / "linked.py").symlink_to(outside)
+
+    assert credentials.imported_by_agent(root, "agents/a") == frozenset()
+
+
+def test_the_import_walk_stops_at_the_file_limit(tmp_path, monkeypatch):
+    from fi.alk.harness import credentials
+
+    root = _agents_repo(
+        tmp_path,
+        {
+            "common/one.py": "import common.two\n",
+            "common/two.py": "x = 1\n",
+            "agents/a/agent.py": "import common.one\n",
+        },
+    )
+    monkeypatch.setattr(credentials, "_MAX_FILES", 1)
+
+    assert credentials.imported_by_agent(root, "agents/a") == frozenset({(root / "common/one.py").resolve()})
+
+
+_STRICT_COMPOSE = "services:\n  billing:\n    environment:\n      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:?}\n"
+
+
+def test_a_root_compose_file_requires_nothing_unless_it_is_named(tmp_path):
+    root = _agents_repo(
+        tmp_path, {"docker-compose.yml": _STRICT_COMPOSE, "agents/a/agent.py": "x = 1\n"}
+    )
+
+    unnamed = discover_credentials(root, agent_subfolder="agents/a")
+    named = discover_credentials(
+        root, agent_subfolder="agents/a", agent_compose_file="docker-compose.yml"
+    )
+
+    assert _required(unnamed)["STRIPE_SECRET_KEY"] is False
+    assert _required(named)["STRIPE_SECRET_KEY"] is True
+
+
+def test_a_compose_file_in_the_folder_is_the_agents(tmp_path):
+    root = _agents_repo(tmp_path, {"agents/a/docker-compose.yml": _STRICT_COMPOSE})
+
+    assert _required(discover_credentials(root, agent_subfolder="agents/a"))["STRIPE_SECRET_KEY"] is True
