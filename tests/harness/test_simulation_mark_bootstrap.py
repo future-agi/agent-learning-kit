@@ -768,6 +768,7 @@ def test_hook_module_imports_only_the_standard_library_and_uses_python_39_syntax
         "os",
         "sys",
         "threading",
+        "time",
         "urllib.parse",
         # Imported only inside a process that already uses OpenTelemetry, to give a span asked for
         # before any provider was set one; never at the hook's own import.

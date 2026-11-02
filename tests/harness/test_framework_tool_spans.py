@@ -218,3 +218,47 @@ def test_an_openai_agents_app_that_sets_its_own_trace_processors_is_still_observ
     assert result.returncode == 0, result.stderr
     assert "hook: failed" not in result.stderr
     assert json.loads(result.stdout.strip().replace("'", '"')) == kept
+
+
+_AUTOGEN_CORE = {
+    "autogen_core/__init__.py": "",
+    "autogen_core/tools/__init__.py": "class BaseTool:\n    def __init__(self, name, run):\n"
+    "        self.name, self._run = name, run\n\n"
+    "    async def run_json(self, args, cancellation_token, call_id=None):\n        return self._run(**args)\n\n"
+    "    def return_value_as_string(self, value):\n        return str(value)\n",
+}
+
+
+def test_an_autogen_tool_call_is_written_with_its_arguments_and_result_beside_its_span(tmp_path: Path) -> None:
+    for path, source in {**_AUTOGEN_CORE, "hook/sitecustomize.py": "import simulation_mark_bootstrap\n"
+                         "simulation_mark_bootstrap.install()\n"}.items():
+        (tmp_path / path).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / path).write_text(source)
+    (tmp_path / "hook/simulation_mark_bootstrap.py").write_bytes(Path(simulation_mark_bootstrap.__file__).read_bytes())
+    script = textwrap.dedent("""
+        import asyncio
+        from autogen_core.tools import BaseTool
+        def fail(note):
+            raise ValueError("no such note")
+        async def main():
+            await BaseTool("look_up_tide", lambda place: "high at 06:10").run_json({"place": "Kochi"}, None)
+            try:
+                await BaseTool("read_note", fail).run_json({"note": "n1"}, None)
+            except ValueError:
+                pass
+        asyncio.run(main())
+    """)
+    trace = tmp_path / "calls.jsonl"
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        env={**os.environ, "PYTHONPATH": f"{tmp_path / 'hook'}:{tmp_path}", "ALK_OBSERVE_FRAMEWORKS": "1",
+             "HARNESS_TOOL_TRACE": str(trace)},
+        capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "hook: failed" not in result.stderr
+    lines = [json.loads(line) for line in trace.read_text().splitlines()]
+    assert [(one["name"], one["arguments"], one["output"], one["is_error"]) for one in lines] == [
+        ("look_up_tide", {"place": "Kochi"}, "high at 06:10", False),
+        ("read_note", {"note": "n1"}, "no such note", True),
+    ]

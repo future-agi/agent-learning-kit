@@ -47,6 +47,7 @@ import json
 import os
 import sys
 import threading
+import time
 import urllib.parse
 
 _RESOURCES = "opentelemetry.sdk.resources"
@@ -556,13 +557,48 @@ class _ToolSpans:
         delegated = self._handed.pop(span_id, None)
         if delegated:
             record["delegated_to"] = delegated[:256]
-        line = json.dumps(record, sort_keys=True)
-        if len(line) > _TRACE_LINE_MAX:
-            record.update(arguments="<truncated>", output="<truncated>")
-            line = json.dumps(record, sort_keys=True)
         with self._lock:
-            with open(self._path, "a", encoding="utf-8") as trace:
-                trace.write(line + "\n")
+            _append(self._path, record)
+
+
+def _append(path, record) -> None:
+    line = json.dumps(record, sort_keys=True, default=str)
+    if len(line) > _TRACE_LINE_MAX:
+        record.update(arguments="<truncated>", output="<truncated>")
+        line = json.dumps(record, sort_keys=True, default=str)
+    with open(path, "a", encoding="utf-8") as trace:
+        trace.write(line + "\n")
+
+
+def _patch_autogen_tools(module, path) -> None:
+    """AutoGen's tool spans name the tool but carry neither its arguments nor its result, so each call is also
+    written from the tool itself, as CrewAI's observer writes its calls; the collector joins the two lines, the
+    span's naming the agent."""
+    cls = module.BaseTool
+    original = cls.run_json
+    if getattr(original, _PATCHED, False):
+        return
+
+    async def run_json(self, args, cancellation_token, call_id=None, __original=original):
+        record = {"name": str(self.name)[:256], "arguments": dict(args), "at": time.time()}
+        try:
+            result = await __original(self, args, cancellation_token, call_id)
+        except Exception as err:
+            _record_tool(path, record, str(err), True)
+            raise
+        _record_tool(path, record, self.return_value_as_string(result), False)
+        return result
+
+    functools.update_wrapper(run_json, original)
+    setattr(run_json, _PATCHED, True)
+    cls.run_json = run_json
+
+
+def _record_tool(path, record, output, is_error) -> None:
+    try:
+        _append(path, {**record, "output": output[:4096], "is_error": is_error})
+    except Exception:
+        pass
 
 
 _OBSERVE = "ALK_OBSERVE_FRAMEWORKS"
@@ -768,6 +804,7 @@ def install() -> None:
             _PATCHES["opentelemetry.trace"] = _patch_proxy
             for name, target in _INSTRUMENTORS.items():
                 _PATCHES.setdefault(name, functools.partial(_instrument, target=target))
+            _PATCHES["autogen_core.tools"] = functools.partial(_patch_autogen_tools, path=tool_trace)
         if not _PATCHES:
             return
         # The finder goes in first so that a failed patch of an already imported module still
