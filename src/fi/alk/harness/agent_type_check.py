@@ -111,10 +111,11 @@ _SCRIPT_COMMENT_OR_STRING = re.compile(
 )
 
 
-# The whole name: "e2e_agent" and "testing_agent" hold agents, and test automation is a main kind
-# of browser agent.
+# The whole name or its last part: "functional_tests" holds tests, while "e2e_agent" and
+# "testing_agent" hold agents, and test automation is a main kind of browser agent.
 _TEST_FOLDER = re.compile(
     r"_*(?:(?:unit|integration|e2e)[_-]?)?(?:tests?|testing|test[_-]?data)_*|e2e"
+    r"|.*[_-](?:tests?|testing|test[_-]?data|e2e)_*"
 )
 
 
@@ -259,26 +260,42 @@ def browser_tools_found(source_root: Path | None) -> list[str]:
     if source_root is None:
         return []
     root = Path(source_root).resolve()
-    try:
-        # A new checkout at the same path has a new time, so it doesn't get the old answer.
-        checked_out = root.stat().st_mtime_ns
-    except OSError:
-        return []
-    return list(_scan(root, checked_out))
+    return list(_scan(root, _signature(root)))
+
+
+def _is_read(path: Path) -> bool:
+    return path.name == "package.json" or path.suffix == ".py" or path.suffix in _SCRIPT_SUFFIXES
+
+
+def _signature(root: Path) -> tuple[int, int, int]:
+    """What changes when the files a scan reads change: a nested edit or a new checkout."""
+    latest = count = size = 0
+    for path in _agent_files(root):
+        if _is_read(path):
+            try:
+                info = path.stat()
+            except OSError:
+                continue
+            latest = max(latest, info.st_mtime_ns)
+            count += 1
+            size += info.st_size
+    return latest, count, size
 
 
 @lru_cache(maxsize=8)
-def _scan(root: Path, _checked_out: int) -> tuple[str, ...]:
-    """One scan per checkout: every builder reopen in a process asks again."""
+def _scan(root: Path, _files: tuple[int, int, int]) -> tuple[str, ...]:
+    """One scan per state of the files: every builder reopen in a process asks again."""
     found: set[str] = set()
     imported: set[str] = set()
     scanned = 0
     for path in _agent_files(root):
-        if path.name != "package.json" and not (
-            path.suffix == ".py" or path.suffix in _SCRIPT_SUFFIXES
-        ):
+        if not _is_read(path):
             continue
-        scanned += _file_size(path)
+        size = _file_size(path)
+        # Never read, so it mustn't use up the limit before the code that is.
+        if size > _LARGEST_CODE_FILE:
+            continue
+        scanned += size
         if scanned > _LARGEST_SCAN:
             break
         if path.name == "package.json":

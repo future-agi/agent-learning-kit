@@ -269,7 +269,20 @@ def test_browser_tools_found_is_sorted_and_names_each_tool_once(tmp_path):
 
 @pytest.mark.parametrize(
     "folder",
-    ["e2e", "e2eTests", "e2e_tests", "testdata", "unittests", "integration_tests", "Test", "__tests__"],
+    [
+        "e2e",
+        "e2eTests",
+        "e2e_tests",
+        "testdata",
+        "unittests",
+        "integration_tests",
+        "Test",
+        "__tests__",
+        "functional_tests",
+        "ui-tests",
+        "api_tests",
+        "playwright-tests",
+    ],
 )
 def test_tools_found_skips_these_test_folders(tmp_path, folder):
     (tmp_path / folder).mkdir()
@@ -408,20 +421,50 @@ def test_the_scan_stops_at_its_limit_with_what_it_found(tmp_path, monkeypatch):
     assert len(browser_tools_found(tmp_path)) == 1
 
 
-def test_a_second_scan_of_a_checkout_reuses_the_first(tmp_path, monkeypatch):
-    _tree(tmp_path, {"a.py": "import playwright\n"})
-    assert browser_tools_found(tmp_path) == ["playwright"]
-    monkeypatch.setattr(agent_type_check, "_agent_files", lambda root: pytest.fail("scanned again"))
+def test_files_too_big_to_read_do_not_use_up_the_limit(tmp_path, monkeypatch):
+    _tree(tmp_path, {"big.js": "x" * 80, "agent/run.py": "import playwright\n"})
+    monkeypatch.setattr(agent_type_check, "_LARGEST_CODE_FILE", 50)
+    monkeypatch.setattr(agent_type_check, "_LARGEST_SCAN", 60)
     assert browser_tools_found(tmp_path) == ["playwright"]
 
 
-def test_a_new_checkout_at_the_same_path_is_scanned_again(tmp_path):
+def test_a_second_scan_of_unchanged_files_reuses_the_first(tmp_path, monkeypatch):
     _tree(tmp_path, {"a.py": "import playwright\n"})
     assert browser_tools_found(tmp_path) == ["playwright"]
-    (tmp_path / "a.py").unlink()
-    (tmp_path / "b.py").write_text("import selenium\n", encoding="utf-8")
-    os.utime(tmp_path, ns=(1, 1))
-    assert browser_tools_found(tmp_path) == ["selenium"]
+
+    def read_again(_path):
+        pytest.fail("scanned again")
+
+    monkeypatch.setattr(agent_type_check, "_markers_in", read_again)
+    assert browser_tools_found(tmp_path) == ["playwright"]
+
+
+def test_a_nested_edit_is_scanned_again(tmp_path):
+    # The same size, so only the time says it changed.
+    _tree(tmp_path, {"src/agent.py": "import openai\n"})
+    assert browser_tools_found(tmp_path) == []
+    (tmp_path / "src/agent.py").write_text("import scrapy\n", encoding="utf-8")
+    os.utime(tmp_path / "src/agent.py", ns=(2**62, 2**62))
+    assert browser_tools_found(tmp_path) == ["scrapy"]
+
+
+def test_one_file_fewer_is_scanned_again(tmp_path):
+    # The same total size and latest time, so only the count says it changed.
+    _tree(tmp_path, {"a.py": "import openai\n", "b.py": "import scrapy\n"})
+    for name in ("a.py", "b.py"):
+        os.utime(tmp_path / name, ns=(1, 1))
+    assert browser_tools_found(tmp_path) == ["scrapy"]
+    (tmp_path / "b.py").unlink()
+    (tmp_path / "a.py").write_text("import openai\n" * 2, encoding="utf-8")
+    os.utime(tmp_path / "a.py", ns=(1, 1))
+    assert browser_tools_found(tmp_path) == []
+
+
+def test_removing_a_nested_helper_is_scanned_again(tmp_path):
+    _tree(tmp_path, {"src/agent.py": "import openai\n", "src/helper.py": "import playwright\n"})
+    assert browser_tools_found(tmp_path) == ["playwright"]
+    (tmp_path / "src/helper.py").unlink()
+    assert browser_tools_found(tmp_path) == []
 
 
 def test_a_customers_other_package_names_never_appear(tmp_path):
