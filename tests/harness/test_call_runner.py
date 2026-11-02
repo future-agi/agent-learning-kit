@@ -216,6 +216,13 @@ def test_span_lines_name_the_agent_of_calls_another_source_observed_and_add_none
     ]
 
 
+def test_a_span_that_recorded_no_arguments_reads_as_none_not_as_raw_text(tmp_path: Path) -> None:
+    trace = _trace_lines(tmp_path / "agent-tool-calls.jsonl", {**_SPAN_LINES[1], "arguments": "", "output": ""},
+                         {"name": "note", "arguments": "not json", "output": "", "is_error": False})
+    calls = cr._collect_file_tool_calls(_runtime(metadata={"tool_trace_path": str(trace)}))
+    assert [(c.name, c.arguments) for c in calls] == [("note", {"raw": "not json"}), ("draft_note", {})]
+
+
 def test_a_process_agent_s_seam_calls_keep_their_evidence_and_take_the_agent_from_its_spans(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

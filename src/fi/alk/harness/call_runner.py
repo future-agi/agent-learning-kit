@@ -843,7 +843,10 @@ def _read_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[list[Call], list
         if not isinstance(name, str) or not name:
             continue
         arguments = record.get("arguments")
-        if isinstance(arguments, str):
+        if isinstance(arguments, str) and not arguments.strip():
+            # A span that recorded no arguments.
+            arguments = {}
+        elif isinstance(arguments, str):
             try:
                 arguments = json.loads(arguments)
             except ValueError:
