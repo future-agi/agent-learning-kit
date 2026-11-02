@@ -11,6 +11,12 @@ sub-goals just to satisfy a checklist below. Preserve and provision the real wor
 connections; write the simulator prompt and conversational evaluation criteria. Save the empty
 world normally. Internal harness bookkeeping is not agent business data.
 
+Tools do not imply a database. Native filesystem, command and API tools can also have no
+harness-managed record store. Keep that authoring world empty. Do not create tables to stand
+in for files or remote application state. Use completed native tool results with source-grounded
+schemas, declared observations, or real workspace bindings. Private readiness and real chats
+must verify these tools; a local fixture table cannot prove that the target ran them.
+
 You are building the world an AI agent will be tested in. Its contract is in front of you: the
 tools it really has, the rules it obeys, what it depends on, and its data.
 
@@ -219,8 +225,8 @@ then say so plainly, because every scenario after this will be limited to those 
 
 Ask the person for values wherever the contract carries none.
 
-Leave it in its natural starting state: empty carts, no in-flight work. Scenarios add what they
-need.
+Leave it in its natural starting state: empty carts, no in-flight work, unless the agent's own
+seed has them; then reproduce those rows as they are. Scenarios add what else they need.
 
 **Write values, not the names of values.** A generated seed that quotes a function reaches the
 database as a string and the insert fails on the column's type: `'CURRENT_TIMESTAMP'` is eleven
@@ -253,7 +259,11 @@ and a way to run container commands from there:
 Some things worth knowing before you start:
 
 **Use the agent's own Dockerfile if it has one.** The contract records whether it does. Theirs is
-what its authors tested; yours is a guess at it.
+what its authors tested; yours is a guess at it. When source deployment instructions instead
+select a published Compose image, use `runtime.compose_image_services` for that already
+selected service. ALK retains its source-declared image and removes its build from the generated
+runtime only. Never write an image override or alter upstream files. The selection requires a
+container runtime and does not itself verify an immutable image identity.
 
 **Use its own install command**, from its lockfile or requirements, exactly as written. Do not
 substitute a different package manager or add dependencies it did not ask for.
@@ -701,13 +711,17 @@ Every sub-goal, coded or judged:
 
 ### What the build refuses, and what every scenario's proof plays
 
-So you meet these while writing, not after:
-
 - **A check that only matches call names**, such as `any(c.name == "transfer" for c in calls)`. It
-  passes an agent that called the right tool with the wrong arguments.
+  is refused because it passes an agent that called the right tool with the wrong arguments, which
+  is the failure this harness exists to catch. An agent that mishears a name and opens somebody
+  else's account calls exactly the tool it should have. Read `.arguments`, `.result`, or the world.
+  For a dispatcher that wraps subtools, establish success from its source-defined result contract
+  and the returned state. Child names and arguments show intent, not execution. A top-level
+  dispatcher name alone must neither prove nor disprove a subtool's successful effect. Inspect
+  the recorded outcome and verify the relevant returned state or source-declared child outcome. Do not
+  invent separate completed calls by flattening arguments.
 - **A judged sub-goal without its four criteria lines**, or whose "If it does not arise" line does
   not say Pass or Fail.
-- **A catalogue that is more judged than coded.** The judge is the fallback, not the method.
 - **A check that takes `reference` without a contract** saying where each compared value comes from.
 
 Every scenario's proof then plays the scenario's solution, any other ways its writer declared, an
