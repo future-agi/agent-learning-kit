@@ -38,7 +38,14 @@ from fi.alk.harness.certification import (
     CheckStatus,
     HarnessCertification,
 )
-from fi.alk.harness.job import HarnessJob, ProviderExecutionMode
+from fi.alk.harness.generated_runtime import GeneratedRuntimeError
+from fi.alk.harness.job import (
+    HarnessJob,
+    ProviderExecutionMode,
+    RepositorySource,
+    SourceKind,
+    SourceVisibility,
+)
 from fi.alk.harness.process_preflight import preflight_bundle
 from fi.alk.harness.provision import source_fingerprint
 from fi.alk.harness.repair_controller import RepairHistory
@@ -5051,3 +5058,882 @@ def test_python_selection_preserves_uv_alternatives_and_target_only_constraints(
         f"environments={json.dumps(environments)}\n"
     )
     assert _python_language_version(tmp_path, "3.11", interpreter_selector=True) == "==3.11.*,>=3.11"
+
+
+# --- an agent that is one folder of a repository -------------------------------------------
+
+_PROJECT = "[project]\nname='proj'\nversion='1'\n"
+_STARTED = ["sh", "-c", 'cd "./$1" && shift && exec "$@"', "alk-source-process"]
+
+
+def _github_job(subfolder: str | None, **kwargs) -> HarnessJob:
+    return _job(**{"connector": "auto", **kwargs}).model_copy(
+        update={
+            "source": RepositorySource(
+                kind=SourceKind.GITHUB,
+                repository="acme/agents",
+                commit_sha="a" * 40,
+                visibility=SourceVisibility.PUBLIC,
+                subfolder=subfolder,
+            )
+        }
+    )
+
+
+def _repo(tmp_path: Path, files: dict[str, str]) -> Path:
+    source = tmp_path / "source"
+    source.mkdir(exist_ok=True)
+    for name, text in files.items():
+        path = source / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    return source
+
+
+def _agent_of(plan_or_manifest):
+    return next(p for p in plan_or_manifest.processes if p.name == "agent")
+
+
+def _plan_for(source, subfolder, runtime=None, *, kind=None, modality="chat", **job):
+    return resolve_environment_plan(
+        source,
+        _github_job(subfolder, **job),
+        contract_modality=modality,
+        contract_interface_kind=kind,
+        contract_runtime={} if runtime is None else runtime,
+    )
+
+
+def _bundle(tmp_path, source, subfolder, runtime=None, *, job=None, modality="chat", contract=None):
+    authoring = _authoring(tmp_path)
+    (authoring / "contract.json").write_text(
+        json.dumps(
+            contract
+            if contract is not None
+            else {
+                "modality": modality,
+                "runtime": runtime if runtime is not None else {"language": "python"},
+                "data_store": {"kind": "none"},
+                "tools": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("CREATE TABLE fixture (id TEXT PRIMARY KEY)")
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source,
+        job=job or _github_job(subfolder, metadata={"generic_harness_v1": True}),
+        authoring=authoring,
+        output=output,
+    )
+    return manifest, output
+
+
+def _sealed(output: Path) -> dict:
+    return json.loads((output / "contract.json").read_text())
+
+
+def _callback(variable: str = "") -> str:
+    read = f'import os\nKEY = os.environ["{variable}"]\n' if variable else ""
+    return f"{read}def agent_callback(messages):\n    return 'ok'\n"
+
+
+# (files, where the project installs, the folder the process changes into)
+_SHAPES = {
+    "own": ({"agents/a/pyproject.toml": _PROJECT}, "agents/a", None),
+    "own_with_unrelated_root": (
+        {"agents/a/pyproject.toml": _PROJECT, "pyproject.toml": _PROJECT},
+        "agents/a",
+        None,
+    ),
+    "own_with_unrelated_requirements": (
+        {"agents/a/pyproject.toml": _PROJECT, "requirements.txt": "left-pad-for-the-root\n"},
+        "agents/a",
+        None,
+    ),
+    "above": ({"pyproject.toml": _PROJECT}, ".", "agents/a"),
+    "requirements_above": ({"requirements.txt": "requests\n"}, ".", "agents/a"),
+    "between": ({"agents/pyproject.toml": _PROJECT}, "agents", "a"),
+}
+_LANES = {
+    "plain": ("x = 1\n", {}, None),
+    "declared": (
+        "x = 1\n",
+        {"command": ["python", "agent.py"], "interface": {"kind": "command"}},
+        "command",
+    ),
+    "callback": (_callback(), {}, None),
+}
+
+
+@pytest.mark.parametrize("lane", sorted(_LANES))
+@pytest.mark.parametrize("shape", sorted(_SHAPES))
+def test_subfolder_install_root_and_run_folder(tmp_path, shape, lane):
+    files, installs_at, starts_in = _SHAPES[shape]
+    text, runtime, kind = _LANES[lane]
+    source = _repo(tmp_path, {**files, "agents/a/agent.py": text})
+
+    agent = _agent_of(_plan_for(source, "agents/a", dict(runtime), kind=kind))
+
+    assert agent.working_directory == installs_at
+    if starts_in is None:
+        assert agent.run_command[:4] == ["uv", "run", "--no-sync", "python"]
+        assert agent.source_component == "."
+        assert not any(argv[:2] == ["ln", "-s"] for argv in agent.build_commands)
+        assert "requirements.txt" not in json.dumps(agent.build_commands)
+    else:
+        assert agent.run_command[:5] == [*_STARTED, starts_in]
+        assert agent.source_component == starts_in
+        link = ["../" * len(Path(starts_in).parts) + ".venv", f"{starts_in}/.venv"]
+        assert ["ln", "-s", *link] in agent.build_commands
+    if lane == "callback":
+        assert agent.environment["ALK_CALLBACK_ENTRYPOINT"] == "agent:agent_callback"
+
+
+def test_subfolder_workspace_member(tmp_path):
+    source = _repo(
+        tmp_path,
+        {
+            "pyproject.toml": '[tool.uv.workspace]\nmembers=["agents/*"]\n',
+            "agents/a/pyproject.toml": "[project]\nname='agent-a'\nversion='1'\n",
+            "agents/b/pyproject.toml": "[project]\nname='agent-b'\nversion='1'\n",
+            "agents/a/agent.py": "x = 1\n",
+        },
+    )
+
+    agent = _agent_of(_plan_for(source, "agents/a"))
+
+    assert agent.working_directory == "."
+    assert agent.source_component == "agents/a"
+    assert agent.run_command[:5] == [*_STARTED, "agents/a"]
+    links = [argv for argv in agent.build_commands if argv[:2] == ["ln", "-s"]]
+    assert links == [["ln", "-s", "../../.venv", "agents/a/.venv"]]
+
+
+def test_subfolder_setup_py_lane_links_venv(tmp_path):
+    source = _repo(
+        tmp_path,
+        {
+            "setup.py": "from setuptools import setup\nsetup()\n",
+            "agents/a/agent.py": "x = 1\n",
+        },
+    )
+
+    agent = _agent_of(_plan_for(source, "agents/a", {"version": "3.12"}))
+
+    assert agent.run_command[:5] == [*_STARTED, "agents/a"]
+    assert ["ln", "-s", "../../.venv", "agents/a/.venv"] in agent.build_commands
+
+    # A bare interpreter with no environment has nothing to link.
+    bare = _agent_of(_plan_for(source, "agents/a"))
+    assert not any(argv[:2] == ["ln", "-s"] for argv in bare.build_commands)
+
+
+def test_subfolder_scopes_credentials_with_the_project_above(tmp_path):
+    source = _repo(
+        tmp_path,
+        {
+            "pyproject.toml": _PROJECT,
+            "agents/a/agent.py": _callback(),
+            "agents/b/agent.py": _callback("B_ONLY_API_KEY"),
+        },
+    )
+
+    _, output = _bundle(tmp_path, source, "agents/a")
+
+    assert "B_ONLY_API_KEY" not in (output / "credentials.json").read_text()
+
+
+def test_callable_without_its_own_callback_ignores_a_siblings(tmp_path):
+    source = _repo(
+        tmp_path,
+        {"agents/a/agent.py": "x = 1\n", "agents/b/agent.py": _callback()},
+    )
+
+    with pytest.raises(BundleAuthorError, match="callback_entrypoint_missing"):
+        _plan_for(source, "agents/a", kind="callable")
+
+
+def test_callable_command_needs_its_own_callback_not_a_siblings(tmp_path):
+    source = _repo(
+        tmp_path,
+        {"agents/a/agent.py": "x = 1\n", "agents/b/agent.py": _callback()},
+    )
+    runtime = {
+        "command": ["python", "agent.py"],
+        "interface": {
+            "kind": "callable",
+            "protocol": "fi.alk",
+            "path": "",
+            "health_path": "",
+            "include_tools": True,
+        },
+    }
+
+    with pytest.raises(BundleAuthorError, match="generated_runtime_entrypoint_ambiguous"):
+        _bundle(tmp_path, source, "agents/a", runtime)
+
+
+def test_subfolder_wrapper_really_changes_folder(tmp_path):
+    source = _repo(
+        tmp_path, {"pyproject.toml": _PROJECT, "agents/a/agent.py": "x = 'inside'\n"}
+    )
+    agent = _agent_of(_plan_for(source, "agents/a"))
+    assert agent.run_command[0] == "sh"
+    started = agent.run_command[:5]
+
+    where = subprocess.run(
+        [*started, "pwd"], cwd=source, check=True, text=True, capture_output=True
+    )
+    read = subprocess.run(
+        [*started, "cat", "agent.py"], cwd=source, check=True, text=True, capture_output=True
+    )
+
+    assert Path(where.stdout.strip()).resolve() == (source / "agents" / "a").resolve()
+    assert read.stdout == "x = 'inside'\n"
+
+
+def test_subfolder_narrows_agent_py_search(tmp_path):
+    source = _repo(
+        tmp_path,
+        {
+            "pyproject.toml": _PROJECT,
+            "agents/a/src/agent.py": "x = 1\n",
+            "agents/b/agent.py": "x = 2\n",
+        },
+    )
+    manifest, _ = _bundle(tmp_path, source, "agents/a")
+
+    agent = _agent_of(manifest)
+
+    assert agent.run_command[:5] == [*_STARTED, "agents/a"]
+    assert agent.run_command[-1] == "src/agent.py"
+
+
+def test_two_callbacks_subfolder_picks_its_own(tmp_path):
+    source = _repo(
+        tmp_path,
+        {
+            "agents/a/agent.py": _callback(),
+            "agents/b/agent.py": _callback("B_ONLY_API_KEY"),
+        },
+    )
+    manifest, output = _bundle(tmp_path, source, "agents/a")
+
+    agent = _agent_of(manifest)
+
+    assert agent.environment["ALK_CALLBACK_ENTRYPOINT"] == "agent:agent_callback"
+    assert _sealed(output)["runtime"]["interface"]["kind"] == "callable"
+
+
+def test_sibling_callback_does_not_flip_interface(tmp_path):
+    source = _repo(
+        tmp_path, {"agents/a/agent.py": "x = 1\n", "agents/b/agent.py": _callback()}
+    )
+    manifest, output = _bundle(tmp_path, source, "agents/a")
+
+    assert "ALK_CALLBACK_ENTRYPOINT" not in _agent_of(manifest).environment
+    assert not _sealed(output)["runtime"].get("interface")
+
+
+def test_subfolder_langgraph_entry_runs_from_subfolder(tmp_path):
+    source = _repo(
+        tmp_path,
+        {
+            "pyproject.toml": _PROJECT,
+            "agents/a/langgraph.json": json.dumps({"graphs": {"A": "./graph.py:graph"}}),
+            "agents/a/graph.py": "graph = object()\n",
+            "agents/b/langgraph.json": json.dumps({"graphs": {"B": "./other.py:graph"}}),
+            "agents/b/other.py": "graph = object()\n",
+        },
+    )
+    manifest, output = _bundle(tmp_path, source, "agents/a")
+
+    agent = _agent_of(manifest)
+
+    assert agent.environment["ALK_LANGGRAPH_ENTRYPOINT"] == "graph.py:graph"
+    assert agent.run_command[:5] == [*_STARTED, "agents/a"]
+    assert _sealed(output)["runtime"]["interface"]["kind"] == "callable"
+
+
+def test_subfolder_ignores_sibling_toolbox(tmp_path):
+    source = _repo(
+        tmp_path,
+        {
+            "agents/a/agent.py": "x = 1\n",
+            "agents/b/agent.py": "from toolbox_core import ToolboxSyncClient\n",
+            "agents/b/tools.yaml": (
+                "tools:\n  lookup:\n    kind: postgres-sql\n    statement: select 1\n"
+                "toolsets:\n  all: [lookup]\n"
+            ),
+        },
+    )
+    manifest, _ = _bundle(tmp_path, source, "agents/a")
+
+    assert "mcp-toolbox" not in [process.name for process in manifest.processes]
+
+
+def test_subfolder_own_toolbox_beside_a_siblings(tmp_path):
+    toolbox = (
+        "tools:\n  {name}:\n    kind: postgres-sql\n    statement: select 1\n"
+        "toolsets:\n  all: [{name}]\n"
+    )
+    source = _repo(
+        tmp_path,
+        {
+            "agents/a/agent.py": "from toolbox_core import ToolboxSyncClient\n",
+            "agents/a/tools.yaml": toolbox.format(name="own_lookup"),
+            "agents/b/agent.py": "from toolbox_core import ToolboxSyncClient\n",
+            "agents/b/tools.yaml": toolbox.format(name="sibling_lookup"),
+        },
+    )
+
+    _, output = _bundle(tmp_path, source, "agents/a")
+
+    definition = (output / "generated" / "mcp-toolbox" / "toolbox.json").read_text()
+    assert "own_lookup" in definition and "sibling_lookup" not in definition
+
+
+def test_subfolder_reads_only_the_folders_alk_yaml(tmp_path, monkeypatch):
+    source = _repo(tmp_path, {"agents/a/agent.py": "x = 1\n"})
+    from fi.alk.harness import bundle_author_v2
+
+    read: list[Path] = []
+    real = bundle_author_v2._declared_runtime_environment
+
+    def spying(folder):
+        read.append(Path(folder).resolve())
+        return real(folder)
+
+    monkeypatch.setattr(bundle_author_v2, "_declared_runtime_environment", spying)
+
+    _bundle(tmp_path, source, "agents/a")
+
+    assert read and set(read) == {(source / "agents" / "a").resolve()}
+
+
+def test_subfolder_ignores_sibling_alk_yaml(tmp_path):
+    source = _repo(
+        tmp_path,
+        {
+            "alk.yaml": "runtime:\n  environment:\n    ROOT_SETTING: root\n",
+            "agents/a/alk.yaml": "runtime:\n  environment:\n    A_SETTING: own\n",
+            "agents/a/agent.py": "x = 1\n",
+        },
+    )
+    manifest, _ = _bundle(tmp_path, source, "agents/a")
+
+    environment = _agent_of(manifest).environment
+
+    assert environment["A_SETTING"] == "own"
+    assert "ROOT_SETTING" not in environment
+
+
+def test_subfolder_ignores_root_dockerfile(tmp_path):
+    source = _repo(
+        tmp_path,
+        {
+            "Dockerfile": 'FROM python:3.12\nCMD ["python", "server.py"]\n',
+            "agents/a/agent.py": "x = 1\n",
+        },
+    )
+    runtime = {"interface": {"kind": "http", "port": 9000, "path": "/chat"}}
+    manifest, _ = _bundle(tmp_path, source, "agents/a", dict(runtime))
+
+    assert "server.py" not in json.dumps(_agent_of(manifest).run_command)
+    plan = _plan_for(source, "agents/a", dict(runtime), kind="http")
+    assert plan.packaging == "generated_python"
+
+
+def test_subfolder_with_a_project_above_ignores_the_root_dockerfile(tmp_path):
+    source = _repo(
+        tmp_path,
+        {
+            "pyproject.toml": _PROJECT,
+            "Dockerfile": 'FROM python:3.12\nCMD ["python", "server.py"]\n',
+            "agents/a/agent.py": "x = 1\n",
+        },
+    )
+
+    agent = _agent_of(_plan_for(source, "agents/a"))
+
+    assert "server.py" not in json.dumps(agent.run_command)
+
+
+@pytest.mark.parametrize("kind", ["http", None])
+def test_subfolder_dockerfile_launcher_follows_the_requirements_above(tmp_path, kind):
+    source = _repo(
+        tmp_path,
+        {
+            "requirements.txt": "flask\n",
+            "agents/a/agent.py": "x = 1\n",
+            "agents/a/Dockerfile": 'FROM python:3.12\nCMD ["python", "server.py"]\n',
+        },
+    )
+    runtime = {"interface": {"kind": "http", "port": 9000, "path": "/chat"}} if kind else {}
+
+    agent = _agent_of(_plan_for(source, "agents/a", runtime, kind=kind))
+
+    assert agent.run_command[-2:] == [".venv/bin/python", "server.py"]
+
+
+def test_subfolder_reads_its_own_readme_schema(tmp_path):
+    fence = "```sql\nCREATE TABLE {name} (id integer primary key);\n```\n"
+    source = _repo(
+        tmp_path,
+        {
+            "README.md": fence.format(name="root_table"),
+            "agents/a/README.md": fence.format(name="own_table"),
+        },
+    )
+    contract = {"runtime": {"source_subfolder": "agents/a"}}
+
+    [schema] = _source_schema_artifacts(source, contract=contract)
+
+    assert schema.relative_path == "agents/a/README.md#sql-1"
+    assert "own_table" in schema.sql and "root_table" not in schema.sql
+
+
+def test_subfolder_reads_its_own_schema_sql(tmp_path):
+    source = _repo(
+        tmp_path,
+        {
+            "schema.sql": "CREATE TABLE root_table (id integer primary key);\n",
+            "agents/a/db/schema.sql": "CREATE TABLE own_table (id integer primary key);\n",
+        },
+    )
+    contract = {"runtime": {"source_subfolder": "agents/a"}}
+
+    paths = [item.relative_path for item in _source_schema_artifacts(source, contract=contract)]
+
+    assert paths == ["agents/a/db/schema.sql"]
+
+
+def test_subfolder_ignores_root_schema_sql(tmp_path):
+    source = _repo(
+        tmp_path,
+        {
+            "schema.sql": "CREATE TABLE root_table (id integer primary key);\n",
+            "agents/a/agent.py": "x = 1\n",
+        },
+    )
+    contract = {"runtime": {"source_subfolder": "agents/a"}}
+
+    assert _source_schema_artifacts(source, contract=contract) == []
+    whole = _source_schema_artifacts(source, contract={"runtime": {}})
+    assert [item.relative_path for item in whole] == ["schema.sql"]
+
+
+def test_subfolder_protects_install_root_requirements(tmp_path):
+    source = _repo(
+        tmp_path, {"requirements.txt": "requests\n", "agents/a/agent.py": "x = 1\n"}
+    )
+
+    with pytest.raises(
+        (GeneratedRuntimeError, BundleAuthorError), match="context_exclude_required"
+    ):
+        _bundle(
+            tmp_path,
+            source,
+            "agents/a",
+            {"language": "python", "context_excludes": ["requirements.txt"]},
+        )
+
+
+def test_no_subfolder_member_may_exclude_a_root_requirements_file(tmp_path):
+    from fi.alk.harness.bundle_author_v2 import _package_process_sources
+    from fi.alk.harness.contract import Runtime
+
+    source = _repo(
+        tmp_path,
+        {
+            "pyproject.toml": '[tool.uv.workspace]\nmembers=["server"]\n',
+            "requirements.txt": "requests\n",
+            "server/pyproject.toml": "[project]\nname='server'\nversion='1'\n",
+            "server/agent.py": "x = 1\n",
+        },
+    )
+    runtime = Runtime(language="python", context_excludes=["requirements.txt"])
+    plan = resolve_environment_plan(
+        source, _job(connector="auto"), contract_runtime=runtime.model_dump()
+    )
+    assert _agent_of(plan).source_component == "server"
+
+    packaged = _package_process_sources(source, tmp_path / "bundle", plan, runtime)
+
+    agent = _agent_of(packaged)
+    assert not (tmp_path / "bundle" / agent.working_directory / "requirements.txt").exists()
+
+
+@pytest.mark.parametrize(
+    "project, installs_at, starts_in",
+    [
+        ({}, "agents/a", None),
+        ({"pyproject.toml": _PROJECT}, ".", "agents/a"),
+        ({"requirements.txt": "requests\n"}, ".", "agents/a"),
+        ({"setup.py": "from setuptools import setup\nsetup()\n"}, "agents/a", None),
+    ],
+    ids=["no_project", "project_above", "requirements_above", "setup_py_only"],
+)
+def test_subfolder_nested_agent_py_entry(tmp_path, project, installs_at, starts_in):
+    source = _repo(tmp_path, {**project, "agents/a/src/agent.py": "x = 1\n"})
+
+    agent = _agent_of(_plan_for(source, "agents/a"))
+
+    assert agent.working_directory == installs_at
+    assert agent.run_command[-1] == "src/agent.py"
+    if starts_in:
+        assert agent.run_command[:5] == [*_STARTED, starts_in]
+    else:
+        assert agent.run_command[0] != "sh"
+
+
+def test_subfolder_nested_own_project_goes_to_repair(tmp_path):
+    source = _repo(
+        tmp_path,
+        {
+            "agents/a/app/pyproject.toml": _PROJECT,
+            "agents/a/app/agent.py": "x = 1\n",
+        },
+    )
+
+    with pytest.raises(BundleAuthorError) as refused:
+        _plan_for(source, "agents/a")
+
+    assert "runtime_workdir_nested_project" in str(refused.value)
+    assert "set runtime.workdir to agents/a/app" in str(refused.value)
+
+
+def test_subfolder_nested_own_project_callback_goes_to_repair(tmp_path):
+    source = _repo(
+        tmp_path,
+        {
+            "agents/a/app/pyproject.toml": _PROJECT,
+            "agents/a/app/agent.py": _callback(),
+        },
+    )
+
+    with pytest.raises(BundleAuthorError) as refused:
+        _plan_for(source, "agents/a")
+
+    assert "runtime_workdir_nested_project" in str(refused.value)
+    assert "set runtime.workdir to agents/a/app" in str(refused.value)
+
+
+def test_contract_workdir_outside_subfolder_refused_at_plan(tmp_path):
+    source = _repo(
+        tmp_path, {"agents/a/agent.py": "x = 1\n", "agents/b/agent.py": "x = 2\n"}
+    )
+
+    with pytest.raises(BundleAuthorError, match="runtime_workdir_outside_subfolder"):
+        _plan_for(source, "agents/a", {"workdir": "agents/b"})
+
+
+def test_workdir_inside_subfolder_kept(tmp_path):
+    source = _repo(
+        tmp_path, {"pyproject.toml": _PROJECT, "agents/a/app/server.py": "x = 1\n"}
+    )
+    runtime = {
+        "execution": "native",
+        "workdir": "agents/a/app",
+        "command": ["python", "server.py"],
+        "interface": {"kind": "http", "port": 8001},
+    }
+
+    agent = _agent_of(_plan_for(source, "agents/a", runtime, kind="http"))
+
+    assert agent.run_command == [*_STARTED, "agents/a/app", "python", "server.py"]
+
+
+@pytest.mark.parametrize("workdir", ["", "agents/a/"])
+def test_http_chat_default_workdir_reaches_discovery(tmp_path, workdir):
+    source = _repo(tmp_path, {"agents/a/agent.py": "x = 1\n"})
+    runtime = {"workdir": workdir, "interface": {"kind": "http", "port": 8001}}
+
+    agent = _agent_of(_plan_for(source, "agents/a", runtime, kind="http"))
+
+    assert agent.run_command[-1] == "agent.py"
+
+
+def test_empty_workdir_at_bundling(tmp_path):
+    source = _repo(tmp_path, {"agents/a/agent.py": "x = 1\n"})
+    _, output = _bundle(tmp_path, source, "agents/a", {"language": "python"})
+
+    runtime = _sealed(output)["runtime"]
+
+    assert runtime["workdir"] == "agents/a"
+    assert runtime["source_subfolder"] == "agents/a"
+
+
+def test_no_subfolder_plan_is_unchanged(tmp_path):
+    source = _repo(tmp_path, {"pyproject.toml": _PROJECT, "agents/a/agent.py": "x = 1\n"})
+
+    agent = _agent_of(
+        resolve_environment_plan(
+            source,
+            _job(connector="auto"),
+            contract_modality="chat",
+            contract_runtime={},
+        )
+    )
+
+    assert agent.working_directory == "."
+    assert agent.source_component == "."
+    assert agent.run_command == ["uv", "run", "--no-sync", "python", "agents/a/agent.py"]
+    assert not any(argv[:2] == ["ln", "-s"] for argv in agent.build_commands)
+
+
+def test_no_subfolder_sealed_contract_is_byte_identical(tmp_path):
+    source = _repo(tmp_path, {"agent.py": "x = 1\n"})
+    written = {"modality": "chat", "runtime": None, "data_store": {"kind": "none"}, "tools": []}
+    job = _job(connector="auto", metadata={"generic_harness_v1": True})
+
+    _, output = _bundle(tmp_path, source, None, job=job, contract=written)
+
+    sealed = _sealed(output)
+    assert sealed == written
+    assert "source_subfolder" not in json.dumps(sealed)
+
+
+def test_no_subfolder_no_failure_file(tmp_path, monkeypatch):
+    from fi.alk.harness import bundle_author_v2 as module
+
+    source = _repo(tmp_path, {"agent.py": "x = 1\n"})
+    authoring = _authoring(tmp_path)
+    job_path = tmp_path / "job.json"
+    job_path.write_text(_job(connector="auto").model_dump_json(), encoding="utf-8")
+    seen = []
+    monkeypatch.setattr(module, "author_bundle_v2", lambda **kwargs: seen.append(kwargs))
+
+    code = module.main(
+        [
+            "--job", str(job_path), "--source", str(source),
+            "--authoring", str(authoring), "--output", str(tmp_path / "bundle"),
+        ]
+    )
+
+    assert code == 0 and len(seen) == 1
+    assert not (authoring / "failure.json").exists()
+
+
+def test_subfolder_voice_entry_gets_start(tmp_path):
+    source = _repo(
+        tmp_path,
+        {
+            "pyproject.toml": _PROJECT,
+            "agents/a/agent.py": (
+                "from livekit.agents import cli, WorkerOptions\n"
+                "cli.run_app(WorkerOptions(entrypoint_fnc=None))\n"
+            ),
+        },
+    )
+    authoring = _authoring(tmp_path)
+    _write_voice_contract(authoring)
+    job = _github_job(
+        "agents/a",
+        with_secrets=True,
+        secret_aliases=("LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "LIVEKIT_URL"),
+    )
+
+    bundle = author_bundle_v2(
+        source=source, job=job, authoring=authoring, output=tmp_path / "bundle"
+    )
+
+    agent = _agent_of(bundle)
+    assert agent.run_command[:5] == [*_STARTED, "agents/a"]
+    assert agent.run_command[-1:] == ["start"]
+
+
+def test_subfolder_bun_runs_from_subfolder(tmp_path):
+    source = _repo(
+        tmp_path,
+        {
+            "pyproject.toml": _PROJECT,
+            "agents/a/package.json": json.dumps({"name": "a", "packageManager": "bun@1.3.14"}),
+            "agents/a/bun.lock": '{"lockfileVersion": 1}',
+            "agents/a/server.ts": "Bun.serve({fetch: () => new Response('ok')})",
+        },
+    )
+    runtime = {
+        "language": "bun",
+        "version": "1.3.14",
+        "execution": "native",
+        "command": ["bun", "run", "server.ts"],
+        "interface": {"kind": "http", "port": 8001},
+    }
+
+    agent = _agent_of(_plan_for(source, "agents/a", runtime, kind="http"))
+
+    assert agent.working_directory == "agents/a"
+    assert agent.run_command == ["bun", "run", "server.ts"]
+    assert agent.build_commands[-1] == ["bun", "install", "--frozen-lockfile"]
+
+
+def test_subfolder_workspaces_relative_to_run_folder(tmp_path):
+    source = _repo(
+        tmp_path, {"pyproject.toml": _PROJECT, "agents/a/agent.py": "x = 1\n"}
+    )
+
+    agent = _agent_of(
+        _plan_for(source, "agents/a", {"workspaces": {"files": "files"}})
+    )
+
+    assert agent.workspaces == {"files": "agents/a/files"}
+
+
+def test_subfolder_config_files_unchanged(tmp_path):
+    source = _repo(
+        tmp_path, {"pyproject.toml": _PROJECT, "agents/a/agent.py": "x = 1\n"}
+    )
+    runtime = {
+        "config_files": {"agents/a/settings.env": {"values": {"MODE": "test"}}},
+        "directories": ["agents/a/data"],
+    }
+
+    agent = _agent_of(_plan_for(source, "agents/a", runtime))
+
+    assert set(agent.config_files) == {"agents/a/settings.env"}
+    assert agent.directories == ["agents/a/data"]
+
+
+def test_subfolder_ignores_root_compose_with_broker(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALK_COMPOSE_BROKER_SOCKET", "/private/alk/broker.sock")
+    source = _repo(
+        tmp_path,
+        {
+            "compose.yaml": "services:\n  rootsvc:\n    build: .\n",
+            "agents/a/agent.py": "x = 1\n",
+        },
+    )
+
+    plan = _plan_for(source, "agents/a")
+
+    assert plan.packaging == "generated_python"
+    assert plan.control_service == "agent"
+
+
+def test_subfolder_finds_its_own_compose_with_broker(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALK_COMPOSE_BROKER_SOCKET", "/private/alk/broker.sock")
+    source = _repo(
+        tmp_path,
+        {
+            "compose.yaml": "services:\n  rootsvc:\n    build: .\n",
+            "agents/a/server.py": "x = 1\n",
+            "agents/a/compose.yaml": (
+                "services:\n  agent:\n    build: .\n    command: [python, server.py]\n"
+            ),
+        },
+    )
+
+    plan = _plan_for(
+        source, "agents/a", {"interface": {"kind": "http", "port": 8080}}, kind="http"
+    )
+
+    assert plan.packaging == "compose"
+    assert plan.control_service == "agent"
+
+
+def _bundle_main(tmp_path, job, source, authoring):
+    from fi.alk.harness.bundle_author_v2 import main
+
+    job_path = tmp_path / "job.json"
+    job_path.write_text(job.model_dump_json(), encoding="utf-8")
+    return main(
+        [
+            "--job", str(job_path), "--source", str(source),
+            "--authoring", str(authoring), "--output", str(tmp_path / "bundle"),
+        ]
+    )
+
+
+def test_bundle_main_bad_subfolder_writes_failure(tmp_path):
+    source = _repo(tmp_path, {"agents/a/agent.py": "x = 1\n"})
+    authoring = _authoring(tmp_path)
+
+    code = _bundle_main(tmp_path, _github_job("agents/missing"), source, authoring)
+
+    assert code == 78
+    failure = json.loads((authoring / "failure.json").read_text())
+    assert (failure["domain"], failure["stage"], failure["code"], failure["retryable"]) == (
+        "agent",
+        "acquiring_source",
+        "subfolder_not_found",
+        False,
+    )
+    assert not (tmp_path / "bundle").exists()
+
+
+def _saved_from(tmp_path, source, folder):
+    from fi.alk.harness.tools import accept_contract
+
+    authoring = _authoring(tmp_path)
+    saved = accept_contract(
+        {
+            "agent": "pair",
+            "real_use_cases": ["order"],
+            "tools": [{"name": "add", "args": ["item_id"]}],
+        },
+        authoring,
+        source_root=source,
+        subfolder=folder,
+    )
+    assert not saved.get("is_error")
+    return authoring
+
+
+def test_bundle_main_contract_from_another_folder_writes_failure(tmp_path):
+    source = _repo(
+        tmp_path, {"agents/a/agent.py": "x = 1\n", "agents/b/agent.py": "x = 2\n"}
+    )
+    authoring = _saved_from(tmp_path, source, "agents/a")
+
+    code = _bundle_main(tmp_path, _github_job("agents/b"), source, authoring)
+
+    assert code == 78
+    failure = json.loads((authoring / "failure.json").read_text())
+    assert failure["code"] == "subfolder_not_found"
+    assert failure["details"] == {"subfolder": "agents/b", "built_from": "agents/a"}
+
+
+def test_bundle_main_job_without_a_folder_on_a_folder_contract_writes_failure(tmp_path):
+    source = _repo(tmp_path, {"agents/a/agent.py": "x = 1\n"})
+    authoring = _saved_from(tmp_path, source, "agents/a")
+
+    code = _bundle_main(tmp_path, _github_job(None), source, authoring)
+
+    assert code == 78
+    failure = json.loads((authoring / "failure.json").read_text())
+    assert failure["code"] == "subfolder_not_found"
+    assert failure["details"] == {"subfolder": "", "built_from": "agents/a"}
+    assert "agents/a" in failure["message"] and "repository root" in failure["message"]
+
+
+@pytest.mark.parametrize("contract", [{"tools": []}, {"runtime": None, "tools": []}])
+def test_bundle_main_contract_without_runtime_writes_failure(tmp_path, contract):
+    source = _repo(tmp_path, {"agents/a/agent.py": "x = 1\n"})
+    authoring = _authoring(tmp_path)
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+
+    code = _bundle_main(tmp_path, _github_job("agents/a"), source, authoring)
+
+    assert code == 78
+    failure = json.loads((authoring / "failure.json").read_text())
+    assert failure["code"] == "subfolder_not_found"
+    assert failure["details"] == {"subfolder": "agents/a", "built_from": ""}
+    assert not (tmp_path / "bundle").exists()
+
+
+def test_bundle_main_matching_folder_passes(tmp_path, monkeypatch):
+    from fi.alk.harness import bundle_author_v2 as module
+
+    source = _repo(tmp_path, {"agents/a/agent.py": "x = 1\n"})
+    authoring = _saved_from(tmp_path, source, "agents/a")
+    seen = []
+    monkeypatch.setattr(module, "author_bundle_v2", lambda **kwargs: seen.append(kwargs))
+
+    code = _bundle_main(tmp_path, _github_job("agents/a"), source, authoring)
+
+    assert code == 0 and len(seen) == 1
+    assert not (authoring / "failure.json").exists()

@@ -5054,3 +5054,38 @@ def test_hosted_compose_uses_broker_and_observation_world(monkeypatch):
     assert selected == ["broker", "observation"]
     assert harness.provisioner.provision_calls == 1
     assert harness.provisioner.closed
+
+
+def test_bad_subfolder_fails_terminal_before_compose(monkeypatch):
+    from fi.alk.harness.source_folder import subfolder_not_found
+
+    harness = _build_harness(scenarios=[])
+    job = _job().model_copy(
+        update={
+            "source": RepositorySource(
+                kind=SourceKind.GITHUB,
+                repository="org/repo",
+                visibility=SourceVisibility.PUBLIC,
+                commit_sha="a" * 40,
+                subfolder="agents/missing",
+            )
+        }
+    )
+    _write_job(harness.job_path, job)
+    started: list[str] = []
+    monkeypatch.setattr(
+        he, "initialize_hosted_compose", lambda job, source: started.append("compose")
+    )
+
+    assert _run(harness) == he.EXIT_OK
+
+    assert started == []
+    assert harness.provisioner.provision_calls == 0
+    terminal = harness.transport.terminal_events()
+    assert len(terminal) == 1
+    assert terminal[0]["payload"]["failure"] == {
+        "domain": "agent",
+        "stage": "acquiring_source",
+        "code": "subfolder_not_found",
+        "message": subfolder_not_found("agents/missing").message,
+    }

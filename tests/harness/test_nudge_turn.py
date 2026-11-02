@@ -797,6 +797,84 @@ def test_a_seeded_table_with_no_key_is_held_only_to_having_rows(tmp_path):
     assert nudge.seed_row_problems(root, source) == []
 
 
+def _two_agents(tmp_path: Path) -> Path:
+    """A repository of two agents, each seeding a different booking."""
+    source = tmp_path / "source"
+    for name, ref in (("a", "A_REF"), ("b", "B_REF")):
+        (source / "agents" / name / "db").mkdir(parents=True)
+        (source / "agents" / name / "db" / "seed.sql").write_text(
+            f"INSERT INTO bookings (ref, status) VALUES ('{ref}', 'matched');\n",
+            encoding="utf-8",
+        )
+    return source
+
+
+def _record_folder(root: Path, folder: str) -> None:
+    path = root / "contract.json"
+    body = json.loads(path.read_text(encoding="utf-8"))
+    body["runtime"] = (
+        {"source_subfolder": folder, "workdir": folder} if folder else None
+    )
+    path.write_text(json.dumps(body), encoding="utf-8")
+
+
+def test_seed_row_problems_ignore_a_siblings_seed(tmp_path):
+    root = _with_bookings(_cart(tmp_path / "work"), "A_REF")
+    source = _two_agents(tmp_path)
+
+    [whole] = nudge.seed_row_problems(root, source)
+    assert whole["item"] == "bookings" and "B_REF" in whole["message"]
+
+    _record_folder(root, "agents/a")
+    assert nudge.seed_row_problems(root, source) == []
+
+
+def test_a_world_check_cannot_cite_a_siblings_file(tmp_path):
+    source = _two_agents(tmp_path)
+    added: list[dict] = []
+
+    @tool("add_world_check", "Add one check.", {})
+    async def add_world_check(args: dict) -> dict:
+        added.append(args)
+        return {"content": []}
+
+    def cite(path: str) -> dict:
+        return {
+            "name": "bookings",
+            "code": "def check(world): return None",
+            "source_path": path,
+            "source_quote": "INSERT INTO bookings (ref, status)",
+        }
+
+    server = nudge.track_world(
+        tool_server(name="world", tools=[add_world_check]), {}, source, "agents/a"
+    )
+    assert _call(server, "add_world_check", cite("agents/b/db/seed.sql"))["is_error"]
+    assert added == []
+    assert not _call(server, "add_world_check", cite("agents/a/db/seed.sql")).get(
+        "is_error"
+    )
+
+
+def test_an_invariant_revision_cannot_cite_a_siblings_file(tmp_path):
+    root, _ = _pinned_review(tmp_path)
+    source = _two_agents(tmp_path / "repo")
+    args = {
+        "name": "cart_starts_empty",
+        "violations_sql": "SELECT item_id FROM cart WHERE item_id = 'x'",
+        "source_path": "agents/b/db/seed.sql",
+        "source_quote": "INSERT INTO bookings (ref, status)",
+    }
+    _record_folder(root, "agents/a")
+    before = (root / ARTIFACT).read_bytes()
+
+    assert nudge.revise_invariant(root, args, source).startswith("Not changed")
+    assert (root / ARTIFACT).read_bytes() == before
+
+    _record_folder(root, "")
+    assert nudge.revise_invariant(root, args, source) == "revised, cites agents/b/db/seed.sql"
+
+
 def test_a_contract_naming_a_removed_tool_is_cleaned_and_warned(tmp_path):
     from fi.alk.harness.contract import Dependency, ToolEntry
 

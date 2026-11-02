@@ -56,12 +56,14 @@ def _contract(prompt: str) -> dict[str, Any]:
     ).model_dump(mode="json")
 
 
-def _provision(bundle_dir: Path, kind: SourceKind) -> dict[str, Any]:
+def _provision(
+    bundle_dir: Path, kind: SourceKind, subfolder: str | None = None
+) -> dict[str, Any]:
     client = _RecordingClient()
     job = SimpleNamespace(
         run_id="job-1",
         metadata={},
-        source=SimpleNamespace(kind=kind, repository="org/clinic"),
+        source=SimpleNamespace(kind=kind, repository="org/clinic", subfolder=subfolder),
     )
     asyncio.run(
         ss.BundleScenarioSource().build(
@@ -152,7 +154,7 @@ def test_provision_payload_has_no_agent_for_remote_or_provider_sources_or_a_miss
     _write_bundle(tmp_path, contract)
     if build_error is not None:
 
-        def _raise(document: Any) -> dict[str, Any]:
+        def _raise(document: Any, **_: Any) -> dict[str, Any]:
             raise build_error
 
         monkeypatch.setattr(ss, "build_authored_agent", _raise)
@@ -168,3 +170,43 @@ def test_provision_payload_has_no_agent_for_remote_or_provider_sources_or_a_miss
     else:
         assert any(logged in message for message in messages)
     assert not any("private_detail" in message for message in messages)
+
+
+@pytest.mark.parametrize("value", ["agents/a", "my..agent", "agents/a/", " agents/a ", "/abs/x"])
+def test_document_echoes_subfolder_exactly(tmp_path: Path, value: str) -> None:
+    _write_bundle(tmp_path, _contract("p"))
+
+    payload = _provision(tmp_path, SourceKind.GITHUB, subfolder=value)
+
+    assert payload["agent"]["agent"]["extension"]["source"] == {"subfolder": value}
+
+
+@pytest.mark.parametrize("subfolder", [None, ""])
+def test_document_has_no_source_without_subfolder(
+    tmp_path: Path, subfolder: str | None
+) -> None:
+    _write_bundle(tmp_path, _contract("p"))
+
+    payload = _provision(tmp_path, SourceKind.GITHUB, subfolder=subfolder)
+
+    assert "source" not in payload["agent"]["agent"]["extension"]
+
+
+def test_no_subfolder_setup_hash_is_pinned(tmp_path: Path) -> None:
+    _write_bundle(
+        tmp_path,
+        {
+            "agent": "faq-bot",
+            "tools": [{"name": "search", "args": "query"}],
+            "runtime": {"language": "python", "workdir": "app", "command": ["python", "app.py"]},
+            "real_use_cases": ["ask"],
+        },
+    )
+
+    payload = _provision(tmp_path, SourceKind.GITHUB)
+
+    # The value a build without a folder produced before the field existed.
+    assert (
+        payload["agent"]["agent"]["setup_hash"]
+        == "sh1:27408adef9319e5f760d442d8e1e4c34ca2787f736e49ede86bc7398b323dd7b"
+    )

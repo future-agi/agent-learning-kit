@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -677,3 +678,105 @@ def test_carrying_on_a_build_restates_how_many_scenarios_it_was_asked_for(tmp_pa
     assert asyncio.run(runtime._carry_on())
     assert "with 60 scenarios" in handled[0]
     assert "call finish_build" in handled[0]
+
+
+def test_open_for_building_passes_subfolder(tmp_path, monkeypatch):
+    policy_path = tmp_path / "policy.yaml"
+    policy_path.write_text(
+        "schema_version: 1\nharness_chat:\n  enabled: true\n", encoding="utf-8"
+    )
+    source = tmp_path / "source"
+    (source / "agents" / "a").mkdir(parents=True)
+    (source / "agents" / "a" / "agent.py").write_text("x = 1\n")
+    (source / "agents" / "b").mkdir()
+    (source / "agents" / "b" / "agent.py").write_text("x = 2\n")
+    opened: dict[str, Any] = {}
+    monkeypatch.setattr(
+        "fi.alk.harness.builder.open_for_building",
+        lambda contract, **kwargs: opened.update(kwargs),
+    )
+    monkeypatch.setattr(HostedChatRuntime, "_builder_platform_server", lambda self: None)
+    monkeypatch.setattr(HostedChatRuntime, "_hosted_prompt", lambda self: "")
+    runtime = HostedChatRuntime(
+        client=SimpleNamespace(turn_context={}),  # type: ignore[arg-type]
+        policy=load_chat_policy(policy_path),
+        workspace=tmp_path,
+        source=source,
+        # A job that doesn't validate, as when the platform sends a field this build doesn't know.
+        job={
+            "metadata": {"agent_name": "demo"},
+            "scenario_count": 1,
+            "source": {"kind": "github", "subfolder": "agents/a"},
+        },
+    )
+
+    runtime._open_for_building(None)
+
+    assert opened["source"].subfolder == "agents/a"
+    briefing = opened["source"].briefing()
+    assert "agents/a/agent.py" in briefing and "agents/b/agent.py" not in briefing
+
+
+def test_nudge_world_checks_cite_only_the_recorded_folder(tmp_path):
+    from fi.alk.harness.backends import SessionSpec, tool, tool_server
+    from fi.alk.harness.world.tools import WORLD_SERVER
+
+    policy_path = tmp_path / "policy.yaml"
+    policy_path.write_text(
+        "schema_version: 1\nharness_chat:\n  enabled: true\n", encoding="utf-8"
+    )
+    source = tmp_path / "source"
+    for name in ("a", "b"):
+        (source / "agents" / name).mkdir(parents=True)
+        (source / "agents" / name / "seed.sql").write_text(
+            "INSERT INTO menu VALUES ('fries');\n"
+        )
+    workspace = tmp_path / "work"
+    workspace.mkdir()
+    (workspace / "contract.json").write_text(
+        json.dumps(
+            {"agent": "demo", "runtime": {"source_subfolder": "agents/a", "workdir": "agents/a"}}
+        ),
+        encoding="utf-8",
+    )
+    runtime = HostedChatRuntime(
+        client=SimpleNamespace(turn_context={}),  # type: ignore[arg-type]
+        policy=load_chat_policy(policy_path),
+        workspace=workspace,
+        source=source,
+        job={"metadata": {"agent_name": "demo"}, "scenario_count": 1},
+    )
+    runtime._nudge = {"nudge_id": "n1", "stage": "environment"}
+
+    @tool("add_world_check", "Add one check.", {})
+    async def add_world_check(args: dict) -> dict:
+        return {"content": []}
+
+    configured: list[SessionSpec] = []
+    stage = SimpleNamespace(
+        spec=SessionSpec(
+            system_prompt="",
+            servers={WORLD_SERVER: tool_server(name=WORLD_SERVER, tools=[add_world_check])},
+        ),
+        kept=None,
+        configure=configured.append,
+    )
+
+    runtime._nudge_tools(stage, None)  # type: ignore[arg-type]
+
+    check = next(one for one in configured[0].servers[WORLD_SERVER].tools)
+
+    def cite(path: str) -> dict:
+        return asyncio.run(
+            check.handler(
+                {
+                    "name": "menu",
+                    "code": "def check(world): return None",
+                    "source_path": path,
+                    "source_quote": "INSERT INTO menu VALUES ('fries');",
+                }
+            )
+        )
+
+    assert cite("agents/b/seed.sql").get("is_error")
+    assert not cite("agents/a/seed.sql").get("is_error")

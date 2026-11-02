@@ -3923,7 +3923,7 @@ def test_every_contract_field_is_advertised_to_the_model(tmp_path):
 
     advertised = asyncio.run(advertised_fields())
     # Set by the amendment tools during later stages, never by whoever submits the contract.
-    ours = {"amendments", "instrumentation"}
+    ours = {"amendments", "instrumentation", "source_subfolder"}
 
     def named(model: type[BaseModel]) -> list[str]:
         """Every field the model would have to fill, nested ones included.

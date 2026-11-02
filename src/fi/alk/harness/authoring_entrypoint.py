@@ -29,6 +29,7 @@ from .job import HarnessJob, ProviderExecutionMode, SourceKind
 from .hosted_compose_bootstrap import initialize_hosted_compose
 from .provider_import import inspect_provider_target
 from .scenarios import load as load_written
+from .source_folder import EXIT_REFUSED, refuse_unusable_folder, saved_runtime
 from .understand import PROVIDER_IMPORT_PROFILE_PATH_ENV
 
 PROVIDER_MANAGED_CONNECTORS = frozenset({"vapi", "retell", "retell_chat"})
@@ -373,6 +374,10 @@ def _certify_only(args: argparse.Namespace) -> int:
         raise RuntimeValidationError(
             "environment", f"Certify-only: invalid job document: {_one_line(exc)}"
         ) from exc
+    if refuse_unusable_folder(
+        source, job.source.subfolder, output, saved_runtime(output)
+    ):
+        return EXIT_REFUSED
     if job.metadata.get("generic_harness_v1") is not True:
         raise RuntimeValidationError(
             "environment", "Certify-only requires a generic_harness_v1 job"
@@ -681,6 +686,10 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
         return _certify_only(args)
 
     job = HarnessJob.model_validate(json.loads(args.job.read_text(encoding="utf-8")))
+    if refuse_unusable_folder(
+        args.source.resolve(), job.source.subfolder, args.output.resolve()
+    ):
+        return EXIT_REFUSED
     broker_socket = initialize_hosted_compose(job, args.source.resolve())
     if broker_socket is not None:
         os.environ["ALK_COMPOSE_BROKER_SOCKET"] = str(broker_socket)

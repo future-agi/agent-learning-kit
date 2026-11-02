@@ -6,6 +6,7 @@ import os
 from fastapi import UploadFile
 from fastapi.testclient import TestClient
 import pytest
+from pydantic import Field
 
 from fi.alk.harness.sandbox_server import (
     LocalSandbox,
@@ -932,3 +933,158 @@ def test_acquisition_defers_inventory_and_unselected_packaging_to_authoring(
         )["status"]
         == "missing"
     )
+
+
+class _Acquirer:
+    """Stands in for the clone: a repository holding two agents, counting how often it is asked."""
+
+    calls = 0
+    on_acquire = None
+
+    def __init__(self, _token_provider) -> None:
+        pass
+
+    async def acquire(self, job, workspace):
+        type(self).calls += 1
+        checkout = workspace / "repository"
+        for name, variable in (("a", "A_ONLY_API_KEY"), ("b", "B_ONLY_API_KEY")):
+            (checkout / "agents" / name).mkdir(parents=True)
+            (checkout / "agents" / name / "agent.py").write_text(
+                f'import os\nKEY = os.environ["{variable}"]\n'
+            )
+        if type(self).on_acquire is not None:
+            type(self).on_acquire(job)
+        return checkout
+
+
+@pytest.fixture
+def cloning(monkeypatch):
+    from fi.alk.harness import sandbox_server
+
+    _Acquirer.calls = 0
+    _Acquirer.on_acquire = None
+    monkeypatch.setattr(sandbox_server, "GitHubSourceAcquirer", _Acquirer)
+    return sandbox_server
+
+
+@pytest.fixture
+def hosted_github_job(monkeypatch):
+    # submit() builds a GitHub job without the dedicated-VM runtime a hosted job requires, so
+    # today it refuses every GitHub submission. These tests cover what follows that step.
+    from fi.alk.harness import sandbox_server
+    from fi.alk.harness.job import RuntimeIsolation, RuntimeRequirements
+
+    class HostedJob(sandbox_server.HarnessJob):
+        runtime: RuntimeRequirements = Field(
+            default_factory=lambda: RuntimeRequirements(isolation=RuntimeIsolation.DEDICATED_VM)
+        )
+
+    monkeypatch.setattr(sandbox_server, "HarnessJob", HostedJob)
+
+
+def _github_request(subfolder: str, **extra) -> LocalSandboxRequest:
+    return LocalSandboxRequest(
+        github_repository="acme/agents",
+        github_commit_sha="a" * 40,
+        github_subfolder=subfolder,
+        metadata={"generic_harness_v1": True},
+        **extra,
+    )
+
+
+def _executed(sandbox: LocalSandbox, request: LocalSandboxRequest):
+    async def run():
+        response = sandbox.submit(request)
+        await sandbox._tasks[response.job.job_id]
+        return response.job.job_id
+
+    job_id = asyncio.run(run())
+    return json.loads((sandbox.jobs_root / job_id / "state.json").read_text())
+
+
+def test_github_subfolder_reaches_source(tmp_path, hosted_github_job):
+    sandbox = LocalSandbox(tmp_path / "state")
+    seen = {}
+
+    async def idle(job, _source):
+        seen["subfolder"] = job.source.subfolder
+
+    sandbox._execute = idle
+
+    async def run():
+        response = sandbox.submit(_github_request("agents/a"))
+        await sandbox._tasks[response.job.job_id]
+
+    asyncio.run(run())
+
+    assert seen == {"subfolder": "agents/a"}
+
+
+def test_github_subfolder_requires_repository(tmp_path):
+    with pytest.raises(ValueError, match="needs a GitHub repository"):
+        LocalSandboxRequest(
+            source_path=str(tmp_path),
+            github_subfolder="agents/a",
+            metadata={"generic_harness_v1": True},
+        )
+    assert LocalSandboxRequest(source_path=str(tmp_path), github_subfolder="").source_path
+
+
+def test_github_subfolder_requires_generic(tmp_path):
+    with pytest.raises(ValueError, match="needs the generic harness"):
+        LocalSandboxRequest(github_repository="acme/agents", github_subfolder="agents/a")
+
+
+def test_bad_subfolder_fails_once_without_retry(tmp_path, cloning, hosted_github_job):
+    sandbox = LocalSandbox(tmp_path / "state")
+
+    state = _executed(sandbox, _github_request("agents/missing"))
+
+    assert _Acquirer.calls == 1
+    assert state["stage"] == "failed"
+    failure = state["failure"]
+    assert (failure["domain"], failure["stage"], failure["code"], failure["retryable"]) == (
+        "agent",
+        "acquiring_source",
+        "subfolder_not_found",
+        False,
+    )
+    assert failure["details"] == {"subfolder": "agents/missing"}
+
+
+def test_bad_subfolder_keeps_canceled(tmp_path, cloning, hosted_github_job):
+    sandbox = LocalSandbox(tmp_path / "state")
+
+    def cancel(job):
+        path = sandbox.jobs_root / job.job_id / "state.json"
+        state = json.loads(path.read_text())
+        state["stage"] = "canceled"
+        path.write_text(json.dumps(state))
+
+    _Acquirer.on_acquire = cancel
+
+    state = _executed(sandbox, _github_request("agents/missing"))
+
+    assert state["stage"] == "canceled"
+    assert not state.get("failure")
+
+
+def test_subfolder_scopes_credentials(tmp_path, cloning, monkeypatch, hosted_github_job):
+    sandbox = LocalSandbox(tmp_path / "state")
+
+    def stop(*args, **kwargs):
+        raise RuntimeError("stop after the credentials are written")
+
+    monkeypatch.setattr(cloning, "resolve_worker_secrets", stop)
+
+    async def run():
+        response = sandbox.submit(_github_request("agents/a"))
+        await sandbox._tasks[response.job.job_id]
+        return response.job.job_id
+
+    job_id = asyncio.run(run())
+
+    manifest = json.loads((sandbox.jobs_root / job_id / "credentials.json").read_text())
+    names = {item["environment_name"] for item in manifest["requirements"]}
+    assert "A_ONLY_API_KEY" in names
+    assert "B_ONLY_API_KEY" not in names

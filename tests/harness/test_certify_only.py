@@ -1412,3 +1412,126 @@ def test_refresh_leaves_a_contract_whose_entrypoints_all_have_tools_untouched(
 
     assert (authoring / "contract.json").read_bytes() == before
     assert not any("entrypoints" in note for note in notes)
+
+
+def _subfolder_certify(tmp_path: Path, subfolder: str, recorded: str | None):
+    """An assembled environment whose repository holds two agents, saved through the real save."""
+    from fi.alk.harness.job import RepositorySource, SourceKind, SourceVisibility
+    from fi.alk.harness.tools import accept_contract
+
+    source, authoring, job_path = _assembled(tmp_path, {"one": ["works"]})
+    for name in ("a", "b"):
+        (source / "agents" / name).mkdir(parents=True)
+        (source / "agents" / name / "agent.py").write_text("print('ok')\n")
+    if recorded is not None:
+        saved = accept_contract(
+            {
+                "agent": "pair",
+                "real_use_cases": ["order"],
+                "tools": [{"name": "add", "args": ["item_id"]}],
+            },
+            authoring,
+            source_root=source,
+            subfolder=recorded,
+        )
+        assert not saved.get("is_error")
+    job = _job(1).model_copy(
+        update={
+            "source": RepositorySource(
+                kind=SourceKind.GITHUB,
+                repository="acme/agents",
+                commit_sha="a" * 40,
+                visibility=SourceVisibility.PUBLIC,
+                subfolder=subfolder,
+            )
+        }
+    )
+    job_path.write_text(job.model_dump_json(indent=2), encoding="utf-8")
+    return source, authoring, job_path
+
+
+def _written_failure(authoring: Path) -> dict:
+    return json.loads((authoring / "failure.json").read_text())
+
+
+def test_bad_subfolder_writes_failure(tmp_path, monkeypatch) -> None:
+    source, authoring, job_path = _subfolder_certify(tmp_path, "agents/missing", None)
+    opened = _forbid_models(monkeypatch)
+    calls: list[str] = []
+    _use_validator(monkeypatch, _certifying_validate(calls))
+
+    code = _hosted(
+        tmp_path, monkeypatch, _argv(source, authoring, job_path, tmp_path / "bundle")
+    )
+
+    assert code == 78
+    failure = _written_failure(authoring)
+    assert (failure["domain"], failure["stage"], failure["code"], failure["retryable"]) == (
+        "agent",
+        "acquiring_source",
+        "subfolder_not_found",
+        False,
+    )
+    assert calls == [] and opened == []
+
+
+def test_contract_from_another_folder_writes_failure(tmp_path, monkeypatch) -> None:
+    source, authoring, job_path = _subfolder_certify(tmp_path, "agents/b", "agents/a")
+    calls: list[str] = []
+    _use_validator(monkeypatch, _certifying_validate(calls))
+
+    code = _hosted(
+        tmp_path, monkeypatch, _argv(source, authoring, job_path, tmp_path / "bundle")
+    )
+
+    assert code == 78
+    failure = _written_failure(authoring)
+    assert failure["code"] == "subfolder_not_found"
+    assert failure["details"] == {"subfolder": "agents/b", "built_from": "agents/a"}
+    assert calls == []
+
+
+@pytest.mark.parametrize("runtime", ["absent", "null"])
+def test_contract_without_runtime_writes_failure(tmp_path, monkeypatch, runtime) -> None:
+    source, authoring, job_path = _subfolder_certify(tmp_path, "agents/a", None)
+    contract = json.loads((authoring / "contract.json").read_text())
+    contract.pop("runtime", None)
+    if runtime == "null":
+        contract["runtime"] = None
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+    calls: list[str] = []
+    _use_validator(monkeypatch, _certifying_validate(calls))
+
+    code = _hosted(
+        tmp_path, monkeypatch, _argv(source, authoring, job_path, tmp_path / "bundle")
+    )
+
+    assert code == 78
+    failure = _written_failure(authoring)
+    assert failure["code"] == "subfolder_not_found"
+    assert failure["details"] == {"subfolder": "agents/a", "built_from": ""}
+    assert calls == []
+
+
+def test_matching_folder_passes(tmp_path, monkeypatch) -> None:
+    source, authoring, job_path = _subfolder_certify(tmp_path, "agents/a", "agents/a")
+    reached: list[str] = []
+
+    async def validated(*args, **kwargs):
+        reached.append("validate")
+
+    monkeypatch.setattr(runtime_validation, "validate_and_repair", validated)
+    monkeypatch.setattr(
+        authoring_entrypoint, "_prepare_source_data_invariants", lambda *args: []
+    )
+    monkeypatch.setattr(
+        bundle_author, "_reuse_certified_bundle", lambda **kwargs: object()
+    )
+
+    code = _hosted(
+        tmp_path, monkeypatch, _argv(source, authoring, job_path, tmp_path / "bundle")
+    )
+
+    assert code == 0
+    assert reached == ["validate"]
+    assert not (authoring / "failure.json").exists()

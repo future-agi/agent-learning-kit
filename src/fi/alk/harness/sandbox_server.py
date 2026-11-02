@@ -59,6 +59,7 @@ from .job import (
 from .packaging import PackagingManifest, inspect_packaging
 from .provision import ProvisionError, source_fingerprint, stop
 from .secrets import resolve_worker_secrets, worker_environment
+from .source_folder import SubfolderNotFound, agent_folder, subfolder_not_found
 
 
 _CONTROLLER_TOKEN = uuid.uuid4().hex
@@ -73,6 +74,7 @@ class LocalSandboxRequest(BaseModel):
     github_commit_sha: str | None = None
     github_visibility: SourceVisibility = SourceVisibility.PUBLIC
     github_installation_id: str | None = None
+    github_subfolder: str | None = None
     scenario_count: int = Field(default=10, ge=1, le=200)
     seed: int | None = None
     agent_name: str | None = None
@@ -102,6 +104,14 @@ class LocalSandboxRequest(BaseModel):
             or self.connector_mode is not ProviderExecutionMode.CONNECT_ONLY
         ):
             raise ValueError("provider_only_requires_connect_only_provider")
+        if self.github_subfolder:
+            if not self.github_repository:
+                raise ValueError("A subfolder needs a GitHub repository to read it from.")
+            # The older authoring path would ignore the folder without saying so.
+            if self.metadata.get("generic_harness_v1") is not True:
+                raise ValueError(
+                    "A subfolder needs the generic harness, which this job didn't ask for."
+                )
         _validate_environment_values(self.environment_values, self.secret_refs)
         return self
 
@@ -525,6 +535,7 @@ class LocalSandbox:
                     commit_sha=request.github_commit_sha,
                     visibility=request.github_visibility,
                     installation_id=request.github_installation_id,
+                    subfolder=request.github_subfolder,
                 )
             )
             job = HarnessJob(
@@ -965,6 +976,7 @@ class LocalSandbox:
                             await asyncio.sleep(delay)
                     if source is None:
                         raise SourceAcquisitionError("github_checkout_missing")
+                agent_folder(source, job.source.subfolder)
                 packaging_manifest = inspect_packaging(
                     source,
                     external_environment=bool(
@@ -975,6 +987,7 @@ class LocalSandbox:
                     source,
                     secret_refs=job.agent.secret_refs,
                     provided_environment=job.agent.config,
+                    scan_paths=[job.source.subfolder] if job.source.subfolder else None,
                     template_secrets_required=(
                         job.metadata.get("generic_harness_v1") is not True
                     ),
@@ -1128,6 +1141,17 @@ class LocalSandbox:
                         completed_scenarios=result.get("completed_scenarios", 0),
                         failure=result.get("failure"),
                         attempt=state.get("attempt", 1),
+                        updated_at=_now(),
+                    )
+                    _write_json(state_path, state)
+            except SubfolderNotFound as exc:
+                state = _read_json(state_path)
+                if state.get("stage") != HarnessStage.CANCELED.value:
+                    failure = subfolder_not_found(exc.subfolder)
+                    state.update(
+                        stage=HarnessStage.FAILED.value,
+                        detail=failure.message,
+                        failure=failure.model_dump(mode="json"),
                         updated_at=_now(),
                     )
                     _write_json(state_path, state)

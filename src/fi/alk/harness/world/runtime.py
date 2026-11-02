@@ -169,6 +169,9 @@ class GeneratedWorld(EnvironmentAdapter):
     # Where the agent's own code lives, so a handler that binds to one of its tools can import
     # it. Empty when the world implements the tools itself.
     source_root: str = ""
+    # The folder of that repository the agent lives in, kept so every process that reaches the
+    # code puts the same folder first.
+    source_subfolder: str = ""
     # The agent's own in-memory state, for tools that take it as an argument instead of
     # connecting to anything. Held opaquely: their code gives it shape.
     state_object: Any = None
@@ -187,6 +190,7 @@ class GeneratedWorld(EnvironmentAdapter):
         self.tools = copy.deepcopy(type(self).tools)
         self.handlers = dict(type(self).handlers)
         self.state_object = copy.deepcopy(type(self).state_object)
+        self.source_subfolder = ""
         self.database = str(database)
         # Where this agent's records live. Given rather than assumed, because the harness
         # writes statements in whatever the agent's own store speaks and they have to reach
@@ -216,7 +220,7 @@ class GeneratedWorld(EnvironmentAdapter):
             )
         return found
 
-    def reach(self, source_root: str) -> None:
+    def reach(self, source_root: str, subfolder: str = "") -> None:
         """Make the agent's own code importable, so a binding can call it rather than copy it.
 
         Two directories go on the path, not one. An agent pointed at flatly is imported from where
@@ -229,11 +233,24 @@ class GeneratedWorld(EnvironmentAdapter):
 
         The package root is found the way Python finds it: walk up while each directory is itself
         a package, and stop at the first that is not.
+
+        Each directory goes in at the front, so the agent's own folder, when it has one, is
+        added last to come first: a module of the agent's is found by its flat name before a
+        same-named module elsewhere in the repository. A call without a folder keeps the one
+        already set.
         """
         import sys
 
         self.source_root = str(source_root or "")
-        for path in self._import_roots(self.source_root):
+        if subfolder:
+            self.source_subfolder = subfolder
+        roots = self._import_roots(self.source_root)
+        if self.source_root and self.source_subfolder:
+            # Reversed, since each goes in at the front: the folder itself must end up first.
+            roots += reversed(
+                self._import_roots(str(Path(self.source_root) / self.source_subfolder))
+            )
+        for path in roots:
             if path not in sys.path:
                 sys.path.insert(0, path)
 

@@ -239,3 +239,102 @@ def test_early_review_never_starts_for_an_agent_without_data(tmp_path, monkeypat
     worker.join(timeout=5)
     assert not worker.is_alive()
     assert not (output / "generic-harness").exists()
+
+
+def _subfolder_job(tmp_path: Path, subfolder: str) -> Path:
+    from fi.alk.harness.job import HarnessJob
+
+    job = HarnessJob(
+        job_id="job",
+        run_id="run",
+        execution="hosted",
+        source={
+            "kind": "github",
+            "visibility": "public",
+            "repository": "acme/agent",
+            "commit_sha": "a" * 40,
+            "subfolder": subfolder,
+        },
+        runtime={"isolation": "dedicated_vm"},
+        agent={"connector": "auto"},
+    )
+    path = tmp_path / "job.json"
+    path.write_text(job.model_dump_json(), encoding="utf-8")
+    return path
+
+
+def _watch_authoring(monkeypatch):
+    from fi.alk.harness import authoring_entrypoint as authoring
+
+    calls: list[str] = []
+
+    def compose(*_args, **_kwargs):
+        calls.append("compose")
+
+    async def auto(_namespace) -> int:
+        calls.append("auto")
+        return 0
+
+    def await_harness(_output) -> int:
+        calls.append("await")
+        return 0
+
+    monkeypatch.setattr(authoring, "initialize_hosted_compose", compose)
+    monkeypatch.setattr(authoring, "_auto", auto)
+    monkeypatch.setattr(authoring, "_await_harness", await_harness)
+    monkeypatch.setattr(authoring, "_persist_authored_scenario_count", lambda *a: None)
+    return authoring, calls
+
+
+def _run_authoring(authoring, tmp_path: Path, subfolder: str, *flags: str) -> int:
+    source = tmp_path / "source"
+    source.mkdir(exist_ok=True)
+    (source / "agents" / "a").mkdir(parents=True, exist_ok=True)
+    (source / "agents" / "a" / "agent.py").write_text("x = 1\n")
+    return authoring.main(
+        [
+            str(_subfolder_job(tmp_path, subfolder)),
+            "--source",
+            str(source),
+            "--output",
+            str(tmp_path / "authoring"),
+            *flags,
+        ]
+    )
+
+
+def _written_failure(tmp_path: Path) -> dict:
+    return json.loads((tmp_path / "authoring" / "failure.json").read_text())
+
+
+def test_bad_subfolder_writes_failure_and_exits_78_await_mode(tmp_path, monkeypatch):
+    authoring, calls = _watch_authoring(monkeypatch)
+
+    assert _run_authoring(authoring, tmp_path, "agents/missing", "--await-harness") == 78
+
+    failure = _written_failure(tmp_path)
+    assert {key: failure[key] for key in ("domain", "stage", "code", "retryable")} == {
+        "domain": "agent",
+        "stage": "acquiring_source",
+        "code": "subfolder_not_found",
+        "retryable": False,
+    }
+    assert calls == []
+
+
+def test_bad_subfolder_writes_failure_and_exits_78_auto_mode(tmp_path, monkeypatch):
+    authoring, calls = _watch_authoring(monkeypatch)
+
+    assert _run_authoring(authoring, tmp_path, "agents/missing") == 78
+
+    assert _written_failure(tmp_path)["code"] == "subfolder_not_found"
+    assert calls == []
+
+
+def test_good_subfolder_continues(tmp_path, monkeypatch):
+    authoring, calls = _watch_authoring(monkeypatch)
+
+    assert _run_authoring(authoring, tmp_path, "agents/a") == 0
+
+    assert calls == ["compose", "auto"]
+    assert not (tmp_path / "authoring" / "failure.json").exists()

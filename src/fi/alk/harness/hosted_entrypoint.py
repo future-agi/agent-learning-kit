@@ -41,6 +41,7 @@ from .backends import GOOGLE_ADK_APPROVAL_ENV
 from .bundle_v2 import BundleV2Error, EnvironmentBundleV2, RuntimeKindV2, load_bundle_v2
 from .compose_broker import BrokerError, ComposeBrokerClient
 from .hosted_compose_bootstrap import initialize_hosted_compose
+from .source_folder import folder_failure
 from .world.observation import ObservationWorldFactory
 from .call_runner import CallRunnerContext, CallRunnerImpl
 from .hosted_scheduler import (
@@ -2384,6 +2385,14 @@ async def run_job(
             # build a reportable failure from, and every downstream stage assumes a valid `job`.
             logger.error("job.json invalid: %s", exc)
             return EXIT_CRASHED
+
+        if (unusable := folder_failure(source, job.source.subfolder)) is not None:
+            return await _fail(
+                domain=unusable.domain,
+                fail_stage=unusable.stage,
+                code=unusable.code,
+                message=unusable.message,
+            )
 
         try:
             broker_socket = await asyncio.to_thread(initialize_hosted_compose, job, source)

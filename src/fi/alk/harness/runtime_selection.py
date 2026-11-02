@@ -55,15 +55,18 @@ def select_runtime(
         if not compose.is_relative_to(root) or not compose.is_file():
             raise RuntimeSelectionError("runtime_compose_file_invalid")
     else:
+        # A Compose file at the repository root belongs to the whole repository, not to the
+        # agent folder, so automatic lookup reads the folder alone.
+        lookup = root / runtime.source_subfolder if runtime.source_subfolder else root
         matches = [
-            root / name
+            lookup / name
             for name in (
                 "compose.yaml",
                 "compose.yml",
                 "docker-compose.yaml",
                 "docker-compose.yml",
             )
-            if (root / name).is_file()
+            if (lookup / name).is_file()
         ]
         if len(matches) > 1:
             raise RuntimeSelectionError(
@@ -119,6 +122,13 @@ def select_runtime(
             service_bases,
             additional_services=runtime.additional_services,
         )
+    if runtime.source_subfolder and _builds_outside_folder(
+        services.get(control),
+        service_bases.get(control, compose.parent),
+        (root / runtime.source_subfolder).resolve(),
+        public_environment or {},
+    ):
+        raise RuntimeSelectionError("runtime_compose_service_outside_subfolder")
     for name in runtime.compose_image_services:
         if name not in services:
             raise RuntimeSelectionError(f"compose_image_service_unselected: {name}")
@@ -152,6 +162,28 @@ def select_runtime(
                 public_environment or {},
             )
     return ComposeSelection(compose, control, services, body, source_files)
+
+
+def _builds_outside_folder(
+    service: Any, base: Path, folder: Path, public_environment: dict[str, str]
+) -> bool:
+    """True when the service builds a folder that is neither the agent's nor above it."""
+    if not isinstance(service, dict) or not service.get("build"):
+        return False
+    build = _interpolate_structure(service["build"], public_environment)
+    context = str(build.get("context", ".") if isinstance(build, dict) else build)
+    if "://" in context:
+        return False
+    built = (base / context).resolve()
+    places = [built]
+    dockerfile = build.get("dockerfile") if isinstance(build, dict) else None
+    if dockerfile:
+        # A root context with a sibling's Dockerfile still builds the sibling.
+        places.append((built / str(dockerfile)).resolve().parent)
+    return any(
+        not (place.is_relative_to(folder) or folder.is_relative_to(place))
+        for place in places
+    )
 
 
 def _runtime_compose_services(
