@@ -30,7 +30,7 @@ from .contract import (
 )
 from .diagnostics import HarnessDiagnostic
 from .session import DONE, RESULT, TOOL, Event, Stage
-from .source_folder import SubfolderNotFound, bind_runtime, recorded_root
+from .source_folder import SubfolderNotFound, bind_runtime, contract_folder, recorded_root
 
 
 _SAFE_RUNTIME_LAUNCHERS = {
@@ -1014,7 +1014,7 @@ def validate_runtime_plan_patch(
     root = source_root.resolve()
     # A patch replaces the whole runtime and its schema doesn't show the folder, so the
     # folder is put back before anything is compared.
-    recorded = contract.runtime.source_subfolder if contract.runtime else ""
+    recorded = contract_folder(contract)
     if recorded or patch.runtime.source_subfolder:
         try:
             patch = patch.model_copy(

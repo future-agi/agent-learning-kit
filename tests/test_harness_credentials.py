@@ -620,3 +620,63 @@ def test_explicit_scan_paths_exclude_unused_optional_integrations(
 
     assert set(_requirements(manifest)) == {"OPENAI_API_KEY"}
     assert "retell" not in manifest.detected_connectors
+
+
+def _agents_repo(root, files):
+    for name, body in files.items():
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        (root / name).write_text(body, encoding="utf-8")
+    return root
+
+
+def _required(manifest):
+    return {item.environment_name: item.required for item in manifest.requirements}
+
+
+def test_shared_code_the_folder_imports_requires_its_values(tmp_path):
+    root = _agents_repo(
+        tmp_path,
+        {
+            "common/__init__.py": "",
+            "common/llm.py": 'import os\nKEY = os.environ["SHARED_API_KEY"]\n',
+            "agents/a/agent.py": "from common import llm\n",
+            "agents/b/agent.py": 'import os\nKEY = os.environ["B_ONLY_API_KEY"]\n',
+        },
+    )
+
+    required = _required(discover_credentials(root, agent_subfolder="agents/a"))
+
+    assert required["SHARED_API_KEY"] is True
+    assert required["B_ONLY_API_KEY"] is False
+
+
+def test_imports_are_followed_past_the_first_file(tmp_path):
+    root = _agents_repo(
+        tmp_path,
+        {
+            "common/first.py": "from . import second\n",
+            "common/second.py": 'import os\nKEY = os.environ["DEEP_API_KEY"]\n',
+            "agents/a/agent.py": "import common.first\n",
+        },
+    )
+
+    assert _required(discover_credentials(root, agent_subfolder="agents/a"))["DEEP_API_KEY"] is True
+
+
+def test_a_siblings_connector_requires_nothing(tmp_path):
+    root = _agents_repo(
+        tmp_path, {"agents/a/agent.py": "x = 1\n", "agents/b/agent.py": "import livekit\n"}
+    )
+    with_folder = discover_credentials(root, agent_subfolder="agents/a")
+    without = discover_credentials(root)
+
+    assert with_folder.detected_connectors == []
+    assert without.detected_connectors != []
+
+
+def test_no_folder_keeps_every_hit_required(tmp_path):
+    root = _agents_repo(
+        tmp_path, {"agents/b/agent.py": 'import os\nKEY = os.environ["B_ONLY_API_KEY"]\n'}
+    )
+
+    assert _required(discover_credentials(root))["B_ONLY_API_KEY"] is True

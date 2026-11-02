@@ -12,7 +12,7 @@ import hashlib
 import json
 import re
 from enum import Enum
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import AbstractSet, Iterable, Mapping, TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, Field
@@ -21,6 +21,7 @@ import yaml
 from fi.simulate.runtime.spec import SecretRef
 
 from .secrets import process_secret_environment_names
+from .source_folder import SubfolderNotFound, agent_folder, agent_scope, in_agent_scope
 
 if TYPE_CHECKING:
     from .contract import Runtime
@@ -411,8 +412,14 @@ def discover_credentials(
     provided_environment: Iterable[str] = (),
     scan_paths: Iterable[str | Path] | None = None,
     template_secrets_required: bool = True,
+    agent_subfolder: str | None = None,
 ) -> CredentialManifest:
-    """Inspect declarations and environment reads without executing submitted code."""
+    """Inspect declarations and environment reads without executing submitted code.
+
+    With ``agent_subfolder``, only that agent's own files can require a value: its folder, the
+    folders above it, and the code it imports. Anything else shipped alongside it is another
+    agent's, so what it reads is listed as optional.
+    """
     root = Path(root).expanduser().resolve()
     if not root.is_dir():
         raise ValueError(f"credential_source_missing: {root}")
@@ -428,6 +435,8 @@ def discover_credentials(
     scanned = 0
     truncated = False
     digest = hashlib.sha256()
+    imported = _imported_by_agent(root, agent_subfolder) if agent_subfolder else frozenset()
+    scope = agent_scope(root, agent_subfolder) if agent_subfolder else None
 
     for path in _candidate_files(root, scan_paths=scan_paths):
         if scanned >= _MAX_FILES:
@@ -448,8 +457,13 @@ def discover_credentials(
         digest.update(relative.encode())
         digest.update(hashlib.sha256(content.encode()).digest())
         lowered = content.lower()
+        agents_own = (
+            scope is None
+            or path in imported
+            or in_agent_scope(PurePosixPath(relative), scope)
+        )
         for connector, signals in _CONNECTOR_SIGNALS.items():
-            if any(signal in lowered for signal in signals):
+            if agents_own and any(signal in lowered for signal in signals):
                 connector_hits.add(connector)
 
         def record(
@@ -469,7 +483,7 @@ def discover_credentials(
                     "detected_from": set(),
                 },
             )
-            item["required"] = bool(item["required"]) or required
+            item["required"] = bool(item["required"]) or (required and agents_own)
             item["declared_default"] = (
                 bool(item["declared_default"]) or declared_default
             )
@@ -501,7 +515,8 @@ def discover_credentials(
                     declared_default=usable_default,
                 )
         if path.name.lower() in _COMPOSE_NAMES:
-            configured.update(_literal_compose_environment(content))
+            if agents_own:
+                configured.update(_literal_compose_environment(content))
             for match in _COMPOSE_VARIABLE.finditer(content):
                 operator, fallback = match.group(2), (match.group(3) or "").strip()
                 # Compose substitutes an unset plain ${NAME} with an empty string. Only its
@@ -598,6 +613,56 @@ def discover_credentials(
         scanned_files=scanned,
         truncated=truncated,
     )
+
+
+def _imported_by_agent(root: Path, subfolder: str) -> frozenset[Path]:
+    """The Python files the agent's folder imports, followed as far as they go."""
+    try:
+        folder = agent_folder(root, subfolder)
+    except SubfolderNotFound:
+        return frozenset()
+    bases = (folder, folder / "src", root, root / "src")
+
+    def located(start: Path, parts: list[str]) -> Path | None:
+        module = start.joinpath(*parts)
+        for candidate in (module.with_suffix(".py"), module / "__init__.py"):
+            if candidate.is_file() and candidate.resolve().is_relative_to(root):
+                return candidate.resolve()
+        return None
+
+    seen: set[Path] = set()
+    pending = [
+        path
+        for path in folder.rglob("*.py")
+        if not any(part in _IGNORED_PARTS for part in path.relative_to(folder).parts)
+    ]
+    while pending:
+        path = pending.pop()
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, SyntaxError, ValueError, RecursionError):
+            continue
+        for node in ast.walk(tree):
+            names: list[tuple[int, str]] = []
+            if isinstance(node, ast.Import):
+                names = [(0, alias.name) for alias in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                module = node.module or ""
+                names = [(node.level, module)] + [
+                    (node.level, f"{module}.{alias.name}".lstrip(".")) for alias in node.names
+                ]
+            for level, name in names:
+                if not name:
+                    continue
+                parts = name.split(".")
+                starts = (path.parents[level - 1],) if level else bases
+                found = next(
+                    (hit for start in starts if (hit := located(start, parts))), None
+                )
+                if found is not None and found not in seen:
+                    seen.add(found)
+                    pending.append(found)
+    return frozenset(seen)
 
 
 def _candidate_files(

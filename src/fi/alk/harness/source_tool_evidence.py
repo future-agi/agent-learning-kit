@@ -13,12 +13,24 @@ import tokenize
 from pathlib import Path
 
 from .contract import AgentContract
+from .source_folder import SubfolderNotFound, agent_folder
 
 _NOT_AGENT_CODE = {"tests", "test", "node_modules", "site-packages", "venv", "__pycache__"}
 
 
-def tool_evidence_problems(contract: AgentContract, source: Path) -> list[str]:
+def tool_evidence_problems(
+    contract: AgentContract, source: Path, subfolder: str | None = None
+) -> list[str]:
     root = source.resolve()
+    bases = [root, root / "src"]
+    if subfolder:
+        # The run imports from the agent's folder first, so the check reads what will run.
+        try:
+            folder = agent_folder(root, subfolder)
+        except SubfolderNotFound:
+            pass  # The folder check reports this.
+        else:
+            bases = [folder, folder / "src", *bases]
     problems = []
     for entry in contract.tool_entrypoints:
         if entry.mode not in {"import", "construct"} or not entry.module:
@@ -29,7 +41,7 @@ def tool_evidence_problems(contract: AgentContract, source: Path) -> list[str]:
         module = Path(*parts)
         candidates = [
             base / relative
-            for base in (root, root / "src")
+            for base in bases
             for relative in (module.with_suffix(".py"), module / "__init__.py")
         ]
         path = next(

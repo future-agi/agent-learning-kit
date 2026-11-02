@@ -987,7 +987,7 @@ class LocalSandbox:
                     source,
                     secret_refs=job.agent.secret_refs,
                     provided_environment=job.agent.config,
-                    scan_paths=[job.source.subfolder] if job.source.subfolder else None,
+                    agent_subfolder=job.source.subfolder,
                     template_secrets_required=(
                         job.metadata.get("generic_harness_v1") is not True
                     ),

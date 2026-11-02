@@ -1085,6 +1085,6 @@ def test_subfolder_scopes_credentials(tmp_path, cloning, monkeypatch, hosted_git
     job_id = asyncio.run(run())
 
     manifest = json.loads((sandbox.jobs_root / job_id / "credentials.json").read_text())
-    names = {item["environment_name"] for item in manifest["requirements"]}
-    assert "A_ONLY_API_KEY" in names
-    assert "B_ONLY_API_KEY" not in names
+    required = {item["environment_name"]: item["required"] for item in manifest["requirements"]}
+    assert required["A_ONLY_API_KEY"] is True
+    assert required["B_ONLY_API_KEY"] is False

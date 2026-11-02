@@ -102,7 +102,7 @@ class RepoSource:
             return ""
         if missing:
             return (
-                f"The folder {self.subfolder} was named as this agent, but it is not in this "
+                f"The folder {self.subfolder!r} was named as this agent, but it is not in this "
                 "repository at the commit being built, is not a folder, or is empty. There is "
                 "no agent to read, and no description can be saved. "
             )

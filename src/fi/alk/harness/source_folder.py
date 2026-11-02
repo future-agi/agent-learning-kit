@@ -5,9 +5,10 @@ from __future__ import annotations
 import errno
 import json
 import os
+import re
 import sys
 from collections.abc import Mapping
-from pathlib import Path
+from pathlib import Path, PurePath, PurePosixPath
 from typing import Any
 
 from .failure_file import write_failure_file
@@ -17,6 +18,10 @@ SUBFOLDER_NOT_FOUND = "subfolder_not_found"
 
 # A link loop or an over-long name is a fault in the path the customer named, not in our disk.
 _PATH_ERRNOS = {errno.ELOOP, errno.ENAMETOOLONG}
+# The platform's own rule. ALK also runs from jobs the platform never checked, and the value is
+# compared exactly and written into prompts, so it is refused rather than normalised.
+_FOLDER_FORM = re.compile(r"(?!.*(^|/)\.{1,2}(/|$))[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*")
+_FOLDER_MAX = 512
 
 
 class SubfolderNotFound(Exception):
@@ -31,11 +36,40 @@ def _inside(path: Path, folder: Path) -> bool:
     return path == folder or folder in path.parents
 
 
+def contains_or_is_above(place: PurePath, folder: PurePath) -> bool:
+    """Whether ``place`` is ``folder``, a folder inside it, or a folder above it."""
+    return place.is_relative_to(folder) or folder.is_relative_to(place)
+
+
+def contract_folder(contract: Any) -> str:
+    """The folder a contract records as its agent, or ``""``."""
+    return contract.runtime.source_subfolder if contract.runtime else ""
+
+
+def in_agent_scope(relative: PurePosixPath, folder: PurePosixPath) -> bool:
+    """Whether a file is in the agent's folder or in one of the folders above it."""
+    return contains_or_is_above(relative.parent, folder)
+
+
+def agent_scope(root: Path, folder: str) -> PurePosixPath | None:
+    """The folder as the walk below reports it: a link inside the repository is spelled by its
+    target there. The literal value stands when the folder can't be resolved."""
+    if not folder:
+        return None
+    resolved = Path(root).resolve()
+    try:
+        return PurePosixPath(agent_folder(resolved, folder).relative_to(resolved).as_posix())
+    except SubfolderNotFound:
+        return PurePosixPath(folder)
+
+
 def agent_folder(root: Path, subfolder: str | None) -> Path:
     """The resolved folder the agent lives in: ``root`` itself when no subfolder is named."""
     resolved_root = Path(root).resolve()
     if not subfolder:
         return resolved_root
+    if len(subfolder) > _FOLDER_MAX or not _FOLDER_FORM.fullmatch(subfolder):
+        raise SubfolderNotFound(subfolder)
     try:
         folder = (resolved_root / subfolder).resolve()
         if not _inside(folder, resolved_root):
@@ -44,7 +78,7 @@ def agent_folder(root: Path, subfolder: str | None) -> Path:
         with os.scandir(folder) as entries:
             if next(entries, None) is None:
                 raise SubfolderNotFound(subfolder)
-    except (FileNotFoundError, NotADirectoryError, RuntimeError, ValueError) as error:
+    except (FileNotFoundError, NotADirectoryError, RuntimeError) as error:
         raise SubfolderNotFound(subfolder) from error
     except OSError as error:
         if error.errno in _PATH_ERRNOS:
@@ -205,7 +239,7 @@ def bind_runtime(
     if compose_file:
         try:
             parent = (resolved_root / compose_file).resolve().parent
-            reachable = _inside(parent, folder) or _inside(folder, parent)
+            reachable = contains_or_is_above(parent, folder)
         except (OSError, RuntimeError, ValueError):
             reachable = False
         if not reachable:

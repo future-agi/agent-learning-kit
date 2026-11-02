@@ -21,31 +21,12 @@ from .backends import SessionSpec, tool, tool_server
 from .config import chosen_model
 from .contract import AgentContract, is_data_free_conversation
 from .session import Stage
-from .source_folder import SubfolderNotFound, agent_folder, saved_folder
+from .source_folder import agent_scope, in_agent_scope, saved_folder
 
 ARTIFACT = "source-data-invariants.json"
 BATCHES = "generic-harness/source-data-review-batches.json"
 _SUFFIXES = {".py", ".sql", ".ts", ".js", ".go", ".rs", ".java"}
 _EXCLUDED = {".git", ".venv", "venv", "node_modules", "__pycache__"}
-
-
-def in_agent_scope(relative: PurePosixPath, folder: PurePosixPath) -> bool:
-    """Whether a file is in the agent's folder or in one of the folders above it."""
-    above = relative.parent.parts
-    return relative.parts[: len(folder.parts)] == folder.parts or (
-        folder.parts[: len(above)] == above
-    )
-
-
-def agent_scope(root: Path, folder: str) -> PurePosixPath | None:
-    """The folder as the walk below reports it: a link inside the repository is spelled by its
-    target there. The literal value stands when the folder can't be resolved."""
-    if not folder:
-        return None
-    try:
-        return PurePosixPath(agent_folder(root, folder).relative_to(root).as_posix())
-    except SubfolderNotFound:
-        return PurePosixPath(folder)
 
 
 def source_files(root: Path, folder: str = "") -> dict[str, Path]:

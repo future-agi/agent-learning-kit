@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any, Callable, Sequence
 from pydantic import ValidationError
 
 from .. import __version__ as _sdk_version
-from ..providers.agent import build_authored_agent
+from ..providers.agent import AgentBuildError, build_authored_agent
 from . import outbound as ob
 from .catalogue import CATALOGUE, SubGoal
 from .contract import AgentContract
@@ -716,10 +716,16 @@ class BundleScenarioSource:
                 contract = AgentContract.model_validate(
                     json.loads(contract_file.read_text(encoding="utf-8"))
                 ).model_dump(mode="json")
+                # The echo proves which folder was built, so it comes from the contract.
+                built_from = str(
+                    (contract.get("runtime") or {}).get("source_subfolder") or ""
+                )
+                if built_from != (job.source.subfolder or ""):
+                    raise AgentBuildError("subfolder_mismatch")
                 authored_agent = {
                     "sdk_version": _sdk_version,
                     "agent": build_authored_agent(
-                        contract, subfolder=job.source.subfolder
+                        contract, subfolder=built_from or None
                     ),
                 }
             except Exception as exc:

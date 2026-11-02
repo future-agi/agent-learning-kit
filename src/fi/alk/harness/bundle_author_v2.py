@@ -3501,8 +3501,9 @@ def author_bundle_v2(
         source_root,
         secret_refs=job.agent.secret_refs,
         provided_environment=provided_environment,
+        # What ships: the install root, which holds the shared code the folder imports.
         scan_paths=(
-            {subfolder}
+            {_runtime_component(source_root, subfolder).relative_to(source_root).as_posix()}
             if subfolder
             else {
                 str(getattr(process, "working_directory", ".") or ".")
@@ -3513,6 +3514,7 @@ def author_bundle_v2(
         # Match preflight: a template documents possible integrations, not every
         # credential needed by the selected generic-runtime path.
         template_secrets_required=job.metadata.get("generic_harness_v1") is not True,
+        agent_subfolder=subfolder or None,
     )
     output_root.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(
