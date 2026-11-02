@@ -558,29 +558,14 @@ def test_writer_failure_blocks_resubmission(tmp_path, browser_repo, monkeypatch)
     assert not (output / "contract.json").exists()
 
 
-def test_writer_failure_reaches_the_model_as_a_tool_error(tmp_path, browser_repo, monkeypatch):
-    from mcp import types
-
-    from fi.alk.harness.backends.claude import _sdk_server
-
+def test_writer_failure_leaves_the_handler(tmp_path, browser_repo, monkeypatch):
+    # The MCP server turns what leaves the handler into a tool error the model reads, so it has to
+    # leave: swallowed here, the model would be told nothing.
     output = tmp_path / "out"
-    instance = _sdk_server(contract_tools(output, scan_root=browser_repo))["instance"]
-    handler = instance.request_handlers[types.CallToolRequest]
+    submit = _submitter(output, browser_repo)
     _failing_write(monkeypatch)
-
-    async def call():
-        return await handler(
-            types.CallToolRequest(
-                method="tools/call",
-                params=types.CallToolRequestParams(
-                    name="submit_contract", arguments=_reading("browser")
-                ),
-            )
-        )
-
-    result = asyncio.run(call()).root
-    assert result.isError
-    assert "disk full" in result.content[0].text
+    with pytest.raises(OSError, match="disk full"):
+        submit(_reading("browser"))
     assert not (output / FAILURE_FILE).exists()
 
 
