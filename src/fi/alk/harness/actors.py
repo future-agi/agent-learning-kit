@@ -200,115 +200,12 @@ ACTORS_DDL = (
 Activation.model_rebuild()
 
 
-def actor_problems(
-    listing: ActorList,
-    *,
-    surfaces: set[str],
-    actions: set[str],
-    collections: set[str] = frozenset(),
-) -> list[str]:
-    """Every structural problem with an environment's actors against what it publishes: the surfaces this agent can
-    be reached on, the world's action catalogue (`<service>.<action>`) and its record collections
-    (`<store>.<collection>`). Each is one sentence naming the fix; none judges what an actor should do."""
-    problems = []
-    by_id = listing.by_id()
-    for one in listing.actors:
-        if one.surface not in surfaces:
-            problems.append(
-                f"{one.id} reaches the agent through {one.surface!r}, which this agent does not have; "
-                f"use one of {', '.join(sorted(surfaces)) or 'none'}."
-            )
-        for action in one.permitted_actions:
-            if action not in actions:
-                problems.append(f"{one.id} may take {action!r}, which is not a world action; name one from the catalogue.")
-        for source in one.knowledge:
-            if source.get("kind") == "records":
-                collection = f"{source.get('store')}.{source.get('collection')}"
-                if collection not in collections:
-                    problems.append(f"{one.id} reads {collection!r}, which the world does not hold.")
-        trigger = one.activation.trigger if one.activation is not None else None
-        if trigger is not None and trigger.kind == "on_tool" and trigger.tool not in actions:
-            problems.append(f"{one.id} comes in on {trigger.tool!r}, which is not a world action.")
-    # A fallback chain that comes back to where it started never answers.
-    for one in listing.actors:
-        seen, at = {one.id}, one
-        while at.activation is not None and at.activation.fallback in by_id:
-            nxt = at.activation.fallback
-            if nxt in seen:
-                problems.append(f"{one.id}'s fallbacks come back to {nxt}; end the chain with silent or decline.")
-                break
-            seen.add(nxt)
-            at = by_id[nxt]
-    return problems
-
-
 EVALUATOR_ONLY_FILE = "evaluator_only.json"
-# What only the grader may read: no actor brief and no actor view ever includes it. One declaration, read by the brief
-# and the view alike, so a field added here is hidden everywhere at once.
+# What only the grader may read: no actor is ever given it. One declaration, sealed beside the actors, so a field added
+# here is hidden everywhere at once.
 EVALUATOR_ONLY = {
     "scenario_fields": ["solution", "alternatives", "sub_goals", "tests", "setup_code", "ready_code", "coverage"],
     "files": ["sub_goals.json", "certification.json", "runtime-validation.json"],
 }
-# What an actor's brief is built from, and nothing else: its own record, the surface it is on, its knowledge, its
-# scenario entry, and the part of the caller's instruction before the caller's own details.
-BRIEF_INPUTS = (
-    ("actor", "name"),
-    ("actor", "role"),
-    ("actor", "persona"),
-    ("actor", "goal"),
-    ("actor", "constraints"),
-    ("actor", "behaviour"),
-    ("actor", "prompt"),
-    ("actor", "surface"),
-    ("actor", "knowledge"),
-    ("scenario", "instruction"),
-    ("scenario", "knowledge"),
-    ("caller", "situation"),
-)
-# Another actor's private material, never in this one's brief.
-_OTHERS_PRIVATE = ("goal", "prompt", "instruction", "actions")
-
-
 def write_evaluator_only(bundle: Path) -> None:
     (Path(bundle) / EVALUATOR_ONLY_FILE).write_text(json.dumps(EVALUATOR_ONLY, indent=2) + "\n", encoding="utf-8")
-
-
-def actor_view(
-    listing: ActorList,
-    actor_id: str,
-    *,
-    scenario: dict[str, Any] | None = None,
-    known_to_others: Any = None,
-) -> dict[str, Any]:
-    """What one actor is given (each input with its value and where it comes from) and what it never sees. Built from
-    `BRIEF_INPUTS` alone, so the view and the brief cannot disagree. `known_to_others` cuts the caller's instruction
-    before the caller's own details."""
-    actor = listing.by_id()[actor_id]
-    record = actor.model_dump()
-    entry = next(
-        (
-            ScenarioActor.model_validate(one).model_dump()
-            for one in (scenario or {}).get("actors") or []
-            if isinstance(one, dict) and one.get("id") == actor_id
-        ),
-        None,
-    )
-    sees = []
-    for source, field in BRIEF_INPUTS:
-        if source == "actor":
-            value = record.get(field)
-        elif source == "scenario":
-            if entry is None:
-                continue
-            value = entry.get(field)
-        else:
-            if scenario is None or actor.side == "caller" or known_to_others is None:
-                continue
-            value = known_to_others(str(scenario.get("instruction") or ""))
-        if value in (None, "", [], {}):
-            continue
-        sees.append({"input": f"{source}.{field}", "value": value, "source": source})
-    never = [f"scenario.{name}" for name in EVALUATOR_ONLY["scenario_fields"]]
-    never += [f"file.{name}" for name in EVALUATOR_ONLY["files"]]
-    never += [f"{other.id}.{name}" for other in listing.actors if other.id != actor_id for name in _OTHERS_PRIVATE]
-    return {"actor_id": actor_id, "sees": sees, "never_sees": never}
