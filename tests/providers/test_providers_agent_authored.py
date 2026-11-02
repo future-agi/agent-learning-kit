@@ -166,3 +166,24 @@ def test_authored_keeps_the_host_of_a_url_with_a_placeholder_port() -> None:
     assert stored["braces"] == "http://{host}/v1"
     assert stored["shell"] == "http://localhost/v1"
     assert stored["numeric"] == "http://localhost:8080/v1"
+
+
+def test_framework_written_beside_contract() -> None:
+    contract = _contract()
+    framework = {"name": "other", "version": "1.2", "label": "dspy"}
+
+    agent = build_authored_agent(contract, framework=framework)
+
+    assert set(agent["extension"]) == {"contract", "framework"}
+    assert agent["extension"]["framework"] == framework
+    assert agent["setup_hash"] == compute_setup_hash(agent)
+    assert agent["setup_hash"] != build_authored_agent(contract)["setup_hash"]
+
+
+def test_no_framework_leaves_extension_and_hash() -> None:
+    recorded = json.loads((AUTHORED / "chat_source.json").read_text())
+
+    agent = build_authored_agent(recorded["contract"], framework=None)
+
+    assert agent == recorded["agent"]
+    assert set(agent["extension"]) == {"contract"}

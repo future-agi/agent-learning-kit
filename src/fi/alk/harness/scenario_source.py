@@ -34,6 +34,7 @@ from ..providers.agent import AgentBuildError, build_authored_agent
 from . import outbound as ob
 from .catalogue import CATALOGUE, SubGoal
 from .contract import AgentContract
+from .framework_detection import FrameworkFolders, detect_framework
 from .job import FailureDomain, SourceKind
 
 if TYPE_CHECKING:
@@ -652,6 +653,27 @@ class BundleScenarioSource:
     always wins over this one.
     """
 
+    def __init__(self, *, framework_folders: FrameworkFolders | None = None) -> None:
+        self._framework_folders = framework_folders
+
+    async def _detect_framework(self) -> dict[str, Any] | None:
+        folders = self._framework_folders
+        if folders is None:
+            return None
+        # The framework is only a label: a failure here must never cost the document.
+        try:
+            return await asyncio.to_thread(
+                detect_framework,
+                folders.folder,
+                repo_root=folders.repo_root,
+                package_dir=folders.package_dir,
+            )
+        except Exception as exc:
+            logger.warning(
+                "framework detection failed: class=%s", type(exc).__name__
+            )
+            return {"name": "unknown", "version": None}
+
     async def build(
         self,
         job: Any,
@@ -711,6 +733,7 @@ class BundleScenarioSource:
         authored_agent = None
         source_kind = getattr(getattr(job, "source", None), "kind", None)
         if source_kind in (SourceKind.GITHUB, SourceKind.ARCHIVE):
+            framework = await self._detect_framework()
             try:
                 contract_file = bundle_dir / "contract.json"
                 contract = AgentContract.model_validate(
@@ -725,7 +748,7 @@ class BundleScenarioSource:
                 authored_agent = {
                     "sdk_version": _sdk_version,
                     "agent": build_authored_agent(
-                        contract, subfolder=built_from or None
+                        contract, subfolder=built_from or None, framework=framework
                     ),
                 }
             except Exception as exc:
