@@ -201,17 +201,18 @@ _SPAN_LINES = (
 
 
 def _observed() -> list[Call]:
-    return [Call(name="ask_writer", arguments={"topic": "tides"}, result="done", ok=True, at=1.1),
-            Call(name="draft_note", arguments={"topic": "tides"}, result="drafted", ok=True, at=2.1)]
+    # Stamped once their results were read, later than they started and in the other order.
+    return [Call(name="ask_writer", arguments={"topic": "tides"}, result="done", ok=True, at=9.2),
+            Call(name="draft_note", arguments={"topic": "tides"}, result="drafted", ok=True, at=9.1)]
 
 
 def test_span_lines_name_the_agent_of_calls_another_source_observed_and_add_none(tmp_path: Path) -> None:
     trace = _trace_lines(tmp_path / "agent-tool-calls.jsonl", *_SPAN_LINES,
                          {"name": "draft_note", "arguments": {}, "output": "written", "is_error": False})
     calls = cr._with_span_calls(_observed(), _runtime(metadata={"tool_trace_path": str(trace)}))
-    assert [(c.name, c.arguments, c.worker_id, c.delegated_to, c.ended_at) for c in calls] == [
-        ("ask_writer", {"topic": "tides"}, "Coordinator", "Writer", 3.0),
-        ("draft_note", {"topic": "tides"}, "Writer", "", 0.0),
+    assert [(c.name, c.arguments, c.worker_id, c.delegated_to, c.at, c.ended_at) for c in calls] == [
+        ("ask_writer", {"topic": "tides"}, "Coordinator", "Writer", 1.0, 3.0),
+        ("draft_note", {"topic": "tides"}, "Writer", "", 2.0, 0.0),
     ]
 
 

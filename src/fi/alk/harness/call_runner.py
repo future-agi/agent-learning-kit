@@ -911,8 +911,9 @@ def _merge_span_calls(calls: list[Call], from_spans: list[Call]) -> tuple[Call, 
     """Count a call reported by both a framework span and another tracer once.
 
     Span lines name the agent that made each call; another tracer of the same process reports
-    the same calls, often without the agent. A span line lends its agent to the first unpaired
-    call of the same tool and outcome, in order, and is then dropped; one with no such call stays.
+    the same calls, often without the agent. A span line lends its agent, hand-off and times to the
+    first unpaired call of the same tool and outcome, in order, and is then dropped; one with no
+    such call stays.
     """
     if not calls:
         # A span is written when it ends, so a hand-off lands after the calls it led to.
@@ -929,6 +930,8 @@ def _merge_span_calls(calls: list[Call], from_spans: list[Call]) -> tuple[Call, 
             other.worker_id, other.worker_label = span.worker_id, span.worker_label
         other.delegated_to = other.delegated_to or span.delegated_to
         other.ended_at = other.ended_at or span.ended_at
+        # A span starts when the call does; another tracer may stamp a call only once it reads its result.
+        other.at = span.at or other.at
     return tuple(sorted(merged, key=lambda call: call.at))
 
 
