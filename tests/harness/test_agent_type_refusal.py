@@ -37,6 +37,7 @@ from fi.alk.harness.contract import AgentContract, known_modalities
 from fi.alk.harness.failure_file import FAILURE_FILE, write_failure_file
 from fi.alk.harness.hosted_chat_entrypoint import HostedChatRuntime
 from fi.alk.harness.job import FailureDomain, HarnessFailure, HarnessJob, HarnessStage
+from fi.alk.harness.source_folder import subfolder_not_found
 from fi.alk.harness.sources import GitHubSource, RepoSource
 from fi.alk.harness.tools import CONTRACT_SERVER, contract_tools
 from fi.alk.harness.understand import load, open_stage
@@ -928,6 +929,43 @@ def test_a_wrapped_browser_reading_is_refused(tmp_path, browser_repo, modality):
     assert not (output / "contract.json").exists()
 
 
+def _folder_repo(root: Path) -> Path:
+    return _tree(
+        root / "repo",
+        {
+            "agents/a/agent.py": "x = 1\n",
+            "agents/b/agent.py": "from playwright.sync_api import sync_playwright\n",
+        },
+    )
+
+
+def _submitter_in(destination: Path, repo: Path, subfolder: str):
+    tool = _submit_tool(contract_tools(destination, scan_root=repo, subfolder=subfolder))
+    return lambda payload: asyncio.run(tool.handler(payload))
+
+
+def test_scan_ignores_sibling_folder(tmp_path):
+    output = tmp_path / "out"
+    answer = _submitter_in(output, _folder_repo(tmp_path), "agents/a")(_reading("chat"))
+    assert not answer.get("is_error"), answer
+    assert (output / "contract.json").exists()
+    assert not (output / FAILURE_FILE).exists()
+
+
+def test_scan_finds_the_agents_own_folder(tmp_path):
+    output = tmp_path / "out"
+    _submitter_in(output, _folder_repo(tmp_path), "agents/b")(_reading("browser"))
+    assert _failure(output)["code"] == "agent_type_unsupported"
+    assert "playwright" in _failure(output)["message"]
+
+
+def test_scan_of_a_missing_folder_finds_nothing(tmp_path):
+    output = tmp_path / "out"
+    answer = _submitter_in(output, _folder_repo(tmp_path), "agents/missing")(_reading("chat"))
+    assert not answer.get("is_error"), answer
+    assert not (output / FAILURE_FILE).exists()
+
+
 def test_free_text_mentioning_browser_gets_a_problem_not_a_block(tmp_path, browser_repo):
     output = tmp_path / "out"
     answer = _submitter(output, browser_repo)({"contract": _reading("chat via browser")})
@@ -1709,6 +1747,14 @@ def test_platform_command_on_a_finished_job_runs_no_turn(tmp_path, state):
 def test_platform_command_with_the_file_runs_no_turn(tmp_path):
     write_failure_file(agent_type_failure(["playwright"]), tmp_path)
     runtime = _runtime(tmp_path, state="running")
+    _handle_command(runtime, _command())
+    _assert_answered_with_no_turn(runtime)
+
+
+def test_redelivered_command_on_failed_folder_gets_no_model_turn(tmp_path):
+    write_failure_file(subfolder_not_found("agents/missing"), tmp_path)
+    runtime = _runtime(tmp_path, state="running")
+    runtime._write_journal({"command-7": "started"})
     _handle_command(runtime, _command())
     _assert_answered_with_no_turn(runtime)
 
