@@ -1091,15 +1091,27 @@ def _sub_actors_that_cannot_run(
         return [
             "sub_actors: sub-actors are switched off in this environment, so leave sub_actors empty"
         ]
+    listing = listing or SubActorList()
+    # The scenario stands without them; the run tells the person who is there, so the instruction never does.
+    named = [
+        one.name
+        for one in (listing.get(entry.id) for entry in scenario.sub_actors)
+        if one is not None and one.name.strip() and one.name.strip().lower() in scenario.instruction.lower()
+    ]
     return scenario_problems(
         scenario.sub_actors,
-        listing or SubActorList(),
+        listing,
         modality="voice" if spoken else "chat",
         call_direction=scenario.call_direction,
         person=scenario.persona.name if scenario.persona else "",
         tools=tools,
         runs_in_world=lambda tool: executes(trial, tool),
-    )
+    ) + [
+        f"instruction: the person's instruction names {name}, who is a sub-actor here. Write the person's "
+        "situation as if no one else were there; the trigger brings them in and the run tells the person "
+        "who is with them"
+        for name in named
+    ]
 
 
 def edited(held: Scenario, change: dict[str, Any]) -> dict[str, Any]:
@@ -1914,6 +1926,9 @@ def scenario_tools(
                     "along whether or not they happen, so the check passes on a conversation "
                     "that never earned it. Give them the value, the preference or the problem "
                     "they arrived with, and let the agent's handling of it be what is measured.\n"
+                    "Write it for this person alone: never name, mention or plan for anyone else "
+                    "on the call, or a hand-off of the phone; whoever joins is added on their own "
+                    "and the run tells the person they are there.\n"
                     "Test every sentence by asking whether this person could say it out loud. "
                     "They have never seen the agent's design, so a parenthetical explaining "
                     "where the agent should find a value fails that test just as much as a "

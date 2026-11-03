@@ -9746,6 +9746,28 @@ def test_editing_a_scenario_written_before_sub_actors_existed_is_never_refused_f
     assert kept[0].persona.name == "Meera Iyer"
 
 
+def test_the_person_s_instruction_never_names_a_sub_actor(monkeypatch):
+    from types import SimpleNamespace
+
+    from fi.alk.harness import scenario_tools
+
+    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+    monkeypatch.setattr(scenario_tools, "scenario_problems", lambda *args, **kwargs: [])
+    listing = _listed(_SECOND)
+
+    def problems(instruction):
+        scenario = SimpleNamespace(
+            sub_actors=[SimpleNamespace(id="second")], instruction=instruction, persona=None, call_direction=""
+        )
+        return scenario_tools._sub_actors_that_cannot_run(scenario, listing, None, True, set())
+
+    assert problems("Ask for two tickets. Hand the phone to Rowan when the agent quotes a price.") == [
+        "instruction: the person's instruction names Rowan, who is a sub-actor here. Write the person's situation "
+        "as if no one else were there; the trigger brings them in and the run tells the person who is with them"
+    ]
+    assert problems("Ask for two tickets for the evening show.") == []
+
+
 def test_a_suite_keeps_its_share_of_scenarios_with_a_sub_actor_unless_the_person_set_another():
     from types import SimpleNamespace
 

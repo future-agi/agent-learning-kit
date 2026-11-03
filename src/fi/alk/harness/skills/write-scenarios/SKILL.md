@@ -642,7 +642,8 @@ called. Assert on what the world looks like afterwards and on what the caller wa
 ### When someone else is in the scene
 
 Only when the environment lists sub-actors. Write the scenario first as if no one else were there: the
-person's situation, request, details, sub-goals and answer key complete on their own. Then add the
+person's situation, request, details, sub-goals and answer key complete on their own. The person's
+instruction never names a sub-actor or plans a hand-off; the run tells the person who is with them. Then add the
 sub-actor on top; nothing written before changes, and the scenario still stands if they never come in.
 A coordinate whose level is named for a sub-actor includes that sub-actor in `sub_actors`, with two
 things written for this scenario:
