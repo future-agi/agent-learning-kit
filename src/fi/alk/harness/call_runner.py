@@ -1648,6 +1648,8 @@ class CallRunnerImpl:
                 return await place()
             finally:
                 acting.cancel()
+                # The token proves an actor only during its own trial; the proxy refuses actors once it is empty.
+                Path(str(runtime.metadata["actor_proof_path"])).write_text("", encoding="utf-8")
                 with contextlib.suppress(asyncio.CancelledError):
                     await acting
 
