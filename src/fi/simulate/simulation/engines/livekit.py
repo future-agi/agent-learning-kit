@@ -2879,8 +2879,10 @@ class LiveKitEngine(BaseEngine):
                     "the agent spoke first, so the person's phone menu never answered"
                 )
             if sub_actors.menu() is not None and menu_answers:
-                # The person's menu answers; the person comes on once it puts the call through.
-                await sub_actors.answer_first()
+                # The person's menu answers; the person comes on once it puts the call through. A menu that
+                # could not speak leaves the call to the person, never to a silence on both sides.
+                if not await sub_actors.answer_first():
+                    customer_agent.open_conversation()
             elif (
                 conversation_direction == "simulator_first" or _answered_by_voicemail()
             ):

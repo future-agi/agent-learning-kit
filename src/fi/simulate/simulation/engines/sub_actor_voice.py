@@ -234,15 +234,18 @@ class SubActorsOnCall:
         if menu is not None and self.say is not None and menu.tts is not None:
             self._greeting = asyncio.create_task(menu.line([_ANSWERED]))
 
-    async def answer_first(self) -> None:
-        """A phone menu answers the call before the person; the person comes on once it puts the call through."""
+    async def answer_first(self) -> bool:
+        """A phone menu answers the call before the person; the person comes on once it puts the call through.
+        False when the menu said nothing, so the person opens the call instead."""
         menu = self.menu()
         if menu is None:
-            return
+            return False
         self.cast.entering(Moment(agent_turns=1))
         self.cast.holder = str(menu.actor["id"])
         self.cast.line_wanted(menu.actor)
         await self._speak(menu, [_ANSWERED], written=self._greeting)
+        said = next(one for one in self.cast.summary() if one["sub_actor"] == str(menu.actor["id"]))
+        return said["delivered"] > 0
 
     def menu_cannot_answer(self, reason: str) -> None:
         """The agent greeted first, so the person's menu never answers this call."""

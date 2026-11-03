@@ -559,12 +559,17 @@ def test_a_background_line_plays_whenever_it_is_ready_and_only_the_end_of_the_ca
     )
 
 
+def test_a_menu_that_could_not_speak_leaves_the_call_to_the_person():
+    call, said, _played = _on_call([_Voice(_actor("menu", "ivr"), [RuntimeError("no voice")])])
+    assert asyncio.run(call.answer_first()) is False and said == []
+
+
 def test_the_person_s_menu_answers_first_or_never_enters_when_the_agent_spoke_first():
     async def answers():
         call, said, _played = _on_call(
             [_Voice(_actor("menu", "ivr"), ["Say accounts", "[DONE]"])]
         )
-        await call.answer_first()
+        assert await call.answer_first() is True
         holding = await call.agent_turn("Accounts")
         await call.close()
         return said, holding, call.summary()
