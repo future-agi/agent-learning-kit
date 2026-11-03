@@ -713,7 +713,14 @@ def world_actor_tools(destination: Path, contract: AgentContract | None = None) 
         given = {name: value for name, value in args.items() if name != "provenance"}
         try:
             base = current.model_dump(exclude_none=True) if current is not None else {}
-            actor = Actor.model_validate({**base, **given})
+            # A nested field merges the keys sent into what it has, as the top level does.
+            merged = {
+                name: {**base[name], **value}
+                if isinstance(value, dict) and isinstance(base.get(name), dict)
+                else value
+                for name, value in given.items()
+            }
+            actor = Actor.model_validate({**base, **merged})
             kept = [one for one in listing.actors if one.id != actor.id]
             save_actors(destination, ActorList(actors=[*kept, actor]))
         except ValueError as exc:

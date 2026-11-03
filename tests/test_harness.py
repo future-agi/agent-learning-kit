@@ -9866,6 +9866,9 @@ def test_world_actors_are_offered_only_when_switched_on_and_kept_in_the_environm
         kept.activation.trigger.tool == "crm.request_approval"
         and kept.behaviour.response_timing.seconds == 5
     )
+    asyncio.run(call("add_actor", {"id": "manager", "name": "Priya", "constraints": {"stop_when": ["Asked twice"]}}))
+    [kept] = load_actors(tmp_path).actors
+    assert (kept.constraints.stop_when, kept.constraints.may_agree) == (["Asked twice"], ["Up to 25%"])
     assert kept.provenance == {}
     used = tmp_path / "scenarios" / "one" / "scenario.json"
     used.parent.mkdir(parents=True, exist_ok=True)
