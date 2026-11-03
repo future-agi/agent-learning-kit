@@ -2424,8 +2424,10 @@ class HostedScheduler:
         for slot, verdict in checked.items():
             if not verdict.held:
                 judged = sub_goal_results[slot]
+                # A judge that found the sub-goal not applicable or could not decide does not explain a failed check.
+                explained = judged.reason if judged.verdict in ("pass", "fail") else None
                 reason = " ".join(
-                    filter(None, [_sub_goal_reason(scenario.sub_goals[slot], verdict), judged.reason or None])
+                    filter(None, [_sub_goal_reason(scenario.sub_goals[slot], verdict), explained])
                 )
                 sub_goal_results[slot] = replace(judged, held=False, reason=reason or None)
 
