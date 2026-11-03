@@ -120,6 +120,8 @@ def capability_evidence(
         "inputs": {
             "source_digest": certificate.source.digest,
             "bundle_digest": certificate.compiler.bundle_digest,
+            # The harness release that checked it: a newer release reading the same versions makes this evidence stale.
+            "harness_version": certificate.compiler.version,
         },
         "limitations": list(certificate.limitations),
         # Catalogue order, so a reader decides each gate before what depends on it; JSON objects carry no order.
