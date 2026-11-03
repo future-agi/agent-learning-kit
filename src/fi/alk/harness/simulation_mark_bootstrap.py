@@ -450,14 +450,18 @@ def _kind(span):
 
 def _graph_worker(attributes):
     """The subgraph a LangGraph node ran in. The namespace reads ``graph:id|...|node:id`` and
-    ends with the node that ran the tool, so the worker is the segment above that node."""
+    ends with the node that ran the tool, so the worker is the segment above that node, or the
+    agent the framework names as running it: a graph started from inside another graph's node
+    sits under that node, whose name is the host's, not the worker's."""
     namespace = _first(attributes, (_GRAPH_NAMESPACE,))
     if not namespace:
         return None
     names = [segment.split(":")[0] for segment in namespace.split("|")]
     if names and names[-1] == attributes.get("langgraph_node"):
         names.pop()
-    return names[-1] if names and names[-1] else None
+    if not names:
+        return None
+    return _first(attributes, ("lc_agent_name",)) or names[-1] or None
 
 
 def _same_tool(one, other):
@@ -485,6 +489,8 @@ class _ToolSpans:
         self._wrapped = set()
         # Tool calls that returned something, oldest first, so a job started by one can be joined to it.
         self._launches = collections.deque(maxlen=_LAUNCHES_MAX)
+        # Jobs that started before the tool call launching them returned, joined once it does.
+        self._waiting = {}
         self._lock = threading.Lock()
 
     def started(self, span) -> None:
@@ -495,7 +501,9 @@ class _ToolSpans:
         self._live[context.span_id] = (span, parent.span_id if parent is not None else None)
         if parent is None and _kind(span) != "TOOL":
             try:
-                self._job_record(span, context.span_id, ended=False)
+                joined = self._job_record(span, context.span_id, ended=False)
+                if not joined and len(self._waiting) < _LAUNCHES_MAX:
+                    self._waiting[context.span_id] = span
             except Exception:
                 pass
         original = span.end
@@ -530,6 +538,18 @@ class _ToolSpans:
             parent = above[1]
         return None
 
+    def _named_above(self, span_id):
+        """The agent the nearest open span from ``span_id`` up names as running it."""
+        while span_id is not None:
+            entry = self._live.get(span_id)
+            if entry is None:
+                return None
+            name = _first(entry[0].attributes or {}, ("lc_agent_name",))
+            if name:
+                return name
+            span_id = entry[1]
+        return None
+
     def _agent_name(self, agent):
         """An agent span's own name, else the tool that handed it the work; never a span
         name, which frameworks often set to a method such as ``Agent.run``."""
@@ -549,12 +569,20 @@ class _ToolSpans:
         try:
             entry = self._live.get(span_id)
             if entry is not None and entry[1] is None and kind != "TOOL":
+                self._waiting.pop(span_id, None)
                 self._job_record(span, span_id, ended=True)
             if kind == "AGENT":
                 handing = self._above(span_id, ("TOOL",))
                 name = self._agent_name(span)
                 if handing is not None and name:
                     self._handed[handing.get_span_context().span_id] = name
+            elif kind != "TOOL" and entry is not None and entry[1] in self._live:
+                # A run opened right under a span by an agent other than the one running that span is the span
+                # handing it the work, as a sub-agent started through a tool is. A tool's kind is often set only
+                # when it ends, so the hand-off is kept on the parent and written if the parent is a tool call.
+                name = _first(span.attributes or {}, ("lc_agent_name",))
+                if name and name != self._named_above(entry[1]):
+                    self._handed[entry[1]] = name
             elif kind == "TOOL":
                 if span_id in self._wrapped:
                     # Two instrumentations wrapped this one call; the inner span was written.
@@ -566,25 +594,27 @@ class _ToolSpans:
                         self._wrapped.add(outer.get_span_context().span_id)
                     self._write(span, span_id)
         finally:
+            if kind != "TOOL":
+                self._handed.pop(span_id, None)
             self._live.pop(span_id, None)
 
-    def _job_record(self, span, span_id, *, ended: bool) -> None:
+    def _job_record(self, span, span_id, *, ended: bool) -> bool:
         """A run with no parent here, in a conversation whose id an earlier tool call returned, is a job that call
         launched: it is written as that call's hand-off, from the agent that made the call to the job's agent, once
         when it starts and again with its answer when it ends, so a job still running when the call ends is kept."""
         attributes = span.attributes or {}
         conversation = _first(attributes, _CONVERSATION_KEYS)
         if not conversation:
-            return
+            return False
         launch = next(
             (one for one in self._launches if one["conversation"] != conversation and conversation in one["output"]),
             None,
         )
         if launch is None:
-            return
+            return False
         worker = _first(attributes, _AGENT_NAME_KEYS) or _graph_worker(attributes) or span.name
         if not worker:
-            return
+            return False
         status = getattr(getattr(span, "status", None), "status_code", None)
         record = {
             "name": launch["name"],
@@ -602,6 +632,7 @@ class _ToolSpans:
             record.update(agent_key=launch["agent"], agent_role=launch["agent"])
         with self._lock:
             _append(self._path, record)
+        return True
 
     def _write(self, span, span_id) -> None:
         attributes = span.attributes or {}
@@ -647,6 +678,9 @@ class _ToolSpans:
             )
         with self._lock:
             _append(self._path, record)
+        for job_id, job in list(self._waiting.items()):
+            if self._job_record(job, job_id, ended=False):
+                self._waiting.pop(job_id, None)
 
 
 def _append(path, record) -> None:

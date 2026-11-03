@@ -139,6 +139,55 @@ def test_a_job_still_running_when_the_call_ends_keeps_its_hand_off(tmp_path: Pat
     assert {r["name"]: r.get("agent_key") for r in records if r["name"] == "run_code_check"} == {"run_code_check": "coder"}
 
 
+def test_a_sub_agent_run_through_a_tool_is_its_hand_off_and_owns_its_tool_calls(tmp_path: Path) -> None:
+    # Deep Agents' `task` tool runs a sub-agent inside the supervisor's `tools` node. The tool span is marked a tool
+    # only when it ends; the sub-agent's nodes sit under the host node in the namespace and name their agent. A tool
+    # inside a named agent whose own inner run names the same agent is not a hand-off.
+    records = _run(tmp_path, """
+        sup_tools = {"langgraph_node": "tools", "langgraph_checkpoint_ns": "tools:a"}
+        own = {"lc_agent_name": "researcher", "langgraph_node": "tools", "langgraph_checkpoint_ns": "tools:a|tools:b"}
+        with span("LangGraph", **{"gen_ai.span.kind": "CHAIN"}):
+            with span("tools", **{"gen_ai.span.kind": "CHAIN", **sup_tools}):
+                with span("task", **sup_tools) as task:
+                    with span("researcher", **{"gen_ai.span.kind": "CHAIN", **own}):
+                        with span("tools", **{"gen_ai.span.kind": "CHAIN", **own}):
+                            with span("ls", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "ls", **own}):
+                                pass
+                    task.set_attribute("gen_ai.span.kind", "TOOL")
+                    task.set_attribute("gen_ai.tool.name", "task")
+                    task.set_attribute("output.value", "researcher answer")
+        named = {"lc_agent_name": "writer", "langgraph_node": "tools", "langgraph_checkpoint_ns": "writer:c|tools:d"}
+        with span("writer", **{"gen_ai.span.kind": "CHAIN", **named}):
+            with span("summarise", **named) as tool:
+                with span("summary chain", **{"gen_ai.span.kind": "CHAIN", **named}):
+                    pass
+                tool.set_attribute("gen_ai.span.kind", "TOOL")
+                tool.set_attribute("gen_ai.tool.name", "summarise")
+    """)
+    assert _by_tool(records) == {"ls": ("researcher", None), "task": (None, "researcher"), "summarise": ("writer", None)}
+
+
+def test_a_job_that_starts_before_its_launch_returns_is_still_its_hand_off(tmp_path: Path) -> None:
+    # The job's run starts while the launching tool call is still returning, and is still running when the call ends.
+    records = _run(tmp_path, """
+        sup = {"gen_ai.conversation.id": "thread-sup"}
+        own = {"lc_agent_name": "coder", "gen_ai.conversation.id": "job-c"}
+        with span("agent", **{"gen_ai.span.kind": "AGENT", **sup}):
+            launch = tracer.start_span("start_async_task", attributes={
+                "gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "start_async_task", "input.value": "coder", **sup})
+            job = tracer.start_span("coder", attributes={"gen_ai.span.kind": "CHAIN", **own},
+                                    context=trace.set_span_in_context(trace.INVALID_SPAN))
+            launch.set_attribute("output.value", "Launched async subagent. task_id: job-c")
+            launch.end()
+        with trace.use_span(job):
+            with span("run_code_check", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "run_code_check", **own}):
+                pass
+    """)
+    hand_offs = [r for r in records if r.get("delegated_to")]
+    assert [(r["delegated_to"], r["agent_key"], "ended_at" in r) for r in hand_offs] == [("coder", "agent", False)]
+    assert {r["name"]: r.get("agent_key") for r in records if r["name"] == "run_code_check"} == {"run_code_check": "coder"}
+
+
 def test_a_run_whose_conversation_no_tool_returned_is_not_a_hand_off(tmp_path: Path) -> None:
     records = _run(tmp_path, """
         with span("agent", **{"gen_ai.span.kind": "AGENT", "gen_ai.conversation.id": "thread-a"}):
