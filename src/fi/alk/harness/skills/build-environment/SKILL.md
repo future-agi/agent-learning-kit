@@ -738,8 +738,8 @@ while. Never anyone on the agent's side: the agent, its staff and its systems ar
 tested, so the run never plays them. Read the contract and add one for each channel `add_sub_actor` offers
 that this agent's users could have around them.
 
-The list says who each one is: a name that is never the person's, a `role` (who they are to the
-person: a friend, a relative, a colleague; never someone there to help with the person's request), and a
+The list says who each one is: a name that is never the person's, a `role` (their relationship to the
+person in a few words; never someone there to help with the person's request), and a
 `persona` in the person's fields, true to who they are in this world, from which their
 voice is chosen. What they do is written by each scenario that includes them, so the list carries no
 script. Never add one for a situation the agent's users would not be in.
