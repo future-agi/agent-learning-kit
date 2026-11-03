@@ -28,7 +28,14 @@ from fi.simulate.simulation.sub_actors import CHANNELS, available_channels, desc
 
 from ..backends import tool, tool_server
 
-from ..actors import Actor, ActorList, actors_enabled, load_actors, save_actors
+from ..actors import (
+    Actor,
+    ActorList,
+    actor_input_schema,
+    actors_enabled,
+    load_actors,
+    save_actors,
+)
 from ..amend import add_rule, drop_rule, fix_tool, set_modality, widen
 from ..catalogue import (
     CONTRACT_FIELDS,
@@ -1963,29 +1970,21 @@ def world_tools(
 
     @tool(
         "add_actor",
-        "Add or replace a person or system in the world who acts through the world's own actions, "
-        "never by speaking to the agent. `permitted_actions` is what the world lets them do, each "
-        "named `<service>.<action>` as the world's own route; anything else they attempt is "
-        "refused and recorded as their attempt. Who may take an action is decided by this list, "
+        "Add a person or system in the world who acts through the world's own actions, never by speaking to "
+        "the agent, or change one already listed: only the fields you send change, the rest stay as they are. "
+        "`permitted_actions` is what the world lets them do, each the world's own action as the environment "
+        "names it (the route a tool calls, with `/` as `.`, e.g. `crm.approve_discount`); anything else they "
+        "attempt is refused and recorded as their attempt. Who may take an action is decided by this list, "
         "never by what anyone says.",
-        schema(
-            {"id": str, "name": str, "role": str, "kind": str, "permitted_actions": list, "identities": dict},
-            ["id", "name", "role"],
-        ),
+        actor_input_schema(),
     )
     async def add_actor(args: dict[str, Any]) -> dict[str, Any]:
         listing = load_actors(destination)
+        current = listing.by_id().get(str(args.get("id") or ""))
+        given = {name: value for name, value in args.items() if name != "provenance"}
         try:
-            actor = Actor.model_validate(
-                {
-                    "id": str(args.get("id") or ""),
-                    "name": str(args.get("name") or ""),
-                    "role": str(args.get("role") or ""),
-                    "kind": str(args.get("kind") or "person"),
-                    "permitted_actions": [str(one) for one in args.get("permitted_actions") or []],
-                    "identities": {str(k): str(v) for k, v in (args.get("identities") or {}).items()},
-                }
-            )
+            base = current.model_dump(exclude_none=True) if current is not None else {}
+            actor = Actor.model_validate({**base, **given})
             kept = [one for one in listing.actors if one.id != actor.id]
             save_actors(destination, ActorList(actors=[*kept, actor]))
         except ValueError as exc:

@@ -176,6 +176,24 @@ def test_a_change_to_the_world_data_alone_is_saved(tmp_path, monkeypatch):
     assert len(client.published) == 1
 
 
+@pytest.mark.parametrize("cast", ["actors.json", "sub_actors.json"])
+def test_a_change_to_the_cast_alone_is_saved(tmp_path, monkeypatch, cast):
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    runtime._published_fingerprint()
+    monkeypatch.setattr(
+        "fi.alk.harness.bundle_author_v2.reseal_scenarios", lambda root: None
+    )
+
+    (tmp_path / cast).write_text(
+        '{"actors": [{"id": "manager", "name": "Priya"}]}\n', encoding="utf-8"
+    )
+    result = asyncio.run(runtime._save_changes())
+
+    assert result.get("unchanged") is not True
+    assert len(client.published) == 1
+
+
 def test_a_rejected_publish_is_never_reported_as_done(tmp_path, monkeypatch):
     client = BuilderClient(applied=False)
     runtime = _runtime(tmp_path, client, monkeypatch)

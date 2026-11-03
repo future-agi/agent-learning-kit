@@ -9774,6 +9774,46 @@ def test_world_actors_are_offered_only_when_switched_on_and_kept_in_the_environm
     asyncio.run(call("add_actor", {**manager, "permitted_actions": ["crm.approve_discount", "crm.reject_discount"]}))
     [kept] = load_actors(tmp_path).actors
     assert kept.permitted_actions == ["crm.approve_discount", "crm.reject_discount"]
+    # Every field the editor sets can be set from the chat, and a later call changes only what it sends.
+    full = {
+        "id": "manager",
+        "name": "Priya",
+        "goal": "Approve only discounts she can justify",
+        "constraints": {
+            "may_agree": ["Up to 25%"],
+            "private": ["The quarter's budget"],
+            "stop_when": ["Decided"],
+        },
+        "behaviour": {
+            "style": "brisk",
+            "response_timing": {"kind": "delayed", "seconds": 5},
+        },
+        "knowledge": [{"kind": "facts", "text": "Discounts above 25% need the VP"}],
+        "activation": {
+            "trigger": {"kind": "on_tool", "tool": "crm.request_approval"},
+            "fallback": "decline",
+        },
+        "provenance": {"origin": "forged"},
+    }
+    asyncio.run(call("add_actor", full))
+    asyncio.run(
+        call(
+            "add_actor",
+            {"id": "manager", "name": "Priya", "role": "regional sales manager"},
+        )
+    )
+    [kept] = load_actors(tmp_path).actors
+    assert (kept.role, kept.goal, kept.constraints.stop_when) == (
+        "regional sales manager",
+        "Approve only discounts she can justify",
+        ["Decided"],
+    )
+    assert kept.permitted_actions == ["crm.approve_discount", "crm.reject_discount"]
+    assert (
+        kept.activation.trigger.tool == "crm.request_approval"
+        and kept.behaviour.response_timing.seconds == 5
+    )
+    assert kept.provenance == {}
     assert "dropped" in asyncio.run(call("drop_actor", {"id": "manager"}))
     assert load_actors(tmp_path).actors == []
 

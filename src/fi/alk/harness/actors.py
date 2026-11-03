@@ -63,7 +63,10 @@ class Activation(BaseModel):
 
 
 class Actor(BaseModel):
-    id: str = Field(pattern=r"^[a-z0-9_]{1,64}$")
+    id: str = Field(
+        pattern=r"^[a-z0-9_]{1,64}$",
+        description="1 to 64 lowercase letters, digits or underscores",
+    )
     name: str = Field(min_length=1)
     # Open sets: an unknown kind or play is kept and shown; only running an unknown play is refused.
     kind: str = "person"
@@ -233,6 +236,13 @@ BRIEF_INPUTS = [
 ]
 # Fields of one actor that no other actor is given.
 PRIVATE_TO_ACTOR = ["goal", "prompt", "instruction", "actions"]
+# How the world names an action: the route a tool's entrypoint calls, with `/` read as `.` (the tool proxy's rule).
+WORLD_ACTIONS = {
+    "from": "tool_entrypoints",
+    "route": "endpoint",
+    "tool": "tool",
+    "separator": ".",
+}
 # Fields naming another listed actor, with the other values each also takes; `parent` may not form a cycle.
 REFERENCES = {
     "parent": [],
@@ -245,7 +255,7 @@ ACYCLIC = ["parent"]
 def actor_rules() -> dict[str, Any]:
     """Everything this release decides about actors, sealed into each bundle so the platform reads the rules of the
     release that built it instead of keeping its own copy."""
-    from fi.simulate.simulation.sub_actors import DETAILS_MARK
+    from fi.simulate.simulation.sub_actors import CHANNELS, DETAILS_MARK
 
     from .sub_actor import SubActor
 
@@ -259,6 +269,11 @@ def actor_rules() -> dict[str, Any]:
         "reserved_ids": [AGENT],
         "references": REFERENCES,
         "acyclic": ACYCLIC,
+        "world_actions": WORLD_ACTIONS,
+        # The call channels a sub-actor can speak on, each with what it does.
+        "channels": {
+            name: str(one.get("about") or "") for name, one in CHANNELS.items()
+        },
         # The format tag each actor file is written with.
         "formats": {ACTORS_FILE: ACTORS_SCHEMA},
         "records": {
@@ -266,6 +281,14 @@ def actor_rules() -> dict[str, Any]:
             "sub_actors.json": SubActor.model_json_schema(),
         },
     }
+
+
+def actor_input_schema() -> dict[str, Any]:
+    """The builder chat's `add_actor` input: every field of the record, from the model, except who last set it."""
+    body = Actor.model_json_schema()
+    body["properties"].pop("provenance", None)
+    body["required"] = ["id", "name"]
+    return body
 
 
 def write_actor_rules(bundle: Path) -> None:

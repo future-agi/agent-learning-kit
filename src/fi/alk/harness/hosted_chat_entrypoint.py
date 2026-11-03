@@ -72,6 +72,8 @@ _NEEDS_CONFIRMATION = frozenset(
         "add_sub_goal",
         "add_sub_actor",
         "drop_sub_actor",
+        "add_actor",
+        "drop_actor",
     }
 )
 _SUBMITS = ("submit_scenario", "edit_scenario")
@@ -96,6 +98,7 @@ _PUBLISHED_PARTS = (
     "scenarios.json",
     "sub_goals.json",
     "sub_actors.json",
+    "actors.json",
     "contract.json",
     "simulator_prompt.md",
     "world.sqlite",
@@ -117,6 +120,10 @@ _WRITING_TOOLS = frozenset(
         "change_world",
         "declare_tool",
         "remember",
+        "add_actor",
+        "drop_actor",
+        "add_sub_actor",
+        "drop_sub_actor",
     }
 )
 
