@@ -76,8 +76,24 @@ _NEEDS_CONFIRMATION = frozenset(
         "drop_actor",
     }
 )
+# Removals and changes to the world, its cast or the contract: each asks on its own, even after a yes to every change.
+_ASKS_ALONE = frozenset(
+    {
+        "add_sub_actor",
+        "drop_sub_actor",
+        "drop_scenario",
+        "drop_scenarios",
+        "change_world",
+        "declare_tool",
+        "fix_tool",
+        "amend_contract",
+        "add_rule",
+        "drop_rule",
+    }
+)
 _SUBMITS = ("submit_scenario", "edit_scenario")
 _CONFIRM = "Yes, make this change"
+_CONFIRM_ALL = "Yes, make every change for this request"
 _NUDGE_NOTE = (
     "\n\nLoad `builder/agent-update` with read_skill first, and end the turn with "
     "report_update."
@@ -317,6 +333,11 @@ class HostedChatRuntime:
         self._turn_acknowledged_through = 0
         self._tool_names: dict[str, str] = {}
         self._checkpoint_lock = asyncio.Lock()
+        # The message whose turn is running, and the one whose every change the person approved.
+        self._turn_message_id = ""
+        self._approved_all_in: str | None = None
+        # One confirmation open at a time: the platform takes an answer to the latest only.
+        self._confirming = asyncio.Lock()
         self._restart_after_turn = False
         # The rebuild command this sandbox runs, and the spend when its turn began.
         self._nudge: dict[str, Any] | None = None
@@ -555,12 +576,14 @@ class HostedChatRuntime:
         }
 
     def _confirmed(self, spec: Any) -> Any:
-        """A consequential tool that runs only once the person has said yes to this very call.
+        """A consequential tool that runs only once the person has said yes to this very call,
+        or to every change made for the message being answered.
 
         A change to what a scenario tests, a removal, a replaced sub-goal, or a change to the world
         or contract does not run on the strength of the request alone: the person is asked to
-        confirm the exact call, and only that answer runs it. Adding scenarios and surface edits
-        do not ask.
+        confirm the exact call, and only that answer runs it. A yes to every change runs the rest
+        of that message's changes without asking, except a removal or a change to the world or
+        contract; the next message asks again. Adding scenarios and surface edits do not ask.
         """
         if spec.name not in _NEEDS_CONFIRMATION:
             return spec
@@ -600,30 +623,36 @@ class HostedChatRuntime:
                 return await handler(args)
             if spec.name == "add_sub_goal" and not self._replaces_sub_goal(args):
                 return await handler(args)
-            answer = await self._ask(
-                spec.name,
-                {
-                    "question": f"Confirm this change: {spec.name} "
-                    + json.dumps(args, sort_keys=True, default=str, indent=1),
-                    "options": [_CONFIRM, "No"],
-                },
-                None,
-            )
-            said = " ".join(
-                str(part.get("text") or "") for part in (answer.get("content") or [])
-            ).strip() if isinstance(answer, dict) else ""
-            if said == _CONFIRM:
-                return await handler(args)
-            return {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": f"Not done: the person did not confirm this change (they said: "
-                        f"{said or 'nothing'}). Leave it undone and follow what they said.",
-                    }
-                ],
-                "is_error": True,
-            }
+            alone = spec.name in _ASKS_ALONE
+            async with self._confirming:
+                if alone or self._approved_all_in != self._turn_message_id:
+                    answer = await self._ask(
+                        spec.name,
+                        {
+                            "question": f"Confirm this change: {spec.name} "
+                            + json.dumps(args, sort_keys=True, default=str, indent=1),
+                            "options": [_CONFIRM, "No"] if alone else [_CONFIRM, _CONFIRM_ALL, "No"],
+                        },
+                        None,
+                    )
+                    said = " ".join(
+                        str(part.get("text") or "") for part in (answer.get("content") or [])
+                    ).strip() if isinstance(answer, dict) else ""
+                    if said == _CONFIRM_ALL and not alone:
+                        self._approved_all_in = self._turn_message_id
+                    elif said != _CONFIRM:
+                        return {
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "Not done: the person did not confirm this change "
+                                    f"(they said: {said or 'nothing'}). Leave it undone and "
+                                    "follow what they said.",
+                                }
+                            ],
+                            "is_error": True,
+                        }
+            return await handler(args)
 
         return replace(spec, handler=guarded)
 
@@ -1470,6 +1499,7 @@ class HostedChatRuntime:
         assistant_message_id = str(uuid.uuid4())
         self._turn_acknowledged_through = sequence
         self._tool_names.clear()
+        self._turn_message_id = message_id
         await self.client.emit(
             "turn_started",
             stage=self.conversation.stage_name,

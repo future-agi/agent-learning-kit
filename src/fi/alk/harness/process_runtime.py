@@ -2325,6 +2325,15 @@ def spawn_source_process(
                     .read_bytes()
                 )
                 mark_module.chmod(0o444)
+        if process.environment.get("ALK_CREWAI_TOOL_TRACE") == "1":
+            observer = world_dir / "crewai_runtime_observer_bootstrap.py"
+            if not observer.exists():
+                observer.write_bytes(
+                    Path(__file__)
+                    .with_name("crewai_runtime_observer_bootstrap.py")
+                    .read_bytes()
+                )
+                observer.chmod(0o444)
         if resolved_user is not None:
             chown(world_dir, resolved_user.pw_uid, resolved_user.pw_gid)
     except OSError as exc:

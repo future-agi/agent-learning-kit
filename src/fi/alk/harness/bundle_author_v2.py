@@ -23,7 +23,7 @@ import tempfile
 import tomllib
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 from urllib.parse import urlsplit
 
 import yaml
@@ -973,6 +973,45 @@ def _source_schema_artifacts(
     return _documented_source_schemas(source)
 
 
+def _only_this_database(action: int, *_args: object) -> int:
+    """SQLite authorizer for repository SQL: it may not open another database file, so
+    ``ATTACH`` and ``VACUUM INTO`` cannot create or write files outside the scratch one."""
+    if action in (sqlite3.SQLITE_ATTACH, sqlite3.SQLITE_DETACH):
+        return sqlite3.SQLITE_DENY
+    return sqlite3.SQLITE_OK
+
+
+def _postgres_schema_sql(
+    source_schemas: list[_SourceSchemaArtifact], *, contract: dict[str, Any] | None
+) -> str:
+    """The source schema as DDL the PostgreSQL world can run.
+
+    A SQLite store's schema is in SQLite's dialect (``AUTOINCREMENT``, for example), which
+    PostgreSQL rejects. Load it into SQLite and emit PostgreSQL DDL the same way an authored
+    ``world.sqlite`` is compiled. Every other store's schema is adopted as written.
+    """
+    schema_sql = "\n".join(artifact.sql for artifact in source_schemas)
+    data_store = (contract or {}).get("data_store")
+    kind = str(data_store.get("kind") or "") if isinstance(data_store, dict) else ""
+    if "sqlite" not in kind.lower():
+        return schema_sql
+    with tempfile.TemporaryDirectory() as scratch:
+        database = Path(scratch) / "source-schema.sqlite"
+        with closing(sqlite3.connect(database)) as connection:
+            connection.set_authorizer(_only_this_database)
+            try:
+                connection.executescript(schema_sql)
+            except sqlite3.Error as exc:
+                raise BundleAuthorError(
+                    f"source_schema_not_sqlite: the SQLite store's schema did not load: {exc}"
+                ) from exc
+        return _sqlite_sql(
+            database,
+            contract_declarations=_contract_column_declarations(contract or {}),
+            include_rows=False,
+        )
+
+
 def _adopted_seed_sql(
     authoring: Path,
     *,
@@ -985,7 +1024,7 @@ def _adopted_seed_sql(
         else []
     )
     if source_schemas:
-        schema_sql = "\n".join(artifact.sql for artifact in source_schemas)
+        schema_sql = _postgres_schema_sql(source_schemas, contract=contract)
         adopted = [f"source/{artifact.relative_path}" for artifact in source_schemas]
         store = authoring / "store.json"
         if store.is_file():
@@ -1078,7 +1117,7 @@ def _generic_postgres_seed_artifacts(
     seed = staging / "seed"
     schema_path = seed / "source-schema.sql"
     if source_schemas:
-        schema_sql = "\n".join(artifact.sql for artifact in source_schemas)
+        schema_sql = _postgres_schema_sql(source_schemas, contract=contract)
     else:
         # A data-free/in-process source has no repository-owned database schema to adopt.
         # During the compatibility window SQLite may carry that harness-owned schema. Canonical
@@ -1647,6 +1686,27 @@ def _hands_off_to_livekit_cli(root: Path, entry: str) -> bool:
     return "cli.run_app" in path.read_text(encoding="utf-8", errors="replace")
 
 
+_PORT_ENVIRONMENT_READ = re.compile(
+    r"""(?:environ(?:\.get\(\s*|\[\s*)|getenv\(\s*)["']PORT["']"""
+    r"""|(?:process|Bun)\.env\.PORT\b"""
+)
+_SOURCE_SUFFIXES = {".py", ".js", ".mjs", ".cjs", ".ts", ".tsx"}
+
+
+def _reads_port_from_environment(root: Path) -> bool:
+    """Whether the source reads ``PORT``. Without that read its port may be hard-coded."""
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root)
+        if path.suffix not in _SOURCE_SUFFIXES or not path.is_file():
+            continue
+        if any(part in _IGNORED_ARTIFACT_PARTS for part in relative.parts):
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if _PORT_ENVIRONMENT_READ.search(text):
+            return True
+    return False
+
+
 def _discover_callback_entrypoint(root: Path) -> str | None:
     """Return the repository's unique module-level ``agent_callback``, if present.
 
@@ -2167,6 +2227,7 @@ def resolve_environment_plan(
     contract_interface_kind: str | None = None,
     contract_runtime: dict[str, Any] | None = None,
     runtime_dependencies: list[dict[str, Any]] | None = None,
+    tool_entrypoints: list[dict[str, Any]] | None = None,
 ) -> EnvironmentPlanV2:
     """Resolve packaging once.  Authoring and provisioning consume this same immutable plan."""
     root = Path(source).resolve()
@@ -2787,6 +2848,20 @@ def resolve_environment_plan(
             process = _consumable_source_process(
                 process, "PORT", f"{{{{PORT_{control_name}}}}}"
             )
+        if (
+            port is not None
+            and not process.fixed_port_consumable
+            and (
+                is_graph
+                or is_callback
+                or is_command_adapter
+                or _reads_port_from_environment(component)
+            )
+        ):
+            # ``PORT`` already carries this world's port and the listener reads it: our adapter
+            # or the agent's own source. Kept as ``fixed_port``, the contract's port would force
+            # one world. Source with no such read keeps it, because it may hard-code that port.
+            process = process.model_copy(update={"fixed_port": None})
         if is_livekit:
             update: dict[str, Any] = {
                 "started_check": StartedCheck(
@@ -2989,12 +3064,79 @@ def resolve_environment_plan(
         for process in normalized_processes
     ]
 
+    if (
+        not isinstance(selected, ComposeSelection)
+        and runtime_model.command
+        and contract_interface_kind == "command"
+    ):
+        trace_environment = _source_tool_trace_environment(
+            root, runtime_model, tool_entrypoints or []
+        )
+        if trace_environment:
+            processes = [
+                process.model_copy(update={
+                    "environment": {**process.environment, **trace_environment},
+                })
+                if isinstance(process, SourceProcess) and process.name == control_name
+                else process
+                for process in processes
+            ]
+
     return EnvironmentPlanV2(
         packaging=packaging,
         control_service=control_name,
         processes=tuple(processes),
         capabilities=capabilities,
         readiness=tuple(readiness),
+    )
+
+
+def _source_tool_trace_environment(
+    source: Path, runtime: Runtime, entries: list[dict[str, Any]]
+) -> dict[str, str]:
+    if runtime.language.lower() not in {"", "python", "py"}:
+        return {}
+    declared = []
+    for raw in entries:
+        entry = ToolEntry.model_validate(raw)
+        if entry.mode in {"import", "construct"} and entry.module and entry.callable:
+            declared.append({
+                "name": entry.tool, "module": entry.module, "callable": entry.callable,
+            })
+    if not declared:
+        return {}
+    environment = {
+        "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
+        "ALK_TOOL_TRACE_BINDINGS": json.dumps(declared, sort_keys=True),
+    }
+    component = _runtime_component(source, runtime.workdir)
+    project = _pyproject_document(component / "pyproject.toml").get("project", {})
+    requirements = list(project.get("dependencies", []))
+    for extra in runtime.extras:
+        requirements.extend(project.get("optional-dependencies", {}).get(extra, []))
+    requirement_files = list(runtime.requirements_files)
+    if not (component / "pyproject.toml").is_file():
+        requirement_files.append("requirements.txt")
+    for name in requirement_files:
+        path = (component / name).resolve()
+        if path.is_relative_to(source) and path.is_file():
+            requirements.extend(path.read_text(encoding="utf-8").splitlines())
+    if any(
+        re.match(r"^crewai(?:\s|\[|[<>=!~@;]|$)", requirement.strip(), re.IGNORECASE)
+        for requirement in requirements
+        if isinstance(requirement, str)
+    ):
+        environment["ALK_CREWAI_TOOL_TRACE"] = "1"
+    return environment
+
+
+_SOURCE_TOOL_TRACE_VERSION = 1
+
+
+def _uses_source_tool_trace(processes: Sequence[Any]) -> bool:
+    return any(
+        "ALK_TOOL_TRACE_BINDINGS" in (getattr(process, "environment", None) or {})
+        for process in processes
     )
 
 
@@ -3228,6 +3370,49 @@ def _environment_tools(contract: dict[str, Any]) -> list[str]:
     )
 
 
+def _source_tool_trace_bindings(contract: dict[str, Any]) -> list[dict[str, str]]:
+    bindings = []
+    for raw in contract.get("tool_entrypoints", []):
+        if not isinstance(raw, dict):
+            continue
+        try:
+            entry = ToolEntry.model_validate(raw)
+        except ValueError as exc:
+            raise BundleAuthorError(f"contract_tool_entry_invalid: {exc}") from exc
+        if entry.mode == "import" and entry.module and entry.callable:
+            bindings.append(
+                {"name": entry.tool, "module": entry.module, "callable": entry.callable}
+            )
+    return bindings
+
+
+def _with_source_tool_trace(
+    processes: list[Any] | tuple[Any, ...],
+    *,
+    control_service: str,
+    bindings: list[dict[str, str]],
+) -> tuple[Any, ...]:
+    updated = []
+    for process in processes:
+        if not isinstance(process, SourceProcess) or process.name != control_service:
+            updated.append(process)
+            continue
+        environment = {
+            key: value
+            for key, value in process.environment.items()
+            if key not in {"HARNESS_TOOL_TRACE", "ALK_TOOL_TRACE_BINDINGS"}
+        }
+        if bindings:
+            environment.update(
+                {
+                    "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
+                    "ALK_TOOL_TRACE_BINDINGS": json.dumps(bindings),
+                }
+            )
+        updated.append(process.model_copy(update={"environment": environment}))
+    return tuple(updated)
+
+
 def _files(root: Path) -> list[BundleFileV2]:
     records: list[BundleFileV2] = []
     for path in sorted(root.rglob("*")):
@@ -3388,7 +3573,22 @@ def author_bundle_v2(
         contract_interface_kind=contract_interface_kind,
         contract_runtime=(runtime if isinstance(runtime, dict) else None),
         runtime_dependencies=contract_body.get("runtime_dependencies"),
+        tool_entrypoints=contract_body.get("tool_entrypoints"),
     )
+    trace_bindings = (
+        _source_tool_trace_bindings(contract_body)
+        if contract_modality == "chat"
+        else []
+    )
+    if trace_bindings and not _uses_source_tool_trace(plan.processes):
+        plan = replace(
+            plan,
+            processes=_with_source_tool_trace(
+                plan.processes,
+                control_service=plan.control_service or "",
+                bindings=trace_bindings,
+            ),
+        )
     provided_environment = {
         str(name).upper()
         for name in (job.metadata.get("environment_value_names", []) or [])
@@ -3617,6 +3817,11 @@ def author_bundle_v2(
             metadata={
                 "packaging": plan.packaging,
                 "environment_plan_version": "2",
+                **(
+                    {"source_tool_trace_version": _SOURCE_TOOL_TRACE_VERSION}
+                    if _uses_source_tool_trace(plan.processes)
+                    else {}
+                ),
                 **_adk_web_app(source_root, contract_body),
                 **({"generic_harness": "v1"} if generic_pipeline else {}),
                 **(
@@ -3820,7 +4025,11 @@ def _built_by_older_alk(
     environments = [getattr(process, "environment", None) or {} for process in processes]
     bridged = _interface({"runtime": {"interface": _COMMAND_BRIDGE_INTERFACE}})
     return (
-        any("ALK_TOOL_TRACE_BINDINGS" in env for env in environments)
+        (
+            any("ALK_TOOL_TRACE_BINDINGS" in env for env in environments)
+            and metadata.get("source_tool_trace_version")
+            != _SOURCE_TOOL_TRACE_VERSION
+        )
         or (
             _interface(sealed) == bridged
             and any("ALK_SUBPROCESS_COMMAND" in env for env in environments)
@@ -3913,6 +4122,29 @@ def _carry_contract(
             **metadata["provider_import"],
             "environment_tools": _environment_tools(body),
         }
+    runtime = body.get("runtime") or {}
+    interface = runtime.get("interface") or {}
+    traced_command = (
+        isinstance(interface, dict)
+        and str(interface.get("kind") or "").strip().lower() == "command"
+        and _uses_source_tool_trace(processes)
+    )
+    if (
+        str(body.get("modality") or "").strip().lower() == "chat"
+        and not traced_command
+    ):
+        bindings = _source_tool_trace_bindings(body)
+        processes = list(
+            _with_source_tool_trace(
+                processes,
+                control_service=manifest.runtime.control_service or "",
+                bindings=bindings,
+            )
+        )
+        if bindings:
+            metadata["source_tool_trace_version"] = _SOURCE_TOOL_TRACE_VERSION
+        else:
+            metadata.pop("source_tool_trace_version", None)
     return True, processes, metadata
 
 

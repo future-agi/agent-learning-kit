@@ -24,6 +24,9 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
 - Sub-actors in the builder chat: adding or dropping one from the environment's list, or changing which
   scenarios include one, waits for the person's yes, and an automatic repair cannot change a scenario's
   sub-actors.
+- Multi-agent compatibility references preserve native Google ADK, LangGraph,
+  and CrewAI orchestration, while Python command agents capture bounded tool
+  evidence with explicit worker and task attribution.
 - Builder chat: `edit_scenario` changes a kept scenario by its key with only the fields that change
   (`clear` resets a field), keeping its key, number, place and history; a rename alone is not
   proved again. A new scenario never takes a key the environment has used, a dropped scenario's
