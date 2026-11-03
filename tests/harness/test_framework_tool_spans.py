@@ -433,3 +433,12 @@ def test_checks_grade_a_launch_once_and_a_hand_off_made_by_a_tool_call() -> None
     task = Call(name="task", arguments={}, result=None, ok=True, at=2.0, delegated_to="researcher",
                 runtime_ids={"event_id": "t1", "parent_event_id": "a1"})
     assert graded_calls([launch, job, task]) == [launch, task]
+
+
+def test_a_job_joins_the_launch_that_named_its_whole_id() -> None:
+    from fi.alk.harness.simulation_mark_bootstrap import _names
+
+    assert _names('{"task_id": "1"}', "1")
+    assert _names("job a1b2-c3 started", "a1b2-c3")
+    assert not _names('{"task_id": "17"}', "1")
+    assert not _names("thread_1x", "1")

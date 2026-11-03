@@ -426,6 +426,19 @@ _LIVE_SPANS_MAX = 4096
 _TRACE_LINE_MAX = 65536
 
 
+def _names(text: str, value: str) -> bool:
+    """Whether ``value`` appears in ``text`` as a whole id, not inside a longer one."""
+    start = text.find(value)
+    while start != -1:
+        before = text[start - 1] if start else " "
+        end = start + len(value)
+        after = text[end] if end < len(text) else " "
+        if not any(c.isalnum() or c in "-_" for c in (before, after)):
+            return True
+        start = text.find(value, start + 1)
+    return False
+
+
 def _first(attributes, keys):
     for key in keys:
         value = attributes.get(key)
@@ -631,7 +644,7 @@ class _ToolSpans:
         if not conversation:
             return False
         launch = next(
-            (one for one in self._launches if one["conversation"] != conversation and conversation in one["output"]),
+            (one for one in self._launches if one["conversation"] != conversation and _names(one["output"], conversation)),
             None,
         )
         if launch is None:
