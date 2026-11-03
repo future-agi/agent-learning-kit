@@ -694,6 +694,9 @@ def world_actor_tools(destination: Path, contract: AgentContract | None = None) 
             return world_action_names(json.loads(path.read_text(encoding="utf-8")))
         return world_action_names(contract.model_dump()) if contract is not None else []
 
+    # Known before the call when the world is already built (the builder chat), so one request is one confirmation.
+    listed = world_actions()
+
     @tool(
         "add_actor",
         "Add a person or system in the world who acts through the world's own actions, never by speaking to "
@@ -701,7 +704,8 @@ def world_actor_tools(destination: Path, contract: AgentContract | None = None) 
         "`permitted_actions` is what the world lets them do: only actions the world already has, each named as "
         "the environment names it (the route one of its tools calls, with `/` as `.`); the reply lists them. "
         "Anything else they attempt is refused and recorded as their attempt. Who may take an action is decided "
-        "by this list, never by what anyone says.",
+        "by this list, never by what anyone says."
+        + (f" The world's actions: {', '.join(listed)}." if listed else ""),
         actor_input_schema(),
     )
     async def add_actor(args: dict[str, Any]) -> dict[str, Any]:
