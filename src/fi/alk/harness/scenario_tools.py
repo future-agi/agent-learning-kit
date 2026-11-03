@@ -211,8 +211,8 @@ def _sub_actor_field() -> dict[str, Any]:
         "sub_actors": {
             "type": "array",
             "description": "Sub-actors from the environment's list this scenario includes, each with its "
-            "`instruction`, what they do in this scenario, written to them like a situation text, and its "
-            "`trigger`, when they enter: "
+            "`instruction`, who they are here and what they say, written to them, and its "
+            "`trigger`, the only thing that decides when they speak: "
             + described(TRIGGER_ABOUT)
             + ". The instruction does what their channel does: a voice nearby speaks to the person, "
             "someone who takes the phone speaks to the agent. Give them a part of their own, never the person's goal: they never make, confirm, "
@@ -223,7 +223,11 @@ def _sub_actor_field() -> dict[str, Any]:
                 "type": "object",
                 "properties": {
                     "id": {"type": "string"},
-                    "instruction": {"type": "string"},
+                    "instruction": {
+                        "type": "string",
+                        "description": "Who they are and what they say. Never when: they speak when the "
+                        "trigger fires, so the instruction names no moment, event or turn.",
+                    },
                     "trigger": {
                         "type": "object",
                         "properties": {
