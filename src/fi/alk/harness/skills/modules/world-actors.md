@@ -33,6 +33,6 @@ starts.
 
 **What is graded.** Sub-goals check what the agent did and what the world holds. A check can read the trial's
 action log with `world.events(actor_id=None, outcome=None)`: every attempted action, whose it was (`agent` for
-the agent under test) and what came of it, so "the dependent action happened only after the permitted one was
-committed" and "the agent's attempt without it was refused" are both checkable. Never a sub-goal about what an
+the agent under test) and what came of it, so a check can assert the order of the agent's actions against an
+actor's and the outcome of each of the agent's attempts. Never a sub-goal about what an
 actor did; the actor's actions are fixed by the scenario.
