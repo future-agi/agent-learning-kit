@@ -1715,6 +1715,23 @@ def test_tool_trace_parsed_json_result_is_not_truncated(monkeypatch) -> None:
     assert calls[0].result == big_list
 
 
+def test_tool_trace_holds_only_the_agents_calls(monkeypatch) -> None:
+    """A world actor's action shares the trace table with the agent's calls; it is never graded as the agent's,
+    and never fires a sub-actor waiting on one of the agent's tools."""
+    from fi.simulate.simulation.engines.sub_actor_voice import world_access
+
+    columns = ["name", "arguments", "result", "ok", "error", "at", "actor_id", "outcome"]
+    rows = [
+        ("read_deal", {"id": "d1"}, {"stage": "open"}, True, "", 1.0, "agent", "ok"),
+        ("approve_discount", {"id": "d1"}, None, False, "refused", 2.0, "manager", "refused"),
+        ("update_deal", {"id": "d1"}, {"ok": True}, True, "", 3.0, None, None),
+    ]
+    monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
+    runtime = _runtime(endpoints={"database": _postgres_endpoint()})
+    assert [one.name for one in cr._collect_tool_trace_calls(runtime)] == ["read_deal", "update_deal"]
+    assert world_access("postgresql://x/y")() == ["read_deal", "update_deal"]
+
+
 def test_tool_trace_clear_is_best_effort_and_never_raises(monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "psycopg", _RaisingPsycopg())
     cr._clear_tool_trace_calls("postgresql://x/y")  # must not raise
