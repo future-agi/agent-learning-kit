@@ -167,22 +167,30 @@ def test_a_sub_agent_run_through_a_tool_is_its_hand_off_and_owns_its_tool_calls(
     assert _by_tool(records) == {"ls": ("researcher", None), "task": (None, "researcher"), "summarise": ("writer", None)}
 
 
-def test_a_job_that_starts_before_its_launch_returns_is_still_its_hand_off(tmp_path: Path) -> None:
-    # The job's run starts while the launching tool call is still returning, and is still running when the call ends.
+@pytest.mark.parametrize("inner_first", [False, True])
+def test_a_job_named_only_inside_it_that_starts_before_its_launch_returns_is_its_hand_off(
+    tmp_path: Path, inner_first: bool
+) -> None:
+    # The job's run starts while the launching tool call is still returning, carries no attributes until it ends (as
+    # LangChain's instrumentation sets them), and is still running when the call ends: the spans inside it name it,
+    # whether they finish after the launch returns or before.
+    inner = """
+with trace.use_span(job):
+    with span("run_code_check", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "run_code_check", **own}):
+        pass
+"""
+    launched = """
+launch.set_attribute("output.value", "Launched async subagent. task_id: job-c")
+launch.end()
+"""
     records = _run(tmp_path, """
-        sup = {"gen_ai.conversation.id": "thread-sup"}
-        own = {"lc_agent_name": "coder", "gen_ai.conversation.id": "job-c"}
-        with span("agent", **{"gen_ai.span.kind": "AGENT", **sup}):
-            launch = tracer.start_span("start_async_task", attributes={
-                "gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "start_async_task", "input.value": "coder", **sup})
-            job = tracer.start_span("coder", attributes={"gen_ai.span.kind": "CHAIN", **own},
-                                    context=trace.set_span_in_context(trace.INVALID_SPAN))
-            launch.set_attribute("output.value", "Launched async subagent. task_id: job-c")
-            launch.end()
-        with trace.use_span(job):
-            with span("run_code_check", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "run_code_check", **own}):
-                pass
-    """)
+sup = {"gen_ai.conversation.id": "thread-sup"}
+own = {"lc_agent_name": "coder", "gen_ai.conversation.id": "job-c"}
+agent = tracer.start_span("agent", attributes={"gen_ai.span.kind": "AGENT", **sup})
+launch = tracer.start_span("start_async_task", context=trace.set_span_in_context(agent), attributes={
+    "gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "start_async_task", "input.value": "coder", **sup})
+job = tracer.start_span("coder", context=trace.set_span_in_context(trace.INVALID_SPAN))
+""" + (inner + launched if inner_first else launched + inner) + "agent.end()\n")
     hand_offs = [r for r in records if r.get("delegated_to")]
     assert [(r["delegated_to"], r["agent_key"], "ended_at" in r) for r in hand_offs] == [("coder", "agent", False)]
     assert {r["name"]: r.get("agent_key") for r in records if r["name"] == "run_code_check"} == {"run_code_check": "coder"}

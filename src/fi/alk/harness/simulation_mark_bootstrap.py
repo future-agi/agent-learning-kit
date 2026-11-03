@@ -489,7 +489,8 @@ class _ToolSpans:
         self._wrapped = set()
         # Tool calls that returned something, oldest first, so a job started by one can be joined to it.
         self._launches = collections.deque(maxlen=_LAUNCHES_MAX)
-        # Jobs that started before the tool call launching them returned, joined once it does.
+        # Runs with no parent not yet joined to a launch, with the attributes last seen in them: a run's own span is
+        # often named only when it ends, so the spans inside it name it first.
         self._waiting = {}
         self._lock = threading.Lock()
 
@@ -503,7 +504,7 @@ class _ToolSpans:
             try:
                 joined = self._job_record(span, context.span_id, ended=False)
                 if not joined and len(self._waiting) < _LAUNCHES_MAX:
-                    self._waiting[context.span_id] = span
+                    self._waiting[context.span_id] = (span, None)
             except Exception:
                 pass
         original = span.end
@@ -538,6 +539,23 @@ class _ToolSpans:
             parent = above[1]
         return None
 
+    def _root(self, span_id):
+        """The run with no parent that ``span_id`` sits in, if it is still open."""
+        entry = self._live.get(span_id)
+        while entry is not None and entry[1] is not None:
+            span_id, entry = entry[1], self._live.get(entry[1])
+        return span_id if entry is not None else None
+
+    def _join_waiting(self, root_id, attributes=None) -> None:
+        waiting = self._waiting.get(root_id)
+        if waiting is None:
+            return
+        seen = attributes or waiting[1]
+        if self._job_record(waiting[0], root_id, ended=False, attributes=seen):
+            self._waiting.pop(root_id, None)
+        elif attributes:
+            self._waiting[root_id] = (waiting[0], attributes)
+
     def _named_above(self, span_id):
         """The agent the nearest open span from ``span_id`` up names as running it."""
         while span_id is not None:
@@ -571,6 +589,8 @@ class _ToolSpans:
             if entry is not None and entry[1] is None and kind != "TOOL":
                 self._waiting.pop(span_id, None)
                 self._job_record(span, span_id, ended=True)
+            elif self._waiting:
+                self._join_waiting(self._root(span_id), span.attributes)
             if kind == "AGENT":
                 handing = self._above(span_id, ("TOOL",))
                 name = self._agent_name(span)
@@ -598,11 +618,11 @@ class _ToolSpans:
                 self._handed.pop(span_id, None)
             self._live.pop(span_id, None)
 
-    def _job_record(self, span, span_id, *, ended: bool) -> bool:
+    def _job_record(self, span, span_id, *, ended: bool, attributes=None) -> bool:
         """A run with no parent here, in a conversation whose id an earlier tool call returned, is a job that call
         launched: it is written as that call's hand-off, from the agent that made the call to the job's agent, once
         when it starts and again with its answer when it ends, so a job still running when the call ends is kept."""
-        attributes = span.attributes or {}
+        attributes = attributes or span.attributes or {}
         conversation = _first(attributes, _CONVERSATION_KEYS)
         if not conversation:
             return False
@@ -678,9 +698,8 @@ class _ToolSpans:
             )
         with self._lock:
             _append(self._path, record)
-        for job_id, job in list(self._waiting.items()):
-            if self._job_record(job, job_id, ended=False):
-                self._waiting.pop(job_id, None)
+        for job_id in list(self._waiting):
+            self._join_waiting(job_id)
 
 
 def _append(path, record) -> None:
