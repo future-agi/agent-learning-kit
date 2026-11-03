@@ -239,6 +239,10 @@ WORLD_ACTIONS = {
     "route": "endpoint",
     "tool": "tool",
     "separator": ".",
+    # Only routes an actor's action can be sent to: a method it sends, and no path part to fill in.
+    "method": "method",
+    "methods": ["POST"],
+    "placeholder": "{",
 }
 
 
@@ -247,7 +251,8 @@ def world_action_names(contract: dict[str, Any]) -> list[str]:
     names = set()
     for entry in contract.get(WORLD_ACTIONS["from"]) or []:
         route = str((entry or {}).get(WORLD_ACTIONS["route"]) or "").strip("/")
-        if route:
+        method = str((entry or {}).get(WORLD_ACTIONS["method"]) or "POST").upper()
+        if route and method in WORLD_ACTIONS["methods"] and WORLD_ACTIONS["placeholder"] not in route:
             names.add(route.replace("/", WORLD_ACTIONS["separator"]))
     return sorted(names)
 

@@ -2003,6 +2003,21 @@ def test_sub_actor_changes_wait_for_a_yes_and_change_what_a_scenario_tests(
     assert runtime._changes_situation(friend)
 
 
+def test_the_world_offers_only_actions_an_actor_can_send():
+    from fi.alk.harness.actors import world_action_names
+
+    contract = {
+        "tool_entrypoints": [
+            {"tool": "read", "endpoint": "records/read"},
+            {"tool": "approve", "endpoint": "/records/approve", "method": "post"},
+            {"tool": "look", "endpoint": "records/look", "method": "GET"},
+            {"tool": "cancel", "endpoint": "records/{record_id}/cancel", "method": "POST"},
+            {"tool": "local", "endpoint": ""},
+        ]
+    }
+    assert world_action_names(contract) == ["records.approve", "records.read"]
+
+
 def test_an_actor_given_actions_the_world_lacks_is_sent_back_before_anyone_is_asked(tmp_path, monkeypatch):
     from fi.alk.harness import actors
     from fi.alk.harness.backends import ToolSpec
