@@ -16,8 +16,8 @@ from .diagnostics import HarnessDiagnostic
 from .repair_controller import RepairHistory
 from .source_model import SourceModel
 from .world_ir import WorldIR
-from .tool_certification import ToolCertificationReport
-from .action_certification import ActionCertificationReport
+from .tool_certification import ToolAvailability, ToolCertificationReport
+from .action_certification import ActionCertificationReport, ActionProbeStatus
 from .repair_patch import WorldIRRepairPatch
 from .scenario_repair import ScenarioRepairReceipt
 
@@ -339,6 +339,7 @@ class GenericHarnessArtifactStore:
     CERTIFICATION = "certification.json"
     TOOL_CERTIFICATION = "tool-certification.json"
     ACTION_CERTIFICATION = "action-certification.json"
+    CAPABILITY_EVIDENCE = "capability-evidence.json"
 
     def __init__(self, root: Path) -> None:
         self.root = root
@@ -428,7 +429,23 @@ class GenericHarnessArtifactStore:
         return self._read(self.RUNTIME_EVIDENCE, RuntimeValidationEvidence)
 
     def write_certification(self, value: HarnessCertification) -> Path:
+        from .capabilities import capability_evidence
+
+        # Sealed with the certificate it is derived from, so the two never disagree.
+        self._write_json(self.CAPABILITY_EVIDENCE, capability_evidence(value, self._failed_targets()))
         return self._write(self.CERTIFICATION, value)
+
+    def _failed_targets(self) -> dict[str, list[str]] | None:
+        """The tools and actions that failed their probes, from the reports runtime validation wrote; None when
+        either report is missing, so nothing is claimed about targets that were never recorded."""
+        if not all((self.root / name).is_file() for name in (self.TOOL_CERTIFICATION, self.ACTION_CERTIFICATION)):
+            return None
+        tools = self.read_tool_certification().tools
+        actions = self.read_action_certification().actions
+        return {
+            "tool_contract": [item.tool for item in tools if item.availability is ToolAvailability.REJECTED],
+            "action_behavior": [item.action for item in actions if item.status is ActionProbeStatus.FAILED],
+        }
 
     def read_certification(self) -> HarnessCertification:
         return self._read(self.CERTIFICATION, HarnessCertification)
