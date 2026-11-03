@@ -265,9 +265,7 @@ def _install_declared_python_tools() -> None:
             isinstance(value, str) and value for value in (name, module, callable_name)
         ):
             continue
-        declared[
-            (module.replace(".", "/") + ".py", callable_name.rsplit(".", 1)[-1])
-        ] = name
+        declared[(module, callable_name.rsplit(".", 1)[-1])] = name
     if not declared:
         return
     function_names = {function for _, function in declared}
@@ -278,6 +276,16 @@ def _install_declared_python_tools() -> None:
     suspendable = (
         inspect.CO_COROUTINE | inspect.CO_GENERATOR | inspect.CO_ASYNC_GENERATOR
     )
+
+    def matches_module(frame: Any, module: str) -> bool:
+        loaded_as = frame.f_globals.get("__name__")
+        if loaded_as == module:
+            return True
+        if loaded_as != "__main__":
+            return False
+        declared_path = Path(*module.split(".")).with_suffix(".py").resolve()
+        return Path(frame.f_code.co_filename).resolve() == declared_path
+
     # frame id -> (frame, entry time). Holding the frame keeps its id from being
     # reused while an entry for it is still open.
     entries: dict[int, tuple[Any, float]] = {}
@@ -305,12 +313,12 @@ def _install_declared_python_tools() -> None:
             entries.pop(id(frame), None) if finished else entries.get(id(frame))
         )
         started = entry[1] if entry is not None else time.time()
-        filename = frame.f_code.co_filename.replace("\\", "/")
         key = next(
             (
                 name
-                for (module_path, function), name in declared.items()
-                if frame.f_code.co_name == function and filename.endswith(module_path)
+                for (module, function), name in declared.items()
+                if frame.f_code.co_name == function
+                and matches_module(frame, module)
             ),
             None,
         )
@@ -350,4 +358,12 @@ def _install_declared_python_tools() -> None:
     threading.setprofile(profile)
 
 
-_install_declared_python_tools()
+try:
+    import crewai_runtime_observer_bootstrap
+
+    _crewai_observer_installed = crewai_runtime_observer_bootstrap.install()
+except Exception:  # noqa: BLE001 - optional observation must not affect customer execution
+    _crewai_observer_installed = False
+
+if not _crewai_observer_installed:
+    _install_declared_python_tools()
