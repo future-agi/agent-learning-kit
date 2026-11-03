@@ -16,7 +16,7 @@ Each package's `README.md` lists its tools, scenarios, coverage map and known ga
 
 | Package | Entry | Tools | Scenarios | Workbook cases | Known gaps |
 |---|---|---|---|---|---|
-| `banking` | V01 Banking | 8 + Gmail 7 | 18 | 5/5 | Bank mailbox not yet linked to the banking records (stage 1) |
+| `banking` | V01 Banking | 8 + Gmail 8 | 18 | 5/5 | Bank mailbox not yet linked to the banking records (stage 1) |
 | `appointment_booking` | V02 Clinic scheduling | 9, `sql` and `filesystem` attached | 10 | 1/5 (S03, S05 partial) | No referral data or slot hold; red-flag and no-medical-advice rules unscored |
 | `hr` | V13 HR | 7 | 18 | 5/5 | No C15 failure cases |
 | `retail` | V15 Retail | 8 | 12 | 5/5 | No C15 timeout-after-commit case |
@@ -31,12 +31,18 @@ Reusable tool sets with their own seed data and acceptance cases. A vertical cop
 tools and handlers when a scenario needs it (Banking copies Gmail's). They are verified on their
 own and are not listed as customer-facing environments (plan decision 2).
 
-| Package | Entry | Tools | Scenarios | Workbook cases | Interface check against the official server |
+| Package | Entry | Tools | Scenarios | Workbook cases | Interface against the official server |
 |---|---|---|---|---|---|
-| `slack_channel_digest` | M01 Slack | 5 (`slack_*`, our own names) | 5 | 5/5 | Not yet (stage 3) |
-| `gmail_inbox_triage` | M02 Gmail | 7 | 15 | 5/5 | Names match the workbook; arguments and results not yet |
-| `calendar_scheduling_desk` | M03 Google Calendar | 8 | 12 | 5/5 | Names match the workbook; arguments and results not yet |
-| `drive_policy_search` | M04 Google Drive | 5 | 7 | 5/5 | Names match the workbook; arguments and results not yet |
+| `slack_channel_digest` | M01 Slack | 5 official + `slack_check_message_status` | 5 | 5/5 | Identifiers and input schemas of mcp.slack.com, pinned 2026-11-04 |
+| `gmail_inbox_triage` | M02 Gmail | 8 of the server's 10 | 15 | 5/5 | Pinned 2026-11-04 from Google's tool reference |
+| `calendar_scheduling_desk` | M03 Google Calendar | 8 of the server's 9 | 12 | 5/5 | Pinned 2026-11-04 from Google's tool reference |
+| `drive_policy_search` | M04 Google Drive | 5 of the server's 8 | 7 | 5/5 | Pinned 2026-11-04 from Google's tool reference |
+
+Each capability's `mcp_reference.json` pins the official server (endpoint, transport, sources, the
+`tools/list` input schemas and result fields, the tools not attached and why, and the local
+extensions: approval and idempotency arguments the workbook's C06 and C07 require, and result
+fields the cases need). `tests/harness/test_mcp_capability_reference.py` holds each package to it.
+The official servers publish no MCP protocol version; the Google servers are a Developer Preview.
 
 Notion (M05) is outside Wave A and was removed.
 

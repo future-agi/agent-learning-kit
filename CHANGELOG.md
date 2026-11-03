@@ -219,6 +219,24 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
   customer is told they are contacting the bank's support, not the old package
   name. Content is otherwise unchanged; every package seals on PostgreSQL and
   rebuilds to the same digests.
+- Wave A stage 3 (TH-8750): the four MCP capabilities match the official
+  servers. Each of `slack_channel_digest`, `gmail_inbox_triage`,
+  `calendar_scheduling_desk` and `drive_policy_search` pins the official
+  server's `tools/list` in `mcp_reference.json` (endpoint, sources, input
+  schemas, result fields, tools not attached, local extensions), and its tools,
+  handlers, reference solutions and checks now use the official tool names,
+  argument names and result shapes: Gmail's `threadId`/`labelIds`/
+  `replyToMessageId` with `unlabel_thread` as its own tool; Calendar's
+  `startTime`/`endTime`/`attendeeEmails` and `Event` objects with
+  `search_events`; Drive's `fileId` and query syntax with `File` objects;
+  Slack's `slack_read_channel`, `slack_read_thread`,
+  `slack_search_public_and_private`, `slack_search_channels` and
+  `slack_send_message`, with the acting user held in the world
+  (`current_actor`) as the OAuth user is on the official server. Approval,
+  idempotency and version arguments stay as documented local extensions.
+  Banking carries the realigned Gmail tool set.
+  `tests/harness/test_mcp_capability_reference.py` holds each package to its
+  reference.
 
 ## v1.0.0-rc.1 — 2026-06-10
 

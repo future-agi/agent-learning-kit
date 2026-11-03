@@ -3,22 +3,20 @@ def check(world, calls, reference=None):
         return "not done: no tool calls were made"
     if reference:
         for step in reference:
-            if step.get("tool") == "slack_search_messages":
-                ch = step.get("arguments", {}).get("channel_id")
-                if ch:
-                    matching = [
-                        c for c in calls
-                        if c.name == "slack_search_messages" and c.ok and c.arguments.get("channel_id") == ch
-                    ]
-                    if not matching:
-                        return f"done wrong: expected search in channel {ch!r}"
-    thread_calls = [
-        c for c in calls
-        if c.name in ("slack_search_messages", "slack_get_thread") and c.ok and c.arguments.get("channel_id") == "C01"
+            tool, ch = step.get("tool"), step.get("arguments", {}).get("channel_id")
+            if tool in ("slack_read_channel", "slack_read_thread") and ch and not any(
+                c.name == tool and c.ok and c.arguments.get("channel_id") == ch for c in calls
+            ):
+                return f"done wrong: expected a successful {tool} in channel {ch!r}"
+    read = [
+        c for c in calls if c.ok and (
+            (c.name in ("slack_read_channel", "slack_read_thread") and c.arguments.get("channel_id") == "C01")
+            or (c.name == "slack_search_public_and_private" and "C01" in str(c.arguments.get("filters") or ""))
+        )
     ]
-    if not thread_calls:
-        return "not done: expected successful message search or thread retrieval in channel 'C01'"
-    if any(c.name == "slack_post_message" for c in calls):
+    if not read:
+        return "not done: expected a successful read or search of channel 'C01'"
+    if any(c.name == "slack_send_message" for c in calls):
         return "failed: agent unexpectedly posted a message during inquiry"
     return None
 

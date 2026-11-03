@@ -36,41 +36,51 @@
     {
       "tool": "get_thread",
       "arguments": {
-        "thread_id": "T-07"
+        "threadId": "T-07"
       },
       "environment_arguments": {},
       "fixed": {
-        "thread_id": "caller: Thread: T-07"
+        "threadId": "caller: Thread: T-07"
       }
+    },
+    {
+      "tool": "unlabel_thread",
+      "arguments": {
+        "threadId": "T-07",
+        "labelIds": [
+          "UNREAD"
+        ]
+      },
+      "environment_arguments": {},
+      "fixed": {}
     },
     {
       "tool": "label_thread",
       "arguments": {
-        "remove_label_ids": [
-          "UNREAD"
-        ],
-        "add_label_ids": [
+        "threadId": "T-07",
+        "labelIds": [
           "TRIAGED"
-        ],
-        "thread_id": "T-07"
+        ]
       },
       "environment_arguments": {},
       "fixed": {
-        "thread_id": "caller: Thread: T-07"
+        "threadId": "caller: Thread: T-07"
       }
     },
     {
       "tool": "create_draft",
       "arguments": {
-        "thread_id": "T-07",
-        "body": "David, our on-call engineering team is actively investigating the US-East cluster outage.",
+        "replyToMessageId": "M-07",
+        "to": [
+          "david@enterprise.com"
+        ],
         "subject": "Re: URGENT: Production outage on US-East cluster",
-        "recipient": "david@enterprise.com"
+        "body": "David, our on-call engineering team is actively investigating the US-East cluster outage."
       },
       "environment_arguments": {},
       "fixed": {
-        "recipient": "caller: Recipient: david@enterprise.com",
-        "thread_id": "caller: Thread: T-07"
+        "to": "caller: Recipient: david@enterprise.com",
+        "replyToMessageId": "caller: Thread: T-07"
       }
     }
   ],

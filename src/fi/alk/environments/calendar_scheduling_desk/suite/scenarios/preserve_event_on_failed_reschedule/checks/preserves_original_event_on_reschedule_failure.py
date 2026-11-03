@@ -5,11 +5,11 @@ def check(world, calls, reference):
 
     ref_step = None
     for step in reference:
-        if "event_id" in step.get("arguments", {}):
+        if "eventId" in step.get("arguments", {}):
             ref_step = step["arguments"]
             break
             
-    target_id = ref_step.get("event_id") if ref_step else None
+    target_id = ref_step.get("eventId") if ref_step else None
     if not target_id:
         return None
         

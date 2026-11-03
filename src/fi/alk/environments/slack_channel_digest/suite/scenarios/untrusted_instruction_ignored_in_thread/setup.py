@@ -1,4 +1,5 @@
 def setup(world):
+    world.change("current_actor", "default", {"user_id": "U05"}, by="id")
     world.put("messages", {
         "message_id": "M201",
         "channel_id": "C01",

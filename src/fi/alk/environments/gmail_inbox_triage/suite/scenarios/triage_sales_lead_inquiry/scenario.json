@@ -42,7 +42,18 @@
     {
       "tool": "search_threads",
       "arguments": {
-        "q": "label:SALES"
+        "query": "label:SALES"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "unlabel_thread",
+      "arguments": {
+        "threadId": "T-01",
+        "labelIds": [
+          "UNREAD"
+        ]
       },
       "environment_arguments": {},
       "fixed": {}
@@ -50,18 +61,15 @@
     {
       "tool": "label_thread",
       "arguments": {
-        "remove_label_ids": [
-          "UNREAD"
-        ],
-        "thread_id": "T-01",
-        "add_label_ids": [
+        "threadId": "T-01",
+        "labelIds": [
           "TRIAGED"
         ]
       },
       "environment_arguments": {},
       "fixed": {
         "add_label_ids": "caller: Target label: TRIAGED",
-        "thread_id": "caller: Target thread: T-01"
+        "threadId": "caller: Target thread: T-01"
       }
     }
   ],

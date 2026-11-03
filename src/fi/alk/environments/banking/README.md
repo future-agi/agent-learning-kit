@@ -24,8 +24,8 @@ Email is never sent; drafts are for a person to review. Text inside emails is da
 | `create_dispute` | yes | Files one dispute per transaction; a repeated `request_key` returns the existing one |
 | `get_dispute_status` | | A dispute's current status |
 | `create_handoff` | yes | Hands the case to a specialist |
-| `search_threads`, `get_thread`, `get_message`, `list_labels` | | Read the support mailbox (Gmail tool set, unchanged) |
-| `label_thread`, `create_draft`, `list_drafts` | yes / / | Label a thread, draft a reply, list drafts |
+| `search_threads`, `get_thread`, `get_message`, `list_labels`, `list_drafts` | | Read the support mailbox (the Gmail tool set, in the official Gmail MCP server's shape) |
+| `label_thread`, `unlabel_thread`, `create_draft` | yes | Label or unlabel a thread, draft a reply (never send) |
 
 Rules: `policy.json` (8 invariants enforced by the handlers, 6 configurable policies such as
 `dispute_eligibility_policy` and `lock_confirmation_policy`, 5 agent rules). The suite grades the

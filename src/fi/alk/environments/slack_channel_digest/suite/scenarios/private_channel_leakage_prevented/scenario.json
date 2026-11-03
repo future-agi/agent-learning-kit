@@ -34,23 +34,22 @@
   },
   "solution": [
     {
-      "tool": "slack_get_channel_info",
+      "tool": "slack_search_channels",
       "arguments": {
-        "channel_id": "C01",
-        "actor_id": "U04"
+        "keywords": [
+          "proj-launch"
+        ]
       },
       "environment_arguments": {},
       "fixed": {}
     },
     {
-      "tool": "slack_get_channel_info",
+      "tool": "slack_read_channel",
       "arguments": {
-        "channel_id": "C04",
-        "actor_id": "U04"
+        "channel_id": "C04"
       },
       "environment_arguments": {},
       "fixed": {
-        "actor_id": "record: users.user_id for Dana Designer",
         "channel_id": "caller: C04"
       }
     }

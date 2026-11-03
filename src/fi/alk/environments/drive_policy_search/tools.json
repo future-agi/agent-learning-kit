@@ -1,23 +1,27 @@
 [
   {
     "name": "search_files",
-    "description": "Search accessible Google Drive policy files by keyword query and optional folder filter with pagination.",
+    "description": "Search for Drive files using a structured query (syntax: `query_term operator values`). Clauses are joined with `and`; string values are single-quoted. Terms: title (contains, =, !=), fullText (contains), mimeType (contains, =, !=), parentId (=, !=), owner (=, !=; 'me' is the requesting user). Use nextPageToken to paginate.",
     "parameters": {
+      "type": "object",
       "properties": {
         "query": {
-          "type": "string"
+          "type": "string",
+          "description": "The search query."
         },
-        "page_token": {
-          "type": "string"
+        "pageToken": {
+          "type": "string",
+          "description": "The page token to use for pagination."
         },
-        "folder_id": {
-          "type": "string"
+        "pageSize": {
+          "type": "integer",
+          "description": "The maximum number of files to return in each page."
         },
-        "page_size": {
-          "type": "integer"
+        "excludeContentSnippets": {
+          "type": "boolean",
+          "description": "If true, the content snippet will be excluded from the response."
         }
       },
-      "type": "object",
       "required": [
         "query"
       ]
@@ -29,221 +33,353 @@
         "files": {
           "type": "array",
           "items": {
-            "type": "object"
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "parentId": {
+                "type": "string"
+              },
+              "mimeType": {
+                "type": "string"
+              },
+              "fileSize": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "fileExtension": {
+                "type": "string"
+              },
+              "contentSnippet": {
+                "type": "string"
+              },
+              "viewUrl": {
+                "type": "string"
+              },
+              "createdTime": {
+                "type": "string"
+              },
+              "modifiedTime": {
+                "type": "string"
+              },
+              "owner": {
+                "type": "string"
+              },
+              "canAddChildren": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "title",
+              "parentId",
+              "mimeType",
+              "fileSize",
+              "description",
+              "viewUrl",
+              "createdTime",
+              "modifiedTime",
+              "owner",
+              "canAddChildren"
+            ]
           }
         },
-        "next_page_token": {
+        "nextPageToken": {
           "type": "string"
-        },
-        "total_results": {
-          "type": "integer"
         }
       },
       "required": [
-        "files",
-        "total_results"
+        "files"
       ]
     }
   },
   {
     "name": "list_recent_files",
-    "description": "List recently modified accessible files in Google Drive within a folder, with pagination.",
+    "description": "Find recent files for the user in a sort order: recency (default), lastModified or lastModifiedByMe. The default page size is 10; use nextPageToken to paginate.",
     "parameters": {
-      "required": [
-        "folder_id"
-      ],
+      "type": "object",
       "properties": {
-        "folder_id": {
-          "type": "string"
+        "orderBy": {
+          "type": "string",
+          "description": "The sort order for the files."
         },
-        "page_size": {
-          "type": "integer"
+        "pageToken": {
+          "type": "string",
+          "description": "The page token to use for pagination."
         },
-        "page_token": {
-          "type": "string"
+        "pageSize": {
+          "type": "integer",
+          "description": "The maximum number of files to return in each page."
+        },
+        "excludeContentSnippets": {
+          "type": "boolean",
+          "description": "If true, the content snippet will be excluded from the response."
         }
-      },
-      "type": "object"
+      }
     },
     "mutates_state": false,
     "returns": {
-      "required": [
-        "files",
-        "total_results"
-      ],
       "type": "object",
       "properties": {
         "files": {
           "type": "array",
           "items": {
-            "type": "object"
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "parentId": {
+                "type": "string"
+              },
+              "mimeType": {
+                "type": "string"
+              },
+              "fileSize": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "fileExtension": {
+                "type": "string"
+              },
+              "contentSnippet": {
+                "type": "string"
+              },
+              "viewUrl": {
+                "type": "string"
+              },
+              "createdTime": {
+                "type": "string"
+              },
+              "modifiedTime": {
+                "type": "string"
+              },
+              "owner": {
+                "type": "string"
+              },
+              "canAddChildren": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "title",
+              "parentId",
+              "mimeType",
+              "fileSize",
+              "description",
+              "viewUrl",
+              "createdTime",
+              "modifiedTime",
+              "owner",
+              "canAddChildren"
+            ]
           }
         },
-        "next_page_token": {
+        "nextPageToken": {
           "type": "string"
-        },
-        "total_results": {
-          "type": "integer"
         }
-      }
+      },
+      "required": [
+        "files"
+      ]
     }
   },
   {
     "name": "get_file_metadata",
-    "description": "Retrieve metadata for a Google Drive file, including version, status, effective date, and folder placement. Enforces ACLs and refuses deleted files.",
+    "description": "General metadata about a Drive file. The description carries the policy family, status, version and effective date.",
     "parameters": {
+      "type": "object",
       "properties": {
-        "file_id": {
-          "type": "string"
+        "fileId": {
+          "type": "string",
+          "description": "The ID of the file to retrieve."
+        },
+        "excludeContentSnippets": {
+          "type": "boolean",
+          "description": "If true, the content snippet will be excluded from the response."
         }
       },
-      "type": "object",
       "required": [
-        "file_id"
+        "fileId"
       ]
     },
     "mutates_state": false,
     "returns": {
-      "required": [
-        "file_id",
-        "folder_id",
-        "mime_type",
-        "status",
-        "title",
-        "version"
-      ],
+      "type": "object",
       "properties": {
-        "created_at": {
-          "type": "string"
-        },
-        "file_id": {
-          "type": "string"
-        },
-        "effective_date": {
-          "type": "string"
-        },
-        "policy_family": {
-          "type": "string"
-        },
-        "mime_type": {
-          "type": "string"
-        },
-        "modified_at": {
-          "type": "string"
-        },
-        "folder_id": {
-          "type": "string"
-        },
-        "status": {
-          "type": "string"
-        },
-        "version": {
+        "id": {
           "type": "string"
         },
         "title": {
           "type": "string"
         },
-        "owner_id": {
+        "parentId": {
           "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        },
+        "fileSize": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "fileExtension": {
+          "type": "string"
+        },
+        "contentSnippet": {
+          "type": "string"
+        },
+        "viewUrl": {
+          "type": "string"
+        },
+        "createdTime": {
+          "type": "string"
+        },
+        "modifiedTime": {
+          "type": "string"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "canAddChildren": {
+          "type": "boolean"
         }
       },
-      "type": "object"
+      "required": [
+        "id",
+        "title",
+        "parentId",
+        "mimeType",
+        "fileSize",
+        "description",
+        "viewUrl",
+        "createdTime",
+        "modifiedTime",
+        "owner",
+        "canAddChildren"
+      ]
     }
   },
   {
     "name": "get_file_permissions",
-    "description": "Get access control list (ACL) and permissions for a Google Drive file and its parent folder. Enforces ACL check on caller.",
+    "description": "List the permissions of a Drive file (its own and its folder's).",
     "parameters": {
+      "type": "object",
       "properties": {
-        "file_id": {
-          "type": "string"
+        "fileId": {
+          "type": "string",
+          "description": "The ID of the file to get permissions for."
         }
       },
       "required": [
-        "file_id"
-      ],
-      "type": "object"
+        "fileId"
+      ]
     },
     "mutates_state": false,
     "returns": {
+      "type": "object",
       "properties": {
-        "owner_id": {
-          "type": "string"
-        },
         "permissions": {
+          "type": "array",
           "items": {
-            "type": "object"
-          },
-          "type": "array"
-        },
-        "file_id": {
-          "type": "string"
-        },
-        "folder_id": {
-          "type": "string"
+            "type": "object",
+            "properties": {
+              "role": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              },
+              "emailAddress": {
+                "type": "string"
+              },
+              "displayName": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "role",
+              "type",
+              "emailAddress"
+            ]
+          }
         }
       },
       "required": [
-        "file_id",
         "permissions"
-      ],
-      "type": "object"
+      ]
     }
   },
   {
     "name": "read_file_content",
-    "description": "Read the text content of a Google Drive document or specific revision. Enforces ACLs, version metadata, and refuses binary or deleted files.",
+    "description": "Fetch a natural language representation of a Drive file, and optionally its comments. fileId must come from search_files or list_recent_files. An unsupported format returns textFormattingNotSupported=true with empty fileContent. revisionId reads an earlier revision of the file.",
     "parameters": {
-      "required": [
-        "file_id"
-      ],
+      "type": "object",
       "properties": {
-        "file_id": {
-          "type": "string"
+        "fileId": {
+          "type": "string",
+          "description": "The ID of the file to retrieve."
         },
-        "revision_id": {
-          "type": "string"
+        "includeComments": {
+          "type": "boolean",
+          "description": "Whether to include comments in the response."
+        },
+        "revisionId": {
+          "type": "string",
+          "description": "An earlier revision of the file to read instead of the current content."
         }
       },
-      "type": "object"
+      "required": [
+        "fileId"
+      ]
     },
     "mutates_state": false,
     "returns": {
+      "type": "object",
       "properties": {
-        "mime_type": {
+        "fileContent": {
           "type": "string"
         },
-        "effective_date": {
-          "type": "string"
+        "textFormattingNotSupported": {
+          "type": "boolean"
         },
-        "file_id": {
-          "type": "string"
+        "contentAnchoredComments": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         },
-        "status": {
-          "type": "string"
+        "unanchoredComments": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         },
-        "revision_id": {
-          "type": "string"
+        "commentsNotSupported": {
+          "type": "boolean"
         },
-        "title": {
-          "type": "string"
-        },
-        "version": {
-          "type": "string"
-        },
-        "content": {
+        "revisionId": {
           "type": "string"
         }
       },
       "required": [
-        "content",
-        "file_id",
-        "mime_type",
-        "status",
-        "title",
-        "version"
-      ],
-      "type": "object"
+        "fileContent",
+        "textFormattingNotSupported"
+      ]
     }
   }
 ]

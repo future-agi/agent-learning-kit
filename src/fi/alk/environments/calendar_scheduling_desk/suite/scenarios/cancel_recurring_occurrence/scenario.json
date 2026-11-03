@@ -38,29 +38,29 @@
     {
       "tool": "get_event",
       "arguments": {
-        "calendar_id": "CAL-PRIMARY",
-        "event_id": "EVT-01"
+        "calendarId": "CAL-PRIMARY",
+        "eventId": "EVT-01"
       },
       "environment_arguments": {},
       "fixed": {
-        "event_id": "record: events.event_id for target recurring meeting",
-        "calendar_id": "record: calendars.calendar_id where access_role is owner"
+        "eventId": "record: events.event_id for target recurring meeting",
+        "calendarId": "record: calendars.calendar_id where access_role is owner"
       }
     },
     {
       "tool": "delete_event",
       "arguments": {
         "approval_id": "APP-DELETE-01",
-        "event_id": "EVT-01",
-        "calendar_id": "CAL-PRIMARY",
+        "eventId": "EVT-01",
+        "calendarId": "CAL-PRIMARY",
         "recurring_action": "this_event"
       },
       "environment_arguments": {},
       "fixed": {
         "approval_id": "record: approvals.approval_id for delete_event",
         "recurring_action": "caller: this_event",
-        "event_id": "record: events.event_id for target recurring meeting",
-        "calendar_id": "record: calendars.calendar_id where access_role is owner"
+        "eventId": "record: events.event_id for target recurring meeting",
+        "calendarId": "record: calendars.calendar_id where access_role is owner"
       }
     }
   ],

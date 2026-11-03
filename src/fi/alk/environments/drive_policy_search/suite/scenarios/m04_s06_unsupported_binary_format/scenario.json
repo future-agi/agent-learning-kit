@@ -34,7 +34,7 @@
     {
       "tool": "search_files",
       "arguments": {
-        "query": "scanned signature"
+        "query": "fullText contains 'scanned signature'"
       },
       "environment_arguments": {},
       "fixed": {}
@@ -42,11 +42,11 @@
     {
       "tool": "read_file_content",
       "arguments": {
-        "file_id": "file_binary_scan"
+        "fileId": "file_binary_scan"
       },
       "environment_arguments": {},
       "fixed": {
-        "file_id": "record: files.file_id for binary signature file"
+        "fileId": "record: files.file_id for binary signature file"
       }
     }
   ],

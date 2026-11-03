@@ -88,3 +88,8 @@ INSERT INTO "users" VALUES('U05','Eli QA','eli@example.com','qa_engineer');
 INSERT INTO "users" VALUES('U06','Fiona DevOps','fiona@example.com','devops_engineer');
 INSERT INTO "users" VALUES('U07','George TechWriter','george@example.com','technical_writer');
 INSERT INTO "users" VALUES('U08','Hannah VP','hannah@example.com','vp_engineering');
+CREATE TABLE current_actor (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL
+);
+INSERT INTO "current_actor" VALUES('default','U03');

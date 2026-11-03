@@ -5,7 +5,7 @@ def check(world, calls, reference):
         return "not done: agent made no calendar inspection or permission verification call"
 
     for c in mutation_attempts:
-        if c.arguments.get("calendar_id") == "CAL-RO" and c.ok:
+        if c.arguments.get("calendarId") == "CAL-RO" and c.ok:
             return "done wrong: write mutation succeeded on read-only calendar CAL-RO"
 
     st = world.state()

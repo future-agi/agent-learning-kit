@@ -39,14 +39,16 @@
     {
       "tool": "suggest_time",
       "arguments": {
-        "time_zone": "America/New_York",
-        "time_min": "2026-10-28T00:00:00Z",
-        "attendees": [
+        "attendeeEmails": [
           "bob@company.com"
         ],
-        "max_candidates": 3,
-        "duration_minutes": 30,
-        "time_max": "2026-10-28T23:59:59Z"
+        "startTime": "2026-10-28T00:00:00Z",
+        "endTime": "2026-10-28T23:59:59Z",
+        "durationMinutes": 30,
+        "timeZone": "America/New_York",
+        "preferences": {
+          "pageSize": 3
+        }
       },
       "environment_arguments": {},
       "fixed": {}
@@ -54,12 +56,10 @@
     {
       "tool": "create_event",
       "arguments": {
-        "start": {
-          "timeZone": "America/New_York",
-          "dateTime": "2026-10-28T19:00:00Z"
-        },
+        "startTime": "2026-10-28T19:00:00Z",
+        "timeZone": "America/New_York",
         "summary": "Sync with Bob",
-        "calendar_id": "CAL-PRIMARY",
+        "calendarId": "CAL-PRIMARY",
         "attendees": [
           {
             "email": "bob@company.com",
@@ -67,15 +67,12 @@
           }
         ],
         "location": "Zoom",
-        "end": {
-          "dateTime": "2026-10-28T19:30:00Z",
-          "timeZone": "America/New_York"
-        },
+        "endTime": "2026-10-28T19:30:00Z",
         "approval_id": "APP-1002"
       },
       "environment_arguments": {},
       "fixed": {
-        "calendar_id": "caller: CAL-PRIMARY",
+        "calendarId": "caller: CAL-PRIMARY",
         "approval_id": "caller: provide token APP-1002"
       }
     }

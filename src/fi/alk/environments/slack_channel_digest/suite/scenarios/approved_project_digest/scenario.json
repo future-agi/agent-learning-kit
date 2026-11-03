@@ -35,31 +35,26 @@
   },
   "solution": [
     {
-      "tool": "slack_search_messages",
+      "tool": "slack_read_channel",
       "arguments": {
-        "cursor": "0",
-        "actor_id": "U03",
-        "limit": 10,
         "channel_id": "C01"
       },
       "environment_arguments": {},
       "fixed": {}
     },
     {
-      "tool": "slack_post_message",
+      "tool": "slack_send_message",
       "arguments": {
-        "approval_id": "APP-201",
         "channel_id": "C01",
-        "request_key": "REQ-DIGEST-201",
-        "actor_id": "U03",
-        "text": "Weekly project digest for proj-launch"
+        "message": "Weekly project digest for proj-launch",
+        "approval_id": "APP-201",
+        "request_key": "REQ-DIGEST-201"
       },
       "environment_arguments": {},
       "fixed": {
         "approval_id": "caller: APP-201",
         "request_key": "caller: REQ-DIGEST-201",
-        "channel_id": "caller: C01",
-        "actor_id": "record: users.user_id for Charlie PM"
+        "channel_id": "caller: C01"
       }
     }
   ],

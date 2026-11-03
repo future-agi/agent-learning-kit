@@ -36,8 +36,8 @@
     {
       "tool": "get_event",
       "arguments": {
-        "calendar_id": "CAL-PRIMARY",
-        "event_id": "EVT-RESCHED-01"
+        "calendarId": "CAL-PRIMARY",
+        "eventId": "EVT-RESCHED-01"
       },
       "environment_arguments": {},
       "fixed": {}
@@ -45,9 +45,9 @@
     {
       "tool": "list_events",
       "arguments": {
-        "calendar_id": "CAL-PRIMARY",
-        "time_max": "2026-10-30T18:00:00Z",
-        "time_min": "2026-10-30T14:00:00Z"
+        "calendarId": "CAL-PRIMARY",
+        "endTime": "2026-10-30T18:00:00Z",
+        "startTime": "2026-10-30T14:00:00Z"
       },
       "environment_arguments": {},
       "fixed": {}
