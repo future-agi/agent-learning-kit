@@ -28,11 +28,13 @@ CHANNELS: dict[str, dict[str, Any]] = {
     },
     "audio_handoff": {
         "modalities": {"voice"},
-        "about": "someone who takes the phone from the person for a few turns, then hands it back",
+        "about": "someone who takes the phone from the person for a few turns to say something of their own, then "
+        "hands it back; the person's request stays the person's, so they never carry it on, confirm it or finish it",
         "tells_person": "{who} may take the phone from you for a few turns. While they have it, say nothing; carry on once they hand it back.",
         "setting": "You have just taken the phone from the person, partway through their call with an automated "
         "agent, to say something of your own. Keep it while you still have something of your own to say or to "
-        "answer, then hand it back.",
+        "answer, then hand it back. The call is the person's: never ask for, agree to, confirm or finish what they "
+        "called about; they do that once they have the phone back.",
     },
     "ivr": {
         "modalities": {"voice"},
