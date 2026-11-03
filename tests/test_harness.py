@@ -9818,6 +9818,25 @@ def test_world_actors_are_offered_only_when_switched_on_and_kept_in_the_environm
     assert load_actors(tmp_path).actors == []
 
 
+def test_a_built_environment_s_chat_can_still_change_its_cast_and_nothing_else_of_the_world(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness.world import tools as world_tools
+
+    _root, contract = _saved_world(tmp_path)
+    voice = contract.model_copy(update={"modality": "voice"})
+    monkeypatch.delenv("HARNESS_SUB_ACTORS", raising=False)
+    assert world_tools.actor_tools_server(voice, tmp_path) is None
+    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+    server = world_tools.actor_tools_server(voice, tmp_path)
+    assert set(_published(server)) == {
+        "add_actor",
+        "drop_actor",
+        "add_sub_actor",
+        "drop_sub_actor",
+    }
+
+
 def test_a_scenario_naming_an_actor_the_world_does_not_list_is_not_kept(tmp_path, monkeypatch):
     from fi.alk.harness.actors import Actor, ActorList, save_actors
     from fi.alk.harness.scenario_tools import _actor_fields, _unlisted_actors

@@ -421,13 +421,21 @@ class HostedChatRuntime:
             ),
             hosted_prompt=self._hosted_prompt(),
             sealed=not self._control_only(),
-            # While building, the world itself (tools, data, caller prompt) can still change.
-            more_servers=self._world_servers(contract, catalogue) if world else None,
+            # While building, the world itself (tools, data, caller prompt) can still change; once built, only the cast.
+            more_servers=self._world_servers(contract, catalogue)
+            if world
+            else self._cast_servers(contract),
             catalogue=catalogue,
         )
         if self._nudge is not None:
             self._nudge_tools(stage, catalogue)
         return stage
+
+    def _cast_servers(self, contract: Any) -> dict[str, Any] | None:
+        from .world.tools import ACTOR_SERVER, actor_tools_server
+
+        server = actor_tools_server(contract, self.workspace)
+        return {ACTOR_SERVER: server} if server is not None else None
 
     def _world_servers(self, contract: Any, catalogue: Any = None) -> dict[str, Any]:
         from .build import open_stage as build_stage

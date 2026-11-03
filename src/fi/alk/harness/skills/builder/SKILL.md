@@ -161,6 +161,9 @@ what the gates check. Then:
   scenarios, ask. An entry you write follows the write-scenarios rules for sub-actors. When a sub-actor
   or trigger the person asked for cannot be used with this agent, or a check refuses it, stop: tell them
   which one and why, offer what can be used instead, and change it only once they agree.
+- **World actors**, where `add_actor` is offered: `add_actor` adds someone who acts through the world's own
+  actions, or changes only the fields you send of one already listed, so what the person set elsewhere stays.
+  `drop_actor` removes one. Read `actors.json` first: edits made in the web app or CLI meet yours there.
 - **The contract's reading of the agent**: `amend_contract`, `add_rule`, `drop_rule`, `fix_tool`, and
   `declare_tool` for a tool the contract lacks (with the line in the agent's source that defines it),
   always with the reason. This corrects the harness's understanding; it never changes the agent.
