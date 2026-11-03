@@ -949,6 +949,45 @@ def _source_schema_artifacts(
     return _documented_source_schemas(source)
 
 
+def _only_this_database(action: int, *_args: object) -> int:
+    """SQLite authorizer for repository SQL: it may not open another database file, so
+    ``ATTACH`` and ``VACUUM INTO`` cannot create or write files outside the scratch one."""
+    if action in (sqlite3.SQLITE_ATTACH, sqlite3.SQLITE_DETACH):
+        return sqlite3.SQLITE_DENY
+    return sqlite3.SQLITE_OK
+
+
+def _postgres_schema_sql(
+    source_schemas: list[_SourceSchemaArtifact], *, contract: dict[str, Any] | None
+) -> str:
+    """The source schema as DDL the PostgreSQL world can run.
+
+    A SQLite store's schema is in SQLite's dialect (``AUTOINCREMENT``, for example), which
+    PostgreSQL rejects. Load it into SQLite and emit PostgreSQL DDL the same way an authored
+    ``world.sqlite`` is compiled. Every other store's schema is adopted as written.
+    """
+    schema_sql = "\n".join(artifact.sql for artifact in source_schemas)
+    data_store = (contract or {}).get("data_store")
+    kind = str(data_store.get("kind") or "") if isinstance(data_store, dict) else ""
+    if "sqlite" not in kind.lower():
+        return schema_sql
+    with tempfile.TemporaryDirectory() as scratch:
+        database = Path(scratch) / "source-schema.sqlite"
+        with closing(sqlite3.connect(database)) as connection:
+            connection.set_authorizer(_only_this_database)
+            try:
+                connection.executescript(schema_sql)
+            except sqlite3.Error as exc:
+                raise BundleAuthorError(
+                    f"source_schema_not_sqlite: the SQLite store's schema did not load: {exc}"
+                ) from exc
+        return _sqlite_sql(
+            database,
+            contract_declarations=_contract_column_declarations(contract or {}),
+            include_rows=False,
+        )
+
+
 def _adopted_seed_sql(
     authoring: Path,
     *,
@@ -961,7 +1000,7 @@ def _adopted_seed_sql(
         else []
     )
     if source_schemas:
-        schema_sql = "\n".join(artifact.sql for artifact in source_schemas)
+        schema_sql = _postgres_schema_sql(source_schemas, contract=contract)
         adopted = [f"source/{artifact.relative_path}" for artifact in source_schemas]
         store = authoring / "store.json"
         if store.is_file():
@@ -1054,7 +1093,7 @@ def _generic_postgres_seed_artifacts(
     seed = staging / "seed"
     schema_path = seed / "source-schema.sql"
     if source_schemas:
-        schema_sql = "\n".join(artifact.sql for artifact in source_schemas)
+        schema_sql = _postgres_schema_sql(source_schemas, contract=contract)
     else:
         # A data-free/in-process source has no repository-owned database schema to adopt.
         # During the compatibility window SQLite may carry that harness-owned schema. Canonical
