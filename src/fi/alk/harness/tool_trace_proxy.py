@@ -30,13 +30,10 @@ def permitted(permitted_actions: object, action: str) -> bool:
 
 
 def _actor(actor_id: str) -> dict | None:
-    try:
-        with psycopg.connect(DATABASE_URL, autocommit=True) as connection:
-            row = connection.execute(
-                "SELECT permitted_actions, on_behalf_of FROM _alk_actors WHERE id = %s", (actor_id,)
-            ).fetchone()
-    except Exception:
-        return None
+    with psycopg.connect(DATABASE_URL, autocommit=True) as connection:
+        row = connection.execute(
+            "SELECT permitted_actions, on_behalf_of FROM _alk_actors WHERE id = %s", (actor_id,)
+        ).fetchone()
     return {"permitted_actions": row[0], "on_behalf_of": row[1]} if row else None
 
 
@@ -167,7 +164,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._refuse(arguments, "identity_conflict", "this request names an actor it cannot prove it is")
                 return
             self._as["actor_id"] = actor
-            listed = _actor(actor)
+            try:
+                listed = _actor(actor)
+            except Exception:
+                # The world could not say who the actor is: its fault, never the actor's.
+                self._log(self._name(), arguments, None, "faulted", "the world's actor list could not be read")
+                self._reply(503, {"detail": "the world could not check this actor"})
+                return
             if listed is None:
                 self._refuse(arguments, "unknown_actor", f"{actor} is not an actor in this world")
                 return
