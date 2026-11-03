@@ -79,7 +79,9 @@ def test_every_catalogue_capability_has_evidence_and_unchecked_ones_are_not_run(
     }
     assert findings["streaming"] == findings["browser"] == findings["cost_measurement"] == "not_run"
     assert findings["tool_discovery"] == "passed"
-    assert evidence["inputs"] == {"source_digest": _digest("a"), "bundle_digest": _digest("f")}
+    assert evidence["inputs"] == {
+        "source_digest": _digest("a"), "bundle_digest": _digest("f"), "harness_version": "compiler-v1"
+    }
     assert evidence["order"] == [entry["id"] for entry in CATALOGUE]
     assert evidence["order"].index("start_health") < evidence["order"].index("one_turn")
 
