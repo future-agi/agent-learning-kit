@@ -1999,6 +1999,9 @@ def world_tools(
         kept = [one for one in listing.actors if one.id != gone]
         if len(kept) == len(listing.actors):
             return _err(f"no actor {gone!r}. Listed: {', '.join(one.id for one in kept) or 'none'}")
+        using = scenarios_using(destination, gone, "actors")
+        if using:
+            return _err(f"Not dropped. These scenarios include {gone}: " + ", ".join(using))
         save_actors(destination, ActorList(actors=kept))
         return _ok(f"{gone} dropped")
 

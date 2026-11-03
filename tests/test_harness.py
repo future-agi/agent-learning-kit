@@ -9819,6 +9819,11 @@ def test_world_actors_are_offered_only_when_switched_on_and_kept_in_the_environm
     asyncio.run(call("add_actor", {**manager, "permitted_actions": ["crm.approve_discount", "crm.reject_discount"]}))
     [kept] = load_actors(tmp_path).actors
     assert kept.permitted_actions == ["crm.approve_discount", "crm.reject_discount"]
+    used = tmp_path / "scenarios" / "one" / "scenario.json"
+    used.parent.mkdir(parents=True, exist_ok=True)
+    used.write_text(json.dumps({"name": "one", "actors": [{"id": "manager"}]}))
+    assert "Not dropped. These scenarios include manager: one" in asyncio.run(call("drop_actor", {"id": "manager"}))
+    used.unlink()
     assert "dropped" in asyncio.run(call("drop_actor", {"id": "manager"}))
     assert load_actors(tmp_path).actors == []
 
