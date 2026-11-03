@@ -4381,6 +4381,34 @@ def test_the_bundle_seals_the_environment_s_sub_actors(tmp_path: Path) -> None:
     manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
     assert (output / "sub_actors.json").is_file()
     assert "sub_actors.json" in {one["path"] for one in manifest["files"]}
+    # No world actors: the bundle seals exactly as before, with no actor rules.
+    assert not (output / "actor_rules.json").exists()
+
+
+def test_a_bundle_with_actors_seals_the_rules_its_release_checks_them_by(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    (authoring / "actors.json").write_text(
+        '{"actors": [{"id": "manager", "name": "Priya"}]}\n', encoding="utf-8"
+    )
+
+    output = tmp_path / "bundle"
+    author_bundle_v2(
+        source=source,
+        job=_job(connector="http", scenario_count=1),
+        authoring=authoring,
+        output=output,
+    )
+    manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    assert {"actors.json", "actor_rules.json"} <= {
+        one["path"] for one in manifest["files"]
+    }
+    rules = json.loads((output / "actor_rules.json").read_text(encoding="utf-8"))
+    assert set(rules["records"]) == {"actors.json", "sub_actors.json"}
 
 
 # The platform pins the same digest for the same files (test_harness_versioning_reseal.py).

@@ -200,12 +200,75 @@ ACTORS_DDL = (
 Activation.model_rebuild()
 
 
-EVALUATOR_ONLY_FILE = "evaluator_only.json"
-# What only the grader may read: no actor is ever given it. One declaration, sealed beside the actors, so a field added
-# here is hidden everywhere at once.
+ACTOR_RULES_FILE = "actor_rules.json"
+ACTOR_RULES_SCHEMA = "futureagi.actor_rules.v1"
+# What only the grader may read: no actor is ever given it.
 EVALUATOR_ONLY = {
-    "scenario_fields": ["solution", "alternatives", "sub_goals", "tests", "setup_code", "ready_code", "coverage"],
+    "scenario_fields": [
+        "solution",
+        "alternatives",
+        "sub_goals",
+        "tests",
+        "setup_code",
+        "ready_code",
+        "coverage",
+    ],
     "files": ["sub_goals.json", "certification.json", "runtime-validation.json"],
 }
-def write_evaluator_only(bundle: Path) -> None:
-    (Path(bundle) / EVALUATOR_ONLY_FILE).write_text(json.dumps(EVALUATOR_ONLY, indent=2) + "\n", encoding="utf-8")
+# What an actor's brief is built from: its own record, its entry in the scenario, and the caller's situation without
+# the caller's own details.
+BRIEF_INPUTS = [
+    ["actor", "name"],
+    ["actor", "role"],
+    ["actor", "persona"],
+    ["actor", "goal"],
+    ["actor", "constraints"],
+    ["actor", "behaviour"],
+    ["actor", "prompt"],
+    ["actor", "surface"],
+    ["actor", "knowledge"],
+    ["scenario", "instruction"],
+    ["scenario", "knowledge"],
+    ["caller", "situation"],
+]
+# Fields of one actor that no other actor is given.
+PRIVATE_TO_ACTOR = ["goal", "prompt", "instruction", "actions"]
+# Fields naming another listed actor, with the other values each also takes; `parent` may not form a cycle.
+REFERENCES = {
+    "parent": [],
+    "on_behalf_of": [],
+    "activation.fallback": ["silent", "decline"],
+}
+ACYCLIC = ["parent"]
+
+
+def actor_rules() -> dict[str, Any]:
+    """Everything this release decides about actors, sealed into each bundle so the platform reads the rules of the
+    release that built it instead of keeping its own copy."""
+    from fi.simulate.simulation.sub_actors import DETAILS_MARK
+
+    from .sub_actor import SubActor
+
+    return {
+        "schema": ACTOR_RULES_SCHEMA,
+        "evaluator_only": EVALUATOR_ONLY,
+        "brief_inputs": BRIEF_INPUTS,
+        "private_to_actor": PRIVATE_TO_ACTOR,
+        # The caller's situation as given to anyone else: its instruction up to this mark.
+        "situation_before": DETAILS_MARK,
+        "reserved_ids": [AGENT],
+        "references": REFERENCES,
+        "acyclic": ACYCLIC,
+        # The format tag each actor file is written with.
+        "formats": {ACTORS_FILE: ACTORS_SCHEMA},
+        "records": {
+            "actors.json": Actor.model_json_schema(),
+            "sub_actors.json": SubActor.model_json_schema(),
+        },
+    }
+
+
+def write_actor_rules(bundle: Path) -> None:
+    (Path(bundle) / ACTOR_RULES_FILE).write_text(
+        json.dumps(actor_rules(), indent=2) + "\n", encoding="utf-8"
+    )

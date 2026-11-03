@@ -4,16 +4,17 @@ from __future__ import annotations
 
 import json
 
+import jsonschema
 import pytest
 from pydantic import ValidationError
 
 from fi.alk.harness.actors import (
-    EVALUATOR_ONLY,
-    EVALUATOR_ONLY_FILE,
+    ACTOR_RULES_FILE,
     ActorList,
+    actor_rules,
     load_actors,
     save_actors,
-    write_evaluator_only,
+    write_actor_rules,
 )
 
 _MANAGER = {
@@ -66,7 +67,17 @@ def test_actors_bringing_each_other_in_are_refused():
     assert ActorList.model_validate({"actors": [{"id": "a", "name": "A"}, {"id": "b", "name": "B", "parent": "a"}]})
 
 
-def test_a_sealed_bundle_with_actors_declares_what_only_the_grader_reads(tmp_path):
-    write_evaluator_only(tmp_path)
-    declared = json.loads((tmp_path / EVALUATOR_ONLY_FILE).read_text())
-    assert declared == EVALUATOR_ONLY and "solution" in declared["scenario_fields"]
+def test_a_sealed_bundle_carries_the_rules_its_release_checks_actors_by(tmp_path):
+    write_actor_rules(tmp_path)
+    declared = json.loads((tmp_path / ACTOR_RULES_FILE).read_text())
+    assert declared == json.loads(json.dumps(actor_rules()))
+    assert "solution" in declared["evaluator_only"]["scenario_fields"]
+    assert declared["reserved_ids"] == ["agent"]
+    actor = declared["records"]["actors.json"]
+    sub_actor = declared["records"]["sub_actors.json"]
+    jsonschema.validate(_MANAGER, actor)
+    partner = {"id": "partner", "name": "Sam", "channel": "audio_mix"}
+    jsonschema.validate({**partner, "loudness_ratio": 0.5}, sub_actor)
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({**partner, "loudness_ratio": 2}, sub_actor)
+    assert "goal" not in sub_actor["properties"]
