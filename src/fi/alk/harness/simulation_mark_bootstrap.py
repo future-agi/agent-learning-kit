@@ -493,6 +493,11 @@ class _ToolSpans:
         if len(self._live) >= _LIVE_SPANS_MAX:
             return
         self._live[context.span_id] = (span, parent.span_id if parent is not None else None)
+        if parent is None and _kind(span) != "TOOL":
+            try:
+                self._job_record(span, context.span_id, ended=False)
+            except Exception:
+                pass
         original = span.end
         if getattr(original, _TOOL_END, False):
             return
@@ -544,7 +549,7 @@ class _ToolSpans:
         try:
             entry = self._live.get(span_id)
             if entry is not None and entry[1] is None and kind != "TOOL":
-                self._job_ended(span, span_id)
+                self._job_record(span, span_id, ended=True)
             if kind == "AGENT":
                 handing = self._above(span_id, ("TOOL",))
                 name = self._agent_name(span)
@@ -563,10 +568,10 @@ class _ToolSpans:
         finally:
             self._live.pop(span_id, None)
 
-    def _job_ended(self, span, span_id) -> None:
+    def _job_record(self, span, span_id, *, ended: bool) -> None:
         """A run with no parent here, in a conversation whose id an earlier tool call returned, is a job that call
-        launched: it is written as that call's hand-off, from the agent that made the call to the job's agent, and
-        returns when the job ends."""
+        launched: it is written as that call's hand-off, from the agent that made the call to the job's agent, once
+        when it starts and again with its answer when it ends, so a job still running when the call ends is kept."""
         attributes = span.attributes or {}
         conversation = _first(attributes, _CONVERSATION_KEYS)
         if not conversation:
@@ -584,10 +589,10 @@ class _ToolSpans:
         record = {
             "name": launch["name"],
             "arguments": launch["arguments"],
-            "output": _answer(_first(attributes, _TOOL_RESULT_KEYS) or "")[:4096],
-            "is_error": getattr(status, "name", "") == "ERROR",
+            "output": _answer(_first(attributes, _TOOL_RESULT_KEYS) or "")[:4096] if ended else "",
+            "is_error": ended and getattr(status, "name", "") == "ERROR",
             "at": (span.start_time or 0) / 1e9,
-            "ended_at": (span.end_time or 0) / 1e9,
+            **({"ended_at": (span.end_time or 0) / 1e9} if ended else {}),
             "source": "otel",
             "event_id": format(span_id, "016x"),
             "parent_event_id": launch["event_id"],

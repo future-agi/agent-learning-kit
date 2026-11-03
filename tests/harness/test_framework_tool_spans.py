@@ -119,6 +119,26 @@ def test_a_background_job_is_a_hand_off_from_the_tool_call_that_launched_it(tmp_
         assert 0 < hand_off["at"] <= hand_off["ended_at"]
 
 
+def test_a_job_still_running_when_the_call_ends_keeps_its_hand_off(tmp_path: Path) -> None:
+    # The job starts and makes a tool call, but has not finished when the process stops.
+    records = _run(tmp_path, """
+        sup = {"gen_ai.conversation.id": "thread-sup"}
+        with span("agent", **{"gen_ai.span.kind": "AGENT", **sup}):
+            with span("start_async_task", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "start_async_task",
+                                             "input.value": "coder", **sup,
+                                             "output.value": "Launched async subagent. task_id: job-c"}):
+                pass
+        own = {"lc_agent_name": "coder", "gen_ai.conversation.id": "job-c"}
+        job = tracer.start_span("coder", attributes={"gen_ai.span.kind": "CHAIN", **own})
+        with trace.use_span(job):
+            with span("run_code_check", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "run_code_check", **own}):
+                pass
+    """)
+    hand_offs = [r for r in records if r.get("delegated_to")]
+    assert [(r["delegated_to"], r["arguments"], "ended_at" in r) for r in hand_offs] == [("coder", "coder", False)]
+    assert {r["name"]: r.get("agent_key") for r in records if r["name"] == "run_code_check"} == {"run_code_check": "coder"}
+
+
 def test_a_run_whose_conversation_no_tool_returned_is_not_a_hand_off(tmp_path: Path) -> None:
     records = _run(tmp_path, """
         with span("agent", **{"gen_ai.span.kind": "AGENT", "gen_ai.conversation.id": "thread-a"}):
