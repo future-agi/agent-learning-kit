@@ -1,8 +1,8 @@
 """The items a person reviews in a draft, by id, with a digest of each one's content.
 
 The platform's review (`simulate/services/harness_versioning/review.py`) lists a draft's changes item by item with the
-same ids: a tool, a rule, any other contract field, a sub-goal, an actor, a source, a scenario folder, or any other
-file. The builder chat reads digests before and after each tool call to know which items that call changed.
+same ids: a tool, a rule, any other contract field, a sub-goal, an actor, a world store, a source, a scenario folder,
+or any other file. The builder chat reads digests before and after each tool call to know which items that call changed.
 """
 
 from __future__ import annotations
@@ -19,6 +19,8 @@ _LISTS = {
     "actors.json": ("actor", "actors", "id"),
     "sources.json": ("source", "sources", "id"),
 }
+# The platform's world seed files (`hashing.WORLD_SEED_FILES`): a change to one is a change to the world's state.
+_WORLD_STATE = frozenset({"world.sqlite", "store.json", "collections.json", "schema.sql"})
 _SKIPPED = ("environment-bundle", "generic-harness", "documents-text", "__pycache__", "node_modules")
 
 
@@ -69,7 +71,8 @@ def item_digests(workspace: Path) -> dict[str, str]:
             item = f"scenario:{parts[1]}"
             items[item] = _digest([items.get(item, ""), relative.as_posix(), hashlib.sha256(path.read_bytes()).hexdigest()])
             continue
-        items[f"file:{relative.as_posix()}"] = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+        kind = "world_state" if path.name in _WORLD_STATE else "file"
+        items[f"{kind}:{relative.as_posix()}"] = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
     return items
 
 

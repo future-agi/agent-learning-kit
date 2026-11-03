@@ -32,3 +32,14 @@ def test_a_writing_chat_tool_notes_the_items_it_moved_for_the_message_it_answere
     assert [(one["message_id"], one["tool"], one["items"]) for one in lines] == [
         ("msg-7", "change_world", ["tool:issue_refund"])]
     assert "tool:issue_refund" in item_digests(tmp_path)
+
+
+def test_a_world_store_is_world_state_and_any_other_file_is_a_file(tmp_path):
+    from fi.alk.harness.review_items import item_digests
+
+    (tmp_path / "store.json").write_text("{}")
+    (tmp_path / "notes.md").write_text("scratch")
+
+    items = item_digests(tmp_path)
+
+    assert "world_state:store.json" in items and "file:notes.md" in items
