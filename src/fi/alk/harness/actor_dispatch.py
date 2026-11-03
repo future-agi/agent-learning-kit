@@ -37,10 +37,11 @@ def _send(url: str, headers: dict[str, str], arguments: dict[str, Any]) -> int:
         return exc.code
 
 
-def _contacts(row: dict[str, Any], actor: Actor) -> bool:
-    """Whether one of the agent's actions is addressed to one of this actor's identities."""
-    said = json.dumps(row.get("arguments") or {}, default=str)
-    return any(identity and f'"{identity}"' in said for identity in actor.identities.values())
+def contacts(arguments: Any, actor: Actor) -> bool:
+    """Whether one of the agent's actions is addressed to one of this actor's identities: an argument value equal
+    to one, compared in the same encoding so any character matches."""
+    said = json.dumps(arguments or {}, default=str)
+    return any(identity and json.dumps(identity) in said for identity in actor.identities.values())
 
 
 class ActorDispatcher:
@@ -94,7 +95,7 @@ class ActorDispatcher:
             calls = [row for row in agent_rows if row.get("name") == trigger.tool.rsplit(".", 1)[-1]]
             return str(calls[trigger.on_call - 1].get("action_id") or "") if len(calls) >= trigger.on_call else None
         if trigger.kind == "contacted":
-            reached = next((row for row in agent_rows if _contacts(row, actor)), None)
+            reached = next((row for row in agent_rows if contacts(row.get("arguments"), actor)), None)
             return None if reached is None else str(reached.get("action_id") or "")
         return None
 

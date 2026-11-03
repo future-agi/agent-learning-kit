@@ -116,6 +116,15 @@ def test_an_actor_comes_in_when_the_agent_reaches_one_of_its_identities():
     assert sent[0][1]["X-ALK-Parent-Event"] == "a2"
 
 
+def test_an_identity_with_any_character_is_reached():
+    from fi.alk.harness.actor_dispatch import contacts
+    from fi.alk.harness.actors import Actor
+
+    actor = Actor(id="lead", name="Lead", identities={"mail": "josé@example.org"})
+    assert contacts({"to": "josé@example.org", "body": "hi"}, actor)
+    assert not contacts({"to": "jose@example.org"}, actor)
+
+
 def test_a_chance_action_is_drawn_once_and_the_same_on_a_rerun_of_the_trial():
     action = {"action": "crm.approve_discount", "trigger": {"kind": "probability", "p": 0.5}}
     cast = [{"id": "manager", "actions": [action] * 20}]

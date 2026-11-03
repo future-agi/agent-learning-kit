@@ -359,8 +359,9 @@ class _WorldActors:
         if trigger.kind == "on_tool":
             return trigger.tool.rsplit(".", 1)[-1] == step.tool and self.counts.get(step.tool) == trigger.on_call
         if trigger.kind == "contacted":
-            said = json.dumps(step.arguments, default=str)
-            return any(identity and f'"{identity}"' in said for identity in actor.identities.values())
+            from .actor_dispatch import contacts
+
+            return contacts(step.arguments, actor)
         return False
 
     def act_on(self, step: Any) -> None:
