@@ -243,6 +243,18 @@ WORLD_ACTIONS = {
     "tool": "tool",
     "separator": ".",
 }
+
+
+def world_action_names(contract: dict[str, Any]) -> list[str]:
+    """The world's actions an actor may be given, named by `WORLD_ACTIONS` from a contract's tool entrypoints."""
+    names = set()
+    for entry in contract.get(WORLD_ACTIONS["from"]) or []:
+        route = str((entry or {}).get(WORLD_ACTIONS["route"]) or "").strip("/")
+        if route:
+            names.add(route.replace("/", WORLD_ACTIONS["separator"]))
+    return sorted(names)
+
+
 # Fields naming another listed actor, with the other values each also takes; `parent` may not form a cycle.
 REFERENCES = {
     "parent": [],
