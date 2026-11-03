@@ -648,8 +648,7 @@ A coordinate whose level is named for a sub-actor includes that sub-actor in `su
 things written for this scenario:
 
 - `instruction`: who they are here and what they do, written to them like a situation text ("You are
-  with <the person>. You want <something other than what they ask for> and say so once the agent
-  <does what the person asked>"). What they do is what their channel does, as the kind file describes
+  with <the person>. You want <something other than what they ask for> and say so"). What they do is what their channel does, as the kind file describes
   it, and what the scenario's level for them names. Give them a part, never the person's goal: the
   person still pursues it and gives every value the agent asks for. What they say is their own:
   something they want, know or worry about. They never make, confirm, choose, change or cancel the
@@ -661,10 +660,13 @@ things written for this scenario:
   them out, a sub-actor always joins: one waiting on a tool call or a word that never comes enters after
   the agent's turn 4. Use `probability` only where the scenario means the same thing either way, such as
   a voice in the background; when what the scenario tests is how the agent handles this sub-actor, they
-  must come in, so give them a trigger that always fires.
+  must come in, so give them a trigger that always fires. The trigger alone decides when they speak:
+  where the moment matters, such as once the agent names a price, the trigger is that moment
+  (`on_keyword` or `on_tool`), and the instruction does not repeat it.
 
 A sub-actor makes the person's task harder; no sub-goal is about the sub-actor. Sub-goals grade what the
-agent controls: that it did what the person asked, and nothing anyone else asked for.
+agent controls: that it did what the person asked, and nothing anyone else asked for. The scenario's name
+says what the agent is tested on, never that a sub-actor is in it or how they come in.
 
 The scenario is correct on its own. Read it with the sub-actor removed: the person's instruction and
 details still say everything they want and hold only the final values, the answer key reaches the right
