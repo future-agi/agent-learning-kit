@@ -803,7 +803,8 @@ def _clear_tool_trace_calls(dsn: str) -> None:
 
 
 def read_tool_trace(dsn: str, *, timeout_ms: int | None = None) -> list[dict[str, Any]]:
-    """The world's tool trace so far, in call order, read without writing."""
+    """The agent's own calls in the world's tool trace so far, in call order, read without writing. A world
+    actor's actions are in the same table and are left out; a row from before `actor_id` existed is the agent's."""
     import psycopg
 
     options = "-c default_transaction_read_only=on"
@@ -813,11 +814,11 @@ def read_tool_trace(dsn: str, *, timeout_ms: int | None = None) -> list[dict[str
         dsn, autocommit=True, connect_timeout=5, options=options
     ) as connection:
         cursor = connection.execute(
-            f'SELECT name, arguments, result, ok, error, at FROM "{_TOOL_TRACE_TABLE}" '  # noqa: S608
-            "ORDER BY at ASC"
+            f'SELECT * FROM "{_TOOL_TRACE_TABLE}" ORDER BY at ASC'  # noqa: S608
         )
         columns = [description[0] for description in cursor.description or []]
-        return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
+        rows = [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
+    return [row for row in rows if (row.get("actor_id") or AGENT) == AGENT]
 
 
 def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
@@ -843,9 +844,6 @@ def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
 
     calls: list[Call] = []
     for record in records:
-        # Only the agent's own actions are its calls; a row from before `actor_id` existed is the agent's.
-        if (record.get("actor_id") or "agent") != "agent":
-            continue
         name = record.get("name")
         if not isinstance(name, str) or not name:
             continue
