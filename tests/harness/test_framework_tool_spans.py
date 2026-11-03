@@ -290,6 +290,22 @@ def test_a_process_that_sets_its_own_provider_later_keeps_it(tmp_path: Path) -> 
     assert [r["name"] for r in records] == ["lookup"]
 
 
+def test_a_span_made_before_the_process_sets_its_provider_leaves_it_free_to_set_one(tmp_path: Path) -> None:
+    records = _run(tmp_path, """
+        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+        with span("startup", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "startup"}):
+            pass
+        own = TracerProvider(); memory = InMemorySpanExporter(); own.add_span_processor(SimpleSpanProcessor(memory))
+        trace.set_tracer_provider(own)
+        assert trace.get_tracer_provider() is own
+        with span("lookup", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "lookup"}):
+            pass
+        assert [s.name for s in memory.get_finished_spans()] == ["lookup"]
+    """, provider="")
+    assert [r["name"] for r in records] == ["startup", "lookup"]
+
+
 @pytest.mark.parametrize("native_worker", ["", "Writer worker"])
 def test_a_span_line_lends_its_agent_to_another_tracer_s_line_for_the_same_call(native_worker: str) -> None:
     native = Call(name="publish_note", arguments={}, result=None, ok=True, worker_label=native_worker, at=2.0)

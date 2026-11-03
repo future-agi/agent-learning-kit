@@ -778,6 +778,7 @@ _INSTRUMENTORS = {
     "strands": ("traceai_strands", "StrandsInstrumentor"),
 }
 
+@functools.lru_cache(maxsize=1)
 def _sandbox_provider():
     """A provider for a process that set none, exporting where the sandbox names, as the
     process's own would, so the platform sees the same spans either way."""
@@ -796,18 +797,20 @@ def _sandbox_provider():
 
 
 def _patch_proxy(module) -> None:
-    """Give a span requested before any provider is set ours, so the process keeps every
-    chance to set its own first and a framework's own tracing is never lost to the no-op one."""
+    """Serve a span requested before any provider is set from ours, without taking the global
+    slot, so a framework's own tracing is never lost to the no-op one and the process can still
+    set its own provider later."""
     cls = module.ProxyTracer
     for method in ("start_span", "start_as_current_span"):
         original = getattr(cls, method)
         if getattr(original, _PATCHED, False):
             continue
 
-        def wrapper(self, *args, __original=original, **kwargs):
+        def wrapper(self, *args, __original=original, __method=method, **kwargs):
             try:
                 if getattr(module, "_TRACER_PROVIDER", None) is None:
-                    module.set_tracer_provider(_sandbox_provider())
+                    tracer = _sandbox_provider().get_tracer(self._instrumenting_module_name)
+                    return getattr(tracer, __method)(*args, **kwargs)
             except Exception:
                 pass
             return __original(self, *args, **kwargs)
