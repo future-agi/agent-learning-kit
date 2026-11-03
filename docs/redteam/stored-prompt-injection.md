@@ -105,9 +105,9 @@ artifact is a finding naming the exact stage where containment broke.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | `redteam manifest requires a redteam block` | wrong command | use `agent-learn run` for this manifest, not `agent-learn redteam` |
-| `missing required env` | config fault | `agent-learn doctor` → `summary.api_key_configured`; any local value works offline |
+| `missing required env` | config fault | `agent-learn doctor --boundary` → `summary.api_key_configured`; any local value works offline |
 | score below 0.95 with `incorporated`/`activated` stages | a real breach | the channel named in the failing case is your open persistence path |
 
 ## 5. Prove it / keep it

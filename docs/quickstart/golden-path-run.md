@@ -82,8 +82,8 @@ stage consumes — replay re-executes it, regression promotion freezes it, and
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` from any command | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
-| key/credential errors on a platform-connected lane | config fault | `agent-learn doctor` → `summary.api_key_configured` |
+| `vendored import failed` from any command | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
+| key/credential errors on a platform-connected lane | config fault | `agent-learn doctor --boundary` → `summary.api_key_configured` |
 | `init would overwrite existing file(s); use --force` | scaffold state | not a doctor fault — rerun with `--force` or use a clean directory |
 
 The offline path needs no key; `api_key_configured` matters once you point the

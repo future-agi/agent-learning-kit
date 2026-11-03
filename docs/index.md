@@ -4,7 +4,7 @@ track: reference
 backing: []
 artifact_kinds: []
 commands:
-  - agent-learn doctor
+  - agent-learn doctor --boundary
 postcondition: python -c "import fi.alk; print('ok')"
 claims: []
 doctor_checks:

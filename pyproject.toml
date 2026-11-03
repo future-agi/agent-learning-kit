@@ -43,6 +43,8 @@ dependencies = [
   "sqlalchemy[asyncio]>=2.0,<3",
   "httpx>=0.24.0",
   "jsonschema>=4.25.1,<5",
+  # The CLI's platform credentials live in the OS keychain where one exists.
+  "keyring>=25.0",
   "levenshtein>=0.25.0",
   "litellm>=1.80.0,<2",
   "nltk>=3.9.0",
@@ -201,6 +203,7 @@ markers = [
   "live_a2a: real A2A peer lane (AGENT_LEARNING_LIVE_A2A=1)",
   "live_credentialed: rungs that need real provider credentials (AGENT_LEARNING_LIVE_CREDENTIALED=1 AND creds present)",
   "integration: exercises the real simulation engine end-to-end (credential-free; slower than unit tests)",
+  "live_platform: agent-learn and the SDK against a running FutureAGI platform (AGENT_LEARNING_LIVE_PLATFORM=1 + FI_E2E_BASE_URL, FI_E2E_API_KEY, FI_E2E_SECRET_KEY)",
 ]
 
 [tool.bandit]

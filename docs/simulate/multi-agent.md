@@ -95,7 +95,7 @@ framework trace evidence the evaluator scored.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | adapter target / manifest rejected | config fault | `summary.public_boundary_passed` + the manifest error line |
 | run passes but coordination score is low | transcript lacks review/reconciliation messages | read the typed messages in the artifact's case record |
 

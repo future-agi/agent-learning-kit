@@ -81,9 +81,9 @@ release gate re-executes.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` -> `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` -> `summary.missing_engine_modules` |
 | probe `status` is `failed` (method did not resolve) | behavior regression | confirm `chat`/`dict` against the current DeepSeek SDK; if drifted, add a `V1_FRAMEWORK_PRESET_CORRECTIONS` row and fix the preset |
-| public-boundary mismatch | config fault | `agent-learn doctor` -> `summary.public_boundary_passed` |
+| public-boundary mismatch | config fault | `agent-learn doctor --boundary` -> `summary.public_boundary_passed` |
 
 ## 5. Prove it / keep it
 

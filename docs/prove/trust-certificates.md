@@ -105,7 +105,7 @@ optimization artifact carries its proof block plus summary counts
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | `suite_trust_certificate_missing` finding | wrong input artifact | point `trust` at a suite artifact, not a child result |
 | `verdict_too_low` (`conditional` observed) | evidence gap in the suite run | read `trust_certificate.conditions` in the suite artifact, fix the named job |
 | `missing required environment variable(s)` | config fault | export the manifest's `required_env` keys with placeholder values |

@@ -95,10 +95,10 @@ escalation is legible cell by cell.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | `Set AGENT_LEARNING_SDK_REDTEAM_ADAPTIVE_LOOP_KEY ...` | config fault | export the env var; any local value works offline |
 | `optimization_passed: false` | real gap | no candidate covered the required attack/surface expansion |
-| campaign proof checks failing | evidence fault | `agent-learn doctor` → `summary.public_boundary_passed`, then the `redteam_campaign_proof_*` counts |
+| campaign proof checks failing | evidence fault | `agent-learn doctor --boundary` → `summary.public_boundary_passed`, then the `redteam_campaign_proof_*` counts |
 
 ## 5. Prove it / keep it
 

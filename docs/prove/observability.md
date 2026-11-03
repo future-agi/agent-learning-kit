@@ -104,7 +104,7 @@ recorded sessions.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | `missing required environment variable(s)` | config fault | export the manifest's `required_env` key with any placeholder value |
 | manifest rejected | manifest fault | `summary.public_boundary_passed` + the manifest error line |
 | report has empty sections | source artifact lacks evidence | inspect the optimization artifact's evidence blocks before re-rendering |

@@ -93,7 +93,7 @@ constructed overclaim negatives the gate must catch.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | `cua_fixture_missing` | config fault | a committed JSON fixture path is missing/unreadable |
 | `cua_fidelity_overclaim` in the gate | overclaim | a deterministic fixture stamped `evidence_class: live_lane` |
 | public boundary error | config fault | `summary.public_boundary_passed` |

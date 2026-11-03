@@ -91,9 +91,9 @@ promote in [promote-to-regression](promote-to-regression.md).
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | `redteam manifest requires a redteam block` | config fault | the manifest is a plain run manifest — use `agent-learn run`, or add the `redteam` block |
-| `missing required env` | config fault | `agent-learn doctor` → `summary.api_key_configured`; offline, any local value satisfies it |
+| `missing required env` | config fault | `agent-learn doctor --boundary` → `summary.api_key_configured`; offline, any local value satisfies it |
 | status `failed` with findings | the gate working | read `summary.redteam` finding counts before blaming the harness |
 
 ## 5. Prove it / keep it

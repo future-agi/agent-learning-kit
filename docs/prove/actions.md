@@ -107,7 +107,7 @@ outputs and whether they exist, and the exit code — dry-run or real.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | action id not found | catalog mismatch | rerun `agent-learn actions` and copy an id from `summary.action_ids` |
 | `missing required environment variable(s)` | config fault | export the manifest's `required_env` key with any placeholder value |
 | action-run outputs marked `exists: false` | wrong working directory | set `--cwd` so the action's relative outputs land where you expect |

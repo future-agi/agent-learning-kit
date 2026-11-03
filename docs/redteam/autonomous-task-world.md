@@ -99,8 +99,8 @@ informally.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
-| manifest rejected at load | config fault | `agent-learn doctor` → `summary.public_boundary_passed`, then the manifest error line |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
+| manifest rejected at load | config fault | `agent-learn doctor --boundary` → `summary.public_boundary_passed`, then the manifest error line |
 | candidate completes task but fails evaluation | a real breach | check the hostile-resistance metrics — the canary was likely touched |
 | `optimization_passed: false` with no transition progress | world fault | preconditions never satisfied — inspect the world transition definitions |
 

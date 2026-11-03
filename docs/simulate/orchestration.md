@@ -90,7 +90,7 @@ and what did each hop cost" from the artifact alone.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | adapter target / manifest rejected | config fault | `summary.public_boundary_passed` + the manifest error line |
 | run passes but orchestration score is low | steps missing routing/recovery evidence | inspect `orchestration_steps` in the artifact's case record |
 

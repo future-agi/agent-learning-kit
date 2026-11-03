@@ -79,14 +79,14 @@ by the release gate; the remainder come from the public command registry.
 | `agent-learning.attack-evolution-shrink.v1` | — | `agent-learn shrink` — minimized counterexample from an evolved attack |
 | `agent-learning.replay.v1` | — | `agent-learn replay` — deterministic re-execution verdict for a kept artifact |
 | `agent-learning.report.v1` | — | `agent-learn report` — rendered report over saved artifacts |
-| `agent-learning.doctor.v1` | — | `agent-learn doctor` — environment and module diagnostics |
+| `agent-learning.doctor.v1` | — | `agent-learn doctor --boundary` — environment and module diagnostics |
 | `agent-learning.release-check.v1` | — | `agent-learn release-check` — the full local gate matrix verdict |
 
 ## 4. When it fails
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `kind` holds an `agent-simulate.*` value | engine — artifact written without `_schema` normalization | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `kind` holds an `agent-simulate.*` value | engine — artifact written without `_schema` normalization | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | `KeyError: 'kind'` reading an artifact | config fault — file is not an agent-learn artifact (or pre-v1) | re-emit with the current CLI; check the `--output` path |
 | docs gate rejects a page's `artifact_kinds` | config fault — value outside the closed kind set | compare against the table above (the gate payload mirrors it) |
 

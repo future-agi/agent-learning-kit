@@ -94,7 +94,7 @@ pass/fail verdict against your threshold.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | suite rejected before any test runs | config fault | the `agent-learn eval` error line names the bad field |
 | score 0.0 with all criteria missing | evidence fault | your transcript lacks the messages/tool_calls the config expects |
 

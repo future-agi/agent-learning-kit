@@ -71,7 +71,7 @@ keys. The whole thing is local-first under `.agent-learning/library/`.
 
 ## 4. When it fails
 
-`agent-learn doctor` reports `missing_engine_modules` when the simulation engine
+`agent-learn doctor --boundary` reports `missing_engine_modules` when the simulation engine
 is not importable, and `api_key_configured` for the keyed pull lane (not needed
 for this page — everything here is local). A persona that declares a behavior
 axis without its realization metric is refused by `validate_persona`; a

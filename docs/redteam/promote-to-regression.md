@@ -97,7 +97,7 @@ edits to a test.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | no findings promoted from a green artifact | expected | promotion consumes failures; a passing run has nothing to pin |
 | `promote-to-regression requires --max-findings greater than 0` | config fault | raise `--max-findings`, or tighten `--min-level` instead |
 | promoted manifest fails immediately on replay | the gate working | the regression caught drift — fix the agent, not the manifest |

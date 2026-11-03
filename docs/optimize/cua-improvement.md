@@ -103,7 +103,7 @@ and the CUA-sublayer attribution per weak cell (`perception` / `grounding` /
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | `cua_loss_guard_missing` | config fault | a judge-only / single-term / missing-anchor CUA objective |
 | `objective_guards_missing` | config fault | a declared loss with no Goodhart guards |
 | public boundary error | config fault | `summary.public_boundary_passed` |

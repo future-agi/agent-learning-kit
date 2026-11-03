@@ -101,7 +101,7 @@ attribution per weak cell (`preprocessing` / `perception` / `reasoning` /
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | `image_loss_guard_missing` | config fault | a judge-only / single-term image objective |
 | `objective_guards_missing` | config fault | a declared loss with no Goodhart guards |
 | public boundary error | config fault | `summary.public_boundary_passed` |

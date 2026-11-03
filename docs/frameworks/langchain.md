@@ -87,8 +87,8 @@ line: the same file feeds `baseline`, `compare`, and `replay`.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
-| `missing required environment variable(s)` | config fault | set the placeholder key shown above; `agent-learn doctor` → `summary.public_boundary_passed` confirms the install surface |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
+| `missing required environment variable(s)` | config fault | set the placeholder key shown above; `agent-learn doctor --boundary` → `summary.public_boundary_passed` confirms the install surface |
 | transcript shows the weak `run(text)` path (no tool calls, no trace) | behavior regression | re-run the twin promotion and compare `invoke` evidence against the `run` fallback |
 
 ## 5. Prove it / keep it

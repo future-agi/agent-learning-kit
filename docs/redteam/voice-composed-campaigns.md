@@ -103,7 +103,7 @@ asking for rung-2 acoustic operators today refuses structured-loud with
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | `voice_rung_unavailable` | expected refusal | run the transcript_level form; the acoustic rung is Phase-9A |
 | `voice_target_authorization_missing` | config fault | add `target.authorization` for a non-local target |
 | `lift: null` + `composed_budget_mismatch` | real gap | an arm did not complete its declared budget |

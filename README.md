@@ -102,7 +102,7 @@ Everything below runs fully offline — no API key, no network. Start with the
 local doctor:
 
 ```bash
-agent-learn doctor
+agent-learn doctor --boundary
 ```
 
 Then run the golden path against the bundled example manifests. The

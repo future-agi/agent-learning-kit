@@ -102,7 +102,7 @@ won at the optimized path.
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `vendored import failed` | infra | `agent-learn doctor` → `summary.missing_engine_modules` |
+| `vendored import failed` | infra | `agent-learn doctor --boundary` → `summary.missing_engine_modules` |
 | `Set AGENT_LEARNING_SDK_MEMORY_TARGET_OPTIMIZATION_KEY...` | missing placeholder env | `summary.api_key_configured` |
 | required operation never observed | memory wiring fault | inspect the probe proof block per case |
 

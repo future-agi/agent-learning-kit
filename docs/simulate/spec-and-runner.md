@@ -43,7 +43,7 @@ that spine directly, so the moving parts are visible.
 git clone https://github.com/future-agi/agent-learning-kit
 cd agent-learning-kit
 uv sync                     # or: pip install -e .
-uv run agent-learn doctor   # status: passed
+uv run agent-learn doctor --boundary   # status: passed
 ```
 
 ## 2. Run the smallest simulation

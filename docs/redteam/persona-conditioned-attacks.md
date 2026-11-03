@@ -65,7 +65,7 @@ readiness certification gate.
 
 ## 4. When it fails
 
-`agent-learn doctor` reports `missing_engine_modules` when the engine is not
+`agent-learn doctor --boundary` reports `missing_engine_modules` when the engine is not
 importable and `api_key_configured` for the keyed lane. A persona whose
 `attack.strategies` or `attack.surfaces` fall outside the 10×6 taxonomy are
 refused by `validate_persona`; an adversarial scenario without its attack_type,

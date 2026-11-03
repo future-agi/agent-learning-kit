@@ -103,7 +103,7 @@ reports `passed_profile_count` and `failed_profiles` — an empty
 
 | Symptom | First-mile class | Doctor check |
 | --- | --- | --- |
-| `Set AGENT_LEARNING_SDK_WORKFLOW_TARGET_PROFILE_MATRIX_KEY...` | missing placeholder env | `agent-learn doctor` → `summary.api_key_configured` |
+| `Set AGENT_LEARNING_SDK_WORKFLOW_TARGET_PROFILE_MATRIX_KEY...` | missing placeholder env | `agent-learn doctor --boundary` → `summary.api_key_configured` |
 | `vendored import failed` | infra | `summary.missing_engine_modules` |
 | one profile in `failed_profiles` | framework-specific trace fault | open that profile's summary; compare its export type counts |
 

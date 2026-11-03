@@ -65,7 +65,7 @@ pass/fail tallies while the report still surfaces an inconclusive count.
 
 ## 4. When it fails
 
-`agent-learn doctor` reports `missing_engine_modules` when the engine is not
+`agent-learn doctor --boundary` reports `missing_engine_modules` when the engine is not
 importable and `api_key_configured` for the keyed lane. An untyped/legacy
 persona produces no fidelity record at all — it runs fine but cannot back a
 release claim. A typed persona with an empty or garbled trajectory is verdict
