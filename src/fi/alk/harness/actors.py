@@ -8,22 +8,18 @@ every action enters the world, never in a prompt.
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+# One switch for every actor, on the caller's side or in the world.
+from .sub_actor import sub_actors_enabled as actors_enabled  # noqa: F401
+
 ACTORS_FILE = "actors.json"
 ACTORS_SCHEMA = "futureagi.actors.v1"
 # The agent under test in the action log; no actor may take its id.
 AGENT = "agent"
-# Same switch as the caller-side sub-actors: off, no actor acts.
-SWITCH = "HARNESS_SUB_ACTORS"
-
-
-def actors_enabled() -> bool:
-    return os.environ.get(SWITCH, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 class Constraints(BaseModel):
