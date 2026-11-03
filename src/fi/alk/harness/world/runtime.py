@@ -186,6 +186,17 @@ def runtime_ids(record: dict[str, Any]) -> dict[str, str]:
     return {key: str(record[key]) for key in _RUNTIME_ID_FIELDS if record.get(key)}
 
 
+def graded_calls(calls: Sequence[Call]) -> list[Call]:
+    """The calls checks grade: a job's hand-off, written beside the call that launched it under the same name, is
+    kept in the sealed trace but is that call's work, not a second call."""
+    plain = {call.name for call in calls if not call.delegated_to}
+    return [
+        call
+        for call in calls
+        if not (call.delegated_to and call.runtime_ids.get("parent_event_id") and call.name in plain)
+    ]
+
+
 def trace_row(call: Call) -> dict[str, Any]:
     """One call as the sealed tool trace keeps it, with who in the agent made it when the runtime said."""
     return {

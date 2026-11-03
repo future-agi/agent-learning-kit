@@ -422,3 +422,14 @@ def test_an_autogen_tool_call_is_written_with_its_arguments_and_result_beside_it
         ("look_up_tide", {"place": "Kochi"}, "high at 06:10", False),
         ("read_note", {"note": "n1"}, "no such note", True),
     ]
+
+
+def test_checks_grade_a_launch_once_and_a_hand_off_made_by_a_tool_call() -> None:
+    from fi.alk.harness.world.runtime import graded_calls
+
+    launch = Call(name="start_async_task", arguments={}, result=None, ok=True, at=1.0)
+    job = Call(name="start_async_task", arguments={}, result=None, ok=True, at=1.5, delegated_to="coder",
+               runtime_ids={"event_id": "j1", "parent_event_id": "l1"})
+    task = Call(name="task", arguments={}, result=None, ok=True, at=2.0, delegated_to="researcher",
+                runtime_ids={"event_id": "t1", "parent_event_id": "a1"})
+    assert graded_calls([launch, job, task]) == [launch, task]
