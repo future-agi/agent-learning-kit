@@ -915,11 +915,12 @@ def _merge_span_calls(calls: list[Call], from_spans: list[Call]) -> tuple[Call, 
 
     Span lines name the agent that made each call; another tracer of the same process reports
     the same calls, often without the agent. A span line lends its agent, hand-off and times to the
-    first unpaired call of the same tool and outcome, in order, and is then dropped; one with no
+    first unpaired call of the same tool, preferring one of the same outcome (a refusal can read as
+    a failure to one tracer and a returned value to the other), and is then dropped; one with no
     such call stays.
     """
     # A background job is written when it starts and again when it ends; the later line carries its return.
-    ended = {span.runtime_ids.get("event_id") for span in from_spans if span.delegated_to and span.ended_at}
+    ended = {span.runtime_ids.get("event_id") for span in from_spans if span.delegated_to and span.ended_at} - {None}
     from_spans = [
         span
         for span in from_spans
@@ -936,7 +937,8 @@ def _merge_span_calls(calls: list[Call], from_spans: list[Call]) -> tuple[Call, 
             # A job's hand-off sits under the call that launched it and is not that call again.
             merged.append(span)
             continue
-        other = next((c for c in unpaired if _tool_key(c.name) == _tool_key(span.name) and c.ok == span.ok), None)
+        same_tool = [c for c in unpaired if _tool_key(c.name) == _tool_key(span.name)]
+        other = next((c for c in same_tool if c.ok == span.ok), same_tool[0] if same_tool else None)
         if other is None:
             merged.append(span)
             continue

@@ -301,6 +301,21 @@ def test_a_span_line_lends_its_agent_to_another_tracer_s_line_for_the_same_call(
     ]
 
 
+def test_a_refusal_read_differently_by_the_two_tracers_is_still_one_call() -> None:
+    native = Call(name="issue_refund", arguments={}, result="refused", ok=False, at=2.0)
+    span_line = Call(name="issue_refund", arguments={}, result="refused", ok=True, worker_label="Refunds", at=2.0)
+    merged = call_runner._merge_span_calls([native], [span_line])
+    assert [(c.name, c.worker_label) for c in merged] == [("issue_refund", "Refunds")]
+
+
+def test_a_running_job_without_an_event_id_is_kept_beside_a_finished_one() -> None:
+    def job(name, **fields):
+        return Call(name="start_async_task", arguments={}, result=None, ok=True, delegated_to=name, **fields)
+
+    merged = call_runner._merge_span_calls([], [job("coder", at=1.0), job("researcher", at=2.0, ended_at=5.0)])
+    assert [c.delegated_to for c in merged] == ["coder", "researcher"]
+
+
 def test_span_lines_alone_read_in_the_order_the_calls_started() -> None:
     late_end = Call(name="ask_research", arguments={}, result=None, ok=True, at=1.0)
     inner = Call(name="search_notes", arguments={}, result=None, ok=True, at=1.5)
