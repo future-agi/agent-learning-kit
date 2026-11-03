@@ -4083,7 +4083,17 @@ def _carry_contract(
             **metadata["provider_import"],
             "environment_tools": _environment_tools(body),
         }
-    if str(body.get("modality") or "").strip().lower() == "chat":
+    runtime = body.get("runtime") or {}
+    interface = runtime.get("interface") or {}
+    traced_command = (
+        isinstance(interface, dict)
+        and str(interface.get("kind") or "").strip().lower() == "command"
+        and _uses_source_tool_trace(processes)
+    )
+    if (
+        str(body.get("modality") or "").strip().lower() == "chat"
+        and not traced_command
+    ):
         bindings = _source_tool_trace_bindings(body)
         processes = list(
             _with_source_tool_trace(

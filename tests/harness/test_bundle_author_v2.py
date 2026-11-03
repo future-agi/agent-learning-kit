@@ -214,6 +214,57 @@ def test_reseal_compiles_tools_added_to_a_traced_command_agent(tmp_path: Path) -
     assert "contract_copied" not in resealed.metadata
 
 
+def test_reseal_preserves_construct_only_crewai_command_trace(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ready')\n")
+    (source / "agent_tools.py").write_text(
+        "class Editor:\n"
+        "    def update(self, value): return value\n"
+    )
+    (source / "requirements.txt").write_text("crewai==1.6.1\n")
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring, command=["python", "agent.py"],
+        interface={"kind": "command", "protocol": "fi.alk"},
+    )
+    contract_path = authoring / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract["tool_entrypoints"] = [{
+        "tool": "editor", "mode": "construct", "module": "agent_tools",
+        "callable": "Editor.update",
+    }]
+    contract_path.write_text(json.dumps(contract))
+    bundle_path = authoring / "environment-bundle"
+    built = author_bundle_v2(
+        source=source, job=_job(connector="auto"), authoring=authoring,
+        output=bundle_path,
+    )
+    original = next(
+        process for process in built.processes
+        if process.name == built.runtime.control_service
+    ).environment
+
+    contract["one_liner"] = "edited after the build"
+    contract_path.write_text(json.dumps(contract))
+    reseal_scenarios(authoring)
+
+    resealed = load_bundle_v2(bundle_path)
+    process = next(
+        item for item in resealed.processes
+        if item.name == resealed.runtime.control_service
+    )
+    assert process.environment == original
+    assert process.environment["HARNESS_TOOL_TRACE"] == (
+        "{{WORLD_DIR}}/agent-tool-calls.jsonl"
+    )
+    assert process.environment["ALK_CREWAI_TOOL_TRACE"] == "1"
+    assert json.loads(process.environment["ALK_TOOL_TRACE_BINDINGS"]) == [{
+        "name": "editor", "module": "agent_tools", "callable": "Editor.update",
+    }]
+    assert resealed.metadata["source_tool_trace_version"] == 1
+
+
 def _job(
     *,
     connector: str,
