@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any, Callable
 
@@ -115,6 +116,8 @@ def entry_problems(actor: SubActor, *, modality: str) -> list[str]:
     problems = []
     if not actor.id.strip() or not actor.name.strip() or not actor.role.strip():
         problems.append("a sub-actor needs an id, a name and a role")
+    elif not re.fullmatch(r"[a-z0-9_]{1,64}", actor.id):
+        problems.append(f"id {actor.id!r} must be 1 to 64 lowercase letters, digits or underscores")
     channel = CHANNELS.get(actor.channel)
     if channel is None:
         problems.append(f"channel {actor.channel!r} is not one of {sorted(CHANNELS)}")

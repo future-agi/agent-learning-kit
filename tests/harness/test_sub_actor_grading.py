@@ -94,7 +94,7 @@ def test_the_judge_reads_a_sub_actor_s_turn_as_someone_other_than_the_customer()
         {"role": "sub_actor", "name": "Rowan", "content": "Make it two"},
         {"role": "assistant", "content": "One item, done."},
     ]
-    assert "Rowan (not the customer): Make it two" in _transcript(messages)
+    assert "Rowan (not the person being served): Make it two" in _transcript(messages)
     said = describe_call("", SimpleNamespace(), [], None, messages)
     assert (
         "Also heard during the call: Rowan. They are not the person being served"
