@@ -797,6 +797,9 @@ yourself first. If an honest answer is the wrong one, fix the scenario before `s
 23. Would an agent that follows its rules to the letter pass every named sub-goal? If a rule says to
     act at once on what this caller says, does the solution start with that act, with no
     verification or lookup before it?
+24. With a sub-actor: does their instruction name a moment, event or turn? The trigger alone decides when.
+25. With a sub-actor: does their instruction ask for, set a condition on, confirm or decide the person's
+    request? They may only voice a concern of their own.
 
 ## The three gates
 
