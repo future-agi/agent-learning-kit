@@ -255,7 +255,7 @@ ACYCLIC = ["parent"]
 def actor_rules() -> dict[str, Any]:
     """Everything this release decides about actors, sealed into each bundle so the platform reads the rules of the
     release that built it instead of keeping its own copy."""
-    from fi.simulate.simulation.sub_actors import CHANNELS, DETAILS_MARK
+    from fi.simulate.simulation.sub_actors import CHANNELS, DETAILS_MARK, LOUDNESS_RANGE
 
     from .sub_actor import SubActor
 
@@ -270,6 +270,14 @@ def actor_rules() -> dict[str, Any]:
         "references": REFERENCES,
         "acyclic": ACYCLIC,
         "world_actions": WORLD_ACTIONS,
+        # A background voice's level as a share of the caller's: which channels have one, and the range a call draws
+        # from when none is set.
+        "loudness": {
+            "channels": ["audio_mix"],
+            "automatic": [round(LOUDNESS_RANGE[0], 3), round(LOUDNESS_RANGE[1], 3)],
+        },
+        # Fields of a sub-actor that may never equal the caller's in a scenario that includes it.
+        "distinct_from_caller": ["name"],
         # The call channels a sub-actor can speak on, each with what it does.
         "channels": {
             name: str(one.get("about") or "") for name, one in CHANNELS.items()

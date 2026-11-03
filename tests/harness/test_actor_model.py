@@ -84,6 +84,9 @@ def test_a_sealed_bundle_carries_the_rules_its_release_checks_actors_by(tmp_path
     # How the world names an action and which call channels exist travel with the rules too.
     assert declared["world_actions"]["route"] == "endpoint"
     assert set(declared["channels"]) == {"audio_mix", "audio_handoff", "ivr"}
+    # A background voice left unset draws from this range; a sub-actor never shares the caller's name.
+    assert declared["loudness"] == {"channels": ["audio_mix"], "automatic": [0.333, 0.667]}
+    assert declared["distinct_from_caller"] == ["name"]
     # A rule a person can break is described in plain words for the message that refuses it.
     assert (
         actor["properties"]["id"]["description"]
