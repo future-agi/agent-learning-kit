@@ -511,7 +511,8 @@ class _ToolSpans:
         context = span.get_span_context()
         parent = getattr(span, "parent", None)
         if len(self._live) >= _LIVE_SPANS_MAX:
-            return
+            # A span that never ended (a dropped generator, a long-lived server) gives way to new ones.
+            self._live.pop(next(iter(self._live)))
         self._live[context.span_id] = (span, parent.span_id if parent is not None else None)
         if parent is None and _kind(span) != "TOOL":
             try:

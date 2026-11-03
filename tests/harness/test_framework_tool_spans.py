@@ -442,3 +442,20 @@ def test_a_job_joins_the_launch_that_named_its_whole_id() -> None:
     assert _names("job a1b2-c3 started", "a1b2-c3")
     assert not _names('{"task_id": "17"}', "1")
     assert not _names("thread_1x", "1")
+
+
+def test_spans_that_never_end_do_not_stop_observation(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from fi.alk.harness import simulation_mark_bootstrap as bootstrap
+
+    monkeypatch.setattr(bootstrap, "_LIVE_SPANS_MAX", 2)
+    observer = bootstrap._ToolSpans("/dev/null")
+
+    def span(span_id):
+        return SimpleNamespace(get_span_context=lambda: SimpleNamespace(span_id=span_id), parent=SimpleNamespace(span_id=0),
+                               attributes={}, name="s", end=lambda: None)
+
+    for span_id in (1, 2, 3):
+        observer.started(span(span_id))
+    assert list(observer._live) == [2, 3]
