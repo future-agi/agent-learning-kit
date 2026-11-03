@@ -4383,6 +4383,20 @@ def test_a_sub_goal_settled_by_both_fails_when_either_fails(monkeypatch) -> None
     assert receipt.status == "failed"
 
 
+def test_a_failed_check_is_not_explained_by_a_not_applicable_judge(monkeypatch) -> None:
+    async def _all(goals, world, calls, *, messages=()):
+        return {"saved_feedback": (True, "Not applicable: the caller never asked for it")}
+
+    goals = [
+        FakeSubGoal(
+            "saved_feedback", lambda w, c: "no feedback row", judged="judge", both=True
+        )
+    ]
+    receipt, _ = _two_judged(monkeypatch, _all, goals=goals)
+    result = receipt.sub_goals[0]
+    assert (result.held, result.reason, result.verdict) == (False, "no feedback row", "fail")
+
+
 def test_a_sub_goal_settled_by_both_takes_the_judge_when_the_check_holds(
     monkeypatch,
 ) -> None:
