@@ -148,6 +148,37 @@ def test_an_http_python_agent_is_observed_through_its_framework_spans(tmp_path: 
     assert control.build_commands[-1] == framework_instrumentation_command()
 
 
+@pytest.mark.parametrize(
+    ("command", "project"),
+    [
+        (["uv", "run", "--project", "graphs/python", "--with", "langgraph-cli[inmem]", "langgraph", "dev"], "graphs/python"),
+        (["uv", "run", "--project=app", "python", "main.py"], "app"),
+        (["uv", "run", "python", "agent.py"], ""),
+        (["python", "agent.py"], ""),
+    ],
+)
+def test_framework_instrumentors_go_where_a_uv_run_project_s_frameworks_are(
+    tmp_path: Path, command: list[str], project: str
+) -> None:
+    from fi.alk.harness.generated_runtime import uv_run_project
+
+    assert uv_run_project(command) == project
+    (tmp_path / "agent.py").write_text("print('ready')\n")
+    runtime = {"language": "python", "execution": "native", "command": command}
+    plan = resolve_environment_plan(
+        tmp_path, _job(connector="auto"), contract_runtime=runtime,
+        tool_entrypoints=[], contract_interface_kind="http", contract_modality="chat",
+    )
+    control = next(p for p in plan.processes if p.name == plan.control_service)
+    step = control.build_commands[-1]
+    assert step == framework_instrumentation_command(project)
+    if project:
+        assert step[2].startswith(f"uv sync --project {project} || true; ")
+        assert f"{project}/.venv/bin/python" in step[2]
+    else:
+        assert "uv sync" not in step[2] and "p=.venv/bin/python" in step[2]
+
+
 def test_bundle_author_carries_command_tool_trace_bindings(tmp_path: Path) -> None:
     source = tmp_path / "source"
     source.mkdir()

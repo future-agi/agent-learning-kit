@@ -62,6 +62,7 @@ from .contract import DataStore, Runtime, ToolEntry, runtime_public_environment
 from .generated_runtime import (
     GeneratedRuntimeError,
     framework_instrumentation_command,
+    uv_run_project,
     _python_language_version,
     select_python_extras,
     python_workspace_root,
@@ -3055,7 +3056,10 @@ def resolve_environment_plan(
             processes = [
                 process.model_copy(update={
                     "environment": {**process.environment, **trace_environment},
-                    "build_commands": [*process.build_commands, framework_instrumentation_command()],
+                    "build_commands": [
+                        *process.build_commands,
+                        framework_instrumentation_command(uv_run_project(process.run_command)),
+                    ],
                 })
                 if isinstance(process, SourceProcess) and process.name == control_name
                 else process

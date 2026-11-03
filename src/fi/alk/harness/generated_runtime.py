@@ -16,6 +16,7 @@ import shutil
 import stat
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from collections.abc import Sequence
 from typing import Any
 
 from packaging.utils import canonicalize_name
@@ -688,7 +689,20 @@ FRAMEWORK_INSTRUMENTORS = (
 )
 
 
-def framework_instrumentation_command() -> list[str]:
+def uv_run_project(command: Sequence[str] | None) -> str:
+    """The project a `uv run --project <dir>` command runs in, or "" for any other command."""
+    parts = list(command or [])
+    if parts[:2] != ["uv", "run"]:
+        return ""
+    for index, part in enumerate(parts):
+        if part == "--project" and index + 1 < len(parts):
+            return parts[index + 1]
+        if part.startswith("--project="):
+            return part.split("=", 1)[1]
+    return ""
+
+
+def framework_instrumentation_command(project: str = "") -> list[str]:
     """Install the instrumentor of each agent framework the built environment holds.
 
     Runs after the source's own install, in its interpreter, with every installed version pinned,
@@ -707,10 +721,14 @@ def framework_instrumentation_command() -> list[str]:
         "    r = subprocess.run([*pip, '--constraint', f.name, t])\n"
         "    if r.returncode: print('framework instrumentor not installed: ' + t, file=sys.stderr)\n"
     )
+    # A `uv run --project <dir>` agent runs in <dir>'s own environment, which `uv run` creates at start: create it now so
+    # the instrumentors land where the frameworks are; `uv run` keeps packages its lock does not name.
+    venv = f"{project.rstrip('/')}/.venv" if project else ".venv"
+    sync = f"uv sync --project {shlex.quote(project)} || true; " if project else ""
     return [
         "sh",
         "-c",
-        'if [ -x .venv/bin/python ]; then p=.venv/bin/python; else p=python3; fi; "$p" -c "$0" || true',
+        sync + f'if [ -x {venv}/bin/python ]; then p={venv}/bin/python; else p=python3; fi; "$p" -c "$0" || true',
         script,
     ]
 
