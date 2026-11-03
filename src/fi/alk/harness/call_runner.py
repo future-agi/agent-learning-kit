@@ -918,12 +918,24 @@ def _merge_span_calls(calls: list[Call], from_spans: list[Call]) -> tuple[Call, 
     first unpaired call of the same tool and outcome, in order, and is then dropped; one with no
     such call stays.
     """
+    # A background job is written when it starts and again when it ends; the later line carries its return.
+    ended = {span.runtime_ids.get("event_id") for span in from_spans if span.delegated_to and span.ended_at}
+    from_spans = [
+        span
+        for span in from_spans
+        if not (span.delegated_to and not span.ended_at and span.runtime_ids.get("event_id") in ended)
+    ]
     if not calls:
         # A span is written when it ends, so a hand-off lands after the calls it led to.
         return tuple(sorted(from_spans, key=lambda call: call.at))
+    launched = {span.runtime_ids.get("event_id"): span.name for span in from_spans}
     merged = list(calls)
     unpaired = list(calls)
     for span in from_spans:
+        if span.delegated_to and launched.get(span.runtime_ids.get("parent_event_id")) == span.name:
+            # A job's hand-off sits under the call that launched it and is not that call again.
+            merged.append(span)
+            continue
         other = next((c for c in unpaired if _tool_key(c.name) == _tool_key(span.name) and c.ok == span.ok), None)
         if other is None:
             merged.append(span)

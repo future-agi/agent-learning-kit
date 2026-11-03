@@ -307,6 +307,23 @@ def test_span_lines_alone_read_in_the_order_the_calls_started() -> None:
     assert [c.name for c in call_runner._merge_span_calls([], [inner, late_end])] == ["ask_research", "search_notes"]
 
 
+def test_a_job_hand_off_stays_its_own_event_and_is_kept_once() -> None:
+    # The sandbox's tracer and the span both report the launch; the job's hand-off is written when it starts and again
+    # with its return, under the launch, and is never paired with the launch itself.
+    def line(at, **fields):
+        return Call(name="start_async_task", arguments={}, result=None, ok=True, at=at, **fields)
+
+    natives = [line(1.0), line(1.1)]
+    first = line(1.0, runtime_ids={"event_id": "l1"})
+    started = line(1.5, delegated_to="coder", runtime_ids={"event_id": "j1", "parent_event_id": "l1"})
+    returned = line(1.5, delegated_to="coder", ended_at=9.0, runtime_ids={"event_id": "j1", "parent_event_id": "l1"})
+    second = line(1.1, runtime_ids={"event_id": "l2"})
+    merged = call_runner._merge_span_calls(natives, [first, started, returned, second])
+    assert [(c.delegated_to, c.ended_at, c.runtime_ids.get("event_id")) for c in merged] == [
+        ("", 0.0, None), ("", 0.0, None), ("coder", 9.0, "j1"),
+    ]
+
+
 _AGENTS_SDK = {
     "agents/__init__.py": "from agents.tracing import get_trace_provider\n\n"
     "def set_trace_processors(processors):\n    get_trace_provider().set_processors(processors)\n",
