@@ -647,13 +647,14 @@ sub-actor on top; nothing written before changes, and the scenario still stands 
 A coordinate whose level is named for a sub-actor includes that sub-actor in `sub_actors`, with two
 things written for this scenario:
 
-- `instruction`: who they are here and what they do, written to them like a situation text ("You are
-  with <the person>. You want <something other than what they ask for> and say so"). What they do is what their channel does, as the kind file describes
-  it, and what the scenario's level for them names. Give them a part, never the person's goal: the
-  person still pursues it and gives every value the agent asks for. What they say is their own:
-  something they want, know or worry about. They never make, confirm, choose, change or cancel the
-  person's request, and never give a detail the agent must get from the person. Holding the phone does not change this: someone who takes
-  it says only their own part, and the request is still the person's when the phone comes back.
+- `instruction`: who they are here and what they do, written to them in the second person like a
+  situation text: who they are with, and what they want that the person did not ask for. What they do
+  is what their channel does, as the kind file describes it, and what the scenario's level for them
+  names. Give them a part, never the person's goal: the person still pursues it and gives every value
+  the agent asks for. What they say is their own: something they want, know or worry about. They never
+  make, confirm, choose, change or cancel the person's request, and never give a detail the agent must
+  get from the person. Holding the phone does not change this: someone who takes it says only their
+  own part, and the request is still the person's when the phone comes back.
 - `trigger`: when they enter. `always`, `mid_journey` after the agent's turn N, `on_tool` on the Nth call
   of one of the agent's tools that runs in the world, `on_keyword` when one of its words is in the
   agent's latest turn, or `probability` with chance `p`. Pick a moment the conversation reaches before the person could be done: an early

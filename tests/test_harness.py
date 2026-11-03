@@ -9604,6 +9604,14 @@ def test_sub_actor_tools_and_fields_are_offered_only_when_switched_on(
     assert offered() == (True, False, True)
 
 
+def test_a_sub_actor_id_is_one_every_part_of_the_platform_can_address():
+    from fi.alk.harness.sub_actor import SubActor, entry_problems
+
+    assert entry_problems(SubActor.model_validate(_SECOND), modality="voice") == []
+    wrong = entry_problems(SubActor.model_validate({**_SECOND, "id": "Front-Desk"}), modality="voice")
+    assert wrong == ["id 'Front-Desk' must be 1 to 64 lowercase letters, digits or underscores"]
+
+
 def test_check_world_says_when_the_list_of_sub_actors_is_empty(tmp_path, monkeypatch):
     import asyncio
 
@@ -9859,6 +9867,11 @@ def test_world_actors_are_offered_only_when_switched_on_and_kept_in_the_environm
         and kept.behaviour.response_timing.seconds == 5
     )
     assert kept.provenance == {}
+    used = tmp_path / "scenarios" / "one" / "scenario.json"
+    used.parent.mkdir(parents=True, exist_ok=True)
+    used.write_text(json.dumps({"name": "one", "actors": [{"id": "manager"}]}))
+    assert "Not dropped. These scenarios include manager: one" in asyncio.run(call("drop_actor", {"id": "manager"}))
+    used.unlink()
     assert "dropped" in asyncio.run(call("drop_actor", {"id": "manager"}))
     assert load_actors(tmp_path).actors == []
 

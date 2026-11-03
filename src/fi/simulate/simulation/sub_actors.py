@@ -59,7 +59,7 @@ TRIGGERS = tuple(TRIGGER_ABOUT)
 
 def someone_else(name: str) -> str:
     """How a sub-actor's turn is labelled wherever grading reads a conversation."""
-    return f"{name or 'Someone else'} (not the customer)"
+    return f"{name or 'Someone else'} (not the person being served)"
 
 
 def known_to_others(instruction: str) -> str:

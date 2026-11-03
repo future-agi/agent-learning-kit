@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any, Callable
 
@@ -118,6 +119,8 @@ def entry_problems(actor: SubActor, *, modality: str) -> list[str]:
     problems = []
     if not actor.id.strip() or not actor.name.strip() or not actor.role.strip():
         problems.append("a sub-actor needs an id, a name and a role")
+    elif not re.fullmatch(r"[a-z0-9_]{1,64}", actor.id):
+        problems.append(f"id {actor.id!r} must be 1 to 64 lowercase letters, digits or underscores")
     channel = CHANNELS.get(actor.channel)
     if channel is None:
         problems.append(f"channel {actor.channel!r} is not one of {sorted(CHANNELS)}")
@@ -203,8 +206,8 @@ def scenario_problems(
     return ["sub_actors: " + problem for problem in problems]
 
 
-def scenarios_using(destination: Path, sub_actor_id: str) -> list[str]:
-    """The written scenarios that include this sub-actor."""
+def scenarios_using(destination: Path, sub_actor_id: str, listed_in: str = "sub_actors") -> list[str]:
+    """The written scenarios that include this sub-actor, or this world actor when `listed_in` is `actors`."""
     found = []
     for document in sorted((Path(destination) / "scenarios").glob("*/scenario.json")):
         try:
@@ -213,7 +216,7 @@ def scenarios_using(destination: Path, sub_actor_id: str) -> list[str]:
             continue
         if any(
             (one or {}).get("id") == sub_actor_id
-            for one in body.get("sub_actors") or []
+            for one in body.get(listed_in) or []
         ):
             found.append(document.parent.name)
     return found

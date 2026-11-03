@@ -615,9 +615,8 @@ def sub_actor_tools(contract: AgentContract, destination: Path) -> list[Any]:
         "Add or replace someone on the person's side who is not the person, on the environment's "
         "list: someone with them who may speak up or take over for a while, never anyone on "
         "the agent's side. The same person, with the same voice, in every scenario that includes them; "
-        "each scenario writes what they do there. Give `role`: who they are to the person in a few words "
-        "(a friend, a relative, a colleague), never what they do in a call or a part in the person's "
-        "request. Give `persona` "
+        "each scenario writes what they do there. Give `role`: their relationship to the person in a few "
+        "words, never what they do in a call or a part in the person's request. Give `persona` "
         "in the person's fields (the voice is chosen from it) and `channel`: "
         + described(
             {name: CHANNELS[name]["about"] for name in available_channels(modality)}
@@ -743,6 +742,9 @@ def world_actor_tools(destination: Path, contract: AgentContract | None = None) 
             return _err(
                 f"no actor {gone!r}. Listed: {', '.join(one.id for one in kept) or 'none'}"
             )
+        using = scenarios_using(destination, gone, "actors")
+        if using:
+            return _err(f"Not dropped. These scenarios include {gone}: " + ", ".join(using))
         save_actors(destination, ActorList(actors=kept))
         return _ok(f"{gone} dropped")
 

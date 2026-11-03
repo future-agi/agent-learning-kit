@@ -739,8 +739,8 @@ tested, so the run never plays them. Read the contract and add one for each chan
 that this agent's users could have around them.
 
 The list says who each one is: an ordinary, invented name that is never the person's and never a known public
-figure, a `role` (who they are to the
-person: a friend, a relative, a colleague; never someone there to help with the person's request), and a
+figure, a `role` (their relationship to the
+person in a few words; never someone there to help with the person's request), and a
 `persona` in the person's fields, true to who they are in this world, from which their
 voice is chosen. What they do is written by each scenario that includes them, so the list carries no
 script. Never add one for a situation the agent's users would not be in.
