@@ -209,6 +209,16 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
   `notion_action_tracker` (M05). Each builds with
   `python -m fi.alk.environments.<name>.build --out DIR`, through the shared
   `fi.alk.environments.designed`.
+- Wave A regroup (TH-8750, stage 2): the environment is the vertical. `hr_leave_desk`,
+  `retail_returns_desk`, `subscription_billing_desk` and `it_access_desk` become
+  `hr`, `retail`, `saas_subscriptions` and `internal_it`, beside `banking`; the
+  V16 acceptance cases carry their workbook IDs like V01, V13, V15 and V20; each
+  vertical package holds a `README.md` (tools, scenarios, coverage map, known
+  gaps) and `sample_agent.md`; `fi/alk/environments/README.md` is the inventory.
+  `notion_action_tracker` (M05, outside Wave A) is removed. Banking's simulated
+  customer is told they are contacting the bank's support, not the old package
+  name. Content is otherwise unchanged; every package seals on PostgreSQL and
+  rebuilds to the same digests.
 
 ## v1.0.0-rc.1 — 2026-06-10
 
