@@ -9612,6 +9612,31 @@ def test_a_sub_actor_id_is_one_every_part_of_the_platform_can_address():
     assert wrong == ["id 'Front-Desk' must be 1 to 64 lowercase letters, digits or underscores"]
 
 
+def test_a_sub_actor_scenarios_include_keeps_its_channel(tmp_path, monkeypatch):
+    import asyncio
+
+    from fi.alk.harness.sub_actor import load_sub_actors, save_sub_actors
+    from fi.alk.harness.world.tools import world_tools
+
+    _root, contract, _catalogue = _built_environment(tmp_path)
+    contract.modality = "voice"
+    destination = tmp_path / "w"
+    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+    save_sub_actors(destination, _listed(_SECOND))
+    server, _world = world_tools(contract, destination, external_runtime=True)
+    add = {one.name: one.handler for one in server.tools}["add_sub_actor"]
+    used = destination / "scenarios" / "one" / "scenario.json"
+    used.parent.mkdir(parents=True, exist_ok=True)
+    used.write_text(json.dumps({"name": "one", "sub_actors": [{"id": "second"}]}))
+    moved = {**_SECOND, "channel": "audio_mix"}
+    assert "Not changed" in asyncio.run(add(moved))["content"][0]["text"]
+    assert load_sub_actors(destination).get("second").channel == "audio_handoff"
+    assert asyncio.run(add({**_SECOND, "role": "someone close to the person"})).get("is_error") is None
+    used.unlink()
+    asyncio.run(add(moved))
+    assert load_sub_actors(destination).get("second").channel == "audio_mix"
+
+
 def test_check_world_says_when_the_list_of_sub_actors_is_empty(tmp_path, monkeypatch):
     import asyncio
 
