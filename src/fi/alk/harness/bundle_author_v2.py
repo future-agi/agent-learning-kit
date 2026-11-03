@@ -23,7 +23,7 @@ import tempfile
 import tomllib
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 from urllib.parse import urlsplit
 
 import yaml
@@ -2202,6 +2202,7 @@ def resolve_environment_plan(
     contract_interface_kind: str | None = None,
     contract_runtime: dict[str, Any] | None = None,
     runtime_dependencies: list[dict[str, Any]] | None = None,
+    tool_entrypoints: list[dict[str, Any]] | None = None,
 ) -> EnvironmentPlanV2:
     """Resolve packaging once.  Authoring and provisioning consume this same immutable plan."""
     root = Path(source).resolve()
@@ -3038,12 +3039,79 @@ def resolve_environment_plan(
         for process in normalized_processes
     ]
 
+    if (
+        not isinstance(selected, ComposeSelection)
+        and runtime_model.command
+        and contract_interface_kind == "command"
+    ):
+        trace_environment = _source_tool_trace_environment(
+            root, runtime_model, tool_entrypoints or []
+        )
+        if trace_environment:
+            processes = [
+                process.model_copy(update={
+                    "environment": {**process.environment, **trace_environment},
+                })
+                if isinstance(process, SourceProcess) and process.name == control_name
+                else process
+                for process in processes
+            ]
+
     return EnvironmentPlanV2(
         packaging=packaging,
         control_service=control_name,
         processes=tuple(processes),
         capabilities=capabilities,
         readiness=tuple(readiness),
+    )
+
+
+def _source_tool_trace_environment(
+    source: Path, runtime: Runtime, entries: list[dict[str, Any]]
+) -> dict[str, str]:
+    if runtime.language.lower() not in {"", "python", "py"}:
+        return {}
+    declared = []
+    for raw in entries:
+        entry = ToolEntry.model_validate(raw)
+        if entry.mode in {"import", "construct"} and entry.module and entry.callable:
+            declared.append({
+                "name": entry.tool, "module": entry.module, "callable": entry.callable,
+            })
+    if not declared:
+        return {}
+    environment = {
+        "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
+        "ALK_TOOL_TRACE_BINDINGS": json.dumps(declared, sort_keys=True),
+    }
+    component = _runtime_component(source, runtime.workdir)
+    project = _pyproject_document(component / "pyproject.toml").get("project", {})
+    requirements = list(project.get("dependencies", []))
+    for extra in runtime.extras:
+        requirements.extend(project.get("optional-dependencies", {}).get(extra, []))
+    requirement_files = list(runtime.requirements_files)
+    if not (component / "pyproject.toml").is_file():
+        requirement_files.append("requirements.txt")
+    for name in requirement_files:
+        path = (component / name).resolve()
+        if path.is_relative_to(source) and path.is_file():
+            requirements.extend(path.read_text(encoding="utf-8").splitlines())
+    if any(
+        re.match(r"^crewai(?:\s|\[|[<>=!~@;]|$)", requirement.strip(), re.IGNORECASE)
+        for requirement in requirements
+        if isinstance(requirement, str)
+    ):
+        environment["ALK_CREWAI_TOOL_TRACE"] = "1"
+    return environment
+
+
+_SOURCE_TOOL_TRACE_VERSION = 1
+
+
+def _uses_source_tool_trace(processes: Sequence[Any]) -> bool:
+    return any(
+        "ALK_TOOL_TRACE_BINDINGS" in (getattr(process, "environment", None) or {})
+        for process in processes
     )
 
 
@@ -3471,13 +3539,14 @@ def author_bundle_v2(
         contract_interface_kind=contract_interface_kind,
         contract_runtime=(runtime if isinstance(runtime, dict) else None),
         runtime_dependencies=contract_body.get("runtime_dependencies"),
+        tool_entrypoints=contract_body.get("tool_entrypoints"),
     )
     trace_bindings = (
         _source_tool_trace_bindings(contract_body)
         if contract_modality == "chat"
         else []
     )
-    if trace_bindings:
+    if trace_bindings and not _uses_source_tool_trace(plan.processes):
         plan = replace(
             plan,
             processes=_with_source_tool_trace(
@@ -3709,7 +3778,11 @@ def author_bundle_v2(
             metadata={
                 "packaging": plan.packaging,
                 "environment_plan_version": "2",
-                **({"source_tool_trace_version": 1} if trace_bindings else {}),
+                **(
+                    {"source_tool_trace_version": _SOURCE_TOOL_TRACE_VERSION}
+                    if _uses_source_tool_trace(plan.processes)
+                    else {}
+                ),
                 **_adk_web_app(source_root, contract_body),
                 **({"generic_harness": "v1"} if generic_pipeline else {}),
                 **(
@@ -3915,7 +3988,8 @@ def _built_by_older_alk(
     return (
         (
             any("ALK_TOOL_TRACE_BINDINGS" in env for env in environments)
-            and metadata.get("source_tool_trace_version") != 1
+            and metadata.get("source_tool_trace_version")
+            != _SOURCE_TOOL_TRACE_VERSION
         )
         or (
             _interface(sealed) == bridged
@@ -4009,7 +4083,17 @@ def _carry_contract(
             **metadata["provider_import"],
             "environment_tools": _environment_tools(body),
         }
-    if str(body.get("modality") or "").strip().lower() == "chat":
+    runtime = body.get("runtime") or {}
+    interface = runtime.get("interface") or {}
+    traced_command = (
+        isinstance(interface, dict)
+        and str(interface.get("kind") or "").strip().lower() == "command"
+        and _uses_source_tool_trace(processes)
+    )
+    if (
+        str(body.get("modality") or "").strip().lower() == "chat"
+        and not traced_command
+    ):
         bindings = _source_tool_trace_bindings(body)
         processes = list(
             _with_source_tool_trace(
@@ -4019,7 +4103,7 @@ def _carry_contract(
             )
         )
         if bindings:
-            metadata["source_tool_trace_version"] = 1
+            metadata["source_tool_trace_version"] = _SOURCE_TOOL_TRACE_VERSION
         else:
             metadata.pop("source_tool_trace_version", None)
     return True, processes, metadata
