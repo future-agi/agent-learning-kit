@@ -387,7 +387,12 @@ _AGENT_NAME_KEYS = (
     "claude_agent.subagent_type",
     "graph.node.id",
     "recipient_agent_type",
+    "lc_agent_name",
 )
+# The conversation a span belongs to; a background job runs as its own conversation, named by the id the launching
+# tool call returned.
+_CONVERSATION_KEYS = ("gen_ai.conversation.id", "session.id")
+_LAUNCHES_MAX = 256
 _GRAPH_NAMESPACE = "langgraph_checkpoint_ns"
 _TOOL_NAME_KEYS = ("gen_ai.tool.name", "tool.name")
 _TOOL_ARGUMENT_KEYS = ("gen_ai.tool.call.arguments", "tool.parameters", "input.value")
@@ -453,6 +458,8 @@ class _ToolSpans:
         self._live = {}
         self._handed = {}
         self._wrapped = set()
+        # Tool calls that returned something, oldest first, so a job started by one can be joined to it.
+        self._launches = collections.deque(maxlen=_LAUNCHES_MAX)
         self._lock = threading.Lock()
 
     def started(self, span) -> None:
@@ -510,6 +517,9 @@ class _ToolSpans:
         span_id = span.get_span_context().span_id
         kind = _kind(span)
         try:
+            entry = self._live.get(span_id)
+            if entry is not None and entry[1] is None and kind != "TOOL":
+                self._job_ended(span, span_id)
             if kind == "AGENT":
                 handing = self._above(span_id, ("TOOL",))
                 name = self._agent_name(span)
@@ -527,6 +537,41 @@ class _ToolSpans:
                     self._write(span, span_id)
         finally:
             self._live.pop(span_id, None)
+
+    def _job_ended(self, span, span_id) -> None:
+        """A run with no parent here, in a conversation whose id an earlier tool call returned, is a job that call
+        launched: it is written as that call's hand-off, from the agent that made the call to the job's agent, and
+        returns when the job ends."""
+        attributes = span.attributes or {}
+        conversation = _first(attributes, _CONVERSATION_KEYS)
+        if not conversation:
+            return
+        launch = next(
+            (one for one in self._launches if one["conversation"] != conversation and conversation in one["output"]),
+            None,
+        )
+        if launch is None:
+            return
+        worker = _first(attributes, _AGENT_NAME_KEYS) or _graph_worker(attributes) or span.name
+        if not worker:
+            return
+        status = getattr(getattr(span, "status", None), "status_code", None)
+        record = {
+            "name": launch["name"],
+            "arguments": launch["arguments"],
+            "output": (_first(attributes, _TOOL_RESULT_KEYS) or "")[:4096],
+            "is_error": getattr(status, "name", "") == "ERROR",
+            "at": (span.start_time or 0) / 1e9,
+            "ended_at": (span.end_time or 0) / 1e9,
+            "source": "otel",
+            "event_id": format(span_id, "016x"),
+            "parent_event_id": launch["event_id"],
+            "delegated_to": worker[:256],
+        }
+        if launch["agent"]:
+            record.update(agent_key=launch["agent"], agent_role=launch["agent"])
+        with self._lock:
+            _append(self._path, record)
 
     def _write(self, span, span_id) -> None:
         attributes = span.attributes or {}
@@ -549,6 +594,8 @@ class _ToolSpans:
             _graph_worker(attributes)
             or _first(attributes, ("gen_ai.agent.name",))
             or (self._agent_name(agent) if agent is not None else None)
+            # No agent span above it: the agent the span itself names, as a job running in its own run does.
+            or _first(attributes, _AGENT_NAME_KEYS)
         )
         if worker:
             record.update(agent_key=worker[:256], agent_role=worker[:256])
@@ -557,6 +604,17 @@ class _ToolSpans:
         delegated = self._handed.pop(span_id, None)
         if delegated:
             record["delegated_to"] = delegated[:256]
+        if record["output"]:
+            self._launches.append(
+                {
+                    "output": record["output"],
+                    "name": record["name"],
+                    "arguments": record["arguments"],
+                    "event_id": record["event_id"],
+                    "agent": record.get("agent_key"),
+                    "conversation": _first(attributes, _CONVERSATION_KEYS),
+                }
+            )
         with self._lock:
             _append(self._path, record)
 

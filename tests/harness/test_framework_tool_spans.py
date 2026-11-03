@@ -80,6 +80,57 @@ def test_a_langgraph_tool_is_the_subgraph_above_the_node_that_ran_it(tmp_path: P
     assert _by_tool(records) == {"publish_note": ("writer_worker", None), "lookup": (None, None)}
 
 
+def test_a_background_job_is_a_hand_off_from_the_tool_call_that_launched_it(tmp_path: Path) -> None:
+    # A supervisor starts two jobs; each runs later as its own run (no parent here), named by the id its launch
+    # returned, with its tools attributed to the job's agent. A status check that echoes the id is not the launch.
+    records = _run(tmp_path, """
+        sup = {"gen_ai.conversation.id": "thread-sup"}
+        with span("agent", **{"gen_ai.span.kind": "AGENT", **sup}):
+            with span("tools", **{"gen_ai.span.kind": "CHAIN", **sup}):
+                for job, kind in (("job-r", "researcher"), ("job-c", "coder")):
+                    with span("start_async_task", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "start_async_task",
+                                                     "input.value": kind, **sup,
+                                                     "output.value": "Launched async subagent. task_id: " + job}):
+                        pass
+        with span("agent", **{"gen_ai.span.kind": "AGENT", **sup}):
+            with span("check_async_task", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "check_async_task",
+                                             "output.value": '{"status": "running", "thread_id": "job-r"}', **sup}):
+                pass
+        for job, kind, tool in (("job-c", "coder", "run_code_check"), ("job-r", "researcher", "analyze_topic")):
+            own = {"lc_agent_name": kind, "gen_ai.conversation.id": job}
+            with span(kind, **{"gen_ai.span.kind": "CHAIN", "output.value": kind + " done", **own}):
+                with span("tools", **{"gen_ai.span.kind": "CHAIN", "langgraph_node": "tools",
+                                      "langgraph_checkpoint_ns": "tools:1", **own}):
+                    with span(tool, **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": tool, "langgraph_node": "tools",
+                                       "langgraph_checkpoint_ns": "tools:1", **own}):
+                        pass
+    """)
+    launches = {r["output"].rsplit(" ", 1)[-1]: r for r in records if r["name"] == "start_async_task" and not r.get("delegated_to")}
+    hand_offs = {r["delegated_to"]: r for r in records if r.get("delegated_to")}
+    assert {r["name"]: r.get("agent_key") for r in records if r["name"] in ("analyze_topic", "run_code_check")} == {
+        "analyze_topic": "researcher", "run_code_check": "coder",
+    }
+    assert sorted(hand_offs) == ["coder", "researcher"]
+    for worker, job in (("researcher", "job-r"), ("coder", "job-c")):
+        hand_off = hand_offs[worker]
+        assert (hand_off["name"], hand_off["agent_key"], hand_off["output"]) == ("start_async_task", "agent", worker + " done")
+        assert hand_off["parent_event_id"] == launches[job]["event_id"]
+        assert hand_off["arguments"] == worker
+        assert 0 < hand_off["at"] <= hand_off["ended_at"]
+
+
+def test_a_run_whose_conversation_no_tool_returned_is_not_a_hand_off(tmp_path: Path) -> None:
+    records = _run(tmp_path, """
+        with span("agent", **{"gen_ai.span.kind": "AGENT", "gen_ai.conversation.id": "thread-a"}):
+            with span("lookup", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "lookup", "output.value": "x",
+                                   "gen_ai.conversation.id": "thread-a"}):
+                pass
+        with span("agent", **{"gen_ai.span.kind": "AGENT", "gen_ai.conversation.id": "thread-a"}):
+            pass
+    """)
+    assert [r.get("delegated_to") for r in records] == [None]
+
+
 def test_an_agent_named_on_the_tool_span_or_by_operation_name_is_read(tmp_path: Path) -> None:
     records = _run(tmp_path, """
         with span("execute_tool search_notes", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "search_notes",
