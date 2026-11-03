@@ -475,3 +475,28 @@ def test_spans_that_never_end_do_not_stop_observation(monkeypatch) -> None:
     for span_id in (1, 2, 3):
         observer.started(span(span_id))
     assert list(observer._live) == [2, 3]
+
+
+def test_the_process_instrumenting_after_the_hook_with_its_own_provider_gets_it() -> None:
+    from fi.alk.harness.simulation_mark_bootstrap import _yield_to_process
+
+    class Instrumentor:
+        # As opentelemetry's BaseInstrumentor: a second instrument() is ignored until uninstrument().
+        is_instrumented_by_opentelemetry = False
+        settings = None
+
+        def instrument(self, **kwargs):
+            if self.is_instrumented_by_opentelemetry:
+                return
+            self.settings, self.is_instrumented_by_opentelemetry = kwargs, True
+
+        def uninstrument(self):
+            self.is_instrumented_by_opentelemetry = False
+
+    ours = Instrumentor()
+    ours.instrument()
+    _yield_to_process(Instrumentor)
+    ours.instrument()
+    assert ours.settings == {}
+    ours.instrument(tracer_provider="own")
+    assert ours.settings == {"tracer_provider": "own"}

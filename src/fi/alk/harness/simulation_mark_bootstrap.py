@@ -832,8 +832,26 @@ def _instrument(module, target) -> None:
     if getattr(instrumentor, "is_instrumented_by_opentelemetry", False):
         return
     instrumentor.instrument()
+    _yield_to_process(type(instrumentor))
     if module.__name__ == "agents":
         _keep_agents_processors()
+
+
+def _yield_to_process(cls) -> None:
+    """The process instrumenting again with its own settings (its own provider, say) gets them:
+    the instrumentor would otherwise ignore the call as already done."""
+    original = cls.instrument
+    if getattr(original, _PATCHED, False):
+        return
+
+    def instrument(self, *args, __original=original, **kwargs):
+        if kwargs and getattr(self, "is_instrumented_by_opentelemetry", False):
+            self.uninstrument()
+        return __original(self, *args, **kwargs)
+
+    functools.update_wrapper(instrument, original)
+    setattr(instrument, _PATCHED, True)
+    cls.instrument = instrument
 
 
 def _keep_agents_processors() -> None:
