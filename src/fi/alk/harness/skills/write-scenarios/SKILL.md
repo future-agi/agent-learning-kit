@@ -647,8 +647,8 @@ sub-actor on top; nothing written before changes, and the scenario still stands 
 A coordinate whose level is named for a sub-actor includes that sub-actor in `sub_actors`, with two
 things written for this scenario:
 
-- `instruction`: who they are here and what they do, written to them in the second person like a
-  situation text: who they are with, and what they want that the person did not ask for. What they do
+- `instruction`: who they are here and what they say, written to them in the second person: who they
+  are with, and what they want that the person did not ask for, never when they say it. What they do
   is what their channel does, as the kind file describes it, and what the scenario's level for them
   names. Give them a part, never the person's goal: the person still pursues it and gives every value
   the agent asks for. What they say is their own: something they want, know or worry about. They never
