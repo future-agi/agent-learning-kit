@@ -19,6 +19,9 @@ from fi.simulate.simulation.sub_actors import CHANNELS, TRIGGERS
 
 SUB_ACTORS_FILE = "sub_actors.json"
 SWITCH = "HARNESS_SUB_ACTORS"
+# A name and a role are one-line labels, for actors and sub-actors alike.
+NAME_MAX_LENGTH = 80
+ROLE_MAX_LENGTH = 160
 
 
 def sub_actors_enabled() -> bool:
@@ -30,8 +33,8 @@ class SubActor(BaseModel):
     """One entry of the environment's list."""
 
     id: str
-    name: str
-    role: str = ""
+    name: str = Field(max_length=NAME_MAX_LENGTH)
+    role: str = Field(default="", max_length=ROLE_MAX_LENGTH)
     channel: str
     # The caller persona's fields; the voice is chosen from them.
     persona: dict[str, Any] = Field(default_factory=dict)

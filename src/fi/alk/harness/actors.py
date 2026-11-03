@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # One switch for every actor, on the caller's side or in the world.
 from .sub_actor import sub_actors_enabled as actors_enabled  # noqa: F401
+from .sub_actor import NAME_MAX_LENGTH, ROLE_MAX_LENGTH
 
 ACTORS_FILE = "actors.json"
 ACTORS_SCHEMA = "futureagi.actors.v1"
@@ -63,11 +64,11 @@ class Actor(BaseModel):
         pattern=r"^[a-z0-9_]{1,64}$",
         description="1 to 64 lowercase letters, digits or underscores",
     )
-    name: str = Field(min_length=1)
+    name: str = Field(min_length=1, max_length=NAME_MAX_LENGTH)
     # Open sets: an unknown kind or play is kept and shown; only running an unknown play is refused.
     kind: str = "person"
     side: Literal["caller", "world"] = "world"
-    role: str = ""
+    role: str = Field(default="", max_length=ROLE_MAX_LENGTH)
     # Who brings this actor in.
     parent: str | None = None
     persona: dict[str, Any] = Field(default_factory=dict)
