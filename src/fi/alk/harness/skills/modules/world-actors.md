@@ -12,7 +12,7 @@ with `add_actor`, and they act only through the world's own actions. They never 
 
 **When one is worth adding.** When the agent asks someone else to act during the run and what is being tested is
 how it handles their action when it comes, that someone is a world actor: add them with `add_actor`, with the
-world actions they may take. Something already decided before the run starts is a record in the seed, not an
+world actions they may take, chosen only from the actions the world already has (`add_actor`'s reply lists them). Something already decided before the run starts is a record in the seed, not an
 actor.
 
 **Permission is world data.** Each actor's `permitted_actions` is what the world lets it do. When an action

@@ -35,6 +35,7 @@ from ..actors import (
     actors_enabled,
     load_actors,
     save_actors,
+    world_action_names,
 )
 from ..amend import add_rule, drop_rule, fix_tool, set_modality, widen
 from ..catalogue import (
@@ -683,17 +684,28 @@ def sub_actor_tools(contract: AgentContract, destination: Path) -> list[Any]:
     return [add_sub_actor, drop_sub_actor]
 
 
-def world_actor_tools(destination: Path) -> list[Any]:
+def world_actor_tools(destination: Path, contract: AgentContract | None = None) -> list[Any]:
     """The tools that keep the environment's world actors: for the build and the builder chat."""
+
+    def world_actions() -> list[str]:
+        # Read when called, so actions adopted later in the build count.
+        path = Path(destination) / "contract.json"
+        if path.is_file():
+            return world_action_names(json.loads(path.read_text(encoding="utf-8")))
+        return world_action_names(contract.model_dump()) if contract is not None else []
+
+    # Known before the call when the world is already built (the builder chat), so one request is one confirmation.
+    listed = world_actions()
 
     @tool(
         "add_actor",
         "Add a person or system in the world who acts through the world's own actions, never by speaking to "
         "the agent, or change one already listed: only the fields you send change, the rest stay as they are. "
-        "`permitted_actions` is what the world lets them do, each the world's own action as the environment "
-        "names it (the route a tool calls, with `/` as `.`, e.g. `crm.approve_discount`); anything else they "
-        "attempt is refused and recorded as their attempt. Who may take an action is decided by this list, "
-        "never by what anyone says.",
+        "`permitted_actions` is what the world lets them do: only actions the world already has, each named as "
+        "the environment names it (the route one of its tools calls, with `/` as `.`); the reply lists them. "
+        "Anything else they attempt is refused and recorded as their attempt. Who may take an action is decided "
+        "by this list, never by what anyone says."
+        + (f" The world's actions: {', '.join(listed)}." if listed else ""),
         actor_input_schema(),
     )
     async def add_actor(args: dict[str, Any]) -> dict[str, Any]:
@@ -707,9 +719,20 @@ def world_actor_tools(destination: Path) -> list[Any]:
             save_actors(destination, ActorList(actors=[*kept, actor]))
         except ValueError as exc:
             return _err(f"Not added: {exc}")
-        return _ok(
-            f"{actor.id} may {', '.join(actor.permitted_actions) or 'do nothing in the world'}"
+        known = world_actions()
+        unknown = [one for one in actor.permitted_actions if one not in known]
+        reply = f"{actor.id} may {', '.join(actor.permitted_actions) or 'do nothing in the world'}. "
+        reply += (
+            f"The world's actions: {', '.join(known)}."
+            if known
+            else "The world has no actions an actor can take yet."
         )
+        if unknown:
+            reply += (
+                f" {', '.join(unknown)} {'is' if len(unknown) == 1 else 'are'} not among them, so the world "
+                "refuses it; send `permitted_actions` again with actions from that list."
+            )
+        return _ok(reply)
 
     @tool("drop_actor", "Remove a world actor by id.", {"id": str})
     async def drop_actor(args: dict[str, Any]) -> dict[str, Any]:
@@ -732,7 +755,7 @@ ACTOR_SERVER = "actors"
 def actor_tools_server(contract: AgentContract, destination: Path) -> Any | None:
     """The cast alone, for a builder chat on a built environment: who is in the world and who is with the caller can
     still change after the world's tools and data are fixed. None when no actor tools are switched on."""
-    tools = (world_actor_tools(destination) if actors_enabled() else []) + (
+    tools = (world_actor_tools(destination, contract) if actors_enabled() else []) + (
         sub_actor_tools(contract, destination) if sub_actors_enabled() else []
     )
     if not tools:
@@ -2053,7 +2076,7 @@ def world_tools(
             run_env_command,
             check_world,
             save_world,
-            *(world_actor_tools(destination) if actors_enabled() else []),
+            *(world_actor_tools(destination, contract) if actors_enabled() else []),
         ]
         + (sub_actor_tools(contract, destination) if sub_actors_enabled() else []),
     )
