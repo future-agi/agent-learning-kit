@@ -112,6 +112,30 @@ def test_the_evidence_is_written_beside_the_certificate(tmp_path):
     ]
 
 
+def test_scenario_requirements_are_sealed_beside_the_certificate_when_a_bundle_exists(tmp_path):
+    bundle = tmp_path / "environment-bundle"
+    (bundle / "scenarios" / "refund").mkdir(parents=True)
+    (bundle / "contract.json").write_text(json.dumps({"modality": "chat", "conversational": True}))
+    (bundle / "sub_goals.json").write_text(
+        json.dumps({"sub_goals": [{"name": "paid", "check": "def check(world, calls):\n    return world.state('t')\n"}]})
+    )
+    (bundle / "scenarios" / "refund" / "scenario.json").write_text(
+        json.dumps({"max_turns": 4, "solution": [{"tool": "refund"}], "sub_goals": ["paid"]})
+    )
+    store = tmp_path / "generic-harness"
+    GenericHarnessArtifactStore(store).write_certification(_certificate())
+
+    written = json.loads((store / "scenario-requirements.json").read_text())
+    assert written["scenarios"]["refund"]["tools"]["required"] == ["refund"]
+    assert written["scenarios"]["refund"]["sub_goal_evidence"]["world"] == ["paid"]
+    assert not (tmp_path / "elsewhere").exists()
+
+
+def test_no_requirements_file_without_a_bundle(tmp_path):
+    GenericHarnessArtifactStore(tmp_path / "generic-harness").write_certification(_certificate())
+    assert not (tmp_path / "generic-harness" / "scenario-requirements.json").exists()
+
+
 def test_the_tools_and_actions_that_failed_are_named_on_their_checks(tmp_path):
     from fi.alk.harness.action_certification import (
         ActionCertificationReport,

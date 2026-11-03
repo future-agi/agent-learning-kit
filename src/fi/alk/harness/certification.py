@@ -430,9 +430,13 @@ class GenericHarnessArtifactStore:
 
     def write_certification(self, value: HarnessCertification) -> Path:
         from .capabilities import capability_evidence
+        from .scenario_requirements import REQUIREMENTS_FILE, requirements_from_bundle
 
         # Sealed with the certificate it is derived from, so the two never disagree.
         self._write_json(self.CAPABILITY_EVIDENCE, capability_evidence(value, self._failed_targets()))
+        requirements = requirements_from_bundle(self.root.parent / "environment-bundle")
+        if requirements is not None:
+            self._write_json(REQUIREMENTS_FILE, requirements)
         return self._write(self.CERTIFICATION, value)
 
     def _failed_targets(self) -> dict[str, list[str]] | None:
