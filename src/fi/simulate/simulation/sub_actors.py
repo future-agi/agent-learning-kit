@@ -8,6 +8,7 @@ type adds a channel here instead of a branch in the code that reads it.
 from __future__ import annotations
 
 import hashlib
+import math
 import random
 import re
 import time
@@ -147,7 +148,7 @@ def default_share(seed: str) -> float:
 
 def at_least(share: float, of: int) -> int:
     """How many of `of` scenarios a share asks for, rounded up so a small suite still gets one."""
-    return -int(-share * of // 1) if share > 0 else 0
+    return math.ceil(share * of) if share > 0 else 0
 
 
 def loudness_ratio(seed: str, sub_actor_id: str, fixed: float | None) -> float:
