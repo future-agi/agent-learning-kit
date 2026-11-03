@@ -3194,6 +3194,49 @@ def _environment_tools(contract: dict[str, Any]) -> list[str]:
     )
 
 
+def _source_tool_trace_bindings(contract: dict[str, Any]) -> list[dict[str, str]]:
+    bindings = []
+    for raw in contract.get("tool_entrypoints", []):
+        if not isinstance(raw, dict):
+            continue
+        try:
+            entry = ToolEntry.model_validate(raw)
+        except ValueError as exc:
+            raise BundleAuthorError(f"contract_tool_entry_invalid: {exc}") from exc
+        if entry.mode == "import" and entry.module and entry.callable:
+            bindings.append(
+                {"name": entry.tool, "module": entry.module, "callable": entry.callable}
+            )
+    return bindings
+
+
+def _with_source_tool_trace(
+    processes: list[Any] | tuple[Any, ...],
+    *,
+    control_service: str,
+    bindings: list[dict[str, str]],
+) -> tuple[Any, ...]:
+    updated = []
+    for process in processes:
+        if not isinstance(process, SourceProcess) or process.name != control_service:
+            updated.append(process)
+            continue
+        environment = {
+            key: value
+            for key, value in process.environment.items()
+            if key not in {"HARNESS_TOOL_TRACE", "ALK_TOOL_TRACE_BINDINGS"}
+        }
+        if bindings:
+            environment.update(
+                {
+                    "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
+                    "ALK_TOOL_TRACE_BINDINGS": json.dumps(bindings),
+                }
+            )
+        updated.append(process.model_copy(update={"environment": environment}))
+    return tuple(updated)
+
+
 def _files(root: Path) -> list[BundleFileV2]:
     records: list[BundleFileV2] = []
     for path in sorted(root.rglob("*")):
@@ -3355,6 +3398,20 @@ def author_bundle_v2(
         contract_runtime=(runtime if isinstance(runtime, dict) else None),
         runtime_dependencies=contract_body.get("runtime_dependencies"),
     )
+    trace_bindings = (
+        _source_tool_trace_bindings(contract_body)
+        if contract_modality == "chat"
+        else []
+    )
+    if trace_bindings:
+        plan = replace(
+            plan,
+            processes=_with_source_tool_trace(
+                plan.processes,
+                control_service=plan.control_service or "",
+                bindings=trace_bindings,
+            ),
+        )
     provided_environment = {
         str(name).upper()
         for name in (job.metadata.get("environment_value_names", []) or [])
@@ -3578,6 +3635,7 @@ def author_bundle_v2(
             metadata={
                 "packaging": plan.packaging,
                 "environment_plan_version": "2",
+                **({"source_tool_trace_version": 1} if trace_bindings else {}),
                 **_adk_web_app(source_root, contract_body),
                 **({"generic_harness": "v1"} if generic_pipeline else {}),
                 **(
@@ -3781,7 +3839,10 @@ def _built_by_older_alk(
     environments = [getattr(process, "environment", None) or {} for process in processes]
     bridged = _interface({"runtime": {"interface": _COMMAND_BRIDGE_INTERFACE}})
     return (
-        any("ALK_TOOL_TRACE_BINDINGS" in env for env in environments)
+        (
+            any("ALK_TOOL_TRACE_BINDINGS" in env for env in environments)
+            and metadata.get("source_tool_trace_version") != 1
+        )
         or (
             _interface(sealed) == bridged
             and any("ALK_SUBPROCESS_COMMAND" in env for env in environments)
@@ -3874,6 +3935,19 @@ def _carry_contract(
             **metadata["provider_import"],
             "environment_tools": _environment_tools(body),
         }
+    if str(body.get("modality") or "").strip().lower() == "chat":
+        bindings = _source_tool_trace_bindings(body)
+        processes = list(
+            _with_source_tool_trace(
+                processes,
+                control_service=manifest.runtime.control_service or "",
+                bindings=bindings,
+            )
+        )
+        if bindings:
+            metadata["source_tool_trace_version"] = 1
+        else:
+            metadata.pop("source_tool_trace_version", None)
     return True, processes, metadata
 
 
