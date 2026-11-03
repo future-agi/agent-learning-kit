@@ -623,6 +623,21 @@ class HostedChatRuntime:
                 return await handler(args)
             if spec.name in _SUBMITS and not self._changes_meaning(args):
                 return await handler(args)
+            unknown = self._actions_the_world_lacks(args) if spec.name == "add_actor" else []
+            if unknown:
+                # Corrected before the person is asked, so they confirm only actions the world has.
+                return {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": f"Not done and not asked: {', '.join(unknown)} "
+                            f"{'is' if len(unknown) == 1 else 'are'} not among the world's actions "
+                            f"({', '.join(self._world_actions()) or 'none yet'}). Send `permitted_actions` "
+                            "again with actions from that list.",
+                        }
+                    ],
+                    "is_error": True,
+                }
             if spec.name == "add_sub_goal" and not self._replaces_sub_goal(args):
                 return await handler(args)
             alone = spec.name in _ASKS_ALONE
@@ -673,6 +688,17 @@ class HostedChatRuntime:
             ),
             whole_persona=True,
         )
+
+    def _world_actions(self) -> list[str]:
+        from .actors import world_action_names
+
+        path = Path(self.workspace) / "contract.json"
+        return world_action_names(json.loads(path.read_text(encoding="utf-8"))) if path.is_file() else []
+
+    def _actions_the_world_lacks(self, args: dict[str, Any]) -> list[str]:
+        known = self._world_actions()
+        # A world whose actions cannot be read yet decides nothing here; the tool's reply still names them.
+        return [str(one) for one in args.get("permitted_actions") or [] if known and str(one) not in known]
 
     def _replaces_sub_goal(self, args: dict[str, Any]) -> bool:
         from .catalogue import load_catalogue
