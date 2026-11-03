@@ -3573,6 +3573,35 @@ def apply_postgres_sqlite_world(
             artifacts.write_world_ir(imported.world)
 
 
+def _without_later_harness_tables(live, recorded):
+    """The live schema without ALK's own `_alk_` tables that the build's recorded model does not have.
+
+    ALK adds tables of its own to a world after its build, such as who may act once a world actor is added
+    later; they are not the agent's data, so the world is checked as it was built."""
+    from .source_model import SourceModel
+
+    built = {table.name for table in recorded.tables}
+    tables = tuple(
+        table for table in live.tables if not table.name.startswith("_alk_") or table.name in built
+    )
+    if len(tables) == len(live.tables):
+        return live
+    return SourceModel.create(
+        source_digest=live.source_digest,
+        engine=live.engine,
+        engine_version=live.engine_version,
+        tables=tables,
+        processes=live.processes,
+        interfaces=live.interfaces,
+        actions=live.actions,
+        configuration_names=live.configuration_names,
+        migrations=live.migrations,
+        seeds=live.seeds,
+        evidence=live.evidence,
+        unsupported=live.unsupported,
+    )
+
+
 def _compose_seed_source_model(source, seed_file: Path, artifact_root: Path | None):
     """Reconcile bundled code facts with the independently inspected live schema."""
     from .certification import GenericHarnessArtifactStore
@@ -3590,8 +3619,9 @@ def _compose_seed_source_model(source, seed_file: Path, artifact_root: Path | No
             raise ValueError("seed_source_model_symlink")
         if path.is_file():
             try:
+                recorded = GenericHarnessArtifactStore(root).read_source_model()
                 return compose_source_models(
-                    GenericHarnessArtifactStore(root).read_source_model(), source
+                    recorded, _without_later_harness_tables(source, recorded)
                 )
             except ValueError as error:
                 # Code facts recorded for other source than the schema running here.
