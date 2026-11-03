@@ -226,7 +226,9 @@ def _sub_actor_field() -> dict[str, Any]:
                     "instruction": {
                         "type": "string",
                         "description": "Who they are and what they say. Never when: they speak when the "
-                        "trigger fires, so the instruction names no moment, event or turn.",
+                        "trigger fires, so the instruction names no moment, event or turn. What they say is "
+                        "their own concern, never the person's request, its terms or conditions, or a "
+                        "decision on it.",
                     },
                     "trigger": {
                         "type": "object",
@@ -1864,8 +1866,9 @@ def scenario_tools(
                 "name": {
                     "type": "string",
                     "description": "Short identifier, lower case with hyphens or underscores. "
-                    "It becomes this scenario's folder name. It says what this scenario tests and "
-                    "carries, without a counter or an invented code, PIN or reference.",
+                    "It becomes this scenario's folder name. It says what the agent is tested on and "
+                    "carries, without a counter or an invented code, PIN or reference, and never who "
+                    "else is on the call or how they join.",
                 },
                 "use_case": {
                     "type": "string",
