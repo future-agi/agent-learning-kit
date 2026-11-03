@@ -1347,3 +1347,22 @@ print(json.dumps({"patched": hasattr(Tracer.start_span, "_alk_simulation_mark")}
     reported = _reported(_run(script, path=[_world(tmp_path)], cwd=tmp_path))
 
     assert reported["patched"] is False
+
+
+def test_a_job_that_returns_its_conversation_is_recorded_by_its_last_message() -> None:
+    from fi.alk.harness.simulation_mark_bootstrap import _answer
+
+    conversation = json.dumps(
+        {
+            "messages": [
+                "content='Implement a token bucket rate limiter' additional_kwargs={}",
+                "content='' additional_kwargs={'refusal': None}",
+                "content='Done: limiter.py with tests' additional_kwargs={}",
+                {"content": "", "type": "ai"},
+            ]
+        }
+    )
+
+    assert _answer(conversation) == "Done: limiter.py with tests"
+    assert _answer("Launched async subagent. task_id: job-r") == "Launched async subagent. task_id: job-r"
+    assert _answer('{"messages": []}') == '{"messages": []}'

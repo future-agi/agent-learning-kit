@@ -392,6 +392,31 @@ _AGENT_NAME_KEYS = (
 # The conversation a span belongs to; a background job runs as its own conversation, named by the id the launching
 # tool call returned.
 _CONVERSATION_KEYS = ("gen_ai.conversation.id", "session.id")
+def _answer(output: str) -> str:
+    """A job's answer: the last message that says something when it returns its whole conversation, so cutting the
+    record to length keeps the answer rather than the task it started from."""
+    try:
+        parsed = json.loads(output)
+    except ValueError:
+        return output
+    messages = parsed.get("messages") if isinstance(parsed, dict) else None
+    if not isinstance(messages, list):
+        return output
+    for message in reversed(messages):
+        if isinstance(message, dict):
+            said = str(message.get("content") or "").strip()
+        else:
+            text = str(message).strip()
+            said = text
+            if text.startswith("content=") and len(text) > 8 and text[8] in "'\"":
+                quote = text[8]
+                end = text.find(quote + " ", 9)
+                said = text[9:end if end >= 0 else len(text) - 1 if text.endswith(quote) else len(text)].strip()
+        if said:
+            return said
+    return output
+
+
 _LAUNCHES_MAX = 256
 _GRAPH_NAMESPACE = "langgraph_checkpoint_ns"
 _TOOL_NAME_KEYS = ("gen_ai.tool.name", "tool.name")
@@ -559,7 +584,7 @@ class _ToolSpans:
         record = {
             "name": launch["name"],
             "arguments": launch["arguments"],
-            "output": (_first(attributes, _TOOL_RESULT_KEYS) or "")[:4096],
+            "output": _answer(_first(attributes, _TOOL_RESULT_KEYS) or "")[:4096],
             "is_error": getattr(status, "name", "") == "ERROR",
             "at": (span.start_time or 0) / 1e9,
             "ended_at": (span.end_time or 0) / 1e9,
