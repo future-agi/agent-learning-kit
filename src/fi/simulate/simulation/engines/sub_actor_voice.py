@@ -234,15 +234,18 @@ class SubActorsOnCall:
         if menu is not None and self.say is not None and menu.tts is not None:
             self._greeting = asyncio.create_task(menu.line([_ANSWERED]))
 
-    async def answer_first(self) -> None:
-        """A phone menu answers the call before the person; the person comes on once it puts the call through."""
+    async def answer_first(self) -> bool:
+        """A phone menu answers the call before the person; the person comes on once it puts the call through.
+        False when the menu said nothing, so the person opens the call instead."""
         menu = self.menu()
         if menu is None:
-            return
+            return False
         self.cast.entering(Moment(agent_turns=1))
         self.cast.holder = str(menu.actor["id"])
         self.cast.line_wanted(menu.actor)
         await self._speak(menu, [_ANSWERED], written=self._greeting)
+        said = next(one for one in self.cast.summary() if one["sub_actor"] == str(menu.actor["id"]))
+        return said["delivered"] > 0
 
     def menu_cannot_answer(self, reason: str) -> None:
         """The agent greeted first, so the person's menu never answers this call."""
@@ -272,7 +275,8 @@ class SubActorsOnCall:
         heard = [*self.conversation(), f"The agent: {text}"]
         took_part = False
         holding = False
-        for key, voice in self.voices.items():
+        # Whoever has the phone is served before a background voice, so a line wanted this turn never crowds them out.
+        for key, voice in sorted(self.voices.items(), key=lambda one: one[1].channel == "audio_mix"):
             if voice.channel == "audio_mix":
                 if (
                     key not in self._pending
