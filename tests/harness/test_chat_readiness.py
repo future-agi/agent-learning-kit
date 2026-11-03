@@ -1037,6 +1037,41 @@ def test_private_workflow_requires_evidence_for_executable_contract_tools(
     assert failure.value.diagnostics[0].code == "chat_tool_evidence_unverified"
 
 
+def test_private_workflow_allows_unobserved_construct_only_tools(
+    tmp_path, profile_app, monkeypatch
+):
+    from fi.alk.harness import chat_call_runner
+    from fi.alk.harness.contract import ToolEntry, ToolSpec
+    from fi.alk.harness.run.conversation import Exchange, Transcript
+
+    url, state = profile_app
+    state.update(profile=True, body={"content": "The account is active"})
+
+    async def conversation(target, *_args):
+        answer = await target.say("Look up account A-1")
+        return Transcript(
+            exchanges=[Exchange("customer", "Look up account A-1"), Exchange("agent", answer)],
+            calls=[], ended="finished",
+        )
+
+    monkeypatch.setattr(chat_call_runner, "_drive_conversation", conversation)
+    contract = AgentContract(
+        tools=[ToolSpec(name="lookup_account")],
+        tool_entrypoints=[ToolEntry(
+            tool="lookup_account", mode="construct", module="agent.tools",
+            callable="AccountTools.lookup", factory="AccountTools()",
+        )],
+        runtime=Runtime(language="python", command=["python", "app.py"], interface=interface()),
+    )
+
+    asyncio.run(workflow_probe(
+        tmp_path, url, contract=contract,
+        job=SimpleNamespace(metadata={}, require_tool_workflow=False),
+    ))
+    _, receipt = workflow_receipt(tmp_path)
+    assert receipt["tool_evidence_status"] == "not_observed"
+
+
 @pytest.mark.parametrize("status,code", [(401, "credential_missing"), (422, "chat_ingress_configuration_invalid")])
 def test_private_workflow_preserves_transport_classification(tmp_path, profile_app, monkeypatch, status, code):
     from fi.alk.harness import chat_call_runner

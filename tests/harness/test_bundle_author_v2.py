@@ -477,6 +477,60 @@ def test_bundle_compiles_discovered_source_tool_entrypoint(tmp_path: Path) -> No
     }
 
 
+def test_bundle_observes_imported_chat_tool_execution(tmp_path: Path) -> None:
+    source = tmp_path / "chat-agent"
+    source.mkdir()
+    (source / "agent.py").write_text(
+        "def search_books(query):\n    return {'query': query, 'matches': 1}\n",
+        encoding="utf-8",
+    )
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring,
+        command=["python3", "agent.py"],
+        interface={
+            "kind": "http", "protocol": "openai_chat", "port": 8080,
+            "path": "/v1/chat/completions", "include_tools": False,
+        },
+    )
+    contract_path = authoring / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract["tool_entrypoints"] = [
+        {
+            "tool": "search_books", "mode": "import", "module": "agent",
+            "callable": "search_books",
+        }
+    ]
+    contract_path.write_text(json.dumps(contract))
+    bundle = author_bundle_v2(
+        source=source, job=_job(connector="http"), authoring=authoring,
+        output=tmp_path / "bundle",
+    )
+    process = next(
+        item for item in bundle.processes if item.name == bundle.runtime.control_service
+    )
+    trace = tmp_path / "agent-tool-calls.jsonl"
+    bootstrap = Path(__file__).resolve().parents[2] / "src/fi/alk/harness/livekit_tool_trace_bootstrap.py"
+    shutil.copy2(bootstrap, source / "sitecustomize.py")
+    result = subprocess.run(
+        [sys.executable, "-c", "from agent import search_books; print(search_books('Dune'))"],
+        env={
+            **os.environ,
+            **{
+                key: value.replace("{{WORLD_DIR}}", str(tmp_path))
+                for key, value in process.environment.items()
+            },
+            "PYTHONPATH": str(source),
+        },
+        capture_output=True, text=True, check=True,
+    )
+    assert "'matches': 1" in result.stdout
+    records = [json.loads(line) for line in trace.read_text().splitlines()]
+    assert records[0]["name"] == "search_books"
+    assert records[0]["arguments"] == {"query": "Dune"}
+    assert bundle.metadata["source_tool_trace_version"] == 1
+
+
 def test_tool_registration_is_not_observed_as_tool_execution(tmp_path: Path) -> None:
     source = tmp_path / "chat-agent"
     source.mkdir()
@@ -537,6 +591,15 @@ def test_auto_voice_contract_compiles_livekit_process_runtime(tmp_path: Path) ->
     )
     authoring = _authoring(tmp_path)
     _write_voice_contract(authoring)
+    contract_path = authoring / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract["tool_entrypoints"] = [
+        {
+            "tool": "search_books", "mode": "import", "module": "agent",
+            "callable": "search_books",
+        }
+    ]
+    contract_path.write_text(json.dumps(contract))
     job = _job(
         connector="auto",
         with_secrets=True,
@@ -550,6 +613,8 @@ def test_auto_voice_contract_compiles_livekit_process_runtime(tmp_path: Path) ->
     agent = next(process for process in bundle.processes if process.name == "agent")
     assert agent.environment["LIVEKIT_AGENT_NAME"].endswith("-w{{WORLD_INDEX}}")
     assert agent.environment["HARNESS_MODE"] == "1"
+    assert "ALK_TOOL_TRACE_BINDINGS" not in agent.environment
+    assert "source_tool_trace_version" not in bundle.metadata
     assert "target_provider" in agent.secret_purposes
     assert "target_http" not in bundle.capabilities
 
@@ -3982,6 +4047,15 @@ def test_a_reseal_leaves_a_bundle_an_older_build_compiled_unstamped(
     manifest = load_bundle_v2(bundle)
     if older == "traced":
         extra = {"ALK_TOOL_TRACE_BINDINGS": "[]"}
+        manifest = manifest.model_copy(
+            update={
+                "metadata": {
+                    key: value
+                    for key, value in manifest.metadata.items()
+                    if key != "source_tool_trace_version"
+                }
+            }
+        )
     else:
         # A ``callable`` command an older build bridged through a subprocess.
         extra = {"ALK_SUBPROCESS_COMMAND": '["python", "main.py"]'}

@@ -1375,7 +1375,9 @@ def is_data_free_conversation(contract: AgentContract) -> bool:
     )
 
 
-def has_executable_tool_workflow(contract: AgentContract) -> bool:
+def has_executable_tool_workflow(
+    contract: AgentContract, *, include_construct: bool = True
+) -> bool:
     declared = {tool.name for tool in contract.tools if tool.name.strip()}
     for entry in contract.tool_entrypoints:
         if entry.tool not in declared:
@@ -1383,7 +1385,8 @@ def has_executable_tool_workflow(contract: AgentContract) -> bool:
         if entry.mode == "import" and entry.module.strip() and entry.callable.strip():
             return True
         if (
-            entry.mode == "construct"
+            include_construct
+            and entry.mode == "construct"
             and entry.module.strip()
             and entry.callable.strip()
             and entry.factory.strip()
