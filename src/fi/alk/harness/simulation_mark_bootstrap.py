@@ -546,6 +546,10 @@ class _ToolSpans:
             span_id, entry = entry[1], self._live.get(entry[1])
         return span_id if entry is not None else None
 
+    def _run_name(self, span_id):
+        root = self._root(span_id)
+        return self._live[root][0].name or None if root not in (None, span_id) else None
+
     def _join_waiting(self, root_id, attributes=None) -> None:
         waiting = self._waiting.get(root_id)
         if waiting is None:
@@ -692,7 +696,8 @@ class _ToolSpans:
                     "name": record["name"],
                     "arguments": record["arguments"],
                     "event_id": record["event_id"],
-                    "agent": record.get("agent_key"),
+                    # No agent names the launching call: the run it sits in, which a graph server names by the graph.
+                    "agent": record.get("agent_key") or self._run_name(span_id),
                     "conversation": _first(attributes, _CONVERSATION_KEYS),
                 }
             )
