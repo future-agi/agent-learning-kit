@@ -1102,6 +1102,14 @@ _ARTIFACT_LEVEL_FORBIDDEN_KINDS: dict[ArtifactLevel, frozenset[ob.ArtifactKind]]
     ArtifactLevel.LOCAL_ONLY: frozenset(ob.ArtifactKind),
 }
 
+# The platform refuses a complete manifest that does not name an acknowledged artifact of each kind.
+_MANIFEST_REQUIRED_KINDS = frozenset(
+    {ob.ArtifactKind.BUILD, ob.ArtifactKind.RESULT, ob.ArtifactKind.LOG}
+)
+# Post-terminal best-effort work (pool teardown, process-log uploads) stops this share of the
+# flush window before its end, so the final drain and the artifact manifest always get a turn.
+_MANIFEST_RESERVE_FRACTION = 0.25
+
 
 class OutboundAdapter:
     """Implements `hosted_scheduler.OutboundPort` plus the extra surface the entrypoint itself
@@ -1286,6 +1294,17 @@ class OutboundAdapter:
         if self._flush_window_start is None:
             return None
         return self._flush_window_start + self._flush_window_seconds
+
+    def best_effort_deadline(self) -> float | None:
+        """The end of the flush-window share that best-effort work may spend. The remainder is
+        reserved for the final drain and the artifact manifest."""
+        deadline = self.deadline()
+        if deadline is None:
+            return None
+        return deadline - self._flush_window_seconds * _MANIFEST_RESERVE_FRACTION
+
+    def _acknowledged(self, entry: dict[str, Any]) -> bool:
+        return entry["artifact_id"].removeprefix("sha256:") in self._uploaded_digests
 
     def _record_channel_error(self, exc: Exception) -> None:
         if isinstance(exc, ob.HostedFencedError):
@@ -1697,14 +1716,28 @@ class OutboundAdapter:
     ) -> bool:
         if self.is_fenced:
             return False
-        wire = ob.build_artifact_manifest(
+        build = functools.partial(
+            ob.build_artifact_manifest,
             job_id=self._capabilities.job_id,
             attempt_id=self._capabilities.attempt_id,
             attempt_number=self._capabilities.attempt_number,
-            entries=list(self._manifest_entries),
             complete=complete,
         )
-        self._persist_offline_json(Path("manifest.json"), wire)
+        entries = list(self._manifest_entries)
+        # The offline mirror names every artifact: the platform's replay ingests each mirrored
+        # artifact before it ingests this manifest. The wire copy names only artifacts the
+        # platform acknowledged -- one unacknowledged entry makes it refuse the whole manifest
+        # (422 `artifact_unknown`), and the attempt with it.
+        self._persist_offline_json(Path("manifest.json"), build(entries=entries))
+        if complete:
+            await self._reupload_required_artifacts(entries, deadline=deadline)
+        acknowledged = [entry for entry in entries if self._acknowledged(entry)]
+        if len(acknowledged) < len(entries):
+            logger.warning(
+                "artifact manifest omits %d unacknowledged artifact(s)",
+                len(entries) - len(acknowledged),
+            )
+        wire = build(entries=acknowledged)
         result = await asyncio.to_thread(
             self._guarded,
             lambda: self._artifacts.push_manifest(wire, deadline=deadline),
@@ -1720,6 +1753,30 @@ class OutboundAdapter:
             )
             return False
         return True
+
+    async def _reupload_required_artifacts(
+        self, entries: list[dict[str, Any]], *, deadline: float | None
+    ) -> None:
+        """Give each required kind that has no acknowledged artifact one more upload, from the
+        offline mirror. A complete manifest without that kind is refused."""
+        acknowledged_kinds = {
+            entry["kind"] for entry in entries if self._acknowledged(entry)
+        }
+        for entry in entries:
+            kind = ob.ArtifactKind(entry["kind"])
+            if kind not in _MANIFEST_REQUIRED_KINDS or kind.value in acknowledged_kinds:
+                continue
+            digest = entry["artifact_id"].removeprefix("sha256:")
+            try:
+                data = (self._spool.root / "artifacts" / f"{digest}.bin").read_bytes()
+            except OSError:
+                continue
+            if hashlib.sha256(data).hexdigest() != digest:
+                continue
+            if await self.upload_artifact(
+                data, kind=kind, scenario_key=entry["scenario_key"], deadline=deadline
+            ):
+                acknowledged_kinds.add(kind.value)
 
     async def ensure_terminal_artifacts(
         self,
@@ -2230,7 +2287,9 @@ async def run_job(
     async def _bounded_close() -> None:
         if pool is None:
             return
-        remaining = adapter.deadline()
+        # Teardown is best-effort: it never spends the share of the window reserved for the
+        # manifest. The finally backstop below waits for whatever teardown is still running.
+        remaining = adapter.best_effort_deadline()
         if remaining is None:
             await pool.close()
             return
@@ -2239,10 +2298,8 @@ async def run_job(
             await asyncio.wait_for(pool.close(), timeout=timeout)
         except asyncio.TimeoutError:
             logger.warning(
-                "pool.close() did not finish within the remaining flush window (%.1fs); "
-                "WorldPool already latches itself closed on entry to close(), so the top-level "
-                "finally's own pool.close() call cannot retry the teardown -- the provisioner may "
-                "be left not fully torn down until close()'s latch ordering changes",
+                "pool.close() did not finish within its share of the flush window (%.1fs); "
+                "teardown continues in the background and the run_job finally waits for it",
                 timeout,
             )
 
@@ -2341,7 +2398,9 @@ async def run_job(
 
         try:
             await upload_process_logs(
-                work_directory / "diagnostics", adapter, deadline=adapter.deadline()
+                work_directory / "diagnostics",
+                adapter,
+                deadline=adapter.best_effort_deadline(),
             )
         except Exception:
             logger.exception("process diagnostic upload failed")
