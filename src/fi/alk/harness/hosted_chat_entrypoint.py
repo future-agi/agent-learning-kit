@@ -74,9 +74,11 @@ _NEEDS_CONFIRMATION = frozenset(
         "drop_sub_actor",
     }
 )
-# Removals and changes to the world or contract: each asks on its own, even after a yes to every change.
+# Removals and changes to the world, its cast or the contract: each asks on its own, even after a yes to every change.
 _ASKS_ALONE = frozenset(
     {
+        "add_sub_actor",
+        "drop_sub_actor",
         "drop_scenario",
         "drop_scenarios",
         "change_world",
