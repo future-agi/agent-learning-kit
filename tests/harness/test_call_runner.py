@@ -216,6 +216,19 @@ def test_span_lines_name_the_agent_of_calls_another_source_observed_and_add_none
     ]
 
 
+def test_a_runtime_s_hand_off_keeps_when_the_worker_returned(tmp_path: Path) -> None:
+    # CrewAI's observer writes each agent a flow runs as a hand-off, with its own start and end.
+    from fi.alk.harness.world.runtime import trace_row
+
+    trace = _trace_lines(tmp_path / "agent-tool-calls.jsonl",
+                         {"name": "X Post Verifier", "arguments": {}, "output": "valid", "is_error": False,
+                          "source": "crewai", "agent_key": "ShakespeareXPostFlow", "delegated_to": "X Post Verifier",
+                          "at": 4.0, "ended_at": 6.5})
+    (row,) = (trace_row(call) for call in cr._collect_file_tool_calls(_runtime(metadata={"tool_trace_path": str(trace)})))
+    assert (row["worker_id"], row["delegated_to"], row["at"], row["ended_at"]) == (
+        "ShakespeareXPostFlow", "X Post Verifier", 4.0, 6.5)
+
+
 def test_a_span_that_recorded_no_arguments_reads_as_none_not_as_raw_text(tmp_path: Path) -> None:
     trace = _trace_lines(tmp_path / "agent-tool-calls.jsonl", {**_SPAN_LINES[1], "arguments": "", "output": ""},
                          {"name": "note", "arguments": "not json", "output": "", "is_error": False})

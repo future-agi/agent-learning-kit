@@ -79,6 +79,51 @@ def _event_to_record(
     return record
 
 
+def _handoff_record(event: Any, started: dict[tuple[str, str], float], coordinator: list[str]) -> dict[str, Any] | None:
+    """An agent's execution of a task as a hand-off from the flow or crew that ran it: written once it ends."""
+    kind = type(event).__name__
+    if kind == "FlowStartedEvent":
+        name = getattr(event, "flow_name", None)
+        if isinstance(name, str) and name:
+            coordinator[:] = [name[:256]]
+        return None
+    if kind not in {"AgentExecutionStartedEvent", "AgentExecutionCompletedEvent", "AgentExecutionErrorEvent"}:
+        return None
+    agent, task = getattr(event, "agent", None), getattr(event, "task", None)
+    role = getattr(agent, "role", None)
+    if not isinstance(role, str) or not role.strip():
+        return None
+    at = getattr(event, "timestamp", None)
+    stamp = at.timestamp() if isinstance(at, datetime) else None
+    key = (str(getattr(agent, "id", "") or role), str(getattr(task, "id", "") or ""))
+    if kind == "AgentExecutionStartedEvent":
+        if stamp is not None:
+            started[key] = stamp
+        return None
+    crew = getattr(getattr(agent, "crew", None), "name", None)
+    by = coordinator[0] if coordinator else (crew if isinstance(crew, str) and crew else "crew")
+    is_error = kind == "AgentExecutionErrorEvent"
+    description = getattr(task, "description", None)
+    record = {
+        "name": role.strip()[:256],
+        "arguments": {"task": _bounded(description)} if isinstance(description, str) else {},
+        "output": _bounded(getattr(event, "error" if is_error else "output", None)),
+        "is_error": is_error,
+        "at": started.pop(key, stamp),
+        "ended_at": stamp,
+        "source": "crewai",
+        "agent_key": by[:256],
+        "agent_role": by[:256],
+        "delegated_to": role.strip()[:256],
+    }
+    task_name = getattr(task, "name", None)
+    if isinstance(task_name, str) and task_name:
+        record["task_name"] = task_name[:256]
+    if key[1]:
+        record["task_id"] = key[1][:256]
+    return record
+
+
 def install() -> bool:
     if os.environ.get("ALK_CREWAI_TOOL_TRACE") != "1" or not os.environ.get(
         "HARNESS_TOOL_TRACE"
@@ -98,12 +143,17 @@ def install() -> bool:
             ToolUsageFinishedEvent: "output",
             ToolUsageErrorEvent: "error",
         }
+        # The flow or crew that runs each agent, and when each agent's task began.
+        started: dict[tuple[str, str], float] = {}
+        coordinator: list[str] = []
 
         @functools.wraps(original)
         def emit(self: Any, source: Any, event: Any) -> Any:
             result = original(self, source, event)
             try:
-                record = _event_to_record(event, terminal_events)
+                record = _event_to_record(event, terminal_events) or _handoff_record(
+                    event, started, coordinator
+                )
                 if record is not None:
                     line = json.dumps(record, sort_keys=True)
                     if len(line) > 65536:

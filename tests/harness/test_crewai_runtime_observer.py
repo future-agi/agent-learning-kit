@@ -258,3 +258,48 @@ finally:
 
     assert len(records[0]["arguments"]["query"]) == 4096
     assert len(records[0]["output"]["result"]) == 4096
+
+
+def test_each_agent_a_flow_runs_is_a_hand_off_from_the_flow_with_its_return(tmp_path: Path) -> None:
+    _fake_crewai(tmp_path)
+    (tmp_path / "crewai/events/types/agent_events.py").write_text(
+        "from types import SimpleNamespace\n"
+        "class AgentExecutionStartedEvent(SimpleNamespace): pass\n"
+        "class AgentExecutionCompletedEvent(SimpleNamespace): pass\n"
+        "class AgentExecutionErrorEvent(SimpleNamespace): pass\n"
+    )
+    (tmp_path / "crewai/events/types/flow_events.py").write_text(
+        "from types import SimpleNamespace\nclass FlowStartedEvent(SimpleNamespace): pass\n"
+    )
+    script = """
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace as N
+from crewai.events.event_bus import CrewAIEventsBus
+from crewai.events.types.agent_events import (
+    AgentExecutionStartedEvent as Start, AgentExecutionCompletedEvent as Done, AgentExecutionErrorEvent as Failed,
+)
+from crewai.events.types.flow_events import FlowStartedEvent
+import crewai_runtime_observer_bootstrap as observer
+assert observer.install()
+bus = CrewAIEventsBus()
+t0 = datetime(2026, 11, 3, 10, 0, tzinfo=timezone.utc)
+bard = N(id='a1', role='Shakespearean Bard')
+verifier = N(id='a2', role='X Post Verifier\\n')
+write, verify = N(id='t1', name='write_x_post', description='Write a post'), N(id='t2', name='verify_x_post', description='Verify it')
+bus.emit(None, FlowStartedEvent(flow_name='ShakespeareXPostFlow', no_handlers=True))
+steps = [(Start, bard, write, 0), (Done, bard, write, 2), (Start, verifier, verify, 3), (Done, verifier, verify, 4),
+         (Start, bard, write, 5), (Done, bard, write, 7), (Start, verifier, verify, 8), (Failed, verifier, verify, 9)]
+for kind, agent, task, second in steps:
+    extra = {'error': 'too long'} if kind is Failed else {'output': 'ok'} if kind is Done else {}
+    bus.emit(None, kind(agent=agent, task=task, timestamp=t0 + timedelta(seconds=second), no_handlers=True, **extra))
+"""
+    _result, records = _run(tmp_path, script)
+    handoffs = [(r["agent_key"], r["delegated_to"], r["ended_at"] - r["at"], r["is_error"]) for r in records]
+    assert handoffs == [
+        ("ShakespeareXPostFlow", "Shakespearean Bard", 2.0, False),
+        ("ShakespeareXPostFlow", "X Post Verifier", 1.0, False),
+        ("ShakespeareXPostFlow", "Shakespearean Bard", 2.0, False),
+        ("ShakespeareXPostFlow", "X Post Verifier", 1.0, True),
+    ]
+    assert records[0]["arguments"] == {"task": "Write a post"} and records[0]["task_name"] == "write_x_post"
+    assert records[1]["output"] == "ok" and records[3]["output"] == "too long"

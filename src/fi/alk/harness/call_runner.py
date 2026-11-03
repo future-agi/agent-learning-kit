@@ -866,9 +866,9 @@ def _read_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[list[Call], list
             runtime_ids=runtime_ids(record),
             at=float(raw_at) if isinstance(raw_at, (int, float)) else 0.0,
         )
+        ended = record.get("ended_at")
+        call.ended_at = float(ended) if isinstance(ended, (int, float)) else 0.0
         if record.get("source") == _SPAN_SOURCE:
-            ended = record.get("ended_at")
-            call.ended_at = float(ended) if isinstance(ended, (int, float)) else 0.0
             from_spans.append(call)
             continue
         if record.get("source") != _LIVEKIT_HOOK_SOURCE:
