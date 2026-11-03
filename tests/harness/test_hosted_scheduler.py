@@ -4707,26 +4707,12 @@ def _friend(**seen) -> dict:
     }
 
 
-def test_a_sub_actor_that_never_joined_errors_the_call_instead_of_grading_it(
-    monkeypatch,
-) -> None:
-    for seen, why in (
-        (
-            _friend(dropped=["not ready in time"]),
-            "Rowan did not join the call (not ready in time)",
-        ),
-        (_friend(triggered=False), "Rowan did not join the call (never triggered)"),
-        (None, "friend did not join the call (never triggered)"),
-    ):
+def test_a_call_is_graded_whether_or_not_its_sub_actor_joined(monkeypatch) -> None:
+    for seen in (_friend(dropped=["not ready in time"]), _friend(triggered=False), None):
         receipt = _run_with_friend(
             monkeypatch, seen, [FakeSubGoal("booked", lambda w, c: None)]
         )
-        assert receipt.status == "errored"
-        assert (receipt.failure.code, receipt.failure.message) == (
-            "sub_actor_missing",
-            why,
-        )
-        assert [one.verdict for one in receipt.sub_goals] == [None]
+        assert (receipt.status, receipt.failure) == ("passed", None)
 
 
 def test_a_sub_actor_a_probability_draw_left_out_leaves_the_call_graded(monkeypatch) -> None:
