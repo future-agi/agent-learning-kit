@@ -319,7 +319,7 @@ async def probe_chat_workflow(
         from .contract import has_executable_tool_workflow
 
         requires_tool_evidence = getattr(job, "require_tool_workflow", False) or (
-            has_executable_tool_workflow(runner._contract)
+            has_executable_tool_workflow(runner._contract, include_construct=False)
         )
         if not outcome.calls and requires_tool_evidence:
             raise failure(

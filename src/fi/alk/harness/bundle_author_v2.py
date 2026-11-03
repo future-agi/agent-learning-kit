@@ -949,6 +949,45 @@ def _source_schema_artifacts(
     return _documented_source_schemas(source)
 
 
+def _only_this_database(action: int, *_args: object) -> int:
+    """SQLite authorizer for repository SQL: it may not open another database file, so
+    ``ATTACH`` and ``VACUUM INTO`` cannot create or write files outside the scratch one."""
+    if action in (sqlite3.SQLITE_ATTACH, sqlite3.SQLITE_DETACH):
+        return sqlite3.SQLITE_DENY
+    return sqlite3.SQLITE_OK
+
+
+def _postgres_schema_sql(
+    source_schemas: list[_SourceSchemaArtifact], *, contract: dict[str, Any] | None
+) -> str:
+    """The source schema as DDL the PostgreSQL world can run.
+
+    A SQLite store's schema is in SQLite's dialect (``AUTOINCREMENT``, for example), which
+    PostgreSQL rejects. Load it into SQLite and emit PostgreSQL DDL the same way an authored
+    ``world.sqlite`` is compiled. Every other store's schema is adopted as written.
+    """
+    schema_sql = "\n".join(artifact.sql for artifact in source_schemas)
+    data_store = (contract or {}).get("data_store")
+    kind = str(data_store.get("kind") or "") if isinstance(data_store, dict) else ""
+    if "sqlite" not in kind.lower():
+        return schema_sql
+    with tempfile.TemporaryDirectory() as scratch:
+        database = Path(scratch) / "source-schema.sqlite"
+        with closing(sqlite3.connect(database)) as connection:
+            connection.set_authorizer(_only_this_database)
+            try:
+                connection.executescript(schema_sql)
+            except sqlite3.Error as exc:
+                raise BundleAuthorError(
+                    f"source_schema_not_sqlite: the SQLite store's schema did not load: {exc}"
+                ) from exc
+        return _sqlite_sql(
+            database,
+            contract_declarations=_contract_column_declarations(contract or {}),
+            include_rows=False,
+        )
+
+
 def _adopted_seed_sql(
     authoring: Path,
     *,
@@ -961,7 +1000,7 @@ def _adopted_seed_sql(
         else []
     )
     if source_schemas:
-        schema_sql = "\n".join(artifact.sql for artifact in source_schemas)
+        schema_sql = _postgres_schema_sql(source_schemas, contract=contract)
         adopted = [f"source/{artifact.relative_path}" for artifact in source_schemas]
         store = authoring / "store.json"
         if store.is_file():
@@ -1054,7 +1093,7 @@ def _generic_postgres_seed_artifacts(
     seed = staging / "seed"
     schema_path = seed / "source-schema.sql"
     if source_schemas:
-        schema_sql = "\n".join(artifact.sql for artifact in source_schemas)
+        schema_sql = _postgres_schema_sql(source_schemas, contract=contract)
     else:
         # A data-free/in-process source has no repository-owned database schema to adopt.
         # During the compatibility window SQLite may carry that harness-owned schema. Canonical
@@ -1621,6 +1660,27 @@ def _hands_off_to_livekit_cli(root: Path, entry: str) -> bool:
     if not path.is_file():
         return False
     return "cli.run_app" in path.read_text(encoding="utf-8", errors="replace")
+
+
+_PORT_ENVIRONMENT_READ = re.compile(
+    r"""(?:environ(?:\.get\(\s*|\[\s*)|getenv\(\s*)["']PORT["']"""
+    r"""|(?:process|Bun)\.env\.PORT\b"""
+)
+_SOURCE_SUFFIXES = {".py", ".js", ".mjs", ".cjs", ".ts", ".tsx"}
+
+
+def _reads_port_from_environment(root: Path) -> bool:
+    """Whether the source reads ``PORT``. Without that read its port may be hard-coded."""
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root)
+        if path.suffix not in _SOURCE_SUFFIXES or not path.is_file():
+            continue
+        if any(part in _IGNORED_ARTIFACT_PARTS for part in relative.parts):
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if _PORT_ENVIRONMENT_READ.search(text):
+            return True
+    return False
 
 
 def _discover_callback_entrypoint(root: Path) -> str | None:
@@ -2763,6 +2823,20 @@ def resolve_environment_plan(
             process = _consumable_source_process(
                 process, "PORT", f"{{{{PORT_{control_name}}}}}"
             )
+        if (
+            port is not None
+            and not process.fixed_port_consumable
+            and (
+                is_graph
+                or is_callback
+                or is_command_adapter
+                or _reads_port_from_environment(component)
+            )
+        ):
+            # ``PORT`` already carries this world's port and the listener reads it: our adapter
+            # or the agent's own source. Kept as ``fixed_port``, the contract's port would force
+            # one world. Source with no such read keeps it, because it may hard-code that port.
+            process = process.model_copy(update={"fixed_port": None})
         if is_livekit:
             update: dict[str, Any] = {
                 "started_check": StartedCheck(
@@ -3262,6 +3336,49 @@ def _environment_tools(contract: dict[str, Any]) -> list[str]:
     )
 
 
+def _source_tool_trace_bindings(contract: dict[str, Any]) -> list[dict[str, str]]:
+    bindings = []
+    for raw in contract.get("tool_entrypoints", []):
+        if not isinstance(raw, dict):
+            continue
+        try:
+            entry = ToolEntry.model_validate(raw)
+        except ValueError as exc:
+            raise BundleAuthorError(f"contract_tool_entry_invalid: {exc}") from exc
+        if entry.mode == "import" and entry.module and entry.callable:
+            bindings.append(
+                {"name": entry.tool, "module": entry.module, "callable": entry.callable}
+            )
+    return bindings
+
+
+def _with_source_tool_trace(
+    processes: list[Any] | tuple[Any, ...],
+    *,
+    control_service: str,
+    bindings: list[dict[str, str]],
+) -> tuple[Any, ...]:
+    updated = []
+    for process in processes:
+        if not isinstance(process, SourceProcess) or process.name != control_service:
+            updated.append(process)
+            continue
+        environment = {
+            key: value
+            for key, value in process.environment.items()
+            if key not in {"HARNESS_TOOL_TRACE", "ALK_TOOL_TRACE_BINDINGS"}
+        }
+        if bindings:
+            environment.update(
+                {
+                    "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
+                    "ALK_TOOL_TRACE_BINDINGS": json.dumps(bindings),
+                }
+            )
+        updated.append(process.model_copy(update={"environment": environment}))
+    return tuple(updated)
+
+
 def _files(root: Path) -> list[BundleFileV2]:
     records: list[BundleFileV2] = []
     for path in sorted(root.rglob("*")):
@@ -3424,6 +3541,20 @@ def author_bundle_v2(
         runtime_dependencies=contract_body.get("runtime_dependencies"),
         tool_entrypoints=contract_body.get("tool_entrypoints"),
     )
+    trace_bindings = (
+        _source_tool_trace_bindings(contract_body)
+        if contract_modality == "chat"
+        else []
+    )
+    if trace_bindings and not _uses_source_tool_trace(plan.processes):
+        plan = replace(
+            plan,
+            processes=_with_source_tool_trace(
+                plan.processes,
+                control_service=plan.control_service or "",
+                bindings=trace_bindings,
+            ),
+        )
     provided_environment = {
         str(name).upper()
         for name in (job.metadata.get("environment_value_names", []) or [])
@@ -3623,6 +3754,8 @@ def author_bundle_v2(
             readiness=list(plan.readiness),
             files=_files(temporary),
             provenance=BundleProvenanceV2(
+                public_material_admissions=[],
+                public_test_fixture_admissions=[],
                 source_kind=job.source.kind.value,
                 repository=job.source.repository,
                 commit=job.source.commit_sha,
@@ -3950,6 +4083,19 @@ def _carry_contract(
             **metadata["provider_import"],
             "environment_tools": _environment_tools(body),
         }
+    if str(body.get("modality") or "").strip().lower() == "chat":
+        bindings = _source_tool_trace_bindings(body)
+        processes = list(
+            _with_source_tool_trace(
+                processes,
+                control_service=manifest.runtime.control_service or "",
+                bindings=bindings,
+            )
+        )
+        if bindings:
+            metadata["source_tool_trace_version"] = _SOURCE_TOOL_TRACE_VERSION
+        else:
+            metadata.pop("source_tool_trace_version", None)
     return True, processes, metadata
 
 

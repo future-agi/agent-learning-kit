@@ -97,6 +97,21 @@ def test_certificate_is_canonical_and_tamper_evident() -> None:
         HarnessCertification.model_validate(body)
 
 
+def test_certificate_preserves_legacy_repair_history_fingerprint() -> None:
+    body = json.loads(_certificate().model_dump_json())
+
+    assert "runtime_patches_used" not in body["repairs"]
+    assert HarnessCertification.model_validate(body).fingerprint == body["fingerprint"]
+
+
+def test_certificate_serializes_explicit_runtime_patch_count() -> None:
+    body = json.loads(
+        _history().model_copy(update={"runtime_patches_used": 0}).model_dump_json()
+    )
+
+    assert body["runtime_patches_used"] == 0
+
+
 def test_execution_gate_accepts_only_matching_complete_certificate(
     tmp_path: Path,
 ) -> None:

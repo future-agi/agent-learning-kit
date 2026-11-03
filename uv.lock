@@ -215,7 +215,7 @@ requires-dist = [
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0,<3" },
     { name = "torch", marker = "extra == 'all'", specifier = ">=2.10.0,<3" },
     { name = "torch", marker = "extra == 'nli'", specifier = ">=2.10.0,<3" },
-    { name = "traceai-claude-agent-sdk", marker = "extra == 'hosted-tracing'", specifier = ">=0.1.0" },
+    { name = "traceai-claude-agent-sdk", marker = "extra == 'hosted-tracing'", specifier = ">=0.1.1" },
     { name = "transformers", marker = "extra == 'all'", specifier = ">=5.2.0,<6" },
     { name = "transformers", marker = "extra == 'nli'", specifier = ">=5.2.0,<6" },
     { name = "typer", specifier = ">=0.9.0,<1.0.0" },
@@ -7012,7 +7012,7 @@ wheels = [
 
 [[package]]
 name = "traceai-claude-agent-sdk"
-version = "0.1.0"
+version = "0.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fi-instrumentation-otel" },
@@ -7020,9 +7020,9 @@ dependencies = [
     { name = "opentelemetry-instrumentation" },
     { name = "opentelemetry-sdk" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/8a/79/8034257a2591f6b997cac2f0eeed778802d9192cf6f6f6583ac47e452191/traceai_claude_agent_sdk-0.1.0.tar.gz", hash = "sha256:7be6fcb638ad67fd57a3484eb618b66e7f5f8de1baceaea9b16db27035dffb4d", size = 20092, upload-time = "2026-03-10T13:50:41.49Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/23/db/43a59f40b047eee99040cb38b4ea2b59d6c234a1c1e3a22182bf7656635b/traceai_claude_agent_sdk-0.1.1.tar.gz", hash = "sha256:253128bb7c2ba7d7a8d047e56cfb80e4d511589d81628b55c56264347035cd02", size = 21017, upload-time = "2026-10-31T07:48:30.996Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a9/50/3457bb1d071b7111ce3e1c3bb3454a4673001be59ee07942173101051673/traceai_claude_agent_sdk-0.1.0-py3-none-any.whl", hash = "sha256:0c123cac2f45171f94045daecd8a56b3b465a58d25a4b5e722de0517bcc95235", size = 23737, upload-time = "2026-03-10T13:50:39.911Z" },
+    { url = "https://files.pythonhosted.org/packages/77/33/c066c04a9ed203724faa0ecc1aeb2bfecfd2b7e17f6a34deb01f56e2205a/traceai_claude_agent_sdk-0.1.1-py3-none-any.whl", hash = "sha256:70285f4a381c8c2aa7207afcdc3f43f9424005fa092655fb87659a96c19cee25", size = 24444, upload-time = "2026-10-31T07:48:26.896Z" },
 ]
 
 [[package]]
