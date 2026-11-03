@@ -1,0 +1,96 @@
+{
+  "schema_version": "futureagi.multi-agent-reference.v1",
+  "id": "google-adk-travel-concierge",
+  "framework": {
+    "name": "google_adk",
+    "version": "1.31.1"
+  },
+  "source": {
+    "repository": "https://github.com/google/adk-samples.git",
+    "commit": "b822efc7710498dfa4ff0d405c20ecdc6b92c8e3",
+    "subdirectory": "python/agents/travel-concierge",
+    "license": "Apache-2.0"
+  },
+  "source_checks": [
+    {"path": "travel_concierge/agent.py", "contains": "sub_agents=["},
+    {"path": "travel_concierge/agent.py", "contains": "inspiration_agent,"},
+    {"path": "travel_concierge/agent.py", "contains": "planning_agent,"},
+    {"path": "travel_concierge/agent.py", "contains": "booking_agent,"},
+    {"path": "travel_concierge/agent.py", "contains": "pre_trip_agent,"},
+    {"path": "travel_concierge/agent.py", "contains": "in_trip_agent,"},
+    {"path": "travel_concierge/agent.py", "contains": "post_trip_agent,"}
+  ],
+  "runtime": {
+    "kind": "chat_http",
+    "command": ["uv", "run", "adk", "api_server", "travel_concierge"],
+    "model_environment": {
+      "GOOGLE_GENAI_MODEL": "gemini-3.7-flash",
+      "GOOGLE_GENAI_USE_VERTEXAI": "true"
+    }
+  },
+  "topology": {
+    "coordinator": "root_agent",
+    "workers": [
+      {"id": "inspiration_agent", "parent": "root_agent"},
+      {"id": "planning_agent", "parent": "root_agent"},
+      {"id": "booking_agent", "parent": "root_agent"},
+      {"id": "pre_trip_agent", "parent": "root_agent"},
+      {"id": "in_trip_agent", "parent": "root_agent"},
+      {"id": "post_trip_agent", "parent": "root_agent"},
+      {"id": "place_agent", "parent": "inspiration_agent"},
+      {"id": "poi_agent", "parent": "inspiration_agent"},
+      {"id": "flight_search_agent", "parent": "planning_agent"},
+      {"id": "flight_seat_selection_agent", "parent": "planning_agent"},
+      {"id": "hotel_search_agent", "parent": "planning_agent"},
+      {"id": "hotel_room_selection_agent", "parent": "planning_agent"},
+      {"id": "itinerary_agent", "parent": "planning_agent"},
+      {"id": "create_reservation", "parent": "booking_agent"},
+      {"id": "payment_choice", "parent": "booking_agent"},
+      {"id": "process_payment", "parent": "booking_agent"},
+      {"id": "what_to_pack_agent", "parent": "pre_trip_agent"},
+      {"id": "google_search_grounding", "parent": "pre_trip_agent"},
+      {"id": "trip_monitor_agent", "parent": "in_trip_agent"},
+      {"id": "day_of_agent", "parent": "in_trip_agent"}
+    ]
+  },
+  "scenarios": [
+    {
+      "id": "plan_and_book_trip",
+      "instruction": "Plan a trip with flight, seat, hotel, room, itinerary, reservation, payment choice, and payment processing.",
+      "expected_workers": [
+        "planning_agent",
+        "flight_search_agent",
+        "flight_seat_selection_agent",
+        "hotel_search_agent",
+        "hotel_room_selection_agent",
+        "itinerary_agent",
+        "booking_agent",
+        "create_reservation",
+        "payment_choice",
+        "process_payment"
+      ],
+      "expected_effects": ["itinerary stored in session state", "booking and payment outcomes reported truthfully"]
+    },
+    {
+      "id": "pre_trip_and_in_trip_support",
+      "instruction": "Ask for packing, travel requirements, booking monitoring, and day-of transit help for an existing itinerary.",
+      "expected_workers": [
+        "pre_trip_agent",
+        "what_to_pack_agent",
+        "google_search_grounding",
+        "in_trip_agent",
+        "trip_monitor_agent",
+        "day_of_agent"
+      ],
+      "expected_effects": ["existing itinerary retained", "support results returned to the root agent"]
+    }
+  ],
+  "required_evidence": [
+    "stable parent and child IDs under one run ID",
+    "delegation and return events for every handoff",
+    "every tool call attributed to its worker",
+    "separate tool permissions per worker",
+    "independent results for each exercised worker and the whole task",
+    "missing child evidence reported as unmeasured"
+  ]
+}

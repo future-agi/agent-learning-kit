@@ -139,16 +139,21 @@ def test_file_tool_trace_is_collected_from_runtime_metadata(tmp_path: Path) -> N
     trace.write_text(
         json.dumps(
             {
-                "name": "book_ride",
-                "arguments": '{"destination":"airport"}',
-                "output": {"booking_id": "ride-1"},
+                "name": "process_request",
+                "arguments": '{"request":"example"}',
+                "output": {"request_id": "request-1"},
                 "is_error": False,
+                "agent_id": "run-worker-7",
+                "agent_key": "worker-a",
+                "agent_role": "Request processor",
+                "task_id": "task-4",
+                "task_name": "Process request",
             }
         )
         + "\n"
         + json.dumps(
             {
-                "name": "charge_card",
+                "name": "write_record",
                 "arguments": {},
                 "output": "declined",
                 "is_error": True,
@@ -160,9 +165,13 @@ def test_file_tool_trace_is_collected_from_runtime_metadata(tmp_path: Path) -> N
     calls = cr._collect_file_tool_calls(
         _runtime(metadata={"tool_trace_path": str(trace)})
     )
-    assert [call.name for call in calls] == ["book_ride", "charge_card"]
-    assert calls[0].arguments == {"destination": "airport"}
+    assert [call.name for call in calls] == ["process_request", "write_record"]
+    assert calls[0].arguments == {"request": "example"}
     assert calls[0].ok is True
+    assert calls[0].worker_id == "worker-a"
+    assert calls[0].worker_label == "Request processor"
+    assert calls[0].task_id == "task-4"
+    assert calls[0].task_label == "Process request"
     assert calls[1].ok is False
     assert calls[1].error == "declined"
 

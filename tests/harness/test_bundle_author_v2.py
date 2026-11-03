@@ -40,6 +40,7 @@ from fi.alk.harness.certification import (
 )
 from fi.alk.harness.job import HarnessJob, ProviderExecutionMode
 from fi.alk.harness.process_preflight import preflight_bundle
+from fi.alk.harness.process_runtime import plan_ports
 from fi.alk.harness.provision import source_fingerprint
 from fi.alk.harness.repair_controller import RepairHistory
 from fi.alk.harness.source_model import SourceModel
@@ -81,6 +82,187 @@ def test_source_tool_handler_rejects_path_separator(tmp_path: Path) -> None:
             },
             tmp_path,
         )
+
+
+@pytest.mark.parametrize("dependency", ["requirements", "selected", "unselected", "extra", "supplemental"])
+@pytest.mark.parametrize("mode", ["import", "construct", "none", "http"])
+def test_native_command_tool_trace_uses_executable_source_bindings(
+    tmp_path: Path, dependency: str, mode: str,
+) -> None:
+    (tmp_path / "agent.py").write_text("print('ready')\n")
+    dependencies = '["crewai==1.6.1"]' if dependency == "selected" else "[]"
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="agent"\nversion="1"\n'
+        f'dependencies={dependencies}\n'
+        '[project.optional-dependencies]\ncrew=["crewai==1.6.1"]\n'
+    )
+    (tmp_path / "requirements.txt").write_text("crewai==1.6.1\n")
+    if dependency == "requirements":
+        (tmp_path / "pyproject.toml").unlink()
+    runtime = {
+        "language": "python", "execution": "native", "command": ["python", "agent.py"],
+        "extras": ["crew"] if dependency == "extra" else [],
+        "requirements_files": ["requirements.txt"] if dependency == "supplemental" else [],
+    }
+    entries = [] if mode == "none" else [{
+        "tool": "Lookup tool", "mode": mode, "module": "agent_tools", "callable": "lookup",
+    }]
+    plan = resolve_environment_plan(
+        tmp_path, _job(connector="auto"), contract_runtime=runtime,
+        tool_entrypoints=entries, contract_interface_kind="command", contract_modality="chat",
+    )
+    control = next(p for p in plan.processes if p.name == plan.control_service)
+    if mode in {"none", "http"}:
+        assert "HARNESS_TOOL_TRACE" not in control.environment
+        assert "ALK_TOOL_TRACE_BINDINGS" not in control.environment
+        assert "ALK_CREWAI_TOOL_TRACE" not in control.environment
+        return
+    assert control.environment["HARNESS_TOOL_TRACE"] == "{{WORLD_DIR}}/agent-tool-calls.jsonl"
+    assert json.loads(control.environment["ALK_TOOL_TRACE_BINDINGS"]) == [{
+        "name": "Lookup tool", "module": "agent_tools", "callable": "lookup",
+    }]
+    assert (control.environment.get("ALK_CREWAI_TOOL_TRACE") == "1") == (
+        dependency in {"requirements", "selected", "extra", "supplemental"}
+    )
+    assert all(
+        "HARNESS_TOOL_TRACE" not in getattr(p, "environment", {})
+        for p in plan.processes if p.name != plan.control_service
+    )
+
+
+def test_bundle_author_carries_command_tool_trace_bindings(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ready')\n")
+    (source / "agent_tools.py").write_text("def lookup(query): return query\n")
+    (source / "requirements.txt").write_text("crewai==1.6.1\n")
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring, command=["python", "agent.py"],
+        interface={"kind": "command", "protocol": "fi.alk"},
+    )
+    contract_path = authoring / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract["tool_entrypoints"] = [
+        {
+            "tool": "lookup",
+            "mode": "import",
+            "module": "agent_tools",
+            "callable": "lookup",
+        },
+        {
+            "tool": "editor",
+            "mode": "construct",
+            "module": "agent_tools",
+            "callable": "Editor.update",
+        },
+    ]
+    contract_path.write_text(json.dumps(contract))
+    bundle = author_bundle_v2(
+        source=source, job=_job(connector="auto"), authoring=authoring,
+        output=tmp_path / "bundle",
+    )
+    process = next(p for p in bundle.processes if p.name == bundle.runtime.control_service)
+    assert process.environment["HARNESS_TOOL_TRACE"] == "{{WORLD_DIR}}/agent-tool-calls.jsonl"
+    assert process.environment["ALK_CREWAI_TOOL_TRACE"] == "1"
+    assert json.loads(process.environment["ALK_TOOL_TRACE_BINDINGS"]) == [
+        {"name": "lookup", "module": "agent_tools", "callable": "lookup"},
+        {
+            "name": "editor",
+            "module": "agent_tools",
+            "callable": "Editor.update",
+        },
+    ]
+
+
+def test_reseal_compiles_tools_added_to_a_traced_command_agent(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ready')\n")
+    (source / "agent_tools.py").write_text(
+        "def lookup(query): return query\n"
+        "def update(value): return value\n"
+    )
+    (source / "requirements.txt").write_text("requests==2.32.5\n")
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring, command=["python", "agent.py"],
+        interface={"kind": "command", "protocol": "fi.alk"},
+    )
+    contract_path = authoring / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract["tools"] = [{"name": "lookup", "args": ["query"]}]
+    contract["tool_entrypoints"] = [{
+        "tool": "lookup", "mode": "import", "module": "agent_tools", "callable": "lookup",
+    }]
+    contract_path.write_text(json.dumps(contract))
+    bundle = authoring / "environment-bundle"
+    author_bundle_v2(
+        source=source, job=_job(connector="auto"), authoring=authoring, output=bundle,
+    )
+    contract["tools"].append({"name": "update", "args": ["value"]})
+    contract["tool_entrypoints"].append({
+        "tool": "update", "mode": "import", "module": "agent_tools", "callable": "update",
+    })
+    contract_path.write_text(json.dumps(contract))
+
+    reseal_scenarios(authoring)
+
+    resealed = load_bundle_v2(bundle)
+    assert resealed.metadata["source_tool_trace_version"] == 1
+    assert "handlers/update.py" in {file.path for file in resealed.files}
+    assert "contract_copied" not in resealed.metadata
+
+
+def test_reseal_preserves_construct_only_crewai_command_trace(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ready')\n")
+    (source / "agent_tools.py").write_text(
+        "class Editor:\n"
+        "    def update(self, value): return value\n"
+    )
+    (source / "requirements.txt").write_text("crewai==1.6.1\n")
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring, command=["python", "agent.py"],
+        interface={"kind": "command", "protocol": "fi.alk"},
+    )
+    contract_path = authoring / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract["tool_entrypoints"] = [{
+        "tool": "editor", "mode": "construct", "module": "agent_tools",
+        "callable": "Editor.update",
+    }]
+    contract_path.write_text(json.dumps(contract))
+    bundle_path = authoring / "environment-bundle"
+    built = author_bundle_v2(
+        source=source, job=_job(connector="auto"), authoring=authoring,
+        output=bundle_path,
+    )
+    original = next(
+        process for process in built.processes
+        if process.name == built.runtime.control_service
+    ).environment
+
+    contract["one_liner"] = "edited after the build"
+    contract_path.write_text(json.dumps(contract))
+    reseal_scenarios(authoring)
+
+    resealed = load_bundle_v2(bundle_path)
+    process = next(
+        item for item in resealed.processes
+        if item.name == resealed.runtime.control_service
+    )
+    assert process.environment == original
+    assert process.environment["HARNESS_TOOL_TRACE"] == (
+        "{{WORLD_DIR}}/agent-tool-calls.jsonl"
+    )
+    assert process.environment["ALK_CREWAI_TOOL_TRACE"] == "1"
+    assert json.loads(process.environment["ALK_TOOL_TRACE_BINDINGS"]) == [{
+        "name": "editor", "module": "agent_tools", "callable": "Editor.update",
+    }]
+    assert resealed.metadata["source_tool_trace_version"] == 1
 
 
 def _job(
@@ -476,6 +658,60 @@ def test_bundle_compiles_discovered_source_tool_entrypoint(tmp_path: Path) -> No
     }
 
 
+def test_bundle_observes_imported_chat_tool_execution(tmp_path: Path) -> None:
+    source = tmp_path / "chat-agent"
+    source.mkdir()
+    (source / "agent.py").write_text(
+        "def search_books(query):\n    return {'query': query, 'matches': 1}\n",
+        encoding="utf-8",
+    )
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring,
+        command=["python3", "agent.py"],
+        interface={
+            "kind": "http", "protocol": "openai_chat", "port": 8080,
+            "path": "/v1/chat/completions", "include_tools": False,
+        },
+    )
+    contract_path = authoring / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract["tool_entrypoints"] = [
+        {
+            "tool": "search_books", "mode": "import", "module": "agent",
+            "callable": "search_books",
+        }
+    ]
+    contract_path.write_text(json.dumps(contract))
+    bundle = author_bundle_v2(
+        source=source, job=_job(connector="http"), authoring=authoring,
+        output=tmp_path / "bundle",
+    )
+    process = next(
+        item for item in bundle.processes if item.name == bundle.runtime.control_service
+    )
+    trace = tmp_path / "agent-tool-calls.jsonl"
+    bootstrap = Path(__file__).resolve().parents[2] / "src/fi/alk/harness/livekit_tool_trace_bootstrap.py"
+    shutil.copy2(bootstrap, source / "sitecustomize.py")
+    result = subprocess.run(
+        [sys.executable, "-c", "from agent import search_books; print(search_books('Dune'))"],
+        env={
+            **os.environ,
+            **{
+                key: value.replace("{{WORLD_DIR}}", str(tmp_path))
+                for key, value in process.environment.items()
+            },
+            "PYTHONPATH": str(source),
+        },
+        capture_output=True, text=True, check=True,
+    )
+    assert "'matches': 1" in result.stdout
+    records = [json.loads(line) for line in trace.read_text().splitlines()]
+    assert records[0]["name"] == "search_books"
+    assert records[0]["arguments"] == {"query": "Dune"}
+    assert bundle.metadata["source_tool_trace_version"] == 1
+
+
 def test_tool_registration_is_not_observed_as_tool_execution(tmp_path: Path) -> None:
     source = tmp_path / "chat-agent"
     source.mkdir()
@@ -536,6 +772,15 @@ def test_auto_voice_contract_compiles_livekit_process_runtime(tmp_path: Path) ->
     )
     authoring = _authoring(tmp_path)
     _write_voice_contract(authoring)
+    contract_path = authoring / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract["tool_entrypoints"] = [
+        {
+            "tool": "search_books", "mode": "import", "module": "agent",
+            "callable": "search_books",
+        }
+    ]
+    contract_path.write_text(json.dumps(contract))
     job = _job(
         connector="auto",
         with_secrets=True,
@@ -549,6 +794,8 @@ def test_auto_voice_contract_compiles_livekit_process_runtime(tmp_path: Path) ->
     agent = next(process for process in bundle.processes if process.name == "agent")
     assert agent.environment["LIVEKIT_AGENT_NAME"].endswith("-w{{WORLD_INDEX}}")
     assert agent.environment["HARNESS_MODE"] == "1"
+    assert "ALK_TOOL_TRACE_BINDINGS" not in agent.environment
+    assert "source_tool_trace_version" not in bundle.metadata
     assert "target_provider" in agent.secret_purposes
     assert "target_http" not in bundle.capabilities
 
@@ -839,6 +1086,7 @@ def test_callable_contract_compiles_repository_callback_adapter(
     assert "ThreadingHTTPServer" in agent.run_command[2]
     assert agent.environment["ALK_CALLBACK_ENTRYPOINT"] == "app.agent:agent_callback"
     assert agent.environment["PORT"] == "{{PORT_agent}}"
+    assert agent.fixed_port is None
     assert bundle.capabilities["target_http"].service == "agent"
     assert any(probe.capability == "target_http" for probe in bundle.readiness)
     preflight_bundle(
@@ -2188,6 +2436,119 @@ def test_generic_pipeline_compiles_harness_schema_for_in_process_store(
         assert copied.execute("SELECT status FROM accounts").fetchone() == ("active",)
 
 
+_SQLITE_ORDERS_DDL = (
+    "CREATE TABLE orders (\n"
+    "  id INTEGER PRIMARY KEY AUTOINCREMENT,\n"
+    "  status TEXT NOT NULL\n"
+    ");\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("path", "content", "schema_from"),
+    [
+        ("data/seed.sql", _SQLITE_ORDERS_DDL, "data/seed.sql"),
+        ("schema.sql", _SQLITE_ORDERS_DDL, ""),
+        ("README.md", f"# Orders\n\n```sql\n{_SQLITE_ORDERS_DDL}```\n", ""),
+    ],
+    ids=["declared", "conventional", "readme"],
+)
+def test_generic_pipeline_adopts_a_sqlite_stores_schema_as_postgres(
+    tmp_path: Path, path: str, content: str, schema_from: str
+) -> None:
+    source = tmp_path / "source"
+    (source / path).parent.mkdir(parents=True)
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    (source / path).write_text(content, encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    contract = {
+        "modality": "chat",
+        "data_store": {"kind": "sqlite", "schema_from": schema_from},
+    }
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("CREATE TABLE orders (id INTEGER PRIMARY KEY, status TEXT)")
+        database.execute("INSERT INTO orders VALUES (?, ?)", (1, "shipped"))
+
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source,
+        job=_job(connector="http", metadata={"generic_harness_v1": True}),
+        authoring=authoring,
+        output=output,
+    )
+
+    assert manifest.seed.stores[0].migrations == ["seed/source-schema.sql"]
+    schema = (output / "seed" / "source-schema.sql").read_text(encoding="utf-8")
+    assert "AUTOINCREMENT" not in schema
+    # The source's own columns, not the authored world's: only the source says NOT NULL.
+    assert (
+        'CREATE TABLE IF NOT EXISTS "orders" ("id" bigint PRIMARY KEY, '
+        '"status" text NOT NULL);'
+    ) in schema
+
+
+def test_generic_pipeline_refuses_a_sqlite_store_schema_sqlite_cannot_load(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    (source / "db").mkdir(parents=True)
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    (source / "db" / "schema.sql").write_text("CREATE TABLE (;\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    (authoring / "contract.json").write_text(
+        json.dumps({"modality": "chat", "data_store": {"kind": "sqlite"}}),
+        encoding="utf-8",
+    )
+    sqlite3.connect(authoring / "world.sqlite").close()
+
+    with pytest.raises(BundleAuthorError, match="source_schema_not_sqlite"):
+        author_bundle_v2(
+            source=source,
+            job=_job(connector="http", metadata={"generic_harness_v1": True}),
+            authoring=authoring,
+            output=tmp_path / "bundle",
+        )
+
+
+@pytest.mark.parametrize(
+    "escape",
+    [
+        "ATTACH DATABASE '{outside}' AS outside; CREATE TABLE outside.proof (id INTEGER);",
+        "CREATE TABLE orders (id INTEGER); VACUUM INTO '{outside}';",
+        "ATTACH DATABASE 'relative.db' AS outside; CREATE TABLE outside.proof (id INTEGER);",
+    ],
+    ids=["attach", "vacuum-into", "attach-relative"],
+)
+def test_a_sqlite_store_schema_cannot_write_outside_its_scratch_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, escape: str
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    outside = tmp_path / "outside.db"
+    source = tmp_path / "source"
+    (source / "db").mkdir(parents=True)
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    (source / "db" / "schema.sql").write_text(
+        escape.format(outside=outside), encoding="utf-8"
+    )
+    authoring = _authoring(tmp_path)
+    (authoring / "contract.json").write_text(
+        json.dumps({"modality": "chat", "data_store": {"kind": "sqlite"}}),
+        encoding="utf-8",
+    )
+    sqlite3.connect(authoring / "world.sqlite").close()
+
+    with pytest.raises(BundleAuthorError, match="source_schema_not_sqlite"):
+        author_bundle_v2(
+            source=source,
+            job=_job(connector="http", metadata={"generic_harness_v1": True}),
+            authoring=authoring,
+            output=tmp_path / "bundle",
+        )
+    assert not outside.exists()
+    assert not (tmp_path / "relative.db").exists()
+
+
 def test_generic_pipeline_accepts_explicitly_tool_free_agent(tmp_path: Path) -> None:
     source = tmp_path / "source"
     source.mkdir()
@@ -2791,6 +3152,7 @@ def test_chat_command_runtime_compiles_generic_subprocess_bridge(
     agent = next(process for process in manifest.processes if process.name == "agent")
     assert agent.source_origin == "bundle"
     assert agent.working_directory == "generated/source/agent"
+    assert agent.fixed_port is None
     assert agent.environment["ALK_SUBPROCESS_COMMAND"] == json.dumps(
         [".venv/bin/python", "main.py"]
     )
@@ -2885,6 +3247,7 @@ def test_declared_langgraph_graph_compiles_without_agent_script(tmp_path: Path) 
 
     agent = next(process for process in manifest.processes if process.name == "agent")
     assert agent.environment["ALK_LANGGRAPH_ENTRYPOINT"] == "src/example/graph.py:graph"
+    assert agent.fixed_port is None
     assert "ThreadingHTTPServer" in agent.run_command[-1]
     sealed_contract = json.loads((output / "contract.json").read_text())
     assert sealed_contract["runtime"]["interface"]["kind"] == "callable"
@@ -3033,6 +3396,106 @@ def test_declared_http_runtime_uses_contract_command_port_and_health(
         item for item in plan.readiness if item.capability == "target_http"
     )
     assert readiness.path == "/docs"
+
+
+_PLAIN_HTTP_RUNTIME = {
+    "language": "python",
+    "command": ["python", "agent.py"],
+    "workdir": ".",
+    "interface": {
+        "kind": "http",
+        "protocol": "openai_chat",
+        "path": "/chat",
+        "health_path": "/health",
+        "port": 8080,
+    },
+}
+
+
+def _plain_http_agent(source: Path, files: dict[str, str]):
+    for name, text in {"agent.py": "", **files}.items():
+        path = source / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    plan = resolve_environment_plan(
+        source,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime=_PLAIN_HTTP_RUNTIME,
+    )
+    return next(process for process in plan.processes if process.name == "agent")
+
+
+@pytest.mark.parametrize(
+    ("name", "text"),
+    [
+        ("agent.py", 'port = int(os.environ.get("PORT", "8080"))\n'),
+        ("agent.py", "port = int(os.environ['PORT'])\n"),
+        ("agent.py", 'port = int(os.getenv("PORT", 8080))\n'),
+        ("app/server.py", 'port = os.environ.get(\n    "PORT",\n    "8080",\n)\n'),
+        ("server.ts", "const port = Number(process.env.PORT ?? 8080);\n"),
+        ("server.ts", "const port = Number(Bun.env.PORT ?? 8080);\n"),
+    ],
+)
+def test_http_agent_that_reads_port_has_no_fixed_port(
+    tmp_path: Path, name: str, text: str
+) -> None:
+    agent = _plain_http_agent(tmp_path / "source", {name: text})
+    assert agent.fixed_port is None
+    assert agent.environment["PORT"] == "{{PORT_agent}}"
+    assert agent.started_check is not None and agent.started_check.port is True
+
+
+@pytest.mark.parametrize(
+    "files",
+    [
+        {"agent.py": 'ThreadingHTTPServer(("0.0.0.0", 8080), Handler)\n'},
+        {"agent.py": 'db_port = os.environ.get("DB_PORT", "5432")\n'},
+        {"agent.py": "port = process.env.PORT_ADMIN\n"},
+        {".venv/lib/uvicorn.py": 'port = os.environ.get("PORT")\n'},
+        {"node_modules/server.js": "const port = process.env.PORT;\n"},
+    ],
+)
+def test_http_agent_without_a_port_read_keeps_its_fixed_port(
+    tmp_path: Path, files: dict[str, str]
+) -> None:
+    assert _plain_http_agent(tmp_path / "source", files).fixed_port == 8080
+
+
+def test_http_agent_that_reads_port_passes_preflight_at_several_worlds(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text(
+        'port = int(os.environ.get("PORT", "8080"))\n', encoding="utf-8"
+    )
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring,
+        command=_PLAIN_HTTP_RUNTIME["command"],
+        interface=_PLAIN_HTTP_RUNTIME["interface"],
+    )
+    output = tmp_path / "bundle"
+    job = _job(connector="auto")
+
+    bundle = author_bundle_v2(
+        source=source, job=job, authoring=authoring, output=output
+    )
+
+    preflight_bundle(
+        output,
+        load_bundle_v2(output),
+        parallelism=4,
+        secret_refs={
+            alias: ref.purpose for alias, ref in job.agent.secret_refs.items()
+        },
+    )
+    plan = plan_ports(bundle, instances=4)
+    assert plan.effective_instances == 4
+    assert plan.degraded_reason is None
+    assert plan.port_for("agent", 0) != plan.port_for("agent", 1)
 
 
 @pytest.mark.parametrize("declare_mount_root", [False, True])
@@ -3765,6 +4228,15 @@ def test_a_reseal_leaves_a_bundle_an_older_build_compiled_unstamped(
     manifest = load_bundle_v2(bundle)
     if older == "traced":
         extra = {"ALK_TOOL_TRACE_BINDINGS": "[]"}
+        manifest = manifest.model_copy(
+            update={
+                "metadata": {
+                    key: value
+                    for key, value in manifest.metadata.items()
+                    if key != "source_tool_trace_version"
+                }
+            }
+        )
     else:
         # A ``callable`` command an older build bridged through a subprocess.
         extra = {"ALK_SUBPROCESS_COMMAND": '["python", "main.py"]'}
