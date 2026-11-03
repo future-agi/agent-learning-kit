@@ -2263,6 +2263,44 @@ def test_generic_pipeline_refuses_a_sqlite_store_schema_sqlite_cannot_load(
         )
 
 
+@pytest.mark.parametrize(
+    "escape",
+    [
+        "ATTACH DATABASE '{outside}' AS outside; CREATE TABLE outside.proof (id INTEGER);",
+        "CREATE TABLE orders (id INTEGER); VACUUM INTO '{outside}';",
+        "ATTACH DATABASE 'relative.db' AS outside; CREATE TABLE outside.proof (id INTEGER);",
+    ],
+    ids=["attach", "vacuum-into", "attach-relative"],
+)
+def test_a_sqlite_store_schema_cannot_write_outside_its_scratch_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, escape: str
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    outside = tmp_path / "outside.db"
+    source = tmp_path / "source"
+    (source / "db").mkdir(parents=True)
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    (source / "db" / "schema.sql").write_text(
+        escape.format(outside=outside), encoding="utf-8"
+    )
+    authoring = _authoring(tmp_path)
+    (authoring / "contract.json").write_text(
+        json.dumps({"modality": "chat", "data_store": {"kind": "sqlite"}}),
+        encoding="utf-8",
+    )
+    sqlite3.connect(authoring / "world.sqlite").close()
+
+    with pytest.raises(BundleAuthorError, match="source_schema_not_sqlite"):
+        author_bundle_v2(
+            source=source,
+            job=_job(connector="http", metadata={"generic_harness_v1": True}),
+            authoring=authoring,
+            output=tmp_path / "bundle",
+        )
+    assert not outside.exists()
+    assert not (tmp_path / "relative.db").exists()
+
+
 def test_generic_pipeline_accepts_explicitly_tool_free_agent(tmp_path: Path) -> None:
     source = tmp_path / "source"
     source.mkdir()

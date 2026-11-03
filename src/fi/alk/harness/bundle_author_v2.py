@@ -949,6 +949,14 @@ def _source_schema_artifacts(
     return _documented_source_schemas(source)
 
 
+def _only_this_database(action: int, *_args: object) -> int:
+    """SQLite authorizer for repository SQL: it may not open another database file, so
+    ``ATTACH`` and ``VACUUM INTO`` cannot create or write files outside the scratch one."""
+    if action in (sqlite3.SQLITE_ATTACH, sqlite3.SQLITE_DETACH):
+        return sqlite3.SQLITE_DENY
+    return sqlite3.SQLITE_OK
+
+
 def _postgres_schema_sql(
     source_schemas: list[_SourceSchemaArtifact], *, contract: dict[str, Any] | None
 ) -> str:
@@ -966,6 +974,7 @@ def _postgres_schema_sql(
     with tempfile.TemporaryDirectory() as scratch:
         database = Path(scratch) / "source-schema.sqlite"
         with closing(sqlite3.connect(database)) as connection:
+            connection.set_authorizer(_only_this_database)
             try:
                 connection.executescript(schema_sql)
             except sqlite3.Error as exc:
