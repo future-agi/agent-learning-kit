@@ -130,6 +130,13 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     && chmod -R a-w /opt/alk \
     && rm /tmp/alk-install-start
 
+# Interpreters here never write bytecode, and a run starts fresh ones for every conversation, so
+# compile it once. The sources cannot change, so nothing checks the cache against them. A
+# third-party file that does not parse must not fail the build; ALK's own workers must compile.
+RUN (/opt/alk-venv/bin/python -m compileall -q -j 0 --invalidation-mode unchecked-hash \
+        /opt/alk-venv/lib/python3.12/site-packages >/dev/null || true) \
+    && test -f /opt/alk-venv/lib/python3.12/site-packages/fi/alk/harness/__pycache__/chat_worker.cpython-312.pyc
+
 ENV PATH="/opt/alk-venv/bin:/usr/lib/postgresql/16/bin:/opt/erlang/bin:/opt/rabbitmq/sbin:/opt/node22/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \
     XDG_RUNTIME_DIR=/run/user/2000
