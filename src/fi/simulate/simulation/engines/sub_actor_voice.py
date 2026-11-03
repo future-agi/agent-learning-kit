@@ -275,7 +275,8 @@ class SubActorsOnCall:
         heard = [*self.conversation(), f"The agent: {text}"]
         took_part = False
         holding = False
-        for key, voice in self.voices.items():
+        # Whoever has the phone is served before a background voice, so a line wanted this turn never crowds them out.
+        for key, voice in sorted(self.voices.items(), key=lambda one: one[1].channel == "audio_mix"):
             if voice.channel == "audio_mix":
                 if (
                     key not in self._pending
