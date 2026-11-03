@@ -1025,6 +1025,36 @@ def test_job_carries_references_but_rejects_resolved_secrets() -> None:
         )
 
 
+def test_job_accepts_nonsecret_certification_call_authorization() -> None:
+    job = HarnessJob(
+        job_id="job",
+        run_id="run",
+        execution="hosted",
+        source={"kind": "archive", "archive_artifact_id": "source-id"},
+        agent={"connector": "auto"},
+        runtime={"isolation": "dedicated_vm"},
+        metadata={
+            "certification": {
+                "production_call_authorization": {
+                    "owner": "simulations",
+                    "automated_production_calls": "approved",
+                    "approved_by": "qa-oncall",
+                    "approved_at": "2026-10-01",
+                    "target_ownership": "futureagi",
+                }
+            }
+        },
+    )
+
+    assert job.metadata["certification"]["production_call_authorization"] == {
+        "owner": "simulations",
+        "automated_production_calls": "approved",
+        "approved_by": "qa-oncall",
+        "approved_at": "2026-10-01",
+        "target_ownership": "futureagi",
+    }
+
+
 def test_public_github_job_needs_no_installation_but_is_commit_pinnable() -> None:
     job = HarnessJob(
         job_id="job",
