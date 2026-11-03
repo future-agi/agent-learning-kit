@@ -3040,7 +3040,12 @@ def resolve_environment_plan(
         for process in normalized_processes
     ]
 
-    if not isinstance(selected, ComposeSelection) and runtime_model.command:
+    # A voice agent's tool calls are traced by its LiveKit worker, never twice.
+    if (
+        not isinstance(selected, ComposeSelection)
+        and runtime_model.command
+        and str(contract_modality or "").strip().lower() != "voice"
+    ):
         trace_environment = _source_tool_trace_environment(
             root,
             runtime_model,
@@ -3111,8 +3116,16 @@ _SOURCE_TOOL_TRACE_VERSION = 2
 
 
 def _uses_source_tool_trace(processes: Sequence[Any]) -> bool:
+    """Whether ALK traces the source's tools or its framework spans; LiveKit's own trace alone does not count."""
     return any(
-        "HARNESS_TOOL_TRACE" in (getattr(process, "environment", None) or {})
+        {"ALK_TOOL_TRACE_BINDINGS", "ALK_OBSERVE_FRAMEWORKS"} & set(getattr(process, "environment", None) or {})
+        for process in processes
+    )
+
+
+def _binds_source_tools(processes: Sequence[Any]) -> bool:
+    return any(
+        "ALK_TOOL_TRACE_BINDINGS" in (getattr(process, "environment", None) or {})
         for process in processes
     )
 
@@ -3371,12 +3384,9 @@ def _with_source_tool_trace(
             if key not in {"HARNESS_TOOL_TRACE", "ALK_TOOL_TRACE_BINDINGS"}
         }
         if bindings:
-            environment.update(
-                {
-                    "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
-                    "ALK_TOOL_TRACE_BINDINGS": json.dumps(bindings),
-                }
-            )
+            environment["ALK_TOOL_TRACE_BINDINGS"] = json.dumps(bindings)
+        if bindings or "ALK_OBSERVE_FRAMEWORKS" in environment:
+            environment["HARNESS_TOOL_TRACE"] = "{{WORLD_DIR}}/agent-tool-calls.jsonl"
         updated.append(process.model_copy(update={"environment": environment}))
     return tuple(updated)
 
@@ -3548,7 +3558,7 @@ def author_bundle_v2(
         if contract_modality == "chat"
         else []
     )
-    if trace_bindings and not _uses_source_tool_trace(plan.processes):
+    if trace_bindings and not _binds_source_tools(plan.processes):
         plan = replace(
             plan,
             processes=_with_source_tool_trace(

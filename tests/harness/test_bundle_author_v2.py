@@ -280,7 +280,7 @@ def test_reseal_preserves_construct_only_crewai_command_trace(tmp_path: Path) ->
     assert json.loads(process.environment["ALK_TOOL_TRACE_BINDINGS"]) == [{
         "name": "editor", "module": "agent_tools", "callable": "Editor.update",
     }]
-    assert resealed.metadata["source_tool_trace_version"] == 1
+    assert resealed.metadata["source_tool_trace_version"] == 2
 
 
 def _job(
@@ -676,6 +676,35 @@ def test_bundle_compiles_discovered_source_tool_entrypoint(tmp_path: Path) -> No
     }
 
 
+def test_a_reseal_keeps_framework_observation_of_a_chat_agent_with_no_import_tools(tmp_path: Path) -> None:
+    source = tmp_path / "chat-agent"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ready')\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring,
+        command=["python3", "agent.py"],
+        interface={
+            "kind": "http", "protocol": "openai_chat", "port": 8080,
+            "path": "/v1/chat/completions", "include_tools": False,
+        },
+    )
+    bundle = authoring / "environment-bundle"
+    author_bundle_v2(source=source, job=_job(connector="auto"), authoring=authoring, output=bundle)
+    contract_path = authoring / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract["notes"] = "edited after the build"
+    contract_path.write_text(json.dumps(contract))
+
+    reseal_scenarios(authoring)
+
+    resealed = load_bundle_v2(bundle)
+    control = next(p for p in resealed.processes if p.name == resealed.runtime.control_service)
+    assert control.environment["ALK_OBSERVE_FRAMEWORKS"] == "1"
+    assert control.environment["HARNESS_TOOL_TRACE"] == "{{WORLD_DIR}}/agent-tool-calls.jsonl"
+    assert "ALK_TOOL_TRACE_BINDINGS" not in control.environment
+
+
 def test_bundle_observes_imported_chat_tool_execution(tmp_path: Path) -> None:
     source = tmp_path / "chat-agent"
     source.mkdir()
@@ -727,7 +756,7 @@ def test_bundle_observes_imported_chat_tool_execution(tmp_path: Path) -> None:
     records = [json.loads(line) for line in trace.read_text().splitlines()]
     assert records[0]["name"] == "search_books"
     assert records[0]["arguments"] == {"query": "Dune"}
-    assert bundle.metadata["source_tool_trace_version"] == 1
+    assert bundle.metadata["source_tool_trace_version"] == 2
 
 
 def test_tool_registration_is_not_observed_as_tool_execution(tmp_path: Path) -> None:
