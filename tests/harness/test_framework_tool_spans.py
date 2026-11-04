@@ -324,6 +324,14 @@ def test_a_refusal_read_differently_by_the_two_tracers_is_still_one_call() -> No
     assert [(c.name, c.worker_label) for c in merged] == [("issue_refund", "Refunds")]
 
 
+def test_a_span_pairs_with_the_call_of_its_own_outcome_when_one_tool_ran_twice() -> None:
+    passed = Call(name="issue_refund", arguments={"order": "1"}, result="issued", ok=True, at=2.0)
+    failed = Call(name="issue_refund", arguments={"order": "2"}, result="refused", ok=False, at=3.0)
+    span_line = Call(name="issue_refund", arguments={}, result=None, ok=False, worker_label="Refunds", at=2.9)
+    merged = call_runner._merge_span_calls([passed, failed], [span_line])
+    assert [(c.arguments, c.worker_label) for c in merged] == [({"order": "1"}, ""), ({"order": "2"}, "Refunds")]
+
+
 def test_a_running_job_without_an_event_id_is_kept_beside_a_finished_one() -> None:
     def job(name, **fields):
         return Call(name="start_async_task", arguments={}, result=None, ok=True, delegated_to=name, **fields)

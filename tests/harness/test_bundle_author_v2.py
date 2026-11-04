@@ -141,6 +141,15 @@ def test_an_http_python_agent_is_observed_through_its_framework_spans(tmp_path: 
         tool_entrypoints=[{"tool": "lookup", "mode": "import", "module": "agent", "callable": "lookup"}],
         contract_interface_kind="http", contract_modality="chat",
     )
+    voice = resolve_environment_plan(
+        tmp_path, _job(connector="auto"), contract_runtime=runtime,
+        tool_entrypoints=[], contract_interface_kind="http", contract_modality="voice",
+    )
+    # A voice agent's calls are traced by its LiveKit worker alone.
+    assert all(
+        "ALK_OBSERVE_FRAMEWORKS" not in p.environment and framework_instrumentation_command() not in p.build_commands
+        for p in voice.processes if hasattr(p, "build_commands")
+    )
     control = next(p for p in plan.processes if p.name == plan.control_service)
     assert control.environment["HARNESS_TOOL_TRACE"] == "{{WORLD_DIR}}/agent-tool-calls.jsonl"
     assert control.environment["ALK_OBSERVE_FRAMEWORKS"] == "1"
