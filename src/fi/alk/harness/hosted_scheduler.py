@@ -49,7 +49,7 @@ from .job import FailureDomain, HarnessStage
 from .sub_actor import sub_actors_enabled
 from .checks import reference_of, takes_reference
 from .joint_judge import OFF_SCRIPT
-from .judge import INCONCLUSIVE, NOT_APPLICABLE
+from .judge import verdict_named
 from .judge import judge_sub_goal as _judge
 from .outbound import (
     HostedAttemptSupersededError,
@@ -327,14 +327,7 @@ class SubGoalResult:
     verdict: str | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
-        reason = self.reason or ""
-        # The judge marks these in the reason with the held value it gives them; both must agree.
-        if self.held is True and reason.startswith(NOT_APPLICABLE):
-            object.__setattr__(self, "verdict", "not_applicable")
-        elif self.held is None and reason.startswith(INCONCLUSIVE):
-            object.__setattr__(self, "verdict", "inconclusive")
-        elif self.held is not None:
-            object.__setattr__(self, "verdict", "pass" if self.held else "fail")
+        object.__setattr__(self, "verdict", verdict_named(self.held, self.reason))
 
 
 @dataclass(frozen=True)

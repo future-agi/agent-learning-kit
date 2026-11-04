@@ -786,7 +786,6 @@ def test_the_menu_s_greeting_is_ready_by_the_time_the_call_is_answered():
 
 
 def test_the_call_s_sub_actor_time_runs_out_and_every_sub_actor_stops_with_the_reason():
-    now = [0.0]
     cast = Cast(
         [
             _actor("one"),
@@ -794,11 +793,8 @@ def test_the_call_s_sub_actor_time_runs_out_and_every_sub_actor_stops_with_the_r
             _actor("three", kind="mid_journey", turn=2),
         ],
         "run",
-        clock=lambda: now[0],
     )
     assert len(cast.entering(Moment(2))) == 2
-    # Time passing in the agent's and the person's turns uses none of it.
-    now[0] = 500.0
     assert cast.remaining() == registry.SUB_ACTOR_SECONDS
     # Only the sub-actors' own lines do: asked for at 500, ready and spoken by 530.
     cast.delivered(cast.actors[0], "a line", 2, 510.0, 530.0, 500.0)
@@ -988,8 +984,7 @@ def test_only_the_per_turn_read_is_bounded_and_evidence_reads_are_not(monkeypatc
 
 
 def test_a_line_late_on_its_own_limit_never_ends_the_call_s_sub_actor_time():
-    now = [0.0]
-    cast = Cast([_actor("one"), _actor("two")], "run", clock=lambda: now[0])
+    cast = Cast([_actor("one"), _actor("two")], "run")
     cast.entering(Moment(2))
     first = cast.line_limit(registry.HANDOFF_LINE_SECONDS)
     cast.delivered(cast.actors[1], "a line", 2, 0.0, 50.0, 0.0)

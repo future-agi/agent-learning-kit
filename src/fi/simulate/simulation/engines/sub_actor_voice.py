@@ -199,7 +199,7 @@ class SubActorsOnCall:
         clock: Callable[[], float] = time.time,
     ) -> None:
         self.voices = {str(voice.actor["id"]): voice for voice in voices}
-        self.cast = Cast([voice.actor for voice in voices], seed, clock=clock)
+        self.cast = Cast([voice.actor for voice in voices], seed)
         self.play = play
         self.say = say
         # Read only for a sub-actor that enters on a tool call: the person's turn waits on it.

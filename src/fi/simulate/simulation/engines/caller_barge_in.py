@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
-import random
 import re
 import time
 import wave
@@ -15,6 +13,8 @@ from typing import Any
 import numpy as np
 from livekit import rtc
 from livekit.agents import llm as livekit_llm
+
+from fi.simulate.simulation.sub_actors import seeded
 
 logger = logging.getLogger(__name__)
 
@@ -99,8 +99,7 @@ def selected_call_indices(run_id: str, count: int, rate: float) -> set[int]:
         raise ValueError("caller barge-in rate must be between 0 and 1")
     if count <= 0 or rate == 0:
         return set()
-    seed = int.from_bytes(hashlib.sha256(run_id.encode()).digest()[:8], "big")
-    rng = random.Random(seed)
+    rng = seeded(run_id)
     if count < 5:
         return {index for index in range(count) if rng.random() < rate}
     return set(rng.sample(range(count), min(count, round(count * rate))))
@@ -213,9 +212,7 @@ class CallerBargeIn:
         self.delay = delay
         self.cooldown = cooldown
         self.propensity = max(0.0, min(1.0, propensity))
-        self._random = random.Random(
-            int.from_bytes(hashlib.sha256(seed.encode()).digest()[:8], "big")
-        )
+        self._random = seeded(seed)
         self._pending: asyncio.Task[None] | None = None
         self._preparation: asyncio.Task[None] | None = None
         self._candidate: tuple[str, list[Any]] | None = None

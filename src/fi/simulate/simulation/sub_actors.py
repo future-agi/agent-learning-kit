@@ -11,9 +11,8 @@ import hashlib
 import math
 import random
 import re
-import time
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 CHANNELS: dict[str, dict[str, Any]] = {
     "audio_mix": {
@@ -95,7 +94,7 @@ def described(entries: dict[str, str]) -> str:
     return "; ".join(f"`{name}`: {about}" for name, about in entries.items())
 
 
-# Tunable defaults, the same for every scenario, so no sub-actor and no group of them can take over a call.
+# Fixed limits, the same for every scenario, so no sub-actor and no group of them can take over a call.
 LIMITS: dict[str, int] = {
     "audio_mix": 3,
     "audio_handoff": 3,
@@ -284,12 +283,9 @@ class Cast:
         self,
         actors: list[dict[str, Any]],
         seed: str,
-        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.actors = actors
         self.seed = seed
-        self.clock = clock
-        self._started_at: float | None = None
         self._spent = 0.0
         self._time_up = False
         self._waiting_lines = 0
@@ -465,8 +461,6 @@ class Cast:
         self._waiting.clear()
 
     def _record(self, key: str, kind: str, **details: Any) -> None:
-        if kind == "triggered" and self._started_at is None:
-            self._started_at = self.clock()
         actor = next(one for one in self.actors if str(one["id"]) == key)
         self.events.append(
             {
