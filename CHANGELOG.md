@@ -10,6 +10,9 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
 - Multi-agent compatibility references preserve native Google ADK, LangGraph,
   and CrewAI orchestration, while Python command agents capture bounded tool
   evidence with explicit worker and task attribution.
+- Multi-agent apps: the contract records the workers an app declares, and every Python agent's
+  tool calls are read from its framework spans with the worker that made each, every hand-off and
+  when that worker returned; a worker's run is never graded as a tool call.
 - Builder chat: `edit_scenario` changes a kept scenario by its key with only the fields that change
   (`clear` resets a field), keeping its key, number, place and history; a rename alone is not
   proved again. A new scenario never takes a key the environment has used, a dropped scenario's
