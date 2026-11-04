@@ -790,8 +790,7 @@ class HostedChatRuntime:
             "run_scenarios",
             "Start a run of the numbered scenarios against the agent, each played `repeats` times "
             "(1 to 20). Every call costs time and money: confirm the numbers and repeats with the "
-            "person first unless they said exactly what to run or this is your check of a finished "
-            "build. Unsaved changes are saved first.",
+            "person first unless they said exactly what to run. Unsaved changes are saved first.",
             schema({"numbers": _NUMBERS, "ranges": _RANGES, "repeats": int}, []),
         )
         async def run_scenarios(args: dict[str, Any]) -> dict[str, Any]:
@@ -1722,6 +1721,10 @@ class HostedChatRuntime:
             try:
                 if event is None:
                     return
+                if event.kind == DONE and event.detail.get("outcome") == "failed":
+                    turn_failures.append(
+                        str(event.detail.get("error") or "stage failed")
+                    )
                 stage = str(event.detail.get("stage") or self.conversation.stage_name)
                 invocation_id = str(
                     event.detail.get("invocation_id") or fallback_invocation_id
@@ -1796,10 +1799,9 @@ class HostedChatRuntime:
                         invocation_id=invocation_id,
                         payload={"artifact": event.detail.get("path")},
                     )
-                elif event.kind == DONE and event.detail.get("outcome") == "failed":
-                    turn_failures.append(
-                        str(event.detail.get("error") or "stage failed")
-                    )
+            except Exception:  # noqa: BLE001 - a lost event or scratch checkpoint must not end the turn.
+                # What the turn says and whether it failed are recorded before any call here.
+                traceback.print_exc()
             finally:
                 queue.task_done()
 
