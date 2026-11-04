@@ -81,7 +81,7 @@ _PATCHES: dict = {}
 
 
 def _write(outcome: str) -> None:
-    """Write the one fixed stderr line. ``failed`` at most once, so a broken merge on every
+    """Write one fixed-form stderr status line. ``failed`` at most once, so a broken merge on every
     resource the process builds cannot flood its log."""
     global _failed_written
     try:
