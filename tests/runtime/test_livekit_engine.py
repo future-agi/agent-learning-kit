@@ -4481,8 +4481,8 @@ def test_caller_who_speaks_first_answers_every_target_turn(monkeypatch) -> None:
         return Caller(), None
 
     target_turns = [
-        "Namaste, am I speaking with Sunil Kapoor?",
-        "Could you please tell me your date of birth?",
+        "Hello, who am I speaking with?",
+        "Thanks. What can I help you with today?",
     ]
 
     async def target_speaks_twice(*args, **kwargs):
