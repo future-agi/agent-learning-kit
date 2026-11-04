@@ -9939,6 +9939,12 @@ def test_world_actors_are_offered_only_when_switched_on_and_kept_in_the_environm
         call("add_actor", {"id": "agent", "name": "x", "role": "y"})
     )
     asyncio.run(
+        call("add_actor", {"id": "deputy", "name": "Lee", "on_behalf_of": "reviewer"})
+    )
+    refused = asyncio.run(call("drop_actor", {"id": "reviewer"}))
+    assert refused.startswith("Not dropped") and "on behalf of" in refused
+    assert asyncio.run(call("drop_actor", {"id": "deputy"})) == "deputy dropped"
+    asyncio.run(
         call(
             "add_actor",
             {**reviewer, "permitted_actions": ["records.approve", "records.reject"]},

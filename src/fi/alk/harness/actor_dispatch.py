@@ -10,11 +10,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import random
 import time
 from collections.abc import Callable
 from typing import Any
 from urllib import error, request
+
+from fi.simulate.simulation.sub_actors import seeded
 
 from .actors import AGENT, Actor, ScenarioActor, ScheduledAction
 
@@ -83,7 +84,7 @@ class ActorDispatcher:
             (actor, index, action)
             for actor, index, action in listed
             if action.trigger.kind != "probability"
-            or random.Random(f"{seed}:{actor.id}:{index}").random() < action.trigger.p
+            or seeded(seed, actor.id, index).random() < action.trigger.p
         ]
         self.started: float | None = None
         self.fired: list[dict[str, Any]] = []

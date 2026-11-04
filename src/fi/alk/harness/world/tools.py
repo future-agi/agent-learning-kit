@@ -766,7 +766,12 @@ def world_actor_tools(
             return _err(
                 f"Not dropped. These scenarios include {gone}: " + ", ".join(using)
             )
-        save_actors(destination, ActorList(actors=kept))
+        try:
+            remaining = ActorList(actors=kept)
+        except ValueError as exc:
+            # Another actor still names this one as its parent, principal or fallback.
+            return _err(f"Not dropped: {exc}")
+        save_actors(destination, remaining)
         return _ok(f"{gone} dropped")
 
     return [add_actor, drop_actor]

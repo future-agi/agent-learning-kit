@@ -952,7 +952,7 @@ def _actor_rows(runtime: EnvironmentRuntime, bundle_dir: Path) -> list[dict[str,
             {
                 "name": row.get("name"),
                 "arguments": row.get("arguments") or {},
-                "result": row.get("result"),
+                "result": _structured(row.get("result")),
                 "ok": bool(row.get("ok")),
                 "error": _truncate(str(row.get("error") or "")),
                 "refused": row.get("outcome") == "refused",
@@ -1730,9 +1730,7 @@ class CallRunnerImpl:
             finally:
                 acting.cancel()
                 # The token proves an actor only during its own trial; the proxy refuses actors once it is empty.
-                Path(str(runtime.metadata["actor_proof_path"])).write_text(
-                    "", encoding="utf-8"
-                )
+                _write_trial_token(Path(str(runtime.metadata["actor_proof_path"])), "")
                 with contextlib.suppress(asyncio.CancelledError):
                     await acting
                 if isinstance(actors.read_log, _ActionLog):

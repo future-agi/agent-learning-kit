@@ -2297,7 +2297,7 @@ def test_actor_rows_are_sealed_named_and_with_their_outcome_and_the_agent_s_are_
         (
             "approve",
             {"item": "d1"},
-            {"ok": True},
+            '{"ok": true}',
             True,
             "",
             2.0,
@@ -2438,10 +2438,15 @@ def test_a_trial_s_actor_token_holds_only_while_its_call_runs(
     monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
     monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg([], ["name", "at"]))
     token = tmp_path / "w0" / "tool-proxy" / "actor-token"
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.write_text("untouched")
     during = []
 
     async def place_call(spec):
         during.append(token.read_text())
+        # A link planted during the call is replaced when the token is emptied, never followed.
+        token.unlink()
+        token.symlink_to(elsewhere)
         return _report(
             transcript="user: hello", messages=[{"role": "user", "content": "hello"}]
         )
@@ -2458,7 +2463,8 @@ def test_a_trial_s_actor_token_holds_only_while_its_call_runs(
             metadata={"livekit_agent_name": "agent-w0", "actor_proof_path": str(token)},
         ),
     )
-    assert len(during[0]) == 64 and token.read_text() == ""
+    assert len(during[0]) == 64 and token.read_text() == "" and not token.is_symlink()
+    assert elsewhere.read_text() == "untouched"
 
 
 def test_a_trial_s_action_log_is_read_over_one_connection_and_reopened_after_a_failed_read(
