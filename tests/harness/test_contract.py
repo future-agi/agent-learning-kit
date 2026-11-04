@@ -201,17 +201,24 @@ def test_declared_workers_name_contract_tools_and_reach_the_brief():
     assert validate_contract(contract) == []
     assert "order_lookup (Order-lookup worker): get_order" in contract.brief()
 
-    contract.workers.append(
-        contract.workers[0].model_copy(update={"tools": ["send_email"]})
+
+def test_a_worker_without_an_id_of_its_own_is_dropped_and_keeps_only_contract_tools():
+    contract = AgentContract.model_validate(
+        {
+            "agent": "returns",
+            "real_use_cases": ["refund an order"],
+            "tools": [{"name": "get_order"}],
+            "workers": [
+                {"id": "order_lookup", "tools": ["get_order", "send_email"]},
+                {"id": "order_lookup", "name": "Second"},
+                {"id": " "},
+            ],
+        }
     )
-    problems = validate_contract(contract)
-    assert "duplicate-worker-ids:order_lookup: give each worker its own id." in problems
-    assert (
-        "worker[order_lookup]:unknown-tools:send_email: add each to the contract's tools, or remove it from this "
-        "worker's tools." in problems
-    )
-    contract.workers = [contract.workers[0].model_copy(update={"id": " "})]
-    assert validate_contract(contract) == ["worker:no-id: give every worker an id."]
+    assert validate_contract(contract) == []
+    assert [(one.id, one.name, one.tools) for one in contract.workers] == [
+        ("order_lookup", "", ["get_order"])
+    ]
 
 
 def test_contract_without_workers_is_unchanged():

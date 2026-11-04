@@ -1163,6 +1163,19 @@ class AgentContract(BaseModel):
     amendments: list[str] = Field(default_factory=list)
     instrumentation: str = "none"
 
+    @model_validator(mode="after")
+    def _resolvable_workers(self) -> AgentContract:
+        # Derived, not refused: one worker per id, holding only tools the contract has.
+        seen: set[str] = set()
+        workers = []
+        for worker in self.workers:
+            if worker.id.strip() and worker.id not in seen:
+                seen.add(worker.id)
+                tools = [tool for tool in worker.tools if tool in self.tool_names()]
+                workers.append(worker.model_copy(update={"tools": tools}))
+        self.workers = workers
+        return self
+
     def tool_names(self) -> set[str]:
         return {tool.name for tool in self.tools}
 
@@ -1481,22 +1494,6 @@ def validate_contract(contract: AgentContract) -> list[str]:
             "give the importable module path and the callable name, or record a mode that "
             "matches what the repository actually exposes."
         )
-    ids = [one.id for one in contract.workers]
-    repeated = sorted({one for one in ids if ids.count(one) > 1})
-    if repeated:
-        problems.append(
-            f"duplicate-worker-ids:{','.join(repeated)}: give each worker its own id."
-        )
-    for worker in contract.workers:
-        if not worker.id.strip():
-            problems.append("worker:no-id: give every worker an id.")
-            continue
-        unknown_tools = sorted(set(worker.tools) - contract.tool_names())
-        if unknown_tools:
-            problems.append(
-                f"worker[{worker.id}]:unknown-tools:{','.join(unknown_tools)}: "
-                "add each to the contract's tools, or remove it from this worker's tools."
-            )
     # Iterate the tools, not tool_names(): that returns a set, so duplicates collapse before
     # they can be counted and the check silently never fires.
     names = [tool.name for tool in contract.tools if tool.name.strip()]
