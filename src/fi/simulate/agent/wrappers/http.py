@@ -1114,8 +1114,7 @@ class _StreamedEvents(list):
 
 
 def _streamed_text(pieces: list[str]) -> str:
-    """A reply streamed as text deltas is their concatenation; one streamed as the text so far,
-    each piece strictly longer than the last, or closed by an event repeating the whole text, keeps its last piece."""
+    """Deltas join; a stream whose pieces each strictly extend the last, or end on the whole text, keeps its last."""
     if pieces[-1] == "".join(pieces[:-1]):
         return pieces[-1]
     cumulative = pieces[:-1] if len(pieces) > 2 and pieces[-1] == pieces[-2] else pieces

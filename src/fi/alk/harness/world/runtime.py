@@ -189,8 +189,7 @@ def runtime_ids(record: dict[str, Any]) -> dict[str, str]:
 
 
 def graded_calls(calls: Sequence[Call]) -> list[Call]:
-    """The calls checks grade: a job's hand-off, written beside the call that launched it under the same name, is
-    kept in the sealed trace but is that call's work, not a second call."""
+    """The calls checks grade: no worker's run, and no job's hand-off repeating the call that launched it."""
     plain = {call.name for call in calls if not call.delegated_to}
     return [
         call

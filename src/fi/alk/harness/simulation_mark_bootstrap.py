@@ -441,10 +441,7 @@ def _kind(span):
 
 
 def _graph_worker(attributes):
-    """The subgraph a LangGraph node ran in. The namespace reads ``graph:id|...|node:id`` and
-    ends with the node that ran the tool, so the worker is the segment above that node, or the
-    agent the framework names as running it: a graph started from inside another graph's node
-    sits under that node, whose name is the host's, not the worker's."""
+    """The subgraph a LangGraph node ran in: the namespace segment above that node, or the agent named as running it."""
     namespace = _first(attributes, (_GRAPH_NAMESPACE,))
     if not namespace:
         return None
@@ -466,13 +463,7 @@ def _same_tool(one, other):
 
 
 class _ToolSpans:
-    """Writes each finished tool span to the harness's tool trace, naming the agent above it.
-
-    Any framework instrumentation that marks agent and tool spans is enough: the worker of a tool
-    call is the nearest agent span above it, and an agent span opened under a tool span is that
-    tool handing the work to it. Spans from other processes are not seen here, so a tool span
-    whose agent ran elsewhere is written without a worker rather than given a wrong one.
-    """
+    """Writes each finished tool span to the tool trace, with the nearest agent span above it as its worker."""
 
     def __init__(self, path: str) -> None:
         self._path = path
@@ -572,8 +563,7 @@ class _ToolSpans:
         return None
 
     def _agent_name(self, agent):
-        """An agent span's own name, else the tool that handed it the work; never a span
-        name, which frameworks often set to a method such as ``Agent.run``."""
+        """An agent span's own name, else the tool that handed it the work; never a method-like span name."""
         name = _first(agent.attributes or {}, _AGENT_NAME_KEYS)
         if name:
             return name
@@ -635,9 +625,7 @@ class _ToolSpans:
             self._appended = False
 
     def _job_record(self, span, span_id, *, ended: bool, attributes=None) -> bool:
-        """A run with no parent here, in a conversation whose id an earlier tool call returned, is a job that call
-        launched: it is written as that call's hand-off, from the agent that made the call to the job's agent, once
-        when it starts and again with its answer when it ends, so a job still running when the call ends is kept."""
+        """Write a parentless run whose conversation id an earlier tool call returned as that call's hand-off."""
         attributes = attributes or span.attributes or {}
         conversation = _first(attributes, _CONVERSATION_KEYS)
         if not conversation:
@@ -733,9 +721,7 @@ def _append(path, record) -> None:
 
 
 def _patch_autogen_tools(module, path) -> None:
-    """AutoGen's tool spans name the tool but carry neither its arguments nor its result, so each call is also
-    written from the tool itself, as CrewAI's observer writes its calls; the collector joins the two lines, the
-    span's naming the agent."""
+    """Write each AutoGen tool call with its arguments and result, which AutoGen's tool spans do not carry."""
     cls = module.BaseTool
     original = cls.run_json
     if getattr(original, _PATCHED, False):
@@ -782,8 +768,7 @@ _INSTRUMENTORS = {
 
 @functools.lru_cache(maxsize=1)
 def _sandbox_provider():
-    """A provider for a process that set none, exporting where the sandbox names, as the
-    process's own would, so the platform sees the same spans either way."""
+    """A provider for a process that set none, exporting where the sandbox names."""
     from opentelemetry.sdk.trace import TracerProvider
 
     provider = TracerProvider()
@@ -799,9 +784,7 @@ def _sandbox_provider():
 
 
 def _patch_proxy(module) -> None:
-    """Serve a span requested before any provider is set from ours, without taking the global
-    slot, so a framework's own tracing is never lost to the no-op one and the process can still
-    set its own provider later."""
+    """Serve a span asked for before any provider is set from ours, leaving the process free to set its own."""
     cls = module.ProxyTracer
     for method in ("start_span", "start_as_current_span"):
         original = getattr(cls, method)
@@ -823,8 +806,7 @@ def _patch_proxy(module) -> None:
 
 
 def _instrument(module, target) -> None:
-    """Turn on the framework's instrumentor unless the process already has. It reads the
-    global provider when it makes a span, so the process's own provider is used if it sets one."""
+    """Turn on the framework's instrumentor unless the process already has; it reads the global provider per span."""
     name, attribute = target
     if name in sys.modules:
         # The process imports the instrumentor itself, and this framework import is part of
@@ -845,8 +827,7 @@ def _instrument(module, target) -> None:
 
 
 def _yield_to_process(cls) -> None:
-    """The process instrumenting again with its own settings (its own provider, say) gets them:
-    the instrumentor would otherwise ignore the call as already done."""
+    """Let the process instrument again with its own settings, which the instrumentor would otherwise ignore."""
     original = cls.instrument
     if getattr(original, _PATCHED, False):
         return
@@ -862,8 +843,7 @@ def _yield_to_process(cls) -> None:
 
 
 def _keep_agents_processors() -> None:
-    """The OpenAI Agents SDK lets a process replace its trace processors, often only to stop
-    exporting to OpenAI, which would also drop ours; keep ours unless the new list has its own."""
+    """Keep our processor when an OpenAI Agents app replaces its trace processors, unless the new list has its kind."""
     from agents.tracing import get_trace_provider, provider
 
     ours = tuple(get_trace_provider()._multi_processor._processors)

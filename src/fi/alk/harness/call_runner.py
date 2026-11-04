@@ -814,8 +814,7 @@ def _collect_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
 
 
 def _with_span_calls(observed: Sequence[Call], runtime: EnvironmentRuntime) -> tuple[Call, ...]:
-    """Calls another source observed, joined with the agent's trace file: its written lines only
-    when no other source saw a call, and its span lines always, as they name each call's agent."""
+    """Calls another source saw, else the trace file's own lines, joined with the file's span lines."""
     written, from_spans = _read_file_tool_calls(runtime)
     return _merge_span_calls(list(observed) or written, from_spans)
 
@@ -912,14 +911,7 @@ def _tool_key(name: str) -> str:
 
 
 def _merge_span_calls(calls: list[Call], from_spans: list[Call]) -> tuple[Call, ...]:
-    """Count a call reported by both a framework span and another tracer once.
-
-    Span lines name the agent that made each call; another tracer of the same process reports
-    the same calls, often without the agent. A span line lends its agent, hand-off and times to the
-    first unpaired call of the same tool, preferring one of the same outcome (a refusal can read as
-    a failure to one tracer and a returned value to the other), and is then dropped; one with no
-    such call stays.
-    """
+    """Count a call a framework span and another tracer both report once, with the span's agent, hand-off and times."""
     # A background job is written when it starts and again when it ends; the later line carries its return.
     ended = {span.runtime_ids.get("event_id") for span in from_spans if span.delegated_to and span.ended_at} - {None}
     from_spans = [
@@ -939,6 +931,7 @@ def _merge_span_calls(calls: list[Call], from_spans: list[Call]) -> tuple[Call, 
             merged.append(span)
             continue
         same_tool = [c for c in unpaired if _tool_key(c.name) == _tool_key(span.name)]
+        # Same outcome first: a refusal can read as a failure to one tracer and a returned value to the other.
         other = next((c for c in same_tool if c.ok == span.ok), same_tool[0] if same_tool else None)
         if other is None:
             merged.append(span)

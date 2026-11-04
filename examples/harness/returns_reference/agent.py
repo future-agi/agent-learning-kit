@@ -1,25 +1,4 @@
-"""Returns desk: a coordinator that hands work to two workers, on the OpenAI Agents SDK.
-
-The coordinator never touches orders or refunds itself. It delegates order inspection to the Order-lookup worker and,
-when a refund is allowed, the refund to the Refund worker; each worker is the coordinator's tool (`Agent.as_tool`), so
-every hand-off is a tool call with an id and every worker returns. Each worker holds only its own tools: the Order-lookup
-worker reads orders and refunds, the Refund worker lists and issues refunds. Issuing is idempotent per order: an order
-that already has a refund gets that refund back, never a second one.
-
-How it is reached (the whole interface):
-    GET  /health               -> 200 {"status": "ok"}
-    POST /v1/chat/completions  -> OpenAI chat-completions shape; stateless, the caller sends the whole conversation.
-It listens on $PORT (default 8080).
-
-Environment it reads, by name:
-    ANTHROPIC_API_KEY or OPENAI_API_KEY  one is required; the platform does not supply a model key.
-    RETURNS_MODEL      optional. Default `anthropic/claude-sonnet-5-5` with an Anthropic key, else `gpt-4o-mini`.
-    OPENAI_BASE_URL    optional. A gateway for OpenAI model calls, read by the openai client.
-    PORT               optional. Default 8080.
-    OTEL_EXPORTER_OTLP_TRACES_ENDPOINT or OTEL_EXPORTER_OTLP_ENDPOINT
-                       when present (the platform sets the first with the trace export), each turn's agent, hand-off
-                       and tool spans are exported through traceAI's OpenAI Agents instrumentation.
-"""
+"""A returns desk on the OpenAI Agents SDK whose coordinator hands lookups and refunds to two workers, over HTTP."""
 
 from __future__ import annotations
 
@@ -32,8 +11,7 @@ from typing import Any
 
 from agents import Agent, Runner, function_tool, set_trace_processors
 
-# --- the returns world: fixed in memory so every run sees the same facts -------------------------------------------
-
+# Fixed in memory, so every run sees the same facts.
 ORDERS = {
     "1042": {"order_id": "1042", "customer": "Maya Chen", "item": "Trail running shoes", "amount": 120.0,
              "status": "delivered", "days_since_delivery": 12},
@@ -64,8 +42,7 @@ def list_refunds(order_id: str) -> str:
 
 @function_tool
 def issue_refund(order_id: str, amount: float) -> str:
-    """Issue a refund for a delivered order inside the return window. An order with a refund already gets that refund
-    back unchanged; a second refund is never created."""
+    """Issue a refund for a delivered order inside the return window; an already refunded order gets that refund back."""
     key = str(order_id).strip()
     with _LOCK:
         order = ORDERS.get(key)
@@ -122,7 +99,7 @@ REFUND = Agent(
 COORDINATOR = Agent(
     name="Returns coordinator",
     instructions=(
-        "You are the returns desk for Northwind Outdoor. You never look up orders or issue refunds yourself: ask the "
+        "You are the returns desk of an outdoor gear store. You never look up orders or issue refunds yourself: ask the "
         "order lookup worker to inspect the order first, then, only if the order is inside the return window and has "
         "no refund yet, ask the refund worker to refund the full amount. Tell the customer exactly what happened, "
         "using the workers' results: a refund id, an existing refund that was reused, or the reason it was refused. "
