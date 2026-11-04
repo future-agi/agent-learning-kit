@@ -2245,3 +2245,35 @@ def test_with_actors_the_agent_s_sealed_calls_carry_their_own_action_ids_to_link
     ]
     assert cr._agent_marks(runtime, bundle, calls[1:]) == [{"action_id": "a3", "outcome": "refused"}]
     assert cr._agent_marks(runtime, bundle, [*calls, calls[0]]) == []
+
+
+def test_a_world_actor_s_actions_are_sealed_with_the_transcript_never_as_the_agent_s_calls(
+    tmp_path, monkeypatch
+) -> None:
+    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    _with_actors(context.bundle_dir)
+    columns = ["name", "arguments", "result", "ok", "error", "at", "action_id", "actor_id", "outcome"]
+    rows = [
+        ("request_approval", {}, None, True, "", 1.0, "a1", "agent", "committed"),
+        ("approve", {}, None, True, "", 2.0, "a2", "manager", "committed"),
+    ]
+    monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
+
+    async def place_call(spec):
+        return _report(transcript="user: hello", messages=[{"role": "user", "content": "hello"}])
+
+    adapter = FakeAdapter()
+    runner = cr.CallRunnerImpl(adapter, context, place_call=place_call)
+    _run(
+        runner,
+        _FakeScenario("k1"),
+        _runtime(endpoints={"database": _postgres_endpoint()}, metadata={"livekit_agent_name": "agent-w0"}),
+    )
+    sealed = {kind: data for kind, _key, data in adapter.uploads}
+    trace = [json.loads(line) for line in sealed[cr.ArtifactKind.TOOL_TRACE].decode().splitlines()]
+    assert [(one["name"], one["action_id"]) for one in trace] == [("request_approval", "a1")]
+    transcript = json.loads(sealed[cr.ArtifactKind.TRANSCRIPT])
+    assert [(one["name"], one["actor_id"]) for one in transcript["world_actors"]["actions"]] == [
+        ("approve", "manager")
+    ]

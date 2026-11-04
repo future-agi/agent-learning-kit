@@ -1756,7 +1756,7 @@ class CallRunnerImpl:
             else []
         )
         marks = _agent_marks(runtime, self._context.bundle_dir, calls) if acted else []
-        if calls or acted:
+        if calls:
             tool_trace = "\n".join(
                 json.dumps(
                     {
@@ -1773,13 +1773,7 @@ class CallRunnerImpl:
                     default=str,
                 )
                 for index, call in enumerate(calls)
-            )
-            if acted:
-                # Who else acted in the world, after the agent's own calls, each with what came of it.
-                tool_trace = "\n".join(
-                    [*([tool_trace] if tool_trace else []), *(json.dumps(row, sort_keys=True, default=str) for row in acted)]
-                )
-            tool_trace = tool_trace.encode("utf-8")
+            ).encode("utf-8")
             await self._adapter.upload_artifact(
                 tool_trace,
                 kind=ArtifactKind.TOOL_TRACE,
@@ -1801,6 +1795,9 @@ class CallRunnerImpl:
                         "summary": took_part.get("sub_actors") or [],
                         "events": took_part.get("sub_actor_events") or [],
                     }
+                if acted:
+                    # Kept out of the tool trace, whose every line is one of the agent's own calls.
+                    transcript_document["world_actors"] = {"actions": acted}
                 recording_offset_ms = result.metadata.get("recording_offset_ms")
                 if isinstance(recording_offset_ms, (int, float)):
                     transcript_document["recording_offset_ms"] = int(
