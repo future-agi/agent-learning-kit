@@ -11,6 +11,7 @@ import re
 import time
 from typing import Any, AsyncIterator, Awaitable, Callable
 
+from fi.simulate._logging import redacted_exc_info
 from fi.simulate.simulation.engines.caller_barge_in import complete_text
 from fi.simulate.simulation.sub_actors import (
     HANDOFF_LINE_SECONDS,
@@ -178,7 +179,7 @@ class SubActorVoice:
 
 def _failed(exc: Exception) -> str:
     """Why a line failed, with the provider's status when it gave one."""
-    logger.warning("sub-actor line failed", exc_info=exc)
+    logger.warning("sub-actor line failed", exc_info=redacted_exc_info(exc))
     status = getattr(exc, "status_code", None)
     return f"line failed: {type(exc).__name__}" + (f" {status}" if status else "")
 
@@ -457,8 +458,11 @@ def world_access(dsn: str) -> Callable[[], list[str]] | None:
                 str(record.get("name"))
                 for record in read_tool_trace(dsn, timeout_ms=2000)
             ]
-        except Exception:  # noqa: BLE001 - not knowing the tools so far never holds up the call
-            logger.warning("sub-actors could not read the tool trace", exc_info=True)
+        except Exception as exc:  # noqa: BLE001 - not knowing the tools so far never holds up the call
+            logger.warning(
+                "sub-actors could not read the tool trace",
+                exc_info=redacted_exc_info(exc),
+            )
             return []
 
     return tools_called

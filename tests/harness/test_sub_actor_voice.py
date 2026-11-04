@@ -687,14 +687,27 @@ def test_a_voice_already_on_the_call_is_avoided_while_the_provider_has_another()
     assert persona_voice(person, "elevenlabs") == ""
 
 
-def test_a_tool_trace_that_cannot_be_read_never_holds_up_the_call(monkeypatch):
+def test_a_tool_trace_that_cannot_be_read_never_holds_up_the_call(monkeypatch, caplog):
     from fi.alk.harness import call_runner
 
+    dsn = "postgresql://svc:s3cret-pw@world:5432/db"
+
     def unreadable(_dsn, **_):
-        raise RuntimeError("relation does not exist")
+        raise RuntimeError(f"connection to {dsn} failed")
 
     monkeypatch.setattr(call_runner, "read_tool_trace", unreadable)
-    assert voice_engine.world_access("postgresql://world")() == []
+    with caplog.at_level("DEBUG"):
+        assert voice_engine.world_access(dsn)() == []
+    assert "RuntimeError: details redacted" in caplog.text
+    assert "s3cret-pw" not in caplog.text
+
+
+def test_a_failed_line_logs_its_kind_never_the_provider_s_message(caplog):
+    with caplog.at_level("WARNING"):
+        reason = voice_engine._failed(ValueError("bad key sk-live-123"))
+    assert reason == "line failed: ValueError"
+    assert "ValueError: details redacted" in caplog.text
+    assert "sk-live-123" not in caplog.text
 
 
 def test_the_tool_trace_is_read_only_for_a_sub_actor_that_enters_on_a_tool_call():
