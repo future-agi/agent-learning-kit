@@ -9595,13 +9595,17 @@ def test_sub_actor_tools_and_fields_are_offered_only_when_switched_on(
             "sub_actor" in goal.input_schema["properties"],
             {"add_sub_actor", "drop_sub_actor"}
             <= {one.name for one in world_server.tools},
+            any(
+                words in json.dumps(submit.input_schema)
+                for words in ("who else is on the call", "hand-off of the phone")
+            ),
         )
 
     monkeypatch.delenv("HARNESS_SUB_ACTORS", raising=False)
-    assert offered() == (False, False, False)
+    assert offered() == (False, False, False, False)
     monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
     # A sub-goal is never about a sub-actor, so add_sub_goal never offers one.
-    assert offered() == (True, False, True)
+    assert offered() == (True, False, True, True)
 
 
 def test_a_sub_actor_id_is_one_every_part_of_the_platform_can_address():
