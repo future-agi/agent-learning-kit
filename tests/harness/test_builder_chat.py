@@ -1938,9 +1938,7 @@ def test_the_build_and_its_check_change_without_asking_and_a_question_gets_no_on
         {"persona": {**person, "languages": ["English"]}},
         {"persona": None},
     ):
-        assert (
-            asyncio.run(submit.handler({**corrected, **situation}))["is_error"] is True
-        )
+        assert asyncio.run(submit.handler({**corrected, **situation}))["is_error"] is True
     assert asyncio.run(drop.handler({"names": ["one"]}))["is_error"] is True
     answer = asyncio.run(runtime._ask("AskUserQuestion", {"question": "Which?"}, None))
     assert "Nobody answers" in answer["content"][0]["text"]

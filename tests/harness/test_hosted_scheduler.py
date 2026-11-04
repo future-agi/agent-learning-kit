@@ -4363,14 +4363,8 @@ def test_a_sub_goal_settled_by_both_fails_when_either_fails(monkeypatch) -> None
         return {goal.name: (True, f"{goal.name} said right") for goal in goals}
 
     goals = [
-        FakeSubGoal(
-            "saved_feedback", lambda w, c: "no feedback row", judged="judge", both=True
-        ),
-        FakeSubGoal(
-            "confirmed",
-            lambda w, c: "ignored for a judged-only sub-goal",
-            judged="judge",
-        ),
+        FakeSubGoal("saved_feedback", lambda w, c: "no feedback row", judged="judge", both=True),
+        FakeSubGoal("confirmed", lambda w, c: "ignored for a judged-only sub-goal", judged="judge"),
     ]
     receipt, _ = _two_judged(monkeypatch, _all, goals=goals)
     held = {g.name: (g.held, g.reason, g.verdict) for g in receipt.sub_goals}
@@ -4397,23 +4391,17 @@ def test_a_failed_check_is_not_explained_by_a_not_applicable_judge(monkeypatch) 
     assert (result.held, result.reason, result.verdict) == (False, "no feedback row", "fail")
 
 
-def test_a_sub_goal_settled_by_both_takes_the_judge_when_the_check_holds(
-    monkeypatch,
-) -> None:
+def test_a_sub_goal_settled_by_both_takes_the_judge_when_the_check_holds(monkeypatch) -> None:
     async def _all(goals, world, calls, *, messages=()):
         return {"saved_feedback": (False, "the saved text left out the charging fault")}
 
-    goals = [
-        FakeSubGoal("saved_feedback", lambda w, c: None, judged="judge", both=True)
-    ]
+    goals = [FakeSubGoal("saved_feedback", lambda w, c: None, judged="judge", both=True)]
     receipt, _ = _two_judged(monkeypatch, _all, goals=goals)
     assert receipt.sub_goals[0].held is False
     assert receipt.sub_goals[0].reason == "the saved text left out the charging fault"
 
 
-def test_a_customer_off_script_marks_the_call_invalid_and_keeps_its_verdicts(
-    monkeypatch,
-) -> None:
+def test_a_customer_off_script_marks_the_call_invalid_and_keeps_its_verdicts(monkeypatch) -> None:
     from fi.alk.harness.joint_judge import OFF_SCRIPT
 
     async def _all(goals, world, calls, *, messages=()):
