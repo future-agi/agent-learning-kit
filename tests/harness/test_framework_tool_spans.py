@@ -135,6 +135,24 @@ def test_a_job_s_answer_is_what_its_model_last_said_not_its_whole_conversation(t
     assert [r["output"] for r in records if r.get("delegated_to") and "ended_at" in r] == ["<the answer>"]
 
 
+def test_a_job_never_joins_a_launch_from_an_earlier_call(tmp_path: Path) -> None:
+    records = _run(tmp_path, """
+        import os
+        sup = {"gen_ai.conversation.id": "thread-sup"}
+        with span("agent", **{"gen_ai.span.kind": "AGENT", **sup}):
+            with span("start_async_task", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "start_async_task",
+                                             "output.value": "Launched. task_id: job-c", **sup}):
+                pass
+        # The harness removes the trace between calls.
+        os.remove(os.environ["HARNESS_TOOL_TRACE"])
+        own = {"lc_agent_name": "coder", "gen_ai.conversation.id": "job-c"}
+        with span("coder", **{"gen_ai.span.kind": "CHAIN", **own}):
+            with span("run_code_check", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "run_code_check", **own}):
+                pass
+    """)
+    assert [(r["name"], r.get("delegated_to")) for r in records] == [("run_code_check", None)]
+
+
 def test_a_job_still_running_when_the_call_ends_keeps_its_hand_off(tmp_path: Path) -> None:
     # The job starts and makes a tool call, but has not finished when the process stops.
     records = _run(tmp_path, """
@@ -499,6 +517,25 @@ def test_spans_that_never_end_do_not_stop_observation(monkeypatch) -> None:
     for span_id in (1, 2, 3):
         observer.started(span(span_id))
     assert list(observer._live) == [2, 3]
+
+
+def test_a_span_starting_or_ending_waits_for_another_thread_s_bookkeeping(tmp_path: Path) -> None:
+    import threading
+    from types import SimpleNamespace
+
+    from fi.alk.harness import simulation_mark_bootstrap as bootstrap
+
+    observer = bootstrap._ToolSpans(str(tmp_path / "calls.jsonl"))
+    one = SimpleNamespace(get_span_context=lambda: SimpleNamespace(span_id=1), parent=None, attributes={}, name="s",
+                          end=lambda: None, status=None, start_time=0, end_time=0)
+    for step in (lambda: observer.started(one), lambda: one.end()):
+        with observer._lock:
+            thread = threading.Thread(target=step)
+            thread.start()
+            thread.join(0.2)
+            assert thread.is_alive()
+        thread.join(5)
+        assert not thread.is_alive()
 
 
 def test_the_process_instrumenting_after_the_hook_with_its_own_provider_gets_it() -> None:

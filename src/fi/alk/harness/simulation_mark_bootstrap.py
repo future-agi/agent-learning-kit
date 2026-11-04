@@ -486,22 +486,25 @@ class _ToolSpans:
         self._waiting = {}
         # What a model last said in each open run, read as a job's answer when the run ends.
         self._said = {}
-        self._lock = threading.Lock()
+        self._appended = False
+        # Spans start and end on the process's own threads.
+        self._lock = threading.RLock()
 
     def started(self, span) -> None:
         context = span.get_span_context()
         parent = getattr(span, "parent", None)
-        if len(self._live) >= _LIVE_SPANS_MAX:
-            # A span that never ended (a dropped generator, a long-lived server) gives way to new ones.
-            self._live.pop(next(iter(self._live)))
-        self._live[context.span_id] = (span, parent.span_id if parent is not None else None)
-        if parent is None and _kind(span) != "TOOL":
-            try:
-                joined = self._job_record(span, context.span_id, ended=False)
-                if not joined and len(self._waiting) < _LAUNCHES_MAX:
-                    self._waiting[context.span_id] = (span, None)
-            except Exception:
-                pass
+        with self._lock:
+            if len(self._live) >= _LIVE_SPANS_MAX:
+                # A span that never ended (a dropped generator, a long-lived server) gives way to new ones.
+                self._live.pop(next(iter(self._live)))
+            self._live[context.span_id] = (span, parent.span_id if parent is not None else None)
+            if parent is None and _kind(span) != "TOOL":
+                try:
+                    joined = self._job_record(span, context.span_id, ended=False)
+                    if not joined and len(self._waiting) < _LAUNCHES_MAX:
+                        self._waiting[context.span_id] = (span, None)
+                except Exception:
+                    pass
         original = span.end
         if getattr(original, _TOOL_END, False):
             return
@@ -510,7 +513,8 @@ class _ToolSpans:
         def end(*args, **kwargs):
             result = original(*args, **kwargs)
             try:
-                self._ended(span)
+                with self._lock:
+                    self._ended(span)
             except Exception:
                 pass
             return result
@@ -623,6 +627,13 @@ class _ToolSpans:
                 self._handed.pop(span_id, None)
             self._live.pop(span_id, None)
 
+    def _forget_cleared_call(self) -> None:
+        """Forget an earlier call's launches once the harness removes the trace, as it does between calls."""
+        if self._appended and not os.path.exists(self._path):
+            self._launches.clear()
+            self._waiting.clear()
+            self._appended = False
+
     def _job_record(self, span, span_id, *, ended: bool, attributes=None) -> bool:
         """A run with no parent here, in a conversation whose id an earlier tool call returned, is a job that call
         launched: it is written as that call's hand-off, from the agent that made the call to the job's agent, once
@@ -631,6 +642,7 @@ class _ToolSpans:
         conversation = _first(attributes, _CONVERSATION_KEYS)
         if not conversation:
             return False
+        self._forget_cleared_call()
         launch = next(
             (one for one in self._launches if one["conversation"] != conversation and _names(one["output"], conversation)),
             None,
@@ -657,6 +669,7 @@ class _ToolSpans:
             record.update(agent_key=launch["agent"], agent_role=launch["agent"])
         with self._lock:
             _append(self._path, record)
+            self._appended = True
         return True
 
     def _write(self, span, span_id) -> None:
@@ -690,6 +703,7 @@ class _ToolSpans:
         delegated = self._handed.pop(span_id, None)
         if delegated:
             record["delegated_to"] = delegated[:256]
+        self._forget_cleared_call()
         if record["output"]:
             self._launches.append(
                 {
@@ -704,6 +718,7 @@ class _ToolSpans:
             )
         with self._lock:
             _append(self._path, record)
+            self._appended = True
         for job_id in list(self._waiting):
             self._join_waiting(job_id)
 
