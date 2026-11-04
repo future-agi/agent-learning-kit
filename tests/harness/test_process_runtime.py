@@ -9368,6 +9368,11 @@ def test_mark_hook_written_with_its_module_first_on_pythonpath_for_every_exporti
     assert (world / "sitecustomize.py").read_bytes() == _LIVEKIT_HOOK.read_bytes()
     assert not (world / "simulation_mark_bootstrap.py").exists()
 
+    # Framework observation reads spans through the mark module, exported or not.
+    observed = both.model_copy(update={"environment": {**both.environment, "ALK_OBSERVE_FRAMEWORKS": "1"}})
+    captured = _spawn(tmp_path / "observed", observed)
+    assert (captured["world_dir"] / "simulation_mark_bootstrap.py").read_bytes() == _MARK_HOOK.read_bytes()
+
     # A reset spawns again in the same directory, whose files the process's own user now owns
     # read-only: they are reused, never rewritten.
     exporting = _source_process(name="agent")

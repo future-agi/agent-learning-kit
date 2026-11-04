@@ -1127,13 +1127,22 @@ def test_private_workflow_deadline_and_cancellation_keep_completed_evidence(tmp_
             if self.opening:
                 self.opening = False
                 return SimpleNamespace(text="Look up account A-1")
+            # The agent's process wrote the span of the call, naming the worker that made it.
+            span = {"name": "lookup_account", "arguments": "", "output": "", "is_error": False, "source": "otel",
+                    "agent_key": "Accounts worker", "agent_role": "Accounts worker", "at": 1.0}
+            spans.write_text(json.dumps(span) + "\n")
             started.set()
             await asyncio.Event().wait()
 
     monkeypatch.setattr(conversation, "Stage", CustomerStage)
+    spans = tmp_path / "agent-tool-calls.jsonl"
+    runtime = SimpleNamespace(
+        metadata={"observation_mode": "native", "tool_trace_path": str(spans)}, world_index=0,
+        endpoints={"target_http": SimpleNamespace(address=url, protocol="http")},
+    )
 
     async def run():
-        task = asyncio.create_task(workflow_probe(tmp_path, url, timeout=2))
+        task = asyncio.create_task(workflow_probe(tmp_path, url, timeout=2, runtime=runtime))
         if cancel:
             await started.wait()
             task.cancel()
@@ -1165,6 +1174,7 @@ def test_private_workflow_deadline_and_cancellation_keep_completed_evidence(tmp_
     assert call["name"] == "lookup_account"
     assert call["arguments"] == {"account_id": "A-1"}
     assert call["result"]["active"] is True
+    assert call["worker_label"] == "Accounts worker"
     assert all("secret123" not in path.read_text() for path in receipt_path.parent.iterdir())
 
 
