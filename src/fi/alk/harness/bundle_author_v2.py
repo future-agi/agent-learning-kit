@@ -3054,13 +3054,17 @@ def resolve_environment_plan(
         )
         if trace_environment:
             processes = [
-                process.model_copy(update={
-                    "environment": {**process.environment, **trace_environment},
-                    "build_commands": [
-                        *process.build_commands,
-                        framework_instrumentation_command(uv_run_project(process.run_command)),
-                    ],
-                })
+                process.model_copy(
+                    update={
+                        "environment": {**process.environment, **trace_environment},
+                        "build_commands": [
+                            *process.build_commands,
+                            framework_instrumentation_command(
+                                uv_run_project(process.run_command)
+                            ),
+                        ],
+                    }
+                )
                 if isinstance(process, SourceProcess) and process.name == control_name
                 else process
                 for process in processes

@@ -1139,8 +1139,16 @@ def test_private_workflow_deadline_and_cancellation_keep_completed_evidence(tmp_
                 "at": 1.0,
             }
             # And a worker's run, which is no tool call.
-            handoff = {"name": "Accounts worker", "arguments": {}, "output": "done", "is_error": False,
-                       "source": "otel", "delegated_to": "Accounts worker", "kind": "handoff", "at": 2.0}
+            handoff = {
+                "name": "Accounts worker",
+                "arguments": {},
+                "output": "done",
+                "is_error": False,
+                "source": "otel",
+                "delegated_to": "Accounts worker",
+                "kind": "handoff",
+                "at": 2.0,
+            }
             spans.write_text(json.dumps(span) + "\n" + json.dumps(handoff) + "\n")
             started.set()
             await asyncio.Event().wait()
@@ -1248,7 +1256,9 @@ def test_native_http_200_failure_rule_unlocks_existing_setup_repair(tmp_path, pr
     assert sorted(item["status"] for item in receipts(tmp_path)) == ["failed", "passed"]
 
 
-def test_an_aborted_readiness_call_counts_its_tool_calls_not_its_hand_offs(tmp_path, profile_app, monkeypatch):
+def test_an_aborted_readiness_call_counts_its_tool_calls_not_its_hand_offs(
+    tmp_path, profile_app, monkeypatch
+):
     from fi.alk.harness import chat_call_runner
     from fi.alk.harness.hosted_scheduler import CallAborted, CallOutcome
     from fi.alk.harness.world.runtime import Call
@@ -1256,11 +1266,18 @@ def test_an_aborted_readiness_call_counts_its_tool_calls_not_its_hand_offs(tmp_p
     url, _state = profile_app
     calls = (
         Call(name="lookup_account", arguments={}, ok=True),
-        Call(name="Accounts worker", arguments={}, delegated_to="Accounts worker", handoff=True),
+        Call(
+            name="Accounts worker",
+            arguments={},
+            delegated_to="Accounts worker",
+            handoff=True,
+        ),
     )
 
     async def aborted(self, *_args):
-        partial = CallOutcome(calls=calls, turns=1, messages=(), started_at="", ended_at="", duration_ms=0)
+        partial = CallOutcome(
+            calls=calls, turns=1, messages=(), started_at="", ended_at="", duration_ms=0
+        )
         raise CallAborted("the target stopped", partial=partial)
 
     monkeypatch.setattr(chat_call_runner.HostedChatCallRunner, "run", aborted)

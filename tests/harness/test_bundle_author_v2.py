@@ -326,7 +326,9 @@ def test_reseal_compiles_tools_added_to_a_traced_command_agent(tmp_path: Path) -
     assert "contract_copied" not in resealed.metadata
 
 
-def test_reseal_binds_a_tool_added_to_a_command_agent_built_with_none(tmp_path: Path) -> None:
+def test_reseal_binds_a_tool_added_to_a_command_agent_built_with_none(
+    tmp_path: Path,
+) -> None:
     source = tmp_path / "source"
     source.mkdir()
     (source / "agent.py").write_text("print('ready')\n")
@@ -334,7 +336,9 @@ def test_reseal_binds_a_tool_added_to_a_command_agent_built_with_none(tmp_path: 
     (source / "requirements.txt").write_text("requests==2.32.5\n")
     authoring = _authoring(tmp_path)
     _write_chat_contract(
-        authoring, command=["python", "agent.py"], interface={"kind": "command", "protocol": "fi.alk"}
+        authoring,
+        command=["python", "agent.py"],
+        interface={"kind": "command", "protocol": "fi.alk"},
     )
     contract_path = authoring / "contract.json"
     contract = json.loads(contract_path.read_text())
@@ -342,16 +346,25 @@ def test_reseal_binds_a_tool_added_to_a_command_agent_built_with_none(tmp_path: 
     contract["tool_entrypoints"] = []
     contract_path.write_text(json.dumps(contract))
     bundle = authoring / "environment-bundle"
-    author_bundle_v2(source=source, job=_job(connector="auto"), authoring=authoring, output=bundle)
+    author_bundle_v2(
+        source=source, job=_job(connector="auto"), authoring=authoring, output=bundle
+    )
     contract["tool_entrypoints"] = [
-        {"tool": "lookup", "mode": "import", "module": "agent_tools", "callable": "lookup"}
+        {
+            "tool": "lookup",
+            "mode": "import",
+            "module": "agent_tools",
+            "callable": "lookup",
+        }
     ]
     contract_path.write_text(json.dumps(contract))
 
     reseal_scenarios(authoring)
 
     resealed = load_bundle_v2(bundle)
-    control = next(p for p in resealed.processes if p.name == resealed.runtime.control_service)
+    control = next(
+        p for p in resealed.processes if p.name == resealed.runtime.control_service
+    )
     assert json.loads(control.environment["ALK_TOOL_TRACE_BINDINGS"]) == [
         {"name": "lookup", "module": "agent_tools", "callable": "lookup"}
     ]

@@ -464,6 +464,7 @@ def _graph_worker(attributes):
 
 def _same_tool(one, other):
     """Whether two spans name the same tool, as two instrumentations of one call spell it."""
+
     def key(span):
         name = _first(span.attributes or {}, _TOOL_NAME_KEYS) or span.name or ""
         return "".join(ch for ch in name.lower() if ch.isalnum())
@@ -802,6 +803,7 @@ _INSTRUMENTORS = {
     "pydantic_ai": ("traceai_pydantic_ai", "PydanticAIInstrumentor"),
     "strands": ("traceai_strands", "StrandsInstrumentor"),
 }
+
 
 @functools.lru_cache(maxsize=1)
 def _sandbox_provider():

@@ -559,15 +559,41 @@ def test_a_span_pairs_with_the_call_of_its_own_outcome_when_one_tool_ran_twice()
     ]
 
 
-def test_a_call_another_tracer_saw_takes_the_span_s_event_ids_and_keeps_its_own() -> None:
+def test_a_call_another_tracer_saw_takes_the_span_s_event_ids_and_keeps_its_own() -> (
+    None
+):
     plain = Call(name="lookup", arguments={}, result=None, ok=True, at=1.0)
-    own = Call(name="lookup", arguments={}, result=None, ok=True, at=2.0, runtime_ids={"event_id": "own"})
+    own = Call(
+        name="lookup",
+        arguments={},
+        result=None,
+        ok=True,
+        at=2.0,
+        runtime_ids={"event_id": "own"},
+    )
     spans = [
-        Call(name="lookup", arguments={}, result=None, ok=True, at=1.0, runtime_ids={"event_id": "s1", "parent_event_id": "a1"}),
-        Call(name="lookup", arguments={}, result=None, ok=True, at=2.0, runtime_ids={"event_id": "s2"}),
+        Call(
+            name="lookup",
+            arguments={},
+            result=None,
+            ok=True,
+            at=1.0,
+            runtime_ids={"event_id": "s1", "parent_event_id": "a1"},
+        ),
+        Call(
+            name="lookup",
+            arguments={},
+            result=None,
+            ok=True,
+            at=2.0,
+            runtime_ids={"event_id": "s2"},
+        ),
     ]
     merged = call_runner._merge_span_calls([plain, own], spans)
-    assert [c.runtime_ids for c in merged] == [{"event_id": "s1", "parent_event_id": "a1"}, {"event_id": "own"}]
+    assert [c.runtime_ids for c in merged] == [
+        {"event_id": "s1", "parent_event_id": "a1"},
+        {"event_id": "own"},
+    ]
 
 
 def test_a_running_job_without_an_event_id_is_kept_beside_a_finished_one() -> None:
