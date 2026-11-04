@@ -31,10 +31,10 @@ ACTORS = ActorList(
 
 
 def _crm(dsn: str) -> type[BaseHTTPRequestHandler]:
-    """A CRM whose own rule is that a change needs a committed approval."""
+    """A records service whose own rule is that a change needs a committed approval."""
     import psycopg
 
-    class Crm(BaseHTTPRequestHandler):
+    class RecordsService(BaseHTTPRequestHandler):
         def log_message(self, *_args: object) -> None:
             return
 
@@ -64,7 +64,7 @@ def _crm(dsn: str) -> type[BaseHTTPRequestHandler]:
             self.end_headers()
             self.wfile.write(content)
 
-    return Crm
+    return RecordsService
 
 
 def _serve(handler: type[BaseHTTPRequestHandler]) -> ThreadingHTTPServer:
