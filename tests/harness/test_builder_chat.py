@@ -186,7 +186,7 @@ def test_a_change_to_the_cast_alone_is_saved(tmp_path, monkeypatch, cast):
     )
 
     (tmp_path / cast).write_text(
-        '{"actors": [{"id": "manager", "name": "Priya"}]}\n', encoding="utf-8"
+        '{"actors": [{"id": "reviewer", "name": "Robin"}]}\n', encoding="utf-8"
     )
     result = asyncio.run(runtime._save_changes())
 

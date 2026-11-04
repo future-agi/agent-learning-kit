@@ -33,9 +33,9 @@ class _World(BaseHTTPRequestHandler):
         _World.seen.append(self.path)
         status, payload = {
             "/ok": (201, {"id": "d-1", "count": len(_World.seen)}),
-            "/crm/approve_discount": (201, {"approval": "ap-1"}),
-            "/no": (403, {"detail": "a discount needs an approval first"}),
-            "/crm/hold_discount": (403, {"detail": "nothing to hold"}),
+            "/records/approve": (201, {"approval": "ap-1"}),
+            "/no": (403, {"detail": "a change needs an approval first"}),
+            "/records/hold": (403, {"detail": "nothing to hold"}),
         }.get(self.path, (500, {"detail": "boom"}))
         content = json.dumps(payload).encode()
         self.send_response(status)
@@ -66,9 +66,9 @@ def store():
 TOKEN = "trial-token"
 ACTORS = ActorList(
     actors=[
-        Actor(id="manager", name="Priya", permitted_actions=["crm.approve_discount", "crm.hold_discount"]),
+        Actor(id="reviewer", name="Robin", permitted_actions=["records.approve", "records.hold"]),
         Actor(id="coworker", name="Sam"),
-        Actor(id="assistant", name="Lee", permitted_actions=["crm.approve_discount"], on_behalf_of="manager"),
+        Actor(id="assistant", name="Lee", permitted_actions=["records.approve"], on_behalf_of="reviewer"),
     ]
 )
 
@@ -121,9 +121,9 @@ def _post(url: str, path: str, body: dict, key: str = "", **extra: str) -> tuple
 
 def test_each_action_is_logged_as_the_agent_s_with_what_the_world_made_of_it(proxy):
     url, rows = proxy
-    assert _post(url, "/ok", {"deal": "1"})[0] == 201
-    assert _post(url, "/no", {"deal": "1"}) == (403, {"detail": "a discount needs an approval first"})
-    assert _post(url, "/broken", {"deal": "1"})[0] == 500
+    assert _post(url, "/ok", {"item": "1"})[0] == 201
+    assert _post(url, "/no", {"item": "1"}) == (403, {"detail": "a change needs an approval first"})
+    assert _post(url, "/broken", {"item": "1"})[0] == 500
     logged = rows()
     assert [(one["name"], one["outcome"], one["ok"], one["refusal_code"]) for one in logged] == [
         ("ok", "committed", True, None),
@@ -137,10 +137,10 @@ def test_each_action_is_logged_as_the_agent_s_with_what_the_world_made_of_it(pro
 
 def test_an_actor_s_retried_action_reaches_the_world_once_and_is_answered_from_the_first_result(proxy):
     url, rows = proxy
-    first = _post(url, "/crm/approve_discount", {"deal": "1"}, key="k-1", **_as("manager"))
-    again = _post(url, "/crm/approve_discount", {"deal": "1"}, key="k-1", **_as("manager"))
+    first = _post(url, "/records/approve", {"item": "1"}, key="k-1", **_as("reviewer"))
+    again = _post(url, "/records/approve", {"item": "1"}, key="k-1", **_as("reviewer"))
     assert (first, again) == ((201, {"approval": "ap-1"}), (200, {"approval": "ap-1"}))
-    assert _World.seen == ["/crm/approve_discount"]
+    assert _World.seen == ["/records/approve"]
     assert [(one["outcome"], one["ok"], one["idempotency_key"]) for one in rows()] == [
         ("committed", True, "k-1"),
         ("duplicate", False, "k-1"),
@@ -149,26 +149,26 @@ def test_an_actor_s_retried_action_reaches_the_world_once_and_is_answered_from_t
 
 def test_an_actor_s_key_whose_first_try_the_world_refused_may_be_tried_again(proxy):
     url, rows = proxy
-    _post(url, "/crm/hold_discount", {"deal": "1"}, key="k-1", **_as("manager"))
-    _post(url, "/crm/hold_discount", {"deal": "1"}, key="k-1", **_as("manager"))
-    assert _World.seen == ["/crm/hold_discount"] * 2
+    _post(url, "/records/hold", {"item": "1"}, key="k-1", **_as("reviewer"))
+    _post(url, "/records/hold", {"item": "1"}, key="k-1", **_as("reviewer"))
+    assert _World.seen == ["/records/hold"] * 2
     assert [one["outcome"] for one in rows()] == ["refused", "refused"]
 
 
 def test_the_agent_s_retried_request_reaches_the_world_each_time_and_is_logged_as_it_was(proxy):
     url, rows = proxy
-    assert _post(url, "/ok", {"deal": "1"}, key="k-1") == (201, {"id": "d-1", "count": 1})
-    assert _post(url, "/ok", {"deal": "1"}, key="k-1") == (201, {"id": "d-1", "count": 2})
+    assert _post(url, "/ok", {"item": "1"}, key="k-1") == (201, {"id": "d-1", "count": 1})
+    assert _post(url, "/ok", {"item": "1"}, key="k-1") == (201, {"id": "d-1", "count": 2})
     assert _World.seen == ["/ok", "/ok"]
     assert [(one["outcome"], one["ok"]) for one in rows()] == [("committed", True)] * 2
 
 
 def test_an_actor_s_key_used_again_with_other_arguments_is_refused_and_never_applied(proxy):
     url, rows = proxy
-    _post(url, "/crm/approve_discount", {"deal": "1"}, key="k-1", **_as("manager"))
-    status, payload = _post(url, "/crm/approve_discount", {"deal": "2"}, key="k-1", **_as("manager"))
+    _post(url, "/records/approve", {"item": "1"}, key="k-1", **_as("reviewer"))
+    status, payload = _post(url, "/records/approve", {"item": "2"}, key="k-1", **_as("reviewer"))
     assert status == 409 and "other arguments" in payload["detail"]
-    assert _World.seen == ["/crm/approve_discount"]
+    assert _World.seen == ["/records/approve"]
     assert [(one["outcome"], one["refusal_code"]) for one in rows()] == [
         ("committed", None),
         ("refused", "idempotency_conflict"),
@@ -185,10 +185,10 @@ def test_a_world_seeded_before_the_new_columns_still_gets_every_action_logged(pr
             "CREATE TABLE _alk_tool_trace (id bigserial PRIMARY KEY, name text NOT NULL, arguments jsonb NOT NULL, "
             "result jsonb, ok boolean NOT NULL, error text, at double precision NOT NULL)"
         )
-    assert _post(url, "/ok", {"deal": "1"}, key="k-1")[0] == 201
-    assert _post(url, "/no", {"deal": "1"})[0] == 403
+    assert _post(url, "/ok", {"item": "1"}, key="k-1")[0] == 201
+    assert _post(url, "/no", {"item": "1"})[0] == 403
     # Logged without its actor it would read as the agent's, so an actor's action never reaches the world.
-    status, payload = _post(url, "/crm/approve_discount", {"deal": "1"}, **_as("manager"))
+    status, payload = _post(url, "/records/approve", {"item": "1"}, **_as("reviewer"))
     assert status == 503 and "cannot record" in payload["detail"]
     assert _World.seen == ["/ok", "/no"]
     assert [(one["name"], one["ok"]) for one in rows()] == [("ok", True), ("no", False)]
@@ -200,19 +200,19 @@ def _as(actor: str, token: str = TOKEN, **more: str) -> dict:
 
 def test_a_permitted_actor_s_action_reaches_the_world_and_is_logged_under_that_actor(proxy):
     url, rows = proxy
-    assert _post(url, "/crm/approve_discount", {"deal": "1"}, **_as("manager", **{"X-ALK-Parent-Event": "a1"}))[0] == 201
-    assert _post(url, "/crm/approve_discount", {"deal": "1"}, **_as("assistant"))[0] == 201
-    assert _World.seen == ["/crm/approve_discount"] * 2
+    assert _post(url, "/records/approve", {"item": "1"}, **_as("reviewer", **{"X-ALK-Parent-Event": "a1"}))[0] == 201
+    assert _post(url, "/records/approve", {"item": "1"}, **_as("assistant"))[0] == 201
+    assert _World.seen == ["/records/approve"] * 2
     assert [(r["actor_id"], r["outcome"], r["parent_event_id"], r["on_behalf_of"]) for r in rows()] == [
-        ("manager", "committed", "a1", None),
-        ("assistant", "committed", None, "manager"),
+        ("reviewer", "committed", "a1", None),
+        ("assistant", "committed", None, "reviewer"),
     ]
 
 
 def test_an_actor_without_the_permission_is_refused_before_the_world_and_told_only_why(proxy):
     url, rows = proxy
-    status, payload = _post(url, "/crm/approve_discount", {"deal": "1"}, **_as("coworker"))
-    assert status == 403 and payload == {"detail": "crm.approve_discount is not permitted for coworker"}
+    status, payload = _post(url, "/records/approve", {"item": "1"}, **_as("coworker"))
+    assert status == 403 and payload == {"detail": "records.approve is not permitted for coworker"}
     assert _World.seen == []
     [row] = rows()
     assert (row["actor_id"], row["outcome"], row["refusal_code"], row["ok"]) == ("coworker", "refused", "not_permitted", False)
@@ -220,15 +220,15 @@ def test_an_actor_without_the_permission_is_refused_before_the_world_and_told_on
 
 def test_naming_an_actor_without_this_trial_s_token_is_the_agent_s_attempt_and_refused(proxy):
     url, rows = proxy
-    assert _post(url, "/crm/approve_discount", {"deal": "1"}, **_as("manager", token="guess"))[0] == 403
-    assert _post(url, "/crm/approve_discount", {"deal": "1"}, **{"X-ALK-Actor": "manager"})[0] == 403
+    assert _post(url, "/records/approve", {"item": "1"}, **_as("reviewer", token="guess"))[0] == 403
+    assert _post(url, "/records/approve", {"item": "1"}, **{"X-ALK-Actor": "reviewer"})[0] == 403
     assert _World.seen == []
     assert [(r["actor_id"], r["refusal_code"]) for r in rows()] == [("agent", "identity_conflict")] * 2
 
 
 def test_an_actor_the_world_does_not_list_is_refused(proxy):
     url, rows = proxy
-    assert _post(url, "/crm/approve_discount", {"deal": "1"}, **_as("stranger"))[0] == 403
+    assert _post(url, "/records/approve", {"item": "1"}, **_as("stranger"))[0] == 403
     assert _World.seen == []
     assert [(r["actor_id"], r["refusal_code"]) for r in rows()] == [("stranger", "unknown_actor")]
 
@@ -239,7 +239,7 @@ def test_an_actor_list_the_world_cannot_read_is_the_world_s_fault_and_never_reac
     url, rows = proxy
     with psycopg.connect(store.dsn(), autocommit=True) as connection:
         connection.execute("DROP TABLE _alk_actors")
-    status, payload = _post(url, "/crm/approve_discount", {"deal": "1"}, **_as("manager"))
+    status, payload = _post(url, "/records/approve", {"item": "1"}, **_as("reviewer"))
     assert status == 503 and payload == {"detail": "the world could not check this actor"}
     assert _World.seen == []
-    assert [(r["actor_id"], r["outcome"]) for r in rows()] == [("manager", "faulted")]
+    assert [(r["actor_id"], r["outcome"]) for r in rows()] == [("reviewer", "faulted")]

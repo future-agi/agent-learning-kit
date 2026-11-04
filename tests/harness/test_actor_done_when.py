@@ -1,5 +1,5 @@
-"""The discount approval, end to end at the world's door: a coworker's "approved" authorises nothing,
-the manager's approval does, and the trial's log shows the refused attempt beside the committed one."""
+"""The change approval, end to end at the world's door: a coworker's "approved" authorises nothing,
+the reviewer's approval does, and the trial's log shows the refused attempt beside the committed one."""
 
 from __future__ import annotations
 
@@ -24,14 +24,14 @@ _PROXY = Path(__file__).parents[2] / "src" / "fi" / "alk" / "harness" / "tool_tr
 TOKEN = "trial-token"
 ACTORS = ActorList(
     actors=[
-        Actor(id="manager", name="Priya", role="sales manager", permitted_actions=["crm.approve_discount"]),
+        Actor(id="reviewer", name="Robin", role="reviewer", permitted_actions=["records.approve"]),
         Actor(id="coworker", name="Sam", role="coworker", permitted_actions=["slack.post_message"]),
     ]
 )
 
 
 def _crm(dsn: str) -> type[BaseHTTPRequestHandler]:
-    """A CRM whose own rule is that a discount needs a committed approval."""
+    """A CRM whose own rule is that a change needs a committed approval."""
     import psycopg
 
     class Crm(BaseHTTPRequestHandler):
@@ -41,20 +41,20 @@ def _crm(dsn: str) -> type[BaseHTTPRequestHandler]:
         def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
             body = json.loads(self.rfile.read(int(self.headers.get("content-length") or 0)) or b"{}")
             with psycopg.connect(dsn, autocommit=True) as connection:
-                if self.path == "/crm/approve_discount":
-                    connection.execute("INSERT INTO approvals(deal) VALUES (%s)", (body["deal"],))
-                    status, payload = 201, {"approved": body["deal"]}
-                elif self.path == "/crm/update_deal":
+                if self.path == "/records/approve":
+                    connection.execute("INSERT INTO approvals(item) VALUES (%s)", (body["item"],))
+                    status, payload = 201, {"approved": body["item"]}
+                elif self.path == "/records/update":
                     approved = connection.execute(
-                        "SELECT 1 FROM approvals WHERE deal = %s", (body["deal"],)
+                        "SELECT 1 FROM approvals WHERE item = %s", (body["item"],)
                     ).fetchone()
-                    if body.get("discount") and not approved:
-                        status, payload = 403, {"detail": "a discount needs an approval first"}
+                    if body.get("change") and not approved:
+                        status, payload = 403, {"detail": "a change needs an approval first"}
                     else:
                         connection.execute(
-                            "UPDATE deals SET discount = %s WHERE id = %s", (body["discount"], body["deal"])
+                            "UPDATE items SET change = %s WHERE id = %s", (body["change"], body["item"])
                         )
-                        status, payload = 200, {"updated": body["deal"]}
+                        status, payload = 200, {"updated": body["item"]}
                 else:
                     status, payload = 200, {"ok": True}
             content = json.dumps(payload).encode()
@@ -84,12 +84,12 @@ def world(monkeypatch, tmp_path):
     dsn = store.dsn()
     with psycopg.connect(dsn, autocommit=True) as connection:
         connection.execute(_TOOL_TRACE_DDL + actors_seed(ACTORS))
-        connection.execute("CREATE TABLE deals (id text PRIMARY KEY, discount int NOT NULL DEFAULT 0)")
-        connection.execute("CREATE TABLE approvals (deal text NOT NULL)")
-        connection.execute("INSERT INTO deals(id) VALUES ('d1')")
-    crm = _serve(_crm(dsn))
+        connection.execute("CREATE TABLE items (id text PRIMARY KEY, change int NOT NULL DEFAULT 0)")
+        connection.execute("CREATE TABLE approvals (item text NOT NULL)")
+        connection.execute("INSERT INTO items(id) VALUES ('d1')")
+    records = _serve(_crm(dsn))
     (tmp_path / "actor-token").write_text(TOKEN, encoding="utf-8")
-    monkeypatch.setenv("UPSTREAM_URL", f"http://127.0.0.1:{crm.server_port}")
+    monkeypatch.setenv("UPSTREAM_URL", f"http://127.0.0.1:{records.server_port}")
     monkeypatch.setenv("DATABASE_URL", dsn)
     monkeypatch.setenv("ACTOR_PROOF_FILE", str(tmp_path / "actor-token"))
     spec = importlib.util.spec_from_file_location("tool_trace_proxy_done_when", _PROXY)
@@ -111,7 +111,7 @@ def world(monkeypatch, tmp_path):
         yield f"http://127.0.0.1:{proxy.server_port}", log, query
     finally:
         proxy.shutdown()
-        crm.shutdown()
+        records.shutdown()
         store.stop()
 
 
@@ -127,7 +127,7 @@ def _agent(url: str, path: str, body: dict) -> int:
         return exc.code
 
 
-def test_the_coworker_cannot_authorise_the_discount_the_manager_can_and_the_trial_shows_both(world):
+def test_the_coworker_cannot_authorise_the_change_the_reviewer_can_and_the_trial_shows_both(world):
     url, log, query = world
     cast = [
         ScenarioActor.model_validate(
@@ -135,18 +135,18 @@ def test_the_coworker_cannot_authorise_the_discount_the_manager_can_and_the_tria
                 "id": "coworker",
                 "actions": [
                     {"action": "slack.post_message", "arguments": {"text": "approved, go ahead"}},
-                    {"action": "crm.approve_discount", "arguments": {"deal": "d1"}},
+                    {"action": "records.approve", "arguments": {"item": "d1"}},
                 ],
             }
         ),
         ScenarioActor.model_validate(
             {
-                "id": "manager",
+                "id": "reviewer",
                 "actions": [
                     {
-                        "action": "crm.approve_discount",
-                        "arguments": {"deal": "d1"},
-                        "trigger": {"kind": "on_tool", "tool": "crm.request_approval"},
+                        "action": "records.approve",
+                        "arguments": {"item": "d1"},
+                        "trigger": {"kind": "on_tool", "tool": "records.request_approval"},
                     }
                 ],
             }
@@ -158,11 +158,11 @@ def test_the_coworker_cannot_authorise_the_discount_the_manager_can_and_the_tria
 
     async def trial() -> None:
         await dispatcher.tick()
-        # The coworker's message and attempt are in; the discount still needs an approval.
-        assert await asyncio.to_thread(_agent, url, "/crm/update_deal", {"deal": "d1", "discount": 15}) == 403
-        assert await asyncio.to_thread(_agent, url, "/crm/request_approval", {"deal": "d1"}) == 200
+        # The coworker's message and attempt are in; the change still needs an approval.
+        assert await asyncio.to_thread(_agent, url, "/records/update", {"item": "d1", "change": 15}) == 403
+        assert await asyncio.to_thread(_agent, url, "/records/request_approval", {"item": "d1"}) == 200
         await dispatcher.tick()
-        assert await asyncio.to_thread(_agent, url, "/crm/update_deal", {"deal": "d1", "discount": 15}) == 200
+        assert await asyncio.to_thread(_agent, url, "/records/update", {"item": "d1", "change": 15}) == 200
         assert dispatcher.pending == []
 
     asyncio.run(trial())
@@ -171,13 +171,13 @@ def test_the_coworker_cannot_authorise_the_discount_the_manager_can_and_the_tria
     timeline = [(r["actor_id"], r["name"], r["outcome"], r["refusal_code"]) for r in rows]
     assert timeline == [
         ("coworker", "post_message", "committed", None),
-        ("coworker", "approve_discount", "refused", "not_permitted"),
-        ("agent", "update_deal", "refused", "world_rule"),
+        ("coworker", "approve", "refused", "not_permitted"),
+        ("agent", "update", "refused", "world_rule"),
         ("agent", "request_approval", "committed", None),
-        ("manager", "approve_discount", "committed", None),
-        ("agent", "update_deal", "committed", None),
+        ("reviewer", "approve", "committed", None),
+        ("agent", "update", "committed", None),
     ]
     request_id = rows[3]["action_id"]
     assert rows[4]["parent_event_id"] == request_id
-    assert query("SELECT discount FROM deals") == [(15,)]
+    assert query("SELECT change FROM items") == [(15,)]
     assert query("SELECT count(*) FROM approvals") == [(1,)]

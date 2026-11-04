@@ -3456,7 +3456,7 @@ def test_canonical_seed_checks_the_world_as_built_whatever_alk_adds_later(
         return SourceTable(name=name, columns=(column,), primary_key=("id",))
 
     digest = "sha256:" + "a" * 64
-    built = ("_alk_tool_trace", "deals", *built_with)
+    built = ("_alk_tool_trace", "items", *built_with)
     recorded = SourceModel.create(source_digest=digest, engine="postgres", tables=tuple(map(table, built)))
     live = SourceModel.create(
         source_digest=digest, engine="postgres", tables=tuple(map(table, (*built, *live_adds)))

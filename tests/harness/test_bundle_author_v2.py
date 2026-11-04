@@ -4865,7 +4865,7 @@ def test_a_bundle_with_actors_seals_the_rules_its_release_checks_them_by(
     (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
     authoring = _authoring(tmp_path)
     (authoring / "actors.json").write_text(
-        '{"actors": [{"id": "manager", "name": "Priya"}]}\n', encoding="utf-8"
+        '{"actors": [{"id": "reviewer", "name": "Robin"}]}\n', encoding="utf-8"
     )
 
     output = tmp_path / "bundle"

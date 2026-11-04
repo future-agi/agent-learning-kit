@@ -1,4 +1,4 @@
-"""The actor record: everyone the agent deals with, as data, checked structurally and never by what it says."""
+"""The actor record: everyone the agent items with, as data, checked structurally and never by what it says."""
 
 from __future__ import annotations
 
@@ -16,29 +16,29 @@ from fi.alk.harness.actors import (
     write_actor_rules,
 )
 
-_MANAGER = {
-    "id": "manager",
-    "name": "Priya Raman",
-    "role": "sales manager who approves discounts above 10%",
+_REVIEWER = {
+    "id": "reviewer",
+    "name": "Robin Hale",
+    "role": "reviewer who approves changes above a limit",
     "persona": {"languages": ["English"], "personality": "brisk"},
-    "goal": "Approve only discounts she can justify",
-    "constraints": {"may_agree": ["Discounts up to 25%"], "private": ["The quarter's discount budget"]},
+    "goal": "Approve only changes she can justify",
+    "constraints": {"may_agree": ["Changes up to 25%"], "private": ["The quarter's change budget"]},
     "behaviour": {"style": "brisk", "response_timing": {"kind": "delayed", "seconds": 5}},
-    "knowledge": [{"kind": "records", "store": "crm", "collection": "deals"}],
-    "permitted_actions": ["crm.approve_discount", "crm.reject_discount"],
-    "activation": {"trigger": {"kind": "on_tool", "tool": "crm.request_approval"}, "fallback": "decline"},
+    "knowledge": [{"kind": "records", "store": "records", "collection": "items"}],
+    "permitted_actions": ["records.approve", "records.reject"],
+    "activation": {"trigger": {"kind": "on_tool", "tool": "records.request_approval"}, "fallback": "decline"},
     "kind": "a role nobody has named yet",
 }
 
 
 def test_a_full_record_round_trips_and_open_values_are_kept(tmp_path):
-    listing = ActorList.model_validate({"actors": [_MANAGER]})
+    listing = ActorList.model_validate({"actors": [_REVIEWER]})
     save_actors(tmp_path, listing)
-    again = load_actors(tmp_path).by_id()["manager"]
+    again = load_actors(tmp_path).by_id()["reviewer"]
 
-    assert again.constraints.private == ["The quarter's discount budget"]
+    assert again.constraints.private == ["The quarter's change budget"]
     assert again.behaviour.response_timing.seconds == 5
-    assert again.activation.trigger.tool == "crm.request_approval" and again.activation.fallback == "decline"
+    assert again.activation.trigger.tool == "records.request_approval" and again.activation.fallback == "decline"
     assert again.kind == "a role nobody has named yet"
 
 
@@ -54,7 +54,7 @@ def test_a_full_record_round_trips_and_open_values_are_kept(tmp_path):
 )
 def test_a_structural_mistake_is_refused_with_what_is_wrong(change, message):
     with pytest.raises(ValidationError, match=message):
-        ActorList.model_validate({"actors": [{**_MANAGER, **change}]})
+        ActorList.model_validate({"actors": [{**_REVIEWER, **change}]})
 
 
 def test_actors_bringing_each_other_in_are_refused():
@@ -72,7 +72,7 @@ def test_a_sealed_bundle_carries_the_rules_its_release_checks_actors_by(tmp_path
     assert declared["reserved_ids"] == ["agent"]
     actor = declared["records"]["actors.json"]
     sub_actor = declared["records"]["sub_actors.json"]
-    jsonschema.validate(_MANAGER, actor)
+    jsonschema.validate(_REVIEWER, actor)
     partner = {"id": "partner", "name": "Sam", "channel": "audio_mix"}
     jsonschema.validate({**partner, "loudness_ratio": 0.5}, sub_actor)
     with pytest.raises(jsonschema.ValidationError):
