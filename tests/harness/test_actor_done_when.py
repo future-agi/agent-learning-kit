@@ -44,7 +44,7 @@ ACTORS = ActorList(
 )
 
 
-def _crm(dsn: str) -> type[BaseHTTPRequestHandler]:
+def _records_service(dsn: str) -> type[BaseHTTPRequestHandler]:
     """A records service whose own rule is that a change needs a committed approval."""
     import psycopg
 
@@ -111,7 +111,7 @@ def world(monkeypatch, tmp_path):
         )
         connection.execute("CREATE TABLE approvals (item text NOT NULL)")
         connection.execute("INSERT INTO items(id) VALUES ('d1')")
-    records = _serve(_crm(dsn))
+    records = _serve(_records_service(dsn))
     (tmp_path / "actor-token").write_text(TOKEN, encoding="utf-8")
     monkeypatch.setenv("UPSTREAM_URL", f"http://127.0.0.1:{records.server_port}")
     monkeypatch.setenv("DATABASE_URL", dsn)

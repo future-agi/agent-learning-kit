@@ -1744,17 +1744,17 @@ def test_tool_trace_holds_only_the_agents_calls(monkeypatch) -> None:
         "outcome",
     ]
     rows = [
-        ("read_deal", {"id": "d1"}, {"stage": "open"}, True, "", 1.0, "agent", "ok"),
+        ("read_record", {"id": "d1"}, {"stage": "open"}, True, "", 1.0, "agent", "ok"),
         ("approve", {"id": "d1"}, None, False, "refused", 2.0, "reviewer", "refused"),
         ("update", {"id": "d1"}, {"ok": True}, True, "", 3.0, None, None),
     ]
     monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
     runtime = _runtime(endpoints={"database": _postgres_endpoint()})
     assert [one.name for one in cr._collect_tool_trace_calls(runtime)] == [
-        "read_deal",
+        "read_record",
         "update",
     ]
-    assert world_access("postgresql://x/y")() == ["read_deal", "update"]
+    assert world_access("postgresql://x/y")() == ["read_record", "update"]
 
 
 def test_tool_trace_clear_is_best_effort_and_never_raises(monkeypatch) -> None:
