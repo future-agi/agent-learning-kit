@@ -236,6 +236,68 @@ def test_read_only_tools_skip_the_workspace_checkpoint(tmp_path, monkeypatch):
     assert client.checkpoints == 3
 
 
+class PackFailingClient(BuilderClient):
+    """A client whose workspace pack fails on the checkpoints named, as when a file shrinks mid-pack."""
+
+    def __init__(self, failing: set[int]):
+        super().__init__()
+        self.failing = failing
+
+    async def checkpoint(self, workspace):
+        self.checkpoints += 1
+        if self.checkpoints in self.failing:
+            raise OSError("unexpected end of data")
+        return {"digest": f"sha256:{self.checkpoints:064x}", "size": 1}
+
+
+def test_a_checkpoint_whose_pack_fails_leaves_the_pump_running_for_the_next_one(
+    tmp_path, monkeypatch
+):
+    client = PackFailingClient(failing={1})
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    queue: asyncio.Queue = asyncio.Queue()
+    for name in ("submit_scenario", "edit_scenario"):
+        queue.put_nowait(RuntimeEvent(kind="tool", tool=f"mcp__x__{name}", detail={"call_id": name}))
+    queue.put_nowait(RuntimeEvent(kind="text", text="Both kept.", detail={}))
+    queue.put_nowait(None)
+    said: list[str] = []
+
+    asyncio.run(
+        runtime._pump_events(
+            queue,
+            assistant_message_id="a-1",
+            fallback_invocation_id="turn-1",
+            emitted_text=said,
+            turn_failures=[],
+        )
+    )
+
+    assert client.checkpoints == 2
+    committed = [e for e in client.events if e["kind"] == "checkpoint_committed"]
+    assert [e["payload"]["digest"] for e in committed] == [f"sha256:{2:064x}"]
+    assert said == ["Both kept."]
+
+
+def test_a_turn_whose_pump_failed_still_sends_its_reply_and_completes(tmp_path, monkeypatch):
+    # The turn's opening checkpoint is the first; the write's, packed by the pump, fails.
+    client = PackFailingClient(failing={2})
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    runtime._published_fingerprint()
+
+    class WritingConversation(EditingConversation):
+        async def say(self, message, on_event=None):
+            on_event(RuntimeEvent(kind="tool", tool="mcp__x__edit_scenario", detail={"call_id": "e"}))
+            on_event(RuntimeEvent(kind="text", text="Edited it.", detail={}))
+
+    runtime.conversation = WritingConversation(tmp_path, writes=False)
+    _turn(runtime, {"content": "make it harder"})
+
+    assert _reply(client) == "Edited it."
+    completed = [e for e in client.events if e["kind"] == "turn_completed"]
+    assert [e["payload"]["outcome"] for e in completed] == ["success"]
+    assert client.checkpoints == 3
+
+
 def test_older_platforms_without_builder_endpoints_still_load(monkeypatch):
     body = _capabilities().model_dump(mode="json")
     capabilities = ConversationCapabilities.model_validate(body)

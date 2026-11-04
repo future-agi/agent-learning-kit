@@ -1722,6 +1722,10 @@ class HostedChatRuntime:
             try:
                 if event is None:
                     return
+                if event.kind == DONE and event.detail.get("outcome") == "failed":
+                    turn_failures.append(
+                        str(event.detail.get("error") or "stage failed")
+                    )
                 stage = str(event.detail.get("stage") or self.conversation.stage_name)
                 invocation_id = str(
                     event.detail.get("invocation_id") or fallback_invocation_id
@@ -1796,10 +1800,9 @@ class HostedChatRuntime:
                         invocation_id=invocation_id,
                         payload={"artifact": event.detail.get("path")},
                     )
-                elif event.kind == DONE and event.detail.get("outcome") == "failed":
-                    turn_failures.append(
-                        str(event.detail.get("error") or "stage failed")
-                    )
+            except Exception:  # noqa: BLE001 - a lost event or scratch checkpoint must not end the turn.
+                # What the turn says and whether it failed are recorded before any call here.
+                traceback.print_exc()
             finally:
                 queue.task_done()
 

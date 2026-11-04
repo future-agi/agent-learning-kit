@@ -2,22 +2,29 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
+import logging
 import os
 import sys
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 from .backends import GOOGLE_ADK_APPROVAL_ENV
 from .call_runner import ArtifactUploader, CallRunnerContext
+from .chat_call_runner import _check_text_usage
 from .hosted_scheduler import CallAborted, CallOutcome, Scenario, World
 from .isolated_process import run_json_worker, run_worker
 from .outbound import ArtifactKind
 from .process_runtime import EnvironmentRuntime, _allowlisted_ambient_env
+from .usage import simulator_funding
 from .world.runtime import Call
+
+logger = logging.getLogger(__name__)
 
 # Model configuration only: no platform callback capability or source-fetch credential.
 _CHAT_ENV = frozenset(
@@ -74,6 +81,10 @@ class IsolatedChatCallRunner:
                 if key in _CHAT_ENV
             }
         )
+        # The reporter cannot cross into the worker: the plan is checked here, and what the
+        # worker's call used is recorded here.
+        funding = simulator_funding()
+        await _check_text_usage(context.usage_reporter, funding)
         result = await run_json_worker(
             "fi.alk.harness.chat_worker",
             {
@@ -94,6 +105,7 @@ class IsolatedChatCallRunner:
             environ=environ,
             work_directory=context.work_directory / "chat-workers",
         )
+        await _record_worker_usage(context.usage_reporter, result.get("usage") or [], funding)
         artifact_ids = {}
         for artifact in result.get("artifacts", []):
             artifact_ids[artifact["id"]] = await self._adapter.upload_artifact(
@@ -123,6 +135,44 @@ class IsolatedChatCallRunner:
         return outcome
 
 
+async def _record_worker_usage(
+    reporter: Any, records: list[dict[str, Any]], funding: str
+) -> None:
+    """Record what the worker's call used, under the funding this process decided."""
+    if reporter is None:
+        return
+    for facts in records:
+        try:
+            await asyncio.to_thread(
+                reporter.record,
+                **{
+                    **facts,
+                    "funding": funding,
+                    "occurred_at": datetime.fromisoformat(facts["occurred_at"]),
+                },
+            )
+        except Exception:  # noqa: BLE001 - a metering failure must not hide the call's result
+            logger.exception(
+                "Could not record hosted text usage for scenario %s",
+                facts.get("scenario_key"),
+            )
+
+
+class _UsageCollector:
+    """The worker's usage reporter: it keeps each record for the parent to make.
+
+    The parent checked the plan before it started the worker, so ``check`` passes."""
+
+    def __init__(self) -> None:
+        self.records: list[dict[str, Any]] = []
+
+    def check(self, _action: str) -> None:
+        return
+
+    def record(self, **facts: Any) -> None:
+        self.records.append({**facts, "occurred_at": facts["occurred_at"].isoformat()})
+
+
 class _ArtifactCollector:
     def __init__(self) -> None:
         self.artifacts: list[dict[str, Any]] = []
@@ -148,6 +198,7 @@ async def main() -> None:
 
     payload = json.load(sys.stdin)
     collector = _ArtifactCollector()
+    usage = _UsageCollector()
     try:
         job = HarnessJob.model_validate(payload["job"])
         context = CallRunnerContext(
@@ -160,6 +211,7 @@ async def main() -> None:
             source_directory=Path(payload["source_directory"])
             if payload["source_directory"]
             else None,
+            usage_reporter=usage,  # type: ignore[arg-type]
         )
         runner_type = (
             RetellChatCallRunner
@@ -193,6 +245,8 @@ async def main() -> None:
             result["artifacts"] = collector.artifacts
     except Exception as exc:  # noqa: BLE001 - return a secret-safe worker failure
         result = {"error": type(exc).__name__}
+    if usage.records:
+        result["usage"] = usage.records
     fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w") as stream:
         json.dump(result, stream, default=str)
