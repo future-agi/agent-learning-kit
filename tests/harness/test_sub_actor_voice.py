@@ -335,7 +335,7 @@ def test_a_line_that_plays_past_the_sub_actor_time_is_cut_and_frees_the_phone(
             [voice], seed="run", play=never_done, say=never_done, clock=lambda: 1.0
         )
         call.cast._spent = registry.SUB_ACTOR_SECONDS - 0.05
-        holding = await asyncio.wait_for(call.agent_turn("Which ride?"), 1.0)
+        holding = await asyncio.wait_for(call.agent_turn("Which date?"), 1.0)
         await asyncio.wait_for(asyncio.gather(*call._pending.values()), 1.0)
         return holding, call.cast.holder, call.events()
 
@@ -358,13 +358,13 @@ def test_every_line_is_written_from_the_conversation_so_far_and_records_how_long
             conversation=lambda: ["The agent: Hello", "The person: Hi"],
             clock=itertools.count().__next__,
         )
-        await call.agent_turn("Which ride?")
+        await call.agent_turn("Which date?")
         await asyncio.sleep(0.01)
         await call.close()
         return phone.heard, near.heard, call.events()
 
     phone, near, events = asyncio.run(scenario())
-    expected = [["The agent: Hello", "The person: Hi", "The agent: Which ride?"]]
+    expected = [["The agent: Hello", "The person: Hi", "The agent: Which date?"]]
     assert phone == near == expected
     delivered = [one for one in events if one["kind"] == "delivered"]
     assert len(delivered) == 2 and all(one["asked_at"] < one["at"] for one in delivered)
@@ -928,14 +928,14 @@ def test_a_background_line_reaches_the_mixer_at_its_rate_so_it_plays_at_its_own_
 def test_someone_who_takes_the_phone_waits_until_the_person_has_spoken():
     cast = Cast(
         [
-            _actor("phone", kind="on_keyword", words=["pickup"]),
+            _actor("phone", kind="on_keyword", words=["later"]),
             _actor("near", "audio_mix"),
         ],
         "run",
     )
     # The agent's greeting names the keyword before the person has said a word: only the
     # background voice comes in; the phone-taker waits for the agent's next turn.
-    first = cast.entering(Moment(1, last_text="Where should we pickup?"))
+    first = cast.entering(Moment(1, last_text="Shall we talk later?"))
     assert [one["id"] for one in first] == ["near"]
     assert [one["id"] for one in cast.entering(Moment(2, last_text="Got it."))] == [
         "phone"
@@ -947,7 +947,7 @@ def test_someone_who_takes_the_phone_waits_until_the_person_has_spoken():
 
 def test_a_sub_actor_is_never_told_it_may_answer_for_the_person():
     brief = line_brief(
-        _actor("phone"), situation="Book a ride.", said=[], conversation=[], language=""
+        _actor("phone"), situation="Book a table.", said=[], conversation=[], language=""
     )
     assert "unless" not in brief
     assert "what they came for is theirs to say" in brief

@@ -9720,7 +9720,7 @@ def test_editing_a_scenario_written_before_sub_actors_existed_is_never_refused_f
         "name": "Asha Rao",
         "personality": "Friendly and cooperative",
         "communication_style": "Direct and concise",
-        "initial_message": "Hi, I want a Big Mac.",
+        "initial_message": "Hi, I would like to place an order.",
         "languages": ["English"],
         "accent": "Neutral",
         "gender": "female",
