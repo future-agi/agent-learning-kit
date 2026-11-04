@@ -37,6 +37,25 @@ def _actor(actor_id: str) -> dict | None:
     return {"permitted_actions": row[0], "on_behalf_of": row[1]} if row else None
 
 
+# Whether the action log has the actor columns, once the table has been seen; a world's log keeps its shape.
+_LOG_SHAPE: dict[str, bool] = {}
+
+
+def _logs_actors() -> bool:
+    """Whether the world's action log can record whose an action was."""
+    if "actors" not in _LOG_SHAPE:
+        try:
+            with psycopg.connect(DATABASE_URL, autocommit=True) as connection:
+                connection.execute("SELECT actor_id FROM _alk_tool_trace LIMIT 0")
+        except psycopg.errors.UndefinedColumn:
+            _LOG_SHAPE["actors"] = False
+        except Exception:
+            return False
+        else:
+            _LOG_SHAPE["actors"] = True
+    return _LOG_SHAPE["actors"]
+
+
 def _trial_token() -> str:
     try:
         with open(ACTOR_PROOF_FILE, encoding="utf-8") as handle:
@@ -61,8 +80,11 @@ def _record(
     """One row of the world's action log. `ok` stays, true only for a committed action."""
     row = (name, json.dumps(arguments), json.dumps(result), outcome == "committed", failure, time.time())
     try:
+        extended = _logs_actors()
+        if not extended and actor_id != "agent":
+            return
         with psycopg.connect(DATABASE_URL, autocommit=True) as connection:
-            try:
+            if extended:
                 connection.execute(
                     "INSERT INTO _alk_tool_trace(name, arguments, result, ok, error, at, action_id, "
                     "outcome, refusal, refusal_code, idempotency_key, actor_id, parent_event_id, on_behalf_of) "
@@ -79,8 +101,8 @@ def _record(
                         on_behalf_of,
                     ),
                 )
-            except psycopg.errors.UndefinedColumn:
-                # A world seeded before the log had these columns.
+            else:
+                # A world seeded without actors keeps the log's original columns.
                 connection.execute(
                     "INSERT INTO _alk_tool_trace(name, arguments, result, ok, error, at) "
                     "VALUES (%s, %s, %s, %s, %s, %s)",
@@ -163,6 +185,10 @@ class Handler(BaseHTTPRequestHandler):
             if not token or not hmac.compare_digest(sent, token):
                 self._refuse(arguments, "identity_conflict", "this request names an actor it cannot prove it is")
                 return
+            if not _logs_actors():
+                # Logged without its actor, the action would read as the agent's, so it never reaches the world.
+                self._reply(503, {"detail": "this world's action log cannot record an actor's action"})
+                return
             self._as["actor_id"] = actor
             try:
                 listed = _actor(actor)
@@ -178,7 +204,8 @@ class Handler(BaseHTTPRequestHandler):
             if not permitted(listed["permitted_actions"], self._action()):
                 self._refuse(arguments, "not_permitted", f"{self._action()} is not permitted for {actor}")
                 return
-        key = (self.headers.get("idempotency-key") or "").strip()
+        # Only an actor's retries are answered from the first result; the agent's reach the world as they always have.
+        key = (self.headers.get("idempotency-key") or "").strip() if actor else ""
         if not key:
             self._send(body, arguments, None)
             return

@@ -138,7 +138,13 @@ class EnvironmentPlanV2:
 
 _IGNORED_ARTIFACT_PARTS = {".git", ".venv", "__pycache__", "node_modules"}
 _CERTIFIED_BUNDLE_DIRECTORY = "certified-bundle"
-# The world's action log: every action the tool proxy saw, who took it and what came of it.
+# The agent's tool trace, as every world without actors is seeded.
+_AGENT_TRACE_DDL = (
+    "CREATE TABLE IF NOT EXISTS _alk_tool_trace ("
+    "id bigserial PRIMARY KEY, name text NOT NULL, arguments jsonb NOT NULL, "
+    "result jsonb, ok boolean NOT NULL, error text, at double precision NOT NULL);\n"
+)
+# With actors, the world's action log: every action the tool proxy saw, who took it and what came of it.
 _TOOL_TRACE_DDL = (
     "CREATE TABLE IF NOT EXISTS _alk_tool_trace ("
     "id bigserial PRIMARY KEY, name text NOT NULL, arguments jsonb NOT NULL, "
@@ -150,10 +156,10 @@ _TOOL_TRACE_DDL = (
 )
 
 
-def _actors_seed(authoring: Path) -> str:
-    """Who may do what in the world, seeded beside the action log; nothing for a world without actors."""
+def _action_log_seed(authoring: Path) -> str:
+    """The action log and who may do what in the world; a world without actors is seeded exactly as before."""
     listing = load_actors(authoring)
-    return actors_seed(listing) if listing.actors else ""
+    return _TOOL_TRACE_DDL + actors_seed(listing) if listing.actors else _AGENT_TRACE_DDL
 
 
 def _catalog_image(image: str) -> tuple[str, str]:
@@ -3670,8 +3676,7 @@ def author_bundle_v2(
         prefix = (
             "CREATE TABLE IF NOT EXISTS harness_seed_sentinel (id text PRIMARY KEY);\n"
             "INSERT INTO harness_seed_sentinel(id) VALUES ('ready') ON CONFLICT DO NOTHING;\n"
-            + _TOOL_TRACE_DDL
-            + _actors_seed(authoring_root)
+            + _action_log_seed(authoring_root)
         )
         generic_pipeline = job.metadata.get("generic_harness_v1") is True
         if generic_pipeline:
