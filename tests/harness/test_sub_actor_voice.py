@@ -704,6 +704,71 @@ def test_a_scenario_s_sub_actors_reach_the_call_resolved_in_voices_no_one_else_h
     json.dumps(voiced)
 
 
+def _one_sub_actor(tmp_path, trigger):
+    from fi.alk.harness.sub_actor import SubActor, SubActorList, save_sub_actors
+
+    save_sub_actors(
+        tmp_path,
+        SubActorList(
+            sub_actors=[
+                SubActor(
+                    id="near",
+                    name="Rowan",
+                    role="someone with the person",
+                    channel="audio_mix",
+                )
+            ]
+        ),
+    )
+    return {
+        "instruction": "Book a table.",
+        "persona": {"name": "Sam", "gender": "female"},
+        "sub_actors": [
+            {"id": "near", "instruction": "You want to leave.", "trigger": trigger}
+        ],
+    }
+
+
+def test_a_sub_actor_on_a_tool_waits_for_the_name_the_trace_logs_that_tool_under(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness.call_runner import _voiced_sub_actors
+
+    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+    (tmp_path / "contract.json").write_text(
+        json.dumps(
+            {
+                "tool_entrypoints": [
+                    {"tool": "check_status", "endpoint": "/orders/get_status"}
+                ]
+            }
+        )
+    )
+    doc = _one_sub_actor(tmp_path, {"kind": "on_tool", "tool": "check_status"})
+    [near] = _voiced_sub_actors(doc, tmp_path, "deepgram", "", "run")
+    assert near["trigger"]["tool"] == "get_status"
+    assert registry.due(
+        near["trigger"],
+        Moment(1, tools_called=["get_status"]),
+        seed="run",
+        sub_actor_id="near",
+    )
+
+
+@pytest.mark.parametrize("provider", ["google", "elevenlabs"])
+def test_a_sub_actor_with_no_voice_of_its_own_does_not_enter(
+    tmp_path, monkeypatch, caplog, provider
+):
+    from fi.alk.harness.call_runner import _voiced_sub_actors
+
+    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+    doc = _one_sub_actor(tmp_path, {"kind": "always"})
+    assert _voiced_sub_actors(doc, tmp_path, provider, "", "run") == []
+    assert (
+        "sub-actor near does not enter: no voice of its own on this call" in caplog.text
+    )
+
+
 def test_a_voice_already_on_the_call_is_avoided_while_the_provider_has_another():
     from fi.alk.harness.simulator_voice import aura_voice_for, persona_voice
 
