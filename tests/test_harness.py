@@ -10154,7 +10154,7 @@ def test_a_proof_plays_permitted_actor_actions_at_their_triggers_and_keeps_them_
             },
         ],
     )
-    world, by_actors = World(), set()
+    world, by_actors = World(), {}
     acting = _WorldActors(scenario, tmp_path, world, by_actors)
     acting.act_on(None)
     assert world.calls == []  # the coworker may not approve, so nothing happened
@@ -10172,10 +10172,14 @@ def test_a_proof_plays_permitted_actor_actions_at_their_triggers_and_keeps_them_
         "request_approval",
         "approve",
     ]
-    assert by_actors == {2, 4}
+    assert by_actors == {2: "coworker", 4: "reviewer"}
+    assert [(one["actor_id"], one["outcome"], one["refusal_code"]) for one in acting.events(outcome="refused")] == [
+        ("coworker", "refused", "not_permitted")
+    ]
+    assert [one["actor_id"] for one in acting.events()] == ["coworker", "agent", "agent", "coworker", "agent", "reviewer"]
 
     # A source-hosted world takes the action at its own route, which the agent's tools never name.
-    world, by_actors = World(), set()
+    world, by_actors = World(), {}
     world.endpoints = {"records/approve", "records/request_approval"}
     acting = _WorldActors(scenario, tmp_path, world, by_actors)
     for _ in range(2):
@@ -10183,6 +10187,26 @@ def test_a_proof_plays_permitted_actor_actions_at_their_triggers_and_keeps_them_
         world.call(step.tool, step.arguments)
         acting.act_on(step)
     assert [call.name for call in world.calls][-1] == "records/approve"
+
+
+def test_a_check_reads_the_proof_s_action_log_as_it_reads_the_run_s(tmp_path):
+    from fi.alk.harness.actors import Actor, ActorList, save_actors
+    from fi.alk.harness.checks import run_check
+    from fi.alk.harness.prove import _run
+
+    root, _contract, _catalogue = _built_environment(tmp_path)
+    save_actors(root, ActorList(actors=[Actor(id="reviewer", name="Robin")]))
+    scenario = Scenario.model_validate(
+        {**_delta(), "actors": [{"id": "reviewer", "actions": [{"action": "records.approve"}]}]}
+    )
+    world, calls, _refused, _assumed = _run(scenario, root, with_solution=True)
+    check = (
+        "def check(world, calls):\n"
+        "    tried = world.events(actor_id='reviewer', outcome='refused')\n"
+        "    return None if len(tried) == 1 and world.events('agent') else 'the log is wrong'\n"
+    )
+    outcome = run_check(check, world, calls, name="reviewer_refused")
+    assert outcome.held is True and not outcome.broken, outcome
 
 
 def test_a_proof_names_the_actor_actions_on_a_clock_or_a_chance_it_could_not_play():

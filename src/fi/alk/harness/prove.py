@@ -309,9 +309,11 @@ def _run(
     world, _applied, _ready = prepared(scenario, world_root)
     refused: list[str] = []
     assumed: list[str] = []
-    by_actors: set[int] = set()
+    by_actors: dict[int, str] = {}
+    acting = _WorldActors(scenario, world_root, world, by_actors)
+    # A check reads the trial's action log the way the run gives it: `world.events(actor_id, outcome)`.
+    world.events = acting.events
     if with_solution:
-        acting = _WorldActors(scenario, world_root, world, by_actors)
         acting.act_on(None)
         for step in scenario.solution if steps is None else steps:
             call = play_reference_step(world, step)
@@ -364,7 +366,7 @@ class _WorldActors:
         scenario: Scenario,
         world_root: Path,
         world: GeneratedWorld,
-        by_actors: set[int],
+        by_actors: dict[int, str],
     ) -> None:
         listed = load_actors(world_root).by_id()
         self.pending = [
@@ -376,6 +378,33 @@ class _WorldActors:
         self.world = world
         self.by_actors = by_actors
         self.counts: dict[str, int] = {}
+        # Actions refused before the world, each with how many world calls came before it.
+        self.refusals: list[tuple[int, dict[str, Any]]] = []
+
+    def events(self, actor_id: str | None = None, outcome: str | None = None) -> list[dict[str, Any]]:
+        """Every attempted action so far, whose it was and what came of it, as `HostedWorld.events` gives them."""
+        rows: list[dict[str, Any]] = []
+        pending = list(self.refusals)
+        for index, call in enumerate(self.world.calls):
+            while pending and pending[0][0] <= index:
+                rows.append(pending.pop(0)[1])
+            rows.append(
+                {
+                    "name": call.name,
+                    "arguments": call.arguments,
+                    "result": call.result,
+                    "ok": call.ok,
+                    "actor_id": self.by_actors.get(index, "agent"),
+                    "outcome": "committed" if call.ok else "refused",
+                    "refusal_code": None if call.ok else "world_rule",
+                }
+            )
+        rows += [row for _, row in pending]
+        return [
+            row
+            for row in rows
+            if (actor_id is None or row["actor_id"] == actor_id) and (outcome is None or row["outcome"] == outcome)
+        ]
 
     def _due(self, actor: Any, action: Any, step: Any) -> bool:
         trigger = action.trigger
@@ -397,6 +426,16 @@ class _WorldActors:
                 continue
             self.pending.remove((actor, action))
             if action.action not in actor.permitted_actions:
+                refusal = {
+                    "name": action.action.rsplit(".", 1)[-1],
+                    "arguments": dict(action.arguments),
+                    "result": None,
+                    "ok": False,
+                    "actor_id": actor.id,
+                    "outcome": "refused",
+                    "refusal_code": "not_permitted",
+                }
+                self.refusals.append((len(self.world.calls), refusal))
                 continue
             before = len(self.world.calls)
             # A source-hosted world knows the action by its route; a generated one by its name.
@@ -406,7 +445,7 @@ class _WorldActors:
                 route if known else action.action.rsplit(".", 1)[-1],
                 dict(action.arguments),
             )
-            self.by_actors.update(range(before, len(self.world.calls)))
+            self.by_actors.update(dict.fromkeys(range(before, len(self.world.calls)), actor.id))
 
 
 def native_runtime(world_root: Path) -> bool:
