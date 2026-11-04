@@ -4436,6 +4436,86 @@ def test_terminal_transcript_preserves_evidence_and_reports_incomplete_capture(
             assert result.metadata["status"] == CaseStatus.COMPLETED.value
 
 
+def test_caller_who_speaks_first_answers_every_target_turn(monkeypatch) -> None:
+    engine = _order_probe_engine(monkeypatch, [])
+    handlers = {}
+    room = livekit.rtc.Room()
+    room.register_text_stream_handler = lambda topic, handler: handlers.update(
+        {topic: handler}
+    )
+    monkeypatch.setattr(livekit.rtc, "Room", lambda: room)
+    replies: list[str] = []
+
+    class Session:
+        def __init__(self):
+            self.history = SimpleNamespace(items=[], add_message=lambda **kwargs: None)
+            self.current_speech = None
+            self.input = SimpleNamespace(set_audio_enabled=lambda enabled: None)
+
+        def on(self, event, callback):
+            pass
+
+        def clear_user_turn(self):
+            pass
+
+        def generate_reply(self, *, user_input):
+            replies.append(user_input)
+
+        async def aclose(self):
+            pass
+
+    class Caller:
+        def end_of_call(self):
+            pass
+
+        def open_conversation(self):
+            pass
+
+        async def start_session(self, room, **kwargs):
+            return Session()
+
+        async def _stop_background_audio(self):
+            pass
+
+    async def create_caller(*args, **kwargs):
+        return Caller(), None
+
+    target_turns = [
+        "Namaste, am I speaking with Sunil Kapoor?",
+        "Could you please tell me your date of birth?",
+    ]
+
+    async def target_speaks_twice(*args, **kwargs):
+        for text in target_turns:
+            handlers[livekit.TOPIC_TRANSCRIPTION](
+                _FakeTranscriptionReader(text), "target-agent"
+            )
+            for _ in range(20):
+                await asyncio.sleep(0)
+        room.remote_participants.clear()
+        return "target_disconnected"
+
+    monkeypatch.setattr(engine, "_create_customer_agent", create_caller)
+    monkeypatch.setattr(livekit, "_wait_for_conversation_end", target_speaks_twice)
+    monkeypatch.setattr(livekit, "_TARGET_TURN_SETTLE_SECONDS", 0.0)
+    monkeypatch.setattr(livekit, "_SESSION_CLEANUP_TIMEOUT_SECONDS", 0.01)
+    asyncio.run(
+        engine.run(
+            agent_definition=_agent(
+                room_mode="managed",
+                agent_name="registered-agent",
+                target_participant_identity="target-agent",
+            ),
+            scenario=_scenario(),
+            run_id="run_simulator_first_two_turns",
+            conversation_direction="simulator_first",
+            min_turn_messages=2,
+        )
+    )
+
+    assert replies == target_turns
+
+
 def test_the_caller_uses_audio_turn_detection_and_speculative_tts():
     """Audio EOU avoids fixed-delay interruptions while preemptive TTS removes response startup."""
     from fi.simulate.simulation.engines.livekit import _simulator_turn_handling
