@@ -561,3 +561,26 @@ def test_the_process_instrumenting_after_the_hook_with_its_own_provider_gets_it(
     assert ours.settings == {}
     ours.instrument(tracer_provider="own")
     assert ours.settings == {"tracer_provider": "own"}
+
+
+def test_the_hook_turns_on_every_instrumentor_the_build_installs() -> None:
+    from fi.alk.harness.generated_runtime import FRAMEWORK_INSTRUMENTORS
+
+    built = {one.split("==")[0].replace("-", "_") for _framework, one in FRAMEWORK_INSTRUMENTORS if one.startswith("traceai")}
+    assert built == {module for module, _cls in simulation_mark_bootstrap._INSTRUMENTORS.values()}
+
+
+def test_a_framework_whose_instrumentor_is_missing_is_reported_unobserved(tmp_path: Path) -> None:
+    hook = tmp_path / "hook"
+    hook.mkdir()
+    (hook / "simulation_mark_bootstrap.py").write_bytes(Path(simulation_mark_bootstrap.__file__).read_bytes())
+    (hook / "sitecustomize.py").write_text("import simulation_mark_bootstrap\nsimulation_mark_bootstrap.install()\n")
+    (hook / "smolagents.py").write_text("")
+    result = subprocess.run(
+        [sys.executable, "-c", "import smolagents"],
+        env={**os.environ, "PYTHONPATH": str(hook), "HARNESS_TOOL_TRACE": str(tmp_path / "calls.jsonl"),
+             "ALK_OBSERVE_FRAMEWORKS": "1"},
+        capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode == 0
+    assert "simulation mark hook: unobserved smolagents, its instrumentor is not installed" in result.stderr
