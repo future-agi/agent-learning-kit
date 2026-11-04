@@ -157,6 +157,31 @@ def test_an_http_python_agent_is_observed_through_its_framework_spans(tmp_path: 
     assert control.build_commands[-1] == framework_instrumentation_command()
 
 
+@pytest.mark.parametrize("uv", ["exit 1", "exec sleep 30"])
+def test_an_instrumentor_that_fails_or_stalls_is_a_warning_and_the_build_goes_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, uv: str
+) -> None:
+    from fi.alk.harness import generated_runtime
+    from fi.alk.harness.generated_runtime import FRAMEWORK_INSTRUMENTORS
+
+    assert all("==" in one for _framework, one in FRAMEWORK_INSTRUMENTORS if one.startswith("traceai-"))
+    monkeypatch.setattr(generated_runtime, "INSTRUMENTOR_INSTALL_SECONDS", 1)
+    installed = tmp_path / "site"
+    (installed / "crewai-1.0.dist-info").mkdir(parents=True)
+    (installed / "crewai-1.0.dist-info" / "METADATA").write_text("Name: crewai\nVersion: 1.0\n")
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    (tools / "uv").write_text(f"#!/bin/sh\n{uv}\n")
+    (tools / "uv").chmod(0o755)
+    (tools / "python3").symlink_to(sys.executable)
+    result = subprocess.run(
+        generated_runtime.framework_instrumentation_command(), cwd=tmp_path, capture_output=True, text=True,
+        env={"PATH": f"{tools}:/bin:/usr/bin", "PYTHONPATH": str(installed)}, timeout=60,
+    )
+    assert result.returncode == 0
+    assert "warning: framework instrumentor not installed, its calls go unobserved: traceai-crewai==" in result.stderr
+
+
 @pytest.mark.parametrize(
     ("command", "project"),
     [
@@ -182,7 +207,7 @@ def test_framework_instrumentors_go_where_a_uv_run_project_s_frameworks_are(
     step = control.build_commands[-1]
     assert step == framework_instrumentation_command(project)
     if project:
-        assert step[2].startswith(f"uv sync --project {project} || true; ")
+        assert step[2].startswith(f"uv sync --project {project} || echo ")
         assert f"{project}/.venv/bin/python" in step[2]
     else:
         assert "uv sync" not in step[2] and "p=.venv/bin/python" in step[2]

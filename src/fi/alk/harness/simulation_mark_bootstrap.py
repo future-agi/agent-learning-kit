@@ -830,7 +830,12 @@ def _instrument(module, target) -> None:
         # The process imports the instrumentor itself, and this framework import is part of
         # that: it instruments with its own settings.
         return
-    instrumentor = getattr(importlib.import_module(name), attribute)()
+    try:
+        instrumentor = getattr(importlib.import_module(name), attribute)()
+    except ImportError:
+        # The build could not install it: this framework's calls go unobserved, and the log says so.
+        _write("unobserved " + module.__name__ + ", its instrumentor is not installed")
+        return
     if getattr(instrumentor, "is_instrumented_by_opentelemetry", False):
         return
     instrumentor.instrument()

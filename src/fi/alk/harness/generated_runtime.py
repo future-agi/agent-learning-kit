@@ -14,9 +14,9 @@ import re
 import shlex
 import shutil
 import stat
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from collections.abc import Sequence
 from typing import Any
 
 from packaging.utils import canonicalize_name
@@ -671,22 +671,24 @@ def select_python_extras(
     )
 
 
-# A framework's distribution, and the traceAI instrumentor that marks its agent and tool spans.
+# A framework's distribution, and the traceAI instrumentor that marks its agent and tool spans, pinned.
 FRAMEWORK_INSTRUMENTORS = (
-    ("openai-agents", "traceai-openai-agents"),
-    ("langchain-core", "traceai-langchain"),
-    ("crewai", "traceai-crewai"),
-    ("google-adk", "traceai-google-adk"),
-    ("autogen-agentchat", "traceai-autogen"),
-    ("smolagents", "traceai-smolagents"),
-    ("claude-agent-sdk", "traceai-claude-agent-sdk"),
-    ("llama-index-core", "traceai-llamaindex"),
-    ("pydantic-ai-slim", "traceai-pydantic-ai"),
-    ("strands-agents", "traceai-strands"),
+    ("openai-agents", "traceai-openai-agents==0.1.7"),
+    ("langchain-core", "traceai-langchain==0.2.1"),
+    ("crewai", "traceai-crewai==0.1.10"),
+    ("google-adk", "traceai-google-adk==0.1.7"),
+    ("autogen-agentchat", "traceai-autogen==0.2.1"),
+    ("smolagents", "traceai-smolagents==0.1.6"),
+    ("claude-agent-sdk", "traceai-claude-agent-sdk==0.1.1"),
+    ("llama-index-core", "traceai-llamaindex==0.1.10"),
+    ("pydantic-ai-slim", "traceai-pydantic-ai==0.1.0"),
+    ("strands-agents", "traceai-strands==0.1.1"),
     # A framework that makes its own spans through the OpenTelemetry API alone, as AutoGen Core
-    # does, has them recorded only once the SDK is there.
+    # does, has them recorded only once the SDK is there, at the API's own version.
     ("opentelemetry-api", "opentelemetry-sdk"),
 )
+# Half the build step's default limit, so a stalled index skips the instrumentors and never fails the build.
+INSTRUMENTOR_INSTALL_SECONDS = 300
 
 
 def uv_run_project(command: Sequence[str] | None) -> str:
@@ -706,29 +708,40 @@ def framework_instrumentation_command(project: str = "") -> list[str]:
     """Install the instrumentor of each agent framework the built environment holds.
 
     Runs after the source's own install, in its interpreter, with every installed version pinned,
-    so the source's resolution never changes. An instrumentor that cannot be added is reported and
-    skipped: that framework's calls are then unobserved, and the build still succeeds.
+    so the source's resolution never changes. An instrumentor that cannot be added in time is
+    reported as a warning and skipped: that framework's calls are then unobserved, and the build
+    still succeeds.
     """
     script = (
-        "import importlib.metadata as m, re, shutil, subprocess, sys, tempfile\n"
+        "import importlib.metadata as m, re, shutil, subprocess, sys, tempfile, time\n"
         "n = lambda s: re.sub(r'[-_.]+', '-', s).lower()\n"
         "have = {n(d.metadata['Name']): d.version for d in m.distributions() if d.metadata['Name']}\n"
-        f"want = [t for f, t in {FRAMEWORK_INSTRUMENTORS!r} if f in have and t not in have]\n"
+        f"want = [t if '==' in t else t + '==' + have[f] for f, t in {FRAMEWORK_INSTRUMENTORS!r} "
+        "if f in have and t.split('==')[0] not in have]\n"
         "f = tempfile.NamedTemporaryFile(mode='w', suffix='.txt')\n"
         "f.write(''.join(k + '==' + v + '\\n' for k, v in have.items())); f.flush()\n"
+        f"deadline = time.monotonic() + {INSTRUMENTOR_INSTALL_SECONDS}\n"
+        "pip = ['uv', 'pip', 'install', '--python', sys.executable] if shutil.which('uv') else [sys.executable, '-m', 'pip', 'install']\n"
         "for t in want:\n"
-        "    pip = ['uv', 'pip', 'install', '--python', sys.executable] if shutil.which('uv') else [sys.executable, '-m', 'pip', 'install']\n"
-        "    r = subprocess.run([*pip, '--constraint', f.name, t])\n"
-        "    if r.returncode: print('framework instrumentor not installed: ' + t, file=sys.stderr)\n"
+        "    try:\n"
+        "        failed = subprocess.run([*pip, '--constraint', f.name, t], timeout=max(1, deadline - time.monotonic())).returncode\n"
+        "    except (OSError, subprocess.TimeoutExpired) as e:\n"
+        "        failed = type(e).__name__\n"
+        "    if failed: print('warning: framework instrumentor not installed, its calls go unobserved: ' + t, file=sys.stderr)\n"
     )
     # A `uv run --project <dir>` agent runs in <dir>'s own environment, which `uv run` creates at start: create it now so
     # the instrumentors land where the frameworks are; `uv run` keeps packages its lock does not name.
     venv = f"{project.rstrip('/')}/.venv" if project else ".venv"
-    sync = f"uv sync --project {shlex.quote(project)} || true; " if project else ""
+    sync = (
+        f"uv sync --project {shlex.quote(project)} || echo 'warning: uv sync failed; instrumentors go to python3' >&2; "
+        if project
+        else ""
+    )
     return [
         "sh",
         "-c",
-        sync + f'if [ -x {venv}/bin/python ]; then p={venv}/bin/python; else p=python3; fi; "$p" -c "$0" || true',
+        sync + f'if [ -x {venv}/bin/python ]; then p={venv}/bin/python; else p=python3; fi; '
+        '"$p" -c "$0" || echo "warning: framework instrumentors not installed" >&2',
         script,
     ]
 
