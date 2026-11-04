@@ -189,19 +189,21 @@ def test_declared_workers_name_contract_tools_and_reach_the_brief():
             "real_use_cases": ["refund an order"],
             "tools": [{"name": "get_order"}, {"name": "issue_refund"}],
             "workers": [
-                {"id": "order_lookup", "name": "Order-lookup worker", "tools": ["get_order"], "binding": "separate"},
+                {"id": "order_lookup", "name": "Order-lookup worker", "tools": ["get_order"]},
                 {"id": "refund", "name": "Refund worker", "tools": ["issue_refund"]},
             ],
         }
     )
     assert validate_contract(contract) == []
-    assert contract.workers[1].binding == "shared"
     assert "order_lookup (Order-lookup worker): get_order" in contract.brief()
 
     contract.workers.append(contract.workers[0].model_copy(update={"tools": ["send_email"]}))
     problems = validate_contract(contract)
-    assert "duplicate-worker-ids:order_lookup" in problems
-    assert any(problem.startswith("worker[order_lookup]:unknown-tools:send_email") for problem in problems)
+    assert "duplicate-worker-ids:order_lookup: give each worker its own id." in problems
+    assert "worker[order_lookup]:unknown-tools:send_email: add each to the contract's tools, or remove it from this " \
+        "worker's tools." in problems
+    contract.workers = [contract.workers[0].model_copy(update={"id": " "})]
+    assert validate_contract(contract) == ["worker:no-id: give every worker an id."]
 
 
 def test_contract_without_workers_is_unchanged():

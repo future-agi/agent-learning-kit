@@ -208,12 +208,8 @@ class DeclaredWorker(BaseModel):
 
     id: str
     name: str = ""
-    # Where the source declares it, as path:line.
-    framework_ref: str = ""
     # The contract tools this worker holds, by name.
     tools: list[str] = Field(default_factory=list)
-    # separate: the worker's tools can be told apart from the others' at the world; shared: they cannot.
-    binding: Literal["separate", "shared"] = "shared"
 
 
 class PromptSource(BaseModel):
@@ -1487,16 +1483,16 @@ def validate_contract(contract: AgentContract) -> list[str]:
     ids = [one.id for one in contract.workers]
     repeated = sorted({one for one in ids if ids.count(one) > 1})
     if repeated:
-        problems.append(f"duplicate-worker-ids:{','.join(repeated)}")
+        problems.append(f"duplicate-worker-ids:{','.join(repeated)}: give each worker its own id.")
     for worker in contract.workers:
         if not worker.id.strip():
-            problems.append("worker:no-id")
+            problems.append("worker:no-id: give every worker an id.")
             continue
         unknown_tools = sorted(set(worker.tools) - contract.tool_names())
         if unknown_tools:
             problems.append(
                 f"worker[{worker.id}]:unknown-tools:{','.join(unknown_tools)}: "
-                "a worker's tools are named from the contract's own tools."
+                "add each to the contract's tools, or remove it from this worker's tools."
             )
     # Iterate the tools, not tool_names(): that returns a set, so duplicates collapse before
     # they can be counted and the check silently never fires.
