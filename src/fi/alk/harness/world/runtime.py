@@ -161,6 +161,8 @@ class Call:
     ended_at: float = 0.0
     # The runtime's own ids for the event (`event_id`, `parent_event_id`, `started_event_id`), as it reported them.
     runtime_ids: dict[str, str] = field(default_factory=dict)
+    # A worker's run the runtime reported in place of a tool call: kept in the trace, never graded.
+    handoff: bool = False
 
 
 def tool_call_attribution(record: Mapping[str, Any]) -> dict[str, str]:
@@ -193,7 +195,8 @@ def graded_calls(calls: Sequence[Call]) -> list[Call]:
     return [
         call
         for call in calls
-        if not (call.delegated_to and call.runtime_ids.get("parent_event_id") and call.name in plain)
+        if not call.handoff
+        and not (call.delegated_to and call.runtime_ids.get("parent_event_id") and call.name in plain)
     ]
 
 
@@ -213,6 +216,7 @@ def trace_row(call: Call) -> dict[str, Any]:
             if getattr(call, key)
         },
         **({"runtime_ids": call.runtime_ids} if call.runtime_ids else {}),
+        **({"kind": "handoff"} if call.handoff else {}),
     }
 
 class GeneratedWorld(EnvironmentAdapter):

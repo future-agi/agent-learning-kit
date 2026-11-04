@@ -11,6 +11,7 @@ from fi.simulate.agent.wrapper import AgentInput
 from .chat_transport import create_chat_wrapper
 from .diagnostics import HarnessDiagnostic
 from .job import HarnessStage
+from .world.runtime import graded_calls
 
 
 def _failure_code(trace):
@@ -313,21 +314,22 @@ async def probe_chat_workflow(
         )
         async with asyncio.timeout(timeout):
             outcome = await runner.run(scenario, runtime)
-        receipt["tool_call_count"] = len(outcome.calls)
+        graded = graded_calls(outcome.calls)
+        receipt["tool_call_count"] = len(graded)
         receipt["turns"] = outcome.turns
         from .contract import has_executable_tool_workflow
 
         requires_tool_evidence = getattr(job, "require_tool_workflow", False) or (
             has_executable_tool_workflow(runner._contract, include_construct=False)
         )
-        if not outcome.calls and requires_tool_evidence:
+        if not graded and requires_tool_evidence:
             raise failure(
                 "chat_tool_evidence_unverified",
                 "Required tool evidence was not captured. Inspect source-supported "
                 "observation mapping. This may be target noncompliance; do not "
                 "fabricate evidence or change business logic.",
             )
-        if not outcome.calls:
+        if not graded:
             receipt["tool_evidence_status"] = "not_observed"
         receipt["status"] = "passed"
     except RuntimeValidationError:

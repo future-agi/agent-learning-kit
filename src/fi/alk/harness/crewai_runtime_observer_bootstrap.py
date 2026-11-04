@@ -115,6 +115,7 @@ def _handoff_record(event: Any, started: dict[tuple[str, str], float], coordinat
         "agent_key": by[:256],
         "agent_role": by[:256],
         "delegated_to": role.strip()[:256],
+        "kind": "handoff",
     }
     task_name = getattr(task, "name", None)
     if isinstance(task_name, str) and task_name:

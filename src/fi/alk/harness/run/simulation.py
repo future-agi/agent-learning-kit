@@ -998,6 +998,7 @@ def _semantic_calls(path: Path, *, contract: AgentContract | None = None) -> lis
             error=str(output) if failed else "",
             **tool_call_attribution(record),
             runtime_ids=runtime_ids(record),
+            handoff=record.get("kind") == "handoff",
             at=float(record.get("at") or 0.0),
         )
         # A harness-aware worker may mirror a local state-machine action to the world for

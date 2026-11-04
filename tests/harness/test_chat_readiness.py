@@ -1003,21 +1003,25 @@ def test_private_workflow_allows_unobserved_internal_tools_without_strict_requir
     assert receipt["tool_evidence_status"] == "not_observed"
 
 
+@pytest.mark.parametrize("handoffs", [0, 1])
 def test_private_workflow_requires_evidence_for_executable_contract_tools(
-    tmp_path, profile_app, monkeypatch
+    tmp_path, profile_app, monkeypatch, handoffs
 ):
     from fi.alk.harness import chat_call_runner
     from fi.alk.harness.contract import ToolEntry, ToolSpec
     from fi.alk.harness.run.conversation import Exchange, Transcript
+    from fi.alk.harness.world.runtime import Call
 
     url, state = profile_app
     state.update(profile=True, body={"content": "The account is active"})
 
     async def conversation(target, *_args):
         answer = await target.say("Look up account A-1")
+        # A worker's run is not a tool call, so it is no evidence for one.
+        handed = [Call(name="Account worker", arguments={}, delegated_to="Account worker", handoff=True)]
         return Transcript(
             exchanges=[Exchange("customer", "Look up account A-1"), Exchange("agent", answer)],
-            calls=[], ended="finished",
+            calls=handed[:handoffs], ended="finished",
         )
 
     monkeypatch.setattr(chat_call_runner, "_drive_conversation", conversation)

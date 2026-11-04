@@ -864,6 +864,7 @@ def _read_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[list[Call], list
             error=str(output) if is_error and output is not None else None,
             **tool_call_attribution(record),
             runtime_ids=runtime_ids(record),
+            handoff=record.get("kind") == "handoff",
             at=float(raw_at) if isinstance(raw_at, (int, float)) else 0.0,
         )
         ended = record.get("ended_at")
