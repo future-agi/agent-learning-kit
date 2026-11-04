@@ -89,7 +89,7 @@ def handle(args, db):
     )
     res_attendees = []
     for em, d_name, optional in attendees_in:
-        att_id = db.one("SELECT COUNT(*) as c FROM event_attendees")["c"] + 1
+        att_id = db.one("SELECT COALESCE(MAX(id), 0) + 1 AS c FROM event_attendees")["c"]
         db.execute(
             "INSERT INTO event_attendees (id, event_id, email, display_name, response_status, is_organizer, is_optional) VALUES (?, ?, ?, ?, 'needsAction', FALSE, ?)",
             (att_id, event_id, em, d_name, optional),

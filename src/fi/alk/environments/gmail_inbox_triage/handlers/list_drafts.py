@@ -13,12 +13,23 @@ def handle(args, db):
     view = args.get("view") or "DRAFT_VIEW_FULL"
     if view not in ("DRAFT_VIEW_UNSPECIFIED", "DRAFT_VIEW_METADATA_ONLY", "DRAFT_VIEW_FULL"):
         raise ToolError(f"Unknown view {view!r}", category="invalid_input")
-    terms = [part.lower() for part in (args.get("query") or "").split() if ":" not in part]
+    terms, filters = [], []
+    for part in (args.get("query") or "").split():
+        operator, colon, value = part.partition(":")
+        if not colon:
+            terms.append(part.lower())
+        elif operator.lower() in ("to", "cc", "bcc", "subject") and value:
+            filters.append((operator.lower(), value.strip('"').lower()))
+        else:
+            raise ToolError(f"Unsupported draft search operator {part!r}; drafts support to:, cc:, bcc: and subject:", category="invalid_input")
 
     drafts = []
     for d in db.query("SELECT * FROM drafts ORDER BY updated_at DESC"):
         text = f"{d['subject']} {d['body']} {d['recipient']}".lower()
         if terms and not all(term in text for term in terms):
+            continue
+        fields = {"to": d["recipient"], "cc": d["cc"] or "", "bcc": d["bcc"] or "", "subject": d["subject"]}
+        if any(value not in fields[operator].lower() for operator, value in filters):
             continue
         draft = {
             "id": d["id"],

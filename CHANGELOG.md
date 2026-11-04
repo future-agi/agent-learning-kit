@@ -236,7 +236,11 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
   idempotency and version arguments stay as documented local extensions.
   Banking carries the realigned Gmail tool set.
   `tests/harness/test_mcp_capability_reference.py` holds each package to its
-  reference.
+  reference. Review fixes: a start-only `update_event` keeps the start's UTC
+  offset on the derived end time, attendee ids never reuse a surviving row's
+  id, `list_drafts` applies `to:`/`cc:`/`bcc:`/`subject:` and refuses other
+  operators, and the Slack timeout criteria accept the channel read-back route
+  (`tests/harness/test_mcp_capability_handlers.py`).
 
 ## v1.0.0-rc.1 — 2026-06-10
 

@@ -46,9 +46,10 @@ def handle(args, db):
             from datetime import datetime
             duration = datetime.fromisoformat(end_time.replace("Z", "+00:00")) - datetime.fromisoformat(start_time.replace("Z", "+00:00"))
         start_time = args["startTime"]
-        if duration is not None:  # only the start moved: the duration is preserved
+        if duration is not None:  # only the start moved: the duration is preserved, in the start's offset
             from datetime import datetime
-            end_time = (datetime.fromisoformat(start_time.replace("Z", "+00:00")) + duration).strftime("%Y-%m-%dT%H:%M:%SZ")
+            new_end = datetime.fromisoformat(start_time.replace("Z", "+00:00")) + duration
+            end_time = new_end.strftime("%Y-%m-%dT%H:%M:%SZ") if start_time.endswith("Z") else new_end.isoformat()
     if args.get("endTime"):
         if not isinstance(args["endTime"], str) or not re.match(iso_pattern, args["endTime"]):
             raise ToolError("endTime must be an ISO 8601 timestamp", category="invalid_input")
@@ -104,7 +105,7 @@ def handle(args, db):
     for em, d_name, optional in added:
         if em in current:
             continue
-        att_id = db.one("SELECT COUNT(*) as c FROM event_attendees")["c"] + 1
+        att_id = db.one("SELECT COALESCE(MAX(id), 0) + 1 AS c FROM event_attendees")["c"]
         db.execute(
             "INSERT INTO event_attendees (id, event_id, email, display_name, response_status, is_organizer, is_optional) VALUES (?, ?, ?, ?, 'needsAction', FALSE, ?)",
             (att_id, evt_id, em, d_name, optional),
