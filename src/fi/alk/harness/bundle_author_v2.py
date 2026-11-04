@@ -3122,7 +3122,8 @@ _SOURCE_TOOL_TRACE_VERSION = 1
 def _uses_source_tool_trace(processes: Sequence[Any]) -> bool:
     """Whether ALK traces the source's tools or its framework spans; LiveKit's own trace alone does not count."""
     return any(
-        {"ALK_TOOL_TRACE_BINDINGS", "ALK_OBSERVE_FRAMEWORKS"} & set(getattr(process, "environment", None) or {})
+        {"ALK_TOOL_TRACE_BINDINGS", "ALK_OBSERVE_FRAMEWORKS"}
+        & set(getattr(process, "environment", None) or {})
         for process in processes
     )
 

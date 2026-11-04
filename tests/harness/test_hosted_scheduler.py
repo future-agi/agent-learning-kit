@@ -2631,7 +2631,9 @@ def test_a_call_with_only_worker_hand_offs_is_evidence_missing() -> None:
         outbound = FakeOutbound()
         pool, _ = _pool(2, outbound=outbound)
         await pool.start()
-        handoff = hs.Call(name="Draft writer", arguments={}, delegated_to="Draft writer", handoff=True)
+        handoff = hs.Call(
+            name="Draft writer", arguments={}, delegated_to="Draft writer", handoff=True
+        )
 
         class Runner:
             async def run(

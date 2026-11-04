@@ -79,7 +79,9 @@ def _event_to_record(
     return record
 
 
-def _handoff_record(event: Any, started: dict[tuple[str, str], float], coordinator: list[str]) -> dict[str, Any] | None:
+def _handoff_record(
+    event: Any, started: dict[tuple[str, str], float], coordinator: list[str]
+) -> dict[str, Any] | None:
     """An agent's execution of a task as a hand-off from the flow or crew that ran it: written once it ends."""
     kind = type(event).__name__
     if kind == "FlowStartedEvent":
@@ -87,7 +89,11 @@ def _handoff_record(event: Any, started: dict[tuple[str, str], float], coordinat
         if isinstance(name, str) and name:
             coordinator[:] = [name[:256]]
         return None
-    if kind not in {"AgentExecutionStartedEvent", "AgentExecutionCompletedEvent", "AgentExecutionErrorEvent"}:
+    if kind not in {
+        "AgentExecutionStartedEvent",
+        "AgentExecutionCompletedEvent",
+        "AgentExecutionErrorEvent",
+    }:
         return None
     agent, task = getattr(event, "agent", None), getattr(event, "task", None)
     role = getattr(agent, "role", None)
@@ -101,12 +107,18 @@ def _handoff_record(event: Any, started: dict[tuple[str, str], float], coordinat
             started[key] = stamp
         return None
     crew = getattr(getattr(agent, "crew", None), "name", None)
-    by = coordinator[0] if coordinator else (crew if isinstance(crew, str) and crew else "crew")
+    by = (
+        coordinator[0]
+        if coordinator
+        else (crew if isinstance(crew, str) and crew else "crew")
+    )
     is_error = kind == "AgentExecutionErrorEvent"
     description = getattr(task, "description", None)
     record = {
         "name": role.strip()[:256],
-        "arguments": {"task": _bounded(description)} if isinstance(description, str) else {},
+        "arguments": {"task": _bounded(description)}
+        if isinstance(description, str)
+        else {},
         "output": _bounded(getattr(event, "error" if is_error else "output", None)),
         "is_error": is_error,
         "at": started.pop(key, stamp),

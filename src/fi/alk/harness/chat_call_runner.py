@@ -618,7 +618,8 @@ class HostedChatCallRunner:
         calls = tuple(transcript.calls)
         if calls:
             tool_trace = "\n".join(
-                json.dumps(trace_row(call), sort_keys=True, default=str) for call in calls
+                json.dumps(trace_row(call), sort_keys=True, default=str)
+                for call in calls
             ).encode("utf-8")
             await self._adapter.upload_artifact(
                 tool_trace,

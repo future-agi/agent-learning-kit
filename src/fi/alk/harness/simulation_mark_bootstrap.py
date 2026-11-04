@@ -378,7 +378,11 @@ _TOOL_TRACE = "HARNESS_TOOL_TRACE"
 # framework instrumentors and the frameworks' own tracing use (traceAI and OpenInference, the
 # OpenTelemetry GenAI names, then names a single framework uses).
 _KIND_KEYS = ("fi.span.kind", "gen_ai.span.kind", "openinference.span.kind")
-_OPERATION_KINDS = {"execute_tool": "TOOL", "invoke_agent": "AGENT", "create_agent": "AGENT"}
+_OPERATION_KINDS = {
+    "execute_tool": "TOOL",
+    "invoke_agent": "AGENT",
+    "create_agent": "AGENT",
+}
 _OWN_KINDS = {"tool": "TOOL", "subagent": "AGENT", "agent": "AGENT"}
 _AGENT_NAME_KEYS = (
     "gen_ai.agent.name",
@@ -393,7 +397,10 @@ _AGENT_NAME_KEYS = (
 # tool call returned.
 _CONVERSATION_KEYS = ("gen_ai.conversation.id", "session.id")
 # The text of a model call's first output message, as traceAI and OpenInference flatten it.
-_SAID_KEYS = ("gen_ai.output.messages.0.message.content", "llm.output_messages.0.message.content")
+_SAID_KEYS = (
+    "gen_ai.output.messages.0.message.content",
+    "llm.output_messages.0.message.content",
+)
 
 
 _LAUNCHES_MAX = 256
@@ -434,7 +441,9 @@ def _kind(span):
     operation = _first(attributes, ("gen_ai.operation.name",))
     if operation in _OPERATION_KINDS:
         return _OPERATION_KINDS[operation]
-    if attributes.get("messaging.operation") == "process" and _first(attributes, ("recipient_agent_type",)):
+    if attributes.get("messaging.operation") == "process" and _first(
+        attributes, ("recipient_agent_type",)
+    ):
         # AutoGen Core's runtime handing a message to the agent that handles it.
         return "AGENT"
     return _OWN_KINDS.get(_first(attributes, ("claude_agent.span_kind",)) or "")
@@ -488,7 +497,10 @@ class _ToolSpans:
             if len(self._live) >= _LIVE_SPANS_MAX:
                 # A span that never ended (a dropped generator, a long-lived server) gives way to new ones.
                 self._live.pop(next(iter(self._live)))
-            self._live[context.span_id] = (span, parent.span_id if parent is not None else None)
+            self._live[context.span_id] = (
+                span,
+                parent.span_id if parent is not None else None,
+            )
             if parent is None and _kind(span) != "TOOL":
                 try:
                     joined = self._job_record(span, context.span_id, ended=False)
@@ -567,7 +579,11 @@ class _ToolSpans:
         name = _first(agent.attributes or {}, _AGENT_NAME_KEYS)
         if name:
             return name
-        if _first(agent.attributes or {}, _KIND_KEYS) and agent.name and "." not in agent.name:
+        if (
+            _first(agent.attributes or {}, _KIND_KEYS)
+            and agent.name
+            and "." not in agent.name
+        ):
             return agent.name
         handing = self._above(agent.get_span_context().span_id, ("TOOL",))
         if handing is not None:
@@ -582,7 +598,9 @@ class _ToolSpans:
             said = _first(span.attributes or {}, _SAID_KEYS)
             if said and said.strip() and entry is not None and entry[1] is not None:
                 root = self._root(span_id)
-                if root is not None and (root in self._said or len(self._said) < _LAUNCHES_MAX):
+                if root is not None and (
+                    root in self._said or len(self._said) < _LAUNCHES_MAX
+                ):
                     self._said[root] = said
             if entry is not None and entry[1] is None and kind != "TOOL":
                 self._waiting.pop(span_id, None)
@@ -632,19 +650,32 @@ class _ToolSpans:
             return False
         self._forget_cleared_call()
         launch = next(
-            (one for one in self._launches if one["conversation"] != conversation and _names(one["output"], conversation)),
+            (
+                one
+                for one in self._launches
+                if one["conversation"] != conversation
+                and _names(one["output"], conversation)
+            ),
             None,
         )
         if launch is None:
             return False
-        worker = _first(attributes, _AGENT_NAME_KEYS) or _graph_worker(attributes) or span.name
+        worker = (
+            _first(attributes, _AGENT_NAME_KEYS)
+            or _graph_worker(attributes)
+            or span.name
+        )
         if not worker:
             return False
         status = getattr(getattr(span, "status", None), "status_code", None)
         record = {
             "name": launch["name"],
             "arguments": launch["arguments"],
-            "output": (self._said.get(span_id) or _first(attributes, _TOOL_RESULT_KEYS) or "")[:4096] if ended else "",
+            "output": (
+                self._said.get(span_id) or _first(attributes, _TOOL_RESULT_KEYS) or ""
+            )[:4096]
+            if ended
+            else "",
             "is_error": ended and getattr(status, "name", "") == "ERROR",
             "at": (span.start_time or 0) / 1e9,
             **({"ended_at": (span.end_time or 0) / 1e9} if ended else {}),
@@ -727,8 +758,14 @@ def _patch_autogen_tools(module, path) -> None:
     if getattr(original, _PATCHED, False):
         return
 
-    async def run_json(self, args, cancellation_token, call_id=None, __original=original):
-        record = {"name": str(self.name)[:256], "arguments": dict(args), "at": time.time()}
+    async def run_json(
+        self, args, cancellation_token, call_id=None, __original=original
+    ):
+        record = {
+            "name": str(self.name)[:256],
+            "arguments": dict(args),
+            "at": time.time(),
+        }
         try:
             result = await __original(self, args, cancellation_token, call_id)
         except Exception as err:
@@ -774,7 +811,9 @@ def _sandbox_provider():
     provider = TracerProvider()
     if os.environ.get(_TRACES_ENDPOINT) or os.environ.get(_GENERIC_ENDPOINT):
         try:
-            from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+            from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+                OTLPSpanExporter,
+            )
             from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
             provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
@@ -794,7 +833,9 @@ def _patch_proxy(module) -> None:
         def wrapper(self, *args, __original=original, __method=method, **kwargs):
             try:
                 if getattr(module, "_TRACER_PROVIDER", None) is None:
-                    tracer = _sandbox_provider().get_tracer(self._instrumenting_module_name)
+                    tracer = _sandbox_provider().get_tracer(
+                        self._instrumenting_module_name
+                    )
                     return getattr(tracer, __method)(*args, **kwargs)
             except Exception:
                 pass
@@ -852,7 +893,9 @@ def _keep_agents_processors() -> None:
 
     def wrapper(self, processors, __original=original):
         kinds = {type(one) for one in processors}
-        return __original(self, [*processors, *(one for one in ours if type(one) not in kinds)])
+        return __original(
+            self, [*processors, *(one for one in ours if type(one) not in kinds)]
+        )
 
     functools.update_wrapper(wrapper, original)
     cls.set_processors = wrapper
@@ -957,7 +1000,9 @@ def install() -> None:
         call_file = os.environ.get(_CALL_FILE)
         tool_trace = os.environ.get(_TOOL_TRACE)
         if call_file or tool_trace:
-            _PATCHES[_TRACE] = functools.partial(_patch_tracer, path=call_file, tool_trace=tool_trace)
+            _PATCHES[_TRACE] = functools.partial(
+                _patch_tracer, path=call_file, tool_trace=tool_trace
+            )
         ingest = None
         try:
             ingest = _read_ingest()
@@ -972,7 +1017,9 @@ def install() -> None:
             _PATCHES["opentelemetry.trace"] = _patch_proxy
             for name, target in _INSTRUMENTORS.items():
                 _PATCHES.setdefault(name, functools.partial(_instrument, target=target))
-            _PATCHES["autogen_core.tools"] = functools.partial(_patch_autogen_tools, path=tool_trace)
+            _PATCHES["autogen_core.tools"] = functools.partial(
+                _patch_autogen_tools, path=tool_trace
+            )
         if not _PATCHES:
             return
         # The finder goes in first so that a failed patch of an already imported module still

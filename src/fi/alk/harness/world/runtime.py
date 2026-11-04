@@ -179,7 +179,6 @@ def tool_call_attribution(record: Mapping[str, Any]) -> dict[str, str]:
     }
 
 
-
 _RUNTIME_ID_FIELDS = ("event_id", "parent_event_id", "started_event_id")
 
 
@@ -195,7 +194,11 @@ def graded_calls(calls: Sequence[Call]) -> list[Call]:
         call
         for call in calls
         if not call.handoff
-        and not (call.delegated_to and call.runtime_ids.get("parent_event_id") and call.name in plain)
+        and not (
+            call.delegated_to
+            and call.runtime_ids.get("parent_event_id")
+            and call.name in plain
+        )
     ]
 
 
@@ -211,12 +214,20 @@ def trace_row(call: Call) -> dict[str, Any]:
         "at": call.at,
         **{
             key: getattr(call, key)
-            for key in ("worker_id", "worker_label", "task_id", "task_label", "delegated_to", "ended_at")
+            for key in (
+                "worker_id",
+                "worker_label",
+                "task_id",
+                "task_label",
+                "delegated_to",
+                "ended_at",
+            )
             if getattr(call, key)
         },
         **({"runtime_ids": call.runtime_ids} if call.runtime_ids else {}),
         **({"kind": "handoff"} if call.handoff else {}),
     }
+
 
 class GeneratedWorld(EnvironmentAdapter):
     """A database-backed world whose tools are generated per agent.

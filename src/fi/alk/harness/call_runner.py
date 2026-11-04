@@ -813,7 +813,9 @@ def _collect_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
     return _with_span_calls((), runtime)
 
 
-def _with_span_calls(observed: Sequence[Call], runtime: EnvironmentRuntime) -> tuple[Call, ...]:
+def _with_span_calls(
+    observed: Sequence[Call], runtime: EnvironmentRuntime
+) -> tuple[Call, ...]:
     """Calls another source saw, else the trace file's own lines, joined with the file's span lines."""
     written, from_spans = _read_file_tool_calls(runtime)
     return _merge_span_calls(list(observed) or written, from_spans)
@@ -913,11 +915,19 @@ def _tool_key(name: str) -> str:
 def _merge_span_calls(calls: list[Call], from_spans: list[Call]) -> tuple[Call, ...]:
     """Count a call a framework span and another tracer both report once, with the span's agent, hand-off and times."""
     # A background job is written when it starts and again when it ends; the later line carries its return.
-    ended = {span.runtime_ids.get("event_id") for span in from_spans if span.delegated_to and span.ended_at} - {None}
+    ended = {
+        span.runtime_ids.get("event_id")
+        for span in from_spans
+        if span.delegated_to and span.ended_at
+    } - {None}
     from_spans = [
         span
         for span in from_spans
-        if not (span.delegated_to and not span.ended_at and span.runtime_ids.get("event_id") in ended)
+        if not (
+            span.delegated_to
+            and not span.ended_at
+            and span.runtime_ids.get("event_id") in ended
+        )
     ]
     if not calls:
         # A span is written when it ends, so a hand-off lands after the calls it led to.
@@ -926,13 +936,19 @@ def _merge_span_calls(calls: list[Call], from_spans: list[Call]) -> tuple[Call, 
     merged = list(calls)
     unpaired = list(calls)
     for span in from_spans:
-        if span.delegated_to and launched.get(span.runtime_ids.get("parent_event_id")) == span.name:
+        if (
+            span.delegated_to
+            and launched.get(span.runtime_ids.get("parent_event_id")) == span.name
+        ):
             # A job's hand-off sits under the call that launched it and is not that call again.
             merged.append(span)
             continue
         same_tool = [c for c in unpaired if _tool_key(c.name) == _tool_key(span.name)]
         # Same outcome first: a refusal can read as a failure to one tracer and a returned value to the other.
-        other = next((c for c in same_tool if c.ok == span.ok), same_tool[0] if same_tool else None)
+        other = next(
+            (c for c in same_tool if c.ok == span.ok),
+            same_tool[0] if same_tool else None,
+        )
         if other is None:
             merged.append(span)
             continue
@@ -1801,9 +1817,13 @@ class CallRunnerImpl:
         if written:
             return _merge_span_calls(written, from_spans)
         if seam is EvidenceSeam.HTTP_TOOL:
-            return _merge_span_calls(list(_collect_http_tool_calls(runtime)), from_spans)
+            return _merge_span_calls(
+                list(_collect_http_tool_calls(runtime)), from_spans
+            )
         if seam is EvidenceSeam.TOOL_TRACE:
-            return _merge_span_calls(list(_collect_tool_trace_calls(runtime)), from_spans)
+            return _merge_span_calls(
+                list(_collect_tool_trace_calls(runtime)), from_spans
+            )
         # Unrecognized/None (should not happen for a `kind: process` bundle past preflight --
         # bundle_v2.py requires `evidence_seam` whenever `kind is PROCESS` -- but degrading rather
         # than crashing keeps this on the scheduler's own evidence_missing path, never a raw

@@ -783,7 +783,11 @@ def test_hook_module_imports_only_the_standard_library_and_uses_python_39_syntax
         for node in tree.body
         if isinstance(node, (ast.Import, ast.ImportFrom))
     }
-    assert not {name for name in top_level if name and name.startswith(("opentelemetry", "agents"))}
+    assert not {
+        name
+        for name in top_level
+        if name and name.startswith(("opentelemetry", "agents"))
+    }
 
 
 COLLECTOR = "http://collector.test:4318"
@@ -1347,4 +1351,3 @@ print(json.dumps({"patched": hasattr(Tracer.start_span, "_alk_simulation_mark")}
     reported = _reported(_run(script, path=[_world(tmp_path)], cwd=tmp_path))
 
     assert reported["patched"] is False
-

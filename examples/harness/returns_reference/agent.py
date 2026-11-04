@@ -13,15 +13,40 @@ from agents import Agent, Runner, function_tool, set_trace_processors
 
 # Fixed in memory, so every run sees the same facts.
 ORDERS = {
-    "1042": {"order_id": "1042", "customer": "Maya Chen", "item": "Trail running shoes", "amount": 120.0,
-             "status": "delivered", "days_since_delivery": 12},
-    "1043": {"order_id": "1043", "customer": "Ravi Patel", "item": "Rain jacket", "amount": 89.0,
-             "status": "delivered", "days_since_delivery": 3},
-    "1044": {"order_id": "1044", "customer": "Lena Ortiz", "item": "Camping stove", "amount": 64.0,
-             "status": "delivered", "days_since_delivery": 41},
+    "1042": {
+        "order_id": "1042",
+        "customer": "Maya Chen",
+        "item": "Trail running shoes",
+        "amount": 120.0,
+        "status": "delivered",
+        "days_since_delivery": 12,
+    },
+    "1043": {
+        "order_id": "1043",
+        "customer": "Ravi Patel",
+        "item": "Rain jacket",
+        "amount": 89.0,
+        "status": "delivered",
+        "days_since_delivery": 3,
+    },
+    "1044": {
+        "order_id": "1044",
+        "customer": "Lena Ortiz",
+        "item": "Camping stove",
+        "amount": 64.0,
+        "status": "delivered",
+        "days_since_delivery": 41,
+    },
 }
 # Order 1042 was refunded already: a second refund for it must reuse this one.
-REFUNDS = {"1042": {"refund_id": "RF-7", "order_id": "1042", "amount": 120.0, "status": "issued"}}
+REFUNDS = {
+    "1042": {
+        "refund_id": "RF-7",
+        "order_id": "1042",
+        "amount": 120.0,
+        "status": "issued",
+    }
+}
 RETURN_WINDOW_DAYS = 30
 _LOCK = threading.Lock()
 
@@ -54,7 +79,12 @@ def issue_refund(order_id: str, amount: float) -> str:
             return json.dumps({"error": "outside the 30-day return window"})
         if float(amount) > order["amount"]:
             return json.dumps({"error": "refund exceeds the order amount"})
-        refund = {"refund_id": f"RF-{len(REFUNDS) + 7}", "order_id": key, "amount": float(amount), "status": "issued"}
+        refund = {
+            "refund_id": f"RF-{len(REFUNDS) + 7}",
+            "order_id": key,
+            "amount": float(amount),
+            "status": "issued",
+        }
         REFUNDS[key] = refund
         return json.dumps({"reused": False, **refund})
 
@@ -63,7 +93,11 @@ def _model() -> str:
     explicit = os.environ.get("RETURNS_MODEL", "").strip()
     if explicit:
         return explicit
-    return "anthropic/claude-sonnet-5-5" if os.environ.get("ANTHROPIC_API_KEY") else "gpt-4o-mini"
+    return (
+        "anthropic/claude-sonnet-5-5"
+        if os.environ.get("ANTHROPIC_API_KEY")
+        else "gpt-4o-mini"
+    )
 
 
 def _model_ref() -> Any:
@@ -107,9 +141,13 @@ COORDINATOR = Agent(
     ),
     tools=[
         ORDER_LOOKUP.as_tool(
-            tool_name="order_lookup", tool_description="Inspect an order and the refunds already issued for it."
+            tool_name="order_lookup",
+            tool_description="Inspect an order and the refunds already issued for it.",
         ),
-        REFUND.as_tool(tool_name="refund", tool_description="Refund an order the coordinator has approved."),
+        REFUND.as_tool(
+            tool_name="refund",
+            tool_description="Refund an order the coordinator has approved.",
+        ),
     ],
     model=_model_ref(),
 )
@@ -117,7 +155,10 @@ COORDINATOR = Agent(
 
 def _tracing() -> None:
     """Export agent, hand-off and tool spans when the platform asks for traces; nothing is sent otherwise."""
-    if not (os.environ.get("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT") or os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")):
+    if not (
+        os.environ.get("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
+        or os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
+    ):
         set_trace_processors([])
         return
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
@@ -126,7 +167,9 @@ def _tracing() -> None:
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
     from traceai_openai_agents import OpenAIAgentsInstrumentor
 
-    provider = TracerProvider(resource=Resource.create({"service.name": "returns-reference"}))
+    provider = TracerProvider(
+        resource=Resource.create({"service.name": "returns-reference"})
+    )
     provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
     # Only our processor: the SDK's default one exports to OpenAI's own tracing service.
     set_trace_processors([])
@@ -163,14 +206,24 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, {"error": "not found"})
             return
         try:
-            request = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+            request = json.loads(
+                self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}"
+            )
             text = reply(request.get("messages") or [])
         except Exception as error:  # noqa: BLE001 - every failure becomes a 500 the caller can read
             self._send(500, {"error": f"{type(error).__name__}: {error}"})
             return
         self._send(
             200,
-            {"choices": [{"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}]},
+            {
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": text},
+                        "finish_reason": "stop",
+                    }
+                ]
+            },
         )
 
     def log_message(self, *_: Any) -> None:

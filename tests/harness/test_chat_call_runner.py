@@ -409,11 +409,25 @@ def test_hosted_chat_takes_each_call_s_worker_from_the_agent_s_framework_spans(
         async def call(self, _request: Any) -> AgentResponse:
             self.calls += 1
             if self.calls == 1:
-                call = {"id": "tool-1", "function": {"name": "lookup_account", "arguments": '{"account_id":"ACC-2048"}'}}
+                call = {
+                    "id": "tool-1",
+                    "function": {
+                        "name": "lookup_account",
+                        "arguments": '{"account_id":"ACC-2048"}',
+                    },
+                }
                 return AgentResponse(content="", tool_calls=[call])
             # The agent's process wrote the span of the call its worker made.
-            span = {"name": "lookup_account", "arguments": "", "output": "", "is_error": False, "source": "otel",
-                    "agent_key": "Accounts worker", "agent_role": "Accounts worker", "at": 1.0}
+            span = {
+                "name": "lookup_account",
+                "arguments": "",
+                "output": "",
+                "is_error": False,
+                "source": "otel",
+                "agent_key": "Accounts worker",
+                "agent_role": "Accounts worker",
+                "at": 1.0,
+            }
             trace.write_text(json.dumps(span) + "\n", encoding="utf-8")
             return AgentResponse(content="The account is active.")
 
@@ -426,11 +440,19 @@ def test_hosted_chat_takes_each_call_s_worker_from_the_agent_s_framework_spans(
         bundle_digest="sha256:" + "a" * 64,
         state=RuntimeState.READY,
         endpoints={
-            "target_http": RuntimeEndpoint(capability="target_http", protocol="http", address="http://localhost:18080")
+            "target_http": RuntimeEndpoint(
+                capability="target_http",
+                protocol="http",
+                address="http://localhost:18080",
+            )
         },
         metadata={"tool_trace_path": str(trace)},
     )
-    outcome = asyncio.run(runner.run(SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), runtime))
+    outcome = asyncio.run(
+        runner.run(
+            SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), runtime
+        )
+    )
 
     assert [(c.name, c.arguments, c.worker_label) for c in outcome.calls] == [
         ("lookup_account", {"account_id": "ACC-2048"}, "Accounts worker")

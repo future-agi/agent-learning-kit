@@ -1128,8 +1128,16 @@ def test_private_workflow_deadline_and_cancellation_keep_completed_evidence(tmp_
                 self.opening = False
                 return SimpleNamespace(text="Look up account A-1")
             # The agent's process wrote the span of the call, naming the worker that made it.
-            span = {"name": "lookup_account", "arguments": "", "output": "", "is_error": False, "source": "otel",
-                    "agent_key": "Accounts worker", "agent_role": "Accounts worker", "at": 1.0}
+            span = {
+                "name": "lookup_account",
+                "arguments": "",
+                "output": "",
+                "is_error": False,
+                "source": "otel",
+                "agent_key": "Accounts worker",
+                "agent_role": "Accounts worker",
+                "at": 1.0,
+            }
             spans.write_text(json.dumps(span) + "\n")
             started.set()
             await asyncio.Event().wait()
@@ -1137,12 +1145,15 @@ def test_private_workflow_deadline_and_cancellation_keep_completed_evidence(tmp_
     monkeypatch.setattr(conversation, "Stage", CustomerStage)
     spans = tmp_path / "agent-tool-calls.jsonl"
     runtime = SimpleNamespace(
-        metadata={"observation_mode": "native", "tool_trace_path": str(spans)}, world_index=0,
+        metadata={"observation_mode": "native", "tool_trace_path": str(spans)},
+        world_index=0,
         endpoints={"target_http": SimpleNamespace(address=url, protocol="http")},
     )
 
     async def run():
-        task = asyncio.create_task(workflow_probe(tmp_path, url, timeout=2, runtime=runtime))
+        task = asyncio.create_task(
+            workflow_probe(tmp_path, url, timeout=2, runtime=runtime)
+        )
         if cancel:
             await started.wait()
             task.cancel()

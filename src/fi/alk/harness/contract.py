@@ -1267,7 +1267,8 @@ class AgentContract(BaseModel):
             parts.append(
                 "WORKERS (agents this one hands work to, and the tools each holds):\n  - "
                 + "\n  - ".join(
-                    f"{one.id} ({one.name or one.id}): {', '.join(one.tools) or 'no tools'}" for one in self.workers
+                    f"{one.id} ({one.name or one.id}): {', '.join(one.tools) or 'no tools'}"
+                    for one in self.workers
                 )
             )
         if self.real_use_cases:
@@ -1483,7 +1484,9 @@ def validate_contract(contract: AgentContract) -> list[str]:
     ids = [one.id for one in contract.workers]
     repeated = sorted({one for one in ids if ids.count(one) > 1})
     if repeated:
-        problems.append(f"duplicate-worker-ids:{','.join(repeated)}: give each worker its own id.")
+        problems.append(
+            f"duplicate-worker-ids:{','.join(repeated)}: give each worker its own id."
+        )
     for worker in contract.workers:
         if not worker.id.strip():
             problems.append("worker:no-id: give every worker an id.")

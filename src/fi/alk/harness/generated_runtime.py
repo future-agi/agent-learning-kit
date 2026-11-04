@@ -740,7 +740,8 @@ def framework_instrumentation_command(project: str = "") -> list[str]:
     return [
         "sh",
         "-c",
-        sync + f'if [ -x {venv}/bin/python ]; then p={venv}/bin/python; else p=python3; fi; '
+        sync
+        + f"if [ -x {venv}/bin/python ]; then p={venv}/bin/python; else p=python3; fi; "
         '"$p" -c "$0" || echo "warning: framework instrumentors not installed" >&2',
         script,
     ]

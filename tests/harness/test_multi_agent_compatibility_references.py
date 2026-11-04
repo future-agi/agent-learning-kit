@@ -108,7 +108,9 @@ def test_returns_reference_declares_the_workers_and_tools_its_app_builds() -> No
         if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "Agent":
             fields = {one.arg: one.value for one in node.keywords}
             tools = fields["tools"].elts
-            built[ast.literal_eval(fields["name"])] = sorted(one.id for one in tools if isinstance(one, ast.Name))
+            built[ast.literal_eval(fields["name"])] = sorted(
+                one.id for one in tools if isinstance(one, ast.Name)
+            )
     topology = reference["topology"]
     assert topology["coordinator"] in built
     assert {one["name"]: sorted(one["tools"]) for one in topology["workers"]} == {

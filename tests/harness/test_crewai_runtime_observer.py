@@ -260,7 +260,9 @@ finally:
     assert len(records[0]["output"]["result"]) == 4096
 
 
-def test_each_agent_a_flow_runs_is_a_hand_off_from_the_flow_with_its_return(tmp_path: Path) -> None:
+def test_each_agent_a_flow_runs_is_a_hand_off_from_the_flow_with_its_return(
+    tmp_path: Path,
+) -> None:
     _fake_crewai(tmp_path)
     (tmp_path / "crewai/events/types/agent_events.py").write_text(
         "from types import SimpleNamespace\n"
@@ -294,13 +296,19 @@ for kind, agent, task, second in steps:
     bus.emit(None, kind(agent=agent, task=task, timestamp=t0 + timedelta(seconds=second), no_handlers=True, **extra))
 """
     _result, records = _run(tmp_path, script)
-    handoffs = [(r["agent_key"], r["delegated_to"], r["ended_at"] - r["at"], r["is_error"]) for r in records]
+    handoffs = [
+        (r["agent_key"], r["delegated_to"], r["ended_at"] - r["at"], r["is_error"])
+        for r in records
+    ]
     assert handoffs == [
         ("DraftFlow", "Draft writer", 2.0, False),
         ("DraftFlow", "Draft checker", 1.0, False),
         ("DraftFlow", "Draft writer", 2.0, False),
         ("DraftFlow", "Draft checker", 1.0, True),
     ]
-    assert records[0]["arguments"] == {"task": "Write a post"} and records[0]["task_name"] == "write_draft"
+    assert (
+        records[0]["arguments"] == {"task": "Write a post"}
+        and records[0]["task_name"] == "write_draft"
+    )
     assert records[1]["output"] == "ok" and records[3]["output"] == "too long"
     assert {r["kind"] for r in records} == {"handoff"}

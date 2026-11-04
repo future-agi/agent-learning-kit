@@ -1118,7 +1118,10 @@ def _streamed_text(pieces: list[str]) -> str:
     if pieces[-1] == "".join(pieces[:-1]):
         return pieces[-1]
     cumulative = pieces[:-1] if len(pieces) > 2 and pieces[-1] == pieces[-2] else pieces
-    if all(len(later) > len(earlier) and later.startswith(earlier) for earlier, later in zip(cumulative, cumulative[1:])):
+    if all(
+        len(later) > len(earlier) and later.startswith(earlier)
+        for earlier, later in zip(cumulative, cumulative[1:])
+    ):
         return pieces[-1]
     return "".join(pieces)
 
