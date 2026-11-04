@@ -1991,7 +1991,7 @@ def test_the_builder_skill_asks_before_running_after_a_build():
         SKILLS_ROOT.joinpath("builder", "SKILL.md").read_text(encoding="utf-8").split()
     )
     assert "check of a finished build" not in skill
-    assert "Never start a run yourself" in skill
+    assert "never on your own" in skill
 
 
 def test_waiting_on_a_run_never_outlasts_the_turn_it_waits_in():

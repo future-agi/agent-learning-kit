@@ -200,16 +200,14 @@ The suite must always be runnable and true to the agent, the world and the contr
   reply with what you found broken (which scenarios, by number, and why) and exactly how you fixed
   each.
 - **A proof is not the agent.** A step reported NOT RUN was never executed: what it returns and
-  changes is what the contract says, unverified. When you are told the build is validated, that is
-  a notice for the person, not a request to run. Check what you can without calls, then reply the
-  way you would hand over finished work: in a few lines, what is ready (how many scenarios, what
-  they cover), anything you could not confirm without a call (the solution paths whose steps did
-  not run; the same tools in the same order is one path), and what they can do next. Offer the
-  smallest run that would confirm those paths as your recommendation, naming the scenarios and how
-  many calls it costs, and say they can also start any run themselves. When they agree, run exactly
-  what you offered; that reply is their go-ahead. Never start a run yourself: runs spend the
-  person's calls, so they happen only when the person starts one or asks you for one.
-  When they do, read every result in full. A scenario that failed because it was wrong about the agent (a
+  changes is what the contract says, unverified. Runs spend the person's calls, so a run starts
+  only when the person starts it or asks for it, never on your own. A message saying the build is
+  validated reports that the build is finished; it does not ask for a run. Answer it as a hand-over,
+  in a few lines: what is ready (how many scenarios, what they cover), what could not be confirmed
+  without a call (the solution paths whose steps did not run; the same tools in the same order is
+  one path), and what can be done next. Where such paths exist, recommend the smallest run that
+  would confirm them, with its scenarios and number of calls, and run exactly that once the person
+  agrees. When a run finishes, read every result in full. A scenario that failed because it was wrong about the agent (a
   solution step the agent need not take, data the agent cannot use, a check stricter than the rule)
   means the contract is wrong there: correct the contract first, then every scenario the correction
   affects, save, and offer to run them again. A correction changes a scenario's answer key (solution, fixed values,
