@@ -10146,7 +10146,7 @@ def test_a_proof_plays_permitted_actor_actions_at_their_triggers_and_keeps_them_
                         "arguments": {"item": "d1"},
                         "trigger": {
                             "kind": "on_tool",
-                            "tool": "records.request_approval",
+                            "tool": "request_approval",
                             "on_call": 2,
                         },
                     },

@@ -1034,6 +1034,12 @@ def _actor_dispatcher(
     token = secrets.token_hex(32)
     _write_trial_token(Path(token_path), token)
     cast = [ScenarioActor.model_validate(entry) for entry in doc.get("actors") or []]
+    contract_path = bundle_dir / "contract.json"
+    contract = json.loads(contract_path.read_text(encoding="utf-8")) if contract_path.is_file() else {}
+    for action in (one for entry in cast for one in entry.actions):
+        if action.trigger.kind == "on_tool":
+            # The log records the route the agent's tool calls, which can differ from the tool's name.
+            action.trigger.tool = logged_tool_name(contract, action.trigger.tool)
     return ActorDispatcher(
         load_actors(bundle_dir).by_id(),
         cast,

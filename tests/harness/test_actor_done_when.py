@@ -180,7 +180,7 @@ def test_the_coworker_cannot_authorise_the_change_the_reviewer_can_and_the_trial
                         "arguments": {"item": "d1"},
                         "trigger": {
                             "kind": "on_tool",
-                            "tool": "records.request_approval",
+                            "tool": "request_approval",
                         },
                     }
                 ],

@@ -106,12 +106,8 @@ class ActorDispatcher:
         if trigger.kind == "probability":
             return ""
         if trigger.kind == "on_tool":
-            # The log names an action by its last part, as the agent's tool calls always have been.
-            calls = [
-                row
-                for row in agent_rows
-                if row.get("name") == trigger.tool.rsplit(".", 1)[-1]
-            ]
+            # `tool` is the name the log records, resolved from the agent's tool when the trial starts.
+            calls = [row for row in agent_rows if row.get("name") == trigger.tool]
             return (
                 str(calls[trigger.on_call - 1].get("action_id") or "")
                 if len(calls) >= trigger.on_call

@@ -382,10 +382,7 @@ class _WorldActors:
         if step is None:
             return trigger.kind == "always"
         if trigger.kind == "on_tool":
-            return (
-                trigger.tool.rsplit(".", 1)[-1] == step.tool
-                and self.counts.get(step.tool) == trigger.on_call
-            )
+            return trigger.tool == step.tool and self.counts.get(step.tool) == trigger.on_call
         if trigger.kind == "contacted":
             from .actor_dispatch import contacts
 

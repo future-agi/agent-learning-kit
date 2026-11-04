@@ -79,7 +79,7 @@ def test_an_action_on_the_agent_s_tool_call_fires_once_after_that_call_and_names
     log: list[dict] = []
     action = {
         "action": "records.approve",
-        "trigger": {"kind": "on_tool", "tool": "records.request_approval"},
+        "trigger": {"kind": "on_tool", "tool": "request_approval"},
     }
     dispatcher, sent = _dispatcher([{"id": "reviewer", "actions": [action]}], log)
 
@@ -252,7 +252,7 @@ def test_the_log_is_read_only_while_an_action_waits_on_what_the_agent_does():
     assert reads == []
     on_tool = {
         "action": "records.approve",
-        "trigger": {"kind": "on_tool", "tool": "records.request_approval"},
+        "trigger": {"kind": "on_tool", "tool": "request_approval"},
     }
     dispatcher, _sent = _dispatcher(
         [{"id": "reviewer", "actions": [on_tool]}], [], reads=reads
