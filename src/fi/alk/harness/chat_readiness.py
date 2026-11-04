@@ -11,7 +11,7 @@ from fi.simulate.agent.wrapper import AgentInput
 from .chat_transport import create_chat_wrapper
 from .diagnostics import HarnessDiagnostic
 from .job import HarnessStage
-from .world.runtime import graded_calls
+from .world.runtime import graded_calls, trace_row
 
 
 def _failure_code(trace):
@@ -280,8 +280,6 @@ async def probe_chat_workflow(
         )
 
     async def retain_interrupted_conversation(exc):
-        from dataclasses import asdict
-
         from .call_runner import _with_span_calls
         from .outbound import ArtifactKind
 
@@ -289,12 +287,12 @@ async def probe_chat_workflow(
         if transcript is None:
             return
         transcript.calls[:] = _with_span_calls(transcript.calls, runtime)
-        receipt["tool_call_count"] = len(transcript.calls)
+        receipt["tool_call_count"] = len(graded_calls(transcript.calls))
         receipt["turns"] = len(transcript.exchanges)
         await artifacts.upload_artifact(transcript.artifact(), kind=ArtifactKind.TRANSCRIPT)
         if transcript.calls:
             trace = "\n".join(
-                json.dumps(asdict(call), sort_keys=True, default=str)
+                json.dumps(trace_row(call), sort_keys=True, default=str)
                 for call in transcript.calls
             ).encode("utf-8")
             await artifacts.upload_artifact(trace, kind=ArtifactKind.TOOL_TRACE)
@@ -341,7 +339,7 @@ async def probe_chat_workflow(
         ) from exc
     except CallAborted as exc:
         if exc.partial is not None:
-            receipt["tool_call_count"] = len(exc.partial.calls)
+            receipt["tool_call_count"] = len(graded_calls(exc.partial.calls))
             receipt["turns"] = exc.partial.turns
         raise failure(_failure_code(artifacts.trace), str(exc)) from exc
     except asyncio.CancelledError as exc:

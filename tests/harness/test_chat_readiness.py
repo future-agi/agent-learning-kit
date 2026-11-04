@@ -1138,7 +1138,10 @@ def test_private_workflow_deadline_and_cancellation_keep_completed_evidence(tmp_
                 "agent_role": "Accounts worker",
                 "at": 1.0,
             }
-            spans.write_text(json.dumps(span) + "\n")
+            # And a worker's run, which is no tool call.
+            handoff = {"name": "Accounts worker", "arguments": {}, "output": "done", "is_error": False,
+                       "source": "otel", "delegated_to": "Accounts worker", "kind": "handoff", "at": 2.0}
+            spans.write_text(json.dumps(span) + "\n" + json.dumps(handoff) + "\n")
             started.set()
             await asyncio.Event().wait()
 
@@ -1181,7 +1184,8 @@ def test_private_workflow_deadline_and_cancellation_keep_completed_evidence(tmp_
         {"role": "assistant", "content": "The account is active <redacted>"},
     ]
     tool_trace = next(receipt_path.parent.glob("tool_trace-*.json"))
-    call = json.loads(tool_trace.read_text())
+    call, handed = (json.loads(line) for line in tool_trace.read_text().splitlines())
+    assert (handed["delegated_to"], handed["kind"], "handoff" in handed) == ("Accounts worker", "handoff", False)
     assert call["name"] == "lookup_account"
     assert call["arguments"] == {"account_id": "A-1"}
     assert call["result"]["active"] is True
@@ -1242,3 +1246,25 @@ def test_native_http_200_failure_rule_unlocks_existing_setup_repair(tmp_path, pr
     assert repaired.runtime.command == contract.runtime.command
     assert "secret123" not in json.dumps(receipts(tmp_path))
     assert sorted(item["status"] for item in receipts(tmp_path)) == ["failed", "passed"]
+
+
+def test_an_aborted_readiness_call_counts_its_tool_calls_not_its_hand_offs(tmp_path, profile_app, monkeypatch):
+    from fi.alk.harness import chat_call_runner
+    from fi.alk.harness.hosted_scheduler import CallAborted, CallOutcome
+    from fi.alk.harness.world.runtime import Call
+
+    url, _state = profile_app
+    calls = (
+        Call(name="lookup_account", arguments={}, ok=True),
+        Call(name="Accounts worker", arguments={}, delegated_to="Accounts worker", handoff=True),
+    )
+
+    async def aborted(self, *_args):
+        partial = CallOutcome(calls=calls, turns=1, messages=(), started_at="", ended_at="", duration_ms=0)
+        raise CallAborted("the target stopped", partial=partial)
+
+    monkeypatch.setattr(chat_call_runner.HostedChatCallRunner, "run", aborted)
+    with pytest.raises(RuntimeValidationError):
+        asyncio.run(workflow_probe(tmp_path, url))
+    _, receipt = workflow_receipt(tmp_path)
+    assert receipt["tool_call_count"] == 1
