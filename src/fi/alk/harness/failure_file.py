@@ -13,7 +13,10 @@ FAILURE_FILE = "failure.json"
 
 
 def _write_in_place(path: Path, body: str) -> None:
-    """For a disk with no hard links: still first-wins, but a reader could catch it part-written."""
+    """For a disk with no hard links: still first-wins, but a reader could catch it part-written.
+
+    A disk that refuses ``chmod`` keeps the umask's mode: a whole file beats none.
+    """
     try:
         descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
     except FileExistsError:
@@ -21,10 +24,13 @@ def _write_in_place(path: Path, body: str) -> None:
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as file:
             file.write(body)
-        os.chmod(path, 0o644)
     except OSError:
         path.unlink(missing_ok=True)
         raise
+    try:
+        os.chmod(path, 0o644)
+    except OSError:
+        pass
 
 
 def write_failure_file(failure: HarnessFailure, output: Path) -> Path:
@@ -39,8 +45,8 @@ def write_failure_file(failure: HarnessFailure, output: Path) -> Path:
     try:
         with temporary:
             temporary.write(body)
-        os.chmod(temporary.name, 0o644)
         try:
+            os.chmod(temporary.name, 0o644)
             os.link(temporary.name, path)
         except FileExistsError:
             pass

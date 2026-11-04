@@ -50,6 +50,9 @@ _READ_MESSAGE = (
     "sites. Only voice and chat agents are supported for now."
 )
 _FINISHED = ".futureagi-build-finished.json"
+_STOP = "Don't submit again or do more work; tell the person."
+_READ = "read-it"
+_REAL_RECEIPT = tools._new_receipt
 
 
 @pytest.fixture(autouse=True)
@@ -58,6 +61,11 @@ def _nothing_reaches_a_network(monkeypatch):
         monkeypatch.setenv(name, "http://127.0.0.1:9")
     monkeypatch.delenv("FI_API_KEY", raising=False)
     monkeypatch.delenv("FI_SECRET_KEY", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _a_known_receipt(monkeypatch):
+    monkeypatch.setattr(tools, "_new_receipt", lambda: _READ)
 
 
 def _tree(root: Path, files: dict[str, str]) -> Path:
@@ -150,8 +158,13 @@ def test_first_failure_stands(tmp_path):
     assert _failure(tmp_path)["code"] == "first"
 
 
-def test_file_is_world_readable(tmp_path):
-    path = write_failure_file(_a_failure(), tmp_path)
+@pytest.mark.parametrize("umask", [0o022, 0o077])
+def test_file_is_world_readable(tmp_path, umask):
+    before = os.umask(umask)
+    try:
+        path = write_failure_file(_a_failure(), tmp_path)
+    finally:
+        os.umask(before)
     assert stat.S_IMODE(path.stat().st_mode) == 0o644
 
 
@@ -161,18 +174,39 @@ def test_writer_leaves_no_temp_file(tmp_path):
     assert [path.name for path in tmp_path.iterdir()] == [FAILURE_FILE]
 
 
-def _no_hard_links(monkeypatch):
+def _no_hard_links(monkeypatch, number=errno.EXDEV):
     def refuse(*_args, **_kwargs):
-        raise OSError(errno.EXDEV, "cross-device link")
+        raise OSError(number, "no hard links here")
 
     monkeypatch.setattr(failure_file.os, "link", refuse)
 
 
-def test_a_disk_with_no_hard_links_still_gets_the_whole_file(tmp_path, monkeypatch):
-    _no_hard_links(monkeypatch)
+@pytest.mark.parametrize("number", [errno.EXDEV, errno.EPERM, errno.ENOTSUP, errno.EMLINK])
+def test_a_disk_with_no_hard_links_still_gets_the_whole_file(tmp_path, monkeypatch, number):
+    _no_hard_links(monkeypatch, number)
     path = write_failure_file(_a_failure(), tmp_path)
     assert HarnessFailure.model_validate_json(path.read_text()) == _a_failure()
     assert stat.S_IMODE(path.stat().st_mode) == 0o644
+    assert [item.name for item in tmp_path.iterdir()] == [FAILURE_FILE]
+
+
+def test_the_file_is_readable_under_a_strict_umask_with_no_hard_links(tmp_path, monkeypatch):
+    _no_hard_links(monkeypatch)
+    before = os.umask(0o077)
+    try:
+        path = write_failure_file(_a_failure(), tmp_path)
+    finally:
+        os.umask(before)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o644
+
+
+def test_a_disk_with_no_permissions_still_gets_the_whole_file(tmp_path, monkeypatch):
+    def refuse(*_args, **_kwargs):
+        raise OSError(errno.EPERM, "no permissions here")
+
+    monkeypatch.setattr(failure_file.os, "chmod", refuse)
+    path = write_failure_file(_a_failure(), tmp_path)
+    assert HarnessFailure.model_validate_json(path.read_text()) == _a_failure()
     assert [item.name for item in tmp_path.iterdir()] == [FAILURE_FILE]
 
 
@@ -235,6 +269,12 @@ def test_failure_message_is_empty_when_the_file_cannot_be_read(tmp_path):
         ({"agent.py": 'TOOL = {"type": "computer_20241022"}\n'}, ["computer-use tool"]),
         ({"agent.ts": 'const tool = {type: "computer_use_preview"};\n'}, ["computer-use tool"]),
         ({"agent.py": 'BETA = "computer-use-2025-01-24"\n'}, ["computer-use tool"]),
+        ({"agent.py": 'TOOLS = [{"computer_use": {"environment": "browser"}}]\n'}, ["computer-use tool"]),
+        ({"agent.py": 'TOOL = dict(computer_use={"environment": "browser"})\n'}, ["computer-use tool"]),
+        ({"agent.js": "const u = 'https://x/computer_20241022';\n"}, ["computer-use tool"]),
+        ({"agent.ts": "const tools = [{computerUse: {environment}}];\n"}, ["computer-use tool"]),
+        ({"agent.js": "const t = 'computer_20241022'; // x\n"}, ["computer-use tool"]),
+        ({"agent.jsx": "export const A = () => <p>Don't use computer_20241022</p>\n"}, ["computer-use tool"]),
         ({"agent.py": 'MODEL = "gemini-2.5-computer-use-preview-10-2025"\n'}, ["computer-use tool"]),
         (
             {"agent.py": 'from google.genai import types\nTOOL = types.ComputerUse(environment="x")\n'},
@@ -282,6 +322,23 @@ def test_browser_tools_found_is_sorted_and_names_each_tool_once(tmp_path):
         "ui-tests",
         "api_tests",
         "playwright-tests",
+        "web_test",
+        "qa-testing",
+        "agent-e2e",
+        "test_utils",
+        "test_helpers",
+        "tests_integration",
+        "tests_ui",
+        "tests.old",
+        "test_selenium",
+        "tests_selenium",
+        "test_browser",
+        "tests_functional",
+        "tests_acceptance",
+        "test_scripts",
+        "testutils",
+        "testing_utils",
+        "test_fixtures",
     ],
 )
 def test_tools_found_skips_these_test_folders(tmp_path, folder):
@@ -361,6 +418,13 @@ def test_tools_found_reads_a_folder_with_test_inside_a_word(tmp_path, folder):
         ("a.py", 'PROMPT = "never do computer-use"\n'),
         ("a.py", 'SPAN = "gen_ai.computer_use.action"\n'),
         ("a.jsx", "export const A = () => <p>Don't</p> // ComputerUse\n"),
+        ("a.js", "const t = 'x'; // computer_20241022\n"),
+        ("a.py", "computer_use = False\n"),
+        ("a.ts", "const a = {computer_use: true};\n"),
+        ("a.py", 'LABEL = f"computer_use: {x}"\n'),
+        ("a.tsx", "export const A = () => <Model computerUse={false} />;\n"),
+        ("a.py", "computer_use = {}\n"),
+        ("a.py", 'FLAGS = {"computer_use": {"on": True}}\n'),
     ],
 )
 def test_browser_tools_found_ignores_what_is_not_the_agent(tmp_path, name, body):
@@ -383,7 +447,9 @@ def _unpacked_at_the_top(root: Path) -> None:
     _tree(
         root,
         {
-            "openai-1.0.dist-info/RECORD": "openai/x.py,sha256=a,1\nsix.py,sha256=b,2\n",
+            "openai-1.0.dist-info/RECORD": (
+                "openai/__init__.py,sha256=a,0\nopenai/x.py,sha256=a,1\nsix.py,sha256=b,2\n"
+            ),
             "openai/__init__.py": "",
             "openai/x.py": 'NAME = "computer_use_preview"\n',
             "six.py": 'NAME = "computer_20241022"\n',
@@ -401,6 +467,81 @@ def test_the_agents_own_folder_is_read_beside_unpacked_packages(tmp_path):
     _unpacked_at_the_top(tmp_path)
     _tree(tmp_path, {"app/run.py": "import playwright\n"})
     assert browser_tools_found(tmp_path) == ["playwright"]
+
+
+def test_a_distribution_shipping_a_folder_name_does_not_hide_the_customers_folder(tmp_path):
+    _tree(
+        tmp_path,
+        {
+            "cron_descriptor-2.0.dist-info/RECORD": "tools/compilepos.py,sha256=a,1\n",
+            "tools/compilepos.py": 'NAME = "computer_20241022"\n',
+            "tools/browser.py": "import playwright\n",
+        },
+    )
+    assert browser_tools_found(tmp_path) == ["playwright"]
+
+
+def _vendored_marker_with_record(root: Path, record: bytes) -> None:
+    _tree(root, {"vendored.py": 'NAME = "computer_20241022"\n', "x-1.dist-info/METADATA": ""})
+    (root / "x-1.dist-info/RECORD").write_bytes(record)
+
+
+def test_a_record_past_its_limit_is_not_believed(tmp_path, monkeypatch):
+    _vendored_marker_with_record(tmp_path, b"vendored.py,sha256=a,1\n")
+    monkeypatch.setattr(agent_type_check, "_LARGEST_RECORD", 5)
+    assert browser_tools_found(tmp_path) == ["computer-use tool"]
+
+
+@pytest.mark.parametrize("record", [b"\xff\xfe\x00binary", b"a\x00b,c\n", b"x" * 200_000 + b",y\n"])
+def test_a_record_that_cannot_be_read_costs_only_itself(tmp_path, record):
+    _vendored_marker_with_record(tmp_path, record)
+    assert browser_tools_found(tmp_path) == ["computer-use tool"]
+
+
+def test_a_blank_record_row_is_harmless(tmp_path):
+    _vendored_marker_with_record(tmp_path, b"\nvendored.py,sha256=a,1\n\n")
+    assert browser_tools_found(tmp_path) == []
+
+
+def test_records_past_their_total_limit_are_not_believed(tmp_path, monkeypatch):
+    _tree(
+        tmp_path,
+        {
+            "a-1.dist-info/RECORD": "a.py,sha256=a,1\n",
+            "b-1.dist-info/RECORD": "b.py,sha256=a,1\n",
+            "a.py": "x = 1\n",
+            "b.py": 'NAME = "computer_20241022"\n',
+        },
+    )
+    assert browser_tools_found(tmp_path) == []
+    monkeypatch.setattr(agent_type_check, "_LARGEST_RECORDS", 20)
+    agent_type_check._scan.cache_clear()
+    assert browser_tools_found(tmp_path) == ["computer-use tool"]
+
+
+def test_a_record_linked_to_a_device_is_not_read(tmp_path, monkeypatch):
+    _tree(tmp_path, {"x-1.dist-info/METADATA": "", "a.py": "import playwright\n"})
+    (tmp_path / "x-1.dist-info/RECORD").symlink_to("/dev/zero")
+    real = Path.read_text
+
+    def careful(self, *args, **kwargs):
+        assert self.name != "RECORD", "read a device to the end of memory"
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", careful)
+    assert browser_tools_found(tmp_path) == ["playwright"]
+
+
+def test_a_record_that_is_a_named_pipe_does_not_hang_the_scan(tmp_path):
+    _tree(tmp_path, {"x-1.dist-info/METADATA": "", "a.py": "import playwright\n"})
+    os.mkfifo(tmp_path / "x-1.dist-info/RECORD")
+    answers = []
+    scan = threading.Thread(
+        target=lambda: answers.append(browser_tools_found(tmp_path)), daemon=True
+    )
+    scan.start()
+    scan.join(10)
+    assert answers == [["playwright"]]
 
 
 def test_a_browser_package_unpacked_at_the_top_still_counts_when_imported(tmp_path):
@@ -422,10 +563,34 @@ def test_the_scan_stops_at_its_limit_with_what_it_found(tmp_path, monkeypatch):
 
 
 def test_files_too_big_to_read_do_not_use_up_the_limit(tmp_path, monkeypatch):
-    _tree(tmp_path, {"big.js": "x" * 80, "agent/run.py": "import playwright\n"})
+    # Read first by name, so it's the one that would use up the limit.
+    _tree(tmp_path, {"a_big.py": "x" * 80, "agent/run.py": "import playwright\n"})
     monkeypatch.setattr(agent_type_check, "_LARGEST_CODE_FILE", 50)
     monkeypatch.setattr(agent_type_check, "_LARGEST_SCAN", 60)
     assert browser_tools_found(tmp_path) == ["playwright"]
+
+
+def test_python_is_read_before_script_bundles_use_up_the_limit(tmp_path, monkeypatch):
+    _tree(tmp_path, {"a.js": "x" * 40, "b.js": "x" * 40, "z/run.py": "import playwright\n"})
+    monkeypatch.setattr(agent_type_check, "_LARGEST_SCAN", 60)
+    assert browser_tools_found(tmp_path) == ["playwright"]
+
+
+def test_package_json_is_read_before_script_bundles(tmp_path, monkeypatch):
+    _tree(
+        tmp_path,
+        {"a.js": "x" * 40, "package.json": json.dumps({"dependencies": {"playwright": "1"}})},
+    )
+    monkeypatch.setattr(agent_type_check, "_LARGEST_SCAN", 60)
+    assert browser_tools_found(tmp_path) == ["playwright"]
+
+
+def test_files_are_read_by_path_whatever_order_the_disk_lists_them(tmp_path, monkeypatch):
+    _tree(tmp_path, {"a.py": "import selenium\n", "b.py": "import playwright\n"})
+    listed = [tmp_path.resolve() / "b.py", tmp_path.resolve() / "a.py"]
+    monkeypatch.setattr(agent_type_check, "_agent_files", lambda _root: iter(listed))
+    monkeypatch.setattr(agent_type_check, "_LARGEST_SCAN", 20)
+    assert browser_tools_found(tmp_path) == ["selenium"]
 
 
 def test_a_second_scan_of_unchanged_files_reuses_the_first(tmp_path, monkeypatch):
@@ -439,13 +604,32 @@ def test_a_second_scan_of_unchanged_files_reuses_the_first(tmp_path, monkeypatch
     assert browser_tools_found(tmp_path) == ["playwright"]
 
 
-def test_a_nested_edit_is_scanned_again(tmp_path):
-    # The same size, so only the time says it changed.
-    _tree(tmp_path, {"src/agent.py": "import openai\n"})
+@pytest.mark.parametrize("edited", ["src/a.py", "src/b.py"])
+def test_a_nested_edit_is_scanned_again(tmp_path, edited):
+    # The same size, so only the time says it changed; either file, whichever the walk ends on.
+    _tree(tmp_path, {"src/a.py": "import openai\n", "src/b.py": "import openai\n"})
     assert browser_tools_found(tmp_path) == []
-    (tmp_path / "src/agent.py").write_text("import scrapy\n", encoding="utf-8")
-    os.utime(tmp_path / "src/agent.py", ns=(2**62, 2**62))
+    (tmp_path / edited).write_text("import scrapy\n", encoding="utf-8")
+    os.utime(tmp_path / edited, ns=(2**62, 2**62))
     assert browser_tools_found(tmp_path) == ["scrapy"]
+
+
+@pytest.mark.parametrize(
+    "name, before, after",
+    [
+        ("agent.ts", "const a = 1;\n", 'const t = "computer_20241022";\n'),
+        (
+            "package.json",
+            json.dumps({"dependencies": {"zod": "1"}}),
+            json.dumps({"dependencies": {"playwright": "1"}}),
+        ),
+    ],
+)
+def test_an_edit_outside_python_is_scanned_again(tmp_path, name, before, after):
+    _tree(tmp_path, {name: before})
+    assert browser_tools_found(tmp_path) == []
+    (tmp_path / name).write_text(after, encoding="utf-8")
+    assert browser_tools_found(tmp_path) != []
 
 
 def test_one_file_fewer_is_scanned_again(tmp_path):
@@ -628,7 +812,9 @@ def test_a_build_that_times_out_is_still_a_crash(tmp_path, monkeypatch):
 
 def test_ci_runs_these_tests():
     workflows = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "sdk-smoke.yml"
-    assert "tests/harness/test_agent_type_refusal.py" in workflows.read_text(encoding="utf-8")
+    text = workflows.read_text(encoding="utf-8")
+    assert "tests/harness/test_agent_type_refusal.py" in text
+    assert "tests/harness/test_executor_completed_counts.py" in text
 
 
 def test_the_file_is_what_the_platform_reads():
@@ -668,18 +854,148 @@ def test_browser_with_tool_is_refused_on_the_first_submission(tmp_path, browser_
     assert not (output / "contract.json").exists()
 
 
-def test_two_submissions_at_once_both_get_the_second_look(tmp_path, plain_repo):
+def _in_one_model_message(tool, modality: str, *, together: bool):
+    """How the two loops run parallel calls: Gemini's together, Claude Code's one after another."""
+
+    async def calls():
+        if together:
+            return await asyncio.gather(*(tool.handler(_reading(modality)) for _ in range(2)))
+        return [await tool.handler(_reading(modality)) for _ in range(2)]
+
+    return asyncio.run(calls())
+
+
+@pytest.mark.parametrize("together", [True, False])
+@pytest.mark.parametrize("scanned_before", [False, True])
+def test_two_browser_readings_in_one_message_both_get_the_second_look(
+    tmp_path, plain_repo, together, scanned_before
+):
     output = tmp_path / "out"
     tool = _submit_tool(contract_tools(output, scan_root=plain_repo))
-
-    async def both():
-        return await asyncio.gather(
-            tool.handler(_reading("browser")), tool.handler(_reading("browser"))
-        )
-
-    for answer in asyncio.run(both()):
+    if scanned_before:
+        asyncio.run(tool.handler(_reading("voice", one_liner="")))
+    for answer in _in_one_model_message(tool, "browser", together=together):
         assert answer.get("is_error")
+        assert "second-look" in _text(answer)
     assert not (output / FAILURE_FILE).exists()
+    assert _STOP in _text(asyncio.run(tool.handler(_reading("browser", second_look_read=_READ))))
+    assert (output / FAILURE_FILE).exists()
+
+
+@pytest.mark.parametrize("together", [True, False])
+def test_two_chat_readings_of_a_browser_repo_in_one_message_save_nothing(
+    tmp_path, browser_repo, together
+):
+    output = tmp_path / "out"
+    tool = _submit_tool(contract_tools(output, scan_root=browser_repo))
+    for answer in _in_one_model_message(tool, "chat", together=together):
+        assert answer.get("is_error")
+        assert "second-look" in _text(answer)
+    assert not (output / "contract.json").exists()
+
+
+def _looked_at(tmp_path, repo):
+    """A handler that has given one second look, and that look's answer."""
+    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=repo))
+    return tool, asyncio.run(tool.handler(_reading("browser")))
+
+
+def test_a_second_look_says_what_to_send_back(tmp_path, plain_repo):
+    _tool, answer = _looked_at(tmp_path, plain_repo)
+    assert f'second_look_read to "{_READ}"' in _text(answer)
+
+
+def test_each_second_look_gets_its_own_value(tmp_path, plain_repo, monkeypatch):
+    monkeypatch.setattr(tools, "_new_receipt", _REAL_RECEIPT)
+    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo))
+    answers = [_text(asyncio.run(tool.handler(_reading("browser")))) for _ in range(2)]
+    first, second = [answer.split('second_look_read to "')[1].split('"')[0] for answer in answers]
+    assert first != second
+
+
+def test_an_earlier_value_still_counts(tmp_path, plain_repo, monkeypatch):
+    # Two calls in one message each got a value; the model may send back either.
+    values = iter(["first", "second"])
+    monkeypatch.setattr(tools, "_new_receipt", lambda: next(values))
+    output = tmp_path / "out"
+    tool = _submit_tool(contract_tools(output, scan_root=plain_repo))
+    _in_one_model_message(tool, "browser", together=False)
+    assert _STOP in _text(asyncio.run(tool.handler(_reading("browser", second_look_read="first"))))
+
+
+def test_a_second_look_answered_with_its_value_stands(tmp_path, browser_repo):
+    output = tmp_path / "out"
+    tool = _submit_tool(contract_tools(output, scan_root=browser_repo))
+    assert asyncio.run(tool.handler(_reading("chat"))).get("is_error")
+    assert not asyncio.run(tool.handler(_reading("chat", second_look_read=_READ))).get("is_error")
+    assert (output / "contract.json").exists()
+    assert "second_look_read" not in (output / "contract.json").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("made_up", ["guess", "", 7, ["read-it"], {"a": 1}, None])
+def test_a_value_it_never_gave_is_not_a_second_look(tmp_path, plain_repo, made_up):
+    output = tmp_path / "out"
+    tool = _submit_tool(contract_tools(output, scan_root=plain_repo))
+    asyncio.run(tool.handler(_reading("browser")))
+    answer = asyncio.run(tool.handler(_reading("browser", second_look_read=made_up)))
+    assert "second-look" in _text(answer)
+    assert not (output / FAILURE_FILE).exists()
+
+
+def test_a_value_before_any_second_look_is_not_a_second_look(tmp_path, plain_repo):
+    output = tmp_path / "out"
+    tool = _submit_tool(contract_tools(output, scan_root=plain_repo))
+    answer = asyncio.run(tool.handler(_reading("browser", second_look_read=_READ)))
+    assert "second-look" in _text(answer)
+    assert not (output / FAILURE_FILE).exists()
+
+
+@pytest.mark.parametrize(
+    "packed",
+    [
+        {"contract": _reading("browser"), "second_look_read": _READ},
+        {"contract": _reading("browser", second_look_read=_READ)},
+        {"contract": json.dumps(_reading("browser", second_look_read=_READ))},
+    ],
+)
+def test_the_value_counts_however_the_contract_was_packaged(tmp_path, plain_repo, packed):
+    tool, _answer = _looked_at(tmp_path, plain_repo)
+    assert _STOP in _text(asyncio.run(tool.handler(packed)))
+
+
+def test_the_tool_declares_the_value_for_every_model(tmp_path):
+    # Required, or of another type, it would be refused before the handler on every build.
+    declared = _submit_tool(contract_tools(tmp_path)).input_schema
+    assert "string" in declared["properties"]["second_look_read"]["type"]
+    assert "integer" not in declared["properties"]["second_look_read"]["type"]
+    assert "second_look_read" not in declared.get("required", [])
+
+
+def test_a_failed_removal_still_writes_the_failure(tmp_path, browser_repo, monkeypatch):
+    output = tmp_path / "out"
+    output.mkdir()
+    (output / "contract.json").write_text("{}", encoding="utf-8")
+    real = Path.unlink
+
+    def refuse(self, *args, **kwargs):
+        if self.name == "contract.json":
+            raise PermissionError("read-only")
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", refuse)
+    with pytest.raises(PermissionError):
+        _submitter(output, browser_repo)(_reading("browser"))
+    assert (output / FAILURE_FILE).exists()
+
+
+def test_a_failed_write_still_removes_the_earlier_reading(tmp_path, browser_repo, monkeypatch):
+    output = tmp_path / "out"
+    output.mkdir()
+    (output / "contract.json").write_text("{}", encoding="utf-8")
+    _failing_write(monkeypatch)
+    with pytest.raises(OSError, match="disk full"):
+        _submitter(output, browser_repo)(_reading("browser"))
+    assert load(output) is None
 
 
 def test_a_refused_new_reading_removes_the_earlier_one(tmp_path, browser_repo):
@@ -786,7 +1102,7 @@ def test_second_look_then_browser_is_refused_with_no_tools(tmp_path, plain_repo)
     output = tmp_path / "out"
     submit = _submitter(output, plain_repo)
     submit(_reading("browser"))
-    answer = submit(_reading("browser"))
+    answer = submit(_reading("browser", second_look_read=_READ))
     assert not answer.get("is_error")
     assert _READ_MESSAGE in _text(answer)
     assert _failure(output)["details"] == {"agent_type": "browser", "tools": []}
@@ -798,7 +1114,7 @@ def test_no_scan_root_behaves_as_no_tool(tmp_path):
     submit = _submitter(output, None)
     assert "second-look" in _text(submit(_reading("browser")))
     assert not (output / FAILURE_FILE).exists()
-    submit(_reading("browser"))
+    submit(_reading("browser", second_look_read=_READ))
     assert _failure(output)["details"]["tools"] == []
 
 
@@ -825,7 +1141,7 @@ def test_conversation_with_tool_then_same_answer_saves(tmp_path, browser_repo, m
     output = tmp_path / "out"
     submit = _submitter(output, browser_repo)
     submit(_reading(modality))
-    assert not submit(_reading(modality)).get("is_error")
+    assert not submit(_reading(modality, second_look_read=_READ)).get("is_error")
     assert load(output).modality == modality
     assert not (output / FAILURE_FILE).exists()
 
@@ -864,7 +1180,7 @@ def test_only_one_second_look_and_one_scan(tmp_path, browser_repo, monkeypatch):
     submit = _submitter(output, browser_repo)
     assert "second-look" in _text(submit(_reading("chat")))
     # A rejected submission after the look doesn't earn another one.
-    rejected = submit(_reading("chat", real_use_cases=[]))
+    rejected = submit(_reading("chat", real_use_cases=[], second_look_read=_READ))
     assert rejected["is_error"] and "second-look" not in _text(rejected)
     assert not submit(_reading("chat")).get("is_error")
     assert load(output).modality == "chat"

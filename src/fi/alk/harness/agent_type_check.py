@@ -8,6 +8,7 @@ and it needs no job or session, so a reading can be checked without a build.
 from __future__ import annotations
 
 import ast
+import csv
 import fnmatch
 import io
 import json
@@ -85,6 +86,7 @@ BROWSER_PACKAGES = frozenset(
 # The tools' own API names only: the bare words turn up in prompts and tracing attributes.
 TOOL_MARKER = re.compile(
     r"\bcomputer[_-]use[_-]preview\b|\bcomputer-use-20\d\d-\d\d-\d\d\b|\bComputerUse\b"
+    r"""|\bcomputer_?[uU]se\b["']?\s*[:=]\s*\{\s*["']?environment\b"""
     r"|\bcomputer_\d{8}\b|@playwright/mcp|mcp-server-playwright"
 )
 # Hidden folders and folders named for tests or e2e describe the developer's setup too.
@@ -101,6 +103,7 @@ _LARGEST_CODE_FILE = 1024 * 1024
 # Past this a repository holds the conversation up for longer than the rest of the scan is worth.
 _LARGEST_SCAN = 128 * 1024 * 1024
 _LARGEST_RECORD = 1024 * 1024
+_LARGEST_RECORDS = 64 * 1024 * 1024
 # Strings are matched first and kept, so "https://..." or "src/**/*.ts" isn't read as a comment.
 # An unclosed one ends at its line or the file: a start that could fail makes a customer's odd file
 # cost the square of its size, which holds up the build's conversation until it's done.
@@ -111,11 +114,14 @@ _SCRIPT_COMMENT_OR_STRING = re.compile(
 )
 
 
-# The whole name or its last part: "functional_tests" holds tests, while "e2e_agent" and
-# "testing_agent" hold agents, and test automation is a main kind of browser agent.
+# The whole name, its last part, or a test word and a helper word: "functional_tests" and
+# "test_utils" hold tests, while "e2e_agent" and "testing_agent" hold agents, and test automation
+# is a main kind of browser agent.
 _TEST_FOLDER = re.compile(
     r"_*(?:(?:unit|integration|e2e)[_-]?)?(?:tests?|testing|test[_-]?data)_*|e2e"
     r"|.*[_-](?:tests?|testing|test[_-]?data|e2e)_*"
+    r"|(?:tests?|testing)[_.-]?(?:utils?|helpers?|integration|ui|unit|e2e|old|fixtures?|support"
+    r"|common|lib|mocks?|selenium|browser|functional|acceptance|scripts?)_*"
 )
 
 
@@ -135,41 +141,51 @@ def _not_the_agent_file(name: str) -> bool:
 
 
 def _unpacked_at_top(root: Path) -> set[str]:
-    """What ``pip install -t .`` put beside the agent's code, by each distribution's own record."""
+    """The files ``pip install -t .`` put beside the agent's code, by each distribution's record.
+
+    Exact paths: one distribution shipping ``tools/x.py`` says nothing about the customer's own
+    ``tools/``.
+    """
     names: set[str] = set()
     try:
-        records = [entry for entry in root.iterdir() if entry.name.endswith(".dist-info")]
+        records = sorted(entry for entry in root.iterdir() if entry.name.endswith(".dist-info"))
     except OSError:
         return names
+    read = 0
     for entry in records:
         try:
             record = entry / "RECORD"
-            if record.stat().st_size > _LARGEST_RECORD:
+            # A link to a device or a named pipe reports no size, and reading it never ends.
+            if not record.is_file() or record.stat().st_size > _LARGEST_RECORD:
                 continue
-            text = record.read_text(encoding="utf-8")
-        except (OSError, ValueError):
+            read += record.stat().st_size
+            if read > _LARGEST_RECORDS:
+                break
+            names.update(
+                row[0] for row in csv.reader(io.StringIO(record.read_text(encoding="utf-8"))) if row
+            )
+        except (OSError, ValueError, csv.Error):
             continue
-        names.update(line.split(",", 1)[0].split("/", 1)[0] for line in text.splitlines())
     return names
 
 
 def _agent_files(root: Path) -> Iterator[Path]:
     unpacked = _unpacked_at_top(root)
     for directory, subdirectories, files in os.walk(root):
-        if Path(directory) == root:
-            subdirectories[:] = [name for name in subdirectories if name not in unpacked]
-            files = [name for name in files if name not in unpacked]
         # A folder of unpacked distributions holds other people's code, whose SDKs name these
         # tools whether or not this agent uses them.
-        elif any(name.endswith(".dist-info") for name in subdirectories):
+        if Path(directory) != root and any(
+            name.endswith(".dist-info") for name in subdirectories
+        ):
             subdirectories[:] = []
             continue
         subdirectories[:] = [
             name for name in subdirectories if not _not_the_agent_dir(name)
         ]
         for name in files:
-            if not _not_the_agent_file(name):
-                yield Path(directory) / name
+            path = Path(directory) / name
+            if not _not_the_agent_file(name) and path.relative_to(root).as_posix() not in unpacked:
+                yield path
 
 
 def _packages_used(path: Path) -> set[str]:
@@ -204,6 +220,7 @@ def _modules_at_top(root: Path) -> set[str]:
             entry.stem if entry.is_file() else entry.name
             for entry in root.iterdir()
             if entry.name not in unpacked
+            and f"{entry.name}/__init__.py" not in unpacked
             and (entry.suffix == ".py" or (entry / "__init__.py").is_file())
         }
     except OSError:
@@ -221,7 +238,7 @@ def _python_code(text: str) -> str:
 def _script_kept(hit: re.Match[str]) -> str:
     kept = hit.group(1) or ""
     # A lone apostrophe, as in JSX text, isn't a string, so it can't protect a comment after it.
-    if kept.startswith("'") and (len(kept) == 1 or not kept.endswith("'")):
+    if kept.startswith("'") and not kept.endswith("'"):
         return kept.split("//", 1)[0]
     return kept
 
@@ -267,6 +284,12 @@ def _is_read(path: Path) -> bool:
     return path.name == "package.json" or path.suffix == ".py" or path.suffix in _SCRIPT_SUFFIXES
 
 
+def _reading_order(path: Path) -> tuple[bool, str]:
+    # Python and package.json first: script bundles shouldn't use up the limit before them, and the
+    # answer shouldn't depend on the order the disk lists files in.
+    return path.suffix in _SCRIPT_SUFFIXES, str(path)
+
+
 def _signature(root: Path) -> tuple[int, int, int]:
     """What changes when the files a scan reads change: a nested edit or a new checkout."""
     latest = count = size = 0
@@ -288,9 +311,7 @@ def _scan(root: Path, _files: tuple[int, int, int]) -> tuple[str, ...]:
     found: set[str] = set()
     imported: set[str] = set()
     scanned = 0
-    for path in _agent_files(root):
-        if not _is_read(path):
-            continue
+    for path in sorted(filter(_is_read, _agent_files(root)), key=_reading_order):
         size = _file_size(path)
         # Never read, so it mustn't use up the limit before the code that is.
         if size > _LARGEST_CODE_FILE:

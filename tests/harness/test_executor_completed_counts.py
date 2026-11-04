@@ -58,14 +58,15 @@ def _job(source):
     )
 
 
-def test_the_failure_a_build_left_is_the_jobs_failure(tmp_path, monkeypatch):
+@pytest.mark.parametrize("exit_code", [1, 78])
+def test_the_failure_a_build_left_is_the_jobs_failure(tmp_path, monkeypatch, exit_code):
     source = tmp_path / "source"
     source.mkdir()
     output = tmp_path / "output"
 
     async def refused(args):
         write_failure_file(agent_type_failure(["playwright"]), Path(args.out))
-        return 78
+        return exit_code
 
     monkeypatch.setattr("fi.alk.harness.cli._auto", refused)
     status = asyncio.run(HarnessExecutor().run(_job(source), source=source, output=output))
@@ -73,14 +74,36 @@ def test_the_failure_a_build_left_is_the_jobs_failure(tmp_path, monkeypatch):
     assert status.failure == agent_type_failure(["playwright"])
 
 
-def test_an_unreadable_failure_file_falls_back_to_the_events(tmp_path, monkeypatch):
+@pytest.mark.parametrize("exit_code", [0, 2])
+def test_a_build_that_ran_reports_no_failure_whatever_the_folder_holds(
+    tmp_path, monkeypatch, exit_code
+):
+    source = tmp_path / "source"
+    source.mkdir()
+    output = tmp_path / "output"
+
+    async def ran(args):
+        write_failure_file(agent_type_failure(["playwright"]), Path(args.out))
+        return exit_code
+
+    monkeypatch.setattr("fi.alk.harness.cli._auto", ran)
+    status = asyncio.run(HarnessExecutor().run(_job(source), source=source, output=output))
+    assert status.stage is HarnessStage.COMPLETED
+    assert status.failure is None
+
+
+@pytest.mark.parametrize("unreadable", ["malformed", "a folder"])
+def test_an_unreadable_failure_file_falls_back_to_the_events(tmp_path, monkeypatch, unreadable):
     source = tmp_path / "source"
     source.mkdir()
     output = tmp_path / "output"
 
     async def crashed(args):
         Path(args.out).mkdir()
-        (Path(args.out) / FAILURE_FILE).write_text("{")
+        if unreadable == "malformed":
+            (Path(args.out) / FAILURE_FILE).write_text("{")
+        else:
+            (Path(args.out) / FAILURE_FILE).mkdir()
         return 1
 
     monkeypatch.setattr("fi.alk.harness.cli._auto", crashed)

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import secrets
 from pathlib import Path
 from typing import Any
 
@@ -247,6 +248,13 @@ def _without_nulls(value: Any) -> Any:
 MOST_CHOSEN_EVALS = 6
 
 
+SECOND_LOOK_READ = "second_look_read"
+
+
+def _new_receipt() -> str:
+    return secrets.token_hex(4)
+
+
 def _stop_message(destination: Path) -> str:
     said = failure_message(destination) or "This build can't go on."
     return f"{said} Don't submit again or do more work; tell the person."
@@ -307,7 +315,10 @@ def contract_tools(
     # and this stage cannot tell those two apart from the outside.
     nudged: set[str] = set()
     refused = False
-    looked_again = False
+    # What a call must hold to count as having read a second look. Calls in one model message run
+    # before the model reads any answer, together or one after another, so none of them can know it.
+    second_look_receipts: set[str] = set()
+    second_look_read = False
     found: list[str] | None = None
 
     @tool(
@@ -330,6 +341,11 @@ def contract_tools(
         # call and a sequence of rejected guesses.
         schema(
             {
+                SECOND_LOOK_READ: {
+                    "type": "string",
+                    "description": "Only when a second look asked for it: the value it gave. "
+                    "It is not part of the contract.",
+                },
                 "agent": {
                     "type": "string",
                     "description": "Short lower-case identifier, no spaces. Only a label for "
@@ -1086,13 +1102,13 @@ def contract_tools(
         ),
     )
     async def submit_contract(args: dict[str, Any]) -> dict[str, Any]:
-        payload = unwrapped(args)
-        nonlocal refused, looked_again, found
+        payload = dict(unwrapped(args))
+        receipt = payload.pop(SECOND_LOOK_READ, None) or (
+            args.get(SECOND_LOOK_READ) if isinstance(args, dict) else None
+        )
+        nonlocal refused, found, second_look_read
         if refused or (destination / FAILURE_FILE).is_file():
             return _ok(_stop_message(destination))
-        # Read before the wait: a call running alongside this one mustn't count as the model
-        # having read the second look.
-        had_second_look = looked_again
         if found is None:
             found = await asyncio.to_thread(browser_tools_found, scan_root)
             # A call running alongside this one may have refused while this one waited.
@@ -1106,17 +1122,30 @@ def contract_tools(
                     "job is work on websites or a computer."
                 ]
             )
-        verdict = decide(claimed, found, looked_again=had_second_look)
+        # Once shown, it stays shown: a later rejected submission doesn't earn another look.
+        second_look_read = second_look_read or (
+            isinstance(receipt, str) and receipt in second_look_receipts
+        )
+        verdict = decide(claimed, found, looked_again=second_look_read)
         if verdict == "refuse":
             # Set first: if the write fails, the model must not get a resubmission through.
             refused = True
-            write_failure_file(agent_type_failure(found), destination)
-            # An earlier reading in this folder would otherwise build the agent just refused.
-            (destination / "contract.json").unlink(missing_ok=True)
+            # First: an earlier reading in this folder would otherwise build the agent just
+            # refused, even if the write below fails.
+            try:
+                (destination / "contract.json").unlink(missing_ok=True)
+            finally:
+                write_failure_file(agent_type_failure(found), destination)
             return _ok(_stop_message(destination))
         if verdict == "second_look":
-            looked_again = True
-            return _problems([_second_look(claimed, found)])
+            issued = _new_receipt()
+            second_look_receipts.add(issued)
+            return _problems(
+                [
+                    f"{_second_look(claimed, found)} When you submit again, set "
+                    f'{SECOND_LOOK_READ} to "{issued}", which shows you read this.'
+                ]
+            )
         data_store = payload.get("data_store")
         if not isinstance(data_store, dict):
             data_store = {}
