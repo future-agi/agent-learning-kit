@@ -66,6 +66,8 @@ class Proof:
     # nowhere, so a scenario whose entire solution was assumed saved as "proved". Carried here so
     # whoever keeps the scenario is told what the proof did not cover.
     assumed: list[str] = field(default_factory=list)
+    # World actors' actions on a clock or a chance: a proof has neither, so it never plays them.
+    unplayed: list[str] = field(default_factory=list)
     # Graded by judgement alone, because the world holds nothing a check could read. True only for
     # a target we cannot see into, never a way around writing a check for a world that has one.
     judged_only: bool = False
@@ -340,10 +342,22 @@ def _run(
     return world, calls, refused, sorted(set(assumed))
 
 
+# The triggers a reference solution can meet; the rest are reported in `Proof.unplayed`.
+_PLAYED_TRIGGERS = ("always", "on_tool", "contacted")
+
+
+def _unplayed(scenario: Scenario) -> list[str]:
+    return [
+        f"{entry.id} {action.action} ({action.trigger.kind})"
+        for entry in scenario.actors
+        for action in entry.actions
+        if action.trigger.kind not in _PLAYED_TRIGGERS
+    ]
+
+
 class _WorldActors:
-    """A scenario's world actors during a proof: each permitted action played when its trigger is
-    met by the reference solution, the way the run plays it at the world's door. A refused action
-    changes nothing, and none of their calls is the agent's."""
+    """A scenario's world actors during a proof: each permitted action on a trigger the reference solution meets,
+    played the way the run plays it at the world's door. None of their calls is the agent's."""
 
     def __init__(self, scenario: Scenario, world_root: Path, world: GeneratedWorld, by_actors: set[int]) -> None:
         listed = load_actors(world_root).by_id()
@@ -638,6 +652,7 @@ def prove(
     # What the proof below could not cover. Detected here since forever and logged into a void; a
     # scenario whose whole solution was assumed used to save as proved.
     proof.assumed = assumed
+    proof.unplayed = _unplayed(scenario)
     try:
         proof.with_solution = [
             run_check(source, world, calls, name=name, reference=reference)

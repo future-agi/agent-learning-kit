@@ -10098,6 +10098,26 @@ def test_a_proof_plays_permitted_actor_actions_at_their_triggers_and_keeps_them_
     assert [call.name for call in world.calls][-1] == "crm/approve_discount"
 
 
+def test_a_proof_names_the_actor_actions_on_a_clock_or_a_chance_it_could_not_play():
+    from fi.alk.harness.prove import _unplayed
+
+    scenario = Scenario(
+        name="later",
+        actors=[
+            {"id": "reviewer", "actions": [
+                {"action": "records.approve", "trigger": {"kind": "after_seconds", "seconds": 5}},
+                {"action": "records.hold", "trigger": {"kind": "probability", "p": 0.5}},
+                {"action": "records.note", "trigger": {"kind": "on_tool", "tool": "records.request"}},
+                {"action": "records.open"},
+            ]},
+        ],
+    )
+    assert _unplayed(scenario) == [
+        "reviewer records.approve (after_seconds)",
+        "reviewer records.hold (probability)",
+    ]
+
+
 def test_the_writer_is_told_which_world_actors_there_are_only_when_switched_on(tmp_path, monkeypatch):
     from fi.alk.harness.actors import Actor, ActorList, save_actors
     from fi.alk.harness.scenario_tools import world_summary

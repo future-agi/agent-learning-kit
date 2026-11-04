@@ -1354,6 +1354,11 @@ def accept_scenario(
         "as demonstrated."
         if proof.assumed
         else ""
+    ) + (
+        "\nNOT PROVED: these world actor actions run on a clock or a chance, which a proof does not "
+        "have, so they were not played: " + ", ".join(proof.unplayed) + "."
+        if proof is not None and proof.unplayed
+        else ""
     )
     if proof is None:
         proof_summary = "Nothing it tests changed, so it was not proved again."
