@@ -9595,21 +9595,29 @@ def test_sub_actor_tools_and_fields_are_offered_only_when_switched_on(
             "sub_actor" in goal.input_schema["properties"],
             {"add_sub_actor", "drop_sub_actor"}
             <= {one.name for one in world_server.tools},
+            any(
+                words in json.dumps(submit.input_schema)
+                for words in ("who else is on the call", "hand-off of the phone")
+            ),
         )
 
     monkeypatch.delenv("HARNESS_SUB_ACTORS", raising=False)
-    assert offered() == (False, False, False)
+    assert offered() == (False, False, False, False)
     monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
     # A sub-goal is never about a sub-actor, so add_sub_goal never offers one.
-    assert offered() == (True, False, True)
+    assert offered() == (True, False, True, True)
 
 
 def test_a_sub_actor_id_is_one_every_part_of_the_platform_can_address():
     from fi.alk.harness.sub_actor import SubActor, entry_problems
 
     assert entry_problems(SubActor.model_validate(_SECOND), modality="voice") == []
-    wrong = entry_problems(SubActor.model_validate({**_SECOND, "id": "Front-Desk"}), modality="voice")
-    assert wrong == ["id 'Front-Desk' must be 1 to 64 lowercase letters, digits or underscores"]
+    wrong = entry_problems(
+        SubActor.model_validate({**_SECOND, "id": "Front-Desk"}), modality="voice"
+    )
+    assert wrong == [
+        "id 'Front-Desk' must be 1 to 64 lowercase letters, digits or underscores"
+    ]
 
 
 def test_a_sub_actor_scenarios_include_keeps_its_channel(tmp_path, monkeypatch):
@@ -9631,7 +9639,12 @@ def test_a_sub_actor_scenarios_include_keeps_its_channel(tmp_path, monkeypatch):
     moved = {**_SECOND, "channel": "audio_mix"}
     assert "Not changed" in asyncio.run(add(moved))["content"][0]["text"]
     assert load_sub_actors(destination).get("second").channel == "audio_handoff"
-    assert asyncio.run(add({**_SECOND, "role": "someone close to the person"})).get("is_error") is None
+    assert (
+        asyncio.run(add({**_SECOND, "role": "someone close to the person"})).get(
+            "is_error"
+        )
+        is None
+    )
     used.unlink()
     asyncio.run(add(moved))
     assert load_sub_actors(destination).get("second").channel == "audio_mix"
@@ -9716,7 +9729,7 @@ def test_editing_a_scenario_written_before_sub_actors_existed_is_never_refused_f
         "name": "Asha Rao",
         "personality": "Friendly and cooperative",
         "communication_style": "Direct and concise",
-        "initial_message": "Hi, I want a Big Mac.",
+        "initial_message": "Hi, I would like to place an order.",
         "languages": ["English"],
         "accent": "Neutral",
         "gender": "female",
@@ -9757,15 +9770,60 @@ def test_the_person_s_instruction_never_names_a_sub_actor(monkeypatch):
 
     def problems(instruction):
         scenario = SimpleNamespace(
-            sub_actors=[SimpleNamespace(id="second")], instruction=instruction, persona=None, call_direction=""
+            sub_actors=[SimpleNamespace(id="second")],
+            instruction=instruction,
+            persona=None,
+            call_direction="",
         )
-        return scenario_tools._sub_actors_that_cannot_run(scenario, listing, None, True, set())
+        return scenario_tools._sub_actors_that_cannot_run(
+            scenario, listing, None, True, set()
+        )
 
-    assert problems("Ask for two tickets. Hand the phone to Rowan when the agent quotes a price.") == [
+    assert problems(
+        "Ask for two tickets. Hand the phone to Rowan when the agent quotes a price."
+    ) == [
         "instruction: the person's instruction names Rowan, who is a sub-actor here. Write the person's situation "
         "as if no one else were there; the trigger brings them in and the run tells the person who is with them"
     ]
     assert problems("Ask for two tickets for the evening show.") == []
+
+
+@pytest.mark.parametrize(
+    ("name", "instruction", "names"),
+    [
+        ("Al", "Ask for two tickets and also a receipt.", False),
+        ("Al", "Al takes the phone when the price is quoted.", True),
+        ("Al", "Say AL is with you.", True),
+        ("Al", "Mention that Al, your brother, is nearby.", True),
+        ("Ann", "Ask for the annual plan.", False),
+        ("Will", "You will ask for two tickets.", False),
+        ("Will", "Hand the phone to Will.", True),
+        ("Mary Ann", "Hand the phone to Mary\nAnn.", True),
+        ("Mary Ann", "Ask Mary for the date.", False),
+        ("Rowan", "Ask about the rowan trees.", False),
+        ("rowan", "Ask what rowan thinks.", True),
+    ],
+)
+def test_a_sub_actor_s_name_is_found_only_as_a_name(
+    monkeypatch, name, instruction, names
+):
+    from types import SimpleNamespace
+
+    from fi.alk.harness import scenario_tools
+
+    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+    monkeypatch.setattr(scenario_tools, "scenario_problems", lambda *args, **kwargs: [])
+    scenario = SimpleNamespace(
+        sub_actors=[SimpleNamespace(id="second")],
+        instruction=instruction,
+        persona=None,
+        call_direction="",
+    )
+    listing = _listed({**_SECOND, "name": name})
+    refused = scenario_tools._sub_actors_that_cannot_run(
+        scenario, listing, None, True, set()
+    )
+    assert bool(refused) is names
 
 
 def test_a_suite_keeps_its_share_of_scenarios_with_a_sub_actor_unless_the_person_set_another():

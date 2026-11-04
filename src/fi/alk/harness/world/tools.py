@@ -650,11 +650,16 @@ def sub_actor_tools(contract: AgentContract, destination: Path) -> list[Any]:
             return _err("Not added:\n  - " + "\n  - ".join(problems))
         listing = load_sub_actors(destination)
         listed = listing.get(actor.id)
-        using = scenarios_using(destination, actor.id) if listed and listed.channel != actor.channel else []
+        using = (
+            scenarios_using(destination, actor.id)
+            if listed and listed.channel != actor.channel
+            else []
+        )
         if using:
             # A scenario's trigger and level were written for the channel it has.
             return _err(
-                f"Not changed. These scenarios include {actor.id} on {listed.channel}: " + ", ".join(using)
+                f"Not changed. These scenarios include {actor.id} on {listed.channel}: "
+                + ", ".join(using)
             )
         listing.sub_actors = [
             one for one in listing.sub_actors if one.id != actor.id

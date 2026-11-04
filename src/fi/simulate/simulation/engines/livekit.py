@@ -3473,16 +3473,24 @@ class LiveKitEngine(BaseEngine):
             )
             waiter = getattr(handle, "wait_for_playout", None)
             if callable(waiter):
-                await waiter()
+                try:
+                    await waiter()
+                except asyncio.CancelledError:
+                    # Out of sub-actor time: the line stops, so the person can take the phone back.
+                    handle.interrupt(force=True)
+                    raise
             await heard(f"{name} said on the line: {text}")
 
         async def play(
             frames: AsyncIterable[Any], ratio: float, text: str, name: str
         ) -> None:
             level = at_level(frames, ratio, customer_agent.voice_rms())
-            await player.play(
-                AudioConfig(_stream_at_mixer_rate(level), volume=1.0)
-            ).wait_for_playout()
+            handle = player.play(AudioConfig(_stream_at_mixer_rate(level), volume=1.0))
+            try:
+                await handle.wait_for_playout()
+            except asyncio.CancelledError:
+                handle.stop()
+                raise
             await heard(
                 f"{name} said nearby, and you heard it: {text} React as you would in person: if it calls"
                 f" for an answer, answer {name} briefly in your next line, then carry on with the call."
@@ -3505,6 +3513,7 @@ class LiveKitEngine(BaseEngine):
             else:
                 # Connected now, as the person's voice is, so a first line is not held up by a cold start.
                 tts.prewarm()
+                tts.on("metrics_collected", customer_agent._usage_collector.collect)
             voices.append(
                 SubActorVoice(
                     actor=actor,

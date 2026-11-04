@@ -11,6 +11,7 @@ import re
 import time
 from typing import Any, AsyncIterator, Awaitable, Callable
 
+from fi.simulate._logging import redacted_exc_info
 from fi.simulate.simulation.engines.caller_barge_in import complete_text
 from fi.simulate.simulation.sub_actors import (
     HANDOFF_LINE_SECONDS,
@@ -178,7 +179,7 @@ class SubActorVoice:
 
 def _failed(exc: Exception) -> str:
     """Why a line failed, with the provider's status when it gave one."""
-    logger.warning("sub-actor line failed", exc_info=exc)
+    logger.warning("sub-actor line failed", exc_info=redacted_exc_info(exc))
     status = getattr(exc, "status_code", None)
     return f"line failed: {type(exc).__name__}" + (f" {status}" if status else "")
 
@@ -198,7 +199,7 @@ class SubActorsOnCall:
         clock: Callable[[], float] = time.time,
     ) -> None:
         self.voices = {str(voice.actor["id"]): voice for voice in voices}
-        self.cast = Cast([voice.actor for voice in voices], seed, clock=clock)
+        self.cast = Cast([voice.actor for voice in voices], seed)
         self.play = play
         self.say = say
         # Read only for a sub-actor that enters on a tool call: the person's turn waits on it.
@@ -244,7 +245,11 @@ class SubActorsOnCall:
         self.cast.holder = str(menu.actor["id"])
         self.cast.line_wanted(menu.actor)
         await self._speak(menu, [_ANSWERED], written=self._greeting)
-        said = next(one for one in self.cast.summary() if one["sub_actor"] == str(menu.actor["id"]))
+        said = next(
+            one
+            for one in self.cast.summary()
+            if one["sub_actor"] == str(menu.actor["id"])
+        )
         return said["delivered"] > 0
 
     def menu_cannot_answer(self, reason: str) -> None:
@@ -276,7 +281,9 @@ class SubActorsOnCall:
         took_part = False
         holding = False
         # Whoever has the phone is served before a background voice, so a line wanted this turn never crowds them out.
-        for key, voice in sorted(self.voices.items(), key=lambda one: one[1].channel == "audio_mix"):
+        for key, voice in sorted(
+            self.voices.items(), key=lambda one: one[1].channel == "audio_mix"
+        ):
             if voice.channel == "audio_mix":
                 if (
                     key not in self._pending
@@ -339,7 +346,15 @@ class SubActorsOnCall:
             self.cast.finish(voice.actor)
             return False
         started = self.clock()
-        await self.say(frames, text, str(voice.actor.get("name") or "someone"))
+        try:
+            await asyncio.wait_for(
+                self.say(frames, text, str(voice.actor.get("name") or "someone")),
+                self._left(asked),
+            )
+        except asyncio.TimeoutError:
+            self.cast.late(voice.actor, cut_by_call_time=True)
+            self.cast.finish(voice.actor)
+            return False
         voice.said.append(text)
         self.cast.delivered(
             voice.actor, text, self.agent_turns, started, self.clock(), asked
@@ -347,6 +362,10 @@ class SubActorsOnCall:
         if done:
             self.cast.finish(voice.actor)
         return not done
+
+    def _left(self, asked: float) -> float:
+        """The call's sub-actor time still left for a line asked for at ``asked``, its writing counted."""
+        return max(0.0, self.cast.remaining() - (self.clock() - asked))
 
     async def _written(
         self, voice: SubActorVoice, heard: list[str]
@@ -375,12 +394,19 @@ class SubActorsOnCall:
                 self.cast.dropped(voice.actor, "voice failed")
                 return
             started = self.clock()
-            await self.play(
-                frames,
-                float(voice.actor.get("loudness_ratio") or 1.0),
-                text,
-                str(voice.actor.get("name") or "someone"),
-            )
+            try:
+                await asyncio.wait_for(
+                    self.play(
+                        frames,
+                        float(voice.actor.get("loudness_ratio") or 1.0),
+                        text,
+                        str(voice.actor.get("name") or "someone"),
+                    ),
+                    self._left(asked),
+                )
+            except asyncio.TimeoutError:
+                self.cast.late(voice.actor, cut_by_call_time=True)
+                return
             voice.said.append(text)
             self.cast.delivered(
                 voice.actor, text, self.agent_turns, started, self.clock(), asked
@@ -457,8 +483,11 @@ def world_access(dsn: str) -> Callable[[], list[str]] | None:
                 str(record.get("name"))
                 for record in read_tool_trace(dsn, timeout_ms=2000)
             ]
-        except Exception:  # noqa: BLE001 - not knowing the tools so far never holds up the call
-            logger.warning("sub-actors could not read the tool trace", exc_info=True)
+        except Exception as exc:  # noqa: BLE001 - not knowing the tools so far never holds up the call
+            logger.warning(
+                "sub-actors could not read the tool trace",
+                exc_info=redacted_exc_info(exc),
+            )
             return []
 
     return tools_called

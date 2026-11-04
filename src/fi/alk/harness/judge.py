@@ -140,6 +140,16 @@ def verdict_of(args: dict[str, Any]) -> tuple[bool | None, str]:
     return verdict == "pass", explanation
 
 
+def verdict_named(held: bool | None, reason: str | None) -> str | None:
+    """The verdict `verdict_of` gave as (held, reason): pass, fail, not_applicable, inconclusive or None."""
+    reason = reason or ""
+    if held is True and reason.startswith(NOT_APPLICABLE):
+        return "not_applicable"
+    if held is None:
+        return "inconclusive" if reason.startswith(INCONCLUSIVE) else None
+    return "pass" if held else "fail"
+
+
 def compared(goal: Any) -> str:
     said = str(getattr(goal, "compares", "") or "").strip()
     return f"Its check contract:\n{said}\n" if said else ""
@@ -576,9 +586,7 @@ def _others_present(messages: Sequence[Any]) -> str:
     )
     if not names:
         return ""
-    return (
-        f"Also heard during the call: {', '.join(names)}. They are not the person being served.\n\n"
-    )
+    return f"Also heard during the call: {', '.join(names)}. They are not the person being served.\n\n"
 
 
 def _transcript(messages: Sequence[Any]) -> str:

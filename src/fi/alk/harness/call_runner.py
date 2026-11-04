@@ -727,7 +727,9 @@ def _voiced_sub_actors(
             logger.warning(
                 "sub-actor %s does not enter: %s",
                 included.id,
-                "not in the environment's list" if actor is None else "not a voice channel",
+                "not in the environment's list"
+                if actor is None
+                else "not a voice channel",
             )
             continue
         persona = {**actor.persona, "name": actor.name}
@@ -1479,16 +1481,12 @@ class CallRunnerImpl:
             call_environ.pop("HARNESS_BACKGROUND_PLACE", None)
 
         setting = _setting(self._context.job.agent.config, call_environ)
-        voices = (
-            _voiced_sub_actors(
-                doc,
-                self._context.bundle_dir,
-                voice_providers(setting)[1],
-                setting("CARTESIA_API_KEY"),
-                run_id,
-            )
-            if doc.get("sub_actors") and sub_actors_enabled()
-            else []
+        voices = _voiced_sub_actors(
+            doc,
+            self._context.bundle_dir,
+            voice_providers(setting)[1],
+            setting("CARTESIA_API_KEY"),
+            run_id,
         )
         call_environ.pop(SUB_ACTOR_WORLD_ALIAS, None)
         if voices:
@@ -1859,7 +1857,6 @@ class CallRunnerImpl:
                 else None
             ),
             target_metrics=_target_metrics(case),
-            sub_actors=tuple(took_part.get("sub_actors") or ()),
         )
 
         if case is None:

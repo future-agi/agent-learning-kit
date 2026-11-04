@@ -11,9 +11,8 @@ import hashlib
 import math
 import random
 import re
-import time
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 # Where a caller's own details start in its instruction; anyone with the caller is given only what comes before.
 DETAILS_MARK = "Your details:"
@@ -98,7 +97,7 @@ def described(entries: dict[str, str]) -> str:
     return "; ".join(f"`{name}`: {about}" for name, about in entries.items())
 
 
-# Tunable defaults, the same for every scenario, so no sub-actor and no group of them can take over a call.
+# Fixed limits, the same for every scenario, so no sub-actor and no group of them can take over a call.
 LIMITS: dict[str, int] = {
     "audio_mix": 3,
     "audio_handoff": 3,
@@ -195,6 +194,19 @@ def _whole(word: str) -> str:
     return f"{start}{re.escape(word)}{end}"
 
 
+def named_in(text: str, name: str) -> bool:
+    """Whether ``text`` names ``name`` as a whole word, written the way a name is (never in lower case
+    unless the name itself is), so a name that is also an everyday word is not found in that word."""
+    name = " ".join(name.split())
+    if not name:
+        return False
+    pattern = _whole(name).replace(r"\ ", r"\s+")
+    return any(
+        " ".join(found.group().split()) == name or not found.group()[0].islower()
+        for found in re.finditer(pattern, text, re.IGNORECASE)
+    )
+
+
 def drawn(trigger: dict[str, Any], *, seed: str, sub_actor_id: str) -> bool:
     """Whether this call is one a `probability` sub-actor comes into; every other kind always does."""
     if str(trigger.get("kind")) != "probability":
@@ -274,12 +286,9 @@ class Cast:
         self,
         actors: list[dict[str, Any]],
         seed: str,
-        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.actors = actors
         self.seed = seed
-        self.clock = clock
-        self._started_at: float | None = None
         self._spent = 0.0
         self._time_up = False
         self._waiting_lines = 0
@@ -455,8 +464,6 @@ class Cast:
         self._waiting.clear()
 
     def _record(self, key: str, kind: str, **details: Any) -> None:
-        if kind == "triggered" and self._started_at is None:
-            self._started_at = self.clock()
         actor = next(one for one in self.actors if str(one["id"]) == key)
         self.events.append(
             {

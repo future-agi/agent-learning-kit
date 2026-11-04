@@ -322,6 +322,31 @@ def _on_call(voices, playing=0.0, **kwargs):
     return call, said, played
 
 
+@pytest.mark.parametrize("channel", ["audio_handoff", "audio_mix"])
+def test_a_line_that_plays_past_the_sub_actor_time_is_cut_and_frees_the_phone(
+    phone_from_first_turn, channel
+):
+    async def never_done(*_args):
+        await asyncio.Event().wait()
+
+    async def scenario():
+        voice = _Voice(_actor("one", channel), ["a long line"])
+        call = voice_engine.SubActorsOnCall(
+            [voice], seed="run", play=never_done, say=never_done, clock=lambda: 1.0
+        )
+        call.cast._spent = registry.SUB_ACTOR_SECONDS - 0.05
+        holding = await asyncio.wait_for(call.agent_turn("Which date?"), 1.0)
+        await asyncio.wait_for(asyncio.gather(*call._pending.values()), 1.0)
+        return holding, call.cast.holder, call.events()
+
+    holding, holder, events = asyncio.run(scenario())
+    assert holding is False and holder == ""
+    assert not [one for one in events if one["kind"] == "delivered"]
+    assert {"kind": "dropped", "reason": registry.TIME_UP} in [
+        {"kind": one["kind"], "reason": one.get("reason")} for one in events
+    ]
+
+
 def test_every_line_is_written_from_the_conversation_so_far_and_records_how_long_it_took(
     phone_from_first_turn,
 ):
@@ -333,13 +358,13 @@ def test_every_line_is_written_from_the_conversation_so_far_and_records_how_long
             conversation=lambda: ["The agent: Hello", "The person: Hi"],
             clock=itertools.count().__next__,
         )
-        await call.agent_turn("Which ride?")
+        await call.agent_turn("Which date?")
         await asyncio.sleep(0.01)
         await call.close()
         return phone.heard, near.heard, call.events()
 
     phone, near, events = asyncio.run(scenario())
-    expected = [["The agent: Hello", "The person: Hi", "The agent: Which ride?"]]
+    expected = [["The agent: Hello", "The person: Hi", "The agent: Which date?"]]
     assert phone == near == expected
     delivered = [one for one in events if one["kind"] == "delivered"]
     assert len(delivered) == 2 and all(one["asked_at"] < one["at"] for one in delivered)
@@ -560,7 +585,9 @@ def test_a_background_line_plays_whenever_it_is_ready_and_only_the_end_of_the_ca
 
 
 def test_a_menu_that_could_not_speak_leaves_the_call_to_the_person():
-    call, said, _played = _on_call([_Voice(_actor("menu", "ivr"), [RuntimeError("no voice")])])
+    call, said, _played = _on_call(
+        [_Voice(_actor("menu", "ivr"), [RuntimeError("no voice")])]
+    )
     assert asyncio.run(call.answer_first()) is False and said == []
 
 
@@ -687,14 +714,27 @@ def test_a_voice_already_on_the_call_is_avoided_while_the_provider_has_another()
     assert persona_voice(person, "elevenlabs") == ""
 
 
-def test_a_tool_trace_that_cannot_be_read_never_holds_up_the_call(monkeypatch):
+def test_a_tool_trace_that_cannot_be_read_never_holds_up_the_call(monkeypatch, caplog):
     from fi.alk.harness import call_runner
 
+    dsn = "postgresql://svc:s3cret-pw@world:5432/db"
+
     def unreadable(_dsn, **_):
-        raise RuntimeError("relation does not exist")
+        raise RuntimeError(f"connection to {dsn} failed")
 
     monkeypatch.setattr(call_runner, "read_tool_trace", unreadable)
-    assert voice_engine.world_access("postgresql://world")() == []
+    with caplog.at_level("DEBUG"):
+        assert voice_engine.world_access(dsn)() == []
+    assert "RuntimeError: details redacted" in caplog.text
+    assert "s3cret-pw" not in caplog.text
+
+
+def test_a_failed_line_logs_its_kind_never_the_provider_s_message(caplog):
+    with caplog.at_level("WARNING"):
+        reason = voice_engine._failed(ValueError("bad key sk-live-123"))
+    assert reason == "line failed: ValueError"
+    assert "ValueError: details redacted" in caplog.text
+    assert "sk-live-123" not in caplog.text
 
 
 def test_the_tool_trace_is_read_only_for_a_sub_actor_that_enters_on_a_tool_call():
@@ -748,7 +788,6 @@ def test_the_menu_s_greeting_is_ready_by_the_time_the_call_is_answered():
 
 
 def test_the_call_s_sub_actor_time_runs_out_and_every_sub_actor_stops_with_the_reason():
-    now = [0.0]
     cast = Cast(
         [
             _actor("one"),
@@ -756,11 +795,8 @@ def test_the_call_s_sub_actor_time_runs_out_and_every_sub_actor_stops_with_the_r
             _actor("three", kind="mid_journey", turn=2),
         ],
         "run",
-        clock=lambda: now[0],
     )
     assert len(cast.entering(Moment(2))) == 2
-    # Time passing in the agent's and the person's turns uses none of it.
-    now[0] = 500.0
     assert cast.remaining() == registry.SUB_ACTOR_SECONDS
     # Only the sub-actors' own lines do: asked for at 500, ready and spoken by 530.
     cast.delivered(cast.actors[0], "a line", 2, 510.0, 530.0, 500.0)
@@ -894,14 +930,14 @@ def test_a_background_line_reaches_the_mixer_at_its_rate_so_it_plays_at_its_own_
 def test_someone_who_takes_the_phone_waits_until_the_person_has_spoken():
     cast = Cast(
         [
-            _actor("phone", kind="on_keyword", words=["pickup"]),
+            _actor("phone", kind="on_keyword", words=["later"]),
             _actor("near", "audio_mix"),
         ],
         "run",
     )
     # The agent's greeting names the keyword before the person has said a word: only the
     # background voice comes in; the phone-taker waits for the agent's next turn.
-    first = cast.entering(Moment(1, last_text="Where should we pickup?"))
+    first = cast.entering(Moment(1, last_text="Shall we talk later?"))
     assert [one["id"] for one in first] == ["near"]
     assert [one["id"] for one in cast.entering(Moment(2, last_text="Got it."))] == [
         "phone"
@@ -913,7 +949,11 @@ def test_someone_who_takes_the_phone_waits_until_the_person_has_spoken():
 
 def test_a_sub_actor_is_never_told_it_may_answer_for_the_person():
     brief = line_brief(
-        _actor("phone"), situation="Book a ride.", said=[], conversation=[], language=""
+        _actor("phone"),
+        situation="Book a table.",
+        said=[],
+        conversation=[],
+        language="",
     )
     assert "unless" not in brief
     assert "what they came for is theirs to say" in brief
@@ -950,8 +990,7 @@ def test_only_the_per_turn_read_is_bounded_and_evidence_reads_are_not(monkeypatc
 
 
 def test_a_line_late_on_its_own_limit_never_ends_the_call_s_sub_actor_time():
-    now = [0.0]
-    cast = Cast([_actor("one"), _actor("two")], "run", clock=lambda: now[0])
+    cast = Cast([_actor("one"), _actor("two")], "run")
     cast.entering(Moment(2))
     first = cast.line_limit(registry.HANDOFF_LINE_SECONDS)
     cast.delivered(cast.actors[1], "a line", 2, 0.0, 50.0, 0.0)

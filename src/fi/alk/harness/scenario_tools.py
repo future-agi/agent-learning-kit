@@ -25,6 +25,7 @@ from fi.simulate.simulation.sub_actors import (
     available_channels,
     default_share,
     described,
+    named_in,
 )
 
 from .backends import tool, tool_server
@@ -217,8 +218,10 @@ def _sub_actor_field() -> dict[str, Any]:
             + ". The instruction does what their channel does: a voice nearby speaks to the person, "
             "someone who takes the phone speaks to the agent. Give them a part of their own, never the person's goal: they never make, confirm, "
             "change or cancel the person's request, and never give a detail the agent needs from the "
-            "person. The person's own instruction never names them or says what they will say. Leave it "
-            "out for the person alone.",
+            "person. The person's own instruction is written for the person alone: it never names, mentions "
+            "or plans for a sub-actor, what they will say or a hand-off of the phone, as the run tells the "
+            "person who is with them. The scenario's name never says who else is on the call or how they "
+            "join. Leave it out for the person alone.",
             "items": {
                 "type": "object",
                 "properties": {
@@ -1098,7 +1101,7 @@ def _sub_actors_that_cannot_run(
     named = [
         one.name
         for one in (listing.get(entry.id) for entry in scenario.sub_actors)
-        if one is not None and one.name.strip() and one.name.strip().lower() in scenario.instruction.lower()
+        if one is not None and named_in(scenario.instruction, one.name)
     ]
     return scenario_problems(
         scenario.sub_actors,
@@ -1205,9 +1208,7 @@ def accept_scenario(
                 allow_empty_solution=allow_empty_solution or workspace,
                 spoken=spoken,
             )
-            problems.extend(
-                contract_sequence_problems(scenario, hard_constraints or [])
-            )
+            problems.extend(contract_sequence_problems(scenario, hard_constraints or []))
             problems.extend(_steps_the_contract_refuses(scenario, world_root))
             problems.extend(_overlay_asserts_nothing(scenario, catalogue))
             problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
@@ -1229,19 +1230,13 @@ def accept_scenario(
                     allow_empty_solution=allow_empty_solution,
                     spoken=spoken,
                 )
-                problems.extend(
-                    contract_sequence_problems(scenario, hard_constraints or [])
-                )
+                problems.extend(contract_sequence_problems(scenario, hard_constraints or []))
                 problems.extend(_credentials_the_world_lacks(scenario, trial))
                 problems.extend(_identifiers_the_instruction_invents(scenario, trial))
-                problems.extend(
-                    _fixed_sources_that_do_not_hold(scenario, trial, instructions)
-                )
+                problems.extend(_fixed_sources_that_do_not_hold(scenario, trial, instructions))
                 problems.extend(_steps_the_contract_refuses(scenario, world_root))
                 problems.extend(_overlay_asserts_nothing(scenario, catalogue))
-                problems.extend(
-                    _shared_check_bound_to_one_task(scenario, catalogue, kept)
-                )
+                problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
                 problems.extend(
                     _sub_actors_that_cannot_run(
                         scenario, sub_actor_list, trial, spoken, tools
@@ -1866,9 +1861,8 @@ def scenario_tools(
                 "name": {
                     "type": "string",
                     "description": "Short identifier, lower case with hyphens or underscores. "
-                    "It becomes this scenario's folder name. It says what the agent is tested on and "
-                    "carries, without a counter or an invented code, PIN or reference, and never who "
-                    "else is on the call or how they join.",
+                    "It becomes this scenario's folder name. It says what this scenario tests and "
+                    "carries, without a counter or an invented code, PIN or reference.",
                 },
                 "use_case": {
                     "type": "string",
@@ -1929,9 +1923,6 @@ def scenario_tools(
                     "along whether or not they happen, so the check passes on a conversation "
                     "that never earned it. Give them the value, the preference or the problem "
                     "they arrived with, and let the agent's handling of it be what is measured.\n"
-                    "Write it for this person alone: never name, mention or plan for anyone else "
-                    "on the call, or a hand-off of the phone; whoever joins is added on their own "
-                    "and the run tells the person they are there.\n"
                     "Test every sentence by asking whether this person could say it out loud. "
                     "They have never seen the agent's design, so a parenthetical explaining "
                     "where the agent should find a value fails that test just as much as a "
@@ -2118,7 +2109,11 @@ def scenario_tools(
             ""
             if any(one.name == same for one in kept)
             else _sub_actors_short(
-                {**args, "name": same}, kept, cap(), sub_actor_share(), usable_sub_actors()
+                {**args, "name": same},
+                kept,
+                cap(),
+                sub_actor_share(),
+                usable_sub_actors(),
             )
         )
         if short:
@@ -2391,9 +2386,7 @@ def scenario_tools(
                 min(max(float(args["sub_actor_share"]), 0.0), 100.0) / 100
             )
         asked = {
-            level_name(str(axis)): [
-                str(one).strip() for one in levels if str(one).strip()
-            ]
+            level_name(str(axis)): [str(one).strip() for one in levels if str(one).strip()]
             for axis, levels in (args.get("asked_for") or {}).items()
             if isinstance(levels, list)
         }
