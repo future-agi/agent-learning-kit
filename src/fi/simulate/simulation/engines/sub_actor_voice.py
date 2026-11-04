@@ -340,7 +340,15 @@ class SubActorsOnCall:
             self.cast.finish(voice.actor)
             return False
         started = self.clock()
-        await self.say(frames, text, str(voice.actor.get("name") or "someone"))
+        try:
+            await asyncio.wait_for(
+                self.say(frames, text, str(voice.actor.get("name") or "someone")),
+                self._left(asked),
+            )
+        except asyncio.TimeoutError:
+            self.cast.late(voice.actor, cut_by_call_time=True)
+            self.cast.finish(voice.actor)
+            return False
         voice.said.append(text)
         self.cast.delivered(
             voice.actor, text, self.agent_turns, started, self.clock(), asked
@@ -348,6 +356,10 @@ class SubActorsOnCall:
         if done:
             self.cast.finish(voice.actor)
         return not done
+
+    def _left(self, asked: float) -> float:
+        """The call's sub-actor time still left for a line asked for at ``asked``, its writing counted."""
+        return max(0.0, self.cast.remaining() - (self.clock() - asked))
 
     async def _written(
         self, voice: SubActorVoice, heard: list[str]
@@ -376,12 +388,19 @@ class SubActorsOnCall:
                 self.cast.dropped(voice.actor, "voice failed")
                 return
             started = self.clock()
-            await self.play(
-                frames,
-                float(voice.actor.get("loudness_ratio") or 1.0),
-                text,
-                str(voice.actor.get("name") or "someone"),
-            )
+            try:
+                await asyncio.wait_for(
+                    self.play(
+                        frames,
+                        float(voice.actor.get("loudness_ratio") or 1.0),
+                        text,
+                        str(voice.actor.get("name") or "someone"),
+                    ),
+                    self._left(asked),
+                )
+            except asyncio.TimeoutError:
+                self.cast.late(voice.actor, cut_by_call_time=True)
+                return
             voice.said.append(text)
             self.cast.delivered(
                 voice.actor, text, self.agent_turns, started, self.clock(), asked

@@ -322,6 +322,31 @@ def _on_call(voices, playing=0.0, **kwargs):
     return call, said, played
 
 
+@pytest.mark.parametrize("channel", ["audio_handoff", "audio_mix"])
+def test_a_line_that_plays_past_the_sub_actor_time_is_cut_and_frees_the_phone(
+    phone_from_first_turn, channel
+):
+    async def never_done(*_args):
+        await asyncio.Event().wait()
+
+    async def scenario():
+        voice = _Voice(_actor("one", channel), ["a long line"])
+        call = voice_engine.SubActorsOnCall(
+            [voice], seed="run", play=never_done, say=never_done, clock=lambda: 1.0
+        )
+        call.cast._spent = registry.SUB_ACTOR_SECONDS - 0.05
+        holding = await asyncio.wait_for(call.agent_turn("Which ride?"), 1.0)
+        await asyncio.wait_for(asyncio.gather(*call._pending.values()), 1.0)
+        return holding, call.cast.holder, call.events()
+
+    holding, holder, events = asyncio.run(scenario())
+    assert holding is False and holder == ""
+    assert not [one for one in events if one["kind"] == "delivered"]
+    assert {"kind": "dropped", "reason": registry.TIME_UP} in [
+        {"kind": one["kind"], "reason": one.get("reason")} for one in events
+    ]
+
+
 def test_every_line_is_written_from_the_conversation_so_far_and_records_how_long_it_took(
     phone_from_first_turn,
 ):
