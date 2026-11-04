@@ -30,6 +30,13 @@ import yaml
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.version import Version
 
+from .actors import (
+    ACTOR_RULES_FILE,
+    ACTORS_FILE,
+    actors_seed,
+    load_actors,
+    write_actor_rules,
+)
 from .bundle import CapabilityProtocol
 from .catalogue import CATALOGUE
 from .sub_actor import SUB_ACTORS_FILE
@@ -131,6 +138,30 @@ class EnvironmentPlanV2:
 
 _IGNORED_ARTIFACT_PARTS = {".git", ".venv", "__pycache__", "node_modules"}
 _CERTIFIED_BUNDLE_DIRECTORY = "certified-bundle"
+# The agent's tool trace, as every world without actors is seeded.
+_AGENT_TRACE_DDL = (
+    "CREATE TABLE IF NOT EXISTS _alk_tool_trace ("
+    "id bigserial PRIMARY KEY, name text NOT NULL, arguments jsonb NOT NULL, "
+    "result jsonb, ok boolean NOT NULL, error text, at double precision NOT NULL);\n"
+)
+# With actors, the world's action log: every action the tool proxy saw, who took it and what came of it.
+_TOOL_TRACE_DDL = (
+    "CREATE TABLE IF NOT EXISTS _alk_tool_trace ("
+    "id bigserial PRIMARY KEY, name text NOT NULL, arguments jsonb NOT NULL, "
+    "result jsonb, ok boolean NOT NULL, error text, at double precision NOT NULL, "
+    "action_id text NOT NULL DEFAULT md5(random()::text || clock_timestamp()::text), "
+    "actor_id text NOT NULL DEFAULT 'agent', worker_id text, parent_event_id text, "
+    "outcome text NOT NULL DEFAULT 'committed', refusal text, refusal_code text, "
+    "on_behalf_of text, idempotency_key text);\n"
+)
+
+
+def _action_log_seed(authoring: Path) -> str:
+    """The action log and who may do what in the world; a world without actors is seeded exactly as before."""
+    listing = load_actors(authoring)
+    return (
+        _TOOL_TRACE_DDL + actors_seed(listing) if listing.actors else _AGENT_TRACE_DDL
+    )
 
 
 def _catalog_image(image: str) -> tuple[str, str]:
@@ -1967,6 +1998,7 @@ def _tool_proxy_process() -> SourceProcess:
             "PORT": "{{PORT_tool-proxy}}",
             "UPSTREAM_URL": "{{TOOLS_UPSTREAM_URL}}",
             "DATABASE_URL": "{{WORLD_DATABASE_URL}}",
+            "ACTOR_PROOF_FILE": "{{WORLD_DIR}}/actor-token",
         },
         started_check=StartedCheck(port=True, timeout_seconds=180),
         user=ProcessUser.SVC_TOOLS,
@@ -3603,6 +3635,11 @@ def author_bundle_v2(
             _copy_scenarios(authoring_root, temporary, count=job.scenario_count)
             adopted_catalogue = _copy_sub_goal_catalogue(authoring_root, temporary)
             adopted_catalogue += _copy_sub_actor_list(authoring_root, temporary)
+            if (authoring_root / ACTORS_FILE).is_file():
+                shutil.copy2(authoring_root / ACTORS_FILE, temporary / ACTORS_FILE)
+                # Only with actors, so a bundle without them seals exactly as before.
+                write_actor_rules(temporary)
+                adopted_catalogue += [ACTORS_FILE, ACTOR_RULES_FILE]
         adopted_chat_files = _copy_chat_authoring(
             authoring_root, temporary, include_simulator=include_scenarios
         )
@@ -3641,9 +3678,7 @@ def author_bundle_v2(
         prefix = (
             "CREATE TABLE IF NOT EXISTS harness_seed_sentinel (id text PRIMARY KEY);\n"
             "INSERT INTO harness_seed_sentinel(id) VALUES ('ready') ON CONFLICT DO NOTHING;\n"
-            "CREATE TABLE IF NOT EXISTS _alk_tool_trace ("
-            "id bigserial PRIMARY KEY, name text NOT NULL, arguments jsonb NOT NULL, "
-            "result jsonb, ok boolean NOT NULL, error text, at double precision NOT NULL);\n"
+            + _action_log_seed(authoring_root)
         )
         generic_pipeline = job.metadata.get("generic_harness_v1") is True
         if generic_pipeline:

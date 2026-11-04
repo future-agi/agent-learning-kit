@@ -4636,8 +4636,15 @@ def test_job_tool_requirement_uses_observed_calls(required, with_calls, expected
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(
+    ("listed_as", "reason"),
+    [
+        ("sub_actors", "sub-actors are switched off"),
+        ("actors", "world actors are switched off"),
+    ],
+)
 def test_a_scenario_with_sub_actors_is_never_run_while_they_are_off_and_says_why(
-    monkeypatch,
+    monkeypatch, listed_as, reason
 ) -> None:
     monkeypatch.delenv("HARNESS_SUB_ACTORS", raising=False)
 
@@ -4656,7 +4663,7 @@ def test_a_scenario_with_sub_actors_is_never_run_while_they_are_off_and_says_why
         with_one = FakeScenario(
             "with-one", "id-1", sub_goals=[FakeSubGoal("g", lambda w, c: None)]
         )
-        with_one.sub_actors = ("friend",)
+        setattr(with_one, listed_as, ("friend",))
         plain = FakeScenario(
             "plain",
             "id-2",
@@ -4670,8 +4677,5 @@ def test_a_scenario_with_sub_actors_is_never_run_while_they_are_off_and_says_why
     result, runner = asyncio.run(scenario())
     assert [call[0] for call in runner.calls] == ["plain"]
     skipped, ran = result.receipts
-    assert (skipped.status, skipped.reason) == (
-        "skipped",
-        "sub-actors are switched off",
-    )
+    assert (skipped.status, skipped.reason) == ("skipped", reason)
     assert ran.status == "passed" and ran.reason is None

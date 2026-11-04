@@ -121,7 +121,8 @@ def test_a_scenario_s_sub_actors_reach_the_run(tmp_path):
         instruction="You want one item.",
         sub_goals=["one_item"],
         sub_actors=[{"id": "friend", "instruction": "You want a second item."}],
+        actors=[{"id": "reviewer", "actions": [{"action": "records.approve"}]}],
     )
     write_folder(scenario, catalogue, tmp_path)
     [loaded] = load_scenarios(tmp_path)
-    assert loaded.sub_actors == ("friend",)
+    assert (loaded.sub_actors, loaded.actors) == (("friend",), ("reviewer",))

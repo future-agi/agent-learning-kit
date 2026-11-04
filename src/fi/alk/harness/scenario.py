@@ -25,6 +25,7 @@ from typing import Any, ClassVar
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from .actors import ScenarioActor
 from .catalogue import Catalogue
 from .sub_actor import ScenarioSubActor
 from .simulator import variables_in
@@ -312,6 +313,8 @@ class Scenario(BaseModel):
     # Which entries of the shared catalogue must hold. Named, not restated, so results roll up
     # across the suite: the same sub-goal failing in seven of twelve scenarios is one sentence.
     sub_goals: list[str] = Field(default_factory=list)
+    # World actors in this scenario and the actions each takes here, by id from `actors.json`.
+    actors: list[ScenarioActor] = Field(default_factory=list)
 
     max_turns: int = 10
 

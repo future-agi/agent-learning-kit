@@ -26,6 +26,7 @@ from .backends import (
 from .catalogue import Catalogue
 from .config import SKILLS_ROOT, chosen_model, discovered_skills, load_skill
 from .contract import AgentContract
+from .sub_actor import sub_actors_enabled
 from .scenario import Scenario, voicemail_enabled
 from .scenario_tools import SCENARIO_SERVER, load_scenarios, scenario_tools, world_summary
 from .scenarios import writer_worker
@@ -94,6 +95,7 @@ def knowledge_server(contract: AgentContract | None, destination: Path) -> ToolS
             text += discovered_skills(
                 modality=contract.modality,
                 voicemail="on" if voicemail_enabled() else "off",
+                actors="on" if sub_actors_enabled() else "off",
                 conversational="yes" if contract.conversational else "no",
             )
         return _ok(text)

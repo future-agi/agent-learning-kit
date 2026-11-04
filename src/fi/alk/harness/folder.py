@@ -146,6 +146,9 @@ def document_for(scenario: Scenario) -> dict:
     body.pop("ready_code", None)
     if not body.get("sub_actors"):
         body.pop("sub_actors", None)
+    if not body.get("actors"):
+        # A scenario without actors is written exactly as before they existed.
+        body.pop("actors", None)
     return body
 
 

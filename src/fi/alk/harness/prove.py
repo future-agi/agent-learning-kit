@@ -33,6 +33,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Sequence
 
+from .actors import load_actors
 from .catalogue import Catalogue
 from .checks import Outcome, reference_of, run_check
 from .folder import apply_setup, check_ready
@@ -65,6 +66,8 @@ class Proof:
     # nowhere, so a scenario whose entire solution was assumed saved as "proved". Carried here so
     # whoever keeps the scenario is told what the proof did not cover.
     assumed: list[str] = field(default_factory=list)
+    # World actors' actions on a clock or a chance: a proof has neither, so it never plays them.
+    unplayed: list[str] = field(default_factory=list)
     # Graded by judgement alone, because the world holds nothing a check could read. True only for
     # a target we cannot see into, never a way around writing a check for a world that has one.
     judged_only: bool = False
@@ -306,11 +309,17 @@ def _run(
     world, _applied, _ready = prepared(scenario, world_root)
     refused: list[str] = []
     assumed: list[str] = []
+    by_actors: dict[int, str] = {}
+    acting = _WorldActors(scenario, world_root, world, by_actors)
+    # A check reads the trial's action log the way the run gives it: `world.events(actor_id, outcome)`.
+    world.events = acting.events
     if with_solution:
+        acting.act_on(None)
         for step in scenario.solution if steps is None else steps:
             call = play_reference_step(world, step)
             if not call.ok:
                 refused.append(f"{call.name}({step.arguments}): {call.error}")
+            acting.act_on(step)
         assumed = [
             str(getattr(step, "tool", ""))
             for step in (scenario.solution if steps is None else steps)
@@ -331,7 +340,120 @@ def _run(
                 scenario.name,
                 len(scenario.solution),
             )
-    return world, list(world.calls), refused, sorted(set(assumed))
+    calls = [call for index, call in enumerate(world.calls) if index not in by_actors]
+    return world, calls, refused, sorted(set(assumed))
+
+
+# The triggers a reference solution can meet; the rest are reported in `Proof.unplayed`.
+_PLAYED_TRIGGERS = ("always", "on_tool", "contacted")
+
+
+def _unplayed(scenario: Scenario) -> list[str]:
+    return [
+        f"{entry.id} {action.action} ({action.trigger.kind})"
+        for entry in scenario.actors
+        for action in entry.actions
+        if action.trigger.kind not in _PLAYED_TRIGGERS
+    ]
+
+
+class _WorldActors:
+    """A scenario's world actors during a proof: each permitted action on a trigger the reference solution meets,
+    played the way the run plays it at the world's door. None of their calls is the agent's."""
+
+    def __init__(
+        self,
+        scenario: Scenario,
+        world_root: Path,
+        world: GeneratedWorld,
+        by_actors: dict[int, str],
+    ) -> None:
+        listed = load_actors(world_root).by_id()
+        self.pending = [
+            (listed[entry.id], action)
+            for entry in scenario.actors
+            if entry.id in listed
+            for action in entry.actions
+        ]
+        self.world = world
+        self.by_actors = by_actors
+        self.counts: dict[str, int] = {}
+        # Actions refused before the world, each with how many world calls came before it.
+        self.refusals: list[tuple[int, dict[str, Any]]] = []
+
+    def events(
+        self, actor_id: str | None = None, outcome: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Every attempted action so far, whose it was and what came of it, as `HostedWorld.events` gives them."""
+        rows: list[dict[str, Any]] = []
+        pending = list(self.refusals)
+        for index, call in enumerate(self.world.calls):
+            while pending and pending[0][0] <= index:
+                rows.append(pending.pop(0)[1])
+            rows.append(
+                {
+                    "name": call.name,
+                    "arguments": call.arguments,
+                    "result": call.result,
+                    "ok": call.ok,
+                    "actor_id": self.by_actors.get(index, "agent"),
+                    "outcome": "committed" if call.ok else "refused",
+                    "refusal_code": None if call.ok else "world_rule",
+                }
+            )
+        rows += [row for _, row in pending]
+        return [
+            row
+            for row in rows
+            if (actor_id is None or row["actor_id"] == actor_id)
+            and (outcome is None or row["outcome"] == outcome)
+        ]
+
+    def _due(self, actor: Any, action: Any, step: Any) -> bool:
+        trigger = action.trigger
+        if step is None:
+            return trigger.kind == "always"
+        if trigger.kind == "on_tool":
+            return (
+                trigger.tool == step.tool
+                and self.counts.get(step.tool) == trigger.on_call
+            )
+        if trigger.kind == "contacted":
+            from .actor_dispatch import contacts
+
+            return contacts(step.arguments, actor)
+        return False
+
+    def act_on(self, step: Any) -> None:
+        if step is not None:
+            self.counts[step.tool] = self.counts.get(step.tool, 0) + 1
+        for actor, action in list(self.pending):
+            if not self._due(actor, action, step):
+                continue
+            self.pending.remove((actor, action))
+            if action.action not in actor.permitted_actions:
+                refusal = {
+                    "name": action.action.rsplit(".", 1)[-1],
+                    "arguments": dict(action.arguments),
+                    "result": None,
+                    "ok": False,
+                    "actor_id": actor.id,
+                    "outcome": "refused",
+                    "refusal_code": "not_permitted",
+                }
+                self.refusals.append((len(self.world.calls), refusal))
+                continue
+            before = len(self.world.calls)
+            # A source-hosted world knows the action by its route; a generated one by its name.
+            route = action.action.replace(".", "/")
+            known = route in getattr(self.world, "endpoints", ())
+            self.world.call(
+                route if known else action.action.rsplit(".", 1)[-1],
+                dict(action.arguments),
+            )
+            self.by_actors.update(
+                dict.fromkeys(range(before, len(self.world.calls)), actor.id)
+            )
 
 
 def native_runtime(world_root: Path) -> bool:
@@ -591,6 +713,7 @@ def prove(
     # What the proof below could not cover. Detected here since forever and logged into a void; a
     # scenario whose whole solution was assumed used to save as proved.
     proof.assumed = assumed
+    proof.unplayed = _unplayed(scenario)
     try:
         proof.with_solution = [
             run_check(source, world, calls, name=name, reference=reference)

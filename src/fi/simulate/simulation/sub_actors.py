@@ -14,6 +14,9 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+# Where a caller's own details start in its instruction; anyone with the caller is given only what comes before.
+DETAILS_MARK = "Your details:"
+
 CHANNELS: dict[str, dict[str, Any]] = {
     "audio_mix": {
         "modalities": {"voice"},
@@ -60,7 +63,7 @@ def someone_else(name: str) -> str:
 
 def known_to_others(instruction: str) -> str:
     """The person's situation as someone with them knows it: without the person's own details."""
-    return instruction.split("Your details:", 1)[0].rstrip()
+    return instruction.split(DETAILS_MARK, 1)[0].rstrip()
 
 
 def with_others(situation: str, actors: list[dict[str, Any]]) -> str:

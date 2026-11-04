@@ -28,6 +28,14 @@ from fi.simulate.simulation.sub_actors import CHANNELS, available_channels, desc
 
 from ..backends import tool, tool_server
 
+from ..actors import (
+    Actor,
+    ActorList,
+    actor_input_schema,
+    load_actors,
+    save_actors,
+    environment_actions,
+)
 from ..amend import add_rule, drop_rule, fix_tool, set_modality, widen
 from ..catalogue import (
     CONTRACT_FIELDS,
@@ -684,6 +692,103 @@ def sub_actor_tools(contract: AgentContract, destination: Path) -> list[Any]:
         return _ok(f"{sub_actor_id} dropped. The list has {len(listing.sub_actors)}.")
 
     return [add_sub_actor, drop_sub_actor]
+
+
+def world_actor_tools(
+    destination: Path, contract: AgentContract | None = None
+) -> list[Any]:
+    """The tools that keep the environment's world actors: for the build and the builder chat."""
+
+    def world_actions() -> list[str]:
+        # Read when called, so actions adopted later in the build count.
+        return environment_actions(
+            destination, contract.model_dump() if contract is not None else None
+        )
+
+    # Known before the call when the world is already built (the builder chat), so one request is one confirmation.
+    listed = world_actions()
+
+    @tool(
+        "add_actor",
+        "Add a person or system in the world who acts through the world's own actions, never by speaking to "
+        "the agent, or change one already listed: only the fields you send change, the rest stay as they are. "
+        "`permitted_actions` is what the world lets them do: only actions the world already has, each named as "
+        "the environment names it (the route one of its tools calls, with `/` as `.`); the reply lists them. "
+        "Anything else they attempt is refused and recorded as their attempt. Who may take an action is decided "
+        "by this list, never by what anyone says."
+        + (f" The world's actions: {', '.join(listed)}." if listed else ""),
+        actor_input_schema(),
+    )
+    async def add_actor(args: dict[str, Any]) -> dict[str, Any]:
+        listing = load_actors(destination)
+        current = listing.by_id().get(str(args.get("id") or ""))
+        given = {name: value for name, value in args.items() if name != "provenance"}
+        try:
+            base = current.model_dump(exclude_none=True) if current is not None else {}
+            # A nested field merges the keys sent into what it has, as the top level does.
+            merged = {
+                name: {**base[name], **value}
+                if isinstance(value, dict) and isinstance(base.get(name), dict)
+                else value
+                for name, value in given.items()
+            }
+            actor = Actor.model_validate({**base, **merged})
+            kept = [one for one in listing.actors if one.id != actor.id]
+            save_actors(destination, ActorList(actors=[*kept, actor]))
+        except ValueError as exc:
+            return _err(f"Not added: {exc}")
+        known = world_actions()
+        unknown = [one for one in actor.permitted_actions if one not in known]
+        reply = f"{actor.id} may {', '.join(actor.permitted_actions) or 'do nothing in the world'}. "
+        reply += (
+            f"The world's actions: {', '.join(known)}."
+            if known
+            else "The world has no actions an actor can take yet."
+        )
+        if unknown:
+            reply += (
+                f" {', '.join(unknown)} {'is' if len(unknown) == 1 else 'are'} not among them, so the world "
+                "refuses it; send `permitted_actions` again with actions from that list."
+            )
+        return _ok(reply)
+
+    @tool("drop_actor", "Remove a world actor by id.", {"id": str})
+    async def drop_actor(args: dict[str, Any]) -> dict[str, Any]:
+        listing = load_actors(destination)
+        gone = str(args.get("id") or "")
+        kept = [one for one in listing.actors if one.id != gone]
+        if len(kept) == len(listing.actors):
+            return _err(
+                f"no actor {gone!r}. Listed: {', '.join(one.id for one in kept) or 'none'}"
+            )
+        using = scenarios_using(destination, gone, "actors")
+        if using:
+            return _err(
+                f"Not dropped. These scenarios include {gone}: " + ", ".join(using)
+            )
+        try:
+            remaining = ActorList(actors=kept)
+        except ValueError as exc:
+            # Another actor still names this one as its parent, principal or fallback.
+            return _err(f"Not dropped: {exc}")
+        save_actors(destination, remaining)
+        return _ok(f"{gone} dropped")
+
+    return [add_actor, drop_actor]
+
+
+ACTOR_SERVER = "actors"
+
+
+def actor_tools_server(contract: AgentContract, destination: Path) -> Any | None:
+    """The cast alone, for a builder chat on a built environment: who is in the world and who is with the caller can
+    still change after the world's tools and data are fixed. None when no actor tools are switched on."""
+    tools = (
+        world_actor_tools(destination, contract) if sub_actors_enabled() else []
+    ) + (sub_actor_tools(contract, destination) if sub_actors_enabled() else [])
+    if not tools:
+        return None
+    return tool_server(name=ACTOR_SERVER, version="0.1.0", tools=tools)
 
 
 def world_tools(
@@ -1999,6 +2104,7 @@ def world_tools(
             run_env_command,
             check_world,
             save_world,
+            *(world_actor_tools(destination, contract) if sub_actors_enabled() else []),
         ]
         + (sub_actor_tools(contract, destination) if sub_actors_enabled() else []),
     )

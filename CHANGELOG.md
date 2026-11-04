@@ -21,6 +21,14 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
   and the judge reads a sub-actor's turns as someone other than the customer. Sub-goal results carry their
   `verdict` (pass, fail, not applicable, inconclusive) alongside `held`; a scenario with sub-actors is
   skipped with its reason while they are switched off.
+- World actors, behind `HARNESS_SUB_ACTORS`: people and systems listed in `actors.json` who act only through
+  the world's own actions. The tool proxy lets an actor take only its `permitted_actions`, under a per-trial
+  token, and logs every attempt with whose it was and what came of it (committed, refused, faulted,
+  duplicate). An actor's actions are sealed with the call's transcript under `world_actors`, never in the
+  agent's tool trace. A bundle with actors also seals `actor_rules.json`, the rules its release checks actors
+  by; a world without actors is seeded and sealed exactly as before.
+- The builder chat of a built environment can change its cast (`add_actor`, `drop_actor`, `add_sub_actor`,
+  `drop_sub_actor`) and nothing else of the world.
 - Sub-actors in the builder chat: adding or dropping one from the environment's list, or changing which
   scenarios include one, waits for the person's yes, and an automatic repair cannot change a scenario's
   sub-actors.

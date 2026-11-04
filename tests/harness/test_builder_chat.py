@@ -176,6 +176,24 @@ def test_a_change_to_the_world_data_alone_is_saved(tmp_path, monkeypatch):
     assert len(client.published) == 1
 
 
+@pytest.mark.parametrize("cast", ["actors.json", "sub_actors.json"])
+def test_a_change_to_the_cast_alone_is_saved(tmp_path, monkeypatch, cast):
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    runtime._published_fingerprint()
+    monkeypatch.setattr(
+        "fi.alk.harness.bundle_author_v2.reseal_scenarios", lambda root: None
+    )
+
+    (tmp_path / cast).write_text(
+        '{"actors": [{"id": "reviewer", "name": "Robin"}]}\n', encoding="utf-8"
+    )
+    result = asyncio.run(runtime._save_changes())
+
+    assert result.get("unchanged") is not True
+    assert len(client.published) == 1
+
+
 def test_a_rejected_publish_is_never_reported_as_done(tmp_path, monkeypatch):
     client = BuilderClient(applied=False)
     runtime = _runtime(tmp_path, client, monkeypatch)
@@ -1981,6 +1999,56 @@ def test_sub_actor_changes_wait_for_a_yes_and_change_what_a_scenario_tests(
     assert asked == ["add_sub_actor", "drop_sub_actor", "submit_scenario"]
     assert ran == [{"id": "friend"}]
     assert runtime._changes_situation(friend)
+
+
+def test_a_change_to_a_scenario_s_world_actors_waits_for_a_yes_and_no_repair_makes_it(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness.backends import ToolSpec
+
+    runtime = _runtime(tmp_path, BuilderClient(), monkeypatch)
+    (tmp_path / "scenarios" / "one" / "scenario.json").write_text(
+        json.dumps({"name": "one", "instruction": "ask for a refund"})
+    )
+    acted = {
+        "name": "one",
+        "instruction": "ask for a refund",
+        "actors": [{"id": "reviewer", "actions": []}],
+    }
+    assert runtime._changes_situation(acted) and runtime._changes_meaning(acted)
+    ran, asked = [], []
+
+    async def handler(args):
+        ran.append(args)
+        return {"content": [{"type": "text", "text": "kept"}]}
+
+    async def ask(tool, payload, context):
+        asked.append(tool)
+        return {"content": [{"type": "text", "text": "No"}]}
+
+    runtime._ask = ask
+    submit = runtime._confirmed(ToolSpec("submit_scenario", "", {}, handler))
+    assert asyncio.run(submit.handler(acted))["is_error"] is True
+    assert (asked, ran) == (["submit_scenario"], [])
+
+
+def test_the_world_offers_only_actions_an_actor_can_send():
+    from fi.alk.harness.actors import world_action_names
+
+    contract = {
+        "tool_entrypoints": [
+            {"tool": "read", "endpoint": "records/read"},
+            {"tool": "approve", "endpoint": "/records/approve", "method": "post"},
+            {"tool": "look", "endpoint": "records/look", "method": "GET"},
+            {
+                "tool": "cancel",
+                "endpoint": "records/{record_id}/cancel",
+                "method": "POST",
+            },
+            {"tool": "local", "endpoint": ""},
+        ]
+    }
+    assert world_action_names(contract) == ["records.approve", "records.read"]
 
 
 def test_the_build_adds_sub_actors_without_asking_and_never_drops_one(

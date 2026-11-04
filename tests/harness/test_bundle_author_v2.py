@@ -4853,6 +4853,51 @@ def test_the_bundle_seals_the_environment_s_sub_actors(tmp_path: Path) -> None:
     manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
     assert (output / "sub_actors.json").is_file()
     assert "sub_actors.json" in {one["path"] for one in manifest["files"]}
+    # No world actors: the bundle seals exactly as before, with no actor rules.
+    assert not (output / "actor_rules.json").exists()
+
+
+def test_a_bundle_with_actors_seals_the_rules_its_release_checks_them_by(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    (authoring / "actors.json").write_text(
+        '{"actors": [{"id": "reviewer", "name": "Robin"}]}\n', encoding="utf-8"
+    )
+
+    output = tmp_path / "bundle"
+    author_bundle_v2(
+        source=source,
+        job=_job(connector="http", scenario_count=1),
+        authoring=authoring,
+        output=output,
+    )
+    manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    assert {"actors.json", "actor_rules.json"} <= {
+        one["path"] for one in manifest["files"]
+    }
+    rules = json.loads((output / "actor_rules.json").read_text(encoding="utf-8"))
+    assert set(rules["records"]) == {"actors.json", "sub_actors.json"}
+
+
+def test_a_world_without_actors_is_seeded_with_the_tool_trace_it_always_had(
+    tmp_path: Path,
+) -> None:
+    from fi.alk.harness.bundle_author_v2 import _action_log_seed
+
+    assert _action_log_seed(tmp_path) == (
+        "CREATE TABLE IF NOT EXISTS _alk_tool_trace ("
+        "id bigserial PRIMARY KEY, name text NOT NULL, arguments jsonb NOT NULL, "
+        "result jsonb, ok boolean NOT NULL, error text, at double precision NOT NULL);\n"
+    )
+    (tmp_path / "actors.json").write_text(
+        '{"actors": [{"id": "reviewer", "name": "Robin"}]}\n', encoding="utf-8"
+    )
+    with_actors = _action_log_seed(tmp_path)
+    assert "actor_id text" in with_actors and "INSERT INTO _alk_actors" in with_actors
 
 
 # The platform pins the same digest for the same files (test_harness_versioning_reseal.py).
