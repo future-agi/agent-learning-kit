@@ -35,7 +35,7 @@ export {
     LLMFactory,
     LocalLLMFactory,
     FactoryConfig
-} from './llm/index';
+} from './llm/index.js';
 
 // Backwards compatibility type alias
-export type LocalLLMConfig = import('./llm/types').OllamaConfig;
+export type LocalLLMConfig = import('./llm/types.js').OllamaConfig;

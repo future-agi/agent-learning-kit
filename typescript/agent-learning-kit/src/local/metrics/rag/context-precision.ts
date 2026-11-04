@@ -12,7 +12,7 @@ import {
     tokenize,
     jaccardSimilarity,
     normalizeContext
-} from './types';
+} from './types.js';
 
 /**
  * Calculate context precision - proportion of retrieved contexts that are relevant.

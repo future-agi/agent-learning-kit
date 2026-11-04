@@ -12,7 +12,7 @@ import {
     tokenize,
     jaccardSimilarity,
     ngramOverlap
-} from './types';
+} from './types.js';
 
 /**
  * Calculate answer relevance - how well the response addresses the query.

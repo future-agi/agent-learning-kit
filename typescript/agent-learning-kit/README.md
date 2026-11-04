@@ -18,6 +18,31 @@ pnpm add @future-agi/agent-learning-kit
 yarn add @future-agi/agent-learning-kit
 ```
 
+### Runtime and imports
+
+Version 0.4.0 targets Node.js 18 or later and is **ESM-only**. Use `.mjs` files
+or set `"type": "module"` in your application's `package.json`; CommonJS
+`require()` is not supported. For TypeScript consumers, use TypeScript 5.9.3
+or later with `"module": "NodeNext"` and `"moduleResolution": "NodeNext"`.
+
+```typescript
+import { evaluate, type BatchRunResult } from '@future-agi/agent-learning-kit';
+import { LocalEvaluator } from '@future-agi/agent-learning-kit/local';
+
+// With API credentials configured, the optional third argument accepts modelName.
+const result: BatchRunResult = await evaluate(
+  'Factual Accuracy',
+  { response: ['Paris'], context: ['Paris is the capital of France.'] },
+  { modelName: 'gpt-4o' }
+);
+```
+
+`@future-agi/agent-learning-kit/evals` aliases the root entry point, and
+`@future-agi/agent-learning-kit/evals/local` aliases `/local`. Use `/local` for
+`AutoEvalPipeline`, `Scanner`, and `StreamingEvaluator`; the deeper paths
+`/local/autoeval`, `/local/scanner`, and `/local/streaming` are not public exports.
+There is no TypeScript CLI entry point.
+
 ## Quick Start
 
 ```typescript

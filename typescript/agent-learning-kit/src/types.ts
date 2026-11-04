@@ -450,7 +450,7 @@ interface JudgeResult {
 
 // Re-export EvalTemplate from templates.ts so existing tests importing it
 // from this module continue to resolve.
-export type { EvalTemplate } from './templates';
+export type { EvalTemplate } from './templates.js';
 
 export {
     ConfigParam,

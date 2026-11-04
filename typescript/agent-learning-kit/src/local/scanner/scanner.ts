@@ -16,8 +16,8 @@ import {
     SEVERITY_VALUES,
     meetsSeverityThreshold,
     compareSeverity
-} from './types';
-import { BUILTIN_RULES, getDefaultRules, getRuleById, getRulesByTag } from './rules';
+} from './types.js';
+import { BUILTIN_RULES, getDefaultRules, getRuleById, getRulesByTag } from './rules.js';
 
 /**
  * Scanner Pipeline - comprehensive content scanning.

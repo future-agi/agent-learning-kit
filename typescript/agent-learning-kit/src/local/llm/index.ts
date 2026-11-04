@@ -42,15 +42,15 @@ export {
     AnthropicConfig,
     LLMProvider,
     LLMConfig
-} from './types';
+} from './types.js';
 
 // Base class
-export { AbstractLLM, DEFAULT_CONFIG } from './base';
+export { AbstractLLM, DEFAULT_CONFIG } from './base.js';
 
 // Providers
-export { OllamaLLM } from './ollama';
-export { OpenAILLM } from './openai';
-export { AnthropicLLM } from './anthropic';
+export { OllamaLLM } from './ollama.js';
+export { OpenAILLM } from './openai.js';
+export { AnthropicLLM } from './anthropic.js';
 
 // Factory
-export { LLMFactory, LocalLLMFactory, FactoryConfig } from './factory';
+export { LLMFactory, LocalLLMFactory, FactoryConfig } from './factory.js';

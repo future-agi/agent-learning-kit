@@ -5,10 +5,10 @@ import {
     RequestConfig,
     Routes,
     InvalidAuthError,
-} from './core';
+} from './core/index.js';
 import { AxiosResponse } from 'axios';
 
-import { Execution } from './execution';
+import { Execution } from './execution.js';
 import {
     BulkDeleteResponse,
     CompositeCreateResponse,
@@ -36,7 +36,7 @@ import {
     VersionListResponse,
     VersionRestoreResponse,
     VersionSetDefaultResponse,
-} from './manager-types';
+} from './manager-types.js';
 
 // Lightweight UUIDv4 generator so the package doesn't pull in a new dep.
 function uuidv4(): string {

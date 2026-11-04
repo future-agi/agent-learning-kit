@@ -4,8 +4,8 @@
  */
 
 import axios, { AxiosError } from 'axios';
-import { AbstractLLM, DEFAULT_CONFIG } from './base';
-import { OllamaConfig, ChatMessage, GenerateOptions, ChatOptions } from './types';
+import { AbstractLLM, DEFAULT_CONFIG } from './base.js';
+import { OllamaConfig, ChatMessage, GenerateOptions, ChatOptions } from './types.js';
 
 /**
  * Default Ollama configuration

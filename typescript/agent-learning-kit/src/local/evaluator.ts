@@ -3,11 +3,11 @@
  * Aligned with Python SDK's fi.evals.local.evaluator module.
  */
 
-import { BatchRunResult, EvalResult } from '../types';
-import { Evaluator } from '../evaluator';
-import { ExecutionMode, canRunLocally, requiresLLM, selectExecutionMode } from './execution-mode';
-import { runMetric, hasMetric, MetricResult } from './metrics';
-import { OllamaLLM, JudgeResult } from './llm';
+import { BatchRunResult, EvalResult } from '../types.js';
+import { Evaluator } from '../evaluator.js';
+import { ExecutionMode, canRunLocally, requiresLLM, selectExecutionMode } from './execution-mode.js';
+import { runMetric, hasMetric, MetricResult } from './metrics/index.js';
+import { OllamaLLM, JudgeResult } from './llm.js';
 
 /**
  * Configuration for LocalEvaluator

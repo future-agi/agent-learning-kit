@@ -16,8 +16,8 @@ import {
     CompleteEvent,
     ErrorEvent,
     canStreamMetric
-} from './types';
-import { runMetric, hasMetric, MetricResult } from '../metrics';
+} from './types.js';
+import { runMetric, hasMetric, MetricResult } from '../metrics/index.js';
 
 /**
  * Streaming Evaluator - evaluates responses as they stream in.

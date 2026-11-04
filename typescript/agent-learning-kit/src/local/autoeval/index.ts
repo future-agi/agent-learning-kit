@@ -45,24 +45,24 @@ export {
     MetricExecutionResult,
     AutoEvalResult,
     CODE_LANGUAGE_PATTERNS
-} from './types';
+} from './types.js';
 
 // Analyzer
 export {
     analyzeContent,
     describeCharacteristics
-} from './analyzer';
+} from './analyzer.js';
 
 // Selector
 export {
     selectMetrics,
     getRecommendedMetrics,
     buildMetricConfig
-} from './selector';
+} from './selector.js';
 
 // Pipeline
 export {
     AutoEvalPipeline,
     createAutoEval,
     autoEvaluate
-} from './pipeline';
+} from './pipeline.js';

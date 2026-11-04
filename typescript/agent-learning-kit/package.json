@@ -1,45 +1,41 @@
 {
   "name": "@future-agi/agent-learning-kit",
-  "version": "0.2.0",
+  "version": "0.4.0",
   "description": "Unified Future AGI TypeScript SDK for agent evaluation, simulation, red teaming, and optimization.",
   "license": "Apache-2.0",
   "type": "module",
-  "main": "./dist/src/index.js",
+  "main": "./dist/esm/index.js",
   "module": "./dist/esm/index.js",
-  "types": "./dist/src/index.d.ts",
+  "types": "./dist/esm/index.d.ts",
   "exports": {
     ".": {
-      "import": "./dist/esm/index.js",
-      "require": "./dist/src/index.js",
-      "types": "./dist/src/index.d.ts"
+      "types": "./dist/esm/index.d.ts",
+      "import": "./dist/esm/index.js"
     },
     "./evals": {
-      "import": "./dist/esm/index.js",
-      "require": "./dist/src/index.js",
-      "types": "./dist/src/index.d.ts"
+      "types": "./dist/esm/index.d.ts",
+      "import": "./dist/esm/index.js"
     },
     "./evals/local": {
-      "import": "./dist/esm/local/index.js",
-      "require": "./dist/src/local/index.js",
-      "types": "./dist/src/local/index.d.ts"
+      "types": "./dist/esm/local/index.d.ts",
+      "import": "./dist/esm/local/index.js"
     },
     "./local": {
-      "import": "./dist/esm/local/index.js",
-      "require": "./dist/src/local/index.js",
-      "types": "./dist/src/local/index.d.ts"
+      "types": "./dist/esm/local/index.d.ts",
+      "import": "./dist/esm/local/index.js"
     }
   },
+  "sideEffects": true,
   "files": [
+    "dist/esm/**/*.js",
+    "dist/esm/**/*.d.ts",
     "LICENSE",
     "NOTICE",
-    "dist/**/*.js",
-    "dist/**/*.d.ts",
-    "dist/esm/package.json"
+    "README.md"
   ],
   "scripts": {
-    "prebuild": "rimraf dist",
-    "build": "rimraf dist && tsc --build --clean tsconfig.json tsconfig.esm.json tsconfig.esnext.json && tsc --build tsconfig.json tsconfig.esm.json tsconfig.esnext.json && tsc-alias -p tsconfig.esm.json && pnpm run postbuild",
-    "postbuild": "echo '{\"type\": \"module\"}' > ./dist/esm/package.json",
+    "build": "rimraf dist && tsc --build tsconfig.json",
+    "pack:candidate": "pnpm run build && node scripts/consumer-smoke/stage-package.cjs",
     "build:watch": "tsc --build --watch tsconfig.json",
     "test": "jest --config jest.config.cjs",
     "test:local": "jest --config jest.config.cjs --testPathPattern=local",
@@ -51,9 +47,9 @@
     "format:check": "prettier --check .",
     "clean": "rimraf dist",
     "dev": "tsx src/index.ts",
-    "cli": "tsx src/cli/main.ts",
     "typecheck": "tsc --noEmit",
-    "prepare": "pnpm run build"
+    "prepack": "node -e \"console.error('Source-tree packing and publishing are disabled; use pnpm run pack:candidate <empty-output-directory>.'); process.exit(1)\"",
+    "prepublishOnly": "node -e \"console.error('Source-tree packing and publishing are disabled; use pnpm run pack:candidate <empty-output-directory>.'); process.exit(1)\""
   },
   "keywords": [
     "ai",
@@ -97,9 +93,8 @@
     "prettier": "^3.0.0",
     "rimraf": "^5.0.0",
     "ts-jest": "^29.1.0",
-    "tsc-alias": "^1.8.0",
     "tsx": "^4.0.0",
-    "typescript": "^5.3.0",
+    "typescript": "5.9.3",
     "@opentelemetry/api": "^1.9.0"
   },
   "peerDependencies": {

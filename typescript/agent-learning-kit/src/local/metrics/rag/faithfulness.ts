@@ -14,7 +14,7 @@ import {
     normalizeContext,
     extractSentences,
     ngramOverlap
-} from './types';
+} from './types.js';
 
 /**
  * Calculate faithfulness - whether response is grounded in the context.

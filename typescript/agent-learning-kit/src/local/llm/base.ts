@@ -11,7 +11,7 @@ import {
     ChatOptions,
     JudgeResult,
     JudgeInput
-} from './types';
+} from './types.js';
 
 /**
  * Default configuration values

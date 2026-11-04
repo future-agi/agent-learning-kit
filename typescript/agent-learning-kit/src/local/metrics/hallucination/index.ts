@@ -18,18 +18,18 @@ export {
     hallucinationExtractSentences,
     isFactualClaim,
     calculateOverlap
-} from './types';
+} from './types.js';
 
 // Re-export with simpler names for direct hallucination module usage
 export {
     hallucinationTokenize as tokenize,
     hallucinationGetNgrams as getNgrams,
     hallucinationExtractSentences as extractSentences
-} from './types';
+} from './types.js';
 
 // Main detection function
 export {
     hallucinationDetection,
     detectHallucination,
     noHallucination
-} from './detection';
+} from './detection.js';

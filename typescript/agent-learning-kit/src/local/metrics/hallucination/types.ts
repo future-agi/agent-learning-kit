@@ -3,7 +3,7 @@
  * @module local/metrics/hallucination/types
  */
 
-import { MetricResult, MetricConfig } from '../types';
+import { MetricResult, MetricConfig } from '../types.js';
 
 /**
  * Input for hallucination detection

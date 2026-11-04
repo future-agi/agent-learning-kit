@@ -51,21 +51,21 @@ export {
     ngramOverlap,
     normalizeContext,
     extractSentences
-} from './types';
+} from './types.js';
 
 // Metrics
-export { contextPrecision } from './context-precision';
-export { contextRecall } from './context-recall';
-export { faithfulness, groundedness } from './faithfulness';
-export { answerRelevance } from './answer-relevance';
-export { contextRelevance, contextUtilization } from './context-relevance';
+export { contextPrecision } from './context-precision.js';
+export { contextRecall } from './context-recall.js';
+export { faithfulness, groundedness } from './faithfulness.js';
+export { answerRelevance } from './answer-relevance.js';
+export { contextRelevance, contextUtilization } from './context-relevance.js';
 
 // Re-export as named object for registry
-import { contextPrecision } from './context-precision';
-import { contextRecall } from './context-recall';
-import { faithfulness, groundedness } from './faithfulness';
-import { answerRelevance } from './answer-relevance';
-import { contextRelevance, contextUtilization } from './context-relevance';
+import { contextPrecision } from './context-precision.js';
+import { contextRecall } from './context-recall.js';
+import { faithfulness, groundedness } from './faithfulness.js';
+import { answerRelevance } from './answer-relevance.js';
+import { contextRelevance, contextUtilization } from './context-relevance.js';
 
 /**
  * All RAG metrics as a named object

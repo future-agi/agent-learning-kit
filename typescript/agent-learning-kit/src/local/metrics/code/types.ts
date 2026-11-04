@@ -3,7 +3,7 @@
  * @module local/metrics/code/types
  */
 
-import { MetricResult, MetricConfig } from '../types';
+import { MetricResult, MetricConfig } from '../types.js';
 
 /**
  * Input for code security evaluation

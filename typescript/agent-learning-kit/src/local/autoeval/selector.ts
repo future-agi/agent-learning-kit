@@ -11,7 +11,7 @@ import {
     SelectedMetric,
     MetricCategory,
     AutoEvalInput
-} from './types';
+} from './types.js';
 
 /**
  * Metric definition for selection
