@@ -459,7 +459,7 @@ def test_an_autogen_tool_call_is_written_with_its_arguments_and_result_beside_it
         def fail(note):
             raise ValueError("no such note")
         async def main():
-            await BaseTool("look_up_tide", lambda place: "high at 06:10").run_json({"place": "Kochi"}, None)
+            await BaseTool("look_up_tide", lambda place: "high at 06:10").run_json({"place": "North Quay"}, None)
             try:
                 await BaseTool("read_note", fail).run_json({"note": "n1"}, None)
             except ValueError:
@@ -477,7 +477,7 @@ def test_an_autogen_tool_call_is_written_with_its_arguments_and_result_beside_it
     assert "hook: failed" not in result.stderr
     lines = [json.loads(line) for line in trace.read_text().splitlines()]
     assert [(one["name"], one["arguments"], one["output"], one["is_error"]) for one in lines] == [
-        ("look_up_tide", {"place": "Kochi"}, "high at 06:10", False),
+        ("look_up_tide", {"place": "North Quay"}, "high at 06:10", False),
         ("read_note", {"note": "n1"}, "no such note", True),
     ]
 

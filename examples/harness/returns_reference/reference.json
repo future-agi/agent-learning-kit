@@ -12,9 +12,9 @@
     "coordinator": "Returns coordinator",
     "workers": [
       {"id": "order_lookup", "name": "Order-lookup worker", "parent": "Returns coordinator",
-       "tools": ["get_order", "list_refunds"], "binding": "shared"},
+       "tools": ["get_order", "list_refunds"]},
       {"id": "refund", "name": "Refund worker", "parent": "Returns coordinator",
-       "tools": ["list_refunds", "issue_refund"], "binding": "shared"}
+       "tools": ["list_refunds", "issue_refund"]}
     ]
   },
   "scenarios": [

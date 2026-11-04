@@ -96,3 +96,21 @@ def test_verifier_checks_materialized_orchestration(tmp_path: Path) -> None:
     assert result.stdout.strip() == (
         "3 multi-agent references and 1 source trees verified"
     )
+
+
+def test_returns_reference_declares_the_workers_and_tools_its_app_builds() -> None:
+    import ast
+
+    app = ROOT / "examples" / "harness" / "returns_reference"
+    reference = json.loads((app / "reference.json").read_text(encoding="utf-8"))
+    built = {}
+    for node in ast.walk(ast.parse((app / "agent.py").read_text(encoding="utf-8"))):
+        if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "Agent":
+            fields = {one.arg: one.value for one in node.keywords}
+            tools = fields["tools"].elts
+            built[ast.literal_eval(fields["name"])] = sorted(one.id for one in tools if isinstance(one, ast.Name))
+    topology = reference["topology"]
+    assert topology["coordinator"] in built
+    assert {one["name"]: sorted(one["tools"]) for one in topology["workers"]} == {
+        name: tools for name, tools in built.items() if name != topology["coordinator"]
+    }
