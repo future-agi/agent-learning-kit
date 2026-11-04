@@ -3588,16 +3588,17 @@ def apply_postgres_sqlite_world(
 def _without_later_harness_tables(
     live: SourceModel, recorded: SourceModel
 ) -> SourceModel:
-    """The live schema without the harness's own `_alk_` tables added after the build, which are not the agent's data."""
+    """The live schema with the harness's own `_alk_` tables as the build recorded them, or left out where it had
+    none: they are not the agent's data, and adding a world actor later widens or adds them."""
     from .source_model import SourceModel
 
-    built = {table.name for table in recorded.tables}
+    built = {table.name: table for table in recorded.tables}
     tables = tuple(
-        table
+        built.get(table.name, table) if table.name.startswith("_alk_") else table
         for table in live.tables
         if not table.name.startswith("_alk_") or table.name in built
     )
-    if len(tables) == len(live.tables):
+    if tables == live.tables:
         return live
     return SourceModel.create(
         source_digest=live.source_digest,

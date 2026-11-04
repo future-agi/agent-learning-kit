@@ -3432,13 +3432,14 @@ def test_canonical_seed_replays_bundled_discovery_without_authoring_directory(
 
 
 @pytest.mark.parametrize(
-    ("built_with", "live_adds", "applies"),
+    ("built_with", "live_adds", "applies", "wider_log"),
     [
-        ((), ("_alk_actors",), True),
-        (("_alk_actors",), ("_alk_actors",), True),
-        ((), ("orders",), False),
+        ((), ("_alk_actors",), True, False),
+        ((), ("_alk_actors",), True, True),
+        (("_alk_actors",), ("_alk_actors",), True, False),
+        ((), ("orders",), False, False),
     ],
-    ids=["actors-added-after-build", "built-with-actors", "agent-schema-changed"],
+    ids=["actors-added-after-build", "actor-columns-on-the-log", "built-with-actors", "agent-schema-changed"],
 )
 def test_canonical_seed_checks_the_world_as_built_whatever_alk_adds_later(
     tmp_path: Path,
@@ -3446,6 +3447,7 @@ def test_canonical_seed_checks_the_world_as_built_whatever_alk_adds_later(
     built_with: tuple[str, ...],
     live_adds: tuple[str, ...],
     applies: bool,
+    wider_log: bool,
 ) -> None:
     from contextlib import nullcontext
 
@@ -3459,26 +3461,29 @@ def test_canonical_seed_checks_the_world_as_built_whatever_alk_adds_later(
     from fi.alk.harness.source_schema import postgres as schema
     from fi.alk.harness.world_ir import WorldIR
 
-    def table(name: str) -> SourceTable:
-        column = SourceColumn(
-            name="id",
-            logical_type=LogicalType.STRING,
-            native_type="text",
-            nullable=False,
-            has_default=False,
+    def table(name: str, *more: str) -> SourceTable:
+        columns = tuple(
+            SourceColumn(
+                name=one,
+                logical_type=LogicalType.STRING,
+                native_type="text",
+                nullable=one != "id",
+                has_default=False,
+            )
+            for one in ("id", *more)
         )
-        return SourceTable(name=name, columns=(column,), primary_key=("id",))
+        return SourceTable(name=name, columns=columns, primary_key=("id",))
 
     digest = "sha256:" + "a" * 64
     built = ("_alk_tool_trace", "items", *built_with)
     recorded = SourceModel.create(
         source_digest=digest, engine="postgres", tables=tuple(map(table, built))
     )
-    live = SourceModel.create(
-        source_digest=digest,
-        engine="postgres",
-        tables=tuple(map(table, (*built, *live_adds))),
-    )
+    live_tables = tuple(map(table, (*built, *live_adds)))
+    if wider_log:
+        # Seeded with an actor, the action log has the actor columns the build's log lacked.
+        live_tables = (table("_alk_tool_trace", "actor_id", "outcome"), *live_tables[1:])
+    live = SourceModel.create(source_digest=digest, engine="postgres", tables=live_tables)
     seed = tmp_path / "seed"
     seed.mkdir()
     (seed / "source-model.json").write_text(recorded.model_dump_json())
