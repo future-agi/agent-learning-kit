@@ -192,6 +192,19 @@ def _whole(word: str) -> str:
     return f"{start}{re.escape(word)}{end}"
 
 
+def named_in(text: str, name: str) -> bool:
+    """Whether ``text`` names ``name`` as a whole word, written the way a name is (never in lower case
+    unless the name itself is), so a name that is also an everyday word is not found in that word."""
+    name = " ".join(name.split())
+    if not name:
+        return False
+    pattern = _whole(name).replace(r"\ ", r"\s+")
+    return any(
+        " ".join(found.group().split()) == name or not found.group()[0].islower()
+        for found in re.finditer(pattern, text, re.IGNORECASE)
+    )
+
+
 def drawn(trigger: dict[str, Any], *, seed: str, sub_actor_id: str) -> bool:
     """Whether this call is one a `probability` sub-actor comes into; every other kind always does."""
     if str(trigger.get("kind")) != "probability":

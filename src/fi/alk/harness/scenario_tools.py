@@ -25,6 +25,7 @@ from fi.simulate.simulation.sub_actors import (
     available_channels,
     default_share,
     described,
+    named_in,
 )
 
 from .backends import tool, tool_server
@@ -1033,7 +1034,7 @@ def _sub_actors_that_cannot_run(
     named = [
         one.name
         for one in (listing.get(entry.id) for entry in scenario.sub_actors)
-        if one is not None and one.name.strip() and one.name.strip().lower() in scenario.instruction.lower()
+        if one is not None and named_in(scenario.instruction, one.name)
     ]
     return scenario_problems(
         scenario.sub_actors,

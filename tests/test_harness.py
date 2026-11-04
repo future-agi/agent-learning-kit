@@ -9768,6 +9768,44 @@ def test_the_person_s_instruction_never_names_a_sub_actor(monkeypatch):
     assert problems("Ask for two tickets for the evening show.") == []
 
 
+@pytest.mark.parametrize(
+    ("name", "instruction", "names"),
+    [
+        ("Al", "Ask for two tickets and also a receipt.", False),
+        ("Al", "Al takes the phone when the price is quoted.", True),
+        ("Al", "Say AL is with you.", True),
+        ("Al", "Mention that Al, your brother, is nearby.", True),
+        ("Ann", "Ask for the annual plan.", False),
+        ("Will", "You will ask for two tickets.", False),
+        ("Will", "Hand the phone to Will.", True),
+        ("Mary Ann", "Hand the phone to Mary\nAnn.", True),
+        ("Mary Ann", "Ask Mary for the date.", False),
+        ("Rowan", "Ask about the rowan trees.", False),
+        ("rowan", "Ask what rowan thinks.", True),
+    ],
+)
+def test_a_sub_actor_s_name_is_found_only_as_a_name(
+    monkeypatch, name, instruction, names
+):
+    from types import SimpleNamespace
+
+    from fi.alk.harness import scenario_tools
+
+    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+    monkeypatch.setattr(scenario_tools, "scenario_problems", lambda *args, **kwargs: [])
+    scenario = SimpleNamespace(
+        sub_actors=[SimpleNamespace(id="second")],
+        instruction=instruction,
+        persona=None,
+        call_direction="",
+    )
+    listing = _listed({**_SECOND, "name": name})
+    refused = scenario_tools._sub_actors_that_cannot_run(
+        scenario, listing, None, True, set()
+    )
+    assert bool(refused) is names
+
+
 def test_a_suite_keeps_its_share_of_scenarios_with_a_sub_actor_unless_the_person_set_another():
     from types import SimpleNamespace
 
