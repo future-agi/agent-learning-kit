@@ -238,16 +238,20 @@ def test_a_span_that_recorded_no_arguments_reads_as_none_not_as_raw_text(tmp_pat
     assert [(c.name, c.arguments) for c in calls] == [("note", {"raw": "not json"}), ("draft_note", {})]
 
 
+@pytest.mark.parametrize("seam", [EvidenceSeam.TOOL_TRACE, EvidenceSeam.HTTP_TOOL, None])
 def test_a_process_agent_s_seam_calls_keep_their_evidence_and_take_the_agent_from_its_spans(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, seam: EvidenceSeam | None
 ) -> None:
     trace = _trace_lines(tmp_path / "agent-tool-calls.jsonl", *_SPAN_LINES)
-    monkeypatch.setattr(cr, "_collect_tool_trace_calls", lambda runtime: tuple(_observed()))
-    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE)
+    for reader in ("_collect_tool_trace_calls", "_collect_http_tool_calls"):
+        monkeypatch.setattr(cr, reader, lambda runtime: tuple(_observed()))
+    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=seam)
     runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=None)
     calls = runner._collect_calls(_runtime(metadata={"tool_trace_path": str(trace)}))
+    # With no seam, the spans are the only evidence.
     assert [(c.name, c.result, c.worker_id) for c in calls] == [
-        ("ask_writer", "done", "Coordinator"), ("draft_note", "drafted", "Writer"),
+        ("ask_writer", "done" if seam else None, "Coordinator"),
+        ("draft_note", "drafted" if seam else None, "Writer"),
     ]
 
 
