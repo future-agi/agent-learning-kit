@@ -1954,6 +1954,46 @@ def test_reading_a_run_can_wait_until_it_has_finished(tmp_path, monkeypatch):
     assert "no Run" in asyncio.run(read({"run_id": "unknown", "wait": True}))["content"][0]["text"]
 
 
+def test_a_platform_message_never_starts_a_run(tmp_path, monkeypatch):
+    client = BuilderClient()
+    started = []
+
+    async def start_run(numbers, ranges, repeats):
+        started.append((numbers, ranges, repeats))
+        return {"run_id": "r-1", "state": "queued"}
+
+    async def saved():
+        return {"applied": True}
+
+    client.start_run = start_run
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    monkeypatch.setattr(runtime, "_save_changes", saved)
+    run = next(
+        spec
+        for spec in runtime._builder_platform_server().tools
+        if spec.name == "run_scenarios"
+    ).handler
+
+    runtime._from_platform = True
+    refused = asyncio.run(run({"numbers": [1, 2], "repeats": 1}))
+    runtime._from_platform = False
+    asyncio.run(run({"numbers": [1, 2], "repeats": 1}))
+
+    assert refused["is_error"] is True
+    assert "ask whether to run them" in refused["content"][0]["text"]
+    assert started == [([1, 2], [], 1)]
+
+
+def test_the_builder_skill_asks_before_running_after_a_build():
+    from fi.alk.harness.config import SKILLS_ROOT
+
+    skill = " ".join(
+        SKILLS_ROOT.joinpath("builder", "SKILL.md").read_text(encoding="utf-8").split()
+    )
+    assert "check of a finished build" not in skill
+    assert "Never start a run yourself" in skill
+
+
 def test_waiting_on_a_run_never_outlasts_the_turn_it_waits_in():
     from fi.alk.harness.hosted_chat_entrypoint import _RUN_POLL_SECONDS, _RUN_WAIT_SECONDS
     from fi.alk.harness.hosted_conversation import _UNAVAILABLE_BUDGET_SECONDS
