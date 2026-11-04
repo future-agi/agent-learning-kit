@@ -254,8 +254,6 @@ class CallOutcome:
     target_metrics: dict[str, Any] | None = None
     # A local path the judge can play; the artifacts above are ids the sandbox cannot read back.
     recording: str | None = None
-    # Per sub-actor in the call: whether it was triggered, how much it delivered, and why any was dropped.
-    sub_actors: tuple[dict[str, Any], ...] = ()
 
 
 class CallAborted(RuntimeError):

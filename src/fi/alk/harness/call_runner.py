@@ -1723,7 +1723,6 @@ class CallRunnerImpl:
                 else None
             ),
             target_metrics=_target_metrics(case),
-            sub_actors=tuple(took_part.get("sub_actors") or ()),
         )
 
         if case is None:

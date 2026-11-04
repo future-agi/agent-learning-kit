@@ -2121,7 +2121,6 @@ def test_a_call_keeps_who_its_sub_actors_were_and_what_happened_to_each(
         _FakeScenario("k1"),
         _runtime(metadata={"livekit_agent_name": "agent-w0"}),
     )
-    assert outcome.sub_actors == tuple(summary)
     [transcript] = [
         json.loads(data)
         for kind, _key, data in adapter.uploads
