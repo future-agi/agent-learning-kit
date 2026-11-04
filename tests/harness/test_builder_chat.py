@@ -2001,6 +2001,31 @@ def test_sub_actor_changes_wait_for_a_yes_and_change_what_a_scenario_tests(
     assert runtime._changes_situation(friend)
 
 
+def test_a_change_to_a_scenario_s_world_actors_waits_for_a_yes_and_no_repair_makes_it(tmp_path, monkeypatch):
+    from fi.alk.harness.backends import ToolSpec
+
+    runtime = _runtime(tmp_path, BuilderClient(), monkeypatch)
+    (tmp_path / "scenarios" / "one" / "scenario.json").write_text(
+        json.dumps({"name": "one", "instruction": "ask for a refund"})
+    )
+    acted = {"name": "one", "instruction": "ask for a refund", "actors": [{"id": "reviewer", "actions": []}]}
+    assert runtime._changes_situation(acted) and runtime._changes_meaning(acted)
+    ran, asked = [], []
+
+    async def handler(args):
+        ran.append(args)
+        return {"content": [{"type": "text", "text": "kept"}]}
+
+    async def ask(tool, payload, context):
+        asked.append(tool)
+        return {"content": [{"type": "text", "text": "No"}]}
+
+    runtime._ask = ask
+    submit = runtime._confirmed(ToolSpec("submit_scenario", "", {}, handler))
+    assert asyncio.run(submit.handler(acted))["is_error"] is True
+    assert (asked, ran) == (["submit_scenario"], [])
+
+
 def test_the_world_offers_only_actions_an_actor_can_send():
     from fi.alk.harness.actors import world_action_names
 

@@ -670,6 +670,7 @@ class HostedChatRuntime:
                 "coverage",
                 "fixture",
                 "sub_actors",
+                "actors",
             ),
             whole_persona=True,
         )
@@ -690,6 +691,7 @@ class HostedChatRuntime:
                 "sub_goals",
                 "solution",
                 "sub_actors",
+                "actors",
             ),
         )
 
