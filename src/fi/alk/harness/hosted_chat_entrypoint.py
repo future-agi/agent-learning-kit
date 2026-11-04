@@ -794,15 +794,6 @@ class HostedChatRuntime:
             schema({"numbers": _NUMBERS, "ranges": _RANGES, "repeats": int}, []),
         )
         async def run_scenarios(args: dict[str, Any]) -> dict[str, Any]:
-            if self._from_platform:
-                return text(
-                    {
-                        "started": False,
-                        "because": "runs start only when the person asks: say which scenarios and "
-                        "how many calls in your reply and ask whether to run them",
-                    },
-                    error=True,
-                )
             if not args.get("numbers") and not args.get("ranges"):
                 return text({"started": False, "because": "name the scenarios by `numbers` or `ranges`"}, error=True)
             saved = await self._save_changes()
