@@ -684,6 +684,10 @@ def test_a_reply_reads_as_json_server_sent_events_or_json_lines_and_nothing_else
     ('[{"content": {"text": "first"}}, {"content": {"text": "last"}}]', "last"),
     ('data: {"content": {"text": "Tides "}}\n\ndata: {"content": {"text": "turn"}}\n\n'
      'data: {"content": {"text": "Tides turn"}}\n\n', "Tides turn"),
+    ('{"content": {"text": "."}}\n{"content": {"text": "."}}\n{"content": {"text": "."}}\n', "..."),
+    ('{"content": {"text": "a"}}\n{"content": {"text": "b"}}\n{"content": {"text": "abc"}}\n', "ababc"),
+    ('{"content": {"text": "T"}}\n{"content": {"text": "Ti"}}\n{"content": {"text": "Tide"}}\n'
+     '{"content": {"text": "Tide"}}\n', "Tide"),
 ])
 def test_a_streamed_reply_is_its_text_deltas_joined_or_its_last_whole_text(body, reply):
     path = "choices.0.delta.content" if "choices" in body else "content.text"
