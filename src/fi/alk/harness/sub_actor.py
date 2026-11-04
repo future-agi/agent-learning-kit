@@ -205,6 +205,22 @@ def scenario_problems(
     return ["sub_actors: " + problem for problem in problems]
 
 
+def logged_tool_name(contract: dict[str, Any], tool: str) -> str:
+    """The name the world's tool trace logs a call of `tool` under: the last part of the route its entrypoint
+    calls, or the tool's own name when it has no fixed route."""
+    for entry in contract.get("tool_entrypoints") or []:
+        if isinstance(entry, dict) and entry.get("tool") == tool:
+            last = (
+                str(entry.get("endpoint") or "")
+                .split("?", 1)[0]
+                .strip("/")
+                .rsplit("/", 1)[-1]
+            )
+            if last and "{" not in last:
+                return last
+    return tool
+
+
 def scenarios_using(destination: Path, sub_actor_id: str) -> list[str]:
     """The written scenarios that include this sub-actor."""
     found = []

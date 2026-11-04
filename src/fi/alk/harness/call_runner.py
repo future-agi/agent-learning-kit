@@ -63,7 +63,12 @@ from fi.simulate.simulation.sub_actors import (
 
 from .background_noise import place_of, scenario_source
 from .bundle_v2 import EvidenceSeam
-from .sub_actor import ScenarioSubActor, load_sub_actors, sub_actors_enabled
+from .sub_actor import (
+    ScenarioSubActor,
+    load_sub_actors,
+    logged_tool_name,
+    sub_actors_enabled,
+)
 from .hosted_scheduler import CallAborted, CallOutcome
 from .hosted_scheduler import Scenario as HostedScenario
 from .job import ExecutionMode, FailureDomain, HarnessJob, ProviderExecutionMode
@@ -705,6 +710,12 @@ def _voiced_sub_actors(
     if not sub_actors_enabled() or not doc.get("sub_actors"):
         return []
     listing = load_sub_actors(bundle_dir)
+    contract_path = Path(bundle_dir) / "contract.json"
+    contract = (
+        json.loads(contract_path.read_text(encoding="utf-8"))
+        if contract_path.is_file()
+        else {}
+    )
     caller = dict(doc.get("persona") or {})
     taken = {
         str(
@@ -730,12 +741,23 @@ def _voiced_sub_actors(
             continue
         persona = {**actor.persona, "name": actor.name}
         voice = persona_voice(persona, tts_provider, frozenset(taken), cartesia_key)
+        if not voice:
+            # The person's voice or none at all: the agent could not tell them apart.
+            logger.warning(
+                "sub-actor %s does not enter: no voice of its own on this call",
+                included.id,
+            )
+            continue
         taken.add(voice)
+        trigger = included.trigger.model_dump()
+        if trigger.get("kind") == "on_tool":
+            # The engine counts the calls the trace logs, which name the route a tool calls.
+            trigger["tool"] = logged_tool_name(contract, str(trigger.get("tool") or ""))
         voiced.append(
             {
                 **actor.model_dump(exclude_none=True),
                 "instruction": included.instruction,
-                "trigger": included.trigger.model_dump(),
+                "trigger": trigger,
                 "loudness_ratio": loudness_ratio(seed, actor.id, actor.loudness_ratio),
                 "voice": voice,
                 "speed": persona_speech_rate(persona),
