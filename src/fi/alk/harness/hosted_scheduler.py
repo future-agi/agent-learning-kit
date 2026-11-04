@@ -1528,10 +1528,14 @@ class RunResult:
     fenced: BaseException | None = None
 
 
-def _switched_off(scenario: Scenario) -> bool:
-    """A scenario with sub-actors while they are off: running it without them would look like a normal
-    result for a test that never happened."""
-    return bool(getattr(scenario, "sub_actors", ())) and not sub_actors_enabled()
+def _switched_off(scenario: Scenario) -> str:
+    """Why a scenario with sub-actors or world actors is not run while they are off, or "": running it without
+    them would look like a normal result for a test that never happened."""
+    if sub_actors_enabled():
+        return ""
+    if getattr(scenario, "sub_actors", ()):
+        return "sub-actors are switched off"
+    return "world actors are switched off" if getattr(scenario, "actors", ()) else ""
 
 
 def _skipped_receipt(scenario: Scenario) -> ResultReceipt:
@@ -1546,7 +1550,7 @@ def _skipped_receipt(scenario: Scenario) -> ResultReceipt:
         evaluations=(),
         call=None,
         failure=None,
-        reason="sub-actors are switched off" if _switched_off(scenario) else None,
+        reason=_switched_off(scenario) or None,
     )
 
 
