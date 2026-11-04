@@ -967,7 +967,7 @@ class HTTPAgentWrapper(AgentWrapper):
 
     def _agent_response_from_payload(self, payload: Any) -> AgentResponse:
         if self.protocol == "json_template":
-            selected = _select_response_value(payload, self.response_path)
+            selected = _select_response_value(payload, self.response_path, text=True)
             if isinstance(selected, Mapping):
                 raise ValueError(
                     "response_path must select chat content, not a JSON object"
@@ -1180,7 +1180,8 @@ def _tool_result_error(result: Any, path: str) -> bool:
     raise ValueError("tool result error must be null, boolean or string")
 
 
-def _select_response_value(payload: Any, path: str) -> Any:
+def _select_response_value(payload: Any, path: str, *, text: bool = False) -> Any:
+    """The value at ``path``; with ``text``, a streamed reply's pieces are its reply text, not its latest event."""
     if not path:
         return payload
     segments = [raw for raw in path.removeprefix("$").strip(".").split(".") if raw]
@@ -1203,7 +1204,7 @@ def _select_response_value(payload: Any, path: str) -> Any:
                 # This is envelope-driven rather than framework-specific and leaves explicit
                 # numeric paths (including negative indexes) unchanged. A streamed reply's
                 # text is spread over its events instead.
-                if isinstance(current, _StreamedEvents):
+                if text and isinstance(current, _StreamedEvents):
                     pieces = []
                     for item in current:
                         try:
