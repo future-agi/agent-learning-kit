@@ -2201,7 +2201,13 @@ def test_world_actors_act_only_when_switched_on_with_a_proxy_taking_actor_reques
     dispatcher = cr._actor_dispatcher(doc, bundle, ready, "t1")
     assert dispatcher is not None and dispatcher.proxy_url == "http://127.0.0.1:9"
     assert token.read_text() == dispatcher.token and len(dispatcher.token) == 64
+    assert token.stat().st_mode & 0o777 == 0o600
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.write_text("untouched")
+    token.unlink()
+    token.symlink_to(elsewhere)
     assert cr._actor_dispatcher(doc, bundle, ready, "t2").token != dispatcher.token
+    assert elsewhere.read_text() == "untouched" and not token.is_symlink()
 
 
 def test_actor_rows_are_sealed_named_and_with_their_outcome_and_the_agent_s_are_left_to_its_calls(
@@ -2277,3 +2283,33 @@ def test_a_world_actor_s_actions_are_sealed_with_the_transcript_never_as_the_age
     assert [(one["name"], one["actor_id"]) for one in transcript["world_actors"]["actions"]] == [
         ("approve", "manager")
     ]
+
+
+def test_a_trial_s_actor_token_holds_only_while_its_call_runs(tmp_path, monkeypatch) -> None:
+    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    document = context.bundle_dir / "scenarios" / "k1" / "scenario.json"
+    body = json.loads(document.read_text())
+    body["actors"] = [{"id": "manager", "actions": [{"action": "crm.approve"}]}]
+    document.write_text(json.dumps(body))
+    _with_actors(context.bundle_dir)
+    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+    monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg([], ["name", "at"]))
+    token = tmp_path / "w0" / "tool-proxy" / "actor-token"
+    during = []
+
+    async def place_call(spec):
+        during.append(token.read_text())
+        return _report(transcript="user: hello", messages=[{"role": "user", "content": "hello"}])
+
+    proxy = RuntimeEndpoint(capability="tool_proxy", protocol="http", address="http://127.0.0.1:9")
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
+    _run(
+        runner,
+        _FakeScenario("k1"),
+        _runtime(
+            endpoints={"tool_proxy": proxy, "database": _postgres_endpoint()},
+            metadata={"livekit_agent_name": "agent-w0", "actor_proof_path": str(token)},
+        ),
+    )
+    assert len(during[0]) == 64 and token.read_text() == ""

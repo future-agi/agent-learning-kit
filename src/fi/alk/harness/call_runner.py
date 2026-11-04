@@ -942,6 +942,24 @@ def _agent_marks(runtime: EnvironmentRuntime, bundle_dir: Path, calls: Sequence[
     return marks
 
 
+def _write_trial_token(path: Path, token: str) -> None:
+    """The token, readable only by whoever owns the tool proxy's directory; a stale file or link is replaced."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.unlink(missing_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        os.write(fd, token.encode("utf-8"))
+    finally:
+        os.close(fd)
+    owner = path.parent.stat()
+    if owner.st_uid != os.geteuid():
+        try:
+            os.chown(path, owner.st_uid, owner.st_gid)
+        except PermissionError:
+            # Without the right to give it away, the proxy's own user can read it only if others can.
+            path.chmod(0o644)
+
+
 def _actor_dispatcher(
     doc: Mapping[str, Any], bundle_dir: Path, runtime: EnvironmentRuntime, trial_id: str
 ) -> ActorDispatcher | None:
@@ -955,10 +973,7 @@ def _actor_dispatcher(
         logger.warning("world actors cannot act: this world has no tool proxy taking actor requests")
         return None
     token = secrets.token_hex(32)
-    path = Path(token_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(token, encoding="utf-8")
-    path.chmod(0o644)
+    _write_trial_token(Path(token_path), token)
     cast = [ScenarioActor.model_validate(entry) for entry in doc.get("actors") or []]
     return ActorDispatcher(
         load_actors(bundle_dir).by_id(),
