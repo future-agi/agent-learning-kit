@@ -4105,7 +4105,7 @@ def _carry_contract(
     traced_command = (
         isinstance(interface, dict)
         and str(interface.get("kind") or "").strip().lower() == "command"
-        and _uses_source_tool_trace(processes)
+        and _binds_source_tools(processes)
     )
     if (
         str(body.get("modality") or "").strip().lower() == "chat"
