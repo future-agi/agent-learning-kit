@@ -598,7 +598,7 @@ def test_span_lines_alone_read_in_the_order_the_calls_started() -> None:
 
 def test_a_job_hand_off_stays_its_own_event_and_is_kept_once() -> None:
     # The sandbox's tracer and the span both report the launch; the job's hand-off is written when it starts and again
-    # with its return, under the launch, and is never paired with the launch itself.
+    # with its return, under the launch, and is never paired with the launch itself, whose event id it names.
     def line(at, **fields):
         return Call(
             name="start_async_task", arguments={}, result=None, ok=True, at=at, **fields
@@ -622,8 +622,8 @@ def test_a_job_hand_off_stays_its_own_event_and_is_kept_once() -> None:
     assert [
         (c.delegated_to, c.ended_at, c.runtime_ids.get("event_id")) for c in merged
     ] == [
-        ("", 0.0, None),
-        ("", 0.0, None),
+        ("", 0.0, "l1"),
+        ("", 0.0, "l2"),
         ("coder", 9.0, "j1"),
     ]
 
