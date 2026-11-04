@@ -2041,7 +2041,11 @@ def scenario_tools(
             ""
             if any(one.name == same for one in kept)
             else _sub_actors_short(
-                {**args, "name": same}, kept, cap(), sub_actor_share(), usable_sub_actors()
+                {**args, "name": same},
+                kept,
+                cap(),
+                sub_actor_share(),
+                usable_sub_actors(),
             )
         )
         if short:

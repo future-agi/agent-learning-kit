@@ -586,9 +586,7 @@ def _others_present(messages: Sequence[Any]) -> str:
     )
     if not names:
         return ""
-    return (
-        f"Also heard during the call: {', '.join(names)}. They are not the person being served.\n\n"
-    )
+    return f"Also heard during the call: {', '.join(names)}. They are not the person being served.\n\n"
 
 
 def _transcript(messages: Sequence[Any]) -> str:

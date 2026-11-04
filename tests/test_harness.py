@@ -9612,8 +9612,12 @@ def test_a_sub_actor_id_is_one_every_part_of_the_platform_can_address():
     from fi.alk.harness.sub_actor import SubActor, entry_problems
 
     assert entry_problems(SubActor.model_validate(_SECOND), modality="voice") == []
-    wrong = entry_problems(SubActor.model_validate({**_SECOND, "id": "Front-Desk"}), modality="voice")
-    assert wrong == ["id 'Front-Desk' must be 1 to 64 lowercase letters, digits or underscores"]
+    wrong = entry_problems(
+        SubActor.model_validate({**_SECOND, "id": "Front-Desk"}), modality="voice"
+    )
+    assert wrong == [
+        "id 'Front-Desk' must be 1 to 64 lowercase letters, digits or underscores"
+    ]
 
 
 def test_a_sub_actor_scenarios_include_keeps_its_channel(tmp_path, monkeypatch):
@@ -9635,7 +9639,12 @@ def test_a_sub_actor_scenarios_include_keeps_its_channel(tmp_path, monkeypatch):
     moved = {**_SECOND, "channel": "audio_mix"}
     assert "Not changed" in asyncio.run(add(moved))["content"][0]["text"]
     assert load_sub_actors(destination).get("second").channel == "audio_handoff"
-    assert asyncio.run(add({**_SECOND, "role": "someone close to the person"})).get("is_error") is None
+    assert (
+        asyncio.run(add({**_SECOND, "role": "someone close to the person"})).get(
+            "is_error"
+        )
+        is None
+    )
     used.unlink()
     asyncio.run(add(moved))
     assert load_sub_actors(destination).get("second").channel == "audio_mix"
@@ -9761,11 +9770,18 @@ def test_the_person_s_instruction_never_names_a_sub_actor(monkeypatch):
 
     def problems(instruction):
         scenario = SimpleNamespace(
-            sub_actors=[SimpleNamespace(id="second")], instruction=instruction, persona=None, call_direction=""
+            sub_actors=[SimpleNamespace(id="second")],
+            instruction=instruction,
+            persona=None,
+            call_direction="",
         )
-        return scenario_tools._sub_actors_that_cannot_run(scenario, listing, None, True, set())
+        return scenario_tools._sub_actors_that_cannot_run(
+            scenario, listing, None, True, set()
+        )
 
-    assert problems("Ask for two tickets. Hand the phone to Rowan when the agent quotes a price.") == [
+    assert problems(
+        "Ask for two tickets. Hand the phone to Rowan when the agent quotes a price."
+    ) == [
         "instruction: the person's instruction names Rowan, who is a sub-actor here. Write the person's situation "
         "as if no one else were there; the trigger brings them in and the run tells the person who is with them"
     ]

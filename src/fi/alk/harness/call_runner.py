@@ -723,7 +723,9 @@ def _voiced_sub_actors(
             logger.warning(
                 "sub-actor %s does not enter: %s",
                 included.id,
-                "not in the environment's list" if actor is None else "not a voice channel",
+                "not in the environment's list"
+                if actor is None
+                else "not a voice channel",
             )
             continue
         persona = {**actor.persona, "name": actor.name}

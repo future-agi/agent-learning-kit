@@ -245,7 +245,11 @@ class SubActorsOnCall:
         self.cast.holder = str(menu.actor["id"])
         self.cast.line_wanted(menu.actor)
         await self._speak(menu, [_ANSWERED], written=self._greeting)
-        said = next(one for one in self.cast.summary() if one["sub_actor"] == str(menu.actor["id"]))
+        said = next(
+            one
+            for one in self.cast.summary()
+            if one["sub_actor"] == str(menu.actor["id"])
+        )
         return said["delivered"] > 0
 
     def menu_cannot_answer(self, reason: str) -> None:
@@ -277,7 +281,9 @@ class SubActorsOnCall:
         took_part = False
         holding = False
         # Whoever has the phone is served before a background voice, so a line wanted this turn never crowds them out.
-        for key, voice in sorted(self.voices.items(), key=lambda one: one[1].channel == "audio_mix"):
+        for key, voice in sorted(
+            self.voices.items(), key=lambda one: one[1].channel == "audio_mix"
+        ):
             if voice.channel == "audio_mix":
                 if (
                     key not in self._pending

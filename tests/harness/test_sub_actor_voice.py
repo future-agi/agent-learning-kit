@@ -585,7 +585,9 @@ def test_a_background_line_plays_whenever_it_is_ready_and_only_the_end_of_the_ca
 
 
 def test_a_menu_that_could_not_speak_leaves_the_call_to_the_person():
-    call, said, _played = _on_call([_Voice(_actor("menu", "ivr"), [RuntimeError("no voice")])])
+    call, said, _played = _on_call(
+        [_Voice(_actor("menu", "ivr"), [RuntimeError("no voice")])]
+    )
     assert asyncio.run(call.answer_first()) is False and said == []
 
 
@@ -947,7 +949,11 @@ def test_someone_who_takes_the_phone_waits_until_the_person_has_spoken():
 
 def test_a_sub_actor_is_never_told_it_may_answer_for_the_person():
     brief = line_brief(
-        _actor("phone"), situation="Book a table.", said=[], conversation=[], language=""
+        _actor("phone"),
+        situation="Book a table.",
+        said=[],
+        conversation=[],
+        language="",
     )
     assert "unless" not in brief
     assert "what they came for is theirs to say" in brief

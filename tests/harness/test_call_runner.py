@@ -2116,7 +2116,7 @@ def test_a_call_keeps_who_its_sub_actors_were_and_what_happened_to_each(
 
     adapter = FakeAdapter()
     runner = cr.CallRunnerImpl(adapter, context, place_call=place_call)
-    outcome = _run(
+    _run(
         runner,
         _FakeScenario("k1"),
         _runtime(metadata={"livekit_agent_name": "agent-w0"}),
