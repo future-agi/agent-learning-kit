@@ -46,7 +46,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Protocol, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Protocol, Sequence
 from urllib.parse import quote as urlquote, urlsplit
 
 from pydantic import BaseModel, Field, JsonValue, PrivateAttr, ValidationError
@@ -85,6 +85,9 @@ from .provider_lifecycle import (
     run_lifecycle_invocation,
     validate_provision_receipt,
 )
+
+if TYPE_CHECKING:
+    from .source_model import SourceModel
 
 logger = logging.getLogger(__name__)
 
@@ -3582,12 +3585,10 @@ def apply_postgres_sqlite_world(
             artifacts.write_world_ir(imported.world)
 
 
-def _without_later_harness_tables(live, recorded):
-    """The live schema without ALK's own `_alk_` tables that the build's recorded model does not have.
-
-    ALK adds tables of its own to a world after its build, such as who may act once a world actor is added
-    later; they are not the agent's data, so the world is checked as it was built."""
+def _without_later_harness_tables(live: SourceModel, recorded: SourceModel) -> SourceModel:
+    """The live schema without the harness's own `_alk_` tables added after the build, which are not the agent's data."""
     from .source_model import SourceModel
+
 
     built = {table.name for table in recorded.tables}
     tables = tuple(

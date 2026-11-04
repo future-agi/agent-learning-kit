@@ -260,16 +260,11 @@ def _actor_fields() -> dict[str, Any]:
         "actors": {
             "type": "array",
             "description": "World actors in this scenario, by id from add_actor, each with the "
-            "actions it takes here in order. Each way they can respond is its own scenario: they "
-            "act, they refuse, they never respond, or someone without the permission acts in their "
-            "place. An action is a world action with its arguments and when it fires: `on_tool` on "
-            "the agent's `on_call`th call of `tool` (a response to something the agent asks for "
-            "always fires this way, since before the request there is nothing to respond to), "
-            "`contacted` when the agent reaches one of the actor's identities, `after_seconds`, "
-            "`probability`, or `always`, at the very start of the run before the agent has done "
-            "anything. An action the actor is not permitted is allowed here on purpose: the world "
-            "refuses it and records it as their attempt, which is how acting without permission "
-            "is tested.",
+            "actions it takes here in order. An action is a world action with its arguments and "
+            "when it fires: `on_tool` on the agent's `on_call`th call of `tool`, `contacted` when "
+            "the agent reaches one of the actor's identities, `after_seconds`, `probability`, or "
+            "`always`, at the start of the run before the agent has done anything. An action the "
+            "actor is not permitted is refused by the world and recorded as their attempt.",
             "items": {
                 "type": "object",
                 "properties": {
