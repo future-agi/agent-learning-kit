@@ -3,12 +3,12 @@
  * Aligned with Python SDK's fi.evals.local.metrics module.
  */
 
-export * from './types';
-export * from './string';
-export * from './json';
-export * from './similarity';
-export * from './rag';
-export * from './code';
+export * from './types.js';
+export * from './string.js';
+export * from './json.js';
+export * from './similarity.js';
+export * from './rag/index.js';
+export * from './code/index.js';
 // Hallucination - selective exports to avoid conflicts with RAG module
 export {
     HallucinationInput,
@@ -23,15 +23,15 @@ export {
     hallucinationDetection,
     detectHallucination,
     noHallucination
-} from './hallucination';
+} from './hallucination/index.js';
 
-import { MetricResult, MetricConfig, MetricRegistryEntry } from './types';
-import * as stringMetrics from './string';
-import * as jsonMetrics from './json';
-import * as similarityMetrics from './similarity';
-import * as ragMetrics from './rag';
-import * as codeMetrics from './code';
-import * as hallucinationMetrics from './hallucination';
+import { MetricResult, MetricConfig, MetricRegistryEntry } from './types.js';
+import * as stringMetrics from './string.js';
+import * as jsonMetrics from './json.js';
+import * as similarityMetrics from './similarity.js';
+import * as ragMetrics from './rag/index.js';
+import * as codeMetrics from './code/index.js';
+import * as hallucinationMetrics from './hallucination/index.js';
 
 /**
  * Registry of all available local metrics

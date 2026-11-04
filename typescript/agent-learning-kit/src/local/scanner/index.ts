@@ -73,7 +73,7 @@ export {
     compareSeverity,
     meetsSeverityThreshold,
     generateFindingId
-} from './types';
+} from './types.js';
 
 // Built-in Rules
 export {
@@ -91,7 +91,7 @@ export {
     getRulesByCategory,
     getDefaultRules,
     getRuleById
-} from './rules';
+} from './rules.js';
 
 // Scanner
 export {
@@ -100,4 +100,4 @@ export {
     quickScan,
     securityScan,
     privacyScan
-} from './scanner';
+} from './scanner.js';

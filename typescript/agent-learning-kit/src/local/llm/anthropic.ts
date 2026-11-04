@@ -3,8 +3,8 @@
  * @module local/llm/anthropic
  */
 
-import { AbstractLLM, DEFAULT_CONFIG } from './base';
-import { AnthropicConfig, ChatMessage, GenerateOptions, ChatOptions } from './types';
+import { AbstractLLM, DEFAULT_CONFIG } from './base.js';
+import { AnthropicConfig, ChatMessage, GenerateOptions, ChatOptions } from './types.js';
 
 /**
  * Default Anthropic configuration

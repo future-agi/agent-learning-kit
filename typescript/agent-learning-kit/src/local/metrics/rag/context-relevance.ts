@@ -13,7 +13,7 @@ import {
     jaccardSimilarity,
     normalizeContext,
     ngramOverlap
-} from './types';
+} from './types.js';
 
 /**
  * Calculate context relevance - how well the retrieved context matches the query.

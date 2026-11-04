@@ -1,6 +1,6 @@
 import axios, { AxiosError, AxiosInstance, AxiosResponse } from "axios";
 
-import { AUTH_ENVVAR_NAME, DEFAULT_SETTINGS, getBaseUrl } from "./constants";
+import { AUTH_ENVVAR_NAME, DEFAULT_SETTINGS, getBaseUrl } from "./constants.js";
 import {
     DatasetNotFoundError,
     InvalidAuthError,
@@ -8,9 +8,9 @@ import {
     RateLimitError,
     ServerError,
     ServiceUnavailableError,
-} from "./errors";
-import { BoundedExecutor } from "./executor";
-import { RequestConfig } from "./types";
+} from "./errors.js";
+import { BoundedExecutor } from "./executor.js";
+import { RequestConfig } from "./types.js";
 
 /**
  * Subclass to parse + validate a typed response.

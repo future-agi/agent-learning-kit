@@ -7,10 +7,10 @@ import {
     SDKException,
     InvalidValueType,
     MissingRequiredKey,
-} from './core';
-import { EvalResponseHandler, Evaluator } from './evaluator';
-import { Templates } from './templates';
-import { BatchRunResult } from './types';
+} from './core/index.js';
+import { EvalResponseHandler, Evaluator } from './evaluator.js';
+import { Templates } from './templates.js';
+import { BatchRunResult } from './types.js';
 
 const PROTECT_FLASH_ID = "76";
 

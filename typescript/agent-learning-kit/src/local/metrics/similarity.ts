@@ -3,7 +3,7 @@
  * Aligned with Python SDK's fi.evals.local.metrics.similarity module.
  */
 
-import { MetricResult, MetricConfig } from './types';
+import { MetricResult, MetricConfig } from './types.js';
 
 /**
  * Calculate BLEU score between response and reference

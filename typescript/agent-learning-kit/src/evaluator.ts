@@ -9,8 +9,8 @@ import {
     InvalidValueType,
     MissingRequiredKey,
     AUTH_ENVVAR_NAME,
-} from './core';
-import { mapInputsToBackend } from './core/cloudRegistry';
+} from './core/index.js';
+import { mapInputsToBackend } from './core/cloudRegistry.js';
 
 
 function coerceToApiInput(value: unknown): unknown {
@@ -26,8 +26,8 @@ function coerceToApiInput(value: unknown): unknown {
 }
 import { AxiosResponse } from 'axios';
 
-import { Execution, normalizeStatus } from './execution';
-import { EvalTemplate } from './templates';
+import { Execution, normalizeStatus } from './execution.js';
+import { EvalTemplate } from './templates.js';
 import {
     BatchRunResult,
     EvalResult,
@@ -36,7 +36,7 @@ import {
     EvaluateOptions,
     PipelineEvalData,
     PipelineResult
-} from './types';
+} from './types.js';
 
 
 /**

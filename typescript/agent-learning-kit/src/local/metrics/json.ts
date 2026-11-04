@@ -3,7 +3,7 @@
  * Aligned with Python SDK's fi.evals.local.metrics.json module.
  */
 
-import { MetricResult, MetricConfig } from './types';
+import { MetricResult, MetricConfig } from './types.js';
 
 /**
  * Check if the response contains valid JSON

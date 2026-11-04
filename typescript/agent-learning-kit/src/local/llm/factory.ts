@@ -3,10 +3,10 @@
  * @module local/llm/factory
  */
 
-import { BaseLLM, LLMProvider, OllamaConfig, OpenAIConfig, AnthropicConfig } from './types';
-import { OllamaLLM } from './ollama';
-import { OpenAILLM } from './openai';
-import { AnthropicLLM } from './anthropic';
+import { BaseLLM, LLMProvider, OllamaConfig, OpenAIConfig, AnthropicConfig } from './types.js';
+import { OllamaLLM } from './ollama.js';
+import { OpenAILLM } from './openai.js';
+import { AnthropicLLM } from './anthropic.js';
 
 /**
  * Configuration options for LLM factory

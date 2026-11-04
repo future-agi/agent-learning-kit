@@ -8,11 +8,11 @@ import {
     Finding,
     ScanContext,
     generateFindingId
-} from './types';
-import { sqlInjection } from '../metrics/code/sql-injection';
-import { xssDetection } from '../metrics/code/xss-detection';
-import { secretsDetection } from '../metrics/code/secrets-detection';
-import { hallucinationDetection } from '../metrics/hallucination';
+} from './types.js';
+import { sqlInjection } from '../metrics/code/sql-injection.js';
+import { xssDetection } from '../metrics/code/xss-detection.js';
+import { secretsDetection } from '../metrics/code/secrets-detection.js';
+import { hallucinationDetection } from '../metrics/hallucination/index.js';
 
 /**
  * Helper to find line number from character offset

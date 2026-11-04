@@ -3,7 +3,7 @@
  * @module local/autoeval/types
  */
 
-import { MetricResult } from '../metrics/types';
+import { MetricResult } from '../metrics/types.js';
 
 /**
  * Input types that AutoEval can detect and handle

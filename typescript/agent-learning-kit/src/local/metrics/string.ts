@@ -3,7 +3,7 @@
  * Aligned with Python SDK's fi.evals.local.metrics.string module.
  */
 
-import { MetricResult, MetricConfig } from './types';
+import { MetricResult, MetricConfig } from './types.js';
 
 /**
  * Check if text matches a regex pattern

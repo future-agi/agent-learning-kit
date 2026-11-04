@@ -3,7 +3,7 @@
  * @module local/streaming/types
  */
 
-import { MetricResult } from '../metrics/types';
+import { MetricResult } from '../metrics/types.js';
 
 /**
  * Event types emitted during streaming evaluation

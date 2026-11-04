@@ -12,10 +12,10 @@ import {
     SelectedMetric,
     MetricExecutionResult,
     ContentCharacteristics
-} from './types';
-import { analyzeContent, describeCharacteristics } from './analyzer';
-import { selectMetrics, buildMetricConfig } from './selector';
-import { runMetric, hasMetric } from '../metrics';
+} from './types.js';
+import { analyzeContent, describeCharacteristics } from './analyzer.js';
+import { selectMetrics, buildMetricConfig } from './selector.js';
+import { runMetric, hasMetric } from '../metrics/index.js';
 
 /**
  * AutoEval Pipeline - automatically selects and runs appropriate metrics.

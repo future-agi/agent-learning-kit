@@ -7,7 +7,7 @@
  * synchronously).
  */
 
-import { EvalResult } from './types';
+import { EvalResult } from './types.js';
 
 export type ExecutionKind = 'eval' | 'composite';
 export type ExecutionStatus =

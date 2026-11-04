@@ -11,7 +11,7 @@ import {
     CodeSecurityResult,
     SecurityIssue,
     createSecurityResult
-} from './types';
+} from './types.js';
 
 /**
  * Patterns that indicate hardcoded secrets

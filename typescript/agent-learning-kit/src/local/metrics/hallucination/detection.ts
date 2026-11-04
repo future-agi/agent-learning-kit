@@ -15,7 +15,7 @@ import {
     calculateOverlap,
     hallucinationTokenize as tokenize,
     hallucinationGetNgrams as getNgrams
-} from './types';
+} from './types.js';
 
 /**
  * Detect hallucinations in a response by checking if claims are supported by context.

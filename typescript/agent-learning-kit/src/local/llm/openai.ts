@@ -3,8 +3,8 @@
  * @module local/llm/openai
  */
 
-import { AbstractLLM, DEFAULT_CONFIG } from './base';
-import { OpenAIConfig, ChatMessage, GenerateOptions, ChatOptions } from './types';
+import { AbstractLLM, DEFAULT_CONFIG } from './base.js';
+import { OpenAIConfig, ChatMessage, GenerateOptions, ChatOptions } from './types.js';
 
 /**
  * Default OpenAI configuration

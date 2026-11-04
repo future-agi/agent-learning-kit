@@ -16,16 +16,16 @@ export {
     SEVERITY_LEVELS,
     meetsMinSeverity,
     createSecurityResult
-} from './types';
+} from './types.js';
 
 // SQL Injection Detection
-export { sqlInjection, noSqlInjection } from './sql-injection';
+export { sqlInjection, noSqlInjection } from './sql-injection.js';
 
 // XSS Detection
-export { xssDetection, noXss } from './xss-detection';
+export { xssDetection, noXss } from './xss-detection.js';
 
 // Secrets Detection
-export { secretsDetection, noSecrets, noHardcodedSecrets } from './secrets-detection';
+export { secretsDetection, noSecrets, noHardcodedSecrets } from './secrets-detection.js';
 
 /**
  * Run all security checks on code
@@ -43,10 +43,10 @@ export { secretsDetection, noSecrets, noHardcodedSecrets } from './secrets-detec
  * console.log(result.issues.length); // 2+
  * ```
  */
-import { CodeInput, CodeSecurityConfig, CodeSecurityResult, SecurityIssue, createSecurityResult } from './types';
-import { sqlInjection } from './sql-injection';
-import { xssDetection } from './xss-detection';
-import { secretsDetection } from './secrets-detection';
+import { CodeInput, CodeSecurityConfig, CodeSecurityResult, SecurityIssue, createSecurityResult } from './types.js';
+import { sqlInjection } from './sql-injection.js';
+import { xssDetection } from './xss-detection.js';
+import { secretsDetection } from './secrets-detection.js';
 
 export function allSecurityChecks(
     input: CodeInput,

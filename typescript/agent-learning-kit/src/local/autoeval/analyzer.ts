@@ -10,7 +10,7 @@ import {
     ContentCharacteristics,
     InputType,
     CODE_LANGUAGE_PATTERNS
-} from './types';
+} from './types.js';
 
 /**
  * Analyze input content to determine characteristics.

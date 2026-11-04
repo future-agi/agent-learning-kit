@@ -13,7 +13,7 @@ import {
     jaccardSimilarity,
     normalizeContext,
     extractSentences
-} from './types';
+} from './types.js';
 
 /**
  * Calculate context recall - proportion of relevant information that was retrieved.

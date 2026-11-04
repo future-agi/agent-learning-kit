@@ -63,7 +63,7 @@ export {
     StreamingState,
     STREAMING_CAPABLE_METRICS,
     canStreamMetric
-} from './types';
+} from './types.js';
 
 // Evaluator
 export {
@@ -71,4 +71,4 @@ export {
     createStreamingEvaluator,
     evaluateStream,
     streamWithEvaluation
-} from './evaluator';
+} from './evaluator.js';

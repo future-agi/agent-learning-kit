@@ -41,7 +41,7 @@ export {
     canRunLocally,
     requiresLLM,
     selectExecutionMode
-} from './execution-mode';
+} from './execution-mode.js';
 
 // Metrics
 export {
@@ -55,7 +55,7 @@ export {
     hasMetric,
     runMetric,
     getAvailableMetrics
-} from './metrics';
+} from './metrics/index.js';
 
 // String metrics
 export {
@@ -71,14 +71,14 @@ export {
     lengthLessThan,
     lengthGreaterThan,
     lengthBetween
-} from './metrics/string';
+} from './metrics/string.js';
 
 // JSON metrics
 export {
     containsJson,
     isJson,
     jsonSchema
-} from './metrics/json';
+} from './metrics/json.js';
 
 // Similarity metrics
 export {
@@ -88,7 +88,7 @@ export {
     levenshteinSimilarity,
     numericSimilarity,
     semanticListContains
-} from './metrics/similarity';
+} from './metrics/similarity.js';
 
 // RAG metrics
 export {
@@ -114,7 +114,7 @@ export {
     // Registry
     RAG_METRICS,
     RAG_METRIC_NAMES
-} from './metrics/rag';
+} from './metrics/rag/index.js';
 
 // LLM Providers
 export {
@@ -145,7 +145,7 @@ export {
     LLMFactory,
     LocalLLMFactory,
     FactoryConfig
-} from './llm';
+} from './llm.js';
 
 // Evaluators
 export {
@@ -154,7 +154,7 @@ export {
     EvaluationRequest,
     LocalEvaluator,
     HybridEvaluator
-} from './evaluator';
+} from './evaluator.js';
 
 // Code Security metrics
 export {
@@ -174,7 +174,7 @@ export {
     noHardcodedSecrets,
     allSecurityChecks,
     codeSecurityScan
-} from './metrics/code';
+} from './metrics/code/index.js';
 
 // Hallucination Detection
 export {
@@ -187,7 +187,7 @@ export {
     noHallucination,
     isFactualClaim,
     calculateOverlap
-} from './metrics/hallucination';
+} from './metrics/hallucination/index.js';
 
 // AutoEval Pipeline
 export {
@@ -215,7 +215,7 @@ export {
     AutoEvalPipeline,
     createAutoEval,
     autoEvaluate
-} from './autoeval';
+} from './autoeval/index.js';
 
 // Streaming Evaluation
 export {
@@ -239,7 +239,7 @@ export {
     createStreamingEvaluator,
     evaluateStream,
     streamWithEvaluation
-} from './streaming';
+} from './streaming/index.js';
 
 // Scanner Pipeline
 export {
@@ -279,4 +279,4 @@ export {
     quickScan,
     securityScan,
     privacyScan
-} from './scanner';
+} from './scanner/index.js';
