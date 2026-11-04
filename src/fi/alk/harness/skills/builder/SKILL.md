@@ -155,8 +155,8 @@ what the gates check. Then:
 - **Sub-goals**: `add_sub_goal` defines or repairs one in the shared catalogue.
 - **Sub-actors**, where `add_sub_actor` is offered: `add_sub_actor` and `drop_sub_actor` change the
   environment's list of who might be around its users, and no scenario changes with it. Including one
-  in scenarios changes what they test: give each its `sub_actors` entry and resubmit it. A share the person
-  asks for ("in 40% of scenarios", "none") goes to `aim_for` as `sub_actor_share` and replaces the
+  in scenarios changes what they test: give each its `sub_actors` entry and resubmit it. A share of
+  scenarios the person asks for, including none, goes to `aim_for` as `sub_actor_share` and replaces the
   default; brief the sub-agents with it. When a request does not say whether it means the list or
   scenarios, ask. An entry you write follows the write-scenarios rules for sub-actors. When a sub-actor
   or trigger the person asked for cannot be used with this agent, or a check refuses it, stop: tell them
