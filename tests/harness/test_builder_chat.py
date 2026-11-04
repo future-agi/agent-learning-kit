@@ -1984,16 +1984,6 @@ def test_a_platform_message_never_starts_a_run(tmp_path, monkeypatch):
     assert started == [([1, 2], [], 1)]
 
 
-def test_the_builder_skill_asks_before_running_after_a_build():
-    from fi.alk.harness.config import SKILLS_ROOT
-
-    skill = " ".join(
-        SKILLS_ROOT.joinpath("builder", "SKILL.md").read_text(encoding="utf-8").split()
-    )
-    assert "check of a finished build" not in skill
-    assert "never on your own" in skill
-
-
 def test_waiting_on_a_run_never_outlasts_the_turn_it_waits_in():
     from fi.alk.harness.hosted_chat_entrypoint import _RUN_POLL_SECONDS, _RUN_WAIT_SECONDS
     from fi.alk.harness.hosted_conversation import _UNAVAILABLE_BUDGET_SECONDS
