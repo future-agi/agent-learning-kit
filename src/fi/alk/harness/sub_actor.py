@@ -23,6 +23,8 @@ SWITCH = "HARNESS_SUB_ACTORS"
 # A name and a role are one-line labels, for actors and sub-actors alike.
 NAME_MAX_LENGTH = 80
 ROLE_MAX_LENGTH = 160
+# An id every part of the platform can address.
+ID_PATTERN = r"[a-z0-9_]{1,64}"
 
 
 def sub_actors_enabled() -> bool:
@@ -119,7 +121,7 @@ def entry_problems(actor: SubActor, *, modality: str) -> list[str]:
     problems = []
     if not actor.id.strip() or not actor.name.strip() or not actor.role.strip():
         problems.append("a sub-actor needs an id, a name and a role")
-    elif not re.fullmatch(r"[a-z0-9_]{1,64}", actor.id):
+    elif not re.fullmatch(ID_PATTERN, actor.id):
         problems.append(
             f"id {actor.id!r} must be 1 to 64 lowercase letters, digits or underscores"
         )
@@ -134,6 +136,27 @@ def entry_problems(actor: SubActor, *, modality: str) -> list[str]:
             f"its persona is named {named!r} but the sub-actor is {actor.name!r}"
         )
     return problems
+
+
+def record_schema() -> dict[str, Any]:
+    """A list entry's JSON schema with the rules `entry_problems` and loading apply, for checks made outside this
+    package; whether a channel fits the agent is in `channel_modalities`."""
+    from .scenario import Persona
+
+    body = SubActor.model_json_schema()
+    fields = body["properties"]
+    fields["id"]["pattern"] = f"^{ID_PATTERN}$"
+    for name in ("id", "name", "role"):
+        fields[name]["minLength"] = 1
+    fields["channel"]["enum"] = sorted(CHANNELS)
+    fields["persona"] = Persona.model_json_schema()
+    body["required"] = ["id", "name", "role", "channel"]
+    return body
+
+
+def channel_modalities() -> dict[str, list[str]]:
+    """The kinds of agent each channel can reach."""
+    return {name: sorted(one["modalities"]) for name, one in CHANNELS.items()}
 
 
 def scenario_problems(

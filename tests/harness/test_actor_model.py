@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from fi.alk.harness.actors import (
     ACTOR_RULES_FILE,
+    actor_rules,
     ActorList,
     load_actors,
     save_actors,
@@ -90,7 +91,12 @@ def test_a_sealed_bundle_carries_the_rules_its_release_checks_actors_by(tmp_path
     actor = declared["records"]["actors.json"]
     sub_actor = declared["records"]["sub_actors.json"]
     jsonschema.validate(_REVIEWER, actor)
-    partner = {"id": "partner", "name": "Sam", "channel": "audio_mix"}
+    partner = {
+        "id": "partner",
+        "name": "Sam",
+        "role": "the person's partner",
+        "channel": "audio_mix",
+    }
     jsonschema.validate({**partner, "loudness_ratio": 0.5}, sub_actor)
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate({**partner, "loudness_ratio": 2}, sub_actor)
@@ -109,3 +115,52 @@ def test_a_sealed_bundle_carries_the_rules_its_release_checks_actors_by(tmp_path
         actor["properties"]["id"]["description"]
         == "1 to 64 lowercase letters, digits or underscores"
     )
+
+
+_PARTNER = {
+    "id": "partner",
+    "name": "Sam",
+    "role": "the person's partner",
+    "channel": "audio_mix",
+}
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"persona": {"age_group": 30}},
+        {"role": ""},
+        {"name": ""},
+        {"id": "Front-Desk"},
+        {"channel": "carrier_pigeon"},
+    ],
+)
+def test_a_sub_actor_record_this_release_refuses_is_refused_by_its_sealed_rules_too(
+    change,
+):
+    from fi.alk.harness.sub_actor import SubActor, entry_problems
+
+    record = {**_PARTNER, **change}
+    try:
+        refused = bool(
+            entry_problems(SubActor.model_validate(record), modality="voice")
+        )
+    except ValidationError:
+        refused = True
+    assert refused
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(record, actor_rules()["records"]["sub_actors.json"])
+
+
+def test_the_sealed_rules_say_which_agents_each_channel_reaches_and_that_a_persona_keeps_the_name():
+    from fi.alk.harness.sub_actor import SubActor, entry_problems
+
+    rules = actor_rules()
+    assert rules["channel_modalities"]["audio_mix"] == ["voice"]
+    assert entry_problems(SubActor.model_validate(_PARTNER), modality="chat")
+    assert rules["equal_when_set"] == {"persona.name": "name"}
+    assert entry_problems(
+        SubActor.model_validate({**_PARTNER, "persona": {"name": "Alex"}}),
+        modality="voice",
+    )
+    jsonschema.validate(_PARTNER, rules["records"]["sub_actors.json"])

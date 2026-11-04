@@ -296,7 +296,7 @@ def actor_rules() -> dict[str, Any]:
     release that built it instead of keeping its own copy."""
     from fi.simulate.simulation.sub_actors import CHANNELS, DETAILS_MARK, LOUDNESS_RANGE
 
-    from .sub_actor import SubActor
+    from .sub_actor import channel_modalities, record_schema
 
     return {
         "schema": ACTOR_RULES_SCHEMA,
@@ -321,11 +321,15 @@ def actor_rules() -> dict[str, Any]:
         "channels": {
             name: str(one.get("about") or "") for name, one in CHANNELS.items()
         },
+        # The kinds of agent each call channel reaches; a sub-actor on a channel that does not reach its agent is refused.
+        "channel_modalities": channel_modalities(),
+        # Fields of a sub-actor that, when set, equal another of its fields.
+        "equal_when_set": {"persona.name": "name"},
         # The format tag each actor file is written with.
         "formats": {ACTORS_FILE: ACTORS_SCHEMA},
         "records": {
             ACTORS_FILE: Actor.model_json_schema(),
-            SUB_ACTORS_FILE: SubActor.model_json_schema(),
+            SUB_ACTORS_FILE: record_schema(),
         },
     }
 
