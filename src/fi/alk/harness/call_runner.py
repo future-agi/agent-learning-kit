@@ -957,6 +957,7 @@ def _merge_span_calls(calls: list[Call], from_spans: list[Call]) -> tuple[Call, 
             other.worker_id, other.worker_label = span.worker_id, span.worker_label
         other.delegated_to = other.delegated_to or span.delegated_to
         other.ended_at = other.ended_at or span.ended_at
+        other.runtime_ids = other.runtime_ids or span.runtime_ids
         # A span starts when the call does; another tracer may stamp a call only once it reads its result.
         other.at = span.at or other.at
     return tuple(sorted(merged, key=lambda call: call.at))
