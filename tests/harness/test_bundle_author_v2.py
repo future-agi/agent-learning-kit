@@ -263,6 +263,53 @@ def test_reseal_compiles_tools_added_to_a_traced_command_agent(tmp_path: Path) -
     assert "contract_copied" not in resealed.metadata
 
 
+def test_reseal_compiles_tools_added_to_a_bundle_sealed_before_framework_observation(tmp_path: Path) -> None:
+    from fi.alk.harness.bundle_author_v2 import _files
+    from fi.alk.harness.bundle_v2 import BUNDLE_V2_MANIFEST, seal_bundle_v2
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ready')\n")
+    (source / "agent_tools.py").write_text("def lookup(query): return query\ndef update(value): return value\n")
+    (source / "requirements.txt").write_text("requests==2.32.5\n")
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(authoring, command=["python", "agent.py"], interface={"kind": "command", "protocol": "fi.alk"})
+    contract_path = authoring / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract["tools"] = [{"name": "lookup", "args": ["query"]}]
+    contract["tool_entrypoints"] = [{"tool": "lookup", "mode": "import", "module": "agent_tools", "callable": "lookup"}]
+    contract_path.write_text(json.dumps(contract))
+    bundle = authoring / "environment-bundle"
+    author_bundle_v2(source=source, job=_job(connector="auto"), authoring=authoring, output=bundle)
+    # As the previous release sealed it: tool bindings at trace version 1, no framework observation.
+    manifest = load_bundle_v2(bundle)
+    observation = framework_instrumentation_command()
+    processes = [
+        process.model_copy(update={
+            "environment": {k: v for k, v in process.environment.items() if k != "ALK_OBSERVE_FRAMEWORKS"},
+            "build_commands": [step for step in process.build_commands if step != observation],
+        })
+        if hasattr(process, "build_commands")
+        else process
+        for process in manifest.processes
+    ]
+    manifest = manifest.model_copy(update={
+        "processes": processes, "files": _files(bundle),
+        "metadata": {**manifest.metadata, "source_tool_trace_version": 1},
+    })
+    manifest = manifest.model_copy(update={"digest": seal_bundle_v2(manifest)})
+    (bundle / BUNDLE_V2_MANIFEST).write_text(json.dumps(manifest.model_dump(mode="json"), indent=2, sort_keys=True) + "\n")
+    contract["tools"].append({"name": "update", "args": ["value"]})
+    contract["tool_entrypoints"].append({"tool": "update", "mode": "import", "module": "agent_tools", "callable": "update"})
+    contract_path.write_text(json.dumps(contract))
+
+    reseal_scenarios(authoring)
+
+    resealed = load_bundle_v2(bundle)
+    assert "handlers/update.py" in {file.path for file in resealed.files}
+    assert "contract_copied" not in resealed.metadata
+
+
 def test_reseal_preserves_construct_only_crewai_command_trace(tmp_path: Path) -> None:
     source = tmp_path / "source"
     source.mkdir()
@@ -311,7 +358,7 @@ def test_reseal_preserves_construct_only_crewai_command_trace(tmp_path: Path) ->
     assert json.loads(process.environment["ALK_TOOL_TRACE_BINDINGS"]) == [{
         "name": "editor", "module": "agent_tools", "callable": "Editor.update",
     }]
-    assert resealed.metadata["source_tool_trace_version"] == 2
+    assert resealed.metadata["source_tool_trace_version"] == _SOURCE_TOOL_TRACE_VERSION
 
 
 def _job(
@@ -787,7 +834,7 @@ def test_bundle_observes_imported_chat_tool_execution(tmp_path: Path) -> None:
     records = [json.loads(line) for line in trace.read_text().splitlines()]
     assert records[0]["name"] == "search_books"
     assert records[0]["arguments"] == {"query": "Dune"}
-    assert bundle.metadata["source_tool_trace_version"] == 2
+    assert bundle.metadata["source_tool_trace_version"] == _SOURCE_TOOL_TRACE_VERSION
 
 
 def test_tool_registration_is_not_observed_as_tool_execution(tmp_path: Path) -> None:

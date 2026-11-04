@@ -3116,7 +3116,7 @@ def _source_tool_trace_environment(
     return environment
 
 
-_SOURCE_TOOL_TRACE_VERSION = 2
+_SOURCE_TOOL_TRACE_VERSION = 1
 
 
 def _uses_source_tool_trace(processes: Sequence[Any]) -> bool:
