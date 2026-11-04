@@ -64,7 +64,7 @@ from fi.simulate.simulation.sub_actors import (
 )
 
 from .actor_dispatch import ActorDispatcher
-from .actors import AGENT, ScenarioActor, actors_enabled, load_actors
+from .actors import AGENT, ScenarioActor, load_actors
 from .background_noise import place_of, scenario_source
 from .bundle_v2 import EvidenceSeam
 from .sub_actor import ScenarioSubActor, load_sub_actors, sub_actors_enabled
@@ -989,7 +989,7 @@ def _actor_dispatcher(
     doc: Mapping[str, Any], bundle_dir: Path, runtime: EnvironmentRuntime, trial_id: str, budget: float
 ) -> ActorDispatcher | None:
     """The scenario's world actors for this trial, with a fresh token only they and the proxy hold."""
-    if not doc.get("actors") or not actors_enabled():
+    if not doc.get("actors") or not sub_actors_enabled():
         return None
     proxy = runtime.endpoints.get("tool_proxy")
     database = _find_postgres_endpoint(runtime)

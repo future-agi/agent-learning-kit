@@ -80,7 +80,7 @@ from .prove import (
     workspace_bindings,
     workspace_fixture,
 )
-from .actors import actors_enabled, load_actors
+from .actors import load_actors
 from .scenario import (
     ANSWERED_BY,
     CALLER_AWARENESS,
@@ -254,7 +254,7 @@ def _sub_actor_field() -> dict[str, Any]:
 
 def _actor_fields() -> dict[str, Any]:
     """The world-actor field, withheld entirely when the switch is off."""
-    if not actors_enabled():
+    if not sub_actors_enabled():
         return {}
     return {
         "actors": {
@@ -2952,7 +2952,7 @@ def world_summary(world_root: Path) -> str:
                 "\nSUB-ACTORS a scenario can include (the person's side, not the person):\n"
                 + listing.summary()
             )
-        acting = load_actors(world_root).actors if actors_enabled() else []
+        acting = load_actors(world_root).actors if sub_actors_enabled() else []
         if acting:
             lines.append("\nWORLD ACTORS (include one in a scenario's `actors`, by id, with its actions):")
             lines += [

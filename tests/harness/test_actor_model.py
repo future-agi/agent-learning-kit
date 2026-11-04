@@ -28,7 +28,6 @@ _MANAGER = {
     "permitted_actions": ["crm.approve_discount", "crm.reject_discount"],
     "activation": {"trigger": {"kind": "on_tool", "tool": "crm.request_approval"}, "fallback": "decline"},
     "kind": "a role nobody has named yet",
-    "play": "human",
 }
 
 
@@ -40,7 +39,7 @@ def test_a_full_record_round_trips_and_open_values_are_kept(tmp_path):
     assert again.constraints.private == ["The quarter's discount budget"]
     assert again.behaviour.response_timing.seconds == 5
     assert again.activation.trigger.tool == "crm.request_approval" and again.activation.fallback == "decline"
-    assert (again.kind, again.play) == ("a role nobody has named yet", "human")
+    assert again.kind == "a role nobody has named yet"
 
 
 @pytest.mark.parametrize(

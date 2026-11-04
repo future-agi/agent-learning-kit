@@ -18,7 +18,7 @@ from typing import Any
 
 from .backends import SessionSpec
 from .catalogue import Catalogue
-from .actors import actors_enabled
+from .sub_actor import sub_actors_enabled
 from .config import artifact_dir, chosen_model, discovered_skills, load_skill, provisioning
 from .contract import AgentContract, runtime_owns_tools
 from .session import Stage
@@ -318,7 +318,7 @@ def open_stage(
             f"{load_skill(SKILL)}\n\n## This agent\n\n{contract.brief(with_data=True)}"
             + environment_note
             # The stage that can add world actors is told when one is worth adding.
-            + discovered_skills(actors="on" if actors_enabled() else "off")
+            + discovered_skills(actors="on" if sub_actors_enabled() else "off")
         ),
         # No file tools and no shell. Everything this stage can do goes through a tool that
         # executes it and reports back, which is what makes the guardrails meaningful.

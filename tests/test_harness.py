@@ -9932,6 +9932,11 @@ def test_world_actors_are_offered_only_when_switched_on_and_kept_in_the_environm
     asyncio.run(call("add_actor", {**manager, "permitted_actions": ["crm.approve_discount", "crm.reject_discount"]}))
     [kept] = load_actors(tmp_path).actors
     assert kept.permitted_actions == ["crm.approve_discount", "crm.reject_discount"]
+    # In the build and the chat alike, an action the world lacks is kept and named, never a refusal.
+    lacking = asyncio.run(call("add_actor", {"id": "manager", "name": "Priya", "permitted_actions": ["crm.no_such_action"]}))
+    assert "crm.no_such_action is not among them" in lacking
+    assert load_actors(tmp_path).actors[0].permitted_actions == ["crm.no_such_action"]
+    asyncio.run(call("add_actor", {**manager, "permitted_actions": ["crm.approve_discount", "crm.reject_discount"]}))
     # Every field the editor sets can be set from the chat, and a later call changes only what it sends.
     full = {
         "id": "manager",

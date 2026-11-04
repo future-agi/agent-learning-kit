@@ -32,10 +32,9 @@ from ..actors import (
     Actor,
     ActorList,
     actor_input_schema,
-    actors_enabled,
     load_actors,
     save_actors,
-    world_action_names,
+    environment_actions,
 )
 from ..amend import add_rule, drop_rule, fix_tool, set_modality, widen
 from ..catalogue import (
@@ -700,10 +699,7 @@ def world_actor_tools(destination: Path, contract: AgentContract | None = None) 
 
     def world_actions() -> list[str]:
         # Read when called, so actions adopted later in the build count.
-        path = Path(destination) / "contract.json"
-        if path.is_file():
-            return world_action_names(json.loads(path.read_text(encoding="utf-8")))
-        return world_action_names(contract.model_dump()) if contract is not None else []
+        return environment_actions(destination, contract.model_dump() if contract is not None else None)
 
     # Known before the call when the world is already built (the builder chat), so one request is one confirmation.
     listed = world_actions()
@@ -776,7 +772,7 @@ ACTOR_SERVER = "actors"
 def actor_tools_server(contract: AgentContract, destination: Path) -> Any | None:
     """The cast alone, for a builder chat on a built environment: who is in the world and who is with the caller can
     still change after the world's tools and data are fixed. None when no actor tools are switched on."""
-    tools = (world_actor_tools(destination, contract) if actors_enabled() else []) + (
+    tools = (world_actor_tools(destination, contract) if sub_actors_enabled() else []) + (
         sub_actor_tools(contract, destination) if sub_actors_enabled() else []
     )
     if not tools:
@@ -2097,7 +2093,7 @@ def world_tools(
             run_env_command,
             check_world,
             save_world,
-            *(world_actor_tools(destination, contract) if actors_enabled() else []),
+            *(world_actor_tools(destination, contract) if sub_actors_enabled() else []),
         ]
         + (sub_actor_tools(contract, destination) if sub_actors_enabled() else []),
     )

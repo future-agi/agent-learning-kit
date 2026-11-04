@@ -13,9 +13,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-# One switch for every actor, on the caller's side or in the world.
-from .sub_actor import sub_actors_enabled as actors_enabled  # noqa: F401
-from .sub_actor import NAME_MAX_LENGTH, ROLE_MAX_LENGTH
+from .sub_actor import NAME_MAX_LENGTH, ROLE_MAX_LENGTH, SUB_ACTORS_FILE
 
 ACTORS_FILE = "actors.json"
 ACTORS_SCHEMA = "futureagi.actors.v1"
@@ -65,7 +63,7 @@ class Actor(BaseModel):
         description="1 to 64 lowercase letters, digits or underscores",
     )
     name: str = Field(min_length=1, max_length=NAME_MAX_LENGTH)
-    # Open sets: an unknown kind or play is kept and shown; only running an unknown play is refused.
+    # An open set: an unknown kind is kept and shown.
     kind: str = "person"
     side: Literal["caller", "world"] = "world"
     role: str = Field(default="", max_length=ROLE_MAX_LENGTH)
@@ -81,7 +79,6 @@ class Actor(BaseModel):
     # The prompt it plays from, written for this environment; empty is the surface's default.
     prompt: str = ""
     surface: str = "world.records"
-    play: str = "scheduled"
     # World actions, `<service>.<action>`; empty means this actor may do nothing in the world.
     permitted_actions: list[str] = Field(default_factory=list)
     # Who this actor is in each service, so the agent reaching one of these reaches this actor.
@@ -91,8 +88,6 @@ class Actor(BaseModel):
     loudness_ratio: float | None = Field(default=None, gt=0, le=1)
     # Who last set the record and each field; written by the platform, never taken from a client.
     provenance: dict[str, Any] = Field(default_factory=dict)
-    # Reserved for a real peer agent standing in for a simulated one.
-    card: dict[str, Any] | None = None
 
     @field_validator("id")
     @classmethod
@@ -257,6 +252,14 @@ def world_action_names(contract: dict[str, Any]) -> list[str]:
     return sorted(names)
 
 
+def environment_actions(destination: Path, contract: dict[str, Any] | None = None) -> list[str]:
+    """The world's actions in the environment's written contract, or in `contract` before it is written."""
+    path = Path(destination) / "contract.json"
+    if path.is_file():
+        return world_action_names(json.loads(path.read_text(encoding="utf-8")))
+    return world_action_names(contract) if contract is not None else []
+
+
 # Fields naming another listed actor, with the other values each also takes; `parent` may not form a cycle.
 REFERENCES = {
     "parent": [],
@@ -299,8 +302,8 @@ def actor_rules() -> dict[str, Any]:
         # The format tag each actor file is written with.
         "formats": {ACTORS_FILE: ACTORS_SCHEMA},
         "records": {
-            "actors.json": Actor.model_json_schema(),
-            "sub_actors.json": SubActor.model_json_schema(),
+            ACTORS_FILE: Actor.model_json_schema(),
+            SUB_ACTORS_FILE: SubActor.model_json_schema(),
         },
     }
 

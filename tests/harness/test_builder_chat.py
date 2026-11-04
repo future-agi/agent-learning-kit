@@ -2016,33 +2016,6 @@ def test_the_world_offers_only_actions_an_actor_can_send():
     assert world_action_names(contract) == ["records.approve", "records.read"]
 
 
-def test_an_actor_given_actions_the_world_lacks_is_sent_back_before_anyone_is_asked(tmp_path, monkeypatch):
-    from fi.alk.harness import actors
-    from fi.alk.harness.backends import ToolSpec
-    from fi.alk.harness.hosted_chat_entrypoint import _CONFIRM
-
-    runtime = _runtime(tmp_path, BuilderClient(), monkeypatch)
-    (tmp_path / "contract.json").write_text("{}")
-    monkeypatch.setattr(actors, "world_action_names", lambda contract: ["records.read", "records.approve"])
-    ran, asked = [], []
-
-    async def handler(args):
-        ran.append(args)
-        return {"content": [{"type": "text", "text": "added"}]}
-
-    async def ask(tool, payload, context):
-        asked.append(tool)
-        return {"content": [{"type": "text", "text": _CONFIRM}]}
-
-    runtime._ask = ask
-    add = runtime._confirmed(ToolSpec("add_actor", "", {}, handler))
-    lacking = asyncio.run(add.handler({"id": "lead", "name": "Lead", "permitted_actions": ["records.delete"]}))
-    assert lacking["is_error"] is True and "records.read, records.approve" in lacking["content"][0]["text"]
-    assert asked == [] and ran == []
-    assert asyncio.run(add.handler({"id": "lead", "name": "Lead", "permitted_actions": ["records.approve"]}))
-    assert asked == ["add_actor"] and len(ran) == 1
-
-
 def test_the_build_adds_sub_actors_without_asking_and_never_drops_one(
     tmp_path, monkeypatch
 ):
