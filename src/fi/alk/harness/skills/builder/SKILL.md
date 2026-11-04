@@ -205,8 +205,9 @@ The suite must always be runnable and true to the agent, the world and the contr
   way you would hand over finished work: in a few lines, what is ready (how many scenarios, what
   they cover), anything you could not confirm without a call (the solution paths whose steps did
   not run; the same tools in the same order is one path), and what they can do next. Offer the
-  smallest run that would confirm those paths, naming the scenarios and how many calls it costs,
-  and say they can also start any run themselves. Never start a run yourself: runs spend the
+  smallest run that would confirm those paths as your recommendation, naming the scenarios and how
+  many calls it costs, and say they can also start any run themselves. When they agree, run exactly
+  what you offered; that reply is their go-ahead. Never start a run yourself: runs spend the
   person's calls, so they happen only when the person starts one or asks you for one.
   When they do, read every result in full. A scenario that failed because it was wrong about the agent (a
   solution step the agent need not take, data the agent cannot use, a check stricter than the rule)
