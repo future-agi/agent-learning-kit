@@ -807,20 +807,28 @@ def _clear_tool_trace_calls(dsn: str) -> None:
 def read_tool_trace(dsn: str, *, timeout_ms: int | None = None) -> list[dict[str, Any]]:
     """The agent's own calls in the world's tool trace so far, in call order, read without writing. A world
     actor's actions are in the same table and are left out; a row from before `actor_id` existed is the agent's."""
+    return [
+        row
+        for row in _read_action_log(dsn, timeout_ms=timeout_ms)
+        if (row.get("actor_id") or AGENT) == AGENT
+    ]
+
+
+def _read_only(dsn: str, timeout_ms: int | None = None) -> Any:
     import psycopg
 
     options = "-c default_transaction_read_only=on"
     if timeout_ms is not None:
         options += f" -c statement_timeout={timeout_ms}"
-    with psycopg.connect(
-        dsn, autocommit=True, connect_timeout=5, options=options
-    ) as connection:
-        cursor = connection.execute(
-            f'SELECT * FROM "{_TOOL_TRACE_TABLE}" ORDER BY at ASC'  # noqa: S608
-        )
-        columns = [description[0] for description in cursor.description or []]
-        rows = [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
-    return [row for row in rows if (row.get("actor_id") or AGENT) == AGENT]
+    return psycopg.connect(dsn, autocommit=True, connect_timeout=5, options=options)
+
+
+def _action_log_rows(connection: Any) -> list[dict[str, Any]]:
+    cursor = connection.execute(
+        f'SELECT * FROM "{_TOOL_TRACE_TABLE}" ORDER BY at ASC'  # noqa: S608
+    )
+    columns = [description[0] for description in cursor.description or []]
+    return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
 
 
 def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
@@ -871,16 +879,33 @@ def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
     return tuple(calls)
 
 
-def _read_action_log(dsn: str) -> list[dict[str, Any]]:
+def _read_action_log(dsn: str, *, timeout_ms: int | None = None) -> list[dict[str, Any]]:
     """Every row of this trial's action log, every column, oldest first."""
-    import psycopg
+    with _read_only(dsn, timeout_ms) as connection:
+        return _action_log_rows(connection)
 
-    with psycopg.connect(
-        dsn, autocommit=True, connect_timeout=5, options="-c default_transaction_read_only=on"
-    ) as connection:
-        cursor = connection.execute(f'SELECT * FROM "{_TOOL_TRACE_TABLE}" ORDER BY at ASC')  # noqa: S608
-        columns = [description[0] for description in cursor.description or []]
-        return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
+
+class _ActionLog:
+    """This trial's action log, read over one connection while its actors wait; reopened after a failed read."""
+
+    def __init__(self, dsn: str) -> None:
+        self.dsn = dsn
+        self.connection: Any = None
+
+    def __call__(self) -> list[dict[str, Any]]:
+        if self.connection is None:
+            self.connection = _read_only(self.dsn)
+        try:
+            return _action_log_rows(self.connection)
+        except Exception:
+            self.close()
+            raise
+
+    def close(self) -> None:
+        if self.connection is not None:
+            with contextlib.suppress(Exception):
+                self.connection.close()
+            self.connection = None
 
 
 def _actor_rows(runtime: EnvironmentRuntime, bundle_dir: Path) -> list[dict[str, Any]]:
@@ -961,7 +986,7 @@ def _write_trial_token(path: Path, token: str) -> None:
 
 
 def _actor_dispatcher(
-    doc: Mapping[str, Any], bundle_dir: Path, runtime: EnvironmentRuntime, trial_id: str
+    doc: Mapping[str, Any], bundle_dir: Path, runtime: EnvironmentRuntime, trial_id: str, budget: float
 ) -> ActorDispatcher | None:
     """The scenario's world actors for this trial, with a fresh token only they and the proxy hold."""
     if not doc.get("actors") or not actors_enabled():
@@ -981,8 +1006,9 @@ def _actor_dispatcher(
         trial_id=trial_id,
         proxy_url=proxy.address,
         token=token,
-        read_log=lambda: _read_action_log(database.address),
+        read_log=_ActionLog(database.address),
         seed=trial_id,
+        timeout=budget,
     )
 
 
@@ -1630,7 +1656,7 @@ class CallRunnerImpl:
                     call_environ[SUB_ACTOR_WORLD_ALIAS] = endpoint.address
 
         actors = (
-            _actor_dispatcher(doc, self._context.bundle_dir, runtime, spec.run_id)
+            _actor_dispatcher(doc, self._context.bundle_dir, runtime, spec.run_id, run_seconds)
             if self._context.evidence_seam is EvidenceSeam.TOOL_TRACE
             else None
         )
@@ -1665,6 +1691,8 @@ class CallRunnerImpl:
                 Path(str(runtime.metadata["actor_proof_path"])).write_text("", encoding="utf-8")
                 with contextlib.suppress(asyncio.CancelledError):
                     await acting
+                if isinstance(actors.read_log, _ActionLog):
+                    await asyncio.to_thread(actors.read_log.close)
 
         try:
             report = await asyncio.wait_for(place_with_actors(), timeout=outer_timeout)

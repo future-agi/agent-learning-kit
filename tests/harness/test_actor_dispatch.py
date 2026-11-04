@@ -18,7 +18,7 @@ class _Clock:
         return self.now
 
 
-def _dispatcher(cast, log, clock=None, seed="trial-1"):
+def _dispatcher(cast, log, clock=None, seed="trial-1", reads=None):
     sent = []
     actors = {
         "manager": Actor(id="manager", name="Priya", permitted_actions=["crm.approve_discount"]),
@@ -35,8 +35,9 @@ def _dispatcher(cast, log, clock=None, seed="trial-1"):
         trial_id="trial-1",
         proxy_url="http://proxy/",
         token="t0ken",
-        read_log=lambda: list(log),
+        read_log=lambda: (reads.append(1) if reads is not None else None) or list(log),
         seed=seed,
+        timeout=60.0,
         clock=clock or _Clock(),
         send=send,
     )
@@ -44,12 +45,8 @@ def _dispatcher(cast, log, clock=None, seed="trial-1"):
 
 
 async def _ticks(dispatcher, count=3):
-    task = asyncio.create_task(dispatcher.run())
     for _ in range(count):
-        await asyncio.sleep(0.3)
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
+        await dispatcher.tick()
 
 
 def test_an_actor_acts_through_the_proxy_under_its_own_id_and_this_trial_s_token():
@@ -72,17 +69,16 @@ def test_an_action_on_the_agent_s_tool_call_fires_once_after_that_call_and_names
     dispatcher, sent = _dispatcher([{"id": "manager", "actions": [action]}], log)
 
     async def scenario():
-        task = asyncio.create_task(dispatcher.run())
-        await asyncio.sleep(0.6)
+        await dispatcher.tick()
         assert sent == []
         # An actor's own row never counts as the agent's call.
         log.append({"name": "request_approval", "actor_id": "coworker", "action_id": "x0"})
-        await asyncio.sleep(0.6)
+        await dispatcher.tick()
         assert sent == []
         log.append({"name": "request_approval", "actor_id": "agent", "action_id": "a1"})
         log.append({"name": "request_approval", "actor_id": "agent", "action_id": "a2"})
-        await asyncio.sleep(0.6)
-        await task
+        await dispatcher.tick()
+        await dispatcher.tick()
 
     asyncio.run(scenario())
     assert len(sent) == 1 and sent[0][1]["X-ALK-Parent-Event"] == "a1"
@@ -94,12 +90,10 @@ def test_an_action_after_a_delay_waits_for_it():
     dispatcher, sent = _dispatcher([{"id": "manager", "actions": [action]}], [], clock=clock)
 
     async def scenario():
-        task = asyncio.create_task(dispatcher.run())
-        await asyncio.sleep(0.6)
+        await dispatcher.tick()
         assert sent == []
         clock.now = 5
-        await asyncio.sleep(0.6)
-        await task
+        await dispatcher.tick()
 
     asyncio.run(scenario())
     assert len(sent) == 1 and "X-ALK-Parent-Event" not in sent[0][1]
@@ -179,3 +173,42 @@ def test_a_check_reads_who_did_what_from_the_world_s_action_log():
     view = object.__new__(ReadOnlyWorld)
     view._ReadOnlyWorld__world = world
     assert view.events("coworker") == world.events("coworker")
+
+
+def test_a_chance_action_its_draw_left_out_is_settled_at_once_and_never_waited_on():
+    action = {"action": "crm.approve_discount", "trigger": {"kind": "probability", "p": 0.0}}
+    dispatcher, sent = _dispatcher([{"id": "manager", "actions": [action]}], [])
+    assert dispatcher.pending == []
+    asyncio.run(asyncio.wait_for(dispatcher.run(), 1.0))
+    assert sent == []
+
+
+def test_the_log_is_read_only_while_an_action_waits_on_what_the_agent_does():
+    reads: list[int] = []
+    timed = {"action": "crm.approve_discount", "trigger": {"kind": "after_seconds", "seconds": 5}}
+    dispatcher, _sent = _dispatcher([{"id": "manager", "actions": [timed]}], [], reads=reads)
+    asyncio.run(_ticks(dispatcher))
+    assert reads == []
+    on_tool = {"action": "crm.approve_discount", "trigger": {"kind": "on_tool", "tool": "crm.request_approval"}}
+    dispatcher, _sent = _dispatcher([{"id": "manager", "actions": [on_tool]}], [], reads=reads)
+    asyncio.run(_ticks(dispatcher, 2))
+    assert reads == [1, 1]
+
+
+def test_an_action_s_request_is_bounded_by_the_call_s_budget(monkeypatch):
+    from fi.alk.harness import actor_dispatch
+
+    seen = []
+    monkeypatch.setattr(actor_dispatch, "_send", lambda url, headers, arguments, timeout: seen.append(timeout) or 201)
+    dispatcher = ActorDispatcher(
+        {"manager": Actor(id="manager", name="Priya")},
+        [ScenarioActor.model_validate({"id": "manager", "actions": [{"action": "crm.approve_discount"}]})],
+        trial_id="t",
+        proxy_url="http://proxy",
+        token="x",
+        read_log=list,
+        seed="s",
+        timeout=42.0,
+    )
+    asyncio.run(dispatcher.tick())
+    assert seen == [42.0]

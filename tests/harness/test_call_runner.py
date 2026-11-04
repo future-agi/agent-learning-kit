@@ -2194,11 +2194,11 @@ def test_world_actors_act_only_when_switched_on_with_a_proxy_taking_actor_reques
         metadata={"actor_proof_path": str(token)},
     )
     monkeypatch.delenv("HARNESS_SUB_ACTORS", raising=False)
-    assert cr._actor_dispatcher(doc, bundle, ready, "t1") is None
+    assert cr._actor_dispatcher(doc, bundle, ready, "t1", 60.0) is None
     monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
-    assert cr._actor_dispatcher({}, bundle, ready, "t1") is None
-    assert cr._actor_dispatcher(doc, bundle, _runtime(endpoints={"database": _postgres_endpoint()}), "t1") is None
-    dispatcher = cr._actor_dispatcher(doc, bundle, ready, "t1")
+    assert cr._actor_dispatcher({}, bundle, ready, "t1", 60.0) is None
+    assert cr._actor_dispatcher(doc, bundle, _runtime(endpoints={"database": _postgres_endpoint()}), "t1", 60.0) is None
+    dispatcher = cr._actor_dispatcher(doc, bundle, ready, "t1", 60.0)
     assert dispatcher is not None and dispatcher.proxy_url == "http://127.0.0.1:9"
     assert token.read_text() == dispatcher.token and len(dispatcher.token) == 64
     assert token.stat().st_mode & 0o777 == 0o600
@@ -2206,7 +2206,7 @@ def test_world_actors_act_only_when_switched_on_with_a_proxy_taking_actor_reques
     elsewhere.write_text("untouched")
     token.unlink()
     token.symlink_to(elsewhere)
-    assert cr._actor_dispatcher(doc, bundle, ready, "t2").token != dispatcher.token
+    assert cr._actor_dispatcher(doc, bundle, ready, "t2", 60.0).token != dispatcher.token
     assert elsewhere.read_text() == "untouched" and not token.is_symlink()
 
 
@@ -2313,3 +2313,34 @@ def test_a_trial_s_actor_token_holds_only_while_its_call_runs(tmp_path, monkeypa
         ),
     )
     assert len(during[0]) == 64 and token.read_text() == ""
+
+
+def test_a_trial_s_action_log_is_read_over_one_connection_and_reopened_after_a_failed_read(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    opened = []
+
+    class _Connection:
+        def __init__(self) -> None:
+            self.fail = False
+            self.closed = False
+
+        def execute(self, _sql):
+            if self.fail:
+                raise RuntimeError("connection lost")
+            return SimpleNamespace(description=[("name",)], fetchall=lambda: [("approve",)])
+
+        def close(self) -> None:
+            self.closed = True
+
+    def connect(_dsn, _timeout_ms=None):
+        opened.append(_Connection())
+        return opened[-1]
+
+    monkeypatch.setattr(cr, "_read_only", connect)
+    log = cr._ActionLog("postgresql://world")
+    assert log() == log() == [{"name": "approve"}] and len(opened) == 1
+    opened[0].fail = True
+    with pytest.raises(RuntimeError):
+        log()
+    assert opened[0].closed and log() == [{"name": "approve"}] and len(opened) == 2

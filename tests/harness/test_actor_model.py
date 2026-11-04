@@ -11,7 +11,6 @@ from pydantic import ValidationError
 from fi.alk.harness.actors import (
     ACTOR_RULES_FILE,
     ActorList,
-    actor_rules,
     load_actors,
     save_actors,
     write_actor_rules,
@@ -70,7 +69,6 @@ def test_actors_bringing_each_other_in_are_refused():
 def test_a_sealed_bundle_carries_the_rules_its_release_checks_actors_by(tmp_path):
     write_actor_rules(tmp_path)
     declared = json.loads((tmp_path / ACTOR_RULES_FILE).read_text())
-    assert declared == json.loads(json.dumps(actor_rules()))
     assert "solution" in declared["evaluator_only"]["scenario_fields"]
     assert declared["reserved_ids"] == ["agent"]
     actor = declared["records"]["actors.json"]

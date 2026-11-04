@@ -153,18 +153,17 @@ def test_the_coworker_cannot_authorise_the_discount_the_manager_can_and_the_tria
         ),
     ]
     dispatcher = ActorDispatcher(
-        ACTORS.by_id(), cast, trial_id="t1", proxy_url=url, token=TOKEN, read_log=log, seed="t1"
+        ACTORS.by_id(), cast, trial_id="t1", proxy_url=url, token=TOKEN, read_log=log, seed="t1", timeout=30.0
     )
 
     async def trial() -> None:
-        acting = asyncio.create_task(dispatcher.run())
-        await asyncio.sleep(0.6)
+        await dispatcher.tick()
         # The coworker's message and attempt are in; the discount still needs an approval.
         assert await asyncio.to_thread(_agent, url, "/crm/update_deal", {"deal": "d1", "discount": 15}) == 403
         assert await asyncio.to_thread(_agent, url, "/crm/request_approval", {"deal": "d1"}) == 200
-        await asyncio.sleep(0.8)
+        await dispatcher.tick()
         assert await asyncio.to_thread(_agent, url, "/crm/update_deal", {"deal": "d1", "discount": 15}) == 200
-        await asyncio.wait_for(acting, timeout=5)
+        assert dispatcher.pending == []
 
     asyncio.run(trial())
 

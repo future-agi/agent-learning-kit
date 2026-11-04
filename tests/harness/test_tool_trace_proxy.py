@@ -231,3 +231,15 @@ def test_an_actor_the_world_does_not_list_is_refused(proxy):
     assert _post(url, "/crm/approve_discount", {"deal": "1"}, **_as("stranger"))[0] == 403
     assert _World.seen == []
     assert [(r["actor_id"], r["refusal_code"]) for r in rows()] == [("stranger", "unknown_actor")]
+
+
+def test_an_actor_list_the_world_cannot_read_is_the_world_s_fault_and_never_reaches_it(proxy, store):
+    import psycopg
+
+    url, rows = proxy
+    with psycopg.connect(store.dsn(), autocommit=True) as connection:
+        connection.execute("DROP TABLE _alk_actors")
+    status, payload = _post(url, "/crm/approve_discount", {"deal": "1"}, **_as("manager"))
+    assert status == 503 and payload == {"detail": "the world could not check this actor"}
+    assert _World.seen == []
+    assert [(r["actor_id"], r["outcome"]) for r in rows()] == [("manager", "faulted")]
