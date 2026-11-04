@@ -392,29 +392,8 @@ _AGENT_NAME_KEYS = (
 # The conversation a span belongs to; a background job runs as its own conversation, named by the id the launching
 # tool call returned.
 _CONVERSATION_KEYS = ("gen_ai.conversation.id", "session.id")
-def _answer(output: str) -> str:
-    """A job's answer: the last message that says something when it returns its whole conversation, so cutting the
-    record to length keeps the answer rather than the task it started from."""
-    try:
-        parsed = json.loads(output)
-    except ValueError:
-        return output
-    messages = parsed.get("messages") if isinstance(parsed, dict) else None
-    if not isinstance(messages, list):
-        return output
-    for message in reversed(messages):
-        if isinstance(message, dict):
-            said = str(message.get("content") or "").strip()
-        else:
-            text = str(message).strip()
-            said = text
-            if text.startswith("content=") and len(text) > 8 and text[8] in "'\"":
-                quote = text[8]
-                end = text.find(quote + " ", 9)
-                said = text[9:end if end >= 0 else len(text) - 1 if text.endswith(quote) else len(text)].strip()
-        if said:
-            return said
-    return output
+# The text of a model call's first output message, as traceAI and OpenInference flatten it.
+_SAID_KEYS = ("gen_ai.output.messages.0.message.content", "llm.output_messages.0.message.content")
 
 
 _LAUNCHES_MAX = 256
@@ -505,6 +484,8 @@ class _ToolSpans:
         # Runs with no parent not yet joined to a launch, with the attributes last seen in them: a run's own span is
         # often named only when it ends, so the spans inside it name it first.
         self._waiting = {}
+        # What a model last said in each open run, read as a job's answer when the run ends.
+        self._said = {}
         self._lock = threading.Lock()
 
     def started(self, span) -> None:
@@ -604,9 +585,15 @@ class _ToolSpans:
         kind = _kind(span)
         try:
             entry = self._live.get(span_id)
+            said = _first(span.attributes or {}, _SAID_KEYS)
+            if said and said.strip() and entry is not None and entry[1] is not None:
+                root = self._root(span_id)
+                if root is not None and (root in self._said or len(self._said) < _LAUNCHES_MAX):
+                    self._said[root] = said
             if entry is not None and entry[1] is None and kind != "TOOL":
                 self._waiting.pop(span_id, None)
                 self._job_record(span, span_id, ended=True)
+                self._said.pop(span_id, None)
             elif self._waiting:
                 self._join_waiting(self._root(span_id), span.attributes)
             if kind == "AGENT":
@@ -657,7 +644,7 @@ class _ToolSpans:
         record = {
             "name": launch["name"],
             "arguments": launch["arguments"],
-            "output": _answer(_first(attributes, _TOOL_RESULT_KEYS) or "")[:4096] if ended else "",
+            "output": (self._said.get(span_id) or _first(attributes, _TOOL_RESULT_KEYS) or "")[:4096] if ended else "",
             "is_error": ended and getattr(status, "name", "") == "ERROR",
             "at": (span.start_time or 0) / 1e9,
             **({"ended_at": (span.end_time or 0) / 1e9} if ended else {}),

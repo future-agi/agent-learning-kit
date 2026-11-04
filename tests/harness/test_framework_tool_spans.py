@@ -119,6 +119,22 @@ def test_a_background_job_is_a_hand_off_from_the_tool_call_that_launched_it(tmp_
         assert 0 < hand_off["at"] <= hand_off["ended_at"]
 
 
+def test_a_job_s_answer_is_what_its_model_last_said_not_its_whole_conversation(tmp_path: Path) -> None:
+    records = _run(tmp_path, """
+        sup = {"gen_ai.conversation.id": "thread-sup"}
+        with span("agent", **{"gen_ai.span.kind": "AGENT", **sup}):
+            with span("start_async_task", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "start_async_task",
+                                             "output.value": "Launched. task_id: job-c", **sup}):
+                pass
+        own = {"lc_agent_name": "coder", "gen_ai.conversation.id": "job-c"}
+        with span("coder", **{"gen_ai.span.kind": "CHAIN", "output.value": '{"messages": ["<the task>", "<the answer>"]}', **own}):
+            for said in ("<the answer>", ""):
+                with span("model", **{"gen_ai.span.kind": "LLM", "gen_ai.output.messages.0.message.content": said, **own}):
+                    pass
+    """)
+    assert [r["output"] for r in records if r.get("delegated_to") and "ended_at" in r] == ["<the answer>"]
+
+
 def test_a_job_still_running_when_the_call_ends_keeps_its_hand_off(tmp_path: Path) -> None:
     # The job starts and makes a tool call, but has not finished when the process stops.
     records = _run(tmp_path, """
