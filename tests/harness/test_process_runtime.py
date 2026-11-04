@@ -3441,36 +3441,64 @@ def test_canonical_seed_replays_bundled_discovery_without_authoring_directory(
     ids=["actors-added-after-build", "built-with-actors", "agent-schema-changed"],
 )
 def test_canonical_seed_checks_the_world_as_built_whatever_alk_adds_later(
-    tmp_path: Path, monkeypatch, built_with: tuple[str, ...], live_adds: tuple[str, ...], applies: bool
+    tmp_path: Path,
+    monkeypatch,
+    built_with: tuple[str, ...],
+    live_adds: tuple[str, ...],
+    applies: bool,
 ) -> None:
     from contextlib import nullcontext
 
     from fi.alk.harness.compile import postgres as compiler
-    from fi.alk.harness.source_model import LogicalType, SourceColumn, SourceModel, SourceTable
+    from fi.alk.harness.source_model import (
+        LogicalType,
+        SourceColumn,
+        SourceModel,
+        SourceTable,
+    )
     from fi.alk.harness.source_schema import postgres as schema
     from fi.alk.harness.world_ir import WorldIR
 
     def table(name: str) -> SourceTable:
-        column = SourceColumn(name="id", logical_type=LogicalType.STRING, native_type="text", nullable=False,
-                              has_default=False)
+        column = SourceColumn(
+            name="id",
+            logical_type=LogicalType.STRING,
+            native_type="text",
+            nullable=False,
+            has_default=False,
+        )
         return SourceTable(name=name, columns=(column,), primary_key=("id",))
 
     digest = "sha256:" + "a" * 64
     built = ("_alk_tool_trace", "items", *built_with)
-    recorded = SourceModel.create(source_digest=digest, engine="postgres", tables=tuple(map(table, built)))
+    recorded = SourceModel.create(
+        source_digest=digest, engine="postgres", tables=tuple(map(table, built))
+    )
     live = SourceModel.create(
-        source_digest=digest, engine="postgres", tables=tuple(map(table, (*built, *live_adds)))
+        source_digest=digest,
+        engine="postgres",
+        tables=tuple(map(table, (*built, *live_adds))),
     )
     seed = tmp_path / "seed"
     seed.mkdir()
     (seed / "source-model.json").write_text(recorded.model_dump_json())
     (seed / "world-ir.json").write_text(
-        WorldIR.create(source_model_fingerprint=recorded.fingerprint, tables=()).model_dump_json()
+        WorldIR.create(
+            source_model_fingerprint=recorded.fingerprint, tables=()
+        ).model_dump_json()
     )
     applied = []
-    monkeypatch.setitem(sys.modules, "psycopg", types.SimpleNamespace(connect=lambda **_: nullcontext(object())))
+    monkeypatch.setitem(
+        sys.modules,
+        "psycopg",
+        types.SimpleNamespace(connect=lambda **_: nullcontext(object())),
+    )
     monkeypatch.setattr(schema, "inspect_postgres", lambda *_args, **_kwargs: live)
-    monkeypatch.setattr(compiler, "apply_postgres", lambda _connection, compiled: applied.append(compiled))
+    monkeypatch.setattr(
+        compiler,
+        "apply_postgres",
+        lambda _connection, compiled: applied.append(compiled),
+    )
 
     def seed_world():
         pr.apply_postgres_world_ir(
@@ -3485,7 +3513,9 @@ def test_canonical_seed_checks_the_world_as_built_whatever_alk_adds_later(
         seed_world()
         assert applied[0].source_schema_hash == recorded.fingerprint
     else:
-        with pytest.raises(pr.GenericWorldSeedError, match="source_model_fingerprint_mismatch"):
+        with pytest.raises(
+            pr.GenericWorldSeedError, match="source_model_fingerprint_mismatch"
+        ):
             seed_world()
         assert not applied
 
@@ -10476,7 +10506,9 @@ def test_native_config_resource_path_rejects_escape_at_model_boundary(path):
         _source_process(config_files={path: {"values": {"MODE": "test"}}})
 
 
-def test_only_the_call_runner_learns_where_the_tool_proxy_reads_a_trial_s_actor_token(tmp_path) -> None:
+def test_only_the_call_runner_learns_where_the_tool_proxy_reads_a_trial_s_actor_token(
+    tmp_path,
+) -> None:
     from types import SimpleNamespace
 
     from fi.alk.harness.process_runtime import ProcessRuntimeProvider
@@ -10491,7 +10523,7 @@ def test_only_the_call_runner_learns_where_the_tool_proxy_reads_a_trial_s_actor_
         )
         return ProcessRuntimeProvider._control_metadata(provider, 2)
 
-    assert metadata({"ACTOR_PROOF_FILE": "{{WORLD_DIR}}/actor-token"})["actor_proof_path"] == str(
-        tmp_path / "worlds" / "w2" / "tool-proxy" / "actor-token"
-    )
+    assert metadata({"ACTOR_PROOF_FILE": "{{WORLD_DIR}}/actor-token"})[
+        "actor_proof_path"
+    ] == str(tmp_path / "worlds" / "w2" / "tool-proxy" / "actor-token")
     assert "actor_proof_path" not in metadata({})

@@ -208,7 +208,9 @@ def scenario_problems(
     return ["sub_actors: " + problem for problem in problems]
 
 
-def scenarios_using(destination: Path, sub_actor_id: str, listed_in: str = "sub_actors") -> list[str]:
+def scenarios_using(
+    destination: Path, sub_actor_id: str, listed_in: str = "sub_actors"
+) -> list[str]:
     """The written scenarios that include this sub-actor, or this world actor when `listed_in` is `actors`."""
     found = []
     for document in sorted((Path(destination) / "scenarios").glob("*/scenario.json")):

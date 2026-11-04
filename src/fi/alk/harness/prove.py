@@ -359,9 +359,20 @@ class _WorldActors:
     """A scenario's world actors during a proof: each permitted action on a trigger the reference solution meets,
     played the way the run plays it at the world's door. None of their calls is the agent's."""
 
-    def __init__(self, scenario: Scenario, world_root: Path, world: GeneratedWorld, by_actors: set[int]) -> None:
+    def __init__(
+        self,
+        scenario: Scenario,
+        world_root: Path,
+        world: GeneratedWorld,
+        by_actors: set[int],
+    ) -> None:
         listed = load_actors(world_root).by_id()
-        self.pending = [(listed[entry.id], action) for entry in scenario.actors if entry.id in listed for action in entry.actions]
+        self.pending = [
+            (listed[entry.id], action)
+            for entry in scenario.actors
+            if entry.id in listed
+            for action in entry.actions
+        ]
         self.world = world
         self.by_actors = by_actors
         self.counts: dict[str, int] = {}
@@ -371,7 +382,10 @@ class _WorldActors:
         if step is None:
             return trigger.kind == "always"
         if trigger.kind == "on_tool":
-            return trigger.tool.rsplit(".", 1)[-1] == step.tool and self.counts.get(step.tool) == trigger.on_call
+            return (
+                trigger.tool.rsplit(".", 1)[-1] == step.tool
+                and self.counts.get(step.tool) == trigger.on_call
+            )
         if trigger.kind == "contacted":
             from .actor_dispatch import contacts
 
@@ -391,7 +405,10 @@ class _WorldActors:
             # A source-hosted world knows the action by its route; a generated one by its name.
             route = action.action.replace(".", "/")
             known = route in getattr(self.world, "endpoints", ())
-            self.world.call(route if known else action.action.rsplit(".", 1)[-1], dict(action.arguments))
+            self.world.call(
+                route if known else action.action.rsplit(".", 1)[-1],
+                dict(action.arguments),
+            )
             self.by_actors.update(range(before, len(self.world.calls)))
 
 

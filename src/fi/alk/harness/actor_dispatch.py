@@ -23,7 +23,9 @@ logger = logging.getLogger(__name__)
 POLL_SECONDS = 0.25
 
 
-def _send(url: str, headers: dict[str, str], arguments: dict[str, Any], timeout: float) -> int:
+def _send(
+    url: str, headers: dict[str, str], arguments: dict[str, Any], timeout: float
+) -> int:
     outgoing = request.Request(
         url,
         data=json.dumps(arguments).encode(),
@@ -41,7 +43,10 @@ def contacts(arguments: Any, actor: Actor) -> bool:
     """Whether one of the agent's actions is addressed to one of this actor's identities: an argument value equal
     to one, compared in the same encoding so any character matches."""
     said = json.dumps(arguments or {}, default=str)
-    return any(identity and json.dumps(identity) in said for identity in actor.identities.values())
+    return any(
+        identity and json.dumps(identity) in said
+        for identity in actor.identities.values()
+    )
 
 
 class ActorDispatcher:
@@ -64,7 +69,9 @@ class ActorDispatcher:
         self.trial_id = trial_id
         self.read_log = read_log
         self.clock = clock
-        self.send = send or (lambda url, headers, arguments: _send(url, headers, arguments, timeout))
+        self.send = send or (
+            lambda url, headers, arguments: _send(url, headers, arguments, timeout)
+        )
         listed = [
             (actors[entry.id], index, action)
             for entry in cast
@@ -82,7 +89,11 @@ class ActorDispatcher:
         self.fired: list[dict[str, Any]] = []
 
     def _cause(
-        self, actor: Actor, action: ScheduledAction, elapsed: float, log: list[dict[str, Any]]
+        self,
+        actor: Actor,
+        action: ScheduledAction,
+        elapsed: float,
+        log: list[dict[str, Any]],
     ) -> str | None:
         """Whether this action is due now: "" when due with no cause in the log, the causing action's id
         when an agent action caused it, None when not due yet."""
@@ -96,14 +107,27 @@ class ActorDispatcher:
             return ""
         if trigger.kind == "on_tool":
             # The log names an action by its last part, as the agent's tool calls always have been.
-            calls = [row for row in agent_rows if row.get("name") == trigger.tool.rsplit(".", 1)[-1]]
-            return str(calls[trigger.on_call - 1].get("action_id") or "") if len(calls) >= trigger.on_call else None
+            calls = [
+                row
+                for row in agent_rows
+                if row.get("name") == trigger.tool.rsplit(".", 1)[-1]
+            ]
+            return (
+                str(calls[trigger.on_call - 1].get("action_id") or "")
+                if len(calls) >= trigger.on_call
+                else None
+            )
         if trigger.kind == "contacted":
-            reached = next((row for row in agent_rows if contacts(row.get("arguments"), actor)), None)
+            reached = next(
+                (row for row in agent_rows if contacts(row.get("arguments"), actor)),
+                None,
+            )
             return None if reached is None else str(reached.get("action_id") or "")
         return None
 
-    async def _fire(self, actor: Actor, index: int, action: ScheduledAction, cause: str) -> None:
+    async def _fire(
+        self, actor: Actor, index: int, action: ScheduledAction, cause: str
+    ) -> None:
         headers = {
             "X-ALK-Actor": actor.id,
             "X-ALK-Actor-Token": self.token,
@@ -113,14 +137,24 @@ class ActorDispatcher:
             headers["X-ALK-Parent-Event"] = cause
         url = f"{self.proxy_url}/{action.action.replace('.', '/')}"
         status = await asyncio.to_thread(self.send, url, headers, action.arguments)
-        self.fired.append({"actor": actor.id, "action": action.action, "status": status, "parent": cause or None})
+        self.fired.append(
+            {
+                "actor": actor.id,
+                "action": action.action,
+                "status": status,
+                "parent": cause or None,
+            }
+        )
 
     async def tick(self) -> None:
         """Fires every pending action whose trigger is met now; the log is read only when one depends on it."""
         if self.started is None:
             self.started = self.clock()
         log: list[dict[str, Any]] = []
-        if any(action.trigger.kind in ("on_tool", "contacted") for _, _, action in self.pending):
+        if any(
+            action.trigger.kind in ("on_tool", "contacted")
+            for _, _, action in self.pending
+        ):
             try:
                 log = await asyncio.to_thread(self.read_log)
             except Exception:  # noqa: BLE001 - an unreadable log this tick is retried next tick
@@ -134,7 +168,12 @@ class ActorDispatcher:
             try:
                 await self._fire(actor, index, action, cause)
             except Exception as exc:  # noqa: BLE001 - one failed action never stops the rest
-                logger.warning("actor action %s by %s could not be sent: %s", action.action, actor.id, type(exc).__name__)
+                logger.warning(
+                    "actor action %s by %s could not be sent: %s",
+                    action.action,
+                    actor.id,
+                    type(exc).__name__,
+                )
 
     async def run(self) -> None:
         """Fires every action once, when its trigger is met; runs until the trial is over and it is cancelled."""

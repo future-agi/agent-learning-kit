@@ -18,14 +18,28 @@ from fi.alk.harness.actor_dispatch import ActorDispatcher
 from fi.alk.harness.actors import Actor, ActorList, ScenarioActor, actors_seed
 from fi.alk.harness.bundle_author_v2 import _TOOL_TRACE_DDL
 
-pytestmark = pytest.mark.skipif(not docker_available(), reason="docker daemon unavailable")
+pytestmark = pytest.mark.skipif(
+    not docker_available(), reason="docker daemon unavailable"
+)
 
-_PROXY = Path(__file__).parents[2] / "src" / "fi" / "alk" / "harness" / "tool_trace_proxy.py"
+_PROXY = (
+    Path(__file__).parents[2] / "src" / "fi" / "alk" / "harness" / "tool_trace_proxy.py"
+)
 TOKEN = "trial-token"
 ACTORS = ActorList(
     actors=[
-        Actor(id="reviewer", name="Robin", role="reviewer", permitted_actions=["records.approve"]),
-        Actor(id="coworker", name="Sam", role="coworker", permitted_actions=["slack.post_message"]),
+        Actor(
+            id="reviewer",
+            name="Robin",
+            role="reviewer",
+            permitted_actions=["records.approve"],
+        ),
+        Actor(
+            id="coworker",
+            name="Sam",
+            role="coworker",
+            permitted_actions=["slack.post_message"],
+        ),
     ]
 )
 
@@ -39,20 +53,28 @@ def _crm(dsn: str) -> type[BaseHTTPRequestHandler]:
             return
 
         def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
-            body = json.loads(self.rfile.read(int(self.headers.get("content-length") or 0)) or b"{}")
+            body = json.loads(
+                self.rfile.read(int(self.headers.get("content-length") or 0)) or b"{}"
+            )
             with psycopg.connect(dsn, autocommit=True) as connection:
                 if self.path == "/records/approve":
-                    connection.execute("INSERT INTO approvals(item) VALUES (%s)", (body["item"],))
+                    connection.execute(
+                        "INSERT INTO approvals(item) VALUES (%s)", (body["item"],)
+                    )
                     status, payload = 201, {"approved": body["item"]}
                 elif self.path == "/records/update":
                     approved = connection.execute(
                         "SELECT 1 FROM approvals WHERE item = %s", (body["item"],)
                     ).fetchone()
                     if body.get("change") and not approved:
-                        status, payload = 403, {"detail": "a change needs an approval first"}
+                        status, payload = (
+                            403,
+                            {"detail": "a change needs an approval first"},
+                        )
                     else:
                         connection.execute(
-                            "UPDATE items SET change = %s WHERE id = %s", (body["change"], body["item"])
+                            "UPDATE items SET change = %s WHERE id = %s",
+                            (body["change"], body["item"]),
                         )
                         status, payload = 200, {"updated": body["item"]}
                 else:
@@ -84,7 +106,9 @@ def world(monkeypatch, tmp_path):
     dsn = store.dsn()
     with psycopg.connect(dsn, autocommit=True) as connection:
         connection.execute(_TOOL_TRACE_DDL + actors_seed(ACTORS))
-        connection.execute("CREATE TABLE items (id text PRIMARY KEY, change int NOT NULL DEFAULT 0)")
+        connection.execute(
+            "CREATE TABLE items (id text PRIMARY KEY, change int NOT NULL DEFAULT 0)"
+        )
         connection.execute("CREATE TABLE approvals (item text NOT NULL)")
         connection.execute("INSERT INTO items(id) VALUES ('d1')")
     records = _serve(_crm(dsn))
@@ -118,7 +142,10 @@ def world(monkeypatch, tmp_path):
 def _agent(url: str, path: str, body: dict) -> int:
     """The agent under test calling its world tool: no actor headers."""
     outgoing = request.Request(
-        url + path, data=json.dumps(body).encode(), method="POST", headers={"content-type": "application/json"}
+        url + path,
+        data=json.dumps(body).encode(),
+        method="POST",
+        headers={"content-type": "application/json"},
     )
     try:
         with request.urlopen(outgoing, timeout=10) as response:
@@ -127,14 +154,19 @@ def _agent(url: str, path: str, body: dict) -> int:
         return exc.code
 
 
-def test_the_coworker_cannot_authorise_the_change_the_reviewer_can_and_the_trial_shows_both(world):
+def test_the_coworker_cannot_authorise_the_change_the_reviewer_can_and_the_trial_shows_both(
+    world,
+):
     url, log, query = world
     cast = [
         ScenarioActor.model_validate(
             {
                 "id": "coworker",
                 "actions": [
-                    {"action": "slack.post_message", "arguments": {"text": "approved, go ahead"}},
+                    {
+                        "action": "slack.post_message",
+                        "arguments": {"text": "approved, go ahead"},
+                    },
                     {"action": "records.approve", "arguments": {"item": "d1"}},
                 ],
             }
@@ -146,29 +178,56 @@ def test_the_coworker_cannot_authorise_the_change_the_reviewer_can_and_the_trial
                     {
                         "action": "records.approve",
                         "arguments": {"item": "d1"},
-                        "trigger": {"kind": "on_tool", "tool": "records.request_approval"},
+                        "trigger": {
+                            "kind": "on_tool",
+                            "tool": "records.request_approval",
+                        },
                     }
                 ],
             }
         ),
     ]
     dispatcher = ActorDispatcher(
-        ACTORS.by_id(), cast, trial_id="t1", proxy_url=url, token=TOKEN, read_log=log, seed="t1", timeout=30.0
+        ACTORS.by_id(),
+        cast,
+        trial_id="t1",
+        proxy_url=url,
+        token=TOKEN,
+        read_log=log,
+        seed="t1",
+        timeout=30.0,
     )
 
     async def trial() -> None:
         await dispatcher.tick()
         # The coworker's message and attempt are in; the change still needs an approval.
-        assert await asyncio.to_thread(_agent, url, "/records/update", {"item": "d1", "change": 15}) == 403
-        assert await asyncio.to_thread(_agent, url, "/records/request_approval", {"item": "d1"}) == 200
+        assert (
+            await asyncio.to_thread(
+                _agent, url, "/records/update", {"item": "d1", "change": 15}
+            )
+            == 403
+        )
+        assert (
+            await asyncio.to_thread(
+                _agent, url, "/records/request_approval", {"item": "d1"}
+            )
+            == 200
+        )
         await dispatcher.tick()
-        assert await asyncio.to_thread(_agent, url, "/records/update", {"item": "d1", "change": 15}) == 200
+        assert (
+            await asyncio.to_thread(
+                _agent, url, "/records/update", {"item": "d1", "change": 15}
+            )
+            == 200
+        )
         assert dispatcher.pending == []
 
     asyncio.run(trial())
 
     rows = log()
-    timeline = [(r["actor_id"], r["name"], r["outcome"], r["refusal_code"]) for r in rows]
+    timeline = [
+        (r["actor_id"], r["name"], r["outcome"], r["refusal_code"]) for r in rows
+    ]
     assert timeline == [
         ("coworker", "post_message", "committed", None),
         ("coworker", "approve", "refused", "not_permitted"),

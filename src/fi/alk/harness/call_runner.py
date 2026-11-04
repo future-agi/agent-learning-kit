@@ -879,7 +879,9 @@ def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
     return tuple(calls)
 
 
-def _read_action_log(dsn: str, *, timeout_ms: int | None = None) -> list[dict[str, Any]]:
+def _read_action_log(
+    dsn: str, *, timeout_ms: int | None = None
+) -> list[dict[str, Any]]:
     """Every row of this trial's action log, every column, oldest first."""
     with _read_only(dsn, timeout_ms) as connection:
         return _action_log_rows(connection)
@@ -946,7 +948,9 @@ def _actor_rows(runtime: EnvironmentRuntime, bundle_dir: Path) -> list[dict[str,
     return rows
 
 
-def _agent_marks(runtime: EnvironmentRuntime, bundle_dir: Path, calls: Sequence[Call]) -> list[dict[str, Any]]:
+def _agent_marks(
+    runtime: EnvironmentRuntime, bundle_dir: Path, calls: Sequence[Call]
+) -> list[dict[str, Any]]:
     """Each of the agent's calls' own action id and outcome, so an actor's action can name the call that
     caused it; none unless every call is found in the log, in order."""
     database = _find_postgres_endpoint(runtime)
@@ -971,7 +975,9 @@ def _write_trial_token(path: Path, token: str) -> None:
     """The token, readable only by whoever owns the tool proxy's directory; a stale file or link is replaced."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.unlink(missing_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    fd = os.open(
+        path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600
+    )
     try:
         os.write(fd, token.encode("utf-8"))
     finally:
@@ -986,7 +992,11 @@ def _write_trial_token(path: Path, token: str) -> None:
 
 
 def _actor_dispatcher(
-    doc: Mapping[str, Any], bundle_dir: Path, runtime: EnvironmentRuntime, trial_id: str, budget: float
+    doc: Mapping[str, Any],
+    bundle_dir: Path,
+    runtime: EnvironmentRuntime,
+    trial_id: str,
+    budget: float,
 ) -> ActorDispatcher | None:
     """The scenario's world actors for this trial, with a fresh token only they and the proxy hold."""
     if not doc.get("actors") or not sub_actors_enabled():
@@ -995,7 +1005,9 @@ def _actor_dispatcher(
     database = _find_postgres_endpoint(runtime)
     token_path = runtime.metadata.get("actor_proof_path")
     if proxy is None or database is None or not isinstance(token_path, str):
-        logger.warning("world actors cannot act: this world has no tool proxy taking actor requests")
+        logger.warning(
+            "world actors cannot act: this world has no tool proxy taking actor requests"
+        )
         return None
     token = secrets.token_hex(32)
     _write_trial_token(Path(token_path), token)
@@ -1656,7 +1668,9 @@ class CallRunnerImpl:
                     call_environ[SUB_ACTOR_WORLD_ALIAS] = endpoint.address
 
         actors = (
-            _actor_dispatcher(doc, self._context.bundle_dir, runtime, spec.run_id, run_seconds)
+            _actor_dispatcher(
+                doc, self._context.bundle_dir, runtime, spec.run_id, run_seconds
+            )
             if self._context.evidence_seam is EvidenceSeam.TOOL_TRACE
             else None
         )
@@ -1688,7 +1702,9 @@ class CallRunnerImpl:
             finally:
                 acting.cancel()
                 # The token proves an actor only during its own trial; the proxy refuses actors once it is empty.
-                Path(str(runtime.metadata["actor_proof_path"])).write_text("", encoding="utf-8")
+                Path(str(runtime.metadata["actor_proof_path"])).write_text(
+                    "", encoding="utf-8"
+                )
                 with contextlib.suppress(asyncio.CancelledError):
                     await acting
                 if isinstance(actors.read_log, _ActionLog):
@@ -1795,7 +1811,8 @@ class CallRunnerImpl:
             calls = _collect_provider_tool_calls(case)
         acted = (
             _actor_rows(runtime, self._context.bundle_dir)
-            if case is not None and self._context.evidence_seam is EvidenceSeam.TOOL_TRACE
+            if case is not None
+            and self._context.evidence_seam is EvidenceSeam.TOOL_TRACE
             else []
         )
         marks = _agent_marks(runtime, self._context.bundle_dir, calls) if acted else []

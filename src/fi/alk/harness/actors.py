@@ -108,19 +108,31 @@ class ActorList(BaseModel):
             raise ValueError("each actor id appears once")
         known = set(ids)
         for one in actors:
-            if one.on_behalf_of is not None and one.on_behalf_of not in known - {one.id}:
-                raise ValueError(f"{one.id} acts on behalf of an actor that is not listed")
+            if one.on_behalf_of is not None and one.on_behalf_of not in known - {
+                one.id
+            }:
+                raise ValueError(
+                    f"{one.id} acts on behalf of an actor that is not listed"
+                )
             if one.parent is not None and one.parent not in known - {one.id}:
-                raise ValueError(f"{one.id} is brought in by an actor that is not listed")
-            fallback = one.activation.fallback if one.activation is not None else "silent"
-            if fallback not in ("silent", "decline") and fallback not in known - {one.id}:
+                raise ValueError(
+                    f"{one.id} is brought in by an actor that is not listed"
+                )
+            fallback = (
+                one.activation.fallback if one.activation is not None else "silent"
+            )
+            if fallback not in ("silent", "decline") and fallback not in known - {
+                one.id
+            }:
                 raise ValueError(f"{one.id} falls back to an actor that is not listed")
         parents = {one.id: one.parent for one in actors}
         for one in actors:
             seen, at = {one.id}, one.parent
             while at is not None:
                 if at in seen:
-                    raise ValueError(f"{one.id} is in a cycle of actors bringing each other in")
+                    raise ValueError(
+                        f"{one.id} is in a cycle of actors bringing each other in"
+                    )
                 seen.add(at)
                 at = parents.get(at)
         return actors
@@ -133,7 +145,9 @@ class Trigger(BaseModel):
     # A misspelt field would otherwise leave an action firing at the start of the call.
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["always", "after_seconds", "on_tool", "contacted", "probability"] = "always"
+    kind: Literal["always", "after_seconds", "on_tool", "contacted", "probability"] = (
+        "always"
+    )
     seconds: float = Field(default=0.0, ge=0)
     tool: str = ""
     on_call: int = Field(default=1, ge=1)
@@ -167,7 +181,9 @@ def load_actors(root: Path) -> ActorList:
 
 def save_actors(root: Path, listing: ActorList) -> None:
     body = {"schema": ACTORS_SCHEMA, **listing.model_dump(exclude_none=True)}
-    (Path(root) / ACTORS_FILE).write_text(json.dumps(body, indent=2) + "\n", encoding="utf-8")
+    (Path(root) / ACTORS_FILE).write_text(
+        json.dumps(body, indent=2) + "\n", encoding="utf-8"
+    )
 
 
 def _literal(value: str | None) -> str:
@@ -247,12 +263,18 @@ def world_action_names(contract: dict[str, Any]) -> list[str]:
     for entry in contract.get(WORLD_ACTIONS["from"]) or []:
         route = str((entry or {}).get(WORLD_ACTIONS["route"]) or "").strip("/")
         method = str((entry or {}).get(WORLD_ACTIONS["method"]) or "POST").upper()
-        if route and method in WORLD_ACTIONS["methods"] and WORLD_ACTIONS["placeholder"] not in route:
+        if (
+            route
+            and method in WORLD_ACTIONS["methods"]
+            and WORLD_ACTIONS["placeholder"] not in route
+        ):
             names.add(route.replace("/", WORLD_ACTIONS["separator"]))
     return sorted(names)
 
 
-def environment_actions(destination: Path, contract: dict[str, Any] | None = None) -> list[str]:
+def environment_actions(
+    destination: Path, contract: dict[str, Any] | None = None
+) -> list[str]:
     """The world's actions in the environment's written contract, or in `contract` before it is written."""
     path = Path(destination) / "contract.json"
     if path.is_file():

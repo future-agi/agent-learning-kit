@@ -210,7 +210,9 @@ class HostedWorld(HttpObservationHandle):
         _reject_unless_read(sql)
         return self._store.query(sql, tuple(params))
 
-    def events(self, actor_id: str | None = None, outcome: str | None = None) -> list[dict[str, Any]]:
+    def events(
+        self, actor_id: str | None = None, outcome: str | None = None
+    ) -> list[dict[str, Any]]:
         """This trial's action log: every action attempted in the world, whose it was (`agent` for the
         agent under test) and what came of it (`committed`, `refused`, `faulted`, `duplicate`)."""
         try:
@@ -221,7 +223,11 @@ class HostedWorld(HttpObservationHandle):
             row
             for row in rows
             if (actor_id is None or (row.get("actor_id") or "agent") == actor_id)
-            and (outcome is None or (row.get("outcome") or ("committed" if row.get("ok") else "refused")) == outcome)
+            and (
+                outcome is None
+                or (row.get("outcome") or ("committed" if row.get("ok") else "refused"))
+                == outcome
+            )
         ]
 
     # -- writing ------------------------------------------------------------------------------
@@ -487,7 +493,9 @@ class ReadOnlyWorld(HttpObservationHandle):
     def query(self, sql: str, params: Sequence[Any] = ()) -> list[dict[str, Any]]:
         return self.__world.query(sql, params)
 
-    def events(self, actor_id: str | None = None, outcome: str | None = None) -> list[dict[str, Any]]:
+    def events(
+        self, actor_id: str | None = None, outcome: str | None = None
+    ) -> list[dict[str, Any]]:
         return self.__world.events(actor_id, outcome)
 
     def put(

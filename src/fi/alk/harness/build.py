@@ -19,7 +19,13 @@ from typing import Any
 from .backends import SessionSpec
 from .catalogue import Catalogue
 from .sub_actor import sub_actors_enabled
-from .config import artifact_dir, chosen_model, discovered_skills, load_skill, provisioning
+from .config import (
+    artifact_dir,
+    chosen_model,
+    discovered_skills,
+    load_skill,
+    provisioning,
+)
 from .contract import AgentContract, runtime_owns_tools
 from .session import Stage
 from .world.snapshot import saved as world_saved

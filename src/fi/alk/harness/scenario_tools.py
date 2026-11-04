@@ -281,12 +281,30 @@ def _actor_fields() -> dict[str, Any]:
                                     "properties": {
                                         "kind": {
                                             "type": "string",
-                                            "enum": ["on_tool", "contacted", "after_seconds", "probability", "always"],
+                                            "enum": [
+                                                "on_tool",
+                                                "contacted",
+                                                "after_seconds",
+                                                "probability",
+                                                "always",
+                                            ],
                                         },
-                                        "tool": {"type": "string", "description": "on_tool: the agent's tool"},
-                                        "on_call": {"type": "integer", "description": "on_tool: which call of it, from 1"},
-                                        "seconds": {"type": "number", "description": "after_seconds"},
-                                        "p": {"type": "number", "description": "probability, 0 to 1"},
+                                        "tool": {
+                                            "type": "string",
+                                            "description": "on_tool: the agent's tool",
+                                        },
+                                        "on_call": {
+                                            "type": "integer",
+                                            "description": "on_tool: which call of it, from 1",
+                                        },
+                                        "seconds": {
+                                            "type": "number",
+                                            "description": "after_seconds",
+                                        },
+                                        "p": {
+                                            "type": "number",
+                                            "description": "probability, 0 to 1",
+                                        },
                                     },
                                     "required": ["kind"],
                                     "additionalProperties": False,
@@ -2954,7 +2972,9 @@ def world_summary(world_root: Path) -> str:
             )
         acting = load_actors(world_root).actors if sub_actors_enabled() else []
         if acting:
-            lines.append("\nWORLD ACTORS (include one in a scenario's `actors`, by id, with its actions):")
+            lines.append(
+                "\nWORLD ACTORS (include one in a scenario's `actors`, by id, with its actions):"
+            )
             lines += [
                 f"  {one.id}: {one.name}, {one.role or one.kind}; may {', '.join(one.permitted_actions) or 'do nothing in the world'}"
                 for one in acting

@@ -9923,20 +9923,50 @@ def test_world_actors_are_offered_only_when_switched_on_and_kept_in_the_environm
         from mcp.types import CallToolRequestParams
 
         handler = _request_handler(_instance(server), "tools/call")
-        result = await handler.handler(None, CallToolRequestParams(name=name, arguments=payload))
+        result = await handler.handler(
+            None, CallToolRequestParams(name=name, arguments=payload)
+        )
         return result.content[0].text
 
-    reviewer = {"id": "reviewer", "name": "Robin", "role": "reviewer", "permitted_actions": ["records.approve"]}
+    reviewer = {
+        "id": "reviewer",
+        "name": "Robin",
+        "role": "reviewer",
+        "permitted_actions": ["records.approve"],
+    }
     assert "records.approve" in asyncio.run(call("add_actor", reviewer))
-    assert "Not added" in asyncio.run(call("add_actor", {"id": "agent", "name": "x", "role": "y"}))
-    asyncio.run(call("add_actor", {**reviewer, "permitted_actions": ["records.approve", "records.reject"]}))
+    assert "Not added" in asyncio.run(
+        call("add_actor", {"id": "agent", "name": "x", "role": "y"})
+    )
+    asyncio.run(
+        call(
+            "add_actor",
+            {**reviewer, "permitted_actions": ["records.approve", "records.reject"]},
+        )
+    )
     [kept] = load_actors(tmp_path).actors
     assert kept.permitted_actions == ["records.approve", "records.reject"]
     # In the build and the chat alike, an action the world lacks is kept and named, never a refusal.
-    lacking = asyncio.run(call("add_actor", {"id": "reviewer", "name": "Robin", "permitted_actions": ["records.no_such_action"]}))
+    lacking = asyncio.run(
+        call(
+            "add_actor",
+            {
+                "id": "reviewer",
+                "name": "Robin",
+                "permitted_actions": ["records.no_such_action"],
+            },
+        )
+    )
     assert "records.no_such_action is not among them" in lacking
-    assert load_actors(tmp_path).actors[0].permitted_actions == ["records.no_such_action"]
-    asyncio.run(call("add_actor", {**reviewer, "permitted_actions": ["records.approve", "records.reject"]}))
+    assert load_actors(tmp_path).actors[0].permitted_actions == [
+        "records.no_such_action"
+    ]
+    asyncio.run(
+        call(
+            "add_actor",
+            {**reviewer, "permitted_actions": ["records.approve", "records.reject"]},
+        )
+    )
     # Every field the editor sets can be set from the chat, and a later call changes only what it sends.
     full = {
         "id": "reviewer",
@@ -9976,14 +10006,28 @@ def test_world_actors_are_offered_only_when_switched_on_and_kept_in_the_environm
         kept.activation.trigger.tool == "records.request_approval"
         and kept.behaviour.response_timing.seconds == 5
     )
-    asyncio.run(call("add_actor", {"id": "reviewer", "name": "Robin", "constraints": {"stop_when": ["Asked twice"]}}))
+    asyncio.run(
+        call(
+            "add_actor",
+            {
+                "id": "reviewer",
+                "name": "Robin",
+                "constraints": {"stop_when": ["Asked twice"]},
+            },
+        )
+    )
     [kept] = load_actors(tmp_path).actors
-    assert (kept.constraints.stop_when, kept.constraints.may_agree) == (["Asked twice"], ["Up to 25%"])
+    assert (kept.constraints.stop_when, kept.constraints.may_agree) == (
+        ["Asked twice"],
+        ["Up to 25%"],
+    )
     assert kept.provenance == {}
     used = tmp_path / "scenarios" / "one" / "scenario.json"
     used.parent.mkdir(parents=True, exist_ok=True)
     used.write_text(json.dumps({"name": "one", "actors": [{"id": "reviewer"}]}))
-    assert "Not dropped. These scenarios include reviewer: one" in asyncio.run(call("drop_actor", {"id": "reviewer"}))
+    assert "Not dropped. These scenarios include reviewer: one" in asyncio.run(
+        call("drop_actor", {"id": "reviewer"})
+    )
     used.unlink()
     assert "dropped" in asyncio.run(call("drop_actor", {"id": "reviewer"}))
     assert load_actors(tmp_path).actors == []
@@ -10008,7 +10052,9 @@ def test_a_built_environment_s_chat_can_still_change_its_cast_and_nothing_else_o
     }
 
 
-def test_a_scenario_naming_an_actor_the_world_does_not_list_is_not_kept(tmp_path, monkeypatch):
+def test_a_scenario_naming_an_actor_the_world_does_not_list_is_not_kept(
+    tmp_path, monkeypatch
+):
     from fi.alk.harness.actors import Actor, ActorList, save_actors
     from fi.alk.harness.scenario_tools import _actor_fields, _unlisted_actors
 
@@ -10019,7 +10065,10 @@ def test_a_scenario_naming_an_actor_the_world_does_not_list_is_not_kept(tmp_path
     save_actors(tmp_path, ActorList(actors=[Actor(id="reviewer", name="Robin")]))
     scenario = Scenario(
         name="wrong-person-approval",
-        actors=[{"id": "reviewer", "actions": [{"action": "records.approve"}]}, {"id": "ghost"}],
+        actors=[
+            {"id": "reviewer", "actions": [{"action": "records.approve"}]},
+            {"id": "ghost"},
+        ],
     )
     assert _unlisted_actors(scenario, tmp_path) == [
         "actors: 'ghost' is not a world actor; add it with add_actor first"
@@ -10027,7 +10076,9 @@ def test_a_scenario_naming_an_actor_the_world_does_not_list_is_not_kept(tmp_path
     from fi.alk.harness.folder import document_for
 
     assert "actors" not in document_for(Scenario(name="plain"))
-    assert document_for(scenario)["actors"][0]["actions"][0]["trigger"]["kind"] == "always"
+    assert (
+        document_for(scenario)["actors"][0]["actions"][0]["trigger"]["kind"] == "always"
+    )
 
 
 def test_the_switch_stops_the_writer_being_told_world_actors_exist():
@@ -10050,40 +10101,76 @@ def test_a_proof_plays_permitted_actor_actions_at_their_triggers_and_keeps_them_
             self.calls = []
 
         def call(self, name, arguments):
-            self.calls.append(Call(name=name, arguments=arguments, result=None, ok=True, error="", refused=False))
+            self.calls.append(
+                Call(
+                    name=name,
+                    arguments=arguments,
+                    result=None,
+                    ok=True,
+                    error="",
+                    refused=False,
+                )
+            )
 
     save_actors(
         tmp_path,
         ActorList(
             actors=[
-                Actor(id="reviewer", name="Robin", permitted_actions=["records.approve"]),
-                Actor(id="coworker", name="Sam", identities={"slack": "@sam"}, permitted_actions=["slack.post_message"]),
+                Actor(
+                    id="reviewer", name="Robin", permitted_actions=["records.approve"]
+                ),
+                Actor(
+                    id="coworker",
+                    name="Sam",
+                    identities={"slack": "@sam"},
+                    permitted_actions=["slack.post_message"],
+                ),
             ]
         ),
     )
     scenario = Scenario(
         name="approval",
         actors=[
-            {"id": "coworker", "actions": [
-                {"action": "records.approve"},
-                {"action": "slack.post_message", "trigger": {"kind": "contacted"}},
-            ]},
-            {"id": "reviewer", "actions": [
-                {"action": "records.approve", "arguments": {"item": "d1"},
-                 "trigger": {"kind": "on_tool", "tool": "records.request_approval", "on_call": 2}},
-            ]},
+            {
+                "id": "coworker",
+                "actions": [
+                    {"action": "records.approve"},
+                    {"action": "slack.post_message", "trigger": {"kind": "contacted"}},
+                ],
+            },
+            {
+                "id": "reviewer",
+                "actions": [
+                    {
+                        "action": "records.approve",
+                        "arguments": {"item": "d1"},
+                        "trigger": {
+                            "kind": "on_tool",
+                            "tool": "records.request_approval",
+                            "on_call": 2,
+                        },
+                    },
+                ],
+            },
         ],
     )
     world, by_actors = World(), set()
     acting = _WorldActors(scenario, tmp_path, world, by_actors)
     acting.act_on(None)
     assert world.calls == []  # the coworker may not approve, so nothing happened
-    for step in [Step(tool="request_approval"), Step(tool="post_message", arguments={"to": "@sam"}),
-                 Step(tool="request_approval")]:
+    for step in [
+        Step(tool="request_approval"),
+        Step(tool="post_message", arguments={"to": "@sam"}),
+        Step(tool="request_approval"),
+    ]:
         world.call(step.tool, step.arguments)
         acting.act_on(step)
     assert [call.name for call in world.calls] == [
-        "request_approval", "post_message", "post_message", "request_approval", "approve"
+        "request_approval",
+        "post_message",
+        "post_message",
+        "request_approval",
+        "approve",
     ]
     assert by_actors == {2, 4}
 
@@ -10104,12 +10191,24 @@ def test_a_proof_names_the_actor_actions_on_a_clock_or_a_chance_it_could_not_pla
     scenario = Scenario(
         name="later",
         actors=[
-            {"id": "reviewer", "actions": [
-                {"action": "records.approve", "trigger": {"kind": "after_seconds", "seconds": 5}},
-                {"action": "records.hold", "trigger": {"kind": "probability", "p": 0.5}},
-                {"action": "records.note", "trigger": {"kind": "on_tool", "tool": "records.request"}},
-                {"action": "records.open"},
-            ]},
+            {
+                "id": "reviewer",
+                "actions": [
+                    {
+                        "action": "records.approve",
+                        "trigger": {"kind": "after_seconds", "seconds": 5},
+                    },
+                    {
+                        "action": "records.hold",
+                        "trigger": {"kind": "probability", "p": 0.5},
+                    },
+                    {
+                        "action": "records.note",
+                        "trigger": {"kind": "on_tool", "tool": "records.request"},
+                    },
+                    {"action": "records.open"},
+                ],
+            },
         ],
     )
     assert _unplayed(scenario) == [
@@ -10118,13 +10217,26 @@ def test_a_proof_names_the_actor_actions_on_a_clock_or_a_chance_it_could_not_pla
     ]
 
 
-def test_the_writer_is_told_which_world_actors_there_are_only_when_switched_on(tmp_path, monkeypatch):
+def test_the_writer_is_told_which_world_actors_there_are_only_when_switched_on(
+    tmp_path, monkeypatch
+):
     from fi.alk.harness.actors import Actor, ActorList, save_actors
     from fi.alk.harness.scenario_tools import world_summary
 
     _saved_world(tmp_path)
-    save_actors(tmp_path, ActorList(actors=[Actor(id="reviewer", name="Robin", role="reviewer",
-                                                   permitted_actions=["records.approve"])]))
+    save_actors(
+        tmp_path,
+        ActorList(
+            actors=[
+                Actor(
+                    id="reviewer",
+                    name="Robin",
+                    role="reviewer",
+                    permitted_actions=["records.approve"],
+                )
+            ]
+        ),
+    )
     monkeypatch.delenv("HARNESS_SUB_ACTORS", raising=False)
     assert "WORLD ACTORS" not in world_summary(tmp_path)
     monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")

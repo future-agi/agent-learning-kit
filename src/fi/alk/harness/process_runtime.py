@@ -3585,14 +3585,17 @@ def apply_postgres_sqlite_world(
             artifacts.write_world_ir(imported.world)
 
 
-def _without_later_harness_tables(live: SourceModel, recorded: SourceModel) -> SourceModel:
+def _without_later_harness_tables(
+    live: SourceModel, recorded: SourceModel
+) -> SourceModel:
     """The live schema without the harness's own `_alk_` tables added after the build, which are not the agent's data."""
     from .source_model import SourceModel
 
-
     built = {table.name for table in recorded.tables}
     tables = tuple(
-        table for table in live.tables if not table.name.startswith("_alk_") or table.name in built
+        table
+        for table in live.tables
+        if not table.name.startswith("_alk_") or table.name in built
     )
     if len(tables) == len(live.tables):
         return live
@@ -7077,13 +7080,21 @@ class ProcessRuntimeProvider:
         metadata: dict[str, Any] = (
             {"workspace_roots": workspace_roots} if workspace_roots else {}
         )
-        proxy = next((p for p in self._manifest.processes if p.name == "tool-proxy"), None)
-        token_file = dict(getattr(proxy, "environment", {}) or {}).get("ACTOR_PROOF_FILE")
+        proxy = next(
+            (p for p in self._manifest.processes if p.name == "tool-proxy"), None
+        )
+        token_file = dict(getattr(proxy, "environment", {}) or {}).get(
+            "ACTOR_PROOF_FILE"
+        )
         if token_file:
             # Only the call runner learns where the tool proxy reads a trial's actor token.
             metadata["actor_proof_path"] = token_file.replace(
                 "{{WORLD_DIR}}",
-                str(world_scratch_dir(self._context.work_directory, world_index, "tool-proxy")),
+                str(
+                    world_scratch_dir(
+                        self._context.work_directory, world_index, "tool-proxy"
+                    )
+                ),
             )
         control = self._manifest.runtime.control_service
         if control is None:

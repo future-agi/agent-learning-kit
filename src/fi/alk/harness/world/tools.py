@@ -694,12 +694,16 @@ def sub_actor_tools(contract: AgentContract, destination: Path) -> list[Any]:
     return [add_sub_actor, drop_sub_actor]
 
 
-def world_actor_tools(destination: Path, contract: AgentContract | None = None) -> list[Any]:
+def world_actor_tools(
+    destination: Path, contract: AgentContract | None = None
+) -> list[Any]:
     """The tools that keep the environment's world actors: for the build and the builder chat."""
 
     def world_actions() -> list[str]:
         # Read when called, so actions adopted later in the build count.
-        return environment_actions(destination, contract.model_dump() if contract is not None else None)
+        return environment_actions(
+            destination, contract.model_dump() if contract is not None else None
+        )
 
     # Known before the call when the world is already built (the builder chat), so one request is one confirmation.
     listed = world_actions()
@@ -759,7 +763,9 @@ def world_actor_tools(destination: Path, contract: AgentContract | None = None) 
             )
         using = scenarios_using(destination, gone, "actors")
         if using:
-            return _err(f"Not dropped. These scenarios include {gone}: " + ", ".join(using))
+            return _err(
+                f"Not dropped. These scenarios include {gone}: " + ", ".join(using)
+            )
         save_actors(destination, ActorList(actors=kept))
         return _ok(f"{gone} dropped")
 
@@ -772,9 +778,9 @@ ACTOR_SERVER = "actors"
 def actor_tools_server(contract: AgentContract, destination: Path) -> Any | None:
     """The cast alone, for a builder chat on a built environment: who is in the world and who is with the caller can
     still change after the world's tools and data are fixed. None when no actor tools are switched on."""
-    tools = (world_actor_tools(destination, contract) if sub_actors_enabled() else []) + (
-        sub_actor_tools(contract, destination) if sub_actors_enabled() else []
-    )
+    tools = (
+        world_actor_tools(destination, contract) if sub_actors_enabled() else []
+    ) + (sub_actor_tools(contract, destination) if sub_actors_enabled() else [])
     if not tools:
         return None
     return tool_server(name=ACTOR_SERVER, version="0.1.0", tools=tools)

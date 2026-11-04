@@ -22,11 +22,20 @@ _REVIEWER = {
     "role": "reviewer who approves changes above a limit",
     "persona": {"languages": ["English"], "personality": "brisk"},
     "goal": "Approve only changes she can justify",
-    "constraints": {"may_agree": ["Changes up to 25%"], "private": ["The quarter's change budget"]},
-    "behaviour": {"style": "brisk", "response_timing": {"kind": "delayed", "seconds": 5}},
+    "constraints": {
+        "may_agree": ["Changes up to 25%"],
+        "private": ["The quarter's change budget"],
+    },
+    "behaviour": {
+        "style": "brisk",
+        "response_timing": {"kind": "delayed", "seconds": 5},
+    },
     "knowledge": [{"kind": "records", "store": "records", "collection": "items"}],
     "permitted_actions": ["records.approve", "records.reject"],
-    "activation": {"trigger": {"kind": "on_tool", "tool": "records.request_approval"}, "fallback": "decline"},
+    "activation": {
+        "trigger": {"kind": "on_tool", "tool": "records.request_approval"},
+        "fallback": "decline",
+    },
     "kind": "a role nobody has named yet",
 }
 
@@ -38,7 +47,10 @@ def test_a_full_record_round_trips_and_open_values_are_kept(tmp_path):
 
     assert again.constraints.private == ["The quarter's change budget"]
     assert again.behaviour.response_timing.seconds == 5
-    assert again.activation.trigger.tool == "records.request_approval" and again.activation.fallback == "decline"
+    assert (
+        again.activation.trigger.tool == "records.request_approval"
+        and again.activation.fallback == "decline"
+    )
     assert again.kind == "a role nobody has named yet"
 
 
@@ -46,7 +58,10 @@ def test_a_full_record_round_trips_and_open_values_are_kept(tmp_path):
     "change, message",
     [
         ({"parent": "nobody"}, "brought in by an actor that is not listed"),
-        ({"activation": {"fallback": "nobody"}}, "falls back to an actor that is not listed"),
+        (
+            {"activation": {"fallback": "nobody"}},
+            "falls back to an actor that is not listed",
+        ),
         ({"constraints": {"secret": ["x"]}}, "Extra inputs"),
         ({"behaviour": {"response_timing": {"kind": "later"}}}, "kind"),
         ({"loudness_ratio": 1.5}, "loudness_ratio"),
@@ -62,7 +77,9 @@ def test_actors_bringing_each_other_in_are_refused():
     second = {"id": "b", "name": "B", "parent": "a"}
     with pytest.raises(ValidationError, match="cycle"):
         ActorList.model_validate({"actors": [first, second]})
-    assert ActorList.model_validate({"actors": [{"id": "a", "name": "A"}, {"id": "b", "name": "B", "parent": "a"}]})
+    assert ActorList.model_validate(
+        {"actors": [{"id": "a", "name": "A"}, {"id": "b", "name": "B", "parent": "a"}]}
+    )
 
 
 def test_a_sealed_bundle_carries_the_rules_its_release_checks_actors_by(tmp_path):
@@ -82,7 +99,10 @@ def test_a_sealed_bundle_carries_the_rules_its_release_checks_actors_by(tmp_path
     assert declared["world_actions"]["route"] == "endpoint"
     assert set(declared["channels"]) == {"audio_mix", "audio_handoff", "ivr"}
     # A background voice left unset draws from this range; a sub-actor never shares the caller's name.
-    assert declared["loudness"] == {"channels": ["audio_mix"], "automatic": [0.333, 0.667]}
+    assert declared["loudness"] == {
+        "channels": ["audio_mix"],
+        "automatic": [0.333, 0.667],
+    }
     assert declared["distinct_from_caller"] == ["name"]
     # A rule a person can break is described in plain words for the message that refuses it.
     assert (

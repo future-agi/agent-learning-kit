@@ -2009,7 +2009,11 @@ def test_the_world_offers_only_actions_an_actor_can_send():
             {"tool": "read", "endpoint": "records/read"},
             {"tool": "approve", "endpoint": "/records/approve", "method": "post"},
             {"tool": "look", "endpoint": "records/look", "method": "GET"},
-            {"tool": "cancel", "endpoint": "records/{record_id}/cancel", "method": "POST"},
+            {
+                "tool": "cancel",
+                "endpoint": "records/{record_id}/cancel",
+                "method": "POST",
+            },
             {"tool": "local", "endpoint": ""},
         ]
     }

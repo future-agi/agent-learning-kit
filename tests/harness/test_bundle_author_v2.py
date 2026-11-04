@@ -4883,7 +4883,9 @@ def test_a_bundle_with_actors_seals_the_rules_its_release_checks_them_by(
     assert set(rules["records"]) == {"actors.json", "sub_actors.json"}
 
 
-def test_a_world_without_actors_is_seeded_with_the_tool_trace_it_always_had(tmp_path: Path) -> None:
+def test_a_world_without_actors_is_seeded_with_the_tool_trace_it_always_had(
+    tmp_path: Path,
+) -> None:
     from fi.alk.harness.bundle_author_v2 import _action_log_seed
 
     assert _action_log_seed(tmp_path) == (
@@ -4891,7 +4893,9 @@ def test_a_world_without_actors_is_seeded_with_the_tool_trace_it_always_had(tmp_
         "id bigserial PRIMARY KEY, name text NOT NULL, arguments jsonb NOT NULL, "
         "result jsonb, ok boolean NOT NULL, error text, at double precision NOT NULL);\n"
     )
-    (tmp_path / "actors.json").write_text('{"actors": [{"id": "reviewer", "name": "Robin"}]}\n', encoding="utf-8")
+    (tmp_path / "actors.json").write_text(
+        '{"actors": [{"id": "reviewer", "name": "Robin"}]}\n', encoding="utf-8"
+    )
     with_actors = _action_log_seed(tmp_path)
     assert "actor_id text" in with_actors and "INSERT INTO _alk_actors" in with_actors
 

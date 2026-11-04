@@ -159,7 +159,9 @@ _TOOL_TRACE_DDL = (
 def _action_log_seed(authoring: Path) -> str:
     """The action log and who may do what in the world; a world without actors is seeded exactly as before."""
     listing = load_actors(authoring)
-    return _TOOL_TRACE_DDL + actors_seed(listing) if listing.actors else _AGENT_TRACE_DDL
+    return (
+        _TOOL_TRACE_DDL + actors_seed(listing) if listing.actors else _AGENT_TRACE_DDL
+    )
 
 
 def _catalog_image(image: str) -> tuple[str, str]:

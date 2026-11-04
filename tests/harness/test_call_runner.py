@@ -1655,7 +1655,9 @@ def test_tool_trace_translates_rows_and_applies_v1_refused_rule(monkeypatch) -> 
     )
 
 
-def test_tool_trace_reads_only_the_agent_s_own_actions_as_its_calls(monkeypatch) -> None:
+def test_tool_trace_reads_only_the_agent_s_own_actions_as_its_calls(
+    monkeypatch,
+) -> None:
     old = ["name", "arguments", "result", "ok", "error", "at"]
     agent_rows = [
         ("lookup_order", {"id": "1"}, {"status": "shipped"}, True, "", 100.5),
@@ -1668,7 +1670,18 @@ def test_tool_trace_reads_only_the_agent_s_own_actions_as_its_calls(monkeypatch)
     columns = [*old, "action_id", "actor_id", "worker_id", "outcome"]
     rows = [
         (*agent_rows[0], "a1", "agent", None, "committed"),
-        ("approve", {"item": "1"}, {"ok": True}, True, "", 100.7, "a2", "reviewer", None, "committed"),
+        (
+            "approve",
+            {"item": "1"},
+            {"ok": True},
+            True,
+            "",
+            100.7,
+            "a2",
+            "reviewer",
+            None,
+            "committed",
+        ),
         (*agent_rows[1], "a3", "agent", None, "refused"),
     ]
     monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
@@ -1720,7 +1733,16 @@ def test_tool_trace_holds_only_the_agents_calls(monkeypatch) -> None:
     and never fires a sub-actor waiting on one of the agent's tools."""
     from fi.simulate.simulation.engines.sub_actor_voice import world_access
 
-    columns = ["name", "arguments", "result", "ok", "error", "at", "actor_id", "outcome"]
+    columns = [
+        "name",
+        "arguments",
+        "result",
+        "ok",
+        "error",
+        "at",
+        "actor_id",
+        "outcome",
+    ]
     rows = [
         ("read_deal", {"id": "d1"}, {"stage": "open"}, True, "", 1.0, "agent", "ok"),
         ("approve", {"id": "d1"}, None, False, "refused", 2.0, "reviewer", "refused"),
@@ -1728,7 +1750,10 @@ def test_tool_trace_holds_only_the_agents_calls(monkeypatch) -> None:
     ]
     monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
     runtime = _runtime(endpoints={"database": _postgres_endpoint()})
-    assert [one.name for one in cr._collect_tool_trace_calls(runtime)] == ["read_deal", "update"]
+    assert [one.name for one in cr._collect_tool_trace_calls(runtime)] == [
+        "read_deal",
+        "update",
+    ]
     assert world_access("postgresql://x/y")() == ["read_deal", "update"]
 
 
@@ -2173,22 +2198,37 @@ def test_a_call_keeps_who_its_sub_actors_were_and_what_happened_to_each(
     )
     low, high = LOUDNESS_RANGE
     assert low <= resolved["loudness_ratio"] <= high
+
+
 def _with_actors(tmp_path: Path) -> Path:
     from fi.alk.harness.actors import Actor, ActorList, save_actors
 
     tmp_path.mkdir(parents=True, exist_ok=True)
     save_actors(
         tmp_path,
-        ActorList(actors=[Actor(id="reviewer", name="Robin", role="reviewer", permitted_actions=["records.approve"])]),
+        ActorList(
+            actors=[
+                Actor(
+                    id="reviewer",
+                    name="Robin",
+                    role="reviewer",
+                    permitted_actions=["records.approve"],
+                )
+            ]
+        ),
     )
     return tmp_path
 
 
-def test_world_actors_act_only_when_switched_on_with_a_proxy_taking_actor_requests(tmp_path, monkeypatch) -> None:
+def test_world_actors_act_only_when_switched_on_with_a_proxy_taking_actor_requests(
+    tmp_path, monkeypatch
+) -> None:
     bundle = _with_actors(tmp_path / "bundle")
     doc = {"actors": [{"id": "reviewer", "actions": [{"action": "records.approve"}]}]}
     token = tmp_path / "w0" / "tool-proxy" / "actor-token"
-    proxy = RuntimeEndpoint(capability="tool_proxy", protocol="http", address="http://127.0.0.1:9")
+    proxy = RuntimeEndpoint(
+        capability="tool_proxy", protocol="http", address="http://127.0.0.1:9"
+    )
     ready = _runtime(
         endpoints={"tool_proxy": proxy, "database": _postgres_endpoint()},
         metadata={"actor_proof_path": str(token)},
@@ -2197,7 +2237,16 @@ def test_world_actors_act_only_when_switched_on_with_a_proxy_taking_actor_reques
     assert cr._actor_dispatcher(doc, bundle, ready, "t1", 60.0) is None
     monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
     assert cr._actor_dispatcher({}, bundle, ready, "t1", 60.0) is None
-    assert cr._actor_dispatcher(doc, bundle, _runtime(endpoints={"database": _postgres_endpoint()}), "t1", 60.0) is None
+    assert (
+        cr._actor_dispatcher(
+            doc,
+            bundle,
+            _runtime(endpoints={"database": _postgres_endpoint()}),
+            "t1",
+            60.0,
+        )
+        is None
+    )
     dispatcher = cr._actor_dispatcher(doc, bundle, ready, "t1", 60.0)
     assert dispatcher is not None and dispatcher.proxy_url == "http://127.0.0.1:9"
     assert token.read_text() == dispatcher.token and len(dispatcher.token) == 64
@@ -2206,7 +2255,9 @@ def test_world_actors_act_only_when_switched_on_with_a_proxy_taking_actor_reques
     elsewhere.write_text("untouched")
     token.unlink()
     token.symlink_to(elsewhere)
-    assert cr._actor_dispatcher(doc, bundle, ready, "t2", 60.0).token != dispatcher.token
+    assert (
+        cr._actor_dispatcher(doc, bundle, ready, "t2", 60.0).token != dispatcher.token
+    )
     assert elsewhere.read_text() == "untouched" and not token.is_symlink()
 
 
@@ -2214,29 +2265,92 @@ def test_actor_rows_are_sealed_named_and_with_their_outcome_and_the_agent_s_are_
     tmp_path, monkeypatch
 ) -> None:
     bundle = _with_actors(tmp_path)
-    columns = ["name", "arguments", "result", "ok", "error", "at", "action_id", "actor_id", "outcome",
-               "refusal_code", "parent_event_id", "on_behalf_of"]
+    columns = [
+        "name",
+        "arguments",
+        "result",
+        "ok",
+        "error",
+        "at",
+        "action_id",
+        "actor_id",
+        "outcome",
+        "refusal_code",
+        "parent_event_id",
+        "on_behalf_of",
+    ]
     rows = [
-        ("request_approval", {"item": "d1"}, {"ok": True}, True, "", 1.0, "a1", "agent", "committed", None, None, None),
-        ("approve", {"item": "d1"}, {"ok": True}, True, "", 2.0, "a2", "reviewer", "committed", None, "a1", None),
+        (
+            "request_approval",
+            {"item": "d1"},
+            {"ok": True},
+            True,
+            "",
+            1.0,
+            "a1",
+            "agent",
+            "committed",
+            None,
+            None,
+            None,
+        ),
+        (
+            "approve",
+            {"item": "d1"},
+            {"ok": True},
+            True,
+            "",
+            2.0,
+            "a2",
+            "reviewer",
+            "committed",
+            None,
+            "a1",
+            None,
+        ),
     ]
     monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
     runtime = _runtime(endpoints={"database": _postgres_endpoint()})
     assert cr._actor_rows(runtime, bundle) == [
         {
-            "name": "approve", "arguments": {"item": "d1"}, "result": {"ok": True}, "ok": True, "error": "",
-            "refused": False, "at": 2.0, "action_id": "a2", "actor_id": "reviewer", "actor_name": "Robin",
-            "actor_role": "reviewer", "outcome": "committed", "refusal_code": None, "parent_event_id": "a1",
+            "name": "approve",
+            "arguments": {"item": "d1"},
+            "result": {"ok": True},
+            "ok": True,
+            "error": "",
+            "refused": False,
+            "at": 2.0,
+            "action_id": "a2",
+            "actor_id": "reviewer",
+            "actor_name": "Robin",
+            "actor_role": "reviewer",
+            "outcome": "committed",
+            "refusal_code": None,
+            "parent_event_id": "a1",
             "on_behalf_of": None,
         }
     ]
-    assert [call.name for call in cr._collect_tool_trace_calls(runtime)] == ["request_approval"]
+    assert [call.name for call in cr._collect_tool_trace_calls(runtime)] == [
+        "request_approval"
+    ]
     assert cr._actor_rows(runtime, tmp_path / "no-actors") == []
 
 
-def test_with_actors_the_agent_s_sealed_calls_carry_their_own_action_ids_to_link_a_cause(tmp_path, monkeypatch) -> None:
+def test_with_actors_the_agent_s_sealed_calls_carry_their_own_action_ids_to_link_a_cause(
+    tmp_path, monkeypatch
+) -> None:
     bundle = _with_actors(tmp_path)
-    columns = ["name", "arguments", "result", "ok", "error", "at", "action_id", "actor_id", "outcome"]
+    columns = [
+        "name",
+        "arguments",
+        "result",
+        "ok",
+        "error",
+        "at",
+        "action_id",
+        "actor_id",
+        "outcome",
+    ]
     rows = [
         ("request_approval", {}, None, True, "", 1.0, "a1", "agent", "committed"),
         ("approve", {}, None, True, "", 2.0, "a2", "reviewer", "committed"),
@@ -2249,17 +2363,31 @@ def test_with_actors_the_agent_s_sealed_calls_carry_their_own_action_ids_to_link
         {"action_id": "a1", "outcome": "committed"},
         {"action_id": "a3", "outcome": "refused"},
     ]
-    assert cr._agent_marks(runtime, bundle, calls[1:]) == [{"action_id": "a3", "outcome": "refused"}]
+    assert cr._agent_marks(runtime, bundle, calls[1:]) == [
+        {"action_id": "a3", "outcome": "refused"}
+    ]
     assert cr._agent_marks(runtime, bundle, [*calls, calls[0]]) == []
 
 
 def test_a_world_actor_s_actions_are_sealed_with_the_transcript_never_as_the_agent_s_calls(
     tmp_path, monkeypatch
 ) -> None:
-    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE)
+    _job_obj, context = _context(
+        tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE
+    )
     _write_scenario_doc(context.bundle_dir, scenario_key="k1")
     _with_actors(context.bundle_dir)
-    columns = ["name", "arguments", "result", "ok", "error", "at", "action_id", "actor_id", "outcome"]
+    columns = [
+        "name",
+        "arguments",
+        "result",
+        "ok",
+        "error",
+        "at",
+        "action_id",
+        "actor_id",
+        "outcome",
+    ]
     rows = [
         ("request_approval", {}, None, True, "", 1.0, "a1", "agent", "committed"),
         ("approve", {}, None, True, "", 2.0, "a2", "reviewer", "committed"),
@@ -2267,26 +2395,40 @@ def test_a_world_actor_s_actions_are_sealed_with_the_transcript_never_as_the_age
     monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
 
     async def place_call(spec):
-        return _report(transcript="user: hello", messages=[{"role": "user", "content": "hello"}])
+        return _report(
+            transcript="user: hello", messages=[{"role": "user", "content": "hello"}]
+        )
 
     adapter = FakeAdapter()
     runner = cr.CallRunnerImpl(adapter, context, place_call=place_call)
     _run(
         runner,
         _FakeScenario("k1"),
-        _runtime(endpoints={"database": _postgres_endpoint()}, metadata={"livekit_agent_name": "agent-w0"}),
+        _runtime(
+            endpoints={"database": _postgres_endpoint()},
+            metadata={"livekit_agent_name": "agent-w0"},
+        ),
     )
     sealed = {kind: data for kind, _key, data in adapter.uploads}
-    trace = [json.loads(line) for line in sealed[cr.ArtifactKind.TOOL_TRACE].decode().splitlines()]
-    assert [(one["name"], one["action_id"]) for one in trace] == [("request_approval", "a1")]
-    transcript = json.loads(sealed[cr.ArtifactKind.TRANSCRIPT])
-    assert [(one["name"], one["actor_id"]) for one in transcript["world_actors"]["actions"]] == [
-        ("approve", "reviewer")
+    trace = [
+        json.loads(line)
+        for line in sealed[cr.ArtifactKind.TOOL_TRACE].decode().splitlines()
     ]
+    assert [(one["name"], one["action_id"]) for one in trace] == [
+        ("request_approval", "a1")
+    ]
+    transcript = json.loads(sealed[cr.ArtifactKind.TRANSCRIPT])
+    assert [
+        (one["name"], one["actor_id"]) for one in transcript["world_actors"]["actions"]
+    ] == [("approve", "reviewer")]
 
 
-def test_a_trial_s_actor_token_holds_only_while_its_call_runs(tmp_path, monkeypatch) -> None:
-    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE)
+def test_a_trial_s_actor_token_holds_only_while_its_call_runs(
+    tmp_path, monkeypatch
+) -> None:
+    _job_obj, context = _context(
+        tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE
+    )
     _write_scenario_doc(context.bundle_dir, scenario_key="k1")
     document = context.bundle_dir / "scenarios" / "k1" / "scenario.json"
     body = json.loads(document.read_text())
@@ -2300,9 +2442,13 @@ def test_a_trial_s_actor_token_holds_only_while_its_call_runs(tmp_path, monkeypa
 
     async def place_call(spec):
         during.append(token.read_text())
-        return _report(transcript="user: hello", messages=[{"role": "user", "content": "hello"}])
+        return _report(
+            transcript="user: hello", messages=[{"role": "user", "content": "hello"}]
+        )
 
-    proxy = RuntimeEndpoint(capability="tool_proxy", protocol="http", address="http://127.0.0.1:9")
+    proxy = RuntimeEndpoint(
+        capability="tool_proxy", protocol="http", address="http://127.0.0.1:9"
+    )
     runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
     _run(
         runner,
@@ -2315,7 +2461,9 @@ def test_a_trial_s_actor_token_holds_only_while_its_call_runs(tmp_path, monkeypa
     assert len(during[0]) == 64 and token.read_text() == ""
 
 
-def test_a_trial_s_action_log_is_read_over_one_connection_and_reopened_after_a_failed_read(monkeypatch) -> None:
+def test_a_trial_s_action_log_is_read_over_one_connection_and_reopened_after_a_failed_read(
+    monkeypatch,
+) -> None:
     from types import SimpleNamespace
 
     opened = []
@@ -2328,7 +2476,9 @@ def test_a_trial_s_action_log_is_read_over_one_connection_and_reopened_after_a_f
         def execute(self, _sql):
             if self.fail:
                 raise RuntimeError("connection lost")
-            return SimpleNamespace(description=[("name",)], fetchall=lambda: [("approve",)])
+            return SimpleNamespace(
+                description=[("name",)], fetchall=lambda: [("approve",)]
+            )
 
         def close(self) -> None:
             self.closed = True

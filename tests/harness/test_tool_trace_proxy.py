@@ -15,9 +15,13 @@ from fi.alk.bench._docker import docker_available
 from fi.alk.harness.actors import Actor, ActorList, actors_seed
 from fi.alk.harness.bundle_author_v2 import _TOOL_TRACE_DDL
 
-pytestmark = pytest.mark.skipif(not docker_available(), reason="docker daemon unavailable")
+pytestmark = pytest.mark.skipif(
+    not docker_available(), reason="docker daemon unavailable"
+)
 
-_PROXY = Path(__file__).parents[2] / "src" / "fi" / "alk" / "harness" / "tool_trace_proxy.py"
+_PROXY = (
+    Path(__file__).parents[2] / "src" / "fi" / "alk" / "harness" / "tool_trace_proxy.py"
+)
 
 
 class _World(BaseHTTPRequestHandler):
@@ -66,9 +70,18 @@ def store():
 TOKEN = "trial-token"
 ACTORS = ActorList(
     actors=[
-        Actor(id="reviewer", name="Robin", permitted_actions=["records.approve", "records.hold"]),
+        Actor(
+            id="reviewer",
+            name="Robin",
+            permitted_actions=["records.approve", "records.hold"],
+        ),
         Actor(id="coworker", name="Sam"),
-        Actor(id="assistant", name="Lee", permitted_actions=["records.approve"], on_behalf_of="reviewer"),
+        Actor(
+            id="assistant",
+            name="Lee",
+            permitted_actions=["records.approve"],
+            on_behalf_of="reviewer",
+        ),
     ]
 )
 
@@ -109,9 +122,17 @@ def proxy(store, monkeypatch, tmp_path):
         world.shutdown()
 
 
-def _post(url: str, path: str, body: dict, key: str = "", **extra: str) -> tuple[int, object]:
-    headers = {"content-type": "application/json", **({"Idempotency-Key": key} if key else {}), **extra}
-    outgoing = request.Request(url + path, data=json.dumps(body).encode(), method="POST", headers=headers)
+def _post(
+    url: str, path: str, body: dict, key: str = "", **extra: str
+) -> tuple[int, object]:
+    headers = {
+        "content-type": "application/json",
+        **({"Idempotency-Key": key} if key else {}),
+        **extra,
+    }
+    outgoing = request.Request(
+        url + path, data=json.dumps(body).encode(), method="POST", headers=headers
+    )
     try:
         with request.urlopen(outgoing, timeout=10) as response:
             return response.status, json.loads(response.read())
@@ -122,20 +143,29 @@ def _post(url: str, path: str, body: dict, key: str = "", **extra: str) -> tuple
 def test_each_action_is_logged_as_the_agent_s_with_what_the_world_made_of_it(proxy):
     url, rows = proxy
     assert _post(url, "/ok", {"item": "1"})[0] == 201
-    assert _post(url, "/no", {"item": "1"}) == (403, {"detail": "a change needs an approval first"})
+    assert _post(url, "/no", {"item": "1"}) == (
+        403,
+        {"detail": "a change needs an approval first"},
+    )
     assert _post(url, "/broken", {"item": "1"})[0] == 500
     logged = rows()
-    assert [(one["name"], one["outcome"], one["ok"], one["refusal_code"]) for one in logged] == [
+    assert [
+        (one["name"], one["outcome"], one["ok"], one["refusal_code"]) for one in logged
+    ] == [
         ("ok", "committed", True, None),
         ("no", "refused", False, "world_rule"),
         ("broken", "faulted", False, None),
     ]
-    assert all(one["actor_id"] == "agent" and one["worker_id"] is None for one in logged)
+    assert all(
+        one["actor_id"] == "agent" and one["worker_id"] is None for one in logged
+    )
     assert "approval first" in logged[1]["refusal"] and logged[2]["refusal"] is None
     assert len({one["action_id"] for one in logged}) == 3
 
 
-def test_an_actor_s_retried_action_reaches_the_world_once_and_is_answered_from_the_first_result(proxy):
+def test_an_actor_s_retried_action_reaches_the_world_once_and_is_answered_from_the_first_result(
+    proxy,
+):
     url, rows = proxy
     first = _post(url, "/records/approve", {"item": "1"}, key="k-1", **_as("reviewer"))
     again = _post(url, "/records/approve", {"item": "1"}, key="k-1", **_as("reviewer"))
@@ -155,18 +185,30 @@ def test_an_actor_s_key_whose_first_try_the_world_refused_may_be_tried_again(pro
     assert [one["outcome"] for one in rows()] == ["refused", "refused"]
 
 
-def test_the_agent_s_retried_request_reaches_the_world_each_time_and_is_logged_as_it_was(proxy):
+def test_the_agent_s_retried_request_reaches_the_world_each_time_and_is_logged_as_it_was(
+    proxy,
+):
     url, rows = proxy
-    assert _post(url, "/ok", {"item": "1"}, key="k-1") == (201, {"id": "d-1", "count": 1})
-    assert _post(url, "/ok", {"item": "1"}, key="k-1") == (201, {"id": "d-1", "count": 2})
+    assert _post(url, "/ok", {"item": "1"}, key="k-1") == (
+        201,
+        {"id": "d-1", "count": 1},
+    )
+    assert _post(url, "/ok", {"item": "1"}, key="k-1") == (
+        201,
+        {"id": "d-1", "count": 2},
+    )
     assert _World.seen == ["/ok", "/ok"]
     assert [(one["outcome"], one["ok"]) for one in rows()] == [("committed", True)] * 2
 
 
-def test_an_actor_s_key_used_again_with_other_arguments_is_refused_and_never_applied(proxy):
+def test_an_actor_s_key_used_again_with_other_arguments_is_refused_and_never_applied(
+    proxy,
+):
     url, rows = proxy
     _post(url, "/records/approve", {"item": "1"}, key="k-1", **_as("reviewer"))
-    status, payload = _post(url, "/records/approve", {"item": "2"}, key="k-1", **_as("reviewer"))
+    status, payload = _post(
+        url, "/records/approve", {"item": "2"}, key="k-1", **_as("reviewer")
+    )
     assert status == 409 and "other arguments" in payload["detail"]
     assert _World.seen == ["/records/approve"]
     assert [(one["outcome"], one["refusal_code"]) for one in rows()] == [
@@ -175,7 +217,9 @@ def test_an_actor_s_key_used_again_with_other_arguments_is_refused_and_never_app
     ]
 
 
-def test_a_world_seeded_before_the_new_columns_still_gets_every_action_logged(proxy, store):
+def test_a_world_seeded_before_the_new_columns_still_gets_every_action_logged(
+    proxy, store
+):
     import psycopg
 
     url, rows = proxy
@@ -198,48 +242,88 @@ def _as(actor: str, token: str = TOKEN, **more: str) -> dict:
     return {"X-ALK-Actor": actor, "X-ALK-Actor-Token": token, **more}
 
 
-def test_a_permitted_actor_s_action_reaches_the_world_and_is_logged_under_that_actor(proxy):
+def test_a_permitted_actor_s_action_reaches_the_world_and_is_logged_under_that_actor(
+    proxy,
+):
     url, rows = proxy
-    assert _post(url, "/records/approve", {"item": "1"}, **_as("reviewer", **{"X-ALK-Parent-Event": "a1"}))[0] == 201
+    assert (
+        _post(
+            url,
+            "/records/approve",
+            {"item": "1"},
+            **_as("reviewer", **{"X-ALK-Parent-Event": "a1"}),
+        )[0]
+        == 201
+    )
     assert _post(url, "/records/approve", {"item": "1"}, **_as("assistant"))[0] == 201
     assert _World.seen == ["/records/approve"] * 2
-    assert [(r["actor_id"], r["outcome"], r["parent_event_id"], r["on_behalf_of"]) for r in rows()] == [
+    assert [
+        (r["actor_id"], r["outcome"], r["parent_event_id"], r["on_behalf_of"])
+        for r in rows()
+    ] == [
         ("reviewer", "committed", "a1", None),
         ("assistant", "committed", None, "reviewer"),
     ]
 
 
-def test_an_actor_without_the_permission_is_refused_before_the_world_and_told_only_why(proxy):
+def test_an_actor_without_the_permission_is_refused_before_the_world_and_told_only_why(
+    proxy,
+):
     url, rows = proxy
     status, payload = _post(url, "/records/approve", {"item": "1"}, **_as("coworker"))
-    assert status == 403 and payload == {"detail": "records.approve is not permitted for coworker"}
+    assert status == 403 and payload == {
+        "detail": "records.approve is not permitted for coworker"
+    }
     assert _World.seen == []
     [row] = rows()
-    assert (row["actor_id"], row["outcome"], row["refusal_code"], row["ok"]) == ("coworker", "refused", "not_permitted", False)
+    assert (row["actor_id"], row["outcome"], row["refusal_code"], row["ok"]) == (
+        "coworker",
+        "refused",
+        "not_permitted",
+        False,
+    )
 
 
-def test_naming_an_actor_without_this_trial_s_token_is_the_agent_s_attempt_and_refused(proxy):
+def test_naming_an_actor_without_this_trial_s_token_is_the_agent_s_attempt_and_refused(
+    proxy,
+):
     url, rows = proxy
-    assert _post(url, "/records/approve", {"item": "1"}, **_as("reviewer", token="guess"))[0] == 403
-    assert _post(url, "/records/approve", {"item": "1"}, **{"X-ALK-Actor": "reviewer"})[0] == 403
+    assert (
+        _post(url, "/records/approve", {"item": "1"}, **_as("reviewer", token="guess"))[
+            0
+        ]
+        == 403
+    )
+    assert (
+        _post(url, "/records/approve", {"item": "1"}, **{"X-ALK-Actor": "reviewer"})[0]
+        == 403
+    )
     assert _World.seen == []
-    assert [(r["actor_id"], r["refusal_code"]) for r in rows()] == [("agent", "identity_conflict")] * 2
+    assert [(r["actor_id"], r["refusal_code"]) for r in rows()] == [
+        ("agent", "identity_conflict")
+    ] * 2
 
 
 def test_an_actor_the_world_does_not_list_is_refused(proxy):
     url, rows = proxy
     assert _post(url, "/records/approve", {"item": "1"}, **_as("stranger"))[0] == 403
     assert _World.seen == []
-    assert [(r["actor_id"], r["refusal_code"]) for r in rows()] == [("stranger", "unknown_actor")]
+    assert [(r["actor_id"], r["refusal_code"]) for r in rows()] == [
+        ("stranger", "unknown_actor")
+    ]
 
 
-def test_an_actor_list_the_world_cannot_read_is_the_world_s_fault_and_never_reaches_it(proxy, store):
+def test_an_actor_list_the_world_cannot_read_is_the_world_s_fault_and_never_reaches_it(
+    proxy, store
+):
     import psycopg
 
     url, rows = proxy
     with psycopg.connect(store.dsn(), autocommit=True) as connection:
         connection.execute("DROP TABLE _alk_actors")
     status, payload = _post(url, "/records/approve", {"item": "1"}, **_as("reviewer"))
-    assert status == 503 and payload == {"detail": "the world could not check this actor"}
+    assert status == 503 and payload == {
+        "detail": "the world could not check this actor"
+    }
     assert _World.seen == []
     assert [(r["actor_id"], r["outcome"]) for r in rows()] == [("reviewer", "faulted")]

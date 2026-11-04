@@ -32,7 +32,8 @@ def permitted(permitted_actions: object, action: str) -> bool:
 def _actor(actor_id: str) -> dict | None:
     with psycopg.connect(DATABASE_URL, autocommit=True) as connection:
         row = connection.execute(
-            "SELECT permitted_actions, on_behalf_of FROM _alk_actors WHERE id = %s", (actor_id,)
+            "SELECT permitted_actions, on_behalf_of FROM _alk_actors WHERE id = %s",
+            (actor_id,),
         ).fetchone()
     return {"permitted_actions": row[0], "on_behalf_of": row[1]} if row else None
 
@@ -78,7 +79,14 @@ def _record(
     on_behalf_of: str | None = None,
 ) -> None:
     """One row of the world's action log. `ok` stays, true only for a committed action."""
-    row = (name, json.dumps(arguments), json.dumps(result), outcome == "committed", failure, time.time())
+    row = (
+        name,
+        json.dumps(arguments),
+        json.dumps(result),
+        outcome == "committed",
+        failure,
+        time.time(),
+    )
     try:
         extended = _logs_actors()
         if not extended and actor_id != "agent":
@@ -175,7 +183,8 @@ class Handler(BaseHTTPRequestHandler):
             arguments = {"_raw": body.decode("utf-8", errors="replace")}
         self._as: dict[str, str | None] = {
             "actor_id": "agent",
-            "parent_event_id": (self.headers.get("x-alk-parent-event") or "").strip() or None,
+            "parent_event_id": (self.headers.get("x-alk-parent-event") or "").strip()
+            or None,
             "on_behalf_of": None,
         }
         actor = (self.headers.get("x-alk-actor") or "").strip()
@@ -183,26 +192,47 @@ class Handler(BaseHTTPRequestHandler):
             token = _trial_token()
             sent = (self.headers.get("x-alk-actor-token") or "").strip()
             if not token or not hmac.compare_digest(sent, token):
-                self._refuse(arguments, "identity_conflict", "this request names an actor it cannot prove it is")
+                self._refuse(
+                    arguments,
+                    "identity_conflict",
+                    "this request names an actor it cannot prove it is",
+                )
                 return
             if not _logs_actors():
                 # Logged without its actor, the action would read as the agent's, so it never reaches the world.
-                self._reply(503, {"detail": "this world's action log cannot record an actor's action"})
+                self._reply(
+                    503,
+                    {
+                        "detail": "this world's action log cannot record an actor's action"
+                    },
+                )
                 return
             self._as["actor_id"] = actor
             try:
                 listed = _actor(actor)
             except Exception:
                 # The world could not say who the actor is: its fault, never the actor's.
-                self._log(self._name(), arguments, None, "faulted", "the world's actor list could not be read")
+                self._log(
+                    self._name(),
+                    arguments,
+                    None,
+                    "faulted",
+                    "the world's actor list could not be read",
+                )
                 self._reply(503, {"detail": "the world could not check this actor"})
                 return
             if listed is None:
-                self._refuse(arguments, "unknown_actor", f"{actor} is not an actor in this world")
+                self._refuse(
+                    arguments, "unknown_actor", f"{actor} is not an actor in this world"
+                )
                 return
             self._as["on_behalf_of"] = listed["on_behalf_of"]
             if not permitted(listed["permitted_actions"], self._action()):
-                self._refuse(arguments, "not_permitted", f"{self._action()} is not permitted for {actor}")
+                self._refuse(
+                    arguments,
+                    "not_permitted",
+                    f"{self._action()} is not permitted for {actor}",
+                )
                 return
         # Only an actor's retries are answered from the first result; the agent's reach the world as they always have.
         key = (self.headers.get("idempotency-key") or "").strip() if actor else ""
