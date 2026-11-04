@@ -10179,10 +10179,18 @@ def test_a_proof_plays_permitted_actor_actions_at_their_triggers_and_keeps_them_
         "approve",
     ]
     assert by_actors == {2: "coworker", 4: "reviewer"}
-    assert [(one["actor_id"], one["outcome"], one["refusal_code"]) for one in acting.events(outcome="refused")] == [
-        ("coworker", "refused", "not_permitted")
+    assert [
+        (one["actor_id"], one["outcome"], one["refusal_code"])
+        for one in acting.events(outcome="refused")
+    ] == [("coworker", "refused", "not_permitted")]
+    assert [one["actor_id"] for one in acting.events()] == [
+        "coworker",
+        "agent",
+        "agent",
+        "coworker",
+        "agent",
+        "reviewer",
     ]
-    assert [one["actor_id"] for one in acting.events()] == ["coworker", "agent", "agent", "coworker", "agent", "reviewer"]
 
     # A source-hosted world takes the action at its own route, which the agent's tools never name.
     world, by_actors = World(), {}
@@ -10203,7 +10211,10 @@ def test_a_check_reads_the_proof_s_action_log_as_it_reads_the_run_s(tmp_path):
     root, _contract, _catalogue = _built_environment(tmp_path)
     save_actors(root, ActorList(actors=[Actor(id="reviewer", name="Robin")]))
     scenario = Scenario.model_validate(
-        {**_delta(), "actors": [{"id": "reviewer", "actions": [{"action": "records.approve"}]}]}
+        {
+            **_delta(),
+            "actors": [{"id": "reviewer", "actions": [{"action": "records.approve"}]}],
+        }
     )
     world, calls, _refused, _assumed = _run(scenario, root, with_solution=True)
     check = (

@@ -3439,7 +3439,12 @@ def test_canonical_seed_replays_bundled_discovery_without_authoring_directory(
         (("_alk_actors",), ("_alk_actors",), True, False),
         ((), ("orders",), False, False),
     ],
-    ids=["actors-added-after-build", "actor-columns-on-the-log", "built-with-actors", "agent-schema-changed"],
+    ids=[
+        "actors-added-after-build",
+        "actor-columns-on-the-log",
+        "built-with-actors",
+        "agent-schema-changed",
+    ],
 )
 def test_canonical_seed_checks_the_world_as_built_whatever_alk_adds_later(
     tmp_path: Path,
@@ -3482,8 +3487,13 @@ def test_canonical_seed_checks_the_world_as_built_whatever_alk_adds_later(
     live_tables = tuple(map(table, (*built, *live_adds)))
     if wider_log:
         # Seeded with an actor, the action log has the actor columns the build's log lacked.
-        live_tables = (table("_alk_tool_trace", "actor_id", "outcome"), *live_tables[1:])
-    live = SourceModel.create(source_digest=digest, engine="postgres", tables=live_tables)
+        live_tables = (
+            table("_alk_tool_trace", "actor_id", "outcome"),
+            *live_tables[1:],
+        )
+    live = SourceModel.create(
+        source_digest=digest, engine="postgres", tables=live_tables
+    )
     seed = tmp_path / "seed"
     seed.mkdir()
     (seed / "source-model.json").write_text(recorded.model_dump_json())

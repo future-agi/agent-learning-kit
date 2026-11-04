@@ -4638,7 +4638,10 @@ def test_job_tool_requirement_uses_observed_calls(required, with_calls, expected
 
 @pytest.mark.parametrize(
     ("listed_as", "reason"),
-    [("sub_actors", "sub-actors are switched off"), ("actors", "world actors are switched off")],
+    [
+        ("sub_actors", "sub-actors are switched off"),
+        ("actors", "world actors are switched off"),
+    ],
 )
 def test_a_scenario_with_sub_actors_is_never_run_while_they_are_off_and_says_why(
     monkeypatch, listed_as, reason

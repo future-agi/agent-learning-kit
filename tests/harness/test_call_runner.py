@@ -2502,16 +2502,43 @@ def test_a_trial_s_action_log_is_read_over_one_connection_and_reopened_after_a_f
     assert opened[0].closed and log() == [{"name": "approve"}] and len(opened) == 2
 
 
-def test_an_actor_on_the_agent_s_tool_waits_for_the_route_the_log_records_for_it(tmp_path, monkeypatch) -> None:
+def test_an_actor_on_the_agent_s_tool_waits_for_the_route_the_log_records_for_it(
+    tmp_path, monkeypatch
+) -> None:
     bundle = _with_actors(tmp_path / "bundle")
     (bundle / "contract.json").write_text(
-        json.dumps({"tool_entrypoints": [{"tool": "ask_for_approval", "endpoint": "/records/request_approval"}]})
+        json.dumps(
+            {
+                "tool_entrypoints": [
+                    {
+                        "tool": "ask_for_approval",
+                        "endpoint": "/records/request_approval",
+                    }
+                ]
+            }
+        )
     )
-    doc = {"actors": [{"id": "reviewer", "actions": [{"action": "records.approve", "trigger": {"kind": "on_tool", "tool": "ask_for_approval"}}]}]}
-    proxy = RuntimeEndpoint(capability="tool_proxy", protocol="http", address="http://127.0.0.1:9")
+    doc = {
+        "actors": [
+            {
+                "id": "reviewer",
+                "actions": [
+                    {
+                        "action": "records.approve",
+                        "trigger": {"kind": "on_tool", "tool": "ask_for_approval"},
+                    }
+                ],
+            }
+        ]
+    }
+    proxy = RuntimeEndpoint(
+        capability="tool_proxy", protocol="http", address="http://127.0.0.1:9"
+    )
     ready = _runtime(
         endpoints={"tool_proxy": proxy, "database": _postgres_endpoint()},
-        metadata={"actor_proof_path": str(tmp_path / "w0" / "tool-proxy" / "actor-token")},
+        metadata={
+            "actor_proof_path": str(tmp_path / "w0" / "tool-proxy" / "actor-token")
+        },
     )
     monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
     dispatcher = cr._actor_dispatcher(doc, bundle, ready, "t1", 60.0)

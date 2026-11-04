@@ -2001,14 +2001,20 @@ def test_sub_actor_changes_wait_for_a_yes_and_change_what_a_scenario_tests(
     assert runtime._changes_situation(friend)
 
 
-def test_a_change_to_a_scenario_s_world_actors_waits_for_a_yes_and_no_repair_makes_it(tmp_path, monkeypatch):
+def test_a_change_to_a_scenario_s_world_actors_waits_for_a_yes_and_no_repair_makes_it(
+    tmp_path, monkeypatch
+):
     from fi.alk.harness.backends import ToolSpec
 
     runtime = _runtime(tmp_path, BuilderClient(), monkeypatch)
     (tmp_path / "scenarios" / "one" / "scenario.json").write_text(
         json.dumps({"name": "one", "instruction": "ask for a refund"})
     )
-    acted = {"name": "one", "instruction": "ask for a refund", "actors": [{"id": "reviewer", "actions": []}]}
+    acted = {
+        "name": "one",
+        "instruction": "ask for a refund",
+        "actors": [{"id": "reviewer", "actions": []}],
+    }
     assert runtime._changes_situation(acted) and runtime._changes_meaning(acted)
     ran, asked = [], []
 

@@ -381,7 +381,9 @@ class _WorldActors:
         # Actions refused before the world, each with how many world calls came before it.
         self.refusals: list[tuple[int, dict[str, Any]]] = []
 
-    def events(self, actor_id: str | None = None, outcome: str | None = None) -> list[dict[str, Any]]:
+    def events(
+        self, actor_id: str | None = None, outcome: str | None = None
+    ) -> list[dict[str, Any]]:
         """Every attempted action so far, whose it was and what came of it, as `HostedWorld.events` gives them."""
         rows: list[dict[str, Any]] = []
         pending = list(self.refusals)
@@ -403,7 +405,8 @@ class _WorldActors:
         return [
             row
             for row in rows
-            if (actor_id is None or row["actor_id"] == actor_id) and (outcome is None or row["outcome"] == outcome)
+            if (actor_id is None or row["actor_id"] == actor_id)
+            and (outcome is None or row["outcome"] == outcome)
         ]
 
     def _due(self, actor: Any, action: Any, step: Any) -> bool:
@@ -411,7 +414,10 @@ class _WorldActors:
         if step is None:
             return trigger.kind == "always"
         if trigger.kind == "on_tool":
-            return trigger.tool == step.tool and self.counts.get(step.tool) == trigger.on_call
+            return (
+                trigger.tool == step.tool
+                and self.counts.get(step.tool) == trigger.on_call
+            )
         if trigger.kind == "contacted":
             from .actor_dispatch import contacts
 
@@ -445,7 +451,9 @@ class _WorldActors:
                 route if known else action.action.rsplit(".", 1)[-1],
                 dict(action.arguments),
             )
-            self.by_actors.update(dict.fromkeys(range(before, len(self.world.calls)), actor.id))
+            self.by_actors.update(
+                dict.fromkeys(range(before, len(self.world.calls)), actor.id)
+            )
 
 
 def native_runtime(world_root: Path) -> bool:

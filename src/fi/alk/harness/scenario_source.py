@@ -564,7 +564,9 @@ def _load_one(
         sub_actors=tuple(
             str((one or {}).get("id") or "") for one in body.get("sub_actors") or []
         ),
-        actors=tuple(str((one or {}).get("id") or "") for one in body.get("actors") or []),
+        actors=tuple(
+            str((one or {}).get("id") or "") for one in body.get("actors") or []
+        ),
     )
 
 
