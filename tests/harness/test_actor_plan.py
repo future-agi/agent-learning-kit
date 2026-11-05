@@ -210,7 +210,10 @@ def test_an_open_wait_and_an_actor_that_never_came_in_are_in_the_record():
         "parent": "a1",
     } in record
     # A trigger that never came is recorded as not triggered, never as the scenario's problem.
-    assert any(one["actor"] == "auditor" and one.get("play") == "not_triggered" for one in record)
+    assert any(
+        one["actor"] == "auditor" and one.get("play") == "not_triggered"
+        for one in record
+    )
     assert not any(one.get("play") == "problem" for one in record)
 
 
@@ -661,26 +664,50 @@ def test_a_voice_actor_with_permitted_actions_reaches_the_engine_able_to_act(tmp
     ).acts
 
 
-def test_a_speaking_live_actor_is_decided_by_its_channel_only_never_also_by_the_dispatcher(tmp_path):
+def test_a_speaking_live_actor_is_decided_by_its_channel_only_never_also_by_the_dispatcher(
+    tmp_path,
+):
     from fi.alk.harness.actor_dispatch import build_dispatcher
     from fi.alk.harness.actors import save_actors
 
     decided: list = []
-    manager = Actor(id="manager", name="Mia", channel="audio_handoff", role="manager", play="live",
-                    permitted_actions=["crm.approve"], identities={"crm": "mia"})
+    manager = Actor(
+        id="manager",
+        name="Mia",
+        channel="audio_handoff",
+        role="manager",
+        play="live",
+        permitted_actions=["crm.approve"],
+        identities={"crm": "mia"},
+    )
     save_actors(tmp_path, ActorList(actors=[manager]))
-    log = [{"actor_id": "agent", "name": "request", "action_id": "a1", "arguments": {"to": "mia"}}]
+    log = [
+        {
+            "actor_id": "agent",
+            "name": "request",
+            "action_id": "a1",
+            "arguments": {"to": "mia"},
+        }
+    ]
     sent: list = []
     dispatcher = build_dispatcher(
-        {"actors": [{"id": "manager"}]}, tmp_path, act=HttpActs("http://p", "t", 5, _sent_to(sent)),
-        read_log=lambda: log, records=None, trial_id="t",
+        {"actors": [{"id": "manager"}]},
+        tmp_path,
+        act=HttpActs("http://p", "t", 5, _sent_to(sent)),
+        read_log=lambda: log,
+        records=None,
+        trial_id="t",
     )
-    dispatcher.decide = lambda situation, actor: decided.append(actor.id) or '{"action": "crm.approve"}'
+    dispatcher.decide = lambda situation, actor: (
+        decided.append(actor.id) or '{"action": "crm.approve"}'
+    )
     asyncio.run(dispatcher.tick())
     assert dispatcher.live == [] and decided == [] and sent == []
 
 
-def test_one_decider_serves_every_runtime_on_the_actor_s_model_and_meters_each_call(monkeypatch):
+def test_one_decider_serves_every_runtime_on_the_actor_s_model_and_meters_each_call(
+    monkeypatch,
+):
     from types import SimpleNamespace
 
     from fi.alk.harness import session
@@ -708,7 +735,10 @@ def test_one_decider_serves_every_runtime_on_the_actor_s_model_and_meters_each_c
     assert asyncio.run(decide("brief", "mia", "own-model")) == "ok"
     asyncio.run(decide("brief", "sam", None))
     assert asked == ["own-model", "env-model"]
-    assert [(one["actor"], one["model"]) for one in meter.rows()] == [("mia", "own-model"), ("sam", "env-model")]
+    assert [(one["actor"], one["model"]) for one in meter.rows()] == [
+        ("mia", "own-model"),
+        ("sam", "env-model"),
+    ]
 
 
 def test_actors_triggered_by_the_agent_s_calls_never_form_a_cycle_whatever_they_may_do():
@@ -724,9 +754,17 @@ def test_actors_triggered_by_the_agent_s_calls_never_form_a_cycle_whatever_they_
 
 
 def test_a_per_trial_session_is_written_inside_each_trial_and_each_trial_keeps_its_own_thread():
-    actors = {"priya": Actor(id="priya", name="Priya", play="live", permitted_actions=["slack.post"])}
-    session = PreRunSession(actors=["priya"], where={"action": "slack.post", "arguments": {"channel": "#leads"}},
-                            about="Acme wants 20%", per_trial=True)
+    actors = {
+        "priya": Actor(
+            id="priya", name="Priya", play="live", permitted_actions=["slack.post"]
+        )
+    }
+    session = PreRunSession(
+        actors=["priya"],
+        where={"action": "slack.post", "arguments": {"channel": "#leads"}},
+        about="Acme wants 20%",
+        per_trial=True,
+    )
     threads = []
     for trial, said in (("t1", "Twenty?"), ("t2", "Too much.")):
         sent: list = []
@@ -736,20 +774,39 @@ def test_a_per_trial_session_is_written_inside_each_trial_and_each_trial_keeps_i
             return next(turns)
 
         dispatcher = ActorDispatcher(
-            actors, [], act=HttpActs("http://p", "t", 5, _sent_to(sent)), trial_id=trial, read_log=list, seed=trial,
-            pre_run=[session], write_session=write, session_briefs={"priya": "You are Priya."},
+            actors,
+            [],
+            act=HttpActs("http://p", "t", 5, _sent_to(sent)),
+            trial_id=trial,
+            read_log=list,
+            seed=trial,
+            pre_run=[session],
+            write_session=write,
+            session_briefs={"priya": "You are Priya."},
         )
         asyncio.run(dispatcher.replay())
-        threads.append([one["arguments"]["text"] for one in dispatcher.fired if one["play"] == "history"])
+        threads.append(
+            [
+                one["arguments"]["text"]
+                for one in dispatcher.fired
+                if one["play"] == "history"
+            ]
+        )
         assert sent[0][1]["Idempotency-Key"] == f"{trial}:priya:h1"
     assert threads == [["Twenty?"], ["Too much."]]
 
 
 @pytest.mark.parametrize(
     "fallback, line, acted",
-    [("silent", None, []), ("decline", "(did not answer: declined)", []), ("crm.reject", None, ["crm.reject"])],
+    [
+        ("silent", None, []),
+        ("decline", "(did not answer: declined)", []),
+        ("crm.reject", None, ["crm.reject"]),
+    ],
 )
-def test_a_chat_actor_that_does_not_answer_in_time_gets_its_fallback(fallback, line, acted):
+def test_a_chat_actor_that_does_not_answer_in_time_gets_its_fallback(
+    fallback, line, acted
+):
     from fi.alk.harness.run import conversation as conv
 
     clock = _Clock()
@@ -760,9 +817,21 @@ def test_a_chat_actor_that_does_not_answer_in_time_gets_its_fallback(fallback, l
         return {"outcome": "committed"}
 
     cast = conv.ChatActors(
-        [{"id": "mia", "name": "Mia", "trigger": {"kind": "always"}, "brief": "You are Mia.", "timeout_seconds": 30,
-          "fallback": fallback, "permitted_actions": ["crm.reject"]}],
-        seed="t", model=None, act=act, clock=clock,
+        [
+            {
+                "id": "mia",
+                "name": "Mia",
+                "trigger": {"kind": "always"},
+                "brief": "You are Mia.",
+                "timeout_seconds": 30,
+                "fallback": fallback,
+                "permitted_actions": ["crm.reject"],
+            }
+        ],
+        seed="t",
+        model=None,
+        act=act,
+        clock=clock,
     )
 
     async def wait(actor, brief):
@@ -771,15 +840,21 @@ def test_a_chat_actor_that_does_not_answer_in_time_gets_its_fallback(fallback, l
     cast._write = wait
 
     async def turns():
-        first = await cast.due_lines(agent_turns=1, last_text="", tools_called=[], conversation=[])
+        first = await cast.due_lines(
+            agent_turns=1, last_text="", tools_called=[], conversation=[]
+        )
         clock.now = 31
-        return first, await cast.due_lines(agent_turns=2, last_text="", tools_called=[], conversation=[])
+        return first, await cast.due_lines(
+            agent_turns=2, last_text="", tools_called=[], conversation=[]
+        )
 
     first, second = asyncio.run(turns())
     assert first == []
     assert [text for _, text in second] == ([line] if line else [])
     assert sent == acted
-    assert any(one["kind"] == "timeout" and one["fallback"] == fallback for one in cast.events)
+    assert any(
+        one["kind"] == "timeout" and one["fallback"] == fallback for one in cast.events
+    )
 
 
 def test_a_voice_actor_that_does_not_answer_in_time_is_recorded_with_its_fallback_never_voiced():
@@ -787,17 +862,48 @@ def test_a_voice_actor_that_does_not_answer_in_time_is_recorded_with_its_fallbac
 
     clock = _Clock()
     actors = [
-        {"id": "mia", "name": "Mia", "trigger": {"kind": "always"}, "timeout_seconds": 30, "fallback": "decline"},
-        {"id": "dev", "name": "Dev", "trigger": {"kind": "on_keyword", "words": ["never"]}},
-        {"id": "ana", "name": "Ana", "trigger": {"kind": "always"}, "timeout_seconds": 30, "fallback": "dev"},
+        {
+            "id": "mia",
+            "name": "Mia",
+            "trigger": {"kind": "always"},
+            "timeout_seconds": 30,
+            "fallback": "decline",
+        },
+        {
+            "id": "dev",
+            "name": "Dev",
+            "trigger": {"kind": "on_keyword", "words": ["never"]},
+        },
+        {
+            "id": "ana",
+            "name": "Ana",
+            "trigger": {"kind": "always"},
+            "timeout_seconds": 30,
+            "fallback": "dev",
+        },
     ]
-    cast = Cast(actors, "s", clock, limits={"max_active": None, "caller_takes_back_after_turns": None,
-                                            "actor_seconds_per_call": None})
+    cast = Cast(
+        actors,
+        "s",
+        clock,
+        limits={
+            "max_active": None,
+            "caller_takes_back_after_turns": None,
+            "actor_seconds_per_call": None,
+        },
+    )
     cast.entering(Moment(agent_turns=1))
     clock.now = 31
     expired = cast.fallbacks()
-    assert [(actor["id"], outcome) for actor, _, outcome in expired] == [("mia", "declined"), ("ana", "answered_by")]
-    declined = next(one for one in cast.events if one.get("actor") == "mia" and one.get("kind") == "timeout")
+    assert [(actor["id"], outcome) for actor, _, outcome in expired] == [
+        ("mia", "declined"),
+        ("ana", "answered_by"),
+    ]
+    declined = next(
+        one
+        for one in cast.events
+        if one.get("actor") == "mia" and one.get("kind") == "timeout"
+    )
     assert declined["text"] == "Mia did not answer: declined"
     # The actor named as the fallback comes in next, whatever its own trigger.
     assert [one["id"] for one in cast.entering(Moment(agent_turns=2))] == ["dev"]
@@ -807,9 +913,23 @@ def test_a_voice_actor_that_answered_in_time_has_no_fallback():
     from fi.simulate.simulation.call_actors import Cast
 
     clock = _Clock()
-    actor = {"id": "mia", "name": "Mia", "trigger": {"kind": "always"}, "timeout_seconds": 30, "fallback": "decline"}
-    cast = Cast([actor], "s", clock, limits={"max_active": None, "caller_takes_back_after_turns": None,
-                                              "actor_seconds_per_call": None})
+    actor = {
+        "id": "mia",
+        "name": "Mia",
+        "trigger": {"kind": "always"},
+        "timeout_seconds": 30,
+        "fallback": "decline",
+    }
+    cast = Cast(
+        [actor],
+        "s",
+        clock,
+        limits={
+            "max_active": None,
+            "caller_takes_back_after_turns": None,
+            "actor_seconds_per_call": None,
+        },
+    )
     cast.entering(Moment(agent_turns=1))
     cast.delivered(actor, "Approved.", 1, 1.0, 2.0)
     clock.now = 31
@@ -823,17 +943,44 @@ def test_a_scenario_never_lists_the_caller_among_its_actors(tmp_path):
 
     ensure_caller(tmp_path)
     scenario = Scenario(name="s", instruction="x", actors=[{"id": "caller"}])
-    assert any("the caller is the person" in one for one in _unlisted_actors(scenario, tmp_path))
+    assert any(
+        "the caller is the person" in one
+        for one in _unlisted_actors(scenario, tmp_path)
+    )
 
 
-def test_a_pre_run_session_with_no_place_is_refused_with_its_fix_before_any_model_is_asked(tmp_path):
+def test_a_pre_run_session_with_no_place_is_refused_with_its_fix_before_any_model_is_asked(
+    tmp_path,
+):
     from fi.alk.harness.actors import save_actors
     from fi.alk.harness.pre_run import session_problems
 
-    save_actors(tmp_path, ActorList(actors=[Actor(id="priya", name="Priya", play="live", permitted_actions=["slack.post"])]))
-    said = session_problems([{"actors": ["priya"], "about": "Acme", "where": {}}], tmp_path)
-    assert said == ["pre_run 1: `where.action` names the action that writes into this place"]
-    assert session_problems([{"actors": ["priya"], "about": "Acme", "where": {"action": "slack.post"}}], tmp_path) == []
+    save_actors(
+        tmp_path,
+        ActorList(
+            actors=[
+                Actor(
+                    id="priya",
+                    name="Priya",
+                    play="live",
+                    permitted_actions=["slack.post"],
+                )
+            ]
+        ),
+    )
+    said = session_problems(
+        [{"actors": ["priya"], "about": "Acme", "where": {}}], tmp_path
+    )
+    assert said == [
+        "pre_run 1: `where.action` names the action that writes into this place"
+    ]
+    assert (
+        session_problems(
+            [{"actors": ["priya"], "about": "Acme", "where": {"action": "slack.post"}}],
+            tmp_path,
+        )
+        == []
+    )
 
 
 @pytest.mark.parametrize("channel", ["voice", "chat"])

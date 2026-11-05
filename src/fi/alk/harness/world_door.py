@@ -94,7 +94,10 @@ class Outcome:
         if not self.fault:
             return 0.0
         try:
-            return min(max(float(self.fault.get("delay_seconds", MAX_FAULT_SECONDS)), 0.0), MAX_FAULT_SECONDS)
+            return min(
+                max(float(self.fault.get("delay_seconds", MAX_FAULT_SECONDS)), 0.0),
+                MAX_FAULT_SECONDS,
+            )
         except (TypeError, ValueError):
             return MAX_FAULT_SECONDS
 
@@ -169,11 +172,15 @@ class WorldDoor:
         try:
             return self._enter(call)
         except Exception as exc:  # noqa: BLE001 - the door adds no error of its own to any caller
-            outcome = Outcome("faulted", 502, reason=f"{type(exc).__name__}: the world's door failed")
+            outcome = Outcome(
+                "faulted", 502, reason=f"{type(exc).__name__}: the world's door failed"
+            )
             self._write(call, outcome)
             return outcome
 
-    def events(self, actor: str | None = None, outcome: str | None = None) -> list[dict[str, Any]]:
+    def events(
+        self, actor: str | None = None, outcome: str | None = None
+    ) -> list[dict[str, Any]]:
         """Every attempt in this trial's log, oldest first, optionally one participant's or one outcome's; nothing
         when the log cannot be read."""
         try:
@@ -194,22 +201,42 @@ class WorldDoor:
             if not call.proven:
                 # Unproven, it is the agent's own attempt to act as an actor, and logged as the agent's.
                 return self._refused(
-                    replace(call, actor=AGENT), "identity_conflict", "this request names an actor it cannot prove it is"
+                    replace(call, actor=AGENT),
+                    "identity_conflict",
+                    "this request names an actor it cannot prove it is",
                 )
             if not self.log.records_actors():
                 # Logged without its actor, the action would read as the agent's, so it never reaches the world.
-                return Outcome("refused", 503, reason="this world's action log cannot record an actor's action")
+                return Outcome(
+                    "refused",
+                    503,
+                    reason="this world's action log cannot record an actor's action",
+                )
             try:
                 listed = self.roster.actor(call.actor)
             except Exception:  # noqa: BLE001 - the world could not say who the actor is: its fault, never the actor's
-                self._write(call, Outcome("faulted", 503, reason="the world's actor list could not be read"))
-                return Outcome("faulted", 503, reason="the world could not check this actor")
+                self._write(
+                    call,
+                    Outcome(
+                        "faulted",
+                        503,
+                        reason="the world's actor list could not be read",
+                    ),
+                )
+                return Outcome(
+                    "faulted", 503, reason="the world could not check this actor"
+                )
             if listed is None:
-                return self._refused(call, "unknown_actor", f"{call.actor} is not an actor in this world")
+                return self._refused(
+                    call, "unknown_actor", f"{call.actor} is not an actor in this world"
+                )
             on_behalf_of = listed.get("on_behalf_of")
             if not permitted(listed.get("permitted_actions"), call.action):
                 return self._refused(
-                    call, "not_permitted", f"{call.action} is not permitted for {call.actor}", on_behalf_of
+                    call,
+                    "not_permitted",
+                    f"{call.action} is not permitted for {call.actor}",
+                    on_behalf_of,
                 )
         else:
             fault = self._fault(call)
@@ -236,7 +263,9 @@ class WorldDoor:
             self._write(call, outcome, key=key, on_behalf_of=on_behalf_of)
             return outcome
 
-    def _refused(self, call: ToolCall, code: str, reason: str, on_behalf_of: str | None = None) -> Outcome:
+    def _refused(
+        self, call: ToolCall, code: str, reason: str, on_behalf_of: str | None = None
+    ) -> Outcome:
         # Says why, never whether the record asked about exists.
         outcome = Outcome("refused", 403, reason=reason, refusal_code=code)
         self._write(call, outcome, on_behalf_of=on_behalf_of)
@@ -256,14 +285,23 @@ class WorldDoor:
             made = self.log.agent_calls(call.name)
         except Exception:  # noqa: BLE001 - counted from zero when the log cannot say
             made = 0
-        return next((one for one in named if _int(one.get("on_call"), 1) == made + 1), None)
+        return next(
+            (one for one in named if _int(one.get("on_call"), 1) == made + 1), None
+        )
 
     def _faulted(self, call: ToolCall, fault: dict[str, Any]) -> Outcome:
         """A timeout the scenario sets: before commit the world never sees the call; after commit it does and the
         caller never hears back. A retry is not deduplicated, so a second commit is what a check can catch."""
         if fault.get("mode") == "timeout_after_commit":
             ran = self._execute(call)
-            logged = replace(ran, reason="response_lost", fault=fault, status=504, body=None, refusal_code=None)
+            logged = replace(
+                ran,
+                reason="response_lost",
+                fault=fault,
+                status=504,
+                body=None,
+                refusal_code=None,
+            )
             self._write(call, logged)
             return logged
         outcome = Outcome("faulted", 504, reason="timeout_before_commit", fault=fault)
@@ -276,7 +314,9 @@ class WorldDoor:
         except Exception as exc:  # noqa: BLE001 - the world failing is a fault of its own
             return Outcome("faulted", 502, reason=f"{type(exc).__name__}: unavailable")
         if ran.status < 400:
-            return Outcome("committed", ran.status, ran.result, ran.body, ran.content_type)
+            return Outcome(
+                "committed", ran.status, ran.result, ran.body, ran.content_type
+            )
         # The request's own fault is the world refusing it; the server's is a world fault.
         refused = ran.status < 500
         return Outcome(
@@ -289,7 +329,9 @@ class WorldDoor:
             refusal_code="world_rule" if refused else None,
         )
 
-    def _run(self, call: ToolCall, key: str | None, on_behalf_of: str | None) -> Outcome:
+    def _run(
+        self, call: ToolCall, key: str | None, on_behalf_of: str | None
+    ) -> Outcome:
         outcome = self._execute(call)
         self._write(call, outcome, key=key, on_behalf_of=on_behalf_of)
         return outcome
@@ -305,7 +347,12 @@ class WorldDoor:
             return self._key_locks.setdefault(key, threading.Lock())
 
     def _write(
-        self, call: ToolCall, outcome: Outcome, *, key: str | None = None, on_behalf_of: str | None = None
+        self,
+        call: ToolCall,
+        outcome: Outcome,
+        *,
+        key: str | None = None,
+        on_behalf_of: str | None = None,
     ) -> None:
         """One row of the action log, given at most `write_seconds`; a failed or slow write loses the row only."""
         action_id = uuid.uuid4().hex
@@ -313,7 +360,9 @@ class WorldDoor:
         row = {
             "name": call.name,
             "arguments": call.arguments,
-            "result": outcome.result if outcome.outcome in ("committed", "duplicate") else None,
+            "result": outcome.result
+            if outcome.outcome in ("committed", "duplicate")
+            else None,
             # `ok` stays, true only for a committed action.
             "ok": outcome.outcome == "committed",
             "error": outcome.reason,
@@ -357,7 +406,9 @@ class HttpExecutor:
 
     def run(self, call: ToolCall) -> Executed:
         path = call.path or "/" + call.action.replace(".", "/")
-        body = call.body if call.body is not None else json.dumps(call.arguments).encode()
+        body = (
+            call.body if call.body is not None else json.dumps(call.arguments).encode()
+        )
         outgoing = request.Request(
             self.upstream + path,
             data=body if call.method != "GET" else None,
@@ -372,7 +423,11 @@ class HttpExecutor:
         except error.HTTPError as exc:
             content = exc.read()
             return Executed(
-                exc.code, None, content, None, content.decode("utf-8", errors="replace")[:2000]
+                exc.code,
+                None,
+                content,
+                None,
+                content.decode("utf-8", errors="replace")[:2000],
             )
         try:
             result = json.loads(content) if content else None
@@ -385,7 +440,9 @@ class RecordExecutor:
     """A record change on one of the world's collections: `<collection>.change` with `{where, set}` or
     `<collection>.put` with `{record}`. Identifiers are checked; values are always parameters."""
 
-    def __init__(self, execute: Callable[[str, list[Any]], Any], placeholder: str = "%s") -> None:
+    def __init__(
+        self, execute: Callable[[str, list[Any]], Any], placeholder: str = "%s"
+    ) -> None:
         self.execute = execute
         self.placeholder = placeholder
 
@@ -397,14 +454,23 @@ class RecordExecutor:
         collection, verb = named
         values = arguments.get("record" if verb == "put" else "set")
         where = arguments.get("where") if verb == "change" else {}
-        if not isinstance(values, dict) or not values or not isinstance(where, dict) or (verb == "change" and not where):
+        if (
+            not isinstance(values, dict)
+            or not values
+            or not isinstance(where, dict)
+            or (verb == "change" and not where)
+        ):
             return Executed(
-                400, None, error="a change needs `where` and `set`; a put needs `record`, each a non-empty object"
+                400,
+                None,
+                error="a change needs `where` and `set`; a put needs `record`, each a non-empty object",
             )
         names = [*values, *where]
         bad = [one for one in names if not _IDENTIFIER.match(str(one))]
         if bad:
-            return Executed(400, None, error="not a field name: " + ", ".join(map(str, bad)))
+            return Executed(
+                400, None, error="not a field name: " + ", ".join(map(str, bad))
+            )
         mark = self.placeholder
         quoted = {one: '"' + str(one) + '"' for one in names}
         if verb == "put":
@@ -429,7 +495,9 @@ class HandlerExecutor:
     call and returns `(ok, result, content)`, `content` being what the agent is shown. One call at a time: the
     agent's calls and the actors' run on different threads against one world."""
 
-    def __init__(self, handle: Callable[[ToolCall], tuple[bool, Any, str] | None]) -> None:
+    def __init__(
+        self, handle: Callable[[ToolCall], tuple[bool, Any, str] | None]
+    ) -> None:
         self.handle = handle
         self._lock = threading.Lock()
 
@@ -443,7 +511,13 @@ class HandlerExecutor:
         body = content.encode() if isinstance(content, str) else None
         if ok:
             return Executed(200, result, body, "text/plain")
-        return Executed(400, result, body, "text/plain", error=content if isinstance(content, str) else "refused")
+        return Executed(
+            400,
+            result,
+            body,
+            "text/plain",
+            error=content if isinstance(content, str) else "refused",
+        )
 
 
 class Routed:
@@ -483,7 +557,9 @@ class PostgresLog:
     def _connect(self, **options: Any) -> Any:
         import psycopg
 
-        return psycopg.connect(self.dsn, autocommit=True, connect_timeout=self.connect_seconds, **options)
+        return psycopg.connect(
+            self.dsn, autocommit=True, connect_timeout=self.connect_seconds, **options
+        )
 
     def records_actors(self) -> bool:
         if self._extended is None:
@@ -507,7 +583,10 @@ class PostgresLog:
         columns = _EXTENDED if extended else _BASIC
         keys = [one.strip() for one in columns.split(",")]
         values = [
-            json.dumps(row.get(key), default=str) if key in ("arguments", "result") else row.get(key) for key in keys
+            json.dumps(row.get(key), default=str)
+            if key in ("arguments", "result")
+            else row.get(key)
+            for key in keys
         ]
         with self._connect() as connection:
             connection.execute(
@@ -534,7 +613,8 @@ class PostgresLog:
         clause = " AND actor_id = 'agent'" if self.records_actors() else ""
         with self._connect() as connection:
             row = connection.execute(
-                f"SELECT count(*) FROM _alk_tool_trace WHERE name = %s{clause}", (name,)  # noqa: S608
+                f"SELECT count(*) FROM _alk_tool_trace WHERE name = %s{clause}",
+                (name,),  # noqa: S608
             ).fetchone()
         return int(row[0]) if row else 0
 
@@ -548,9 +628,12 @@ class PostgresRoster:
     def actor(self, actor_id: str) -> Mapping[str, Any] | None:
         import psycopg
 
-        with psycopg.connect(self.dsn, autocommit=True, connect_timeout=5) as connection:
+        with psycopg.connect(
+            self.dsn, autocommit=True, connect_timeout=5
+        ) as connection:
             row = connection.execute(
-                "SELECT permitted_actions, on_behalf_of FROM _alk_actors WHERE id = %s", (actor_id,)
+                "SELECT permitted_actions, on_behalf_of FROM _alk_actors WHERE id = %s",
+                (actor_id,),
             ).fetchone()
         return {"permitted_actions": row[0], "on_behalf_of": row[1]} if row else None
 
@@ -564,7 +647,9 @@ class PostgresRecords:
     def __call__(self, sql: str, params: list[Any]) -> int:
         import psycopg
 
-        with psycopg.connect(self.dsn, autocommit=True, connect_timeout=5) as connection:
+        with psycopg.connect(
+            self.dsn, autocommit=True, connect_timeout=5
+        ) as connection:
             return int(connection.execute(sql, params).rowcount)
 
 
@@ -588,13 +673,22 @@ class MemoryLog:
 
     def committed(self, key: str) -> tuple[Any, Any] | None:
         found = next(
-            (one for one in self.rows() if one.get("idempotency_key") == key and one.get("outcome") == "committed"),
+            (
+                one
+                for one in self.rows()
+                if one.get("idempotency_key") == key
+                and one.get("outcome") == "committed"
+            ),
             None,
         )
         return (found["arguments"], found["result"]) if found else None
 
     def agent_calls(self, name: str) -> int:
-        return sum(1 for one in self.rows() if one.get("name") == name and one.get("actor_id") == AGENT)
+        return sum(
+            1
+            for one in self.rows()
+            if one.get("name") == name and one.get("actor_id") == AGENT
+        )
 
 
 class TeeLog:

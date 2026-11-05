@@ -531,7 +531,7 @@ def test_a_live_actor_acts_on_a_message_it_can_see_from_the_agent_or_another_act
 
 
 def test_many_actors_each_answering_once_with_the_agent_idle_are_never_stopped_by_a_count():
-    # K-26: ten people each posting once is a conversation, not a loop; no count stops actors at run time.
+    # Ten people each posting once is a conversation, not a loop; no count stops actors at run time.
     async def decide(situation):
         return '{"action": "slack.post_message", "arguments": {"text": "agreed"}, "why": "replying"}'
 

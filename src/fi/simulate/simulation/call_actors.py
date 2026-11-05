@@ -120,7 +120,7 @@ ACTOR_WORLD_ALIAS = "HARNESS_ACTOR_WORLD"
 TOOLS_READ_SECONDS = 1.0
 # How much of the conversation an actor hears before writing a line.
 CONVERSATION_LINES = 12
-# The defaults for every limit nobody set, per run (K-26): two voices on one phone line, the caller back after four
+# The defaults for every limit nobody set, per run: two voices on one phone line, the caller back after four
 # agent turns, a minute of actors per call, a long ceiling on a pre-run conversation. Each is a setting on the
 # environment's actor list, overridable per scenario; `None` there is no limit.
 LIMIT_DEFAULTS: dict[str, Any] = {

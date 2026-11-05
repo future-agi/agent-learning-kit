@@ -1,4 +1,4 @@
-"""One conformance suite for the world's door (§5.12 rule 4): the same cases against every surface and executor, the
+"""One conformance suite for the world's door: the same cases against every surface and executor, the
 same outcomes on each. A new surface (stdio MCP, a prebuilt world's tool server) is added with one entry in
 `SURFACES`, and is not done until every case here passes for it."""
 
@@ -24,7 +24,12 @@ from fi.alk.harness.world_door import (
     WorldDoor,
 )
 
-ROSTER = {"manager": {"permitted_actions": ["crm.approve", "approvals.change"], "on_behalf_of": None}}
+ROSTER = {
+    "manager": {
+        "permitted_actions": ["crm.approve", "approvals.change"],
+        "on_behalf_of": None,
+    }
+}
 
 
 class _Upstream(BaseHTTPRequestHandler):
@@ -111,7 +116,14 @@ def _enter(door, call, via):
         from fi.alk.harness.actor_dispatch import DoorActs
 
         sent = asyncio.run(
-            DoorActs(door)(call.actor, call.action, call.arguments, key=call.key or "k", parent=None, form=call.form)
+            DoorActs(door)(
+                call.actor,
+                call.action,
+                call.arguments,
+                key=call.key or "k",
+                parent=None,
+                form=call.form,
+            )
         )
         return SimpleNamespace(outcome=sent["outcome"], refusal_code=None, fault=None)
     return door.enter(call)
@@ -120,7 +132,12 @@ def _enter(door, call, via):
 def _door(name, upstream, log=None, faults=()):
     make, via = SURFACES[name]
     failing = _Failing()
-    door = WorldDoor(make(upstream, failing), log or MemoryLog(), DictRoster(ROSTER), faults=lambda: list(faults))
+    door = WorldDoor(
+        make(upstream, failing),
+        log or MemoryLog(),
+        DictRoster(ROSTER),
+        faults=lambda: list(faults),
+    )
     return door, via, failing
 
 
@@ -136,18 +153,36 @@ ARGS = {"where": {"id": 1}, "set": {"status": "approved"}}
 
 
 @pytest.mark.parametrize("surface", SURFACES)
-def test_a_permitted_actor_action_commits_and_is_logged_as_the_actor_s(surface, upstream):
+def test_a_permitted_actor_action_commits_and_is_logged_as_the_actor_s(
+    surface, upstream
+):
     door, via, _ = _door(surface, upstream)
-    outcome = _enter(door, ToolCall(action=_action(surface), name="x", actor="manager", key="k1", arguments=ARGS,
-                                    form=_form(surface)), via)
+    outcome = _enter(
+        door,
+        ToolCall(
+            action=_action(surface),
+            name="x",
+            actor="manager",
+            key="k1",
+            arguments=ARGS,
+            form=_form(surface),
+        ),
+        via,
+    )
     assert outcome.outcome == "committed"
-    assert [(row["actor_id"], row["outcome"]) for row in door.events()] == [("manager", "committed")]
+    assert [(row["actor_id"], row["outcome"]) for row in door.events()] == [
+        ("manager", "committed")
+    ]
 
 
 @pytest.mark.parametrize("surface", SURFACES)
 def test_an_actor_action_it_may_not_take_is_refused_and_logged(surface, upstream):
     door, via, _ = _door(surface, upstream)
-    outcome = _enter(door, ToolCall(action="crm.delete", name="delete", actor="manager", key="k2"), via)
+    outcome = _enter(
+        door,
+        ToolCall(action="crm.delete", name="delete", actor="manager", key="k2"),
+        via,
+    )
     assert outcome.outcome == "refused"
     assert [row["refusal_code"] for row in door.events()] == ["not_permitted"]
 
@@ -155,30 +190,60 @@ def test_an_actor_action_it_may_not_take_is_refused_and_logged(surface, upstream
 @pytest.mark.parametrize("surface", SURFACES)
 def test_the_agent_s_call_commits_with_no_permission_check(surface, upstream):
     door, via, _ = _door(surface, upstream)
-    assert _enter(door, ToolCall(action="crm.delete", name="delete"), via).outcome == "committed"
+    assert (
+        _enter(door, ToolCall(action="crm.delete", name="delete"), via).outcome
+        == "committed"
+    )
 
 
 @pytest.mark.parametrize("surface", SURFACES)
 @pytest.mark.parametrize("mode", ["timeout_before_commit", "timeout_after_commit"])
-def test_the_agent_s_call_with_a_fault_is_faulted_on_its_named_call_only(surface, mode, upstream):
-    door, via, _ = _door(surface, upstream, faults=[{"action": "crm.update", "mode": mode, "on_call": 1}])
-    assert _enter(door, ToolCall(action="crm.update", name="update"), via).fault is not None
+def test_the_agent_s_call_with_a_fault_is_faulted_on_its_named_call_only(
+    surface, mode, upstream
+):
+    door, via, _ = _door(
+        surface, upstream, faults=[{"action": "crm.update", "mode": mode, "on_call": 1}]
+    )
+    assert (
+        _enter(door, ToolCall(action="crm.update", name="update"), via).fault
+        is not None
+    )
     assert _enter(door, ToolCall(action="crm.update", name="update"), via).fault is None
 
 
 @pytest.mark.parametrize("surface", SURFACES)
 def test_a_replayed_key_is_a_duplicate_and_reaches_the_world_once(surface, upstream):
     door, via, _ = _door(surface, upstream)
-    call = ToolCall(action=_action(surface), name="x", actor="manager", key="k3", arguments=ARGS, form=_form(surface))
-    assert [_enter(door, call, via).outcome for _ in range(2)] == ["committed", "duplicate"]
+    call = ToolCall(
+        action=_action(surface),
+        name="x",
+        actor="manager",
+        key="k3",
+        arguments=ARGS,
+        form=_form(surface),
+    )
+    assert [_enter(door, call, via).outcome for _ in range(2)] == [
+        "committed",
+        "duplicate",
+    ]
 
 
 @pytest.mark.parametrize("surface", SURFACES)
 def test_an_executor_error_is_a_fault_never_an_exception(surface, upstream):
     door, via, failing = _door(surface, upstream)
     failing.on = True
-    outcome = _enter(door, ToolCall(action=_action(surface), name="x", actor="manager", key="k4", arguments=ARGS,
-                                    form=_form(surface)), via)
+    outcome = _enter(
+        door,
+        ToolCall(
+            action=_action(surface),
+            name="x",
+            actor="manager",
+            key="k4",
+            arguments=ARGS,
+            form=_form(surface),
+        ),
+        via,
+    )
     assert outcome.outcome == "faulted"
 
 
@@ -189,10 +254,15 @@ def test_an_unreachable_log_never_changes_the_answer(surface, upstream):
             raise RuntimeError("log down")
 
     door, via, _ = _door(surface, upstream, log=_Down())
-    assert _enter(door, ToolCall(action="crm.update", name="update"), via).outcome == "committed"
+    assert (
+        _enter(door, ToolCall(action="crm.update", name="update"), via).outcome
+        == "committed"
+    )
 
 
-def test_over_http_a_fault_names_the_world_action_and_never_hits_another_service_s_call(upstream):
+def test_over_http_a_fault_names_the_world_action_and_never_hits_another_service_s_call(
+    upstream,
+):
     # Byte for byte with the proxy before the door: a fault matches the action only, so `crm.get` never faults `chat.get`.
     faults = [{"action": "crm.get", "mode": "timeout_before_commit"}]
     door, via, _ = _door("proxy over HTTP", upstream, faults=faults)
@@ -200,5 +270,9 @@ def test_over_http_a_fault_names_the_world_action_and_never_hits_another_service
     door, via, _ = _door("proxy over HTTP", upstream, faults=faults)
     assert _enter(door, ToolCall(action="crm.get", name="get"), via).fault is not None
     # A fault written as the bare tool name never fired at the proxy, and still does not.
-    door, via, _ = _door("proxy over HTTP", upstream, faults=[{"action": "get", "mode": "timeout_before_commit"}])
+    door, via, _ = _door(
+        "proxy over HTTP",
+        upstream,
+        faults=[{"action": "get", "mode": "timeout_before_commit"}],
+    )
     assert _enter(door, ToolCall(action="crm.get", name="get"), via).fault is None

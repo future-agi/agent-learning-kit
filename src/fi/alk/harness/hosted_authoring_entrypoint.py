@@ -170,7 +170,7 @@ def main(argv: list[str] | None = None) -> int:
                 GOOGLE_ADK_APPROVAL_ENV,
                 "ALK_BACKGROUND_NOISE",
                 "ALK_BACKGROUND_NOISE_CATALOG",
-                            TARGET_PHONE_ENV,
+                TARGET_PHONE_ENV,
                 PIN_ENV,
             )
             if gateway_values.get(name)

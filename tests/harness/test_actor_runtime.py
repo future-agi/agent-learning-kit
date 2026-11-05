@@ -192,7 +192,7 @@ def test_an_actor_whose_word_never_comes_never_writes_and_is_recorded_not_trigge
 
 @pytest.mark.parametrize("limits, expected", [(None, 9), ({"caller_takes_back_after_turns": 4}, 4)])
 def test_a_chat_actor_is_free_and_only_the_environment_s_limit_stops_it(monkeypatch, limits, expected):
-    # K-4, K-26: no hard-coded cap; an actor decides on every agent turn, within the limits the environment sets.
+    # No hard-coded cap: an actor decides on every agent turn, within the limits the environment sets.
     cast = _cast({"kind": "always"}, monkeypatch, lines=[f"line {n}" for n in range(10)], limits=limits)
 
     async def lines():
