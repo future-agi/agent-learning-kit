@@ -273,6 +273,18 @@ def sse_server():
                     event_id="text-1",
                 )
             )
+            self.wfile.write(
+                _event(
+                    {
+                        "type": "MESSAGES_SNAPSHOT",
+                        "messages": [
+                            {"role": "user", "content": case},
+                            {"role": "assistant", "content": "hello"},
+                        ],
+                    },
+                    event_id="snapshot-1",
+                )
+            )
             self.wfile.write(_event({"type": "RUN_FINISHED"}, event_id="done-1"))
             self.wfile.flush()
             state["release"].wait(3)

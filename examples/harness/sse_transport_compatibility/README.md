@@ -25,12 +25,17 @@ export VERTEXAI_PROJECT=futureagiprimary
 export VERTEXAI_LOCATION=global
 export MODEL=vertex_ai/gemini-3.7-flash
 uv sync
+uv pip install --python .venv/bin/python google-auth
 uv run dev
 ```
 
 `GOOGLE_APPLICATION_CREDENTIALS` points LiteLLM at the local service-account JSON. Keep that file
 outside this reference: never copy its contents or an access token into the materialized source,
 qualification output, or repository.
+
+The pinned example's default dependency set omits `google-auth`. Install it into the materialized
+virtual environment after `uv sync`; installing it only with `uv run --with` does not reach the
+Uvicorn reload worker.
 
 With the dojo running on port 8000, exercise two turns through ALK's SSE wrapper:
 
@@ -48,12 +53,15 @@ POST AG-UI `RunAgentInput` bodies to
 for each turn.
 
 `RUN_FINISHED` is the only successful terminal event and `RUN_ERROR` is failure. EOF without either
-is not success. The example's `TEXT_MESSAGE_CONTENT.delta` values are appended.
+is not success. This conversational route sends its answer in repeated `MESSAGES_SNAPSHOT` events;
+the mapping takes the cumulative content of the last message only when that message is an assistant.
 
 Tool evidence is intentionally still marked pending. AG-UI streams a tool call across
 `TOOL_CALL_START`, `TOOL_CALL_ARGS`, `TOOL_CALL_END`, and `TOOL_CALL_RESULT`; the existing ALK
 generic collectors consume complete action/result objects. Do not claim full fixture qualification
 or re-execute the streamed call until a declarative pairing proves the source tool and result.
+The live Vertex run observed exactly one `get_weather` start/result sequence, so source execution is
+proven; normalized ALK retention of that split evidence is the remaining gap.
 
 Client disconnect proves that ALK closes its socket. It does not prove CrewAI stopped provider work;
 the upstream conversational worker may continue after its client disconnects.

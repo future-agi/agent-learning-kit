@@ -42,6 +42,7 @@
     },
     "environment_names": ["GOOGLE_APPLICATION_CREDENTIALS", "VERTEXAI_PROJECT"],
     "authentication": "google_application_credentials_file",
+    "supplemental_dependencies": ["google-auth"],
     "endpoint": "/conversational_flows/backend_tool_rendering"
   },
   "request": {
@@ -64,9 +65,9 @@
     "failure": {"path": "data.type", "values": ["RUN_ERROR"]},
     "text": [
       {
-        "mode": "delta",
-        "path": "data.delta",
-        "when": {"path": "data.type", "values": ["TEXT_MESSAGE_CONTENT"]}
+        "mode": "cumulative",
+        "path": "data.messages.-1.content",
+        "when": {"path": "data.messages.-1.role", "values": ["assistant"]}
       }
     ]
   },
@@ -78,13 +79,13 @@
     ],
     "required_evidence": [
       "both turns end with RUN_FINISHED and no RUN_ERROR",
-      "TEXT_MESSAGE_CONTENT deltas assemble into one answer per turn",
+      "the last assistant content in MESSAGES_SNAPSHOT becomes the answer for each turn",
       "the second answer depends on the first turn under the same threadId",
       "get_weather executes exactly once and its source-owned result is retained",
       "client cancellation closes the SSE connection",
       "explicit completion returns without waiting for response EOF"
     ],
     "tool_event_status": "pending",
-    "tool_event_gap": "AG-UI emits TOOL_CALL_START, TOOL_CALL_ARGS, TOOL_CALL_END, and TOOL_CALL_RESULT as separate correlated events. ALK's current generic completed-tool collectors require complete action/result objects, so this fixture does not pass tool-evidence qualification until a declarative mapping can pair those fragments without framework-specific execution semantics."
+    "tool_event_gap": "The live Vertex run observed exactly one get_weather TOOL_CALL_START followed by TOOL_CALL_ARGS, TOOL_CALL_END, and TOOL_CALL_RESULT. ALK's current generic completed-tool collectors require complete action/result objects, so normalized tool-evidence qualification remains pending until a declarative mapping can pair those fragments without framework-specific execution semantics."
   }
 }

@@ -29,6 +29,7 @@ def verify(source_root: Path | None = None) -> dict[str, object]:
         "GOOGLE_APPLICATION_CREDENTIALS",
         "VERTEXAI_PROJECT",
     ]
+    assert reference["runtime"]["supplemental_dependencies"] == ["google-auth"]
     assert (
         reference["runtime"]["authentication"]
         == "google_application_credentials_file"
@@ -43,6 +44,16 @@ def verify(source_root: Path | None = None) -> dict[str, object]:
     ]
     assert reference["sse"]["completion"]["values"] == ["RUN_FINISHED"]
     assert reference["sse"]["failure"]["values"] == ["RUN_ERROR"]
+    assert reference["sse"]["text"] == [
+        {
+            "mode": "cumulative",
+            "path": "data.messages.-1.content",
+            "when": {
+                "path": "data.messages.-1.role",
+                "values": ["assistant"],
+            },
+        }
+    ]
     assert qualification["requires_credentials"] is True
     assert qualification["tool_event_status"] == "pending"
     assert len(qualification["turns"]) == 2

@@ -11,7 +11,7 @@
 
 Live qualification still required outside this implementation unit:
 
-- [ ] Run the pinned AG-UI CrewAI example with Vertex AI Gemini 3.7 Flash, using the declared credentials file, and retain the two-turn qualification summary.
+- [ ] Complete the pinned AG-UI CrewAI two-turn run with Vertex AI Gemini 3.7 Flash; the first live turn already proved RUN_FINISHED plus one get_weather start/result sequence and exposed the MESSAGES_SNAPSHOT mapping.
 - [ ] Qualify split `TOOL_CALL_*` / `TOOL_CALL_RESULT` pairing before claiming upstream tool-evidence support.
 
 Skipped for this unit unless a failing acceptance test requires them:
