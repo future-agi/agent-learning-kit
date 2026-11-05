@@ -1413,3 +1413,48 @@ def test_generated_command_bridge_handles_readiness_and_hosted_chat(tmp_path, mo
         server.shutdown()
         thread.join()
         server.server_close()
+
+
+def test_a_chat_trial_plays_its_actors_through_the_same_door_as_the_agent(tmp_path: Path, monkeypatch: Any) -> None:
+    from fi.alk.harness.actors import Actor, ActorList, save_actors
+
+    context = _context(tmp_path)
+    save_actors(context.bundle_dir, ActorList(actors=[
+        Actor(id="manager", name="Mia", play="mocked", permitted_actions=["lookup_account"]),
+    ]))
+    path = context.bundle_dir / "scenarios" / "one" / "scenario.json"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document["actors"] = [{"id": "manager", "actions": [{"action": "lookup_account",
+                                                          "arguments": {"account_id": "ACC-1"}}]}]
+    path.write_text(json.dumps(document), encoding="utf-8")
+    tool_world = _ToolWorld()
+    monkeypatch.setattr(chat, "_tool_world", lambda *_args: tool_world)
+    monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
+
+    class Wrapper:
+        def __init__(self, **_kwargs: Any) -> None:
+            self.calls = 0
+
+        async def call(self, _request: Any) -> AgentResponse:
+            self.calls += 1
+            # The actors play while the agent works.
+            await asyncio.sleep(0.05)
+            if self.calls == 1:
+                return AgentResponse(content="", tool_calls=[{"id": "tool-1", "function": {
+                    "name": "lookup_account", "arguments": '{"account_id":"ACC-2048"}'}}])
+            return AgentResponse(content="The account is active.")
+
+    monkeypatch.setattr(chat, "HTTPAgentWrapper", Wrapper)
+    runner = chat.HostedChatCallRunner(_Adapter(), context)
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1", world_index=0, bundle_digest="sha256:" + "a" * 64, state=RuntimeState.READY,
+        endpoints={"target_http": RuntimeEndpoint(capability="target_http", protocol="http",
+                                                  address="http://localhost:18080")},
+    )
+    outcome = asyncio.run(runner.run(SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), runtime))
+
+    # The agent's own calls are what grading reads; the actor's action is never among them.
+    assert [(call.name, call.arguments) for call in outcome.calls] == [("lookup_account", {"account_id": "ACC-2048"})]
+    assert [(one["actor_id"], one["outcome"]) for one in outcome.world_actions] == [("manager", "committed")]
+    assert {"actor": "manager", "name": "Mia", "triggered": True, "delivered": 1, "dropped": [],
+            "acts_in_world": True} in outcome.call_actors
