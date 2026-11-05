@@ -1,4 +1,17 @@
 import { bleuScore } from '../metrics/similarity';
+import type { MetricResult } from '../metrics/types';
+
+// RED accepts only string references statically and throws on other inputs.
+// Keep runtime coverage without turning a RED assertion into a compile/error failure.
+const callBleu = bleuScore as unknown as (response: unknown, config: unknown) => MetricResult;
+function bleu(response: unknown, config: unknown): MetricResult {
+    let result: MetricResult | undefined;
+    let threw = false;
+    try { result = callBleu(response, config); }
+    catch { threw = true; }
+    expect(threw).toBe(false);
+    return result!;
+}
 
 // Stdlib NLTK 3.9 sentence_bleu + method1 reproduction, not the TS implementation.
 // BLEU-ORACLE-r1.json SHA-256: b9b0f863e30b1b8f3922e26c32a65392128f7de698b3c735d45e5878c1f39c77
@@ -44,8 +57,10 @@ const goldenRows: GoldenRow[] = [
 
 describe('BLEU Python sentence-level parity', () => {
     it.each(goldenRows)('$name', ({ hypothesis, references, weights, expected_score }) => {
-        const referenceInputs: Array<string | string[]> = [references];
+        // Check primitive-reference numerics before the additional array contract.
+        const referenceInputs: Array<string | string[]> = [];
         if (references.length === 1) referenceInputs.push(references[0]!);
+        referenceInputs.push(references);
         for (const reference of referenceInputs) {
             const configurations: Array<{ reference: string | string[]; ngramWeights?: number[] }> = [
                 { reference, ngramWeights: weights }
@@ -54,7 +69,7 @@ describe('BLEU Python sentence-level parity', () => {
                 configurations.push({ reference });
             }
             for (const config of configurations) {
-                const result = bleuScore(hypothesis, config);
+                const result = bleu(hypothesis, config);
                 if (expected_score === 0) expect(result.score).toBe(0);
                 else expect(Math.abs(result.score - expected_score)).toBeLessThan(1e-4);
                 expect(result.passed).toBe(expected_score >= 0.5);
@@ -63,10 +78,13 @@ describe('BLEU Python sentence-level parity', () => {
         }
     });
 
-    it.each(Array.from(pythonWhitespace))('splits on Python whitespace U+%s', separator => {
+    it.each(Array.from(pythonWhitespace, separator => ({
+        label: `U+${separator.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}`,
+        separator
+    })))('splits on Python whitespace $label', ({ separator }) => {
         const text = ['alpha', 'beta', 'gamma', 'delta'].join(separator);
-        expect(bleuScore(text, { reference: 'alpha beta gamma delta' }).score).toBe(1);
-        expect(bleuScore('alpha beta gamma delta', { reference: [text] }).score).toBe(1);
+        expect(bleu(text, { reference: 'alpha beta gamma delta' }).score).toBe(1);
+        expect(bleu('alpha beta gamma delta', { reference: [text] }).score).toBe(1);
     });
 
     it.each([
@@ -78,7 +96,7 @@ describe('BLEU Python sentence-level parity', () => {
         { label: 'object', response: {} },
         { label: 'array', response: ['alpha'] }
     ])('rejects $label response', ({ response }) => {
-        expect(bleuScore(response as any, { reference: 'alpha' }))
+        expect(bleu(response as any, { reference: 'alpha' }))
             .toEqual({ score: 0, passed: false, reason: 'NO_EVIDENCE' });
     });
 
@@ -97,7 +115,7 @@ describe('BLEU Python sentence-level parity', () => {
         { label: 'nested array member', reference: ['alpha', ['alpha']] },
         { label: 'sparse array', reference: new Array(1) }
     ])('rejects $label reference without dropping invalid evidence', ({ reference }) => {
-        expect(bleuScore('alpha', { reference } as any))
+        expect(bleu('alpha', { reference } as any))
             .toEqual({ score: 0, passed: false, reason: 'NO_EVIDENCE' });
     });
 
@@ -111,7 +129,7 @@ describe('BLEU Python sentence-level parity', () => {
                 return 'alpha beta gamma delta';
             }
         });
-        const result = bleuScore('alpha beta gamma delta', {
+        const result = bleu('alpha beta gamma delta', {
             get reference() {
                 referenceReads++;
                 if (referenceReads > 1) throw new Error('reference reread');
@@ -127,7 +145,7 @@ describe('BLEU Python sentence-level parity', () => {
         const references = Object.defineProperty([''], '0', {
             get() { throw new Error('untrusted reference getter'); }
         });
-        expect(bleuScore('alpha', { reference: references }))
+        expect(bleu('alpha', { reference: references }))
             .toEqual({ score: 0, passed: false, reason: 'METRIC_CONFIG_INVALID' });
     });
 });

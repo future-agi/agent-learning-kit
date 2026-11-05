@@ -32,6 +32,8 @@ function once<T extends object>(record: T): T {
 }
 afterEach(() => jest.restoreAllMocks());
 
+// Diagnostic fields added after RED are accessed through local casts only;
+// their runtime assertions must still fail when the pre-W04 fields are absent.
 describe('W04 round3 fail-closed', () => {
     test('R3-L01 declared scale, not observed magnitude, controls verdict', async () => {
         const judge = new Judge();
@@ -59,21 +61,21 @@ describe('W04 round3 fail-closed', () => {
         const stream = new StreamingEvaluator({ metrics: ['one_line'], maxAccumulatedLength: 8 });
         stream.addChunk('unsafe\n' + 'a'.repeat(20));
         const result = stream.complete();
-        expect(result.status).toBe('incomplete');
-        expect(result.metricErrors).toContainEqual({ metric: 'one_line', reasonCode: 'TRUNCATED' });
+        expect((result as any).status).toBe('incomplete');
+        expect((result as any).metricErrors).toContainEqual({ metric: 'one_line', reasonCode: 'TRUNCATED' });
         const run = jest.spyOn(metrics, 'runMetric').mockReturnValueOnce({ score: 0, passed: false, reason: 'fixture' }).mockReturnValue({ score: 1, passed: true, reason: 'fixture' });
         const latch = new StreamingEvaluator({ metrics: ['one_line'], minCharsBeforeEval: 1 });
         latch.addChunk('answer'); latch.addChunk(' later');
-        expect(latch.complete().status).toBe('failed');
+        expect((latch.complete() as any).status).toBe('failed');
         expect(run).toHaveBeenCalled();
     });
     test('R3-C04 empty prefixes defer evidence, tokenless metric results latch', () => {
         const stream = new StreamingEvaluator({ metrics: ['one_line'], minCharsBeforeEval: 0 });
         stream.addChunk(''); stream.addChunk('  '); stream.addChunk('A complete answer.');
-        expect(stream.complete().status).toBe('passed');
+        expect((stream.complete() as any).status).toBe('passed');
         const rouge = new StreamingEvaluator({ metrics: ['rouge_score'], reference: 'alpha beta', minCharsBeforeEval: 1 });
         rouge.addChunk('---'); rouge.addChunk('alpha beta');
-        expect(rouge.complete().status).toBe('incomplete');
+        expect((rouge.complete() as any).status).toBe('incomplete');
     });
     test('R3-L04 scanner never promotes tokenless or claims-free evidence', () => {
         for (const response of ['Paris is the capital of France.', 'I think this seems nice.']) {
@@ -135,14 +137,14 @@ describe('W04 round3 fail-closed', () => {
         expect(stream.complete().finalResults.get('context_recall')).toMatchObject({ passed: true, score: 1, chunkScores: [1] });
         const result = new AutoEvalPipeline({ includeCategories: ['rag'], passThreshold: 0 }).evaluate({ ...evidence, reference: evidence.response });
         expect(result.metricResults.find(r => r.metric === 'context_recall')?.result).toMatchObject({ passed: true, score: 1 });
-        expect(result.status).not.toBe('incomplete');
+        expect((result as any).status).not.toBe('incomplete');
     });
     test('R3-L07 caps account for omitted applicable metrics and cannot drop security', () => {
         const result = new AutoEvalPipeline({ maxMetrics: 1 }).evaluate({ response: '{"ok":true}', code: 'const value = 1;' });
         expect(result.selectedMetrics.some(m => m.name === 'secrets_detection')).toBe(true);
-        expect(result.coverage?.skipped).toBeGreaterThan(0);
-        expect(result.status).toBe('incomplete');
-        expect(result.metricResults.some(r => r.reasonCode === 'METRIC_LIMIT')).toBe(true);
+        expect((result as any).coverage?.skipped).toBeGreaterThan(0);
+        expect((result as any).status).toBe('incomplete');
+        expect(result.metricResults.some(r => (r as any).reasonCode === 'METRIC_LIMIT')).toBe(true);
     });
     test('R3-L11 checkComments true checks comments in all detectors', () => {
         const cases = [
@@ -178,7 +180,7 @@ describe('W04 round3 fail-closed', () => {
         const pipeline = new AutoEvalPipeline(once({ includeCategories: ['string'] as any }));
         expect(pipeline.evaluate(once({ response: 'A complete answer.' })).passed).toBe(true);
         const stream = new StreamingEvaluator(once({ metrics: ['one_line'], minCharsBeforeEval: 0 }));
-        stream.addChunk('A complete answer.'); expect(stream.complete().status).toBe('passed');
+        stream.addChunk('A complete answer.'); expect((stream.complete() as any).status).toBe('passed');
         const scanner = new Scanner(once({ enableRules: ['quality/hallucination'], context: once({ ragContext: evidence.context }) }));
         expect(scanner.scan(evidence.response).passed).toBe(true);
         expect(() => pipeline.evaluate({ get response(): string { throw new Error('PRIVATE_SENTINEL'); } })).toThrow('EVALUATION_INPUT_INVALID');

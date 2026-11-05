@@ -1,5 +1,15 @@
 import { runMetric } from '../metrics';
 import { bleuScore } from '../metrics/similarity';
+import type { MetricResult } from '../metrics/types';
+
+function returned(run: () => MetricResult): MetricResult {
+    let result: MetricResult | undefined;
+    let threw = false;
+    try { result = run(); }
+    catch { threw = true; }
+    expect(threw).toBe(false);
+    return result!;
+}
 
 const text = 'alpha beta gamma delta';
 const invalidReferenceResult = { score: 0, passed: false, reason: 'NO_EVIDENCE' };
@@ -26,7 +36,12 @@ const invalidReferences: ReferenceCase[] = [
         label: 'generator object',
         makeReference: response => (function* () { yield response; })()
     },
-    { label: 'Map', makeReference: response => new Map([[response, response]]) },
+    {
+        label: 'Map with an own text-yielding iterator',
+        makeReference: response => Object.defineProperty(new Map([[response, response]]), Symbol.iterator, {
+            value: function* () { yield response; }
+        })
+    },
     {
         label: 'boxed String',
         // A single character and unigram weight make the boxed string's native
@@ -34,7 +49,13 @@ const invalidReferences: ReferenceCase[] = [
         response: 'a',
         ngramWeights: [1],
         makeReference: response => new String(response)
-    },
+    }
+];
+
+// Already rejected at the r2 baseline 99457f1d by non-string member validation.
+// These are controls for that repair, not new RED evidence on that baseline.
+const unchangedRejections: ReferenceCase[] = [
+    { label: 'Map', makeReference: response => new Map([[response, response]]) },
     { label: 'array containing a Set', makeReference: response => [new Set([response])] }
 ];
 
@@ -48,12 +69,12 @@ const entryPoints = [
     {
         label: 'bleuScore',
         run: (response: string, reference: unknown, ngramWeights?: number[]) =>
-            bleuScore(response, { reference, ngramWeights } as any)
+            returned(() => bleuScore(response, { reference, ngramWeights } as any))
     },
     {
         label: 'runMetric',
         run: (response: string, reference: unknown, ngramWeights?: number[]) =>
-            runMetric('bleu_score', response, { reference, ngramWeights } as any)
+            returned(() => runMetric('bleu_score', response, { reference, ngramWeights } as any))
     }
 ];
 
@@ -63,6 +84,12 @@ describe.each(entryPoints)('$label reference container validation', ({ run }) =>
     }) => {
         // Construct a fresh value per entry point, especially for one-shot generators.
         expect(run(response, makeReference(response), ngramWeights)).toEqual(invalidReferenceResult);
+    });
+
+    it.each(unchangedRejections)('unchanged-rejection control: rejects $label with the existing invalid-reference result', ({
+        makeReference
+    }) => {
+        expect(run(text, makeReference(text))).toEqual(invalidReferenceResult);
     });
 
     it.each(validReferences)('accepts $label as a perfect match', ({ makeReference }) => {
