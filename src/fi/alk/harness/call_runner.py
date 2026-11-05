@@ -1206,6 +1206,7 @@ def _actor_dispatcher(
     budget: float,
     meter: Any = None,
     reported: Callable[[], list[dict[str, Any]]] | None = None,
+    why_not: list[tuple[str, str]] | None = None,
 ) -> ActorDispatcher | None:
     """The scenario's actors for this trial over the bundle's tool proxy, with a fresh token only they and the proxy
     hold; None when the scenario has none. An actor that cannot act here is the scenario's problem, recorded by the
@@ -1217,6 +1218,8 @@ def _actor_dispatcher(
     token_path = runtime.metadata.get("actor_proof_path")
     if proxy is None or database is None or not isinstance(token_path, str):
         logger.warning("actors cannot act: this world has no tool proxy taking actor requests")
+        if why_not is not None:
+            why_not.append(("no_world_door", "no world door: this agent's tools run where actors cannot act"))
         return None
     token = secrets.token_hex(32)
     try:
@@ -1226,6 +1229,8 @@ def _actor_dispatcher(
             "actors cannot act: no_private_token, the trial token cannot be kept from the agent",
             extra={"reason": "no_private_token", "detail": str(error)},
         )
+        if why_not is not None:
+            why_not.append(("no_private_token", "the trial token cannot be kept from the agent, so no actor may act"))
         return None
     return build_dispatcher(
         dict(doc),
@@ -1943,20 +1948,22 @@ class CallRunnerImpl:
                     call_environ[ACTOR_WORLD_ALIAS] = endpoint.address
 
         meter = ActorMeter()
+        why_not: list[tuple[str, str]] = []
         actors = (
             _actor_dispatcher(
                 doc, self._context.bundle_dir, runtime, spec.run_id, run_seconds, meter,
                 reported=_reported_actions(actions_file) if voices else None,
+                why_not=why_not,
             )
             if self._context.evidence_seam is EvidenceSeam.TOOL_TRACE
             else None
         )
-        # An actor that should act in the world and cannot here is the scenario's problem, in the record.
-        no_door = (
-            actor_problems(doc, self._context.bundle_dir, "no world door: this agent's tools run where actors cannot act")
-            if actors is None
-            else []
+        # An actor that should act in the world and cannot here is the scenario's problem, in the record, with the
+        # reason it could not.
+        problem, why = why_not[0] if why_not else (
+            "no_world_door", "no world door: this agent's tools run where actors cannot act"
         )
+        no_door = actor_problems(doc, self._context.bundle_dir, why, problem) if actors is None else []
         started_at = datetime.now(timezone.utc)
         outer_timeout = run_seconds + _OUTER_WAIT_FOR_PAD_SECONDS
 

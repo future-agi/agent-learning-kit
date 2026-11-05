@@ -2585,3 +2585,27 @@ def test_a_trial_token_that_cannot_be_given_to_the_proxy_user_is_never_widened(t
     with pytest.raises(cr.PrivateTokenUnavailable):
         cr._write_trial_token(token_path, "secret")
     assert not token_path.exists()
+
+
+def test_an_actor_that_cannot_act_is_recorded_with_the_real_reason(tmp_path, monkeypatch):
+    import fi.alk.harness.call_runner as cr
+
+    bundle = _with_actors(tmp_path / "bundle")
+    doc = {"actors": [{"id": "reviewer", "actions": [{"action": "records.approve"}]}]}
+    proxy = RuntimeEndpoint(capability="tool_proxy", protocol="http", address="http://127.0.0.1:9")
+    ready = _runtime(
+        endpoints={"tool_proxy": proxy, "database": _postgres_endpoint()},
+        metadata={"actor_proof_path": str(tmp_path / "w0" / "tool-proxy" / "actor-token")},
+    )
+
+    def unavailable(path, token):
+        raise cr.PrivateTokenUnavailable("not ours to give")
+
+    monkeypatch.setattr(cr, "_write_trial_token", unavailable)
+    why: list = []
+    assert cr._actor_dispatcher(doc, bundle, ready, "t1", 60.0, why_not=why) is None
+    assert why[0][0] == "no_private_token"
+    why = []
+    assert cr._actor_dispatcher(doc, bundle, _runtime(endpoints={"database": _postgres_endpoint()}), "t1", 60.0,
+                                why_not=why) is None
+    assert why[0][0] == "no_world_door"

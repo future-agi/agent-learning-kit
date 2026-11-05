@@ -1551,7 +1551,7 @@ def _call_actors_missing(scenario: Scenario, outcome: CallOutcome) -> str:
     # An actor acting through the world that could not act at all (no door, not listed) is the scenario's problem too.
     for report in outcome.call_actors:
         actor_id = str(report.get("actor") or "")
-        if report.get("problem") in ("not_listed", "no_world_door") and actor_id not in graded:
+        if report.get("problem") in ("not_listed", "no_world_door", "no_private_token") and actor_id not in graded:
             missing.append(f"{report.get('name') or actor_id} ({report.get('problem')})")
     return ", ".join(missing)
 
