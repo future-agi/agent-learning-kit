@@ -1,10 +1,10 @@
-"""Run environment-authored handlers outside the process that calls them.
+"""Run environment-authored Python outside the process that calls it.
 
-A designed environment's handlers are written by a model, and a document the person uploaded can
-steer that model. In process, a handler can reach everything the calling process holds: the
-builder's model credentials, its platform capability, a run's provider secrets. A source check
-of the handler cannot close that (`collections._sys.modules['os']` is one of many ways round
-it), so with `ALK_HANDLER_ISOLATION` set the handler runs in a child process instead:
+A designed environment's handlers, setup, readiness and checks are written by a model, and a
+document the person uploaded can steer that model. In process, that code can reach everything the
+calling process holds: the builder's model credentials, its platform capability, a run's provider
+secrets. A source check cannot close that (`collections._sys.modules['os']` is one of many ways
+round it), so with `ALK_HANDLER_ISOLATION` set the code runs in a child process instead:
 
 - `namespace` (the hosted image): the child starts in a user namespace as a uid the sandbox user
   does not own, with an empty environment, no network, and empty mounts over `/work`, `/run`,
@@ -14,9 +14,10 @@ it), so with `ALK_HANDLER_ISOLATION` set the handler runs in a child process ins
   not see the caller's environment, and nothing more.
 - unset: handlers run in process, as before.
 
-The child reaches the world only through its `db`: each operation is a request this process
-answers on the real store. Messages are JSON lines (see `handler_child`); nothing the child sends
-is unpickled. One child serves one thread, and a call that runs past its timeout kills it.
+The child reaches a handler's database, or setup and checks' documented world methods, only through
+requests this process answers on the real world. Messages are JSON lines (see `handler_child`);
+nothing the child sends is unpickled. Handlers reuse one child per thread. Each setup or check gets
+a fresh child, so its nested `world.call()` uses a separate handler process and cannot deadlock.
 """
 
 from __future__ import annotations
@@ -32,7 +33,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .handler_child import decode, encode
+from .handler_child import AuthoredOutcome, decode, encode
 
 MODES = ("namespace", "process")
 # A uid inside the sandbox user's subordinate range (/etc/subuid in the hosted image): it owns
@@ -226,6 +227,33 @@ def _answer(db: Any, request: dict[str, Any]) -> dict[str, Any]:
     return {"reply": encode(value)}
 
 
+def _call_record(value: Any) -> dict[str, Any]:
+    return {
+        "name": str(getattr(value, "name", "") or ""),
+        "arguments": dict(getattr(value, "arguments", {}) or {}),
+        "result": getattr(value, "result", None),
+        "ok": bool(getattr(value, "ok", True)),
+        "error": str(getattr(value, "error", "") or ""),
+        "refused": bool(getattr(value, "refused", False)),
+        "at": float(getattr(value, "at", 0.0) or 0.0),
+    }
+
+
+def _answer_world(world: Any, request: dict[str, Any]) -> dict[str, Any]:
+    method = request.get("method")
+    if method not in {"state", "query", "put", "change", "drop", "call"}:
+        return {
+            "error": {"type": "AttributeError", "message": f"world has no {method!r}"}
+        }
+    try:
+        value = getattr(world, method)(
+            *decode(request["args"]), **decode(request["kwargs"])
+        )
+    except Exception as exc:  # noqa: BLE001 - authored code sees the world's own refusal
+        return {"error": {"type": type(exc).__name__, "message": str(exc)}}
+    return {"reply": encode(_call_record(value) if method == "call" else value)}
+
+
 def _rebuild(raised: dict[str, Any]) -> Exception:
     from .runtime import ToolError
 
@@ -276,3 +304,69 @@ def run_handler(
         # call; the next call starts a fresh one.
         _discard(child)
         raise
+
+
+def run_authored(
+    source: str,
+    world: Any,
+    *,
+    kind: str,
+    name: str,
+    calls: Any = (),
+    reference: Any = (),
+    mode: str,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+) -> AuthoredOutcome:
+    """Run environment-authored scenario code in its own isolated child."""
+    child = _Child(mode)
+    deadline = time.monotonic() + timeout
+    try:
+        authored: dict[str, Any] = {
+            "source": source,
+            "kind": kind,
+            "name": name,
+            "calls": [encode(_call_record(one)) for one in calls],
+            "reference": encode(list(reference)),
+        }
+        if hasattr(world, "world_index"):
+            authored.update(
+                has_world_index=True,
+                world_index=world.world_index,
+            )
+        if hasattr(world, "rng"):
+            authored["rng"] = encode(world.rng.getstate())
+        child.send(
+            {
+                "authored": authored,
+            }
+        )
+        while True:
+            message = child.receive(deadline)
+            if "world" in message:
+                child.send(_answer_world(world, message["world"]))
+            elif "outcome" in message:
+                outcome = message["outcome"]
+                if not isinstance(outcome, dict):
+                    raise HandlerHostError(
+                        "the isolated authored-code process sent a malformed outcome"
+                    )
+                if "rng" in outcome and hasattr(world, "rng"):
+                    world.rng.setstate(decode(outcome["rng"]))
+                return AuthoredOutcome(
+                    ok=bool(outcome.get("ok")),
+                    said=str(outcome.get("said") or ""),
+                    broken=bool(outcome.get("broken")),
+                )
+            else:
+                raise HandlerHostError(
+                    "the isolated authored-code process sent a malformed message"
+                )
+    except Exception as failed:  # noqa: BLE001 - a broken boundary is broken authored code
+        said = (
+            f"the check raised {type(failed).__name__}: {str(failed)[:200]}"
+            if kind in {"check", "world-check"}
+            else f"{name} raised {type(failed).__name__}: {failed}"
+        )
+        return AuthoredOutcome(False, said, broken=True)
+    finally:
+        child.close()

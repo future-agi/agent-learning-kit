@@ -32,6 +32,7 @@ from typing import Any
 
 from .catalogue import Catalogue, SubGoal
 from .scenario import Scenario
+from .world.handler_child import evaluate_authored
 from .world.runtime import GeneratedWorld
 
 SCENARIOS = "scenarios"
@@ -80,49 +81,16 @@ def _run(source: str, name: str, entry: str, *args: Any) -> Outcome:
     mistake, and scoring it as though the world were wrong would send somebody looking in the
     wrong place.
     """
-    if not source.strip():
-        return Outcome(True)
-    namespace: dict[str, Any] = {}
-    try:
-        exec(compile(source, f"<{name}>", "exec"), namespace)
-    except Exception as failed:
-        return Outcome(False, f"{name} would not compile: {failed}", broken=True)
+    world = args[0] if args else None
+    result = None
+    if getattr(world, "isolated", False):
+        from .world.handler_host import isolation_mode, run_authored
 
-    function = namespace.get(entry)
-    if not callable(function):
-        return Outcome(False, f"{name} defines no {entry}()", broken=True)
-    try:
-        said = function(*args)
-    except Exception as failed:
-        return Outcome(
-            False, f"{name} raised {type(failed).__name__}: {failed}", broken=True
-        )
-    # The convention is that a complaint is a sentence, and anything else means it held. An empty
-    # string is the case worth naming: it reads as "no complaint" to whoever wrote it, and taking
-    # it as a failure produces a rejection with no reason attached, which cannot be acted on and
-    # sends the author hunting for a problem that is not there.
-    if said is None or said is True or (isinstance(said, str) and not said.strip()):
-        return Outcome(True)
-    if said is False:
-        # Bare False from ready() names no precondition, so a scenario that hits it cannot be
-        # told apart from one whose ready.py is simply wrong — that is our mistake, not a
-        # generation-time precondition failure, so ready() alone reports it broken.
-        return Outcome(
-            False,
-            f"{name} returned False without saying what is wrong. Return the sentence instead, "
-            "or None if it holds.",
-            broken=(entry == "ready"),
-        )
-    if entry == "ready" and not isinstance(said, str):
-        # Same reasoning as bare False, widened: ready() has no way to turn a non-string value
-        # into a precondition sentence, so any of them is our mistake rather than the world's.
-        return Outcome(
-            False,
-            f"{name} returned {type(said).__name__} {repr(said)[:200]}. Return the sentence "
-            "naming what is missing, or None if it holds.",
-            broken=True,
-        )
-    return Outcome(False, str(said))
+        if mode := isolation_mode():
+            result = run_authored(source, world, kind=entry, name=name, mode=mode)
+    if result is None:
+        result = evaluate_authored(source, world, kind=entry, name=name)
+    return Outcome(result.ok, result.said, result.broken)
 
 
 def apply_setup(scenario: Scenario, world: GeneratedWorld) -> Outcome:

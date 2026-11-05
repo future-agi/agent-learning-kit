@@ -54,6 +54,10 @@ class HostedWorld:
     is the only sanctioned source of randomness scenario code may use.
     """
 
+    # A hosted world comes from a sealed environment release. Its scenario code is authored with
+    # that environment, so setup, ready, and checks use the same isolation boundary as handlers.
+    isolated = True
+
     def __init__(
         self,
         store: PostgresStore,
