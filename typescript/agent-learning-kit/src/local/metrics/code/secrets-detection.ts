@@ -255,7 +255,7 @@ function unquotedBearerStarts(code: string): Set<number> {
  * @example
  * ```typescript
  * const result = secretsDetection({
- *     code: 'const apiKey = "sk-1234567890abcdef";'
+ *     code: 'const apiKey = "<api-key>";'
  * });
  * console.log(result.passed); // false
  * console.log(result.issues[0].type); // 'api-key'
