@@ -65,3 +65,41 @@ proven; normalized ALK retention of that split evidence is the remaining gap.
 
 Client disconnect proves that ALK closes its socket. It does not prove CrewAI stopped provider work;
 the upstream conversational worker may continue after its client disconnects.
+
+## Ten-case E2B matrix
+
+The E2B qualifier deploys the current ALK checkout and runs three pinned framework cases plus seven
+deterministic transport cases in one private sandbox:
+
+1. CrewAI two-turn continuity
+2. LangGraph streamed text
+3. Google ADK streamed text
+4. delta assembly
+5. cumulative assembly
+6. final-event-only text
+7. explicit completion before EOF
+8. terminal application error
+9. EOF before completion
+10. cancellation, socket close, and recovery
+
+The three frameworks come from the official AG-UI repository at the same commit pinned by the
+CrewAI reference. Provider-only patches select `gemini-3.7-flash` through Vertex and are hashed in
+the result. The framework receipts prove response text and explicit completion through ALK; they do
+not claim that ALK has normalized split AG-UI tool-call events.
+
+Run the matrix from the ALK checkout:
+
+```bash
+export E2B_API_KEY=...
+export VERTEXAI_PROJECT=futureagiprimary
+export GOOGLE_APPLICATION_CREDENTIALS="/Users/rishavhada/Documents/futureagi/oss/future-agi/futureagi/Vertex_AI_Creds.json"
+uv run --with e2b==2.37.1 \
+  python examples/harness/sse_transport_compatibility/e2b_qualify.py \
+  --output /tmp/alk-sse-e2b.json
+```
+
+The controller fails before provisioning if either credential is missing. It uploads the Vertex
+file outside the artifact tree with mode `0600`, verifies the imported ALK SSE module hash, emits
+exactly ten sanitized receipts, and kills the sandbox in `finally`. Use
+`ALK_E2B_TEMPLATE_REFERENCE` to select an existing ALK template; otherwise the E2B `base` template
+is used and dependencies are installed for the run.
