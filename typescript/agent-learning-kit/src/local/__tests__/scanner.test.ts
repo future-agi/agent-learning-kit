@@ -115,7 +115,11 @@ describe('Scanner Pipeline', () => {
             };
 
             scanner.addRule(customRule);
-            expect(scanner.getRule('custom/test')).toBe(customRule);
+            expect(scanner.getRule('custom/test')).toEqual(customRule);
+            expect(scanner.getRule('custom/test')).not.toBe(customRule);
+            expect(Object.isFrozen(scanner.getRule('custom/test'))).toBe(true);
+            customRule.severity = 'critical';
+            expect(scanner.getRule('custom/test')?.severity).toBe('medium');
         });
 
         it('should remove rules', () => {
@@ -508,8 +512,9 @@ describe('Scanner Pipeline', () => {
             const result = privacyScan(userContent);
 
             expect(result.findings.length).toBeGreaterThan(0);
-            expect(result.findings.some(f => f.title.includes('email'))).toBe(true);
-            expect(result.findings.some(f => f.title.includes('phone'))).toBe(true);
+            expect(result.findings.some(f => f.ruleId === 'privacy/pii' && f.location?.line === 3 && f.severity === 'medium')).toBe(true);
+            expect(result.findings.some(f => f.ruleId === 'privacy/pii' && f.location?.line === 4 && f.severity === 'medium')).toBe(true);
+            expect(result.findings.every(f => f.title === 'RULE_FINDING' && f.match === undefined)).toBe(true);
         });
 
         it('should validate AI response against source', () => {

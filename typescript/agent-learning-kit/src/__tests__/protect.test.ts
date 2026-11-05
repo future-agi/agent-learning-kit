@@ -44,11 +44,11 @@ describe('Protect', () => {
 
     describe('Input and Rule Validation', () => {
         it('should throw an error for invalid inputs', async () => {
-            await expect(protect.protect(null as any)).rejects.toThrow('inputs with value null is of type object, but expected from string.');
+            await expect(protect.protect(null as any)).rejects.toThrow('PROTECT_INPUT_INVALID');
         });
 
         it('should throw an error for invalid protectRules', async () => {
-            await expect(protect.protect('test', [{ metric: 'InvalidMetric' }])).rejects.toThrow('metric in Rule at index 0 with value "InvalidMetric" is of type string, but expected from one of');
+            await expect(protect.protect('test', [{ metric: 'InvalidMetric' }])).rejects.toThrow('PROTECT_RULE_UNKNOWN');
         });
     });
 
@@ -89,7 +89,7 @@ describe('Protect', () => {
                 });
                 const result = await protect.protect(mockInput, [{ metric: 'Toxicity' }], 'Blocked', true);
                 expect(result.status).toBe('failed');
-                expect(result.reasons).toBe('High toxicity score');
+                expect(result.reasons).toBe('PROTECTION_RULE_TRIGGERED');
             });
         });
     });

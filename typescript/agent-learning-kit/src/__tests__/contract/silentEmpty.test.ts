@@ -1,10 +1,13 @@
 /**
  * Regression test for the silent-empty bug — api 4xx must surface a failed
- * EvalResult with readable error text, never an empty batch.
+ * EvalResult with a value-free reason code, never an empty batch.
  *
  * Mirror of python/tests/contract/test_silent_empty.py.
  */
 import { Evaluator } from "../../evaluator";
+
+// Registry and transport are independent seams; this suite covers transport only.
+jest.mock('../../core/cloudRegistry.js', () => ({ mapInputsToBackend: jest.fn(async (_name, inputs) => inputs) }));
 
 
 describe("Evaluator silent-empty regression", () => {
@@ -34,7 +37,7 @@ describe("Evaluator silent-empty regression", () => {
         expect(batch.eval_results).toHaveLength(1);
         const r = batch.eval_results[0]!;
         expect(r.output).toBeNull();
-        expect(r.reason).toContain("400");
+        expect(r.reason).toBe('EVALUATION_REQUEST_FAILED');
         expect(r.name).toBe("toxicity");
     });
 
@@ -48,6 +51,6 @@ describe("Evaluator silent-empty regression", () => {
         const batch = await ev.evaluate("toxicity", { output: "x" }, { modelName: "turing_flash" });
 
         expect(batch.eval_results).toHaveLength(1);
-        expect(batch.eval_results[0]!.reason).toContain("500");
+        expect(batch.eval_results[0]!.reason).toBe('EVALUATION_REQUEST_FAILED');
     });
 });

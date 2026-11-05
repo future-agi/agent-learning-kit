@@ -117,12 +117,9 @@ describe("mapInputsToBackend", () => {
         expect(mapped).toEqual({ input: "x", output: "y", context: "z" });
     });
 
-    test("unknown eval falls through unmodified", async () => {
-        const mapped = await mapInputsToBackend(
-            "some_new_eval_we_dont_know",
-            { foo: "bar" },
-            OPTS
-        );
-        expect(mapped).toEqual({ foo: "bar" });
+    test("unknown eval rejects before evaluation transport", async () => {
+        await expect(mapInputsToBackend(
+            "some_new_eval_we_dont_know", { foo: "bar" }, OPTS
+        )).rejects.toThrow('TEMPLATE_UNKNOWN');
     });
 });

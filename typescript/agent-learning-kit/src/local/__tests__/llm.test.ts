@@ -208,7 +208,7 @@ describe('OllamaLLM', () => {
 
             expect(result.score).toBe(0.8);
             expect(result.passed).toBe(true);
-            expect(result.reason).toBe('Good response');
+            expect(result.reason).toBe('JUDGE_PASSED');
         });
 
         it('should parse JSON from code block', async () => {
@@ -224,7 +224,7 @@ describe('OllamaLLM', () => {
             expect(result.score).toBe(0.9);
         });
 
-        it('should extract score from unstructured response', async () => {
+        it('should reject an unstructured score', async () => {
             mockedAxios.post.mockResolvedValueOnce({
                 data: {
                     message: {
@@ -234,10 +234,11 @@ describe('OllamaLLM', () => {
             });
 
             const result = await llm.judge('query', 'response', 'criteria');
-            expect(result.score).toBe(0.7); // Normalized from 7/10
+            expect(result.score).toBe(0);
+            expect(result.passed).toBe(false);
         });
 
-        it('should normalize scores on 0-100 scale', async () => {
+        it('should reject scores outside the SDK declared 0-1 scale', async () => {
             mockedAxios.post.mockResolvedValueOnce({
                 data: {
                     message: {
@@ -247,7 +248,9 @@ describe('OllamaLLM', () => {
             });
 
             const result = await llm.judge('query', 'response', 'criteria');
-            expect(result.score).toBe(0.85);
+            expect(result.score).toBe(0);
+            expect(result.passed).toBe(false);
+            expect(result.reason).toBe('NO_EVIDENCE');
         });
 
         it('should include context in evaluation', async () => {
@@ -273,7 +276,7 @@ describe('OllamaLLM', () => {
             );
         });
 
-        it('should return default score on unparseable response', async () => {
+        it('should fail closed on unparseable response', async () => {
             mockedAxios.post.mockResolvedValueOnce({
                 data: {
                     message: {
@@ -283,8 +286,10 @@ describe('OllamaLLM', () => {
             });
 
             const result = await llm.judge('query', 'response', 'criteria');
-            expect(result.score).toBe(0.5);
-            expect(result.rawResponse).toBeDefined();
+            expect(result.score).toBe(0);
+            expect(result.passed).toBe(false);
+            expect(result.reason).toBe('JUDGE_RESULT_INVALID');
+            expect(result.rawResponse).toBeUndefined();
         });
     });
 

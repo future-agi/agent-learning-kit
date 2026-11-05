@@ -3,12 +3,15 @@ import { BatchRunResult } from '../types';
 import { HttpMethod, InvalidAuthError } from '../core';
 import { Templates } from '../templates';
 
-beforeAll(() => {
-    process.env.AGENT_LEARNING_DISABLE_CLOUD_REGISTRY = "1";
-});
+import axios from 'axios';
+import { __clearRegistryCache } from '../core/cloudRegistry.js';
 
+jest.mock('axios');
+const previousRegistrySwitch = process.env.AGENT_LEARNING_DISABLE_CLOUD_REGISTRY;
+beforeAll(() => { delete process.env.AGENT_LEARNING_DISABLE_CLOUD_REGISTRY; });
 afterAll(() => {
-    delete process.env.AGENT_LEARNING_DISABLE_CLOUD_REGISTRY;
+    if (previousRegistrySwitch === undefined) delete process.env.AGENT_LEARNING_DISABLE_CLOUD_REGISTRY;
+    else process.env.AGENT_LEARNING_DISABLE_CLOUD_REGISTRY = previousRegistrySwitch;
 });
 
 // Mock the entire APIKeyAuth class from the SDK to spy on the 'request' method
@@ -31,7 +34,12 @@ describe('Evaluator', () => {
     let mockRequest: jest.Mock;
 
     beforeEach(() => {
-        evaluator = new Evaluator({ fiApiKey: process.env.FI_API_KEY, fiSecretKey: process.env.FI_SECRET_KEY });
+        __clearRegistryCache();
+        (axios.get as jest.Mock).mockReset().mockResolvedValue({ data: { result:
+            [...new Set(['factual_accuracy', ...Object.values(Templates).map(template => template.eval_name)])]
+                .map(name => ({ name, config: { required_keys: ['query', 'response'] } }))
+        } });
+        evaluator = new Evaluator({ fiApiKey: 'fixture', fiSecretKey: 'fixture' });
         // Get the mock instance of the request method for each test
         mockRequest = (evaluator as any).request;
         mockRequest.mockClear();
@@ -80,7 +88,11 @@ describe('Evaluator', () => {
                 timeout: NaN
             });
             expect(typeof callArgs[1]).toBe('function');
-            expect(result).toEqual(mockBatchResult);
+            expect(result).toEqual({
+                eval_results: mockBatchResult.eval_results.map(row => ({ ...row, failure: false, reason: 'EVALUATION_COMPLETED' })),
+                warnings: [], status: 'completed', reasonCode: 'EVALUATION_COMPLETED',
+            });
+            expect(axios.get).toHaveBeenCalledTimes(1);
         });
 
         it('should throw an error for invalid eval_templates', async () => {
@@ -173,7 +185,7 @@ describe('Evaluator', () => {
         it.each(evalNames)('should construct payload for %s', async (evalName) => {
             mockRequest.mockResolvedValue(dummyBatchResult);
 
-            await evaluator.evaluate(evalName, { input: 'example', response: 'example' }, { modelName: 'test-model' });
+            await evaluator.evaluate(evalName, { input: 'example', query: 'example', response: 'example' }, { modelName: 'test-model' });
 
             expect(mockRequest).toHaveBeenCalledWith(
                 expect.objectContaining({

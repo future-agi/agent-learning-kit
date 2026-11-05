@@ -79,14 +79,15 @@ describe('Code Security Metrics', () => {
             expect(result.issues.some(i => i.description.includes('ORDER BY'))).toBe(true);
         });
 
-        it('should ignore issues in comments when checkComments is true (default)', () => {
+        it('should check issues in comments by default and skip only when false', () => {
             const code = `
 // SELECT * FROM users WHERE id = " + userId
 const safeQuery = "SELECT * FROM users WHERE id = ?";
             `;
-            // Default behavior skips comments
+            // checkComments defaults to true; explicit false opts out.
             const result = sqlInjection({ code });
-            expect(result.passed).toBe(true);
+            expect(result.passed).toBe(false);
+            expect(sqlInjection({ code }, { checkComments: false }).passed).toBe(true);
         });
 
         it('noSqlInjection should be an alias', () => {
@@ -282,7 +283,7 @@ const safeQuery = "SELECT * FROM users WHERE id = ?";
             const result = secretsDetection({ code });
             // Check that the match is masked
             const matchedSecret = result.issues[0]?.match || '';
-            expect(matchedSecret).toContain('***');
+            expect(matchedSecret).toBe('[REDACTED]');
             expect(matchedSecret).not.toBe('sk-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKL');
         });
 
@@ -381,14 +382,14 @@ const safeQuery = "SELECT * FROM users WHERE id = ?";
     describe('Empty/Invalid Input', () => {
         it('should handle empty code', () => {
             const result = allSecurityChecks({ code: '' });
-            expect(result.passed).toBe(true);
-            expect(result.issues.length).toBe(0);
+            expect(result.passed).toBe(false);
+            expect(result.issues.every(issue => issue.type === 'validation-incomplete')).toBe(true);
         });
 
         it('should handle whitespace-only code', () => {
             const result = allSecurityChecks({ code: '   \n\t  ' });
-            expect(result.passed).toBe(true);
-            expect(result.issues.length).toBe(0);
+            expect(result.passed).toBe(false);
+            expect(result.issues.every(issue => issue.type === 'validation-incomplete')).toBe(true);
         });
     });
 

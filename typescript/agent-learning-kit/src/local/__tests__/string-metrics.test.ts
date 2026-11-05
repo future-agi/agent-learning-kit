@@ -128,10 +128,11 @@ describe('String Metrics', () => {
             expect(result.passed).toBe(false);
         });
 
-        it('should handle empty string', () => {
+        it('should fail closed when the string has no evidence', () => {
             const result = oneLine('');
-            expect(result.score).toBe(1.0);
-            expect(result.passed).toBe(true);
+            expect(result.score).toBe(0.0);
+            expect(result.passed).toBe(false);
+            expect(result.reason).toBe('NO_EVIDENCE');
         });
     });
 

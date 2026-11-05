@@ -168,7 +168,7 @@ describe('Context Recall', () => {
         expect(result.score).toBeGreaterThan(0);
     });
 
-    it('should return full recall when no references', () => {
+    it('should fail closed when no references', () => {
         const input: RAGInput = {
             query: 'What is AI?',
             response: 'AI is artificial intelligence.',
@@ -176,8 +176,9 @@ describe('Context Recall', () => {
         };
 
         const result = contextRecall(input);
-        expect(result.score).toBe(1.0);
-        expect(result.passed).toBe(true);
+        expect(result.score).toBe(0);
+        expect(result.passed).toBe(false);
+        expect(result.reason).toBe('NO_EVIDENCE');
     });
 });
 
@@ -294,7 +295,7 @@ describe('Answer Relevance', () => {
         expect(result.passed).toBe(false);
     });
 
-    it('should return 1 for no query', () => {
+    it('should fail closed for no query', () => {
         const input: RAGInput = {
             query: '',
             response: 'Some response.',
@@ -302,7 +303,8 @@ describe('Answer Relevance', () => {
         };
 
         const result = answerRelevance(input);
-        expect(result.score).toBe(1.0);
+        expect(result.score).toBe(0);
+        expect(result.passed).toBe(false);
     });
 });
 

@@ -23,10 +23,21 @@ describe('Similarity Metrics', () => {
 
         it('should return high score for similar text', () => {
             const result = bleuScore('the cat sat on the mat', {
-                reference: 'the cat is on the mat'
+                reference: 'the cat sat on a mat'
             });
+            // R4-BLEU-PASS: precisions 5/6, 3/5, 2/4, 1/3; BP = 1.
             expect(result.score).toBeGreaterThanOrEqual(0.5);
             expect(result.passed).toBe(true);
+            expect(result.score).toBeCloseTo(Math.pow(1 / 12, 1 / 4), 12);
+        });
+
+        it('R4-BLEU-LEGACY-ZERO returns zero without a shared four-gram', () => {
+            const result = bleuScore('the cat sat on the mat', {
+                reference: 'the cat is on the mat'
+            });
+            // Precisions 5/6, 3/5, 1/4, 0 require unsmoothed BLEU = 0.
+            expect(result.score).toBe(0);
+            expect(result.passed).toBe(false);
         });
 
         it('should return low score for different text', () => {
@@ -117,8 +128,9 @@ describe('Similarity Metrics', () => {
 
         it('should handle empty reference', () => {
             const result = recallScore('some text', { reference: '' });
-            expect(result.score).toBe(1.0); // Trivially satisfied
-            expect(result.passed).toBe(true);
+            expect(result.score).toBe(0);
+            expect(result.passed).toBe(false);
+            expect(result.reason).toBe('NO_EVIDENCE');
         });
     });
 
@@ -143,7 +155,9 @@ describe('Similarity Metrics', () => {
 
         it('should handle empty strings', () => {
             const result = levenshteinSimilarity('', { reference: '' });
-            expect(result.score).toBe(1.0);
+            expect(result.score).toBe(0);
+            expect(result.passed).toBe(false);
+            expect(result.reason).toBe('NO_EVIDENCE');
         });
 
         it('should handle one empty string', () => {
