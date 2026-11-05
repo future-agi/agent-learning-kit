@@ -412,8 +412,13 @@ def test_a_script_comment_still_hides_what_it_holds(tmp_path, body):
 
 @pytest.mark.parametrize(
     "line",
-    ["const r = /[/*]/;", "const r = " + "(/[" * 20_000],
-    ids=["slash-in-a-class", "unclosed-classes"],
+    [
+        "const r = /[/*]/;",
+        "const r = " + "(/[" * 20_000,
+        "const r = /[" + "[" * 20_000,
+        "const r = /[" + "[" * 20_000 + "\\",
+    ],
+    ids=["slash-in-a-class", "unclosed-classes", "repeated-brackets", "repeated-then-escape"],
 )
 def test_an_odd_regex_literal_stays_quick_and_hides_nothing(tmp_path, line):
     _tree(tmp_path, {"agent.js": f'{line}\nconst tool = {{ type: "computer_20250124" }};\n'})
