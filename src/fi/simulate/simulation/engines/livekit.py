@@ -3522,6 +3522,7 @@ class LiveKitEngine(BaseEngine):
                     tts=tts,
                     situation=str(actor.get("situation") or ""),
                     language=str(actor.get("language") or ""),
+                    report_action=_action_reporter(_bound_call_actors()["actions_file"]),
                 )
             )
         return CallActorsOnCall(
@@ -4506,17 +4507,35 @@ def _bound_call_actors() -> dict[str, Any]:
     try:
         bound = json.loads(os.environ.get(ACTOR_VOICES_ALIAS, "") or "[]")
     except ValueError:
-        return {"voices": [], "limits": None}
+        return {"voices": [], "limits": None, "actions_file": None}
     if isinstance(bound, list):
         bound = {"voices": bound, "limits": None}
     if not isinstance(bound, dict):
-        return {"voices": [], "limits": None}
+        return {"voices": [], "limits": None, "actions_file": None}
     voices = bound.get("voices")
     limits = bound.get("limits")
+    actions = bound.get("actions_file")
     return {
         "voices": [one for one in voices if isinstance(one, dict)] if isinstance(voices, list) else [],
         "limits": limits if isinstance(limits, dict) else None,
+        "actions_file": actions if isinstance(actions, str) and actions else None,
     }
+
+
+def _action_reporter(path: str | None) -> Callable[[dict[str, Any]], None] | None:
+    """Where an actor's decided action goes: one JSON line in the file the run reads during the call. The run, which
+    holds the trial's token, sends it through the world's door; this process never does."""
+    if not path:
+        return None
+
+    def report(action: dict[str, Any]) -> None:
+        try:
+            with open(path, "a", encoding="utf-8") as handle:
+                handle.write(json.dumps(action, default=str) + "\n")
+        except OSError:
+            logger.warning("an actor's action could not be handed to the run")
+
+    return report
 
 
 def _bound_call_actor_voices() -> list[dict[str, Any]]:

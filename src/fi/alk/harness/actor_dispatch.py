@@ -145,8 +145,12 @@ class ActorDispatcher:
         pre_run: list[PreRunSession] | None = None,
         records: Callable[[str], list[dict[str, Any]]] | None = None,
         names_actor: set[str] | None = None,
+        reported: Callable[[], list[dict[str, Any]]] | None = None,
     ) -> None:
         self.act = act
+        # Actions speaking actors decided on the call, handed over by the voice engine, sent from here.
+        self.reported = reported
+        self.reported_sent = 0
         # World actions whose tool takes an `actor_id` argument.
         self.names_actor = set(names_actor or ())
         self.trial_id = trial_id
@@ -467,11 +471,36 @@ class ActorDispatcher:
         for actor in timed_out:
             if actor.id not in self.settled:
                 await self._fall_back(actor, log)
+        await self.send_reported()
+
+    async def send_reported(self) -> None:
+        """Sends each action a speaking actor decided on the call, under its id, through the world's door: the same
+        door every runtime uses; the voice engine never holds the trial's token."""
+        if self.reported is None:
+            return
+        try:
+            reported = await asyncio.to_thread(self.reported)
+        except Exception:  # noqa: BLE001 - read again next tick
+            return
+        for one in reported[self.reported_sent :]:
+            self.reported_sent += 1
+            actor = self.actors.get(str(one.get("actor") or ""))
+            if actor is None or not one.get("action"):
+                continue
+            arguments = one.get("arguments") if isinstance(one.get("arguments"), dict) else {}
+            sent = await self._send(
+                actor, str(one["action"]), arguments, f"{self.trial_id}:{actor.id}:v{self.reported_sent}", ""
+            )
+            self._answered(actor)
+            self.fired.append({"actor": actor.id, "play": "live", "channel": "voice", "action": one["action"],
+                               "arguments": arguments, "status": sent.get("status"), "outcome": sent.get("outcome"),
+                               "why": one.get("why"), "parent": None})
 
     async def run(self) -> None:
         """Plays every actor until the trial is over and it is cancelled."""
         while (
             self.pending
+            or self.reported is not None
             or any(one.id not in self.fell_back for one in self.live)
             or any(one.id not in self.settled for one in self.timed)
         ):
@@ -493,6 +522,7 @@ def build_dispatcher(
     records: Callable[[str], list[dict[str, Any]]] | None,
     trial_id: str,
     meter: Any = None,
+    reported: Callable[[], list[dict[str, Any]]] | None = None,
 ) -> ActorDispatcher | None:
     """The scenario's actors for this trial, the same way on every runtime; None when it has no actor or pre-run
     session. The surface (`act`) is the only thing a runtime chooses."""
@@ -562,6 +592,7 @@ def build_dispatcher(
         seed=trial_id,
         records=records,
         names_actor=names_actor,
+        reported=reported,
     )
 
 

@@ -1202,6 +1202,7 @@ def _actor_dispatcher(
     trial_id: str,
     budget: float,
     meter: Any = None,
+    reported: Callable[[], list[dict[str, Any]]] | None = None,
 ) -> ActorDispatcher | None:
     """The scenario's actors for this trial over the bundle's tool proxy, with a fresh token only they and the proxy
     hold; None when the scenario has none. An actor that cannot act here is the scenario's problem, recorded by the
@@ -1231,7 +1232,29 @@ def _actor_dispatcher(
         records=_world_records(runtime),
         trial_id=trial_id,
         meter=meter,
+        reported=reported,
     )
+
+
+def _reported_actions(path: Path) -> Callable[[], list[dict[str, Any]]]:
+    """The actions speaking actors decided on the call so far, as the voice engine handed them over, oldest first."""
+
+    def read() -> list[dict[str, Any]]:
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return []
+        out = []
+        for line in lines:
+            try:
+                one = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(one, dict):
+                out.append(one)
+        return out
+
+    return read
 
 
 def _with_world_actors(
@@ -1781,9 +1804,17 @@ class CallRunnerImpl:
         # Only an actor that can speak reaches the call; the record keeps every one.
         voices = [one for one in resolved if one.get("entered", True)]
         call_environ.pop(ACTOR_WORLD_ALIAS, None)
+        # Where a speaking actor's decided actions are handed to this run, which sends them through the door.
+        actions_file = self._context.work_directory / "call-workers" / f"actor-actions-{run_id}.jsonl"
+        actions_file.parent.mkdir(parents=True, exist_ok=True)
+        actions_file.unlink(missing_ok=True)
         if voices:
             call_environ[ACTOR_VOICES_ALIAS] = json.dumps(
-                {"voices": voices, "limits": actor_limits(doc, self._context.bundle_dir, "voice")}
+                {
+                    "voices": voices,
+                    "limits": actor_limits(doc, self._context.bundle_dir, "voice"),
+                    "actions_file": str(actions_file),
+                }
             )
         else:
             call_environ.pop(ACTOR_VOICES_ALIAS, None)
@@ -1911,7 +1942,8 @@ class CallRunnerImpl:
         meter = ActorMeter()
         actors = (
             _actor_dispatcher(
-                doc, self._context.bundle_dir, runtime, spec.run_id, run_seconds, meter
+                doc, self._context.bundle_dir, runtime, spec.run_id, run_seconds, meter,
+                reported=_reported_actions(actions_file) if voices else None,
             )
             if self._context.evidence_seam is EvidenceSeam.TOOL_TRACE
             else None
@@ -1961,10 +1993,13 @@ class CallRunnerImpl:
                 return await place()
             finally:
                 acting.cancel()
-                # The token proves an actor only during its own trial; the proxy refuses actors once it is empty.
-                _write_trial_token(Path(str(runtime.metadata["actor_proof_path"])), "")
                 with contextlib.suppress(asyncio.CancelledError):
                     await acting
+                # An action a speaking actor decided on its last line is still sent, inside its own trial.
+                with contextlib.suppress(Exception):
+                    await actors.send_reported()
+                # The token proves an actor only during its own trial; the proxy refuses actors once it is empty.
+                _write_trial_token(Path(str(runtime.metadata["actor_proof_path"])), "")
                 if isinstance(actors.read_log, _ActionLog):
                     await asyncio.to_thread(actors.read_log.close)
 

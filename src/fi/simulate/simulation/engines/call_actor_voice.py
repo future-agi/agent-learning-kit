@@ -18,9 +18,11 @@ from fi.simulate.simulation.call_actors import (
     TOOLS_READ_SECONDS,
     Cast,
     Moment,
+    decision_brief,
     limited,
     line_brief,
     line_gain,
+    read_decision,
 )
 
 logger = logging.getLogger(__name__)
@@ -140,6 +142,7 @@ class CallActorVoice:
         tts: Any,
         situation: str,
         language: str,
+        report_action: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self.actor = actor
         self.model = model
@@ -147,6 +150,13 @@ class CallActorVoice:
         self.situation = situation
         self.language = language
         self.said: list[str] = []
+        # Hands an action this actor decides to the run, which sends it through the world's door under its id.
+        self.report_action = report_action
+
+    @property
+    def acts(self) -> bool:
+        """Whether this actor can also act in the world from the same decision as its line."""
+        return bool(self.report_action is not None and self.actor.get("permitted_actions"))
 
     @property
     def channel(self) -> str:
@@ -159,18 +169,37 @@ class CallActorVoice:
         from livekit.agents import llm as livekit_llm
 
         context = livekit_llm.ChatContext.empty()
-        brief = line_brief(
-            self.actor,
-            situation=self.situation,
-            said=self.said,
-            conversation=conversation,
-            language=self.language,
-        )
         how = _HOW[self.channel]
         if self.channel == "audio_handoff" and not self.said:
             how += " " + _FIRST_HANDOFF
-        context.add_message(role="user", content=brief + "\n\n" + how)
-        written = await complete_text(self.model, context)
+        if self.acts:
+            # One decision: what it says, and what it does in the world, from the same turn.
+            brief = decision_brief(
+                self.actor,
+                situation=self.situation,
+                said=self.said,
+                conversation=conversation,
+                language=self.language,
+                actions={str(one): "" for one in self.actor.get("permitted_actions") or []},
+            )
+            context.add_message(role="user", content=brief + "\n\nFor `line`: " + how)
+            decision = read_decision(await complete_text(self.model, context))
+            if decision.action:
+                self.report_action(
+                    {"actor": str(self.actor.get("id")), "action": decision.action,
+                     "arguments": decision.arguments, "why": decision.why, "at": time.time()}
+                )
+            written = decision.line
+        else:
+            brief = line_brief(
+                self.actor,
+                situation=self.situation,
+                said=self.said,
+                conversation=conversation,
+                language=self.language,
+            )
+            context.add_message(role="user", content=brief + "\n\n" + how)
+            written = await complete_text(self.model, context)
         # Wherever the model put the marker, it is never spoken.
         done = _DONE in written
         text = re.sub(r"\s*\[DONE\][.!?,]*", "", written).strip().strip('"“”').strip()
