@@ -30,7 +30,7 @@ DEFAULT_CREDENTIAL = Path(
 )
 REMOTE_ROOT = "/work/sse-qualification"
 CASE_IDS = (
-    "crewai_continuity",
+    "crewai_backend_tool_stream",
     "langgraph_stream_text",
     "adk_stream_text",
     "delta_assembly",
@@ -42,7 +42,7 @@ CASE_IDS = (
     "cancellation_recovery",
 )
 FRAMEWORKS = {
-    "crewai_continuity": "crewai",
+    "crewai_backend_tool_stream": "crewai",
     "langgraph_stream_text": "langgraph",
     "adk_stream_text": "google_adk",
 }
@@ -72,17 +72,34 @@ SOURCE_SUBDIRECTORIES = {
     "google_adk": "integrations/adk-middleware/python",
 }
 SOURCE_ENDPOINTS = {
-    "crewai": "/conversational_flows/agentic_chat",
+    "crewai": "/conversational_flows/backend_tool_rendering",
     "langgraph": "/agent/agentic_chat",
     "google_adk": "/",
 }
-SOURCE_VERSION_KEYS = {
-    "crewai": {"crewai", "ag-ui-crewai", "ag-ui-protocol"},
-    "langgraph": {"langgraph", "ag-ui-langgraph", "ag-ui-protocol"},
-    "google_adk": {"google-adk", "ag-ui-adk", "ag-ui-protocol"},
+SOURCE_VERSIONS = {
+    "crewai": {
+        "crewai": "1.15.16",
+        "ag-ui-crewai": "1.0.0",
+        "ag-ui-protocol": "1.0.0",
+    },
+    "langgraph": {
+        "langgraph": "1.2.10",
+        "ag-ui-langgraph": "0.0.47",
+        "ag-ui-protocol": "1.0.0",
+    },
+    "google_adk": {
+        "google-adk": "2.2.0",
+        "ag-ui-adk": "0.12.0",
+        "ag-ui-protocol": "1.0.0",
+    },
+}
+SOURCE_MODELS = {
+    "crewai": "gemini-3.7-flash",
+    "langgraph": "deterministic",
+    "google_adk": "gemini-3.7-flash",
 }
 PROVIDER_PATCH_SHA256 = (
-    "0fc46f6382600e4326725234f7cebacfdab7e685f0c525042e2e631fadd76af9"
+    "4dda0890381ec5ee155eb1dc0c44087f65b78a44c9025e991aa3b4d894022f82"
 )
 REASONS = {
     "ok",
@@ -212,7 +229,7 @@ def validate_report(raw: bytes, expected_hash: str) -> dict[str, Any]:
                 source["repository"] != "https://github.com/ag-ui-protocol/ag-ui.git"
                 or source["framework"] != expected_framework
                 or source["subdirectory"] != SOURCE_SUBDIRECTORIES[expected_framework]
-                or source["model"] != "gemini-3.7-flash"
+                or source["model"] != SOURCE_MODELS[expected_framework]
             ):
                 raise ValueError("framework source provenance is invalid")
             if source["commit"] != "2b967c34c49759c4afe0f0a176b281a0f645de34":
@@ -222,21 +239,7 @@ def validate_report(raw: bytes, expected_hash: str) -> dict[str, Any]:
                 or source["provider_patch_sha256"] != PROVIDER_PATCH_SHA256
             ):
                 raise ValueError("framework source evidence is invalid")
-            versions = source["versions"]
-            if (
-                not isinstance(versions, dict)
-                or set(versions) != SOURCE_VERSION_KEYS[expected_framework]
-                or any(
-                    not isinstance(version, str)
-                    or not 1 <= len(version) <= 64
-                    or any(
-                        char
-                        not in "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.+_-"
-                        for char in version
-                    )
-                    for version in versions.values()
-                )
-            ):
+            if source["versions"] != SOURCE_VERSIONS[expected_framework]:
                 raise ValueError("framework versions are invalid")
             if receipt["terminal"] != "RUN_FINISHED":
                 raise ValueError("passing framework receipt lacks completion")
@@ -258,12 +261,19 @@ def _sandbox_command(
     timeout: int,
     envs: dict[str, str] | None = None,
 ) -> int:
-    result = sandbox.commands.run(
-        command,
-        timeout=timeout,
-        envs=envs or {},
-        user="root",
-    )
+    try:
+        result = sandbox.commands.run(
+            command,
+            timeout=timeout,
+            envs=envs or {},
+            user="root",
+        )
+    except Exception as exc:
+        from e2b import CommandExitException
+
+        if isinstance(exc, CommandExitException):
+            return int(exc.exit_code)
+        raise
     return int(getattr(result, "exit_code", 1))
 
 
@@ -363,6 +373,13 @@ def qualify(
         try:
             sandbox.kill()
             cleanup_succeeded = True
+            list_sandboxes = getattr(type(sandbox), "list", None)
+            if callable(list_sandboxes):
+                time.sleep(2)
+                active = list_sandboxes(api_key=api_key, limit=100).next_items()
+                cleanup_succeeded = sandbox_id not in {
+                    str(item.sandbox_id) for item in active
+                }
         except Exception:
             cleanup_succeeded = False
 

@@ -71,7 +71,7 @@ the upstream conversational worker may continue after its client disconnects.
 The E2B qualifier deploys the current ALK checkout and runs three pinned framework cases plus seven
 deterministic transport cases in one private sandbox:
 
-1. CrewAI two-turn continuity
+1. CrewAI backend-tool route streaming
 2. LangGraph streamed text
 3. Google ADK streamed text
 4. delta assembly
@@ -83,9 +83,11 @@ deterministic transport cases in one private sandbox:
 10. cancellation, socket close, and recovery
 
 The three frameworks come from the official AG-UI repository at the same commit pinned by the
-CrewAI reference. Provider-only patches select `gemini-3.7-flash` through Vertex and are hashed in
-the result. The framework receipts prove response text and explicit completion through ALK; they do
-not claim that ALK has normalized split AG-UI tool-call events.
+CrewAI reference. CrewAI and Google ADK call `gemini-3.7-flash` through Vertex. LangGraph uses a
+deterministic one-node graph so its SSE adapter is qualified independently of a model provider.
+Provider-only source patches are hashed in the result. The framework receipts prove response text
+and explicit completion through ALK; they do not claim that ALK has normalized split AG-UI
+tool-call events.
 
 Run the matrix from the ALK checkout:
 
@@ -103,3 +105,7 @@ file outside the artifact tree with mode `0600`, verifies the imported ALK SSE m
 exactly ten sanitized receipts, and kills the sandbox in `finally`. Use
 `ALK_E2B_TEMPLATE_REFERENCE` to select an existing ALK template; otherwise the E2B `base` template
 is used and dependencies are installed for the run.
+
+The sanitized successful run from 2026-11-05 is retained at
+`results/e2b-2026-11-05.json`. It contains package versions, event/response counts, source hashes,
+the E2B template reference, and cleanup status, but no prompts, responses, headers, or credentials.

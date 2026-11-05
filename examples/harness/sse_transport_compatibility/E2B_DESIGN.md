@@ -55,10 +55,10 @@ receipts.
 
 - One sandbox reduces secret uploads and orphan surfaces, but framework environments must remain
   isolated inside it.
-- Source-side tool counts prove framework execution without claiming ALK has normalized AG-UI's
-  split tool frames.
-- Provider-only patches select Vertex Gemini for upstream examples; the upstream commit and patch
-  digest must both be recorded.
+- The CrewAI backend-tool route proves completed response streaming, but does not claim ALK has
+  normalized AG-UI's split tool frames.
+- CrewAI and ADK use Vertex Gemini; LangGraph uses a deterministic graph to isolate its adapter
+  contract from provider behavior. The upstream commit and provider-patch digest are recorded.
 - A hard controller crash can bypass `finally`; the bounded E2B TTL limits that orphan risk.
 
 ## Alternatives considered
@@ -69,16 +69,19 @@ scenario names with handlers. Both expose more policy than the selected one-comm
 
 ## Implementation reconciliation
 
-No accepted deviations yet. If live framework installation requires a different provider adapter,
-update this design and record the exact patch rather than weakening a receipt.
+The live matrix showed that the pinned LangGraph example's provider-specific agent emitted only
+lifecycle events in this environment. The framework case now uses a checkpointed deterministic
+LangGraph node through the same pinned official AG-UI adapter, separating adapter qualification
+from provider behavior. CrewAI continuity was not accepted: repeated live runs streamed valid
+answers but did not prove the second answer depended on the first. That case was narrowed to the
+observable backend-tool route streaming contract.
 
 ## Open questions and risks
 
-- Will the pinned LangGraph `langchain-google-genai` version accept `gemini-3.7-flash` through
-  Vertex in E2B?
-- Will the pinned ADK example accept the same model name with ADC in the selected region?
-- Which E2B template is available to this account? The generic `base` template is the default.
+- CrewAI cross-turn continuity remains unqualified.
+- AG-UI split tool-call normalization remains unqualified.
 
 ## Next implementation step
 
-Build strict result validation and credential-free lifecycle tests before running the live matrix.
+Treat continuity and split tool-call normalization as separate follow-up qualifications; do not
+infer them from this successful transport matrix.

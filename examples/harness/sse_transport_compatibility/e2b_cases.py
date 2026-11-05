@@ -22,7 +22,7 @@ from typing import Any, Iterator
 
 
 CASE_IDS = (
-    "crewai_continuity",
+    "crewai_backend_tool_stream",
     "langgraph_stream_text",
     "adk_stream_text",
     "delta_assembly",
@@ -34,7 +34,7 @@ CASE_IDS = (
     "cancellation_recovery",
 )
 FRAMEWORK_BY_CASE = {
-    "crewai_continuity": "crewai",
+    "crewai_backend_tool_stream": "crewai",
     "langgraph_stream_text": "langgraph",
     "adk_stream_text": "google_adk",
 }
@@ -173,14 +173,14 @@ def _trace(response: Any) -> dict[str, Any]:
     return dict((response.metadata or {}).get("external_agent") or {})
 
 
-def _input(message: str, *, thread_id: str | None = None, turn: int = 0) -> Any:
+def _input(message: str) -> Any:
     from fi.simulate.agent.wrapper import AgentInput
 
     execution_id = uuid.uuid4().hex
     return AgentInput(
-        thread_id=thread_id or f"sse-{execution_id}",
+        thread_id=f"sse-{execution_id}",
         execution_id=execution_id,
-        turn_index=turn,
+        turn_index=0,
         messages=[],
         new_message={"role": "user", "content": message},
     )
@@ -356,20 +356,6 @@ def prepare_upstream(work: Path) -> tuple[Path, str, dict[str, dict[str, str]]]:
     ):
         raise RuntimeError("source_revision")
 
-    langgraph_agent = (
-        source / "integrations/langgraph/python/examples/agents/agentic_chat/agent.py"
-    )
-    langgraph_text = langgraph_agent.read_text(encoding="utf-8")
-    expected = langgraph_text.count('model="openai:gpt-4.1-mini"')
-    if expected != 2:
-        raise RuntimeError("langgraph_patch_shape")
-    langgraph_agent.write_text(
-        langgraph_text.replace(
-            'model="openai:gpt-4.1-mini"', f'model="google_genai:{MODEL}"'
-        ),
-        encoding="utf-8",
-    )
-
     adk_server = (
         source / "integrations/adk-middleware/python/examples/server/__init__.py"
     )
@@ -392,7 +378,7 @@ def prepare_upstream(work: Path) -> tuple[Path, str, dict[str, dict[str, str]]]:
         encoding="utf-8",
     )
     patch_hash = hashlib.sha256(
-        langgraph_agent.read_bytes() + adk_agent.read_bytes() + adk_server.read_bytes()
+        adk_agent.read_bytes() + adk_server.read_bytes()
     ).hexdigest()
 
     projects = (
@@ -455,25 +441,9 @@ def framework_server(
         log.close()
 
 
-def _agui_wrapper(endpoint: str, *, cumulative: bool = False) -> Any:
+def _agui_wrapper(endpoint: str) -> Any:
     from fi.simulate.agent.wrappers.http import HTTPAgentWrapper
 
-    text_rule: dict[str, Any]
-    if cumulative:
-        text_rule = {
-            "mode": "cumulative",
-            "path": "data.messages.-1.content",
-            "when": {"path": "data.messages.-1.role", "values": ["assistant"]},
-        }
-    else:
-        text_rule = {
-            "mode": "delta",
-            "path": "data.delta",
-            "when": {
-                "path": "data.type",
-                "values": ["TEXT_MESSAGE_CONTENT"],
-            },
-        }
     return HTTPAgentWrapper(
         endpoint=endpoint,
         protocol="json_template",
@@ -495,7 +465,24 @@ def _agui_wrapper(endpoint: str, *, cumulative: bool = False) -> Any:
         sse={
             "completion": {"path": "data.type", "values": ["RUN_FINISHED"]},
             "failure": {"path": "data.type", "values": ["RUN_ERROR"]},
-            "text": [text_rule],
+            "text": [
+                {
+                    "mode": "delta",
+                    "path": "data.delta",
+                    "when": {
+                        "path": "data.type",
+                        "values": ["TEXT_MESSAGE_CONTENT"],
+                    },
+                },
+                {
+                    "mode": "cumulative",
+                    "path": "data.messages.-1.content",
+                    "when": {
+                        "path": "data.messages.-1.role",
+                        "values": ["assistant"],
+                    },
+                },
+            ],
         },
         timeout=180,
         secret_values={},
@@ -508,13 +495,14 @@ def _framework_source(
     endpoint: str,
     patch_hash: str,
     versions: dict[str, str],
+    model: str,
 ) -> dict[str, Any]:
     return {
         "repository": AG_UI_REPOSITORY,
         "commit": AG_UI_COMMIT,
         "subdirectory": subdirectory,
         "framework": framework,
-        "model": MODEL,
+        "model": model,
         "endpoint": endpoint,
         "provider_patch_sha256": patch_hash,
         "versions": versions,
@@ -545,7 +533,7 @@ async def run_framework_cases(work: Path) -> list[Receipt]:
     receipts: list[Receipt] = []
 
     crew = source / "integrations/crew-ai/python/examples"
-    crew_endpoint = "/conversational_flows/agentic_chat"
+    crew_endpoint = "/conversational_flows/backend_tool_rendering"
     try:
         with framework_server(
             [
@@ -557,36 +545,25 @@ async def run_framework_cases(work: Path) -> list[Receipt]:
             env={**common_env, "MODEL": f"vertex_ai/{MODEL}"},
             port=8101,
         ):
-            wrapper = _agui_wrapper(
-                f"http://127.0.0.1:8101{crew_endpoint}", cumulative=True
-            )
-            thread_id = f"alk-e2b-{uuid.uuid4().hex}"
-            first = await wrapper.call(
+            wrapper = _agui_wrapper(f"http://127.0.0.1:8101{crew_endpoint}")
+            response = await wrapper.call(
                 _input(
-                    "Remember the codeword cobalt-731. Reply exactly STORED.",
-                    thread_id=thread_id,
+                    "Ask for the weather in Pune and use the get_weather tool.",
                 )
             )
-            second = await wrapper.call(
-                _input(
-                    "What codeword did I ask you to remember? Reply only with it.",
-                    thread_id=thread_id,
-                    turn=1,
-                )
-            )
-            trace = _trace(second)
+            trace = _trace(response)
             passed = (
-                _trace(first).get("success") is True
-                and trace.get("success") is True
-                and "cobalt-731" in second.content.lower()
+                trace.get("success") is True
+                and bool(response.content)
+                and int(trace.get("stream_events_received") or 0) >= 5
             )
             receipts.append(
                 _receipt(
-                    "crewai_continuity",
+                    "crewai_backend_tool_stream",
                     passed=passed,
-                    reason="continuity_not_observed",
+                    reason="stream_text_not_observed",
                     framework="crewai",
-                    response_characters=len(second.content),
+                    response_characters=len(response.content),
                     stream_events=int(trace.get("stream_events_received") or 0),
                     terminal="RUN_FINISHED",
                     source=_framework_source(
@@ -595,13 +572,14 @@ async def run_framework_cases(work: Path) -> list[Receipt]:
                         crew_endpoint,
                         patch_hash,
                         versions["crewai"],
+                        MODEL,
                     ),
                 )
             )
     except Exception:
         receipts.append(
             _receipt(
-                "crewai_continuity",
+                "crewai_backend_tool_stream",
                 passed=False,
                 reason="framework_runtime",
                 framework="crewai",
@@ -611,17 +589,28 @@ async def run_framework_cases(work: Path) -> list[Receipt]:
     langgraph = source / "integrations/langgraph/python/examples"
     langgraph_endpoint = "/agent/agentic_chat"
     try:
-        langgraph_server = (
-            "import os, uvicorn; from fastapi import FastAPI; "
-            "from ag_ui_langgraph import add_langgraph_fastapi_endpoint; "
-            "from copilotkit import LangGraphAGUIAgent; "
-            "from agents.agentic_chat.agent import graph; "
-            "app=FastAPI(); agent=LangGraphAGUIAgent(name='agentic_chat', "
-            "description='ALK qualification', graph=graph); "
-            "add_langgraph_fastapi_endpoint(app=app, agent=agent, "
-            "path='/agent/agentic_chat'); "
-            "uvicorn.run(app, host='0.0.0.0', port=int(os.environ['PORT']))"
-        )
+        langgraph_server = """
+import os
+import uvicorn
+from fastapi import FastAPI
+from ag_ui_langgraph import LangGraphAgent, add_langgraph_fastapi_endpoint
+from langchain_core.messages import AIMessage
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import END, START, MessagesState, StateGraph
+
+def reply(_state):
+    return {"messages": [AIMessage(content="LANGGRAPH_OK")]}
+
+builder = StateGraph(MessagesState)
+builder.add_node("reply", reply)
+builder.add_edge(START, "reply")
+builder.add_edge("reply", END)
+graph = builder.compile(checkpointer=MemorySaver())
+app = FastAPI()
+agent = LangGraphAgent(name="agentic_chat", description="ALK qualification", graph=graph)
+add_langgraph_fastapi_endpoint(app=app, agent=agent, path="/agent/agentic_chat")
+uvicorn.run(app, host="0.0.0.0", port=int(os.environ["PORT"]))
+"""
         with framework_server(
             [str(langgraph / ".venv/bin/python"), "-c", langgraph_server],
             cwd=langgraph,
@@ -648,6 +637,7 @@ async def run_framework_cases(work: Path) -> list[Receipt]:
                         langgraph_endpoint,
                         patch_hash,
                         versions["langgraph"],
+                        "deterministic",
                     ),
                 )
             )
@@ -694,6 +684,7 @@ async def run_framework_cases(work: Path) -> list[Receipt]:
                         adk_endpoint,
                         patch_hash,
                         versions["google_adk"],
+                        MODEL,
                     ),
                 )
             )

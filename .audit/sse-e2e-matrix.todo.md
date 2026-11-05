@@ -3,9 +3,9 @@
 - [x] Read the Principles section of poteto-mode.
 - [x] Phase A: Frame the falsifiable definition of done, quantified scope, blockers, and rigor.
 - [x] Phase B: Design atomic units, build the verification harness first, and choose safe fan-out seams.
-- [ ] Phase C: Run each unit as hypothesis, smallest change, real measurement, and VERIFIED / NOT VERIFIED / INCONCLUSIVE verdict (local unit verified; live E2B pending).
+- [x] Phase C: Run each unit as hypothesis, smallest change, real measurement, and VERIFIED / NOT VERIFIED / INCONCLUSIVE verdict.
 - [x] Phase D: Append every material decision and pivot to `.audit/sse-e2e-matrix.tsv`.
-- [ ] Phase E: Run the whole matrix against real E2B artifacts and hand back verified and open results.
+- [x] Phase E: Run the whole matrix against real E2B artifacts and hand back verified and open results.
 
 Task-specific units, refined after discovery:
 
@@ -13,8 +13,8 @@ Task-specific units, refined after discovery:
 - [x] Define a typed ten-case matrix across at least three open-source agent frameworks.
 - [x] Build one rerunnable E2B runner that provisions, deploys, exercises, captures evidence, and always tears down.
 - [x] Add credential-free contract tests for matrix validation and result accounting.
-- [ ] Run the ten live cases in E2B and retain a redacted JSON report.
-- [ ] Independently review the runner, evidence, and decision trail.
+- [x] Run the ten live cases in E2B and retain a redacted JSON report.
+- [x] Independently review the runner, evidence, and decision trail.
 
 Definition of done:
 

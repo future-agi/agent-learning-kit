@@ -2,6 +2,7 @@ import asyncio
 import importlib.util
 import json
 import sys
+from types import ModuleType
 from pathlib import Path
 
 import pytest
@@ -37,12 +38,10 @@ def _passing_report(qualifier, digest="a" * 64):
                 "commit": "2b967c34c49759c4afe0f0a176b281a0f645de34",
                 "subdirectory": subdirectories[framework],
                 "framework": framework,
-                "model": "gemini-3.7-flash",
+                "model": qualifier.SOURCE_MODELS[framework],
                 "endpoint": qualifier.SOURCE_ENDPOINTS[framework],
                 "provider_patch_sha256": qualifier.PROVIDER_PATCH_SHA256,
-                "versions": {
-                    name: "1.0.0" for name in qualifier.SOURCE_VERSION_KEYS[framework]
-                },
+                "versions": dict(qualifier.SOURCE_VERSIONS[framework]),
             }
         receipts.append(
             {
@@ -87,6 +86,11 @@ def test_report_requires_exactly_ten_ordered_receipts_and_branch_hash():
     with pytest.raises(ValueError, match="source provenance"):
         qualifier.validate_report(json.dumps(report).encode(), "a" * 64)
 
+    report = _passing_report(qualifier)
+    report["receipts"][0]["source"]["versions"]["crewai"] = "999"
+    with pytest.raises(ValueError, match="versions"):
+        qualifier.validate_report(json.dumps(report).encode(), "a" * 64)
+
 
 def test_failed_and_withheld_framework_receipts_remain_valid():
     qualifier = _module("sse_e2b_qualify_failures", "e2b_qualify.py")
@@ -123,8 +127,26 @@ def test_controller_fails_before_e2b_without_key(tmp_path):
         )
 
 
-def test_controller_writes_report_only_after_sandbox_cleanup(tmp_path):
+def test_sandbox_command_returns_nonzero_case_exit(monkeypatch):
+    qualifier = _module("sse_e2b_qualify_command_exit", "e2b_qualify.py")
+
+    class CommandExitException(Exception):
+        exit_code = 7
+
+    class Commands:
+        def run(self, *_args, **_kwargs):
+            raise CommandExitException
+
+    e2b = ModuleType("e2b")
+    e2b.CommandExitException = CommandExitException
+    monkeypatch.setitem(sys.modules, "e2b", e2b)
+    sandbox = type("Sandbox", (), {"commands": Commands()})()
+    assert qualifier._sandbox_command(sandbox, "runner", timeout=1) == 7
+
+
+def test_controller_writes_report_only_after_sandbox_cleanup(tmp_path, monkeypatch):
     qualifier = _module("sse_e2b_qualify_lifecycle", "e2b_qualify.py")
+    monkeypatch.setattr(qualifier.time, "sleep", lambda _seconds: None)
     digest = qualifier._sha256(qualifier.SSE_MODULE)
     remote_report = json.dumps(_passing_report(qualifier, digest)).encode()
 
@@ -155,6 +177,10 @@ def test_controller_writes_report_only_after_sandbox_cleanup(tmp_path):
 
         def kill(self):
             self.killed = True
+
+        @classmethod
+        def list(cls, **_kwargs):
+            return type("Paginator", (), {"next_items": lambda self: []})()
 
     sandbox = Sandbox()
     credential = tmp_path / "vertex.json"
@@ -188,6 +214,12 @@ def test_seven_transport_cases_observe_http_wrapper_behavior():
     receipts = asyncio.run(cases.run_transport_cases())
     assert [receipt.case_id for receipt in receipts] == list(cases.CASE_IDS[3:])
     assert all(receipt.status == "passed" for receipt in receipts)
+
+
+def test_framework_wrapper_accepts_delta_and_snapshot_text():
+    cases = _module("sse_e2b_cases_framework_mapping", "e2b_cases.py")
+    wrapper = cases._agui_wrapper("http://127.0.0.1:1/agent")
+    assert [rule.mode for rule in wrapper.sse.text] == ["delta", "cumulative"]
 
 
 def test_runner_always_writes_ten_receipts_on_unexpected_case_error(

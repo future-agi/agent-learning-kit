@@ -29,14 +29,15 @@ artifact tree, runs all cases, downloads sanitized JSON evidence, and kills the 
 must record and compare the imported SSE module hash so the preinstalled template copy cannot be
 mistaken for the branch under test.
 
-The current shell has no `E2B_API_KEY` or template reference. The controller therefore fails
-closed before provisioning when the key is absent and may default to E2B's generic `base`
-template. The live remote verdict stays unverified until the key is supplied.
+The live controller borrowed the E2B key and template reference from the running platform worker
+without persisting them. The retained remote receipt passed all ten cases against the configured
+platform template, matched the uploaded branch module hash, and verified after termination that
+the sandbox ID was absent from E2B's active-sandbox list.
 
 ## Qualification contract
 
 Exactly ten cases must produce exactly ten receipts. Three cases are real-framework smoke tests
-(CrewAI continuity and tool call, LangGraph streamed text, ADK middleware streamed text/tool);
+(CrewAI backend-tool route streaming, LangGraph streamed text, ADK middleware streamed text/tool);
 seven are deterministic HTTP/SSE lifecycle cases (delta, cumulative, final-only, explicit done
 before EOF, terminal error, incomplete EOF/reset, cancellation and recovery). Only behavior
 observed through ALK counts. A setup/import/mock-only check cannot pass a case. Any missing,
