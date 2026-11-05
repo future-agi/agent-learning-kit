@@ -15,7 +15,7 @@ from collections.abc import Callable
 from typing import Any
 from urllib import error, request
 
-from fi.simulate.simulation.sub_actors import seeded
+from fi.simulate.simulation.call_actors import seeded
 
 from .actors import AGENT, Actor, ScenarioActor, ScheduledAction
 

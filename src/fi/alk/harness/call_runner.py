@@ -54,24 +54,24 @@ from fi.simulate.results.futureagi import target_provider_usage
 from fi.simulate.runtime.report import SimulationReport
 from fi.simulate.runtime.run import TestCaseStatus
 from fi.simulate.runtime.runner import SimulationRunner
-from fi.simulate.simulation.sub_actors import (
+from fi.simulate.simulation.call_actors import (
     CHANNELS,
-    SUB_ACTOR_VOICES_ALIAS,
-    SUB_ACTOR_WORLD_ALIAS,
+    ACTOR_VOICES_ALIAS,
+    ACTOR_WORLD_ALIAS,
     known_to_others,
     loudness_ratio,
     with_others,
 )
 
 from .actor_dispatch import ActorDispatcher
-from .actors import AGENT, ScenarioActor, load_actors
+from .actors import AGENT, ScenarioActor, actor_brief, brief_text, load_actors, with_caller_actor
 from .background_noise import place_of, scenario_source
 from .bundle_v2 import EvidenceSeam
-from .sub_actor import (
-    ScenarioSubActor,
-    load_sub_actors,
+from .call_actor import (
+    load_call_actors,
+    speaking_entries,
     logged_tool_name,
-    sub_actors_enabled,
+    actors_enabled,
 )
 from .hosted_scheduler import CallAborted, CallOutcome
 from .hosted_scheduler import Scenario as HostedScenario
@@ -580,7 +580,7 @@ def _build_spec(
     environ: Mapping[str, str],
     connector: str = "livekit",
     provider_target_id: str | None = None,
-    sub_actors: list[dict[str, Any]] | None = None,
+    call_actors: list[dict[str, Any]] | None = None,
 ) -> SimulationSpec:
     """The hosted lane: values come from job config and the bundle's scenario document.
 
@@ -679,7 +679,7 @@ def _build_spec(
         scenario=caller_scenario(
             name=str(doc.get("scenario_key") or doc.get("name") or "harness-voice"),
             persona=doc.get("persona"),
-            situation=with_others(doc["instruction"], sub_actors or []),
+            situation=with_others(doc["instruction"], call_actors or []),
             fixture=doc.get("fixture"),
             tts_provider=simulator.tts.provider,
             variation=run_id,
@@ -702,19 +702,27 @@ def _build_spec(
     )
 
 
-def _resolved_sub_actors(
+def _resolved_call_actors(
     doc: Mapping[str, Any],
     bundle_dir: Any,
     tts_provider: str,
     cartesia_key: str,
     seed: str,
 ) -> list[dict[str, Any]]:
-    """Every sub-actor the scenario includes, resolved from the environment's list with what it does
+    """Every actor the scenario includes, resolved from the environment's list with what it does
     here. One that can speak has a voice no one else on the call has and a level of its own; one that
     cannot is kept with `entered: false` and the reason, so the call's record still names it."""
-    if not sub_actors_enabled() or not doc.get("sub_actors"):
+    if not actors_enabled() or not doc.get("actors"):
         return []
-    listing = load_sub_actors(bundle_dir)
+    listing = load_call_actors(bundle_dir)
+    full = load_actors(bundle_dir).by_id()
+    speaking = speaking_entries(
+        [ScenarioActor.model_validate(entry) for entry in doc.get("actors") or []],
+        listing,
+        set(full),
+    )
+    if not speaking:
+        return []
     contract_path = Path(bundle_dir) / "contract.json"
     contract = (
         json.loads(contract_path.read_text(encoding="utf-8"))
@@ -730,8 +738,7 @@ def _resolved_sub_actors(
         )
     }
     resolved = []
-    for entry in doc.get("sub_actors") or []:
-        included = ScenarioSubActor.model_validate(entry)
+    for included in speaking:
         actor = listing.get(included.id)
         trigger = included.trigger.model_dump()
         here = {
@@ -747,7 +754,7 @@ def _resolved_sub_actors(
             "modalities", ()
         ):
             logger.warning(
-                "sub-actor %s does not enter: %s",
+                "actor %s does not enter: %s",
                 included.id,
                 "not in the environment's list"
                 if actor is None
@@ -761,7 +768,7 @@ def _resolved_sub_actors(
         if not voice:
             # The person's voice or none at all: the agent could not tell them apart.
             logger.warning(
-                "sub-actor %s does not enter: no voice of its own on this call",
+                "actor %s does not enter: no voice of its own on this call",
                 included.id,
             )
             resolved.append({**here, "entered": False, "reason": "no_distinct_voice"})
@@ -779,6 +786,21 @@ def _resolved_sub_actors(
                 "emotion": persona_emotion(persona),
                 "situation": known_to_others(str(doc.get("instruction") or "")),
                 "language": ", ".join(caller.get("languages") or []),
+                # The same view the platform shows as what this actor sees.
+                "brief": brief_text(
+                    actor_brief(
+                        full[actor.id].model_dump(exclude_none=True),
+                        entry=next(
+                            (
+                                one
+                                for one in doc.get("actors") or []
+                                if (one or {}).get("id") == actor.id
+                            ),
+                            None,
+                        ),
+                        scenario=dict(doc),
+                    )
+                ),
             }
         )
     return resolved
@@ -1040,7 +1062,7 @@ def _actor_dispatcher(
     budget: float,
 ) -> ActorDispatcher | None:
     """The scenario's world actors for this trial, with a fresh token only they and the proxy hold."""
-    if not doc.get("actors") or not sub_actors_enabled():
+    if not doc.get("actors") or not actors_enabled():
         return None
     proxy = runtime.endpoints.get("tool_proxy")
     database = _find_postgres_endpoint(runtime)
@@ -1544,6 +1566,7 @@ class CallRunnerImpl:
         doc = _with_scenario_edits(
             doc, getattr(self._context.job, "metadata", None), source_key
         )
+        doc = with_caller_actor(doc, self._context.bundle_dir)
 
         room_count = self._scenario_room_counts.get(scenario.scenario_key, 0) + 1
         self._scenario_room_counts[scenario.scenario_key] = room_count
@@ -1592,20 +1615,20 @@ class CallRunnerImpl:
             call_environ.pop("HARNESS_BACKGROUND_PLACE", None)
 
         setting = _setting(self._context.job.agent.config, call_environ)
-        resolved = _resolved_sub_actors(
+        resolved = _resolved_call_actors(
             doc,
             self._context.bundle_dir,
             voice_providers(setting)[1],
             setting("CARTESIA_API_KEY"),
             run_id,
         )
-        # Only a sub-actor that can speak reaches the call; the record keeps every one.
+        # Only an actor that can speak reaches the call; the record keeps every one.
         voices = [one for one in resolved if one.get("entered", True)]
-        call_environ.pop(SUB_ACTOR_WORLD_ALIAS, None)
+        call_environ.pop(ACTOR_WORLD_ALIAS, None)
         if voices:
-            call_environ[SUB_ACTOR_VOICES_ALIAS] = json.dumps(voices)
+            call_environ[ACTOR_VOICES_ALIAS] = json.dumps(voices)
         else:
-            call_environ.pop(SUB_ACTOR_VOICES_ALIAS, None)
+            call_environ.pop(ACTOR_VOICES_ALIAS, None)
 
         # Read the same way and for the same reason as the noise source above: the simulator's
         # instructions are built deep inside simulator_definition, which sees the environment and
@@ -1711,7 +1734,7 @@ class CallRunnerImpl:
             doc=doc,
             simulator_config=self._context.job.agent.config,
             environ=call_environ,
-            sub_actors=voices,
+            call_actors=voices,
             livekit_url=self._livekit_url,
             call_timeout_seconds=call_timeout_seconds,
             run_seconds=run_seconds,
@@ -1725,7 +1748,7 @@ class CallRunnerImpl:
                 _clear_tool_trace_calls(endpoint.address)
                 if voices:
                     # The engine reads the live trace for on_tool triggers.
-                    call_environ[SUB_ACTOR_WORLD_ALIAS] = endpoint.address
+                    call_environ[ACTOR_WORLD_ALIAS] = endpoint.address
 
         actors = (
             _actor_dispatcher(
@@ -1790,7 +1813,7 @@ class CallRunnerImpl:
                 runtime=runtime,
                 scenario_key=scenario.scenario_key,
                 started_at=started_at,
-                sub_actors=resolved,
+                call_actors=resolved,
             )
         except (CallAborted, WorldUnavailable):
             # `_translate_report`'s own typed control-flow (non-completed status, no test case,
@@ -1821,7 +1844,7 @@ class CallRunnerImpl:
         runtime: EnvironmentRuntime,
         scenario_key: str,
         started_at: datetime,
-        sub_actors: Sequence[dict[str, Any]] = (),
+        call_actors: Sequence[dict[str, Any]] = (),
     ) -> CallOutcome:
         case = report.test_cases[0] if report.test_cases else None
         took_part = (
@@ -1837,13 +1860,13 @@ class CallRunnerImpl:
             if case is not None and case.ended_at is not None
             else datetime.now(timezone.utc)
         )
-        # The person's and the agent's turns; a sub-actor's lines are not turns of the conversation.
+        # The person's and the agent's turns; an actor's lines are not turns of the conversation.
         turns = (
             sum(
                 1
                 for message in case.result.messages
                 if not (
-                    isinstance(message, Mapping) and message.get("role") == "sub_actor"
+                    isinstance(message, Mapping) and message.get("role") == "actor"
                 )
             )
             if case is not None and case.result is not None
@@ -1907,11 +1930,11 @@ class CallRunnerImpl:
                     "transcript": result.transcript,
                     "messages": result.messages,
                 }
-                if sub_actors:
-                    transcript_document["sub_actors"] = {
-                        "resolved": sub_actors,
-                        "summary": took_part.get("sub_actors") or [],
-                        "events": took_part.get("sub_actor_events") or [],
+                if call_actors:
+                    transcript_document["call_actors"] = {
+                        "resolved": call_actors,
+                        "summary": took_part.get("call_actors") or [],
+                        "events": took_part.get("call_actor_events") or [],
                     }
                 if acted:
                     # Kept out of the tool trace, whose every line is one of the agent's own calls.
@@ -1972,10 +1995,10 @@ class CallRunnerImpl:
                 else None
             ),
             target_metrics=_target_metrics(case),
-            sub_actors=tuple(took_part.get("sub_actors") or ())
+            call_actors=tuple(took_part.get("call_actors") or ())
             + tuple(
-                {"sub_actor": one["id"], "name": one.get("name"), "triggered": False}
-                for one in sub_actors
+                {"actor": one["id"], "name": one.get("name"), "triggered": False}
+                for one in call_actors
                 if one.get("entered") is False
             ),
         )

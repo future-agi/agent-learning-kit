@@ -730,12 +730,12 @@ fixed value wrong at a time. A check that fails a correct agent is refused as to
 value that no check notices when wrong is refused as unchecked. The five steps above are how you pass
 these the first time.
 
-## Sub-actors
+## Actors
 
-Only when `add_sub_actor` is offered. A sub-actor is someone on the person's side who is not the
+Only when `add_actor` is offered. An actor is someone on the person's side who is not the
 person, whom the agent has to cope with: someone with them who speaks up, or takes over from them for a
 while. Never anyone on the agent's side: the agent, its staff and its systems are what is being
-tested, so the run never plays them. Read the contract and add one for each channel `add_sub_actor` offers
+tested, so the run never plays them. Read the contract and add one for each channel `add_actor` offers
 that this agent's users could have around them.
 
 The list says who each one is: an ordinary, invented name that is never the person's and never a known public

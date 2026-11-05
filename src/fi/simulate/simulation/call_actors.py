@@ -1,6 +1,6 @@
-"""How a sub-actor can reach the agent under test, and when one enters.
+"""How an actor can reach the agent under test, and when one enters.
 
-Shared by the build, which refuses a sub-actor no run could deliver, and by every runner. Each
+Shared by the build, which refuses an actor no run could deliver, and by every runner. Each
 channel names the agent types it reaches and whether a runner can deliver it yet, so a new agent
 type adds a channel here instead of a branch in the code that reads it.
 """
@@ -44,6 +44,14 @@ CHANNELS: dict[str, dict[str, Any]] = {
         "through to you; if the agent speaks to you first, answer as yourself.",
         "setting": "You are the automated phone menu that answers this line before a person does.",
     },
+    "chat_message": {
+        "modalities": {"chat"},
+        "about": "someone else in the person's conversation with the agent who writes messages of their own, "
+        "labelled with their name, which the agent reads",
+        "tells_person": "Also in this conversation, and may write in it: {who}.",
+        "setting": "You are in a written conversation between someone and an automated agent, and you write in it "
+        "yourself; the agent reads what you write, labelled with your name.",
+    },
 }
 
 TRIGGER_ABOUT: dict[str, str] = {
@@ -58,7 +66,7 @@ TRIGGERS = tuple(TRIGGER_ABOUT)
 
 
 def someone_else(name: str) -> str:
-    """How a sub-actor's turn is labelled wherever grading reads a conversation."""
+    """How an actor's turn is labelled wherever grading reads a conversation."""
     return f"{name or 'Someone else'} (not the person being served)"
 
 
@@ -98,31 +106,31 @@ def described(entries: dict[str, str]) -> str:
     return "; ".join(f"`{name}`: {about}" for name, about in entries.items())
 
 
-# Fixed limits, the same for every scenario, so no sub-actor and no group of them can take over a call.
+# Fixed limits, the same for every scenario, so no actor and no group of them can take over a call.
 LIMITS: dict[str, int] = {
     "audio_mix": 3,
     "audio_handoff": 3,
     "ivr": 3,
 }
 HANDOFF_LINE_SECONDS = 15.0
-# The speaking sub-actors one call carries, as JSON. Set per call and cleared otherwise.
-SUB_ACTOR_VOICES_ALIAS = "HARNESS_SUB_ACTOR_VOICES"
+# The speaking actors one call carries, as JSON. Set per call and cleared otherwise.
+ACTOR_VOICES_ALIAS = "HARNESS_ACTOR_VOICES"
 # Where the engine reads the live tool trace. Set per call, never logged.
-SUB_ACTOR_WORLD_ALIAS = "HARNESS_SUB_ACTOR_WORLD"
+ACTOR_WORLD_ALIAS = "HARNESS_ACTOR_WORLD"
 TOOLS_READ_SECONDS = 1.0
-# How much of the conversation a sub-actor hears before writing a line.
+# How much of the conversation an actor hears before writing a line.
 CONVERSATION_LINES = 12
 MAX_ACTIVE = 2
 TAKEOVER_AFTER_TURNS = 4
 # Someone can only take the phone from a person who already has it: not before the agent's second turn, by
 # which point the person has spoken at least once. A trigger that fires earlier waits for that turn.
 TAKES_PHONE_FROM_TURN = 2
-# Time all sub-actors together have in one call: wall clock from the first sub-actor's trigger, the agent's
-# and the person's turns included. Once it runs out every sub-actor stops and the person has the call.
-SUB_ACTOR_SECONDS = 60.0
+# Time all actors together have in one call: wall clock from the first actor's trigger, the agent's
+# and the person's turns included. Once it runs out every actor stops and the person has the call.
+ACTOR_SECONDS = 60.0
 # Lines asked for and not yet ready; one more is dropped rather than queued behind them.
 MAX_WAITING_LINES = 2
-TIME_UP = "sub-actor time used up"
+TIME_UP = "actor time used up"
 # A background voice's level as an amplitude ratio to the person's voice (its RMS over theirs, on
 # each line), drawn per call from the run seed: 1/3 to 1/1.5 of the person, about -9.5 to -3.5 dB.
 LOUDNESS_RANGE = (1 / 3, 1 / 1.5)
@@ -139,13 +147,13 @@ def seeded(seed: str, *parts: object) -> random.Random:
     )
 
 
-# The share of a suite's scenarios that include a sub-actor when the person has not asked for one:
+# The share of a suite's scenarios that include an actor when the person has not asked for one:
 # drawn once per environment within this range, so suites differ and none goes without.
 SHARE_RANGE = (0.15, 0.25)
 
 
 def default_share(seed: str) -> float:
-    """The share of an environment's scenarios that include a sub-actor, unless the person asked for one."""
+    """The share of an environment's scenarios that include an actor, unless the person asked for one."""
     return seeded(seed, "share").uniform(*SHARE_RANGE)
 
 
@@ -154,12 +162,12 @@ def at_least(share: float, of: int) -> int:
     return math.ceil(share * of) if share > 0 else 0
 
 
-def loudness_ratio(seed: str, sub_actor_id: str, fixed: float | None) -> float:
+def loudness_ratio(seed: str, actor_id: str, fixed: float | None) -> float:
     """How loud a background voice is against the person on this call: the list's own ratio when it
     sets one, else a draw from the run seed."""
     if fixed is not None:
         return fixed
-    return seeded(seed, sub_actor_id, "loudness").uniform(*LOUDNESS_RANGE)
+    return seeded(seed, actor_id, "loudness").uniform(*LOUDNESS_RANGE)
 
 
 def line_gain(ratio: float, person_rms: float | None, line_rms: float) -> float:
@@ -178,7 +186,7 @@ def limited(gain: float, peak: int) -> float:
 
 @dataclass
 class Moment:
-    """What a run knows after one step of the agent: enough to decide whether a sub-actor is due."""
+    """What a run knows after one step of the agent: enough to decide whether an actor is due."""
 
     agent_turns: int
     last_text: str = ""
@@ -206,15 +214,15 @@ def named_in(text: str, name: str) -> bool:
     )
 
 
-def drawn(trigger: dict[str, Any], *, seed: str, sub_actor_id: str) -> bool:
-    """Whether this call is one a `probability` sub-actor comes into; every other kind always does."""
+def drawn(trigger: dict[str, Any], *, seed: str, actor_id: str) -> bool:
+    """Whether this call is one a `probability` actor comes into; every other kind always does."""
     if str(trigger.get("kind")) != "probability":
         return True
-    return seeded(seed, sub_actor_id, "enters").random() < float(trigger.get("p") or 0)
+    return seeded(seed, actor_id, "enters").random() < float(trigger.get("p") or 0)
 
 
 def due(
-    trigger: dict[str, Any], moment: Moment, *, seed: str, sub_actor_id: str
+    trigger: dict[str, Any], moment: Moment, *, seed: str, actor_id: str
 ) -> bool:
     kind = str(trigger.get("kind") or "always")
     if kind == "always":
@@ -236,7 +244,7 @@ def due(
         return any(re.search(_whole(word), said) for word in words)
     if kind == "probability":
         return moment.agent_turns >= 1 and drawn(
-            trigger, seed=seed, sub_actor_id=sub_actor_id
+            trigger, seed=seed, actor_id=actor_id
         )
     return False
 
@@ -249,13 +257,21 @@ def line_brief(
     conversation: list[str],
     language: str,
 ) -> str:
-    """What a sub-actor is given each time it writes a line, on any channel."""
+    """What an actor is given each time it writes a line, on any channel."""
     role = f", {actor['role']}" if actor.get("role") else ""
     setting = (CHANNELS.get(str(actor.get("channel") or "")) or {}).get("setting") or ""
+    # The actor's brief, when the run resolved one, is the same view the platform shows as what it sees.
+    own = (
+        [setting, str(actor["brief"])]
+        if actor.get("brief")
+        else [
+            f"You are {actor.get('name') or 'someone'}{role}. {setting}",
+            f"What is going on (this is the other person's situation, not yours):\n{situation}",
+            f"What you do:\n{actor.get('instruction') or ''}",
+        ]
+    )
     parts = [
-        f"You are {actor.get('name') or 'someone'}{role}. {setting}",
-        f"What is going on (this is the other person's situation, not yours):\n{situation}",
-        f"What you do:\n{actor.get('instruction') or ''}",
+        *own,
         "You are not the other person. Never give any detail the agent needs from them, never "
         "make their request or answer a question put to them, and never confirm or choose anything for them: "
         "what they came for is theirs to say. Say only what you yourself want or know.",
@@ -273,7 +289,7 @@ def line_brief(
 
 
 class Cast:
-    """Every sub-actor in one call: who enters when, the call-wide budget, and what happened to each.
+    """Every actor in one call: who enters when, the call-wide budget, and what happened to each.
 
     Each actor is a resolved entry: its list fields plus the scenario's `instruction` and `trigger`.
     """
@@ -287,7 +303,7 @@ class Cast:
         self.actors = actors
         self.seed = seed
         self.clock = clock
-        # When the first sub-actor was triggered; the call's sub-actor time runs from then.
+        # When the first actor was triggered; the call's actor time runs from then.
         self._started: float | None = None
         self._cut = False
         self._time_up = False
@@ -315,15 +331,15 @@ class Cast:
         ]
 
     def remaining(self) -> float:
-        """Seconds left of the call's sub-actor time; all of it until the first trigger."""
+        """Seconds left of the call's actor time; all of it until the first trigger."""
         if self._cut:
             return 0.0
         if self._started is None:
-            return SUB_ACTOR_SECONDS
-        return max(0.0, SUB_ACTOR_SECONDS - (self.clock() - self._started))
+            return ACTOR_SECONDS
+        return max(0.0, ACTOR_SECONDS - (self.clock() - self._started))
 
     def out_of_time(self) -> bool:
-        """Whether the call's sub-actor time is used up; the first time it is, every sub-actor stops."""
+        """Whether the call's actor time is used up; the first time it is, every actor stops."""
         if not self._time_up and not self.remaining():
             self._time_up = True
             for actor in self.actors:
@@ -335,7 +351,7 @@ class Cast:
         return self._time_up
 
     def waits_on_tools(self) -> bool:
-        """Whether a sub-actor that enters on a tool call has yet to be triggered."""
+        """Whether an actor that enters on a tool call has yet to be triggered."""
         return any(
             str((actor.get("trigger") or {}).get("kind")) == "on_tool"
             and not self._state[str(actor["id"])]["entered"]
@@ -362,14 +378,14 @@ class Cast:
         self._waiting_lines = max(0, self._waiting_lines - 1)
 
     def late(self, actor: dict[str, Any], *, cut_by_call_time: bool) -> None:
-        """A line not ready within its limit, or cut off by the call's sub-actor time."""
+        """A line not ready within its limit, or cut off by the call's actor time."""
         if cut_by_call_time:
-            # It waited out the rest of the call's sub-actor time.
+            # It waited out the rest of the call's actor time.
             self._cut = True
         self.dropped(actor, TIME_UP if self.out_of_time() else "not ready in time")
 
     def entering(self, moment: Moment) -> list[dict[str, Any]]:
-        """The sub-actors that enter now: due ones in the scenario's order, while there is room."""
+        """The actors that enter now: due ones in the scenario's order, while there is room."""
         if self.out_of_time():
             return []
         for actor in self.actors:
@@ -381,7 +397,7 @@ class Cast:
                 dict(actor.get("trigger") or {}),
                 moment,
                 seed=self.seed,
-                sub_actor_id=key,
+                actor_id=key,
             ):
                 if (
                     actor.get("channel") == "audio_handoff"
@@ -402,7 +418,7 @@ class Cast:
         return entered
 
     def may_speak(self, actor: dict[str, Any], agent_turns: int) -> bool:
-        """Whether this sub-actor may take part on this turn, within its own limit and the call's."""
+        """Whether this actor may take part on this turn, within its own limit and the call's."""
         key = str(actor["id"])
         state = self._state[key]
         if not state["entered"] or state["done"] or self.out_of_time():
@@ -420,7 +436,7 @@ class Cast:
         return True
 
     def took_turn(self) -> None:
-        """One agent turn spent with a sub-actor taking part, counted against the call-wide budget."""
+        """One agent turn spent with an actor taking part, counted against the call-wide budget."""
         self._activity += 1
 
     def delivered(
@@ -445,7 +461,7 @@ class Cast:
         )
 
     def not_entered(self, actor: dict[str, Any], reason: str) -> None:
-        """A sub-actor that cannot enter this call at all, with the reason."""
+        """An actor that cannot enter this call at all, with the reason."""
         self._state[str(actor["id"])]["done"] = True
         self._record(str(actor["id"]), "not_entered", reason=reason)
 
@@ -472,7 +488,7 @@ class Cast:
         actor = next(one for one in self.actors if str(one["id"]) == key)
         self.events.append(
             {
-                "sub_actor": key,
+                "actor": key,
                 "name": actor.get("name"),
                 "channel": actor.get("channel"),
                 "kind": kind,
@@ -481,26 +497,26 @@ class Cast:
         )
 
     def summary(self) -> list[dict[str, Any]]:
-        """Per sub-actor: whether it was triggered, how many lines reached the agent, and why any were dropped."""
+        """Per actor: whether it was triggered, how many lines reached the agent, and why any were dropped."""
         return [
             {
-                "sub_actor": str(actor["id"]),
+                "actor": str(actor["id"]),
                 "name": actor.get("name"),
                 "triggered": any(
-                    e["kind"] == "triggered" and e["sub_actor"] == str(actor["id"])
+                    e["kind"] == "triggered" and e["actor"] == str(actor["id"])
                     for e in self.events
                 ),
                 "delivered": self._state[str(actor["id"])]["lines"],
-                # False only for a `probability` sub-actor this call's draw left out: absent by design.
+                # False only for a `probability` actor this call's draw left out: absent by design.
                 "drawn": drawn(
                     dict(actor.get("trigger") or {}),
                     seed=self.seed,
-                    sub_actor_id=str(actor["id"]),
+                    actor_id=str(actor["id"]),
                 ),
                 "dropped": [
                     e["reason"]
                     for e in self.events
-                    if e["kind"] == "dropped" and e["sub_actor"] == str(actor["id"])
+                    if e["kind"] == "dropped" and e["actor"] == str(actor["id"])
                 ],
             }
             for actor in self.actors

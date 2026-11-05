@@ -9313,13 +9313,13 @@ def test_an_old_contract_gains_the_new_tool_fields_through_fix_tool(tmp_path):
     )
 
 
-# --- sub-actors ------------------------------------------------------------------------
+# --- actors ------------------------------------------------------------------------
 
 
 def _listed(*entries):
-    from fi.alk.harness.sub_actor import SubActor, SubActorList
+    from fi.alk.harness.call_actor import CallActor, CallActorList
 
-    return SubActorList(sub_actors=[SubActor.model_validate(one) for one in entries])
+    return CallActorList(call_actors=[CallActor.model_validate(one) for one in entries])
 
 
 _NEARBY = {
@@ -9431,12 +9431,12 @@ _SECOND = {
         (_NEARBY, "voice", {"person": "rowan"}, "has the simulated user's name"),
     ],
 )
-def test_a_scenario_s_sub_actors_are_refused_with_the_reason_no_run_could_honour_them(
+def test_a_scenario_s_call_actors_are_refused_with_the_reason_no_run_could_honour_them(
     entry, modality, overrides, refused
 ):
-    from fi.alk.harness.sub_actor import ScenarioSubActor, scenario_problems
+    from fi.alk.harness.call_actor import ScenarioCallActor, scenario_problems
 
-    included = ScenarioSubActor.model_validate(
+    included = ScenarioCallActor.model_validate(
         {
             "instruction": "You want something else and say so.",
             "trigger": {"kind": "always"},
@@ -9458,10 +9458,10 @@ def test_a_scenario_s_sub_actors_are_refused_with_the_reason_no_run_could_honour
         assert problems == []
 
 
-def test_a_scenario_names_each_sub_actor_once():
-    from fi.alk.harness.sub_actor import ScenarioSubActor, scenario_problems
+def test_a_scenario_names_each_call_actor_once():
+    from fi.alk.harness.call_actor import ScenarioCallActor, scenario_problems
 
-    one = ScenarioSubActor(id="nearby", instruction="You want something else.")
+    one = ScenarioCallActor(id="nearby", instruction="You want something else.")
     twice = scenario_problems(
         [one, one],
         _listed(_NEARBY),
@@ -9471,7 +9471,7 @@ def test_a_scenario_names_each_sub_actor_once():
         tools=None,
         runs_in_world=lambda _tool: True,
     )
-    assert twice == ["sub_actors: nearby is included twice"]
+    assert twice == ["actors: nearby is included twice"]
 
 
 @pytest.mark.parametrize(
@@ -9480,7 +9480,7 @@ def test_a_scenario_names_each_sub_actor_once():
 def test_an_on_tool_trigger_counts_calls_from_the_first(on_call, accepted):
     from pydantic import ValidationError
 
-    from fi.alk.harness.sub_actor import Trigger
+    from fi.alk.harness.call_actor import Trigger
 
     if accepted:
         trigger = Trigger(kind="on_tool", tool="lookup", on_call=on_call)
@@ -9490,16 +9490,16 @@ def test_an_on_tool_trigger_counts_calls_from_the_first(on_call, accepted):
             Trigger(kind="on_tool", tool="lookup", on_call=on_call)
 
 
-def test_the_list_keeps_one_entry_per_sub_actor_and_refuses_what_no_run_can_deliver(
+def test_the_list_keeps_one_entry_per_call_actor_and_refuses_what_no_run_can_deliver(
     tmp_path, monkeypatch
 ):
     import asyncio
 
-    from fi.alk.harness.sub_actor import load_sub_actors
-    from fi.alk.harness.world.tools import sub_actor_tools
+    from fi.alk.harness.call_actor import load_call_actors
+    from fi.alk.harness.world.tools import world_actor_tools
 
-    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
-    add, drop = sub_actor_tools(_contract(modality="voice"), tmp_path)
+    monkeypatch.setenv("HARNESS_ACTORS", "1")
+    add, drop = world_actor_tools(tmp_path, _contract(modality="voice"))
 
     def said(tool, args):
         out = asyncio.run(tool.handler(args))
@@ -9509,25 +9509,26 @@ def test_the_list_keeps_one_entry_per_sub_actor_and_refuses_what_no_run_can_deli
         False,
         said(add, _NEARBY)[1],
     )
-    listed = load_sub_actors(tmp_path)
-    assert [(one.id, one.name, one.persona) for one in listed.sub_actors] == [
-        ("nearby", "Rowan", {})
+    listed = load_call_actors(tmp_path)
+    # Only the fields sent change: the persona given first is kept.
+    assert [(one.id, one.name, one.persona) for one in listed.call_actors] == [
+        ("nearby", "Rowan", {"gender": "female"})
     ]
     assert (
         said(add, _ON_A_PAGE)[0]
         and "channel 'page_content' is not one of" in said(add, _ON_A_PAGE)[1]
     )
-    assert "an id, a name and a role" in said(add, {**_NEARBY, "role": ""})[1]
+    assert "needs a role" in said(add, {**_NEARBY, "id": "other", "role": ""})[1]
     assert (
         "persona is named 'Sam'"
-        in said(add, {**_NEARBY, "persona": {"name": "Sam"}})[1]
+        in said(add, {**_NEARBY, "id": "other", "persona": {"name": "Sam"}})[1]
     )
-    assert [one.id for one in load_sub_actors(tmp_path).sub_actors] == ["nearby"]
+    assert [one.id for one in load_call_actors(tmp_path).call_actors] == ["nearby"]
 
     (tmp_path / "scenarios" / "uses-it").mkdir(parents=True)
     (tmp_path / "scenarios" / "uses-it" / "scenario.json").write_text(
         json.dumps(
-            {"name": "uses-it", "sub_actors": [{"id": "nearby", "instruction": "x"}]}
+            {"name": "uses-it", "actors": [{"id": "nearby", "instruction": "x"}]}
         )
     )
     refused, text = said(drop, {"id": "nearby"})
@@ -9536,17 +9537,17 @@ def test_the_list_keeps_one_entry_per_sub_actor_and_refuses_what_no_run_can_deli
         json.dumps({"name": "uses-it"})
     )
     assert said(drop, {"id": "nearby"})[0] is False
-    assert load_sub_actors(tmp_path).sub_actors == []
+    assert load_call_actors(tmp_path).call_actors == []
 
 
-def test_a_scenario_keeps_its_sub_actors_and_one_without_is_written_as_before(
+def test_a_scenario_keeps_its_call_actors_and_one_without_is_written_as_before(
     tmp_path, monkeypatch
 ):
     from fi.alk.harness.scenario_tools import accept_scenario
-    from fi.alk.harness.sub_actor import save_sub_actors
+    from fi.alk.harness.call_actor import save_call_actors
 
     root, _contract_, catalogue = _built_environment(tmp_path)
-    save_sub_actors(root, _listed(_SECOND))
+    save_call_actors(root, _listed(_SECOND))
     included = [
         {
             "id": "second",
@@ -9562,35 +9563,35 @@ def test_a_scenario_keeps_its_sub_actors_and_one_without_is_written_as_before(
             catalogue=catalogue,
             kept=[],
             spoken=True,
-            sub_actor_list=_listed(_SECOND),
+            call_actor_list=_listed(_SECOND),
             tools={"add", "lst"},
         )
 
-    monkeypatch.delenv("HARNESS_SUB_ACTORS", raising=False)
-    off = submit(_delta(sub_actors=included))
+    monkeypatch.delenv("HARNESS_ACTORS", raising=False)
+    off = submit(_delta(actors=included))
     assert (
         off.get("is_error")
-        and "sub-actors are switched off" in off["content"][0]["text"]
+        and "actors are switched off" in off["content"][0]["text"]
     )
 
-    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
-    kept = submit(_delta(sub_actors=included))
+    monkeypatch.setenv("HARNESS_ACTORS", "1")
+    kept = submit(_delta(actors=included))
     assert not kept.get("is_error"), kept
     written = json.loads(
         (root / "scenarios" / "adds-a-big-mac" / "scenario.json").read_text()
     )
-    assert written["sub_actors"] == [
-        {**included[0], "trigger": {"kind": "on_tool", "tool": "add"}}
-    ]
+    [entry] = written["actors"]
+    assert (entry["id"], entry["instruction"]) == ("second", included[0]["instruction"])
+    assert entry["trigger"]["kind"] == "on_tool" and entry["trigger"]["tool"] == "add"
 
     plain = submit(_delta(name="adds-another"))
     assert not plain.get("is_error"), plain
-    assert "sub_actors" not in json.loads(
+    assert "actors" not in json.loads(
         (root / "scenarios" / "adds-another" / "scenario.json").read_text()
     )
 
 
-def test_sub_actor_tools_and_fields_are_offered_only_when_switched_on(
+def test_call_actor_tools_and_fields_are_offered_only_when_switched_on(
     tmp_path, monkeypatch
 ):
     from fi.alk.harness.scenario_tools import scenario_tools
@@ -9607,9 +9608,9 @@ def test_sub_actor_tools_and_fields_are_offered_only_when_switched_on(
             contract, tmp_path / "w", external_runtime=True
         )
         return (
-            "sub_actors" in submit.input_schema["properties"],
-            "sub_actor" in goal.input_schema["properties"],
-            {"add_sub_actor", "drop_sub_actor"}
+            "actors" in submit.input_schema["properties"],
+            "actor" in goal.input_schema["properties"],
+            {"add_actor", "drop_actor"}
             <= {one.name for one in world_server.tools},
             any(
                 words in json.dumps(submit.input_schema)
@@ -9617,44 +9618,44 @@ def test_sub_actor_tools_and_fields_are_offered_only_when_switched_on(
             ),
         )
 
-    monkeypatch.delenv("HARNESS_SUB_ACTORS", raising=False)
+    monkeypatch.delenv("HARNESS_ACTORS", raising=False)
     assert offered() == (False, False, False, False)
-    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
-    # A sub-goal is never about a sub-actor, so add_sub_goal never offers one.
-    assert offered() == (True, False, True, True)
+    monkeypatch.setenv("HARNESS_ACTORS", "1")
+    # A sub-goal may name the actor it is about (plan #76 s8), offered only while actors are on.
+    assert offered() == (True, True, True, True)
 
 
-def test_a_sub_actor_id_is_one_every_part_of_the_platform_can_address():
-    from fi.alk.harness.sub_actor import SubActor, entry_problems
+def test_a_actor_id_is_one_every_part_of_the_platform_can_address():
+    from fi.alk.harness.call_actor import CallActor, entry_problems
 
-    assert entry_problems(SubActor.model_validate(_SECOND), modality="voice") == []
+    assert entry_problems(CallActor.model_validate(_SECOND), modality="voice") == []
     wrong = entry_problems(
-        SubActor.model_validate({**_SECOND, "id": "Front-Desk"}), modality="voice"
+        CallActor.model_validate({**_SECOND, "id": "Front-Desk"}), modality="voice"
     )
     assert wrong == [
         "id 'Front-Desk' must be 1 to 64 lowercase letters, digits or underscores"
     ]
 
 
-def test_a_sub_actor_scenarios_include_keeps_its_channel(tmp_path, monkeypatch):
+def test_a_call_actor_scenarios_include_keeps_its_channel(tmp_path, monkeypatch):
     import asyncio
 
-    from fi.alk.harness.sub_actor import load_sub_actors, save_sub_actors
+    from fi.alk.harness.call_actor import load_call_actors, save_call_actors
     from fi.alk.harness.world.tools import world_tools
 
     _root, contract, _catalogue = _built_environment(tmp_path)
     contract.modality = "voice"
     destination = tmp_path / "w"
-    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
-    save_sub_actors(destination, _listed(_SECOND))
+    monkeypatch.setenv("HARNESS_ACTORS", "1")
+    save_call_actors(destination, _listed(_SECOND))
     server, _world = world_tools(contract, destination, external_runtime=True)
-    add = {one.name: one.handler for one in server.tools}["add_sub_actor"]
+    add = {one.name: one.handler for one in server.tools}["add_actor"]
     used = destination / "scenarios" / "one" / "scenario.json"
     used.parent.mkdir(parents=True, exist_ok=True)
-    used.write_text(json.dumps({"name": "one", "sub_actors": [{"id": "second"}]}))
+    used.write_text(json.dumps({"name": "one", "actors": [{"id": "second"}]}))
     moved = {**_SECOND, "channel": "audio_mix"}
     assert "Not changed" in asyncio.run(add(moved))["content"][0]["text"]
-    assert load_sub_actors(destination).get("second").channel == "audio_handoff"
+    assert load_call_actors(destination).get("second").channel == "audio_handoff"
     assert (
         asyncio.run(add({**_SECOND, "role": "someone close to the person"})).get(
             "is_error"
@@ -9663,13 +9664,13 @@ def test_a_sub_actor_scenarios_include_keeps_its_channel(tmp_path, monkeypatch):
     )
     used.unlink()
     asyncio.run(add(moved))
-    assert load_sub_actors(destination).get("second").channel == "audio_mix"
+    assert load_call_actors(destination).get("second").channel == "audio_mix"
 
 
-def test_check_world_says_when_the_list_of_sub_actors_is_empty(tmp_path, monkeypatch):
+def test_check_world_says_when_the_list_of_call_actors_is_empty(tmp_path, monkeypatch):
     import asyncio
 
-    from fi.alk.harness.sub_actor import save_sub_actors
+    from fi.alk.harness.call_actor import save_call_actors
     from fi.alk.harness.world.tools import world_tools
 
     _root, contract, _catalogue = _built_environment(tmp_path)
@@ -9681,25 +9682,25 @@ def test_check_world_says_when_the_list_of_sub_actors_is_empty(tmp_path, monkeyp
         tools = {one.name: one.handler for one in server.tools}
         return asyncio.run(tools["check_world"]({}))["content"][0]["text"]
 
-    monkeypatch.delenv("HARNESS_SUB_ACTORS", raising=False)
-    assert "No sub-actors on the list yet" not in said()
-    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
-    assert "No sub-actors on the list yet" in said()
-    save_sub_actors(destination, _listed(_SECOND))
-    assert "No sub-actors on the list yet" not in said()
+    monkeypatch.delenv("HARNESS_ACTORS", raising=False)
+    assert "No actor speaks on calls yet" not in said()
+    monkeypatch.setenv("HARNESS_ACTORS", "1")
+    assert "No actor speaks on calls yet" in said()
+    save_call_actors(destination, _listed(_SECOND))
+    assert "No actor speaks on calls yet" not in said()
 
 
-def test_the_coverage_plan_and_the_world_view_name_the_environment_s_sub_actors(
+def test_the_coverage_plan_and_the_world_view_name_the_environment_s_call_actors(
     tmp_path, monkeypatch
 ):
     import asyncio
 
     from fi.alk.harness.scenario_tools import CANONICAL_AXES, scenario_tools
-    from fi.alk.harness.sub_actor import save_sub_actors
+    from fi.alk.harness.call_actor import save_call_actors
 
     root, contract, _catalogue = _built_environment(tmp_path)
     contract.modality = "voice"
-    save_sub_actors(root, _listed(_SECOND))
+    save_call_actors(root, _listed(_SECOND))
 
     def replies(levels):
         server, _kept = scenario_tools(contract, root, root, wanted=2)
@@ -9710,35 +9711,32 @@ def test_the_coverage_plan_and_the_world_view_name_the_environment_s_sub_actors(
         seen = asyncio.run(tools["inspect_world"]({}))["content"][0]["text"]
         return aimed, seen
 
-    monkeypatch.delenv("HARNESS_SUB_ACTORS", raising=False)
+    monkeypatch.delenv("HARNESS_ACTORS", raising=False)
     aimed, seen = replies(["quiet_line"])
     assert "second: Rowan" not in aimed and "second: Rowan" not in seen
-    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+    monkeypatch.setenv("HARNESS_ACTORS", "1")
     aimed, seen = replies(["quiet_line"])
     assert (
         "no level is named for them yet" in aimed
         and "- second: Rowan (someone who takes the phone), audio_handoff: someone who takes the phone from the person"
         in aimed
     )
-    assert (
-        "SUB-ACTORS a scenario can include (the person's side, not the person):\n- second: Rowan"
-        in seen
-    )
+    assert "  second: Rowan, someone who takes the phone; speaks on calls (audio_handoff)" in seen
     aimed, _seen = replies(["quiet_line", "second"])
     assert "no level is named" not in aimed
 
 
-def test_editing_a_scenario_written_before_sub_actors_existed_is_never_refused_for_the_share(
+def test_editing_a_scenario_written_before_call_actors_existed_is_never_refused_for_the_share(
     tmp_path, monkeypatch
 ):
     import asyncio
 
     from fi.alk.harness.scenario_tools import scenario_tools
-    from fi.alk.harness.sub_actor import save_sub_actors
+    from fi.alk.harness.call_actor import save_call_actors
 
     root, contract, _catalogue = _built_environment(tmp_path)
     voice = contract.model_copy(update={"modality": "voice"})
-    monkeypatch.delenv("HARNESS_SUB_ACTORS", raising=False)
+    monkeypatch.delenv("HARNESS_ACTORS", raising=False)
     server, kept = scenario_tools(voice, root, root, wanted=4)
     submit = next(one for one in server.tools if one.name == "submit_scenario")
     persona = {
@@ -9762,8 +9760,8 @@ def test_editing_a_scenario_written_before_sub_actors_existed_is_never_refused_f
         )
         assert not said.get("is_error"), said
 
-    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
-    save_sub_actors(root, _listed(_SECOND))
+    monkeypatch.setenv("HARNESS_ACTORS", "1")
+    save_call_actors(root, _listed(_SECOND))
     server, kept = scenario_tools(voice, root, root, wanted=4)
     edit = next(one for one in server.tools if one.name == "edit_scenario")
     said = asyncio.run(
@@ -9775,30 +9773,30 @@ def test_editing_a_scenario_written_before_sub_actors_existed_is_never_refused_f
     assert kept[0].persona.name == "Meera Iyer"
 
 
-def test_the_person_s_instruction_never_names_a_sub_actor(monkeypatch):
+def test_the_person_s_instruction_never_names_a_call_actor(monkeypatch):
     from types import SimpleNamespace
 
     from fi.alk.harness import scenario_tools
 
-    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+    monkeypatch.setenv("HARNESS_ACTORS", "1")
     monkeypatch.setattr(scenario_tools, "scenario_problems", lambda *args, **kwargs: [])
     listing = _listed(_SECOND)
 
     def problems(instruction):
         scenario = SimpleNamespace(
-            sub_actors=[SimpleNamespace(id="second")],
+            actors=[SimpleNamespace(id="second", instruction="x", trigger=None)],
             instruction=instruction,
             persona=None,
             call_direction="",
         )
-        return scenario_tools._sub_actors_that_cannot_run(
+        return scenario_tools._call_actors_that_cannot_run(
             scenario, listing, None, True, set()
         )
 
     assert problems(
         "Ask for two tickets. Hand the phone to Rowan when the agent quotes a price."
     ) == [
-        "instruction: the person's instruction names Rowan, who is a sub-actor here. Write the person's situation "
+        "instruction: the person's instruction names Rowan, who speaks on this call. Write the person's situation "
         "as if no one else were there; the trigger brings them in and the run tells the person who is with them"
     ]
     assert problems("Ask for two tickets for the evening show.") == []
@@ -9820,46 +9818,46 @@ def test_the_person_s_instruction_never_names_a_sub_actor(monkeypatch):
         ("rowan", "Ask what rowan thinks.", True),
     ],
 )
-def test_a_sub_actor_s_name_is_found_only_as_a_name(
+def test_a_call_actor_s_name_is_found_only_as_a_name(
     monkeypatch, name, instruction, names
 ):
     from types import SimpleNamespace
 
     from fi.alk.harness import scenario_tools
 
-    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+    monkeypatch.setenv("HARNESS_ACTORS", "1")
     monkeypatch.setattr(scenario_tools, "scenario_problems", lambda *args, **kwargs: [])
     scenario = SimpleNamespace(
-        sub_actors=[SimpleNamespace(id="second")],
+        actors=[SimpleNamespace(id="second", instruction="x", trigger=None)],
         instruction=instruction,
         persona=None,
         call_direction="",
     )
     listing = _listed({**_SECOND, "name": name})
-    refused = scenario_tools._sub_actors_that_cannot_run(
+    refused = scenario_tools._call_actors_that_cannot_run(
         scenario, listing, None, True, set()
     )
     assert bool(refused) is names
 
 
-def test_a_suite_keeps_its_share_of_scenarios_with_a_sub_actor_unless_the_person_set_another():
+def test_a_suite_keeps_its_share_of_scenarios_with_a_call_actor_unless_the_person_set_another():
     from types import SimpleNamespace
 
-    from fi.alk.harness.scenario_tools import _sub_actors_short
+    from fi.alk.harness.scenario_tools import _call_actors_short
 
-    with_one = SimpleNamespace(name="a", sub_actors=[object()])
-    alone = [SimpleNamespace(name=f"p{i}", sub_actors=[]) for i in range(8)]
+    with_one = SimpleNamespace(name="a", actors=[SimpleNamespace(id="near")])
+    alone = [SimpleNamespace(name=f"p{i}", actors=[]) for i in range(8)]
     plain = {"name": "next"}
-    # 9 written of 10, one with a sub-actor; a 20% share needs 2, so the last one must include one.
-    refused = _sub_actors_short(plain, [with_one, *alone], 10, 0.2, ["near"])
+    # 9 written of 10, one with an actor; a 20% share needs 2, so the last one must include one.
+    refused = _call_actors_short(plain, [with_one, *alone], 10, 0.2, ["near"])
     assert (
         "1 of the 10 scenarios" in refused
         and "at least 2 must" in refused
         and "near" in refused
     )
     assert (
-        _sub_actors_short(
-            {**plain, "sub_actors": [{"id": "near"}]},
+        _call_actors_short(
+            {**plain, "actors": [{"id": "near"}]},
             [with_one, *alone],
             10,
             0.2,
@@ -9868,10 +9866,10 @@ def test_a_suite_keeps_its_share_of_scenarios_with_a_sub_actor_unless_the_person
         == ""
     )
     # Room left: the share can still be met by the scenarios still to come.
-    assert _sub_actors_short(plain, [with_one, *alone[:3]], 10, 0.2, ["near"]) == ""
+    assert _call_actors_short(plain, [with_one, *alone[:3]], 10, 0.2, ["near"]) == ""
     # None asked for, or nothing this agent can be reached by: no share to keep.
-    assert _sub_actors_short(plain, [with_one, *alone], 10, 0.0, ["near"]) == ""
-    assert _sub_actors_short(plain, [with_one, *alone], 10, 0.2, []) == ""
+    assert _call_actors_short(plain, [with_one, *alone], 10, 0.0, ["near"]) == ""
+    assert _call_actors_short(plain, [with_one, *alone], 10, 0.2, []) == ""
 
 
 def test_aim_for_reports_the_default_share_and_takes_the_person_s_own(
@@ -9880,13 +9878,13 @@ def test_aim_for_reports_the_default_share_and_takes_the_person_s_own(
     import asyncio
 
     from fi.alk.harness.scenario_tools import CANONICAL_AXES, scenario_tools
-    from fi.alk.harness.sub_actor import save_sub_actors
-    from fi.simulate.simulation.sub_actors import SHARE_RANGE, at_least, default_share
+    from fi.alk.harness.call_actor import save_call_actors
+    from fi.simulate.simulation.call_actors import SHARE_RANGE, at_least, default_share
 
     root, contract, _catalogue = _built_environment(tmp_path)
     contract.modality = "voice"
-    save_sub_actors(root, _listed(_SECOND))
-    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+    save_call_actors(root, _listed(_SECOND))
+    monkeypatch.setenv("HARNESS_ACTORS", "1")
     server, _kept = scenario_tools(contract, root, root, wanted=40)
     aim = next(one.handler for one in server.tools if one.name == "aim_for")
     axes = {axis: ["plain", "with_second"] for axis in CANONICAL_AXES}
@@ -9899,7 +9897,7 @@ def test_aim_for_reports_the_default_share_and_takes_the_person_s_own(
     share = default_share(str(root))
     assert SHARE_RANGE[0] <= share <= SHARE_RANGE[1]
     assert (
-        f"At least {at_least(share, 40)} of the 40 scenarios include a sub-actor"
+        f"At least {at_least(share, 40)} of the 40 scenarios include an actor"
         in said()
     )
     job = next(
@@ -9909,13 +9907,13 @@ def test_aim_for_reports_the_default_share_and_takes_the_person_s_own(
     )
     monkeypatch.setenv("ALK_HARNESS_JOB_ID", job)
     assert (
-        f"At least {at_least(default_share(job), 40)} of the 40 scenarios include a sub-actor"
+        f"At least {at_least(default_share(job), 40)} of the 40 scenarios include an actor"
         in said()
     )
     monkeypatch.delenv("ALK_HARNESS_JOB_ID")
-    assert "At least 16 of the 40" in said(sub_actor_share=40)
-    assert "No scenario includes a sub-actor, as the person asked" in said(
-        sub_actor_share=0
+    assert "At least 16 of the 40" in said(call_actor_share=40)
+    assert "No scenario includes an actor, as the person asked" in said(
+        call_actor_share=0
     )
 
 
@@ -9928,10 +9926,10 @@ def test_world_actors_are_offered_only_when_switched_on_and_kept_in_the_environm
     from fi.alk.harness.world import tools as world_tools
 
     _root, contract = _saved_world(tmp_path)
-    monkeypatch.delenv("HARNESS_SUB_ACTORS", raising=False)
+    monkeypatch.delenv("HARNESS_ACTORS", raising=False)
     server, _world = world_tools.world_tools(contract, tmp_path)
     assert "add_actor" not in _published(server)
-    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+    monkeypatch.setenv("HARNESS_ACTORS", "1")
     server, _world = world_tools.world_tools(contract, tmp_path)
     assert {"add_actor", "drop_actor"} <= set(_published(server))
 
@@ -10062,15 +10060,15 @@ def test_a_built_environment_s_chat_can_still_change_its_cast_and_nothing_else_o
 
     _root, contract = _saved_world(tmp_path)
     voice = contract.model_copy(update={"modality": "voice"})
-    monkeypatch.delenv("HARNESS_SUB_ACTORS", raising=False)
+    monkeypatch.delenv("HARNESS_ACTORS", raising=False)
     assert world_tools.actor_tools_server(voice, tmp_path) is None
-    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+    monkeypatch.setenv("HARNESS_ACTORS", "1")
     server = world_tools.actor_tools_server(voice, tmp_path)
     assert set(_published(server)) == {
         "add_actor",
         "drop_actor",
-        "add_sub_actor",
-        "drop_sub_actor",
+        "add_actor",
+        "drop_actor",
     }
 
 
@@ -10080,9 +10078,9 @@ def test_a_scenario_naming_an_actor_the_world_does_not_list_is_not_kept(
     from fi.alk.harness.actors import Actor, ActorList, save_actors
     from fi.alk.harness.scenario_tools import _actor_fields, _unlisted_actors
 
-    monkeypatch.delenv("HARNESS_SUB_ACTORS", raising=False)
+    monkeypatch.delenv("HARNESS_ACTORS", raising=False)
     assert _actor_fields() == {}
-    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+    monkeypatch.setenv("HARNESS_ACTORS", "1")
     assert "actors" in _actor_fields()
     save_actors(tmp_path, ActorList(actors=[Actor(id="reviewer", name="Robin")]))
     scenario = Scenario(
@@ -10294,7 +10292,7 @@ def test_the_writer_is_told_which_world_actors_there_are_only_when_switched_on(
             ]
         ),
     )
-    monkeypatch.delenv("HARNESS_SUB_ACTORS", raising=False)
+    monkeypatch.delenv("HARNESS_ACTORS", raising=False)
     assert "WORLD ACTORS" not in world_summary(tmp_path)
-    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+    monkeypatch.setenv("HARNESS_ACTORS", "1")
     assert "  reviewer: Robin, reviewer; may records.approve" in world_summary(tmp_path)

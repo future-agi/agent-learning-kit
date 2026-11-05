@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from fi.alk.harness.actors import (
     ACTOR_RULES_FILE,
+    Actor,
     actor_rules,
     ActorList,
     load_actors,
@@ -88,8 +89,9 @@ def test_a_sealed_bundle_carries_the_rules_its_release_checks_actors_by(tmp_path
     declared = json.loads((tmp_path / ACTOR_RULES_FILE).read_text())
     assert "solution" in declared["evaluator_only"]["scenario_fields"]
     assert declared["reserved_ids"] == ["agent"]
+    # One record for every actor: no second file, no second shape.
+    assert set(declared["records"]) == {"actors.json"}
     actor = declared["records"]["actors.json"]
-    sub_actor = declared["records"]["sub_actors.json"]
     jsonschema.validate(_REVIEWER, actor)
     partner = {
         "id": "partner",
@@ -97,14 +99,24 @@ def test_a_sealed_bundle_carries_the_rules_its_release_checks_actors_by(tmp_path
         "role": "the person's partner",
         "channel": "audio_mix",
     }
-    jsonschema.validate({**partner, "loudness_ratio": 0.5}, sub_actor)
+    jsonschema.validate({**partner, "loudness_ratio": 0.5}, actor)
     with pytest.raises(jsonschema.ValidationError):
-        jsonschema.validate({**partner, "loudness_ratio": 2}, sub_actor)
-    assert "goal" not in sub_actor["properties"]
+        jsonschema.validate({**partner, "loudness_ratio": 2}, actor)
+    # An actor speaking on the call takes the whole contract like any other.
+    jsonschema.validate(
+        {
+            **partner,
+            "goal": "Get the booking moved",
+            "parent": "caller",
+            "permitted_actions": ["crm.update"],
+            "knowledge": [{"kind": "facts", "text": "The flight is on Friday."}],
+        },
+        actor,
+    )
     # How the world names an action and which call channels exist travel with the rules too.
     assert declared["world_actions"]["route"] == "endpoint"
-    assert set(declared["channels"]) == {"audio_mix", "audio_handoff", "ivr"}
-    # A background voice left unset draws from this range; a sub-actor never shares the caller's name.
+    assert set(declared["channels"]) == {"audio_mix", "audio_handoff", "ivr", "chat_message"}
+    # A background voice left unset draws from this range; an actor never shares the caller's name.
     assert declared["loudness"] == {
         "channels": ["audio_mix"],
         "automatic": [0.333, 0.667],
@@ -135,32 +147,23 @@ _PARTNER = {
         {"channel": "carrier_pigeon"},
     ],
 )
-def test_a_sub_actor_record_this_release_refuses_is_refused_by_its_sealed_rules_too(
+def test_an_actor_record_this_release_refuses_is_refused_by_its_sealed_rules_too(
     change,
 ):
-    from fi.alk.harness.sub_actor import SubActor, entry_problems
-
     record = {**_PARTNER, **change}
-    try:
-        refused = bool(
-            entry_problems(SubActor.model_validate(record), modality="voice")
-        )
-    except ValidationError:
-        refused = True
-    assert refused
+    with pytest.raises(ValidationError):
+        Actor.model_validate(record)
     with pytest.raises(jsonschema.ValidationError):
-        jsonschema.validate(record, actor_rules()["records"]["sub_actors.json"])
+        jsonschema.validate(record, actor_rules()["records"]["actors.json"])
 
 
 def test_the_sealed_rules_say_which_agents_each_channel_reaches_and_that_a_persona_keeps_the_name():
-    from fi.alk.harness.sub_actor import SubActor, entry_problems
+    from fi.alk.harness.call_actor import CallActor, entry_problems
 
     rules = actor_rules()
     assert rules["channel_modalities"]["audio_mix"] == ["voice"]
-    assert entry_problems(SubActor.model_validate(_PARTNER), modality="chat")
+    assert entry_problems(CallActor.model_validate(_PARTNER), modality="chat")
     assert rules["equal_when_set"] == {"persona.name": "name"}
-    assert entry_problems(
-        SubActor.model_validate({**_PARTNER, "persona": {"name": "Alex"}}),
-        modality="voice",
-    )
-    jsonschema.validate(_PARTNER, rules["records"]["sub_actors.json"])
+    with pytest.raises(ValidationError, match="persona is named"):
+        Actor.model_validate({**_PARTNER, "persona": {"name": "Alex"}})
+    jsonschema.validate(_PARTNER, rules["records"]["actors.json"])

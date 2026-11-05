@@ -1,6 +1,6 @@
-"""Sub-actors: people on the person's side who are not the person.
+"""Actors: people on the person's side who are not the person.
 
-The environment keeps one list of who might be around its users (`sub_actors.json`, beside the
+The environment keeps one list of who might be around its users (`actors.json`, beside the
 sub-goal list): each with a name, role, channel and persona, so the same person sounds the same in
 every scenario. A scenario that includes one names its id and writes what that person does in this
 scenario and when they enter.
@@ -16,23 +16,22 @@ from typing import Any, Callable
 
 from pydantic import BaseModel, Field, model_serializer, model_validator
 
-from fi.simulate.simulation.sub_actors import CHANNELS, TRIGGERS
+from fi.simulate.simulation.call_actors import CHANNELS, TRIGGERS
 
-SUB_ACTORS_FILE = "sub_actors.json"
-SWITCH = "HARNESS_SUB_ACTORS"
-# A name and a role are one-line labels, for actors and sub-actors alike.
+SWITCH = "HARNESS_ACTORS"
+# A name and a role are one-line labels.
 NAME_MAX_LENGTH = 80
 ROLE_MAX_LENGTH = 160
 # An id every part of the platform can address.
 ID_PATTERN = r"[a-z0-9_]{1,64}"
 
 
-def sub_actors_enabled() -> bool:
-    """Whether this sandbox may build or run sub-actors. Off unless the platform turns it on."""
+def actors_enabled() -> bool:
+    """Whether this sandbox may build or run actors. Off unless the platform turns it on."""
     return os.environ.get(SWITCH, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-class SubActor(BaseModel):
+class CallActor(BaseModel):
     """One entry of the environment's list."""
 
     id: str
@@ -46,7 +45,7 @@ class SubActor(BaseModel):
     loudness_ratio: float | None = Field(default=None, gt=0, le=1)
 
     @model_validator(mode="after")
-    def _a_persona_the_caller_could_have(self) -> "SubActor":
+    def _a_persona_the_caller_could_have(self) -> "CallActor":
         if self.persona:
             from .scenario import Persona
 
@@ -56,24 +55,24 @@ class SubActor(BaseModel):
         return self
 
 
-class SubActorList(BaseModel):
-    sub_actors: list[SubActor] = Field(default_factory=list)
+class CallActorList(BaseModel):
+    call_actors: list[CallActor] = Field(default_factory=list)
 
-    def get(self, sub_actor_id: str) -> SubActor | None:
-        return next((one for one in self.sub_actors if one.id == sub_actor_id), None)
+    def get(self, actor_id: str) -> CallActor | None:
+        return next((one for one in self.call_actors if one.id == actor_id), None)
 
     def summary(self) -> str:
-        """One line per sub-actor, for a writer's or a judge's brief."""
+        """One line per actor, for a writer's or a judge's brief."""
         return "\n".join(
             f"- {one.id}: {one.name}"
             + (f" ({one.role})" if one.role else "")
             + f", {one.channel}: {(CHANNELS.get(one.channel) or {}).get('about', '')}"
-            for one in self.sub_actors
+            for one in self.call_actors
         )
 
 
 class Trigger(BaseModel):
-    """When a sub-actor enters a call."""
+    """When an actor enters a call."""
 
     kind: str = "always"
     turn: int = 0
@@ -92,35 +91,93 @@ class Trigger(BaseModel):
         }
 
 
-class ScenarioSubActor(BaseModel):
-    """A sub-actor a scenario includes: what they do in it, and when they enter."""
+class ScenarioCallActor(BaseModel):
+    """An actor a scenario includes: what they do in it, and when they enter."""
 
     id: str
     instruction: str = ""
     trigger: Trigger = Field(default_factory=Trigger)
 
 
-def load_sub_actors(root: Path) -> SubActorList:
-    """The environment's list; an environment without one has none."""
-    path = Path(root) / SUB_ACTORS_FILE
-    if not path.exists():
-        return SubActorList()
-    return SubActorList.model_validate(json.loads(path.read_text(encoding="utf-8")))
+def speaking_entries(
+    entries: list[Any], listing: CallActorList, every_listed: set[str] | None = None
+) -> list[ScenarioCallActor]:
+    """A scenario's actors that speak on the call (listed with a channel), each with what it says and when. With
+    `every_listed`, the ids of the whole actor list, an entry missing from the list is kept too, so the call's record
+    can say it was not there."""
+    speaking = []
+    for entry in entries:
+        missing = every_listed is not None and entry.id not in every_listed
+        if listing.get(entry.id) is None and not missing:
+            continue
+        trigger = entry.trigger.model_dump(exclude_unset=True) if entry.trigger is not None else {}
+        speaking.append(
+            ScenarioCallActor(
+                id=entry.id,
+                instruction=entry.instruction,
+                trigger=Trigger.model_validate(
+                    {
+                        key: trigger[key]
+                        for key in ("kind", "turn", "tool", "on_call", "words", "p")
+                        if key in trigger
+                    }
+                ),
+            )
+        )
+    return speaking
 
 
-def save_sub_actors(root: Path, listing: SubActorList) -> None:
-    root = Path(root)
-    root.mkdir(parents=True, exist_ok=True)
-    (root / SUB_ACTORS_FILE).write_text(
-        listing.model_dump_json(indent=2, exclude_none=True) + "\n", encoding="utf-8"
+def load_call_actors(root: Path) -> CallActorList:
+    """The environment's actors who speak on calls (those with a channel), from its one actor list."""
+    from .actors import load_actors
+
+    return CallActorList(
+        call_actors=[
+            CallActor(
+                id=one.id,
+                name=one.name,
+                role=one.role,
+                channel=one.channel,
+                persona=one.persona,
+                loudness_ratio=one.loudness_ratio,
+            )
+            for one in load_actors(root).actors
+            if one.channel
+        ]
     )
 
 
-def entry_problems(actor: SubActor, *, modality: str) -> list[str]:
+def save_call_actors(root: Path, listing: CallActorList) -> None:
+    """Write the actors who speak on calls back into the one actor list, keeping every other field of each."""
+    from .actors import Actor, ActorList, load_actors, save_actors
+
+    root = Path(root)
+    root.mkdir(parents=True, exist_ok=True)
+    current = load_actors(root).by_id()
+    speaking = {one.id: one for one in listing.call_actors}
+    kept = [
+        one for one in current.values() if not one.channel or one.id in speaking
+    ]
+    merged = []
+    for one in kept:
+        entry = speaking.pop(one.id, None)
+        merged.append(
+            one
+            if entry is None
+            else one.model_copy(update=entry.model_dump(exclude_none=True))
+        )
+    merged += [
+        Actor.model_validate({"side": "caller", **entry.model_dump(exclude_none=True)})
+        for entry in speaking.values()
+    ]
+    save_actors(root, ActorList(actors=merged))
+
+
+def entry_problems(actor: CallActor, *, modality: str) -> list[str]:
     """Why this list entry cannot be part of this agent's environment, or nothing."""
     problems = []
     if not actor.id.strip() or not actor.name.strip() or not actor.role.strip():
-        problems.append("a sub-actor needs an id, a name and a role")
+        problems.append("an actor needs an id, a name and a role")
     elif not re.fullmatch(ID_PATTERN, actor.id):
         problems.append(
             f"id {actor.id!r} must be 1 to 64 lowercase letters, digits or underscores"
@@ -133,7 +190,7 @@ def entry_problems(actor: SubActor, *, modality: str) -> list[str]:
     named = str(actor.persona.get("name") or "").strip()
     if named and named != actor.name:
         problems.append(
-            f"its persona is named {named!r} but the sub-actor is {actor.name!r}"
+            f"its persona is named {named!r} but the actor is {actor.name!r}"
         )
     return problems
 
@@ -143,7 +200,7 @@ def record_schema() -> dict[str, Any]:
     package; whether a channel fits the agent is in `channel_modalities`."""
     from .scenario import Persona
 
-    body = SubActor.model_json_schema()
+    body = CallActor.model_json_schema()
     fields = body["properties"]
     fields["id"]["pattern"] = f"^{ID_PATTERN}$"
     for name in ("id", "name", "role"):
@@ -160,8 +217,8 @@ def channel_modalities() -> dict[str, list[str]]:
 
 
 def scenario_problems(
-    entries: list[ScenarioSubActor],
-    listing: SubActorList,
+    entries: list[ScenarioCallActor],
+    listing: CallActorList,
     *,
     modality: str,
     call_direction: str,
@@ -169,14 +226,14 @@ def scenario_problems(
     tools: set[str] | None,
     runs_in_world: Callable[[str], bool],
 ) -> list[str]:
-    """Why a scenario's sub-actors cannot run, or nothing. `person` is the simulated user's name,
-    which no sub-actor may share."""
+    """Why a scenario's actors cannot run, or nothing. `person` is the simulated user's name,
+    which no actor may share."""
     problems = []
     seen: set[str] = set()
     for entry in entries:
         actor = listing.get(entry.id)
         if actor is None:
-            known = ", ".join(one.id for one in listing.sub_actors) or "none"
+            known = ", ".join(one.id for one in listing.call_actors) or "none"
             problems.append(
                 f"{entry.id} is not on the environment's list (it has: {known})"
             )
@@ -228,7 +285,7 @@ def scenario_problems(
             problems.append(f"{entry.id}: on_keyword needs the words that bring it in")
         if trigger.kind == "probability" and not 0 < trigger.p <= 1:
             problems.append(f"{entry.id}: probability needs p above 0 and at most 1")
-    return ["sub_actors: " + problem for problem in problems]
+    return ["actors: " + problem for problem in problems]
 
 
 def logged_tool_name(contract: dict[str, Any], tool: str) -> str:
@@ -247,10 +304,8 @@ def logged_tool_name(contract: dict[str, Any], tool: str) -> str:
     return tool
 
 
-def scenarios_using(
-    destination: Path, sub_actor_id: str, listed_in: str = "sub_actors"
-) -> list[str]:
-    """The written scenarios that include this sub-actor, or this world actor when `listed_in` is `actors`."""
+def scenarios_using(destination: Path, actor_id: str) -> list[str]:
+    """The written scenarios that include this actor."""
     found = []
     for document in sorted((Path(destination) / "scenarios").glob("*/scenario.json")):
         try:
@@ -258,8 +313,7 @@ def scenarios_using(
         except (OSError, ValueError):
             continue
         if any(
-            (one or {}).get("id") == sub_actor_id
-            for one in body.get(listed_in) or []
+            (one or {}).get("id") == actor_id for one in body.get("actors") or []
         ):
             found.append(document.parent.name)
     return found

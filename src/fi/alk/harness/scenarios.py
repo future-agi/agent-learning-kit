@@ -40,7 +40,7 @@ from .config import (
 from .contract import AgentContract
 from .job import HarnessJob
 from .poc_guest_booking import guest_booking_pin_guidance, guest_booking_pin_scenario_problem
-from .sub_actor import sub_actors_enabled
+from .call_actor import actors_enabled
 from .scenario import Scenario, used_keys, voicemail_enabled, with_unique_keys
 from .scenario_tools import (
     SCENARIO_SERVER,
@@ -125,7 +125,7 @@ def writer_worker(
                 + discovered_skills(
                     modality=contract.modality,
                     voicemail="on" if voicemail_enabled() else "off",
-                    actors="on" if sub_actors_enabled() else "off",
+                    actors="on" if actors_enabled() else "off",
                     conversational="yes" if contract.conversational else "no",
                 )
                 + (
@@ -194,7 +194,7 @@ def writer_worker(
                 "  - an instruction that is a circumstance the person is living through, not a "
                 "script of lines to say or of how to react to what the agent does: never when they "
                 "give in, cooperate, acknowledge or hang up\n"
-                "  - where a sub-actor is included, an instruction for them that names no moment, event or "
+                "  - where an actor is included, an instruction for them that names no moment, event or "
                 "turn, since the trigger alone decides when, and only voices a concern of their own, never "
                 "asking for, setting a condition on, confirming or deciding the person's request\n"
                 "  - a setup that makes true whatever the instruction presumes, and a ready "
@@ -295,7 +295,7 @@ def open_stage(
             + discovered_skills(
                 modality=contract.modality,
                 voicemail="on" if voicemail_enabled() else "off",
-                actors="on" if sub_actors_enabled() else "off",
+                actors="on" if actors_enabled() else "off",
                 conversational="yes" if contract.conversational else "no",
             )
             + (
@@ -786,7 +786,7 @@ def brief_for(
         "  - an instruction that is a circumstance the person is living through, not a script "
         "of lines to say or of how to react to what the agent does: never when they give in, "
         "cooperate, acknowledge or hang up\n"
-        "  - where a sub-actor is included, an instruction for them that names no moment, event or "
+        "  - where an actor is included, an instruction for them that names no moment, event or "
         "turn, since the trigger alone decides when, and only voices a concern of their own, never "
         "asking for, setting a condition on, confirming or deciding the person's request\n"
         "  - a whole task with something at stake for the person\n"
@@ -862,7 +862,7 @@ async def _write_slice(
             + discovered_skills(
                 modality=contract.modality,
                 voicemail="on" if voicemail_enabled() else "off",
-                actors="on" if sub_actors_enabled() else "off",
+                actors="on" if actors_enabled() else "off",
             )
             + f"\n\n## Your slice\n\nYou are writing only: {mine.named()}"
         ),

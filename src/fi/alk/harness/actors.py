@@ -11,14 +11,16 @@ import json
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from .sub_actor import NAME_MAX_LENGTH, ROLE_MAX_LENGTH, SUB_ACTORS_FILE
+from .call_actor import NAME_MAX_LENGTH, ROLE_MAX_LENGTH
 
 ACTORS_FILE = "actors.json"
 ACTORS_SCHEMA = "futureagi.actors.v1"
 # The agent under test in the action log; no actor may take its id.
 AGENT = "agent"
+# The environment's caller, an actor like any other; each scenario still writes its persona for itself.
+CALLER = "caller"
 
 
 class Constraints(BaseModel):
@@ -85,6 +87,9 @@ class Actor(BaseModel):
     identities: dict[str, str] = Field(default_factory=dict)
     on_behalf_of: str | None = None
     activation: Activation | None = None
+    # How the actor is heard or seen on a call when it speaks in one: beside the person, taking over from them, or
+    # answering before them. Empty: it does not speak on calls, it acts through the world.
+    channel: str | None = None
     loudness_ratio: float | None = Field(default=None, gt=0, le=1)
     # Who last set the record and each field; written by the platform, never taken from a client.
     provenance: dict[str, Any] = Field(default_factory=dict)
@@ -95,6 +100,30 @@ class Actor(BaseModel):
         if value == AGENT:
             raise ValueError(f"{AGENT!r} is the agent under test, never an actor")
         return value
+
+    @model_validator(mode="after")
+    def _one_contract(self) -> "Actor":
+        """Every actor is checked the same way; one that speaks on calls also needs a known channel and a role."""
+        from fi.simulate.simulation.call_actors import CHANNELS
+
+        from .scenario import Persona
+
+        if self.persona:
+            Persona.model_validate(self.persona)
+            named = str(self.persona.get("name") or "").strip()
+            if named and named != self.name:
+                raise ValueError(f"its persona is named {named!r} but the actor is {self.name!r}")
+        hidden = set(EVALUATOR_ONLY["files"])
+        for one in self.knowledge:
+            named = [str(path) for path in one.get("paths") or []] if one.get("kind") == "files" else []
+            if any(Path(path).name in hidden for path in named):
+                raise ValueError("an actor never sees what only the evaluator reads: " + ", ".join(sorted(hidden)))
+        if self.channel is not None:
+            if self.channel not in CHANNELS:
+                raise ValueError(f"channel {self.channel!r} is not one of {sorted(CHANNELS)}")
+            if not self.role.strip():
+                raise ValueError("an actor who speaks on calls needs a role: who they are to the person")
+        return self
 
 
 class ActorList(BaseModel):
@@ -145,13 +174,22 @@ class Trigger(BaseModel):
     # A misspelt field would otherwise leave an action firing at the start of the call.
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["always", "after_seconds", "on_tool", "contacted", "probability"] = (
-        "always"
-    )
+    kind: Literal[
+        "always",
+        "after_seconds",
+        "on_tool",
+        "contacted",
+        "probability",
+        "mid_journey",
+        "on_keyword",
+    ] = "always"
     seconds: float = Field(default=0.0, ge=0)
     tool: str = ""
     on_call: int = Field(default=1, ge=1)
     p: float = Field(default=1.0, ge=0, le=1)
+    # mid_journey: the person's turn from which the actor may speak; on_keyword: the words that bring it in.
+    turn: int = Field(default=0, ge=0)
+    words: list[str] = Field(default_factory=list)
 
 
 class ScheduledAction(BaseModel):
@@ -161,8 +199,8 @@ class ScheduledAction(BaseModel):
 
 
 class ScenarioActor(BaseModel):
-    """An actor in one scenario: what it is told to do there, what it knows there, when it comes in, and the actions
-    it takes, in order."""
+    """An actor in one scenario: what it says there and when it comes in to say it (for an actor that speaks on
+    calls), what it knows there, and the actions it takes in the world, in order."""
 
     id: str
     instruction: str = ""
@@ -291,12 +329,102 @@ REFERENCES = {
 ACYCLIC = ["parent"]
 
 
+def actor_brief(
+    actor: dict[str, Any],
+    *,
+    entry: dict[str, Any] | None = None,
+    scenario: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """What an actor is given, one item per `BRIEF_INPUTS` line with its source: the one view the runtime plays from
+    (lines on a call, live turns, history) and the platform shows as what the actor sees. Evaluator-only fields are
+    never among the inputs; the caller's situation reaches anyone else only up to its details."""
+    from fi.simulate.simulation.call_actors import known_to_others
+
+    items = []
+    for source, field in BRIEF_INPUTS:
+        if source == "actor":
+            value = actor.get(field)
+        elif source == "scenario":
+            value = (entry or {}).get(field)
+        else:
+            value = (
+                known_to_others(str(scenario.get("instruction") or ""))
+                if scenario is not None and actor.get("id") != CALLER
+                else None
+            )
+        if value in (None, "", [], {}):
+            continue
+        items.append({"input": f"{source}.{field}", "value": value, "source": source})
+    return items
+
+
+def brief_text(items: list[dict[str, Any]]) -> str:
+    """An actor's brief as the lines it is given."""
+    labels = {
+        "actor.name": "You are",
+        "actor.role": "Who you are to the others",
+        "actor.persona": "How you come across",
+        "actor.goal": "What you want",
+        "actor.constraints": "What you will not do",
+        "actor.behaviour": "How you behave",
+        "actor.prompt": "Your instructions",
+        "actor.surface": "Where you act",
+        "actor.knowledge": "What you know",
+        "scenario.instruction": "What you do here",
+        "scenario.knowledge": "What you know here",
+        "caller.situation": "What is going on (the other person's situation, not yours)",
+    }
+    lines = []
+    for item in items:
+        value = item["value"]
+        if item["input"] in ("actor.knowledge", "scenario.knowledge"):
+            value = "\n".join(_knowledge_line(one) for one in value)
+        elif not isinstance(value, str):
+            value = json.dumps(value, ensure_ascii=False, sort_keys=True)
+        lines.append(f"{labels.get(item['input'], item['input'])}: {value}")
+    return "\n".join(lines)
+
+
+def _knowledge_line(one: Any) -> str:
+    if not isinstance(one, dict):
+        return f"- {one}"
+    kind = one.get("kind")
+    if kind == "facts":
+        return f"- {one.get('text') or ''}"
+    if kind == "files":
+        return "- You can read these files: " + ", ".join(map(str, one.get("paths") or []))
+    if kind == "records":
+        where = f" where {one['where']}" if one.get("where") else ""
+        return f"- You can read the {one.get('collection') or 'records'} records in {one.get('store') or 'the world'}{where}"
+    return "- " + json.dumps(one, ensure_ascii=False, sort_keys=True)
+
+
+def with_caller_actor(doc: dict[str, Any], root: Path) -> dict[str, Any]:
+    """A scenario as the caller plays it, when the environment lists the caller as an actor: its persona under the
+    scenario's own, and its goal, constraints, behaviour and knowledge after the scenario's instruction, so they are
+    the caller's alone (anyone else is given the situation only up to the caller's details)."""
+    caller = load_actors(root).by_id().get(CALLER)
+    if caller is None:
+        return doc
+    own = [
+        item
+        for item in actor_brief(caller.model_dump(exclude_none=True))
+        if item["input"] in ("actor.goal", "actor.constraints", "actor.behaviour", "actor.knowledge", "actor.prompt")
+    ]
+    instruction = str(doc.get("instruction") or "")
+    return {
+        **doc,
+        "persona": {**caller.persona, **(doc.get("persona") or {})},
+        "instruction": instruction + ("\n\n" + brief_text(own) if own else ""),
+    }
+
+
 def actor_rules() -> dict[str, Any]:
     """Everything this release decides about actors, sealed into each bundle so the platform reads the rules of the
     release that built it instead of keeping its own copy."""
-    from fi.simulate.simulation.sub_actors import CHANNELS, DETAILS_MARK, LOUDNESS_RANGE
+    from fi.simulate.simulation.call_actors import CHANNELS, DETAILS_MARK, LOUDNESS_RANGE
 
-    from .sub_actor import channel_modalities, record_schema
+    from .call_actor import channel_modalities
 
     return {
         "schema": ACTOR_RULES_SCHEMA,
@@ -315,28 +443,45 @@ def actor_rules() -> dict[str, Any]:
             "channels": ["audio_mix"],
             "automatic": [round(LOUDNESS_RANGE[0], 3), round(LOUDNESS_RANGE[1], 3)],
         },
-        # Fields of a sub-actor that may never equal the caller's in a scenario that includes it.
+        # Fields of an actor speaking on a call that may never equal the caller's in a scenario that includes it.
         "distinct_from_caller": ["name"],
-        # The call channels a sub-actor can speak on, each with what it does.
+        # The ways an actor can speak on a call, each with what it does.
         "channels": {
             name: str(one.get("about") or "") for name, one in CHANNELS.items()
         },
-        # The kinds of agent each call channel reaches; a sub-actor on a channel that does not reach its agent is refused.
+        # The kinds of agent each channel reaches; an actor on a channel that does not reach its agent is refused.
         "channel_modalities": channel_modalities(),
-        # Fields of a sub-actor that, when set, equal another of its fields.
+        # Fields of an actor that, when set, equal another of its fields.
         "equal_when_set": {"persona.name": "name"},
         # The format tag each actor file is written with.
         "formats": {ACTORS_FILE: ACTORS_SCHEMA},
-        "records": {
-            ACTORS_FILE: Actor.model_json_schema(),
-            SUB_ACTORS_FILE: record_schema(),
-        },
+        "records": {ACTORS_FILE: actor_record_schema()},
     }
+
+
+def actor_record_schema() -> dict[str, Any]:
+    """An actor's JSON schema, with the channels an actor can speak on named."""
+    from fi.simulate.simulation.call_actors import CHANNELS
+
+    from .scenario import Persona
+
+    body = Actor.model_json_schema()
+    fields = body["properties"]
+    fields["channel"] = {
+        "anyOf": [{"type": "string", "enum": sorted(CHANNELS)}, {"type": "null"}],
+        "default": None,
+    }
+    persona = Persona.model_json_schema()
+    fields["persona"] = {**persona, "additionalProperties": True}
+    # One that speaks on calls says who they are to the person.
+    body["if"] = {"properties": {"channel": {"type": "string"}}, "required": ["channel"]}
+    body["then"] = {"properties": {"role": {"minLength": 1}}, "required": ["role"]}
+    return body
 
 
 def actor_input_schema() -> dict[str, Any]:
     """The builder chat's `add_actor` input: every field of the record, from the model, except who last set it."""
-    body = Actor.model_json_schema()
+    body = actor_record_schema()
     body["properties"].pop("provenance", None)
     body["required"] = ["id", "name"]
     return body

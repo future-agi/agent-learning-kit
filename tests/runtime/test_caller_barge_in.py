@@ -494,7 +494,7 @@ def test_the_shared_seeding_keeps_every_barge_in_draw() -> None:
     import hashlib
     import random
 
-    from fi.simulate.simulation.sub_actors import seeded
+    from fi.simulate.simulation.call_actors import seeded
 
     for run_id in ("run-1", "", "multi|part"):
         before = random.Random(

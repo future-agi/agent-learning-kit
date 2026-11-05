@@ -27,7 +27,6 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .actors import ScenarioActor
 from .catalogue import Catalogue
-from .sub_actor import ScenarioSubActor
 from .simulator import variables_in
 
 
@@ -313,7 +312,8 @@ class Scenario(BaseModel):
     # Which entries of the shared catalogue must hold. Named, not restated, so results roll up
     # across the suite: the same sub-goal failing in seven of twelve scenarios is one sentence.
     sub_goals: list[str] = Field(default_factory=list)
-    # World actors in this scenario and the actions each takes here, by id from `actors.json`.
+    # The environment's actors this scenario includes, by id from `actors.json`: what each says here and when (an
+    # actor that speaks on calls) and the actions each takes in the world. Empty: the person alone.
     actors: list[ScenarioActor] = Field(default_factory=list)
 
     max_turns: int = 10
@@ -323,10 +323,6 @@ class Scenario(BaseModel):
     # the name, so a suite still covers both conditions but the same suite decides the same way
     # twice; a coin flip here made a seeded run unreproducible.
     background_noise: bool | str = ""
-
-    # The environment's sub-actors this scenario includes, each with what they do here and when they
-    # enter. Empty: the person alone.
-    sub_actors: list[ScenarioSubActor] = Field(default_factory=list)
 
     # Whether the agent placed this call or answered it. Voice only: a chat is always started by
     # the person, so it stays inbound. An outbound caller has no opening request to make, which is

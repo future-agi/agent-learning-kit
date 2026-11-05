@@ -46,10 +46,10 @@ from typing import Any, Awaitable, Callable, Protocol, Sequence
 
 from . import observability
 from .job import FailureDomain, HarnessStage
-from .sub_actor import sub_actors_enabled
+from .call_actor import actors_enabled
 from .checks import reference_of, takes_reference
 from .joint_judge import OFF_SCRIPT
-from .judge import verdict_named
+from .judge import INCONCLUSIVE, NOT_APPLICABLE, verdict_named
 from .judge import judge_sub_goal as _judge
 from .outbound import (
     HostedAttemptSupersededError,
@@ -254,8 +254,8 @@ class CallOutcome:
     target_metrics: dict[str, Any] | None = None
     # A local path the judge can play; the artifacts above are ids the sandbox cannot read back.
     recording: str | None = None
-    # Per sub-actor in the call: whether it was triggered, how much it delivered, and why any was dropped.
-    sub_actors: tuple[dict[str, Any], ...] = ()
+    # Per actor in the call: whether it was triggered, how much it delivered, and why any was dropped.
+    call_actors: tuple[dict[str, Any], ...] = ()
 
 
 class CallAborted(RuntimeError):
@@ -419,7 +419,7 @@ _CODE_DOMAIN: dict[str, FailureDomain] = {
     "judge_undecided": FailureDomain.SIMULATOR,
     "caller_off_script": FailureDomain.SIMULATOR,
     "evidence_missing": FailureDomain.SIMULATOR,
-    "sub_actor_missing": FailureDomain.SIMULATOR,
+    "actor_missing": FailureDomain.SIMULATOR,
     "world_usage": FailureDomain.SIMULATOR,
     "world_unavailable": FailureDomain.ENVIRONMENT,
     "state_too_large": FailureDomain.SIMULATOR,
@@ -1531,27 +1531,45 @@ class RunResult:
     fenced: BaseException | None = None
 
 
-def _sub_actors_missing(scenario: Scenario, outcome: CallOutcome) -> str:
-    """Each of the scenario's sub-actors that never reached the agent, and why: not_triggered or
+def _call_actors_missing(scenario: Scenario, outcome: CallOutcome) -> str:
+    """Each of the scenario's actors who speak on the call that never reached the agent, and why: not_triggered or
     not_delivered. One a `probability` draw left out is absent by design and not counted."""
-    reports = {str(one.get("sub_actor")): one for one in outcome.sub_actors}
+    reports = {str(one.get("actor")): one for one in outcome.call_actors}
+    # An actor a sub-goal is about is settled on that sub-goal instead.
+    graded = {str(getattr(goal, "actor", "") or "") for goal in scenario.sub_goals}
     missing = []
-    for sub_actor_id in getattr(scenario, "sub_actors", ()):
-        report = reports.get(sub_actor_id) or {}
+    for actor_id in getattr(scenario, "speaking_actors", ()):
+        if actor_id in graded:
+            continue
+        report = reports.get(actor_id) or {}
         if not report.get("delivered") and report.get("drawn", True):
             why = "not_delivered" if report.get("triggered") else "not_triggered"
-            missing.append(f"{report.get('name') or sub_actor_id} ({why})")
+            missing.append(f"{report.get('name') or actor_id} ({why})")
     return ", ".join(missing)
 
 
+def _about_an_actor(goal: Any, result: SubGoalResult, outcome: CallOutcome) -> SubGoalResult:
+    """A sub-goal about an actor, as plan #76 s8 settles it: not applicable when the actor never came in (a
+    `probability` draw that left it out included), inconclusive when it came in and never reached the agent, else as
+    graded."""
+    actor_id = str(getattr(goal, "actor", "") or "")
+    if not actor_id:
+        return result
+    report = next((one for one in outcome.call_actors if str(one.get("actor")) == actor_id), {})
+    name = report.get("name") or actor_id
+    if not report.get("triggered"):
+        return replace(result, held=True, reason=f"{NOT_APPLICABLE}{name} never came into this call.")
+    if not report.get("delivered"):
+        return replace(result, held=None, reason=f"{INCONCLUSIVE}{name} came in but never reached the agent.")
+    return result
+
+
 def _switched_off(scenario: Scenario) -> str:
-    """Why a scenario with sub-actors or world actors is not run while they are off, or "": running it without
-    them would look like a normal result for a test that never happened."""
-    if sub_actors_enabled():
+    """Why a scenario with actors is not run while they are off, or "": running it without them would look like a
+    normal result for a test that never happened."""
+    if actors_enabled():
         return ""
-    if getattr(scenario, "sub_actors", ()):
-        return "sub-actors are switched off"
-    return "world actors are switched off" if getattr(scenario, "actors", ()) else ""
+    return "actors are switched off" if getattr(scenario, "actors", ()) else ""
 
 
 def _skipped_receipt(scenario: Scenario) -> ResultReceipt:
@@ -2270,16 +2288,16 @@ class HostedScheduler:
         # Set the moment the call step returns, so a crash later in this method (e.g.
         # `world.read_only()` below) still reports the call that genuinely ran, not `null`.
         context.call = self._call_summary(call_outcome)
-        missing = _sub_actors_missing(scenario, call_outcome)
+        missing = _call_actors_missing(scenario, call_outcome)
         if missing:
-            # The scenario's sub-actor is part of the test: a call it never reached tested something
+            # The scenario's actor is part of the test: a call it never reached tested something
             # else, so the call is inconclusive, never a pass.
             return self._fault(
                 scenario,
                 world_index,
                 attempt,
                 _failure(
-                    "sub_actor_missing",
+                    "actor_missing",
                     f"inconclusive: did not reach the agent: {missing}",
                 ),
                 sub_goals=_unjudged(scenario.sub_goals),
@@ -2486,6 +2504,29 @@ class HostedScheduler:
                 retry=False,
             )
 
+        sub_goal_results = [
+            _about_an_actor(goal, result, call_outcome)
+            for goal, result in zip(scenario.sub_goals, sub_goal_results)
+        ]
+        unreached = [
+            result.name
+            for goal, result in zip(scenario.sub_goals, sub_goal_results)
+            if getattr(goal, "actor", "") and result.verdict == "inconclusive"
+        ]
+        if unreached:
+            return self._fault(
+                scenario,
+                world_index,
+                attempt,
+                _failure(
+                    "actor_missing",
+                    "inconclusive: an actor these sub-goals are about never reached the agent: "
+                    + ", ".join(unreached),
+                ),
+                sub_goals=tuple(sub_goal_results),
+                call=self._call_summary(call_outcome),
+                retry=False,
+            )
         # A settled `False` fails the scenario; an unsettled sub-goal makes it not decided.
         if any(result.held is False for result in sub_goal_results):
             status = "failed"

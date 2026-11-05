@@ -1,4 +1,4 @@
-"""Grading with sub-actors: what each result says, and how a sub-actor's turns read to the judge."""
+"""Grading with actors: what each result says, and how an actor's turns read to the judge."""
 
 from __future__ import annotations
 
@@ -32,15 +32,15 @@ def test_each_sub_goal_result_says_which_of_the_four_it_is(held, reason, verdict
     assert SubGoalResult("goal", held, reason, True).verdict == verdict
 
 
-def test_a_scenario_with_sub_actors_is_skipped_with_the_reason_while_they_are_off(
+def test_a_scenario_with_actors_is_skipped_with_the_reason_while_they_are_off(
     monkeypatch,
 ):
-    with_one = SimpleNamespace(scenario_key="s", scenario_id="", sub_actors=("friend",))
-    alone = SimpleNamespace(scenario_key="t", scenario_id="", sub_actors=())
-    monkeypatch.delenv("HARNESS_SUB_ACTORS", raising=False)
-    assert _skipped_receipt(with_one).reason == "sub-actors are switched off"
+    with_one = SimpleNamespace(scenario_key="s", scenario_id="", actors=("friend",))
+    alone = SimpleNamespace(scenario_key="t", scenario_id="", actors=())
+    monkeypatch.delenv("HARNESS_ACTORS", raising=False)
+    assert _skipped_receipt(with_one).reason == "actors are switched off"
     assert _skipped_receipt(alone).reason is None
-    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+    monkeypatch.setenv("HARNESS_ACTORS", "1")
     assert _skipped_receipt(with_one).reason is None
 
 
@@ -71,11 +71,11 @@ def test_a_receipt_carries_the_verdict_and_reason_only_when_sent_and_its_digest_
     before = _receipt()
     assert "verdict" not in before["sub_goals"][0] and "reason" not in before
     after = _receipt(
-        goal={"verdict": "not_applicable"}, reason="sub-actors are switched off"
+        goal={"verdict": "not_applicable"}, reason="actors are switched off"
     )
     assert (
         after["sub_goals"][0]["verdict"] == "not_applicable"
-        and after["reason"] == "sub-actors are switched off"
+        and after["reason"] == "actors are switched off"
     )
     for wire in (before, after):
         assert (
@@ -86,12 +86,12 @@ def test_a_receipt_carries_the_verdict_and_reason_only_when_sent_and_its_digest_
         )
 
 
-def test_the_judge_reads_a_sub_actor_s_turn_as_someone_other_than_the_customer():
+def test_the_judge_reads_a_call_actor_s_turn_as_someone_other_than_the_customer():
     from fi.alk.harness.judge import _transcript, describe_call
 
     messages = [
         {"role": "user", "content": "One item please"},
-        {"role": "sub_actor", "name": "Rowan", "content": "Make it two"},
+        {"role": "actor", "name": "Rowan", "content": "Make it two"},
         {"role": "assistant", "content": "One item, done."},
     ]
     assert "Rowan (not the person being served): Make it two" in _transcript(messages)
@@ -105,7 +105,8 @@ def test_the_judge_reads_a_sub_actor_s_turn_as_someone_other_than_the_customer()
     )
 
 
-def test_a_scenario_s_sub_actors_reach_the_run(tmp_path):
+def test_a_scenario_s_actors_reach_the_run_and_those_who_speak_are_known(tmp_path):
+    from fi.alk.harness.actors import ActorList, save_actors
     from fi.alk.harness.catalogue import Catalogue, SubGoal, save_catalogue
     from fi.alk.harness.folder import write_folder
     from fi.alk.harness.scenario import Scenario
@@ -120,9 +121,22 @@ def test_a_scenario_s_sub_actors_reach_the_run(tmp_path):
         scenario_key="with-a-friend",
         instruction="You want one item.",
         sub_goals=["one_item"],
-        sub_actors=[{"id": "friend", "instruction": "You want a second item."}],
-        actors=[{"id": "reviewer", "actions": [{"action": "records.approve"}]}],
+        actors=[
+            {"id": "friend", "instruction": "You want a second item."},
+            {"id": "reviewer", "actions": [{"action": "records.approve"}]},
+        ],
+    )
+    save_actors(
+        tmp_path,
+        ActorList.model_validate(
+            {
+                "actors": [
+                    {"id": "friend", "name": "Rowan", "role": "a friend", "channel": "audio_mix"},
+                    {"id": "reviewer", "name": "Robin", "permitted_actions": ["records.approve"]},
+                ]
+            }
+        ),
     )
     write_folder(scenario, catalogue, tmp_path)
     [loaded] = load_scenarios(tmp_path)
-    assert (loaded.sub_actors, loaded.actors) == (("friend",), ("reviewer",))
+    assert (loaded.actors, loaded.speaking_actors) == (("friend", "reviewer"), ("friend",))

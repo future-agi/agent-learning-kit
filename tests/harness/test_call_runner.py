@@ -1730,8 +1730,8 @@ def test_tool_trace_parsed_json_result_is_not_truncated(monkeypatch) -> None:
 
 def test_tool_trace_holds_only_the_agents_calls(monkeypatch) -> None:
     """A world actor's action shares the trace table with the agent's calls; it is never graded as the agent's,
-    and never fires a sub-actor waiting on one of the agent's tools."""
-    from fi.simulate.simulation.engines.sub_actor_voice import world_access
+    and never fires an actor waiting on one of the agent's tools."""
+    from fi.simulate.simulation.engines.call_actor_voice import world_access
 
     columns = [
         "name",
@@ -2129,18 +2129,18 @@ def test_a_tool_result_sent_as_text_is_read_back_into_its_shape():
     assert len(_structured("x" * 5000)) == 2000
 
 
-def test_a_call_keeps_who_its_sub_actors_were_and_what_happened_to_each(
+def test_a_call_keeps_who_its_call_actors_were_and_what_happened_to_each(
     tmp_path: Path, monkeypatch
 ) -> None:
-    from fi.alk.harness.sub_actor import SubActor, SubActorList, save_sub_actors
-    from fi.simulate.simulation.sub_actors import LOUDNESS_RANGE
+    from fi.alk.harness.call_actor import CallActor, CallActorList, save_call_actors
+    from fi.simulate.simulation.call_actors import LOUDNESS_RANGE
 
-    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+    monkeypatch.setenv("HARNESS_ACTORS", "1")
     _job_obj, context = _context(tmp_path=tmp_path)
     _write_scenario_doc(context.bundle_dir, scenario_key="k1")
     document = context.bundle_dir / "scenarios" / "k1" / "scenario.json"
     body = json.loads(document.read_text())
-    body["sub_actors"] = [
+    body["actors"] = [
         {
             "id": "near",
             "instruction": "You want them to hurry.",
@@ -2149,17 +2149,17 @@ def test_a_call_keeps_who_its_sub_actors_were_and_what_happened_to_each(
         {"id": "other", "instruction": "x", "trigger": {"kind": "always"}},
     ]
     document.write_text(json.dumps(body))
-    save_sub_actors(
+    save_call_actors(
         context.bundle_dir,
-        SubActorList(
-            sub_actors=[
-                SubActor(
+        CallActorList(
+            call_actors=[
+                CallActor(
                     id="near",
                     name="Rowan",
                     role="someone with the person",
                     channel="audio_mix",
                 ),
-                SubActor(
+                CallActor(
                     id="other", name="Kai", role="a neighbour", channel="audio_mix"
                 ),
             ]
@@ -2167,14 +2167,14 @@ def test_a_call_keeps_who_its_sub_actors_were_and_what_happened_to_each(
     )
     summary = [
         {
-            "sub_actor": "near",
+            "actor": "near",
             "name": "Rowan",
             "triggered": True,
             "delivered": 1,
             "dropped": [],
         }
     ]
-    events = [{"sub_actor": "near", "kind": "delivered", "text": "Hurry up"}]
+    events = [{"actor": "near", "kind": "delivered", "text": "Hurry up"}]
 
     placed = []
     # The provider has no voice left for Kai that no one else on the call has.
@@ -2190,7 +2190,7 @@ def test_a_call_keeps_who_its_sub_actors_were_and_what_happened_to_each(
     async def place_call(spec):
         placed.append(spec.model_dump_json())
         return _report(
-            result_metadata={"sub_actors": summary, "sub_actor_events": events}
+            result_metadata={"call_actors": summary, "call_actor_events": events}
         )
 
     adapter = FakeAdapter()
@@ -2200,17 +2200,17 @@ def test_a_call_keeps_who_its_sub_actors_were_and_what_happened_to_each(
         _FakeScenario("k1"),
         _runtime(metadata={"livekit_agent_name": "agent-w0"}),
     )
-    # The grader reads every sub-actor, the one that could not enter as never triggered.
-    assert outcome.sub_actors == (
+    # The grader reads every actor, the one that could not enter as never triggered.
+    assert outcome.call_actors == (
         *summary,
-        {"sub_actor": "other", "name": "Kai", "triggered": False},
+        {"actor": "other", "name": "Kai", "triggered": False},
     )
     [transcript] = [
         json.loads(data)
         for kind, _key, data in adapter.uploads
         if kind is cr.ArtifactKind.TRANSCRIPT
     ]
-    record = transcript["sub_actors"]
+    record = transcript["call_actors"]
     assert record["summary"] == summary and record["events"] == events
     resolved, other = record["resolved"]
     assert (resolved["id"], resolved["instruction"]) == (
@@ -2261,9 +2261,9 @@ def test_world_actors_act_only_when_switched_on_with_a_proxy_taking_actor_reques
         endpoints={"tool_proxy": proxy, "database": _postgres_endpoint()},
         metadata={"actor_proof_path": str(token)},
     )
-    monkeypatch.delenv("HARNESS_SUB_ACTORS", raising=False)
+    monkeypatch.delenv("HARNESS_ACTORS", raising=False)
     assert cr._actor_dispatcher(doc, bundle, ready, "t1", 60.0) is None
-    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+    monkeypatch.setenv("HARNESS_ACTORS", "1")
     assert cr._actor_dispatcher({}, bundle, ready, "t1", 60.0) is None
     assert (
         cr._actor_dispatcher(
@@ -2463,7 +2463,7 @@ def test_a_trial_s_actor_token_holds_only_while_its_call_runs(
     body["actors"] = [{"id": "reviewer", "actions": [{"action": "records.approve"}]}]
     document.write_text(json.dumps(body))
     _with_actors(context.bundle_dir)
-    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+    monkeypatch.setenv("HARNESS_ACTORS", "1")
     monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg([], ["name", "at"]))
     token = tmp_path / "w0" / "tool-proxy" / "actor-token"
     elsewhere = tmp_path / "elsewhere"
@@ -2568,7 +2568,7 @@ def test_an_actor_on_the_agent_s_tool_waits_for_the_route_the_log_records_for_it
             "actor_proof_path": str(tmp_path / "w0" / "tool-proxy" / "actor-token")
         },
     )
-    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+    monkeypatch.setenv("HARNESS_ACTORS", "1")
     dispatcher = cr._actor_dispatcher(doc, bundle, ready, "t1", 60.0)
     log = [{"name": "request_approval", "actor_id": "agent", "action_id": "a1"}]
     [(_actor, action)] = [(one[0], one[2]) for one in dispatcher.pending]

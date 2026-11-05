@@ -25,7 +25,7 @@ from typing import Any, Callable, Sequence
 
 import requests
 
-from fi.simulate.simulation.sub_actors import someone_else
+from fi.simulate.simulation.call_actors import someone_else
 
 from .backends import SessionSpec, tool, tool_server
 from .catalogue import criteria_text
@@ -570,7 +570,7 @@ _SPEAKERS = {"user": "Customer", "assistant": "Agent"}
 
 def _speaker(message: dict[str, Any]) -> str:
     role = str(message.get("role") or "")
-    if role == "sub_actor":
+    if role == "actor":
         return someone_else(str(message.get("name") or ""))
     return _SPEAKERS.get(role, role or "unknown")
 
@@ -581,7 +581,7 @@ def _others_present(messages: Sequence[Any]) -> str:
         {
             str(m.get("name") or "someone else")
             for m in messages
-            if isinstance(m, dict) and m.get("role") == "sub_actor"
+            if isinstance(m, dict) and m.get("role") == "actor"
         }
     )
     if not names:
