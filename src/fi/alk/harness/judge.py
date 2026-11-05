@@ -306,9 +306,10 @@ class CallEvidence:
 
             @tool(
                 "read_actors",
-                "Everyone else who took part: each actor's part in the call (came in, reached the agent, why not) and "
-                "every action each took in the world, with when and what the world made of it. Use it to see what the "
-                "agent was dealing with; the sub-goal still grades the agent, never an actor.",
+                "Everyone else who took part: each actor's part in the call (came in, reached the agent, why not), "
+                "every action each took in the world, with when and what the world made of it, and the brief each "
+                "played from. Use it to see what the agent was dealing with; the sub-goal still grades the agent, never "
+                "an actor.",
                 schema({}, []),
             )
             async def read_actors(args: dict[str, Any]) -> dict[str, Any]:

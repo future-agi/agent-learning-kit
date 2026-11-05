@@ -1015,3 +1015,18 @@ def test_a_speaking_actor_that_names_a_model_talks_on_it_and_is_counted_as_simul
     assert own.listeners == [("metrics_collected", collector.collect)]
     assert actor_llm({"id": "dev"}, shared, config, collector, build=Model) is shared
     assert actor_llm({"id": "ana", "model": "caller-model"}, shared, config, collector, build=Model) is shared
+
+
+def test_an_approval_that_timed_out_reads_the_fallback_as_its_decision_and_every_agent_write_after_the_request():
+    from fi.alk.harness.call_runner import approvals
+
+    log = [
+        {"action_id": "a1", "actor_id": "agent", "name": "approvals.request", "outcome": "committed", "at": 1.0},
+        {"action_id": "a2", "actor_id": "agent", "name": "orders.cancel", "outcome": "committed", "at": 5.0},
+    ]
+    decisions = [{"actor": "manager", "play": "timeout", "fallback": "decline", "outcome": "declined", "parent": "a1"}]
+    (line,) = approvals(log, decisions)
+    assert line["decision"] == {"by": "manager", "action": "timeout: decline", "outcome": "declined", "at": None}
+    # With no time for the decision, every write after the request came before it.
+    assert line["before_decision"] == [{"action": "orders.cancel", "outcome": "committed"}]
+    assert line["acted_before_decision"] is True
