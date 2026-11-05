@@ -679,11 +679,26 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
         type=Path,
         help="Directory the sealed bundle is written to in --certify-only mode",
     )
+    parser.add_argument(
+        "--read-agent-only",
+        action="store_true",
+        help="Read the agent and leave its description in --output; build nothing",
+    )
     args = parser.parse_args(argv)
     if args.certify_only:
         if args.bundle_output is None:
             parser.error("--certify-only requires --bundle-output")
         return _certify_only(args)
+    if args.read_agent_only:
+        from .agent_reading import READ_AGENT
+        from .reading_entry import run_reading_mode
+
+        return run_reading_mode(
+            READ_AGENT,
+            job_path=args.job,
+            source=args.source.resolve(),
+            output=args.output.resolve(),
+        )
 
     job = HarnessJob.model_validate(json.loads(args.job.read_text(encoding="utf-8")))
     if refuse_unusable_folder(

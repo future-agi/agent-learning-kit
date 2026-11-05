@@ -102,6 +102,8 @@ jobs:
           tests/harness/test_instrumentation_evidence.py
           tests/harness/test_agent_type_refusal.py
           tests/harness/test_executor_completed_counts.py
+          tests/harness/test_reading_entry.py
+          tests/harness/test_agent_reading.py
           tests/test_bump_deployment_values.py
           tests/test_release_workflow.py
           tests/test_release_pr_step.py

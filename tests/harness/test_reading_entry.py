@@ -1,0 +1,536 @@
+"""The shared way into a reading: what it refuses, the cost it leaves, and its time limit."""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+import pytest
+
+from fi.alk.harness import reading_entry, session, spend
+from fi.alk.harness.job import FailureDomain, HarnessFailure, HarnessJob, HarnessStage
+from fi.alk.harness.reading_entry import (
+    MESSAGE_LIMIT,
+    READING_JOB_INVALID,
+    READING_OUTPUT_NOT_EMPTY,
+    ReadingMode,
+    run_reading_mode,
+    write_reading_cost,
+    write_reading_failure,
+)
+
+_DEFAULT_SECRET_FILES = reading_entry._SECRET_FILES
+
+READ_AGENT_VALUES = {
+    "name": "read_agent",
+    "time_limit_seconds": 1980.0,
+    "timed_out_code": "agent_reading_timed_out",
+    "timed_out_retryable": False,
+    "crashed_code": "agent_reading_crashed",
+}
+FIND_AGENTS_VALUES = {
+    "name": "find_agents",
+    "time_limit_seconds": 1800.0,
+    "timed_out_code": "scan_hard_limit_reached",
+    "timed_out_retryable": False,
+    "crashed_code": "scan_crashed",
+}
+
+
+@pytest.fixture(autouse=True)
+def _fresh_state(monkeypatch, tmp_path):
+    monkeypatch.setattr(session, "STAGE_IDLE_RETRIES", session.STAGE_IDLE_RETRIES)
+    monkeypatch.delenv(spend.JOURNAL_ALIAS, raising=False)
+    # The machine's own secrets files must not decide what a test sees masked.
+    monkeypatch.setattr(reading_entry, "_SECRET_FILES", (tmp_path / "no-secrets.json",))
+    monkeypatch.setattr(reading_entry, "_secret_values", None)
+    spend._stages.clear()
+    spend.journal_to(None)
+    yield
+    spend._stages.clear()
+    spend.journal_to(None)
+
+
+@pytest.fixture(params=[READ_AGENT_VALUES, FIND_AGENTS_VALUES], ids=["read_agent", "find_agents"])
+def values(request):
+    return request.param
+
+
+def _job(source: dict | None = None) -> dict:
+    return {
+        "job_id": "job",
+        "run_id": "run",
+        "execution": "hosted",
+        "source": source
+        or {
+            "kind": "github",
+            "visibility": "public",
+            "repository": "acme/agent",
+            "commit_sha": "a" * 40,
+        },
+        "runtime": {"isolation": "dedicated_vm"},
+        "agent": {"connector": "auto"},
+    }
+
+
+class _Work:
+    """A mode's work that remembers being called; ``action`` stands in for what it does."""
+
+    def __init__(self, code: int = 0, action=None) -> None:
+        self.code = code
+        self.action = action
+        self.calls: list[tuple] = []
+
+    async def __call__(self, job, source, output) -> int:
+        self.calls.append((job, source, output))
+        if self.action is not None:
+            self.action(job, source, output)
+        return self.code
+
+
+def _accept(_parsed) -> None:
+    return None
+
+
+def _mode(values: dict, work, check_job=_accept, **overrides) -> ReadingMode:
+    return ReadingMode(check_job=check_job, work=work, **{**values, **overrides})
+
+
+def _run(mode: ReadingMode, root: Path, job_path: Path | None = None) -> int:
+    if job_path is None:
+        job_path = root / "job.json"
+        job_path.write_text(json.dumps(_job()), encoding="utf-8")
+    return run_reading_mode(
+        mode, job_path=job_path, source=root / "source", output=root / "reading"
+    )
+
+
+def _failure_in(output: Path) -> dict:
+    return json.loads((output / "failure.json").read_text(encoding="utf-8"))
+
+
+def _cost_in(output: Path) -> dict:
+    return json.loads((output / "cost.json").read_text(encoding="utf-8"))
+
+
+def _shape(failure: dict) -> dict:
+    return {key: failure[key] for key in ("domain", "stage", "code", "retryable")}
+
+
+def _refusal(code: str = "scan_job_invalid") -> HarnessFailure:
+    return HarnessFailure(
+        domain=FailureDomain.PLATFORM_SYNC,
+        stage=HarnessStage.UNDERSTANDING_AGENT,
+        code=code,
+        message="A scan reads a whole repository, not one folder of it.",
+        retryable=False,
+        details={"subfolder": "agents/support"},
+    )
+
+
+# The helper ends the process with os._exit at its limit, so those tests run it in a child.
+_CHILD = r"""
+import asyncio, json, sys, time
+config = json.loads(sys.argv[1])
+sys.path[:0] = config["sys_path"]
+from pathlib import Path
+from fi.alk.harness import reading_entry, spend
+from fi.alk.harness.reading_entry import ReadingMode, run_reading_mode
+
+reading_entry._SECRET_FILES = ()
+root = Path(config["root"])
+
+
+def broken(*_args, **_kwargs):
+    raise RuntimeError("this writer is broken")
+
+
+async def work(job, source, output):
+    if config["work"] == "returns":
+        return 0
+    if config["work"] == "records_then_blocks":
+        spend.record("read-agent", 0.21, turns=1, models={"m"})
+    if config["work"] == "breaks_the_writers_then_blocks":
+        reading_entry.write_reading_failure = broken
+        reading_entry.write_reading_cost = broken
+    await asyncio.to_thread(time.sleep, config["block_seconds"])
+    return 0
+
+
+mode = ReadingMode(check_job=lambda job: None, work=work, **config["mode"])
+(root / "started").write_text(repr(time.time()))
+code = run_reading_mode(
+    mode, job_path=root / "job.json", source=root / "source", output=root / "reading"
+)
+time.sleep(config["linger_seconds"])
+sys.exit(code)
+"""
+
+_BLOCK_SECONDS = 20.0
+
+
+def _run_in_a_child(root: Path, mode_values: dict, work: str, *, linger: float = 0.0):
+    """Returns the finished child and the seconds from the helper's start to the child's end."""
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "job.json").write_text(json.dumps(_job()), encoding="utf-8")
+    config = {
+        "sys_path": [entry for entry in sys.path if entry],
+        "root": str(root),
+        "mode": mode_values,
+        "work": work,
+        "block_seconds": _BLOCK_SECONDS,
+        "linger_seconds": linger,
+    }
+    env = {
+        **os.environ,
+        "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:9",
+        "OTEL_TRACES_EXPORTER": "none",
+    }
+    env.pop(spend.JOURNAL_ALIAS, None)
+    finished = subprocess.run(
+        [sys.executable, "-c", _CHILD, json.dumps(config)],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=_BLOCK_SECONDS + 40,
+    )
+    ended = time.time()
+    started = float((root / "started").read_text(encoding="utf-8"))
+    return finished, ended - started
+
+
+@pytest.mark.parametrize("case", ["missing", "not_json", "not_a_job", "folder_on_an_upload"])
+def test_an_unreadable_job_is_refused_before_any_work(tmp_path, values, case):
+    job_path = tmp_path / "job.json"
+    if case == "not_json":
+        job_path.write_text("{not json", encoding="utf-8")
+    elif case == "not_a_job":
+        job_path.write_text(json.dumps({"hello": "world"}), encoding="utf-8")
+    elif case == "folder_on_an_upload":
+        upload = {"kind": "archive", "archive_artifact_id": "upload-1"}
+        # Without the folder the same upload is a good job, so only the folder is refused.
+        HarnessJob.model_validate(_job(upload))
+        job_path.write_text(
+            json.dumps(_job({**upload, "subfolder": "agents/support"})), encoding="utf-8"
+        )
+    checked: list = []
+    work = _Work()
+
+    code = _run(_mode(values, work, check_job=checked.append), tmp_path, job_path)
+
+    output = tmp_path / "reading"
+    assert code == 78
+    assert _shape(_failure_in(output)) == {
+        "domain": "platform_sync",
+        "stage": "understanding_agent",
+        "code": READING_JOB_INVALID,
+        "retryable": False,
+    }
+    assert not (output / "cost.json").exists()
+    assert checked == []
+    assert work.calls == []
+
+
+def test_the_modes_own_job_check_refuses_before_any_work(tmp_path, values):
+    seen: list = []
+
+    def check_job(job):
+        seen.append(job)
+        return _refusal()
+
+    work = _Work()
+
+    assert _run(_mode(values, work, check_job=check_job), tmp_path) == 78
+
+    output = tmp_path / "reading"
+    assert _failure_in(output) == _refusal().model_dump(mode="json")
+    assert [type(job) for job in seen] == [HarnessJob]
+    assert seen[0].job_id == "job"
+    assert not (output / "cost.json").exists()
+    assert work.calls == []
+
+
+def test_a_job_check_that_raises_is_a_crash_before_any_work(tmp_path, values):
+    def check_job(_job):
+        raise KeyError("metadata")
+
+    work = _Work()
+
+    assert _run(_mode(values, work, check_job=check_job), tmp_path) == 1
+
+    output = tmp_path / "reading"
+    failure = _failure_in(output)
+    assert _shape(failure) == {
+        "domain": "infrastructure",
+        "stage": "understanding_agent",
+        "code": values["crashed_code"],
+        "retryable": True,
+    }
+    assert "KeyError" in failure["message"]
+    assert not (output / "cost.json").exists()
+    assert work.calls == []
+
+
+def test_a_non_empty_output_is_refused_and_left_alone(tmp_path, values):
+    old = tmp_path / "old"
+    (old / "reading").mkdir(parents=True)
+    (old / "reading" / "contract.json").write_bytes(b'{"old": true}')
+    stale = tmp_path / "stale"
+    (stale / "reading").mkdir(parents=True)
+    stale_failure = b'{"code": "from_an_earlier_run"}'
+    (stale / "reading" / "failure.json").write_bytes(stale_failure)
+    a_file = tmp_path / "a_file"
+    a_file.mkdir()
+    (a_file / "reading").write_bytes(b"not a folder")
+    work = _Work()
+
+    assert _run(_mode(values, work), old) == 78
+    assert _run(_mode(values, work), stale) == 78
+    assert _run(_mode(values, work), a_file) == 78
+
+    assert (old / "reading" / "contract.json").read_bytes() == b'{"old": true}'
+    assert sorted(entry.name for entry in (old / "reading").iterdir()) == [
+        "contract.json",
+        "failure.json",
+    ]
+    assert _shape(_failure_in(old / "reading")) == {
+        "domain": "platform_sync",
+        "stage": "understanding_agent",
+        "code": READING_OUTPUT_NOT_EMPTY,
+        "retryable": False,
+    }
+    assert [entry.name for entry in (stale / "reading").iterdir()] == ["failure.json"]
+    assert (stale / "reading" / "failure.json").read_bytes() == stale_failure
+    assert (a_file / "reading").read_bytes() == b"not a folder"
+    assert work.calls == []
+
+
+def test_cost_starts_at_zero_and_incomplete_before_the_work(tmp_path, values):
+    seen: dict = {}
+
+    def look(_job, _source, output):
+        seen.update(_cost_in(output))
+
+    assert _run(_mode(values, _Work(action=look)), tmp_path) == 0
+
+    assert seen["total_usd"] == 0
+    assert seen["unpriced_turns"] == 0
+    assert seen["stages"] == []
+    assert seen["complete"] is False
+
+
+def test_a_failed_first_cost_write_stops_before_the_work(tmp_path, values, monkeypatch):
+    blocked = tmp_path / "blocked"
+    blocked.write_text("a file, not a folder", encoding="utf-8")
+    assert write_reading_cost(blocked, complete=False) is False
+
+    monkeypatch.setattr(reading_entry, "write_reading_cost", lambda output, *, complete: False)
+    work = _Work()
+
+    assert _run(_mode(values, work), tmp_path) == 1
+
+    assert work.calls == []
+    assert _shape(_failure_in(tmp_path / "reading")) == {
+        "domain": "infrastructure",
+        "stage": "understanding_agent",
+        "code": values["crashed_code"],
+        "retryable": True,
+    }
+
+
+@pytest.mark.parametrize("retryable, exit_code", [(False, 78), (True, 1)])
+def test_the_time_limit_writes_its_code_and_ends_the_process(
+    tmp_path, values, retryable, exit_code
+):
+    limit = 1.0
+    mode_values = {**values, "time_limit_seconds": limit, "timed_out_retryable": retryable}
+
+    finished, elapsed = _run_in_a_child(tmp_path, mode_values, "blocks")
+
+    output = tmp_path / "reading"
+    assert finished.returncode == exit_code, finished.stderr
+    assert limit <= elapsed <= limit + 5
+    assert _shape(_failure_in(output)) == {
+        "domain": "infrastructure",
+        "stage": "understanding_agent",
+        "code": values["timed_out_code"],
+        "retryable": retryable,
+    }
+    assert _cost_in(output)["complete"] is False
+    assert "reading started at " in finished.stderr
+
+
+def test_the_time_limit_ends_the_process_even_when_its_writes_fail(tmp_path):
+    limit = 1.0
+    mode_values = {**READ_AGENT_VALUES, "time_limit_seconds": limit}
+
+    finished, elapsed = _run_in_a_child(tmp_path, mode_values, "breaks_the_writers_then_blocks")
+
+    assert finished.returncode == 78, finished.stderr
+    assert limit <= elapsed <= limit + 5
+    # Proof the writers really raised: the limit could leave no failure of its own.
+    assert not (tmp_path / "reading" / "failure.json").exists()
+
+
+def test_the_time_limit_does_not_fire_after_the_work_returns(tmp_path):
+    mode_values = {**READ_AGENT_VALUES, "time_limit_seconds": 1.0}
+
+    finished, elapsed = _run_in_a_child(tmp_path, mode_values, "returns", linger=2.0)
+
+    assert finished.returncode == 0, finished.stderr
+    assert elapsed >= 2.0
+    assert not (tmp_path / "reading" / "failure.json").exists()
+
+
+def test_a_crash_writes_its_code_with_no_secret_and_a_capped_message(tmp_path, values):
+    def crash(*_args):
+        raise RuntimeError("could not fetch https://user:pw@host/repo.git " + "x" * 3000)
+
+    assert _run(_mode(values, _Work(action=crash)), tmp_path) == 1
+
+    output = tmp_path / "reading"
+    failure = _failure_in(output)
+    assert _shape(failure) == {
+        "domain": "infrastructure",
+        "stage": "understanding_agent",
+        "code": values["crashed_code"],
+        "retryable": True,
+    }
+    assert failure["message"].startswith(
+        "RuntimeError: could not fetch https://user:***@host/repo.git "
+    )
+    assert "pw" not in failure["message"]
+    assert MESSAGE_LIMIT == 2000
+    assert len(failure["message"]) == MESSAGE_LIMIT
+    assert _cost_in(output)["complete"] is False
+
+    blocked = tmp_path / "blocked"
+    blocked.write_text("a file, not a folder", encoding="utf-8")
+    assert write_reading_failure(_refusal(), blocked) is None
+
+
+def test_a_value_from_the_secrets_file_is_masked(tmp_path, monkeypatch, values):
+    target = "sk-0123456789abcdefg"
+    simulator = "sim-0123456789abcdef"
+    assert len(target) == len(simulator) == 20
+    secrets = tmp_path / "secrets.json"
+    secrets.write_text(json.dumps({"TARGET_KEY": target}), encoding="utf-8")
+    simulator_secrets = tmp_path / "simulator-secrets.json"
+    simulator_secrets.write_text(json.dumps({"SIMULATOR_KEY": simulator}), encoding="utf-8")
+    monkeypatch.setattr(reading_entry, "_SECRET_FILES", (secrets, simulator_secrets))
+
+    def crash(*_args):
+        raise RuntimeError(f"the provider refused {target} and {simulator}")
+
+    assert _run(_mode(values, _Work(action=crash)), tmp_path) == 1
+
+    assert _failure_in(tmp_path / "reading")["message"] == (
+        "RuntimeError: the provider refused *** and ***"
+    )
+    assert _DEFAULT_SECRET_FILES == (
+        Path("/run/futureagi/secrets.json"),
+        Path("/run/futureagi/simulator-secrets.json"),
+    )
+
+
+@pytest.mark.parametrize("exit_code", [0, 1, 78])
+def test_the_works_exit_code_is_returned(tmp_path, values, exit_code):
+    assert _run(_mode(values, _Work(code=exit_code)), tmp_path) == exit_code
+    assert not (tmp_path / "reading" / "failure.json").exists()
+
+
+def test_a_works_own_incomplete_cost_is_kept(tmp_path, values):
+    def account(_job, _source, output):
+        spend.record("read-agent", 0.42, turns=1, models={"m"})
+        assert write_reading_cost(output, complete=False)
+        # Spend the work's file leaves out: any rewrite after the work returns would add it.
+        spend.record("read-agent", 0.08, turns=1, models={"m"})
+
+    assert _run(_mode(values, _Work(action=account)), tmp_path) == 0
+
+    cost = _cost_in(tmp_path / "reading")
+    assert cost["total_usd"] == 0.42
+    assert cost["complete"] is False
+
+
+def test_cost_is_left_after_a_timeout_and_a_crash(tmp_path):
+    def record_then_crash(*_args):
+        spend.record("read-agent", 0.21, turns=1, models={"m"})
+        raise RuntimeError("the reading broke")
+
+    crashed = tmp_path / "crash"
+    crashed.mkdir()
+    assert _run(_mode(READ_AGENT_VALUES, _Work(action=record_then_crash)), crashed) == 1
+    cost = _cost_in(crashed / "reading")
+    assert cost["total_usd"] == 0.21
+    assert cost["complete"] is False
+    assert _failure_in(crashed / "reading")["code"] == "agent_reading_crashed"
+
+    timed_out = tmp_path / "timeout"
+    mode_values = {**READ_AGENT_VALUES, "time_limit_seconds": 1.0}
+    finished, _ = _run_in_a_child(timed_out, mode_values, "records_then_blocks")
+    assert finished.returncode == 78, finished.stderr
+    cost = _cost_in(timed_out / "reading")
+    assert cost["total_usd"] == 0.21
+    assert cost["complete"] is False
+    assert _failure_in(timed_out / "reading")["code"] == "agent_reading_timed_out"
+
+
+def test_the_checks_run_in_order(tmp_path, values):
+    unreadable = tmp_path / "unreadable"
+    (unreadable / "reading").mkdir(parents=True)
+    (unreadable / "reading" / "old.txt").write_text("old", encoding="utf-8")
+    bad_job = unreadable / "job.json"
+    bad_job.write_text("{not json", encoding="utf-8")
+    refused = tmp_path / "refused"
+    (refused / "reading").mkdir(parents=True)
+    (refused / "reading" / "old.txt").write_text("old", encoding="utf-8")
+    work = _Work()
+
+    assert _run(_mode(values, work), unreadable, bad_job) == 78
+    assert _run(_mode(values, work, check_job=lambda _parsed: _refusal()), refused) == 78
+
+    assert _failure_in(unreadable / "reading")["code"] == READING_JOB_INVALID
+    assert _failure_in(refused / "reading")["code"] == "scan_job_invalid"
+    assert not (unreadable / "reading" / "cost.json").exists()
+    assert not (refused / "reading" / "cost.json").exists()
+    assert work.calls == []
+
+
+def test_cost_json_keeps_the_build_keys_and_adds_complete(tmp_path):
+    spend.record(
+        "read-agent",
+        0.125,
+        turns=3,
+        models={"claude-x"},
+        tokens_in=1000,
+        tokens_out=200,
+        tokens_cached=100,
+        tools={"submit_contract": 1},
+        refusals={"agent_type": 1},
+    )
+    output = tmp_path / "reading"
+
+    assert write_reading_cost(output, complete=True) is True
+
+    snapshot = spend.snapshot()
+    assert "complete" not in snapshot
+    assert _cost_in(output) == {**snapshot, "complete": True}
+    assert [entry.name for entry in output.iterdir()] == ["cost.json"]
+
+
+def test_an_unpriced_turn_marks_the_cost_incomplete(tmp_path):
+    spend.record("read-agent", 0.1, turns=1, models={"m"})
+    spend.record("read-agent", None, turns=1, models={"m"})
+    output = tmp_path / "reading"
+
+    assert write_reading_cost(output, complete=True) is True
+
+    cost = _cost_in(output)
+    assert cost["unpriced_turns"] == 1
+    assert cost["total_usd"] == 0.1
+    assert cost["complete"] is False
