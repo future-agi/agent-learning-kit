@@ -5,6 +5,7 @@
  * @module local/metrics/hallucination/detection
  */
 
+import { snapshotBoundary } from '../../autoeval/types.js';
 import {
     HallucinationInput,
     HallucinationConfig,
@@ -43,21 +44,26 @@ export function hallucinationDetection(
     input: HallucinationInput,
     config: HallucinationConfig = {}
 ): HallucinationResult {
+    const incomplete = (reason: string): HallucinationResult => ({
+        score: 0, passed: false, reason, supportedClaims: 0, unsupportedClaims: 0,
+        hallucinationRate: 1, claims: [],
+    });
+    try { ({ input, config } = snapshotBoundary({ input, config }, 'METRIC_CONFIG_INVALID')); }
+    catch { return incomplete('METRIC_CONFIG_INVALID'); }
+    if (!input || typeof input !== 'object' || Array.isArray(input) ||
+        !config || typeof config !== 'object' || Array.isArray(config)) return incomplete('METRIC_CONFIG_INVALID');
     const { query, response, context, reference } = input;
-    const threshold = config.threshold ?? 0.8;
-    const includeClaimAnalysis = config.includeClaimAnalysis ?? true;
+    const threshold = config.threshold === undefined ? 0.8 : config.threshold;
+    const includeClaimAnalysis = config.includeClaimAnalysis === undefined ? true : config.includeClaimAnalysis;
+    if (typeof threshold !== 'number' || !Number.isFinite(threshold) || threshold < 0 || threshold > 1 ||
+        typeof includeClaimAnalysis !== 'boolean') return incomplete('METRIC_CONFIG_INVALID');
 
     // Handle empty response
-    if (!response || response.trim().length === 0) {
-        return {
-            score: 1.0,
-            passed: true,
-            reason: 'Empty response - no hallucination possible',
-            supportedClaims: 0,
-            unsupportedClaims: 0,
-            hallucinationRate: 0,
-            claims: []
-        };
+    if (typeof response !== 'string' || !response.trim() ||
+        (context !== undefined && typeof context !== 'string' && !Array.isArray(context)) ||
+        (Array.isArray(context) && context.some(value => typeof value !== 'string')) ||
+        (reference !== undefined && typeof reference !== 'string')) {
+        return incomplete('NO_EVIDENCE');
     }
 
     // Normalize context to array
@@ -70,11 +76,11 @@ export function hallucinationDetection(
         : combinedContext;
 
     // Handle empty context
-    if (!allContext || allContext.trim().length === 0) {
+    if (!allContext || tokenize(allContext).length === 0) {
         return {
             score: 0.0,
             passed: false,
-            reason: 'No context provided - cannot verify claims',
+            reason: 'NO_EVIDENCE',
             supportedClaims: 0,
             unsupportedClaims: 0,
             hallucinationRate: 1.0,
@@ -86,15 +92,7 @@ export function hallucinationDetection(
     const sentences = extractSentences(response);
 
     if (sentences.length === 0) {
-        return {
-            score: 1.0,
-            passed: true,
-            reason: 'No factual claims detected in response',
-            supportedClaims: 0,
-            unsupportedClaims: 0,
-            hallucinationRate: 0,
-            claims: []
-        };
+        return incomplete('NO_EVIDENCE');
     }
 
     // Analyze each sentence for support in context
@@ -151,6 +149,8 @@ export function hallucinationDetection(
             normalizedTrigramOverlap * 0.35
         );
 
+        if (typeof supportScore !== 'number' || !Number.isFinite(supportScore)) return incomplete('METRIC_RESULT_INVALID');
+
         // Threshold for considering a claim supported
         const supportThreshold = 0.3;
         const isSupported = supportScore >= supportThreshold;
@@ -187,6 +187,7 @@ export function hallucinationDetection(
     }
 
     const totalClaims = supportedCount + unsupportedCount;
+    if (totalClaims === 0) return incomplete('NO_EVIDENCE');
 
     // Calculate hallucination rate
     const hallucinationRate = totalClaims > 0

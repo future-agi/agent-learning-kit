@@ -5,6 +5,7 @@
  * @module local/metrics/rag/faithfulness
  */
 
+import { snapshotBoundary } from '../../autoeval/types.js';
 import {
     RAGInput,
     RAGConfig,
@@ -42,10 +43,21 @@ export function faithfulness(
     input: RAGInput,
     config: RAGConfig = {}
 ): RAGResult {
-    const threshold = config.threshold ?? 0.5;
-    const supportThreshold = config.similarityThreshold ?? 0.25;
-    const ngramSize = config.ngramSize ?? 2;
+    try { ({ input, config } = snapshotBoundary({ input, config }, 'METRIC_CONFIG_INVALID')); }
+    catch { return { score: 0, passed: false, reason: 'METRIC_CONFIG_INVALID' }; }
+    if (!input || typeof input !== 'object' || Array.isArray(input) ||
+        !config || typeof config !== 'object' || Array.isArray(config)) return { score: 0, passed: false, reason: 'METRIC_CONFIG_INVALID' };
+    const threshold = config.threshold === undefined ? 0.5 : config.threshold;
+    const supportThreshold = config.similarityThreshold === undefined ? 0.25 : config.similarityThreshold;
+    const ngramSize = config.ngramSize === undefined ? 2 : config.ngramSize;
 
+    if (typeof threshold !== 'number' || !Number.isFinite(threshold) || threshold < 0 || threshold > 1 ||
+        typeof supportThreshold !== 'number' || !Number.isFinite(supportThreshold) || supportThreshold <= 0 || supportThreshold > 1 ||
+        typeof ngramSize !== 'number' || !Number.isSafeInteger(ngramSize) || ngramSize < 1) {
+        return { score: 0, passed: false, reason: 'METRIC_CONFIG_INVALID' };
+    }
+    if (typeof input.response !== 'string' || (typeof input.context !== 'string' && !Array.isArray(input.context)) ||
+        (Array.isArray(input.context) && input.context.some(value => typeof value !== 'string'))) return { score: 0, passed: false, reason: 'NO_EVIDENCE' };
     const contexts = normalizeContext(input.context);
     const combinedContext = contexts.join(' ');
 
@@ -53,26 +65,26 @@ export function faithfulness(
         return {
             score: 0,
             passed: false,
-            reason: 'No response provided'
+            reason: 'NO_EVIDENCE'
         };
     }
 
-    if (contexts.length === 0 || combinedContext.trim().length === 0) {
+    if (contexts.length === 0 || tokenize(combinedContext).length === 0) {
         return {
             score: 0,
             passed: false,
-            reason: 'No context provided to verify faithfulness'
+            reason: 'NO_EVIDENCE'
         };
     }
 
     // Extract claims (sentences) from response
-    const claims = extractSentences(input.response);
+    const claims = extractSentences(input.response).filter(claim => tokenize(claim).length > 0);
 
     if (claims.length === 0) {
         return {
-            score: 1.0,
-            passed: true,
-            reason: 'No claims found in response',
+            score: 0,
+            passed: false,
+            reason: 'NO_EVIDENCE',
             claims: []
         };
     }
@@ -93,6 +105,7 @@ export function faithfulness(
 
         // Use the higher of the two
         const supportScore = Math.max(tokenSimilarity, ngramSim);
+        if (typeof supportScore !== 'number' || !Number.isFinite(supportScore)) return { score: 0, passed: false, reason: 'METRIC_RESULT_INVALID' };
         claimScores.push(supportScore);
 
         if (supportScore >= supportThreshold) {

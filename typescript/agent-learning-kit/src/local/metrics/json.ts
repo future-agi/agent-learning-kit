@@ -4,11 +4,13 @@
  */
 
 import { MetricResult, MetricConfig } from './types.js';
+import { snapshotBoundary } from '../autoeval/types.js';
 
 /**
  * Check if the response contains valid JSON
  */
 export function containsJson(response: string): MetricResult {
+    if (typeof response !== 'string') return { score: 0, passed: false, reason: 'JSON_INVALID' };
     // Try to find JSON in the response
     const jsonPatterns = [
         /```json\s*([\s\S]*?)\s*```/,  // Markdown code block
@@ -54,6 +56,7 @@ export function containsJson(response: string): MetricResult {
  * Check if the response is valid JSON
  */
 export function isJson(response: string): MetricResult {
+    if (typeof response !== 'string') return { score: 0, passed: false, reason: 'JSON_INVALID' };
     try {
         JSON.parse(response.trim());
         return {
@@ -65,18 +68,27 @@ export function isJson(response: string): MetricResult {
         return {
             score: 0.0,
             passed: false,
-            reason: `Response is not valid JSON: ${(e as Error).message}`
+            reason: 'JSON_INVALID'
         };
     }
 }
 
 /**
- * Validate JSON against a schema
+ * Validate JSON against the supported, fail-closed schema subset.
+ * Supports type, required, properties, additionalProperties (boolean), items,
+ * min/maxItems, min/maxLength, pattern, primitive enum, minimum and maximum.
+ * Nested boolean schemas are supported; a missing, true or empty root is no
+ * validation evidence. Unsupported keywords, malformed schemas, cycles and
+ * depth > 64 are rejected even in properties absent from the response.
  */
 export function jsonSchema(
     response: string,
     config: MetricConfig & { schema: object }
 ): MetricResult {
+    try { config = snapshotBoundary(config, 'SCHEMA_UNSUPPORTED'); }
+    catch { return { score: 0, passed: false, reason: 'SCHEMA_UNSUPPORTED' }; }
+    if (!config || typeof config !== 'object' || Array.isArray(config)) return { score: 0, passed: false, reason: 'METRIC_CONFIG_INVALID' };
+    if (typeof response !== 'string') return { score: 0, passed: false, reason: 'JSON_INVALID' };
     // Parse the response
     let parsed: any;
     try {
@@ -85,12 +97,18 @@ export function jsonSchema(
         return {
             score: 0.0,
             passed: false,
-            reason: `Response is not valid JSON: ${(e as Error).message}`
+            reason: 'JSON_INVALID'
         };
     }
 
-    // Simple schema validation (supports basic JSON Schema properties)
-    const schema = config.schema as any;
+    let schema: any;
+    try { schema = snapshotSchema(config?.schema); }
+    catch { return { score: 0, passed: false, reason: 'SCHEMA_UNSUPPORTED' }; }
+    if (schema === undefined || schema === null || schema === true ||
+        (typeof schema === 'object' && !Array.isArray(schema) && Object.keys(schema).length === 0)) {
+        return { score: 0, passed: false, reason: 'SCHEMA_MISSING' };
+    }
+    if (!supportedSchema(schema)) return { score: 0, passed: false, reason: 'SCHEMA_UNSUPPORTED' };
     const errors = validateAgainstSchema(parsed, schema, '');
 
     if (errors.length === 0) {
@@ -103,14 +121,53 @@ export function jsonSchema(
         return {
             score: 0.0,
             passed: false,
-            reason: `Schema validation errors: ${errors.join('; ')}`
+            reason: 'SCHEMA_VALIDATION_FAILED'
         };
     }
 }
 
-/**
- * Simple JSON Schema validator
- */
+const SCHEMA_KEYS = new Set(['type', 'required', 'properties', 'additionalProperties', 'items',
+    'minItems', 'maxItems', 'minLength', 'maxLength', 'pattern', 'enum', 'minimum', 'maximum']);
+const JSON_TYPES = new Set(['object', 'array', 'string', 'number', 'integer', 'boolean', 'null']);
+
+// Own a single snapshot before validation; getters/iterators cannot change the
+// schema between the supported-subset check and the actual comparison.
+function snapshotSchema(value: any): any {
+    return snapshotBoundary(value, 'SCHEMA_UNSUPPORTED');
+}
+
+function supportedSchema(schema: any, depth = 0, ancestors = new Set<object>()): boolean {
+    if (typeof schema === 'boolean') return true;
+    if (!schema || typeof schema !== 'object' || Array.isArray(schema) || depth > 64 || ancestors.has(schema)) return false;
+    if (Object.keys(schema).some(key => !SCHEMA_KEYS.has(key))) return false;
+    if (schema.type !== undefined) {
+        const types = Array.isArray(schema.type) ? schema.type : [schema.type];
+        if (types.length === 0 || types.some((type: unknown) => typeof type !== 'string' || !JSON_TYPES.has(type))) return false;
+    }
+    if (schema.required !== undefined && (!Array.isArray(schema.required) || schema.required.some((key: unknown) => typeof key !== 'string'))) return false;
+    if (schema.additionalProperties !== undefined && typeof schema.additionalProperties !== 'boolean') return false;
+    for (const key of ['minItems', 'maxItems', 'minLength', 'maxLength']) {
+        if (schema[key] !== undefined && (!Number.isSafeInteger(schema[key]) || schema[key] < 0)) return false;
+    }
+    for (const key of ['minimum', 'maximum']) {
+        if (schema[key] !== undefined && (typeof schema[key] !== 'number' || !Number.isFinite(schema[key]))) return false;
+    }
+    if (schema.enum !== undefined && (!Array.isArray(schema.enum) || schema.enum.length === 0 ||
+        schema.enum.some((value: unknown) => value !== null && typeof value !== 'string' && typeof value !== 'boolean' &&
+            !(typeof value === 'number' && Number.isFinite(value))))) return false;
+    if (schema.pattern !== undefined) {
+        if (typeof schema.pattern !== 'string') return false;
+        try { new RegExp(schema.pattern); } catch { return false; }
+    }
+    const next = new Set(ancestors).add(schema);
+    if (schema.properties !== undefined) {
+        if (!schema.properties || typeof schema.properties !== 'object' || Array.isArray(schema.properties)) return false;
+        if (Object.values(schema.properties).some(child => !supportedSchema(child, depth + 1, next))) return false;
+    }
+    return schema.items === undefined || supportedSchema(schema.items, depth + 1, next);
+}
+
+/** Simple validator for the prevalidated subset above. */
 function validateAgainstSchema(
     value: any,
     schema: any,
@@ -118,7 +175,9 @@ function validateAgainstSchema(
 ): string[] {
     const errors: string[] = [];
 
-    if (!schema) return errors;
+    if (schema === false) return ['SCHEMA_FALSE'];
+    if (schema === true) return errors;
+    if (schema.enum && !schema.enum.includes(value)) errors.push('ENUM_MISMATCH');
 
     // Type validation
     if (schema.type) {
@@ -142,7 +201,7 @@ function validateAgainstSchema(
         // Required properties
         if (schema.required && Array.isArray(schema.required)) {
             for (const prop of schema.required) {
-                if (!(prop in value)) {
+                if (!Object.prototype.hasOwnProperty.call(value, prop)) {
                     errors.push(`${path || 'root'}: missing required property "${prop}"`);
                 }
             }
@@ -151,7 +210,7 @@ function validateAgainstSchema(
         // Property validation
         if (schema.properties) {
             for (const [prop, propSchema] of Object.entries(schema.properties)) {
-                if (prop in value) {
+                if (Object.prototype.hasOwnProperty.call(value, prop)) {
                     const propPath = path ? `${path}.${prop}` : prop;
                     errors.push(...validateAgainstSchema(value[prop], propSchema, propPath));
                 }
@@ -177,7 +236,7 @@ function validateAgainstSchema(
         if (schema.maxItems !== undefined && value.length > schema.maxItems) {
             errors.push(`${path || 'root'}: array length ${value.length} is greater than maxItems ${schema.maxItems}`);
         }
-        if (schema.items) {
+        if (schema.items !== undefined) {
             value.forEach((item, index) => {
                 const itemPath = `${path || 'root'}[${index}]`;
                 errors.push(...validateAgainstSchema(item, schema.items, itemPath));

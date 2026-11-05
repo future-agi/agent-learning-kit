@@ -5,6 +5,58 @@
 
 import { MetricResult } from '../metrics/types.js';
 
+// Shared internal C5 boundary. Never trust Object.isFrozen on caller objects:
+// only records produced here may bypass capture. Own non-enumerable fields are
+// included, so a supplied false verdict cannot disappear during a spread.
+const boundaryRecords = new WeakSet<object>();
+class BoundaryError extends Error {}
+export function snapshotBoundary<T>(value: T, code: string, allowCallbacks = false): T {
+    const active = new Set<object>();
+    const copies = new Map<object, unknown>();
+    const capture = (source: any, depth: number, reason: string): any => {
+        try {
+            if (source === null || source === undefined || typeof source === 'string' ||
+                typeof source === 'boolean' || typeof source === 'number') return source;
+            // Only scanner callbacks are opaque capabilities; their return values
+            // cross a separate data boundary. They are never interpreted as data.
+            if (allowCallbacks && typeof source === 'function') return source;
+            if (typeof source !== 'object' || depth > 64 || active.has(source)) throw new BoundaryError(reason);
+            if (boundaryRecords.has(source)) return source;
+            if (copies.has(source)) return copies.get(source);
+            active.add(source);
+            const iterator = source[Symbol.iterator];
+            let owned: any;
+            if (iterator !== undefined) {
+                if (typeof iterator !== 'function') throw new BoundaryError(reason);
+                // Array.from reads this SDK-owned iterator method, not the caller's
+                // property a second time. Each yielded member is captured once.
+                owned = Array.from({ [Symbol.iterator]: () => iterator.call(source) },
+                    item => capture(item, depth + 1, reason));
+            } else {
+                const proto = Object.getPrototypeOf(source);
+                if (proto !== Object.prototype && proto !== null) throw new BoundaryError(reason);
+                owned = Object.create(null);
+                for (const key of Object.getOwnPropertyNames(source)) {
+                    const fieldReason = key === 'customPatterns' ? 'INVALID_SECURITY_PATTERN' : reason;
+                    let member;
+                    try { member = source[key]; } catch { throw new BoundaryError(fieldReason); }
+                    owned[key] = capture(member, depth + 1, fieldReason);
+                }
+            }
+            active.delete(source);
+            Object.freeze(owned);
+            copies.set(source, owned);
+            boundaryRecords.add(owned);
+            return owned;
+        } catch (error) {
+            if (error instanceof BoundaryError) throw error;
+            throw new BoundaryError(reason);
+        }
+    };
+    return capture(value, 0, code) as T;
+}
+
+
 /**
  * Input types that AutoEval can detect and handle
  */
@@ -124,6 +176,10 @@ export interface MetricExecutionResult {
     executionTimeMs: number;
     /** Any error that occurred */
     error?: string;
+    /** Completion state, independent of the numeric score. */
+    status?: 'completed' | 'error' | 'not_evaluated';
+    reasonCode?: string;
+    executed?: boolean;
 }
 
 /**
@@ -146,6 +202,9 @@ export interface AutoEvalResult {
     recommendations: string[];
     /** Total execution time (ms) */
     totalExecutionTimeMs: number;
+    status?: 'passed' | 'failed' | 'incomplete';
+    reasonCode?: string;
+    coverage?: { required: number; executed: number; completed: number; skipped: number; errored: number };
 }
 
 /**

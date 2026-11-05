@@ -11,11 +11,51 @@ import {
     AutoEvalResult,
     SelectedMetric,
     MetricExecutionResult,
-    ContentCharacteristics
+    ContentCharacteristics,
+    snapshotBoundary
 } from './types.js';
 import { analyzeContent, describeCharacteristics } from './analyzer.js';
 import { selectMetrics, buildMetricConfig } from './selector.js';
-import { runMetric, hasMetric } from '../metrics/index.js';
+import { runMetric, hasMetric, getMetric } from '../metrics/index.js';
+
+function snapshotConfig(config: AutoEvalConfig): AutoEvalConfig {
+    try {
+        const owned = snapshotBoundary(config, 'EVALUATION_CONFIG_INVALID');
+        if (!owned || typeof owned !== 'object' || Array.isArray(owned)) throw new Error();
+        const copy = { ...owned };
+        for (const key of ['includeCategories', 'excludeCategories'] as const) {
+            const value = copy[key];
+            if (value === undefined) continue;
+            if (value === null || typeof value !== 'object' || typeof value[Symbol.iterator] !== 'function') throw new Error();
+            const values = Array.from(value);
+            if (values.some(item => typeof item !== 'string' || !['string', 'json', 'similarity', 'rag', 'security', 'hallucination', 'quality'].includes(item))) throw new Error();
+            copy[key] = values;
+        }
+        for (const key of ['enableSecurityChecks', 'enableHallucinationCheck'] as const) {
+            if (copy[key] !== undefined && typeof copy[key] !== 'boolean') throw new Error();
+        }
+        for (const key of ['minConfidence', 'maxMetrics', 'passThreshold'] as const) {
+            const value = copy[key];
+            if (value !== undefined && (typeof value !== 'number' || !Number.isFinite(value) || value < 0 ||
+                (key === 'maxMetrics' ? !Number.isSafeInteger(value) : value > 1))) throw new Error();
+        }
+        if (copy.metricWeights !== undefined) {
+            if (!copy.metricWeights || typeof copy.metricWeights !== 'object' || Array.isArray(copy.metricWeights)) throw new Error();
+            copy.metricWeights = { ...copy.metricWeights };
+        }
+        return snapshotBoundary(copy, 'EVALUATION_CONFIG_INVALID');
+    } catch { throw new Error('EVALUATION_CONFIG_INVALID'); }
+}
+
+// Preserve metric detail keys/counts without returning input-derived text.
+function redactDetails(value: unknown, depth = 0): unknown {
+    if (depth > 32) return undefined;
+    if (typeof value === 'string') return '[REDACTED]';
+    if (Array.isArray(value)) return value.map(item => redactDetails(item, depth + 1));
+    if (value && typeof value === 'object') return Object.fromEntries(
+        Object.entries(value).map(([key, item]) => [key, redactDetails(item, depth + 1)]));
+    return value;
+}
 
 /**
  * AutoEval Pipeline - automatically selects and runs appropriate metrics.
@@ -47,14 +87,14 @@ export class AutoEvalPipeline {
     private config: AutoEvalConfig;
 
     constructor(config: AutoEvalConfig = {}) {
-        this.config = {
+        this.config = snapshotBoundary({
             minConfidence: 0.5,
             maxMetrics: 10,
             enableSecurityChecks: true,
             enableHallucinationCheck: true,
             passThreshold: 0.7,
-            ...config
-        };
+            ...snapshotConfig(config)
+        }, 'EVALUATION_CONFIG_INVALID');
     }
 
     /**
@@ -68,30 +108,58 @@ export class AutoEvalPipeline {
         input: AutoEvalInput,
         configOverrides?: Partial<AutoEvalConfig>
     ): AutoEvalResult {
+        ({ input, configOverrides } = snapshotBoundary({ input, configOverrides }, 'EVALUATION_INPUT_INVALID'));
+        if (!input || typeof input.response !== 'string') throw new Error('EVALUATION_INPUT_INVALID');
+        for (const key of ['query', 'reference', 'code'] as const) if (input[key] !== undefined && typeof input[key] !== 'string') throw new Error('EVALUATION_INPUT_INVALID');
+        if (input.context !== undefined && typeof input.context !== 'string' && (!Array.isArray(input.context) || input.context.some(value => typeof value !== 'string'))) throw new Error('EVALUATION_INPUT_INVALID');
         const startTime = Date.now();
-        const config = { ...this.config, ...configOverrides };
+        const config = snapshotBoundary({ ...this.config, ...snapshotConfig(configOverrides === undefined ? {} : configOverrides) }, 'EVALUATION_CONFIG_INVALID');
 
         // Step 1: Analyze content
         const characteristics = analyzeContent(input);
 
         // Step 2: Select metrics
-        const selectedMetrics = selectMetrics(characteristics, input, config);
+        const applicable = selectMetrics(characteristics, input, { ...config, maxMetrics: Number.MAX_SAFE_INTEGER })
+            .filter(metric => metric.name !== 'context_recall' || (typeof input.reference === 'string' && input.reference.trim().length > 0));
+        const cap = config.maxMetrics === undefined ? 10 : config.maxMetrics;
+        // Security checks are never removed by the presentation/execution cap.
+        const selectedMetrics = applicable.filter((metric, index) => metric.category === 'security' || index < cap);
+        const omitted = applicable.filter(metric => !selectedMetrics.includes(metric));
 
-        // Step 3: Execute metrics
-        const metricResults = this.executeMetrics(selectedMetrics, input);
+        // Step 3: Execute metrics; every cap omission is an explicit record.
+        const metricResults = this.executeMetrics(selectedMetrics, input, config);
+        metricResults.push(...omitted.map(metric => ({ metric: metric.name, category: metric.category,
+            result: { score: 0, passed: false, reason: 'METRIC_LIMIT' }, executionTimeMs: 0,
+            error: 'METRIC_LIMIT', reasonCode: 'METRIC_LIMIT', status: 'not_evaluated' as const, executed: false })));
 
         // Step 4: Calculate overall score
-        const overallScore = this.calculateOverallScore(metricResults, config);
+        const overallScore = cap === 0 ? 0 : this.calculateOverallScore(metricResults, config);
 
         // Step 5: Generate summary and recommendations
-        const summary = this.generateSummary(characteristics, metricResults, overallScore);
+        const coverage = {
+            required: applicable.length,
+            executed: metricResults.filter(r => r.executed).length,
+            completed: metricResults.filter(r => r.status === 'completed').length,
+            skipped: metricResults.filter(r => r.status === 'not_evaluated').length,
+            errored: metricResults.filter(r => r.status === 'error').length,
+        };
+        const threshold = config.passThreshold ?? 0.7;
+        const complete = cap > 0 && coverage.required > 0 && coverage.completed === coverage.required &&
+            Number.isFinite(threshold) && threshold >= 0 && threshold <= 1;
+        const passed = complete && metricResults.every(r => r.result.passed === true) && overallScore >= threshold;
+        const status = !complete ? 'incomplete' : passed ? 'passed' : 'failed';
+        const summary = !complete ? 'EVALUATION_INCOMPLETE' : !passed ? 'CHECKS_FAILED' :
+            this.generateSummary(characteristics, metricResults, overallScore);
         const recommendations = this.generateRecommendations(metricResults, characteristics);
 
         const totalExecutionTimeMs = Date.now() - startTime;
 
         return {
             overallScore,
-            passed: overallScore >= (config.passThreshold ?? 0.7),
+            passed,
+            status,
+            coverage,
+            reasonCode: !complete ? 'EVALUATION_INCOMPLETE' : passed ? 'CHECKS_PASSED' : 'CHECKS_FAILED',
             characteristics,
             selectedMetrics,
             metricResults,
@@ -106,54 +174,61 @@ export class AutoEvalPipeline {
      */
     private executeMetrics(
         selectedMetrics: SelectedMetric[],
-        input: AutoEvalInput
+        input: AutoEvalInput,
+        config: AutoEvalConfig
     ): MetricExecutionResult[] {
         const results: MetricExecutionResult[] = [];
 
         for (const metric of selectedMetrics) {
             const startTime = Date.now();
 
-            try {
-                // Build config for this metric
-                const metricConfig = buildMetricConfig(metric, input);
-
-                // Check if metric exists
-                if (!hasMetric(metric.name)) {
-                    results.push({
-                        metric: metric.name,
-                        category: metric.category,
-                        result: {
-                            score: 0,
-                            passed: false,
-                            reason: `Metric '${metric.name}' not found`
-                        },
-                        executionTimeMs: Date.now() - startTime,
-                        error: `Metric '${metric.name}' not found`
-                    });
-                    continue;
-                }
-
-                // Run the metric
-                const result = runMetric(metric.name, input.response, metricConfig);
-
+            let executed = false;
+            const incomplete = (reasonCode: string, status: 'error' | 'not_evaluated' = 'error') => {
                 results.push({
-                    metric: metric.name,
-                    category: metric.category,
-                    result,
-                    executionTimeMs: Date.now() - startTime
-                });
-            } catch (error) {
-                results.push({
-                    metric: metric.name,
-                    category: metric.category,
-                    result: {
-                        score: 0,
-                        passed: false,
-                        reason: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`
-                    },
+                    metric: metric.name, category: metric.category,
+                    result: { score: 0, passed: false, reason: reasonCode },
                     executionTimeMs: Date.now() - startTime,
-                    error: error instanceof Error ? error.message : 'Unknown error'
+                    error: reasonCode, reasonCode, status, executed,
                 });
+            };
+            try {
+                if (!input.response?.trim()) { incomplete('NO_EVIDENCE', 'not_evaluated'); continue; }
+                const weight = config.metricWeights?.[metric.name];
+                if (weight !== undefined && (typeof weight !== 'number' || !Number.isFinite(weight) || weight <= 0)) {
+                    incomplete('INVALID_METRIC_WEIGHT', 'not_evaluated'); continue;
+                }
+                const metricConfig = buildMetricConfig(metric, input);
+                if (metric.name === 'context_recall') metricConfig.expected_response = input.reference;
+                if (!hasMetric(metric.name)) { incomplete('METRIC_UNAVAILABLE', 'not_evaluated'); continue; }
+                const required = getMetric(metric.name)?.requiredConfig ?? [];
+                if (required.some(key => {
+                    const value = metricConfig[key];
+                    return value === null || value === undefined || (typeof value === 'string' && !value.trim()) ||
+                        (Array.isArray(value) && (value.length === 0 || value.every(item => typeof item === 'string' && !item.trim())));
+                })) { incomplete('NO_EVIDENCE', 'not_evaluated'); continue; }
+                executed = true;
+                const rawResult = runMetric(metric.name, input.response, snapshotBoundary(metricConfig, 'METRIC_CONFIG_INVALID'));
+                const result = snapshotBoundary(rawResult, 'METRIC_RESULT_INVALID');
+                if (!result || typeof result.score !== 'number' || !Number.isFinite(result.score) || result.score < 0 || result.score > 1 ||
+                    typeof result.passed !== 'boolean' || typeof result.reason !== 'string') {
+                    incomplete('METRIC_RESULT_INVALID'); continue;
+                }
+                // A diagnostic error is not completed validation evidence.
+                if (['INVALID_SECURITY_PATTERN', 'METRIC_CONFIG_INVALID', 'METRIC_RESULT_INVALID', 'SCHEMA_MISSING', 'SCHEMA_UNSUPPORTED', 'JUDGE_RESULT_INVALID', 'JUDGE_REQUEST_FAILED'].some(code => result.reason === code)) {
+                    incomplete('METRIC_VALIDATION_INCOMPLETE'); continue;
+                }
+                const details = result as typeof result & { claims?: unknown[]; totalClaims?: number; supportedClaims?: number; unsupportedClaims?: number };
+                if (result.reason === 'NO_EVIDENCE' || details.claims?.length === 0 || details.totalClaims === 0 ||
+                    (details.supportedClaims === 0 && details.unsupportedClaims === 0)) {
+                    incomplete('NO_EVIDENCE', 'not_evaluated'); continue;
+                }
+                results.push({
+                    metric: metric.name, category: metric.category,
+                    result: { ...(redactDetails(result) as typeof result), score: result.score, passed: result.passed, reason: result.passed ? 'CHECK_PASSED' : 'CHECK_FAILED' },
+                    executionTimeMs: Date.now() - startTime, status: 'completed', executed,
+                });
+            } catch {
+                incomplete('METRIC_EXECUTION_FAILED');
             }
         }
 
@@ -167,8 +242,8 @@ export class AutoEvalPipeline {
         results: MetricExecutionResult[],
         config: AutoEvalConfig
     ): number {
-        if (results.length === 0) {
-            return 1.0; // No metrics to run = pass
+        if (results.length === 0 || results.some(r => r.status !== 'completed')) {
+            return 0;
         }
 
         const weights = config.metricWeights || {};
@@ -186,27 +261,16 @@ export class AutoEvalPipeline {
             'quality': 0.8
         };
 
-        for (const result of results) {
-            // Skip errored metrics
-            if (result.error) {
-                continue;
-            }
-
-            // Get weight for this metric
-            let weight = weights[result.metric];
-            if (weight === undefined) {
-                weight = categoryWeights[result.category] ?? 1.0;
-            }
-
+        const metricWeights = results.map(r => weights[r.metric] ?? categoryWeights[r.category] ?? 1);
+        if (metricWeights.some(w => typeof w !== 'number' || !Number.isFinite(w) || w <= 0)) return 0;
+        // Normalize before summation to avoid overflowing large finite weights.
+        const scale = Math.max(...metricWeights);
+        results.forEach((result, index) => {
+            const weight = metricWeights[index] / scale;
             totalWeight += weight;
             weightedSum += result.result.score * weight;
-        }
-
-        if (totalWeight === 0) {
-            return 1.0;
-        }
-
-        return weightedSum / totalWeight;
+        });
+        return totalWeight > 0 ? weightedSum / totalWeight : 0;
     }
 
     /**
@@ -312,6 +376,8 @@ export class AutoEvalPipeline {
         description: string;
         recommendedMetrics: SelectedMetric[];
     } {
+        input = snapshotBoundary(input, 'EVALUATION_INPUT_INVALID');
+        if (!input || typeof input.response !== 'string') throw new Error('EVALUATION_INPUT_INVALID');
         const characteristics = analyzeContent(input);
         const description = describeCharacteristics(characteristics);
         const recommendedMetrics = selectMetrics(characteristics, input, this.config);
@@ -327,7 +393,7 @@ export class AutoEvalPipeline {
      * Update pipeline configuration
      */
     configure(config: Partial<AutoEvalConfig>): void {
-        this.config = { ...this.config, ...config };
+        this.config = snapshotBoundary({ ...this.config, ...snapshotConfig(config) }, 'EVALUATION_CONFIG_INVALID');
     }
 
     /**

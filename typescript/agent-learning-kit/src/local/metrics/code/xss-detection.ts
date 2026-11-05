@@ -5,6 +5,8 @@
  * @module local/metrics/code/xss-detection
  */
 
+import { snapshotBoundary } from '../../autoeval/types.js';
+import { incompleteSecurity } from './types.js';
 import {
     CodeInput,
     CodeSecurityConfig,
@@ -149,11 +151,22 @@ export function xssDetection(
     input: CodeInput,
     config: CodeSecurityConfig = {}
 ): CodeSecurityResult {
+    try { ({ input, config } = snapshotBoundary({ input, config }, 'METRIC_CONFIG_INVALID')); }
+    catch (error) { return incompleteSecurity(error instanceof Error && error.message === 'INVALID_SECURITY_PATTERN' ? 'INVALID_SECURITY_PATTERN' : 'METRIC_CONFIG_INVALID'); }
+    if (!input || typeof input !== 'object' || Array.isArray(input) ||
+        !config || typeof config !== 'object' || Array.isArray(config)) return incompleteSecurity('METRIC_CONFIG_INVALID');
     const { code, language } = input;
     const issues: SecurityIssue[] = [];
+    const threshold = config.threshold === undefined ? 1 : config.threshold;
+    const severity = config.minSeverity === undefined ? 'low' : config.minSeverity;
+    if (typeof threshold !== 'number' || !Number.isFinite(threshold) || threshold < 0 || threshold > 1 ||
+        typeof severity !== 'string' || !['low', 'medium', 'high', 'critical'].some(value => severity === value) ||
+        (config.checkComments !== undefined && typeof config.checkComments !== 'boolean')) {
+        return { ...createSecurityResult([{ type: 'validation-incomplete', severity: 'critical', match: '', description: 'METRIC_CONFIG_INVALID' }]), score: 0, passed: false, reason: 'METRIC_CONFIG_INVALID' };
+    }
 
-    if (!code || code.trim().length === 0) {
-        return createSecurityResult([], config);
+    if (typeof code !== 'string' || code.trim().length === 0) {
+        return { ...createSecurityResult([{ type: 'validation-incomplete', severity: 'critical', match: '', description: 'NO_EVIDENCE' }], config), score: 0, passed: false, reason: 'NO_EVIDENCE' };
     }
 
     const lines = code.split('\n');
@@ -179,7 +192,7 @@ export function xssDetection(
 
             // Check if in comment
             const line = lines[lineNumber - 1] || '';
-            const isComment = config.checkComments === false ? false :
+            const isComment = config.checkComments !== false ? false :
                 line.trim().startsWith('//') ||
                 line.trim().startsWith('#') ||
                 line.trim().startsWith('*') ||
@@ -190,7 +203,7 @@ export function xssDetection(
                     type: 'xss',
                     severity,
                     line: lineNumber,
-                    match: match[0].substring(0, 100),
+                    match: '[REDACTED]',
                     description,
                     suggestion
                 });
@@ -198,22 +211,35 @@ export function xssDetection(
         }
     }
 
-    // Check custom patterns
-    if (config.customPatterns) {
-        for (const patternStr of config.customPatterns) {
+    // Snapshot caller iterables once; never validate a consumed iterator.
+    let patterns: string[];
+    try {
+        const value = config.customPatterns;
+        if (value !== undefined && (value === null || typeof value !== 'object' || typeof value[Symbol.iterator] !== 'function')) throw new Error();
+        patterns = value === undefined ? [] : Array.from(value);
+        if (patterns.some(pattern => typeof pattern !== 'string')) throw new Error();
+    } catch {
+        return { ...createSecurityResult([...issues, { type: 'validation-incomplete', severity: 'critical', match: '', description: 'INVALID_SECURITY_PATTERN' }], config), score: 0, passed: false, reason: 'INVALID_SECURITY_PATTERN' };
+    }
+    {
+        for (const patternStr of patterns) {
             try {
+                if (typeof patternStr !== 'string') throw new Error('INVALID_SECURITY_PATTERN');
                 const customPattern = new RegExp(patternStr, 'gi');
                 let match;
                 while ((match = customPattern.exec(code)) !== null) {
+                    if (match[0].length === 0) throw new Error('INVALID_SECURITY_PATTERN');
+                    const line = code.slice(code.lastIndexOf('\n', match.index - 1) + 1, match.index + match[0].length).trim();
+                    if (config.checkComments === false && /^(?:\/\/|#|\*|--|\{\/\*)/.test(line)) continue;
                     issues.push({
                         type: 'xss-custom',
                         severity: 'medium',
-                        match: match[0].substring(0, 100),
+                        match: '[REDACTED]',
                         description: 'Custom XSS pattern matched'
                     });
                 }
             } catch {
-                // Invalid regex, skip
+                return { ...createSecurityResult([...issues, { type: 'validation-incomplete', severity: 'critical', match: '', description: 'INVALID_SECURITY_PATTERN' }], config), score: 0, passed: false, reason: 'INVALID_SECURITY_PATTERN' };
             }
         }
     }

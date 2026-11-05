@@ -83,6 +83,10 @@ export interface CompleteEvent extends StreamingEvent {
     finalResults: Map<string, MetricResult>;
     /** Total time elapsed (ms) */
     elapsedMs: number;
+    status?: 'passed' | 'failed' | 'incomplete';
+    reasonCode?: string;
+    coverage?: { required: number; executed: number; completed: number; skipped: number; errored: number };
+    metricErrors?: { metric: string; reasonCode: string }[];
 }
 
 /**

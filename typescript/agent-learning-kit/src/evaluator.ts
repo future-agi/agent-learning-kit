@@ -5,12 +5,17 @@ import {
     RequestConfig,
     Routes,
     InvalidAuthError,
+    DatasetNotFoundError,
+    RateLimitError,
+    ServerError,
+    ServiceUnavailableError,
     SDKException,
     InvalidValueType,
     MissingRequiredKey,
     AUTH_ENVVAR_NAME,
 } from './core/index.js';
 import { mapInputsToBackend } from './core/cloudRegistry.js';
+import { snapshotBoundary } from './local/autoeval/types.js';
 
 
 function coerceToApiInput(value: unknown): unknown {
@@ -39,6 +44,74 @@ import {
 } from './types.js';
 
 
+function responseData(raw: any, code: string): any {
+    try {
+        const data = raw?.data;
+        return snapshotBoundary(data === undefined ? raw : data, code);
+    } catch { throw new Error(code); }
+}
+
+// Operate only on captured records. Envelopes have verdict state but need not
+// carry output themselves; expanding their children must never erase that state.
+function terminalState(row: any): 'completed' | 'failed' | 'incomplete' {
+    if (!row || typeof row !== 'object' || Array.isArray(row) ||
+        (row.eval_status !== undefined && row.eval_status !== 'completed' && row.eval_status !== 'failed') ||
+        (row.failure !== undefined && typeof row.failure !== 'boolean') ||
+        ('passed' in row && typeof row.passed !== 'boolean') ||
+        ('status' in row && row.status !== 'completed' && row.status !== 'passed' && row.status !== 'failed') ||
+        (row.error_message !== undefined && row.error_message !== null && typeof row.error_message !== 'string')) return 'incomplete';
+    return row.failure === true || row.passed === false || row.status === 'failed' ||
+        row.eval_status === 'failed' || !!row.error_message ? 'failed' : 'completed';
+}
+
+function validResultOutput(row: any): boolean {
+    return row.output !== null && row.output !== undefined &&
+        (typeof row.output !== 'number' || Number.isFinite(row.output)) &&
+        (row.output_type === undefined || typeof row.output_type === 'string') &&
+        (row.output_type !== 'score' || typeof row.output === 'number') &&
+        (row.output_type !== 'boolean' || typeof row.output === 'boolean') &&
+        (row.output_type !== 'text' || typeof row.output === 'string');
+}
+
+// Only documented payload channels retain backend content. Diagnostics are fixed.
+function completedBatch(raw: any, warnings: NonNullable<BatchRunResult['warnings']> = []): BatchRunResult {
+    try { raw = snapshotBoundary(raw, 'EVALUATION_RESULT_INVALID'); }
+    catch { raw = undefined; }
+    let incomplete = false;
+    let failed = false;
+    const invalid = (): EvalResult => ({ output: null, failure: true, reason: 'EVALUATION_RESULT_INVALID', runtime: 0 });
+    const status = raw?.status;
+    if (status !== undefined && (typeof status !== 'string' ||
+        (status !== 'completed' && status !== 'passed' && status !== 'failed'))) incomplete = true;
+    if (status === 'failed') failed = true;
+    const rows = Array.isArray(raw?.eval_results) ? Array.from(raw.eval_results) : [];
+    if (rows.length === 0) incomplete = true;
+    const eval_results = rows.map((value: any): EvalResult => {
+        const state = terminalState(value);
+        if (state === 'incomplete' || !validResultOutput(value) || value.output === 'Pending') {
+            incomplete = true;
+            return invalid();
+        }
+        const row = value;
+        const rowFailed = state === 'failed';
+        failed = failed || rowFailed;
+        return {
+            name: row.name, output: row.output, data: row.data, error_localizer: row.error_localizer,
+            reason: rowFailed ? 'EVALUATION_FAILED' : 'EVALUATION_COMPLETED', runtime: row.runtime ?? 0,
+            output_type: row.output_type, eval_id: row.eval_id, model: row.model,
+            error_localizer_enabled: row.error_localizer_enabled, failure: rowFailed,
+            metadata: row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata)
+                ? { usage: row.metadata.usage ?? {}, cost: row.metadata.cost ?? {}, explanation: {} } : undefined,
+            metrics: row.metrics,
+        };
+    });
+    return {
+        eval_results: eval_results.length > 0 ? eval_results : [invalid()], warnings,
+        status: incomplete ? 'incomplete' : failed ? 'failed' : 'completed',
+        reasonCode: incomplete ? 'EVALUATION_INCOMPLETE' : failed ? 'EVALUATION_FAILED' : 'EVALUATION_COMPLETED',
+    };
+}
+
 /**
  * Handles responses for evaluation requests
  */
@@ -50,7 +123,11 @@ export class EvalResponseHandler extends ResponseHandler<BatchRunResult, any> {
         //     error_localizer? }] }] }
         // Async / single-row paths sometimes return the eval wrapped in
         // { eval_status, result: <eval> } — handle both.
-        const data = response.data || {};
+        let data: any;
+        try { data = snapshotBoundary(response.data, 'EVALUATION_RESULT_INVALID') || {}; }
+        catch { throw new Error('EVALUATION_RESULT_INVALID'); }
+        if (data.status === false) throw new Error('EVALUATION_BACKEND_REJECTED');
+        if (data.status !== undefined && typeof data.status !== 'boolean') throw new Error('EVALUATION_RESULT_INVALID');
         const evalResults: (EvalResult | null)[] = [];
 
         const topResult = data.result;
@@ -61,14 +138,35 @@ export class EvalResponseHandler extends ResponseHandler<BatchRunResult, any> {
                 : [];
 
         for (const item of outerList) {
-            const evaluations = Array.isArray(item?.evaluations)
-                ? item.evaluations
-                : item && typeof item === "object"
-                    ? [item]
-                    : [];
+            if (!item || typeof item !== 'object' || Array.isArray(item)) {
+                evalResults.push({ output: null, failure: true, reason: 'EVALUATION_RESULT_INVALID', runtime: 0 });
+                continue;
+            }
+            const wrapped = item.eval_status !== undefined && 'result' in item ? item.result : item;
+            if (!wrapped || typeof wrapped !== 'object' || Array.isArray(wrapped)) {
+                evalResults.push({ output: null, failure: true, reason: 'EVALUATION_RESULT_INVALID', runtime: 0 });
+                continue;
+            }
+            const parentStates = [terminalState(item), terminalState(wrapped)];
+            const parentIncomplete = parentStates.includes('incomplete');
+            const parentFailed = parentStates.includes('failed');
+            // A declared malformed/empty child group occupies an invalid slot;
+            // do not fall back to an unrelated successful output on its parent.
+            const evaluations = 'evaluations' in wrapped
+                ? Array.isArray(wrapped.evaluations) && wrapped.evaluations.length > 0 ? wrapped.evaluations : [null]
+                : [wrapped];
 
             for (const evaluation of evaluations) {
-                if (!evaluation || typeof evaluation !== "object") continue;
+                const state = terminalState(evaluation);
+                const output = evaluation && typeof evaluation === 'object'
+                    ? 'output' in evaluation ? evaluation.output : evaluation.value : undefined;
+                if (parentIncomplete || state === 'incomplete' ||
+                    ('failure' in evaluation && typeof evaluation.failure !== 'boolean') ||
+                    !validResultOutput({ output, output_type: evaluation.output_type })) {
+                    evalResults.push({ output: null, failure: true, reason: 'EVALUATION_RESULT_INVALID', runtime: 0 });
+                    continue;
+                }
+                const failed = parentFailed || state === 'failed';
 
                 // Legacy metadata passthrough (usage / cost / explanation)
                 // — still returned by some v1 paths and consumed by
@@ -83,15 +181,15 @@ export class EvalResponseHandler extends ResponseHandler<BatchRunResult, any> {
                         legacyMetadata = {
                             usage: metadata.usage ?? {},
                             cost: metadata.cost ?? {},
-                            explanation: metadata.explanation ?? {},
+                            explanation: {},
                         };
                     }
                 }
 
                 evalResults.push({
                     name: evaluation.name ?? "",
-                    output: evaluation.output ?? evaluation.value,
-                    reason: evaluation.reason ?? "",
+                    output,
+                    reason: output === 'Pending' ? 'EVALUATION_INCOMPLETE' : failed ? 'EVALUATION_FAILED' : 'EVALUATION_COMPLETED',
                     runtime: evaluation.runtime ?? 0,
                     output_type: evaluation.output_type,
                     eval_id: evaluation.eval_id,
@@ -100,7 +198,7 @@ export class EvalResponseHandler extends ResponseHandler<BatchRunResult, any> {
                     error_localizer: evaluation.error_localizer ?? null,
                     // Legacy v1 fields (optional, used by Protect)
                     data: evaluation.data,
-                    failure: evaluation.failure,
+                    failure: failed ? true : evaluation.failure,
                     metadata: legacyMetadata,
                     metrics: Array.isArray(evaluation.metrics)
                         ? evaluation.metrics.map((m: any): EvalResultMetric => ({
@@ -112,19 +210,21 @@ export class EvalResponseHandler extends ResponseHandler<BatchRunResult, any> {
             }
         }
 
-        return { eval_results: evalResults } as BatchRunResult;
+        return { eval_results: evalResults,
+            ...(evalResults.length === 0 || evalResults.some(row => row?.output === 'Pending' || row?.output === null || row?.output === undefined)
+                ? { status: 'incomplete' as const, reasonCode: 'EVALUATION_INCOMPLETE' as const } : {}) } as BatchRunResult;
     }
 
     public static _handleError(response: AxiosResponse): never {
         if (response.status === 400) {
             throw new Error(
-                `Evaluation failed with a 400 Bad Request. Please check your input data and evaluation configuration. Response: ${response.data}`
+                'EVALUATION_BAD_REQUEST'
             );
         } else if (response.status === 403) {
             throw new InvalidAuthError();
         } else {
             throw new Error(
-                `Error in evaluation: ${response.status}, response: ${response.data}`
+                'EVALUATION_REQUEST_FAILED'
             );
         }
     }
@@ -135,23 +235,23 @@ export class EvalResponseHandler extends ResponseHandler<BatchRunResult, any> {
  */
 export class EvalInfoResponseHandler extends ResponseHandler<Record<string, any>, any> {
     public static _parseSuccess(response: AxiosResponse): Record<string, any> {
-        const data = response.data;
-        if (data.result) {
+        const data = responseData(response, 'EVALUATION_INFO_INVALID');
+        if (data?.result && typeof data.result === 'object') {
             return data.result;
         } else {
-            throw new Error(`Failed to get evaluation info: ${data}`);
+            throw new Error('EVALUATION_INFO_INVALID');
         }
     }
 
     public static _handleError(response: AxiosResponse): never {
         if (response.status === 400) {
             // In TypeScript with axios, it's more common to let the caller handle response.data
-            throw new Error(`Bad request: ${response.data}`);
+            throw new Error('EVALUATION_INFO_BAD_REQUEST');
         }
         if (response.status === 403) {
             throw new InvalidAuthError();
         }
-        throw new Error(`Failed to get evaluation info: ${response.status}`);
+        throw new Error('EVALUATION_INFO_REQUEST_FAILED');
     }
 }
 
@@ -163,12 +263,40 @@ export class Evaluator extends APIKeyAuth {
     private readonly maxWorkers: number;
     private evalInfoCache = new Map<string, Record<string, any>>();
 
+    // Catch only the transport await: validation/mapping errors outside this
+    // boundary retain their contracts. Never attach the original error/cause.
+    private async requestWithFixedDiagnostics(config: RequestConfig, handler?: typeof ResponseHandler): Promise<any> {
+        try { return await (handler === undefined ? this.request(config) : this.request(config, handler)); }
+        catch (error) {
+            let ErrorType: new (message?: string) => Error = Error;
+            try {
+                if (error instanceof InvalidAuthError) ErrorType = InvalidAuthError;
+                else if (error instanceof DatasetNotFoundError) ErrorType = DatasetNotFoundError;
+                else if (error instanceof RateLimitError) ErrorType = RateLimitError;
+                else if (error instanceof ServerError) ErrorType = ServerError;
+                else if (error instanceof ServiceUnavailableError) ErrorType = ServiceUnavailableError;
+                else if (error instanceof SDKException) ErrorType = SDKException;
+            } catch { /* A hostile rejected value is not a diagnostic channel. */ }
+            throw new ErrorType('EVALUATION_REQUEST_FAILED');
+        }
+    }
+
     // Platform credentials (Langfuse)
     private readonly langfuseSecretKey?: string;
     private readonly langfusePublicKey?: string;
     private readonly langfuseHost?: string;
 
     constructor(options: EvaluatorConfig = {}) {
+        options = snapshotBoundary(options, 'EVALUATION_CONFIG_INVALID');
+        if (!options || typeof options !== 'object' || Array.isArray(options)) throw new Error('EVALUATION_CONFIG_INVALID');
+        for (const key of ['fiApiKey', 'fiSecretKey', 'fiBaseUrl', 'langfuseSecretKey', 'langfusePublicKey', 'langfuseHost'] as const) {
+            if (options[key] !== undefined && typeof options[key] !== 'string') throw new Error('EVALUATION_CONFIG_INVALID');
+        }
+        for (const key of ['timeout', 'maxQueue', 'maxWorkers'] as const) {
+            const value = options[key];
+            if (value !== undefined && (typeof value !== 'number' || !Number.isFinite(value) || value < 0 ||
+                (key !== 'timeout' && !Number.isSafeInteger(value)) || (key === 'maxWorkers' && value === 0))) throw new Error('EVALUATION_CONFIG_INVALID');
+        }
         const fiApiKey = process.env.FI_API_KEY || options.fiApiKey;
         const fiSecretKey = process.env.FI_SECRET_KEY || options.fiSecretKey;
         const fiBaseUrl = process.env.FI_BASE_URL || options.fiBaseUrl;
@@ -187,7 +315,12 @@ export class Evaluator extends APIKeyAuth {
         inputs: Record<string, string | string[]>,
         options: EvaluateOptions = {}
     ): Promise<BatchRunResult> {
-
+        ({ evalTemplates, inputs, options } = snapshotBoundary({ evalTemplates, inputs, options }, 'EVALUATION_CONFIG_INVALID'));
+        if (!inputs || typeof inputs !== 'object' || Array.isArray(inputs)) throw new Error('REQUIRED_INPUT_MISSING');
+        if (!options || typeof options !== 'object' || Array.isArray(options)) throw new Error('EVALUATION_CONFIG_INVALID');
+        if (options.timeout !== undefined && (typeof options.timeout !== 'number' || !Number.isFinite(options.timeout) || options.timeout < 0)) throw new Error('EVALUATION_CONFIG_INVALID');
+        for (const key of ['traceEval', 'isAsync', 'errorLocalizer'] as const) if (options[key] !== undefined && typeof options[key] !== 'boolean') throw new Error('EVALUATION_CONFIG_INVALID');
+        for (const key of ['modelName', 'customEvalName', 'platform'] as const) if (options[key] !== undefined && typeof options[key] !== 'string') throw new Error('EVALUATION_CONFIG_INVALID');
         const {
             timeout,
             modelName,
@@ -198,6 +331,23 @@ export class Evaluator extends APIKeyAuth {
             errorLocalizer = false,
             evalConfig
         } = options;
+
+        if (typeof evalTemplates !== 'string' && evalTemplates !== null && typeof evalTemplates === 'object' &&
+            typeof (evalTemplates as any)[Symbol.iterator] === 'function') {
+            evalTemplates = Array.from(evalTemplates as (string | EvalTemplate)[]);
+            if (evalTemplates.length === 0) throw new Error('EVALUATION_TEMPLATES_EMPTY');
+            if (evalTemplates.length > 1) {
+                const batches = await Promise.all(evalTemplates.map(template => this.evaluate(template, inputs, options)));
+                const incomplete = batches.some(batch => batch.status === 'incomplete');
+                const failed = batches.some(batch => batch.status === 'failed');
+                return {
+                    eval_results: batches.flatMap(batch => batch.eval_results),
+                    warnings: batches.flatMap(batch => batch.warnings ?? []),
+                    status: incomplete ? 'incomplete' : failed ? 'failed' : 'completed',
+                    reasonCode: incomplete ? 'EVALUATION_INCOMPLETE' : failed ? 'EVALUATION_FAILED' : 'EVALUATION_COMPLETED',
+                };
+            }
+        }
 
         // Handle platform configuration (e.g., Langfuse)
         if (platform) {
@@ -216,12 +366,18 @@ export class Evaluator extends APIKeyAuth {
 
         let traceEval = initialTraceEval;
         let spanId: string | undefined = undefined;
+        const warnings: NonNullable<BatchRunResult['warnings']> = [];
+        const disableTracing = () => {
+            traceEval = false;
+            spanId = undefined;
+            if (!warnings.includes('TRACING_UNAVAILABLE')) warnings.push('TRACING_UNAVAILABLE');
+        };
 
         const extractName = (t: string | EvalTemplate): string | undefined => {
             if (typeof t === 'string') {
                 return t;
             }
-            if (typeof t === 'object' && t.eval_name) {
+            if (t !== null && typeof t === 'object' && typeof t.eval_name === 'string') {
                 return t.eval_name;
             }
             return undefined;
@@ -234,68 +390,28 @@ export class Evaluator extends APIKeyAuth {
             throw new TypeError("Unsupported eval_templates argument. Expect eval template class/obj or name str.");
         }
 
-        // OpenTelemetry logic
+        // Optional telemetry can fail independently; it must not skip evaluation.
         if (traceEval) {
-            if (!customEvalName) {
-                traceEval = false;
-                console.warn("Failed to trace the evaluation. Please set the customEvalName.");
-            } else {
-                try {
-                    // Dynamically import to avoid making OTEL a hard dependency
-                    const otel = await import('@opentelemetry/api');
-
-                    const { checkCustomEvalConfigExists } = await import('@traceai/fi-core');
-
-
-                    const currentSpan = otel.trace.getSpan(otel.context.active());
-                    if (currentSpan && currentSpan.isRecording()) {
-                        const spanContext = currentSpan.spanContext();
-                        if (otel.isSpanContextValid(spanContext)) {
-                            spanId = spanContext.spanId;
-
-                            // Accessing the resource is not part of the public API interface,
-                            // but is available on SDK implementations. This mirrors the Python SDK's approach.
-                            const tracerProvider = otel.trace.getTracerProvider();
-                            // @ts-ignore
-                            const resource = tracerProvider.resource || (currentSpan && (currentSpan).resource);
-
-                            let projectName = resource?.attributes['project_name'] as string | undefined;
-                            if (!projectName) {
-                                // Fallback to standard OTEL service.name if custom attribute is absent
-                                projectName = resource?.attributes['service.name'] as string | undefined;
-                            }
-
-
-                            if (projectName) {
-                                const evalTags = [{
-                                    custom_eval_name: customEvalName,
-                                    eval_name: evalName,
-                                    mapping: {},
-                                    config: {},
-                                }];
-                                const customEvalExists = await checkCustomEvalConfigExists(projectName, evalTags);
-
-                                if (customEvalExists) {
-                                    traceEval = false;
-                                    console.warn("Failed to trace the evaluation. Custom eval configuration with the same name already exists for this project");
-                                }
-                            } else {
-                                traceEval = false;
-                                console.warn(
-                                    "Could not determine project_name from OpenTelemetry context. " +
-                                    "Skipping check for existing custom eval configuration."
-                                );
-                            }
-                        }
-                    }
-                } catch (error) {
-                    console.warn(
-                        "OpenTelemetry API not found. Please install '@opentelemetry/api' to enable tracing. " +
-                        "Skipping trace for this evaluation.",
-                        error
-                    );
-                    traceEval = false;
-                }
+            try {
+                if (!customEvalName) throw new Error('TRACING_UNAVAILABLE');
+                const otel = await import('@opentelemetry/api');
+                const { checkCustomEvalConfigExists } = await import('@traceai/fi-core');
+                const currentSpan = otel.trace.getSpan(otel.context.active());
+                if (!currentSpan?.isRecording()) throw new Error('TRACING_UNAVAILABLE');
+                const spanContext = currentSpan.spanContext();
+                if (!otel.isSpanContextValid(spanContext)) throw new Error('TRACING_UNAVAILABLE');
+                const provider = otel.trace.getTracerProvider() as any;
+                const resource = provider.resource || (currentSpan as any).resource;
+                const projectName = resource?.attributes?.project_name ?? resource?.attributes?.['service.name'];
+                if (!projectName) throw new Error('TRACING_UNAVAILABLE');
+                const exists = await checkCustomEvalConfigExists(projectName, [{
+                    custom_eval_name: customEvalName, eval_name: evalName, mapping: {}, config: {},
+                }]);
+                if (exists !== false) throw new Error('TRACING_UNAVAILABLE');
+                spanId = spanContext.spanId;
+            } catch {
+                disableTracing();
+                console.warn('TRACING_UNAVAILABLE');
             }
         }
 
@@ -303,20 +419,10 @@ export class Evaluator extends APIKeyAuth {
             throw new TypeError("'inputs' must be a dictionary, array-of-dicts is not supported.");
         }
 
-        // Dynamic registry: map user kwargs to exact required_keys before POST.
-        // The api rejects supersets (e.g. {output,input,context} for a template
-        // that only wants {output}), so this can't be a pass-through. On
-        // registry miss, leaves inputs untouched — backend surfaces its own error.
-        let mappedInputs: Record<string, any> = inputs;
-        try {
-            mappedInputs = await mapInputsToBackend(evalName, inputs, {
-                baseUrl: this.baseUrl,
-                apiKey: this.fiApiKey,
-                secretKey: this.fiSecretKey,
-            });
-        } catch (err) {
-            console.debug("Dynamic input mapping skipped:", err);
-        }
+        // Validation errors reject before transport; never submit unmapped input.
+        const mappedInputs = await mapInputsToBackend(evalName, inputs, {
+            baseUrl: this.baseUrl, apiKey: this.fiApiKey, secretKey: this.fiSecretKey,
+        });
 
         // The api accepts strings, list[str], or list[list[str]]. Serialize
         // dict / list-of-dicts / list-of-mixed values (e.g. conversation
@@ -354,23 +460,12 @@ export class Evaluator extends APIKeyAuth {
                 },
                 EvalResponseHandler
             ) as BatchRunResult;
-            return response;
-        } catch (error) {
-            // Silent-empty fix: return a failed EvalResult with the api's error
-            // text so callers can see *why* instead of getting an IndexError
-            // downstream from an empty list.
-            const message = error instanceof Error ? error.message : String(error);
-            console.warn(`Evaluation failed for '${evalName}':`, message);
+            return completedBatch(response, warnings);
+        } catch {
             return {
-                eval_results: [
-                    {
-                        name: evalName,
-                        output: null,
-                        reason: message,
-                        runtime: 0,
-                    } as any,
-                ],
-            } as BatchRunResult;
+                eval_results: [{ name: evalName, output: null, failure: true, reason: 'EVALUATION_REQUEST_FAILED', runtime: 0 }],
+                status: 'incomplete', reasonCode: 'EVALUATION_INCOMPLETE', warnings,
+            };
         }
     }
 
@@ -379,7 +474,7 @@ export class Evaluator extends APIKeyAuth {
             return this.evalInfoCache.get(evalName)!;
         }
 
-        const response = await this.request(
+        const response = await this.requestWithFixedDiagnostics(
             {
                 method: HttpMethod.GET,
                 url: `${this.baseUrl}/${Routes.get_eval_templates}`,
@@ -390,7 +485,7 @@ export class Evaluator extends APIKeyAuth {
         const evalInfo = response.find(item => item.name === evalName);
 
         if (!evalInfo) {
-            throw new Error(`Evaluation template with name '${evalName}' not found`);
+            throw new Error('TEMPLATE_UNKNOWN');
         }
 
         this.evalInfoCache.set(evalName, evalInfo);
@@ -402,7 +497,7 @@ export class Evaluator extends APIKeyAuth {
             method: HttpMethod.GET,
             url: `${this.baseUrl}/${Routes.get_eval_templates}`
         };
-        const response = await this.request(config, EvalInfoResponseHandler) as Record<string, any>[];
+        const response = await this.requestWithFixedDiagnostics(config, EvalInfoResponseHandler) as Record<string, any>[];
         return response;
     }
 
@@ -412,14 +507,15 @@ export class Evaluator extends APIKeyAuth {
      * can be awaited, use `getExecution` instead.
      */
     public async getEvalResult(evalId: string): Promise<Record<string, any>> {
+        if (typeof evalId !== 'string' || !evalId.trim()) throw new Error('EVALUATION_INPUT_INVALID');
         const config: RequestConfig = {
             method: HttpMethod.GET,
             url: `${this.baseUrl}/${Routes.get_eval_result}`,
             params: { eval_id: evalId },
             timeout: this.defaultTimeout * 1000,
         };
-        const response = await this.request(config);
-        return (response as any).data;
+        const response = await this.requestWithFixedDiagnostics(config);
+        return responseData(response, 'EVALUATION_RESULT_INVALID');
     }
 
     /**
@@ -430,6 +526,9 @@ export class Evaluator extends APIKeyAuth {
         version: string,
         evalData: PipelineEvalData[]
     ): Promise<Record<string, any>> {
+        evalData = snapshotBoundary(evalData, 'EVALUATION_INPUT_INVALID');
+        if (typeof projectName !== 'string' || !projectName.trim() || typeof version !== 'string' ||
+            !Array.isArray(evalData) || evalData.length === 0) throw new Error('EVALUATION_INPUT_INVALID');
         const apiPayload = {
             project_name: projectName,
             version: version,
@@ -443,8 +542,8 @@ export class Evaluator extends APIKeyAuth {
             timeout: this.defaultTimeout * 1000,
         };
 
-        const response = await this.request(config);
-        return (response as any).data;
+        const response = await this.requestWithFixedDiagnostics(config);
+        return responseData(response, 'EVALUATION_RESULT_INVALID');
     }
 
     /**
@@ -454,7 +553,8 @@ export class Evaluator extends APIKeyAuth {
         projectName: string,
         versions: string[]
     ): Promise<Record<string, any>> {
-        if (!Array.isArray(versions) || !versions.every(v => typeof v === 'string')) {
+        versions = snapshotBoundary(versions, 'EVALUATION_INPUT_INVALID');
+        if (typeof projectName !== 'string' || !Array.isArray(versions) || !versions.every(v => typeof v === 'string')) {
             throw new TypeError("versions must be an array of strings");
         }
 
@@ -468,8 +568,8 @@ export class Evaluator extends APIKeyAuth {
             timeout: this.defaultTimeout * 1000,
         };
 
-        const response = await this.request(config);
-        return (response as any).data;
+        const response = await this.requestWithFixedDiagnostics(config);
+        return responseData(response, 'EVALUATION_RESULT_INVALID');
     }
 
     /**
@@ -503,16 +603,10 @@ export class Evaluator extends APIKeyAuth {
                 }
             }
         } catch {
-            // OpenTelemetry not available
+            throw new Error('PLATFORM_CONTEXT_UNAVAILABLE');
         }
 
-        if (!kwargs.span_id || !kwargs.trace_id) {
-            console.warn(
-                "span_id and/or trace_id not found. " +
-                "Please run this function within a span context."
-            );
-            return { eval_results: [] } as BatchRunResult;
-        }
+        if (!kwargs.span_id || !kwargs.trace_id) throw new Error('PLATFORM_CONTEXT_UNAVAILABLE');
 
         const apiPayload = {
             eval_config: {
@@ -532,13 +626,16 @@ export class Evaluator extends APIKeyAuth {
             timeout: this.defaultTimeout * 1000,
         };
 
+        let response;
         try {
-            const response = await this.request(config);
-            return (response as any).data;
-        } catch (error) {
-            console.warn(`Error configuring evaluations: ${error}`);
-            return { eval_results: [] } as BatchRunResult;
+            response = await this.request(config);
+        } catch {
+            throw new Error('PLATFORM_REQUEST_FAILED');
         }
+        const batch = responseData(response, 'PLATFORM_RESULT_INVALID');
+        const result = completedBatch(batch);
+        if (result.status === 'incomplete') throw new Error('PLATFORM_RESULT_INVALID');
+        return result;
     }
 
     // ------------------------------------------------------------------
@@ -564,6 +661,11 @@ export class Evaluator extends APIKeyAuth {
             errorLocalizer?: boolean;
         } = {}
     ): Promise<Execution> {
+        ({ evalTemplates, inputs, options } = snapshotBoundary({ evalTemplates, inputs, options }, 'EVALUATION_CONFIG_INVALID'));
+        if (!inputs || typeof inputs !== 'object' || Array.isArray(inputs) || !options || typeof options !== 'object') throw new Error('EVALUATION_CONFIG_INVALID');
+        if (Array.isArray(evalTemplates) && evalTemplates.length !== 1) throw new Error('ASYNC_TEMPLATE_COUNT_INVALID');
+        if (options.timeout !== undefined && (typeof options.timeout !== 'number' || !Number.isFinite(options.timeout) || options.timeout < 0)) throw new Error('EVALUATION_CONFIG_INVALID');
+        for (const key of ['traceEval', 'errorLocalizer'] as const) if (options[key] !== undefined && typeof options[key] !== 'boolean') throw new Error('EVALUATION_CONFIG_INVALID');
         const extractName = (t: string | EvalTemplate): string | undefined => {
             if (typeof t === 'string') return t;
             if (typeof t === 'object' && t.eval_name) return t.eval_name;
@@ -601,31 +703,32 @@ export class Evaluator extends APIKeyAuth {
                 ? options.timeout * 1000
                 : (this.defaultTimeout ?? 30) * 1000;
 
-        const raw = (await this.request({
+        const raw = (await this.requestWithFixedDiagnostics({
             method: HttpMethod.POST,
             url: `${this.baseUrl}/${Routes.evaluatev2}`,
             json: payload,
             timeout: timeoutMs,
         })) as any;
-        const body = raw?.data ?? raw;
+        const body = responseData(raw, 'EVALUATION_RESULT_INVALID');
 
-        if (body?.status === false) {
+        if (!body || (body.status !== undefined && body.status !== true)) {
             throw new Error(
-                `Async submit rejected by backend: ${JSON.stringify(body.result)}`
+                'ASYNC_SUBMIT_REJECTED'
             );
         }
         const results = body?.result;
-        if (!Array.isArray(results) || results.length === 0) {
+        if (!Array.isArray(results) || results.length !== 1) {
             throw new Error(
-                `Async submit did not return a result list (response: ${JSON.stringify(body)})`
+                'ASYNC_SUBMIT_RESULT_INVALID'
             );
         }
         const evaluations = results[0]?.evaluations ?? [];
+        if (!Array.isArray(evaluations) || evaluations.length !== 1) throw new Error('ASYNC_SUBMIT_RESULT_INVALID');
         const firstEval = evaluations[0] ?? {};
         const executionId: string | undefined = firstEval.eval_id;
-        if (!executionId) {
+        if (typeof executionId !== 'string' || !executionId.trim()) {
             throw new Error(
-                `Async submit did not return an eval_id (response: ${JSON.stringify(body)})`
+                'ASYNC_SUBMIT_ID_MISSING'
             );
         }
 
@@ -644,43 +747,47 @@ export class Evaluator extends APIKeyAuth {
      * `handle.wait()` to block until completion.
      */
     public async getExecution(executionId: string): Promise<Execution> {
+        if (typeof executionId !== 'string' || !executionId.trim()) throw new Error('EVALUATION_INPUT_INVALID');
         const handle = await this._refreshEvalExecution(executionId);
         handle._setRefresher(() => this._refreshEvalExecution(executionId));
         return handle;
     }
 
     private async _refreshEvalExecution(executionId: string): Promise<Execution> {
-        const raw = (await this.request({
+        const raw = (await this.requestWithFixedDiagnostics({
             method: HttpMethod.GET,
             url: `${this.baseUrl}/${Routes.get_eval_result}`,
             params: { eval_id: executionId },
             timeout: (this.defaultTimeout ?? 30) * 1000,
         })) as any;
-        const body = raw?.data ?? raw;
+        const body = responseData(raw, 'EVALUATION_RESULT_INVALID');
         // Envelope: { status, result: { eval_status, result: <dict|str>, error_message? } }
         const payload = body?.result ?? {};
-        const status = normalizeStatus(payload.eval_status);
+        const token = payload.eval_status;
+        const validStatus = typeof token === 'string' && ['pending', 'PENDING', 'processing', 'PROCESSING', 'running', 'completed', 'COMPLETED', 'failed', 'FAILED'].some(value => token === value);
+        let status = validStatus ? normalizeStatus(token) : 'failed' as const;
         const rawResult = payload.result;
         let parsedResult: EvalResult | null = null;
         let errorLocalizer: Record<string, any> | null = null;
-        let errorMessage: string | null = payload.error_message ?? null;
-
-        if (rawResult && typeof rawResult === 'object') {
-            parsedResult = {
-                name: rawResult.name ?? '',
-                output: rawResult.output ?? rawResult.value,
-                reason: rawResult.reason ?? '',
-                runtime: rawResult.runtime ?? 0,
-                output_type: rawResult.output_type,
-                eval_id: rawResult.eval_id ?? executionId,
-                model: rawResult.model,
-                error_localizer_enabled: rawResult.error_localizer_enabled,
-                error_localizer: rawResult.error_localizer ?? null,
-            };
-            errorLocalizer = rawResult.error_localizer ?? null;
-            errorMessage = rawResult.error_message ?? errorMessage;
+        let errorMessage: string | null = null;
+        if (!validStatus || (!body || (body.status !== undefined && body.status !== true)) || payload.error_message) {
+            status = 'failed'; errorMessage = 'EVALUATION_RESULT_INVALID';
         }
-        // else rawResult is a human-readable string like "Evaluation is being processed."
+        if (status === 'completed') {
+            // The async status aliases have already been checked and normalized.
+            // Other verdict fields on the enclosing payload still constrain its child.
+            const parentState = terminalState({ ...payload, eval_status: status });
+            const row = rawResult && typeof rawResult === 'object' && !Array.isArray(rawResult)
+                ? { ...rawResult, output: 'output' in rawResult ? rawResult.output : rawResult.value } : null;
+            const batch = completedBatch({ eval_results: [row] });
+            if (parentState !== 'completed' || batch.status !== 'completed') {
+                status = 'failed'; errorMessage = 'EVALUATION_RESULT_INVALID';
+            } else {
+                parsedResult = batch.eval_results[0];
+                errorLocalizer = parsedResult?.error_localizer ?? null;
+            }
+        }
+        if (status === 'failed' && !errorMessage) errorMessage = 'EVALUATION_FAILED';
 
         return new Execution({
             id: executionId,
@@ -705,6 +812,7 @@ export const evaluate = (
     inputs: Record<string, string | string[]>,
     options: EvaluatorConfig & EvaluateOptions = {}
 ): Promise<BatchRunResult> => {
+    ({ evalTemplates, inputs, options } = snapshotBoundary({ evalTemplates, inputs, options }, 'EVALUATION_CONFIG_INVALID'));
     const { fiApiKey, fiSecretKey, fiBaseUrl, ...evalOptions } = options;
     return new Evaluator({ fiApiKey, fiSecretKey, fiBaseUrl }).evaluate(evalTemplates, inputs, evalOptions);
 };
@@ -714,6 +822,7 @@ export const evaluate = (
  * @returns A list of evaluation template information dictionaries.
  */
 export const list_evaluations = (options: EvaluatorConfig = {}): Promise<Record<string, any>[]> => {
+    options = snapshotBoundary(options, 'EVALUATION_CONFIG_INVALID');
     const { fiApiKey, fiSecretKey, fiBaseUrl } = options;
     return new Evaluator({ fiApiKey, fiSecretKey, fiBaseUrl }).list_evaluations();
 };
@@ -728,6 +837,7 @@ export const get_eval_result = (
     evalId: string,
     options: EvaluatorConfig = {}
 ): Promise<Record<string, any>> => {
+    options = snapshotBoundary(options, 'EVALUATION_CONFIG_INVALID');
     const { fiApiKey, fiSecretKey, fiBaseUrl } = options;
     return new Evaluator({ fiApiKey, fiSecretKey, fiBaseUrl }).getEvalResult(evalId);
 };
@@ -746,6 +856,7 @@ export const evaluate_pipeline = (
     evalData: PipelineEvalData[],
     options: EvaluatorConfig = {}
 ): Promise<Record<string, any>> => {
+    options = snapshotBoundary(options, 'EVALUATION_CONFIG_INVALID');
     const { fiApiKey, fiSecretKey, fiBaseUrl } = options;
     return new Evaluator({ fiApiKey, fiSecretKey, fiBaseUrl }).evaluatePipeline(projectName, version, evalData);
 };
@@ -762,6 +873,7 @@ export const get_pipeline_results = (
     versions: string[],
     options: EvaluatorConfig = {}
 ): Promise<Record<string, any>> => {
+    options = snapshotBoundary(options, 'EVALUATION_CONFIG_INVALID');
     const { fiApiKey, fiSecretKey, fiBaseUrl } = options;
     return new Evaluator({ fiApiKey, fiSecretKey, fiBaseUrl }).getPipelineResults(projectName, versions);
 };

@@ -1,50 +1,81 @@
-import {
-    APIKeyAuth,
-    HttpMethod,
-    RequestConfig,
-    Routes,
-    InvalidAuthError,
-    SDKException,
-    InvalidValueType,
-    MissingRequiredKey,
-} from './core/index.js';
+import { HttpMethod, Routes, InvalidAuthError, SDKException } from './core/index.js';
 import { EvalResponseHandler, Evaluator } from './evaluator.js';
 import { Templates } from './templates.js';
 import { BatchRunResult } from './types.js';
+import { snapshotBoundary } from './local/autoeval/types.js';
 
-const PROTECT_FLASH_ID = "76";
+// A protection request asks for one verdict. Validate every supplied slot and
+// reject extra slots rather than silently selecting a successful first row.
+function protectionResult(raw: unknown, flash: boolean): { result: any; failed: boolean } {
+    const response = snapshotBoundary(raw, 'PROTECT_RESULT_INVALID') as any;
+    if (!response || !Array.isArray(response.eval_results) ||
+        (response.status !== undefined && response.status !== 'completed' && response.status !== 'failed')) throw new Error('PROTECT_RESULT_INVALID');
+    // Legacy Protect verdicts may omit output entirely. A supplied output or
+    // declared kind, however, must agree with completed evaluation evidence.
+    const valid = response.eval_results.map((row: any) => !!row && typeof row === 'object' && !Array.isArray(row) &&
+        (!flash || typeof row.failure === 'boolean') &&
+        (row.failure === undefined || typeof row.failure === 'boolean') &&
+        (!Object.prototype.hasOwnProperty.call(row, 'passed') || typeof row.passed === 'boolean') &&
+        (row.eval_status === undefined || row.eval_status === 'completed' || row.eval_status === 'failed') &&
+        (!('status' in row) || row.status === 'completed' || row.status === 'passed' || row.status === 'failed') &&
+        (row.error_message === undefined || row.error_message === null || typeof row.error_message === 'string') &&
+        (!('output' in row) || (row.output !== null && row.output !== undefined && row.output !== 'Pending')) &&
+        (typeof row.output !== 'number' || Number.isFinite(row.output)) &&
+        (row.output_type === undefined || typeof row.output_type === 'string') &&
+        (row.output_type !== 'score' || typeof row.output === 'number') &&
+        (row.output_type !== 'boolean' || typeof row.output === 'boolean') &&
+        (row.output_type !== 'text' || typeof row.output === 'string') &&
+        (flash || (Array.isArray(row.data) && row.data.length > 0 && row.data.every((item: unknown) => typeof item === 'string'))));
+    if (valid.length !== 1 || valid.some((ok: boolean) => !ok)) throw new Error('PROTECT_RESULT_INVALID');
+    const result = response.eval_results[0];
+    return { result, failed: response.status === 'failed' || result.failure === true || result.passed === false ||
+        result.status === 'failed' || result.eval_status === 'failed' || !!result.error_message };
+}
+
+const PROTECT_FLASH_ID = '76';
 
 export class Protect {
     public evaluator: Evaluator;
     private metric_map: Record<string, any>;
 
-    constructor(options: {
-        fiApiKey?: string;
-        fiSecretKey?: string;
-        fiBaseUrl?: string;
-        evaluator?: Evaluator;
-    } = {}) {
-        if (options.evaluator) {
-            this.evaluator = options.evaluator;
+    constructor(options: { fiApiKey?: string; fiSecretKey?: string; fiBaseUrl?: string; evaluator?: Evaluator } = {}) {
+        // The injected transport is an opaque capability, not a data record.
+        let supplied: Evaluator | undefined;
+        let credentials: Omit<typeof options, 'evaluator'>;
+        try {
+            supplied = options.evaluator;
+            credentials = snapshotBoundary({ fiApiKey: options.fiApiKey, fiSecretKey: options.fiSecretKey, fiBaseUrl: options.fiBaseUrl }, 'PROTECT_CONFIG_INVALID');
+        } catch { throw new SDKException('PROTECT_CONFIG_INVALID'); }
+        if (supplied !== undefined) {
+            this.evaluator = supplied;
         } else {
-            const fiApiKey = process.env.FI_API_KEY || options.fiApiKey;
-            const fiSecretKey = process.env.FI_SECRET_KEY || options.fiSecretKey;
-            const fiBaseUrl = process.env.FI_BASE_URL || options.fiBaseUrl;
-
-            if (!fiApiKey || !fiSecretKey) {
-                throw new InvalidAuthError("API key or secret key is missing for Protect initialization.");
-            }
-
+            const fiApiKey = process.env.FI_API_KEY || credentials.fiApiKey;
+            const fiSecretKey = process.env.FI_SECRET_KEY || credentials.fiSecretKey;
+            const fiBaseUrl = process.env.FI_BASE_URL || credentials.fiBaseUrl;
+            if (!fiApiKey || !fiSecretKey) throw new InvalidAuthError('PROTECT_AUTH_MISSING');
             this.evaluator = new Evaluator({ fiApiKey, fiSecretKey, fiBaseUrl });
         }
-
         this.metric_map = {
-            "Toxicity": Templates.Toxicity,
-            "Tone": Templates.Tone,
-            "Sexism": Templates.Sexist,
-            "Prompt Injection": Templates.PromptInjection,
-            "Data Privacy": Templates.DataPrivacyCompliance,
+            Toxicity: Templates.Toxicity, Tone: Templates.Tone, Sexism: Templates.Sexist,
+            'Prompt Injection': Templates.PromptInjection, 'Data Privacy': Templates.DataPrivacyCompliance,
         };
+    }
+
+    /** Bound even a transport that ignores its timeout; clear timers on every exit. */
+    private async withinBudget<T>(operation: () => Promise<T>, milliseconds: number): Promise<T> {
+        if (!Number.isFinite(milliseconds) || milliseconds <= 0 || milliseconds > 2147483647) throw new Error('PROTECT_TIMEOUT');
+        const deadline = Date.now() + milliseconds;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+            const watchdog = new Promise<never>((_, reject) => {
+                timer = setTimeout(() => reject(new Error('PROTECT_TIMEOUT')), milliseconds);
+            });
+            const result = await Promise.race([watchdog, Promise.resolve().then(operation)]);
+            if (Date.now() >= deadline) throw new Error('PROTECT_TIMEOUT');
+            return result;
+        } finally {
+            if (timer !== undefined) clearTimeout(timer);
+        }
     }
 
     private async _check_rule_sync(
@@ -53,278 +84,138 @@ export class Protect {
         timeoutSeconds: number
     ): Promise<[string, boolean, string | undefined, string | undefined]> {
         const templateInfo = this.metric_map[rule.metric];
-        const templateConfig: Record<string, any> = { call_type: "protect" };
-
-        if (rule.metric === "Data Privacy") {
-            templateConfig.check_internet = false;
-        }
-
-        const payload = {
-            inputs: [testCase],
-            config: {
-                [templateInfo.eval_id]: templateConfig
-            },
-        };
-
-        const timeoutMs = Math.max(0, timeoutSeconds * 1000);
-        const evalResult = await this.evaluator.request(
-            {
-                method: HttpMethod.POST,
-                url: `${this.evaluator.baseUrl}/${Routes.evaluate}`,
-                json: payload,
-                timeout: timeoutMs
-            },
-            EvalResponseHandler,
-        ) as BatchRunResult;
-
-        let reasonText: string | undefined = undefined;
-
-        if (evalResult.eval_results && evalResult.eval_results[0]) {
-            const result = evalResult.eval_results[0]!;
-            const detectedValues = result.data as any[] || [];
-            let shouldTrigger = false;
-            if (rule.type === "any") {
-                shouldTrigger = detectedValues.some((value: any) => rule.contains?.includes(value));
-            } else if (rule.type === "all") {
-                shouldTrigger = rule.contains?.every((value: any) => detectedValues.includes(value)) ?? false;
-            }
-
-            if (shouldTrigger) {
-                const message = rule.action;
-                if (rule._internal_reason_flag) {
-                    reasonText = result.reason;
-                }
-                return [rule.metric, true, message, reasonText];
-            }
-        }
-
-        return [rule.metric, false, undefined, undefined];
-    }
-
-    private async _process_rules_batch(
-        rules: Record<string, any>[],
-        testCase: { input: string; call_type: string },
-        remainingTime: number // in seconds
-    ): Promise<[string[], string[], string[], string[] | undefined, string | undefined]> {
-        let failureMessages: string[] = [];
-        let completedRules: string[] = [];
-        let uncompletedRules: string[] = [];
-        let failureReasons: string[] = [];
-        let failedRule: string | undefined = undefined;
-
-        const timeoutPromise = new Promise<'timeout'>((resolve) =>
-            setTimeout(() => resolve("timeout"), remainingTime * 1000)
-        );
-
-        const rulePromises = rules.map(rule =>
-            this._check_rule_sync(rule, testCase, remainingTime)
-                .then(value => ({ status: 'fulfilled' as const, value, metric: rule.metric }))
-                .catch(reason => ({ status: 'rejected' as const, reason, metric: rule.metric }))
-        );
-
-        const raceResult = await Promise.race([Promise.all(rulePromises), timeoutPromise]);
-
-        if (raceResult === "timeout") {
-            uncompletedRules = rules.map(r => r.metric);
-            return [failureMessages, completedRules, uncompletedRules, failureReasons, failedRule];
-        }
-
-        for (const result of raceResult) {
-            if (result.status === 'fulfilled') {
-                const [metric, triggered, message, reason_text] = result.value;
-                completedRules.push(metric);
-                if (triggered && !failedRule) {
-                    failedRule = metric;
-                    failureMessages.push(message!);
-                    if (reason_text) {
-                        failureReasons.push(reason_text);
-                    }
-                }
-            } else {
-                console.error(`Rule ${result.metric} failed with error:`, result.reason);
-            }
-        }
-
-        const allMetrics = rules.map(r => r.metric);
-        uncompletedRules = allMetrics.filter(m => !completedRules.includes(m));
-
-        return [failureMessages, completedRules, uncompletedRules, failureReasons, failedRule];
+        const templateConfig: Record<string, any> = { call_type: 'protect' };
+        if (rule.metric === 'Data Privacy') templateConfig.check_internet = false;
+        const response = await this.withinBudget(() => this.evaluator.request({
+            method: HttpMethod.POST,
+            url: `${this.evaluator.baseUrl}/${Routes.evaluate}`,
+            json: { inputs: [testCase], config: { [templateInfo.eval_id]: templateConfig } },
+            timeout: timeoutSeconds * 1000,
+        }, EvalResponseHandler) as Promise<BatchRunResult>, timeoutSeconds * 1000);
+        const { result, failed } = protectionResult(response, false);
+        const detected: string[] = result.data;
+        const triggered = failed || (rule.type === 'all'
+            ? rule.contains.every((value: string) => detected.includes(value))
+            : detected.some(value => rule.contains.includes(value)));
+        return [rule.metric, triggered, triggered ? rule.action : undefined, triggered ? 'PROTECTION_RULE_TRIGGERED' : undefined];
     }
 
     public async protect(
         inputs: string,
         protectRules: Record<string, any>[] | null = null,
-        action: string = "Response cannot be generated as the input fails the checks",
+        action: string = 'Response cannot be generated as the input fails the checks',
         reason: boolean = false,
-        timeout: number = 30000, // milliseconds
+        timeout: number = 30000,
         useFlash: boolean = false
     ): Promise<Record<string, any>> {
-        const timeoutSeconds = timeout / 1000.0;
-        let protectRulesCopy: Record<string, any>[] = protectRules ? JSON.parse(JSON.stringify(protectRules)) : [];
-
-        if (useFlash && protectRulesCopy.length === 0) {
-            protectRulesCopy = [{ metric: "Toxicity" }];
-        } else if (useFlash) {
-            console.log("Note: When using ProtectFlash, Rules are not considered as it performs binary harmful/not harmful classification only.");
-        }
-
-        if (typeof inputs !== 'string') {
-            throw new InvalidValueType("inputs", inputs, "string");
-        }
-
-        const input_text = inputs;
-        if (!input_text.trim()) {
-            throw new InvalidValueType("inputs", input_text, "non-empty string or string with non-whitespace characters");
-        }
-
-        const inputsList = [input_text];
+        if (typeof inputs !== 'string' || !inputs.trim()) throw new SDKException('PROTECT_INPUT_INVALID');
+        if (typeof timeout !== 'number' || !Number.isFinite(timeout) || timeout < 0) throw new SDKException('PROTECT_TIMEOUT_INVALID');
+        if (typeof reason !== 'boolean' || typeof useFlash !== 'boolean') throw new SDKException('PROTECT_CONFIG_INVALID');
+        const startTime = Date.now();
+        const deadline = startTime + timeout;
+        let rules: Record<string, any>[];
+        try {
+            const owned = snapshotBoundary(protectRules, 'PROTECT_RULES_INVALID');
+            if (owned !== null && !Array.isArray(owned)) throw new Error();
+            rules = (owned ?? []).map(rule => ({ ...rule }));
+        } catch { throw new SDKException('PROTECT_RULES_INVALID'); }
+        const incomplete = (required: number, names: string[], reasonCode: string) => ({
+            status: 'incomplete', completed_rules: [], uncompleted_rules: names, failed_rule: null,
+            messages: 'PROTECTION_INCOMPLETE', reasons: reasonCode, reasonCode,
+            time_taken: (Date.now() - startTime) / 1000,
+            coverage: { required, executed: 0, completed: 0, skipped: required, errored: 0 },
+        });
 
         if (useFlash) {
-            const testCase = { input: inputsList[0], call_type: "protect" };
-            const templateInfo = this.metric_map[protectRulesCopy[0].metric];
-            const payload = {
-                inputs: [testCase],
-                config: { [PROTECT_FLASH_ID]: { call_type: "protect" } },
-                protect_flash: true
-            };
-
-            const response = await this.evaluator.request(
-                {
-                    method: HttpMethod.POST,
-                    url: `${this.evaluator.baseUrl}/${Routes.evaluate}`,
-                    json: payload,
-                    timeout: timeoutSeconds * 1000
-                },
-                EvalResponseHandler,
-            ) as BatchRunResult;
-
-            if (response?.eval_results?.[0]) {
-                const result = response.eval_results[0];
-                const isHarmful = result.failure;
+            if (timeout === 0) return incomplete(1, ['ProtectFlash'], 'PROTECT_TIMEOUT');
+            try {
+                const response = await this.withinBudget(() => this.evaluator.request({
+                    method: HttpMethod.POST, url: `${this.evaluator.baseUrl}/${Routes.evaluate}`,
+                    json: { inputs: [{ input: inputs, call_type: 'protect' }], config: { [PROTECT_FLASH_ID]: { call_type: 'protect' } }, protect_flash: true },
+                    timeout,
+                }, EvalResponseHandler) as Promise<BatchRunResult>, deadline - Date.now());
+                let failed: boolean;
+                try { failed = protectionResult(response, true).failed; }
+                catch { return { ...incomplete(1, ['ProtectFlash'], 'PROTECT_RESULT_INVALID'), coverage: { required: 1, executed: 1, completed: 0, skipped: 0, errored: 1 } }; }
+                if (Date.now() >= deadline) throw new Error('PROTECT_TIMEOUT');
                 return {
-                    status: isHarmful ? "failed" : "passed",
-                    completed_rules: ["ProtectFlash"],
-                    uncompleted_rules: [],
-                    failed_rule: isHarmful ? "ProtectFlash" : null,
-                    messages: isHarmful ? (protectRulesCopy[0].action || action) : inputsList[0],
-                    reasons: isHarmful ? "Content detected as harmful." : "All checks passed",
-                    time_taken: result.runtime ? result.runtime / 1000 : 0,
+                    status: failed ? 'failed' : 'passed', completed_rules: ['ProtectFlash'], uncompleted_rules: [],
+                    failed_rule: failed ? 'ProtectFlash' : null,
+                    messages: failed ? 'PROTECTION_RULE_TRIGGERED' : 'CHECKS_PASSED',
+                    reasons: failed ? 'PROTECTION_RULE_TRIGGERED' : 'All checks passed',
+                    reasonCode: failed ? 'CHECKS_FAILED' : 'CHECKS_PASSED',
+                    time_taken: (Date.now() - startTime) / 1000,
+                    coverage: { required: 1, executed: 1, completed: 1, skipped: 0, errored: 0 },
                 };
+            } catch {
+                return { ...incomplete(1, ['ProtectFlash'], 'PROTECT_CHECK_FAILED'), coverage: { required: 1, executed: 1, completed: 0, skipped: 0, errored: 1 } };
+            }
+        }
+
+        if (rules.length === 0) throw new SDKException('PROTECT_RULES_EMPTY');
+        for (const rule of rules) {
+            if (typeof rule.metric !== 'string' || !Object.prototype.hasOwnProperty.call(this.metric_map, rule.metric)) throw new SDKException('PROTECT_RULE_UNKNOWN');
+            if (rule.metric === 'Tone') {
+                try {
+                    const contains = rule.contains;
+                    if (contains === null || typeof contains !== 'object' || typeof contains[Symbol.iterator] !== 'function') throw new Error();
+                    rule.contains = Array.from(contains);
+                } catch { throw new SDKException('PROTECT_RULE_INVALID'); }
+                if (rule.contains.length === 0 || rule.contains.some((v: unknown) => typeof v !== 'string' || !v)) throw new SDKException('PROTECT_RULE_INVALID');
+                if (rule.type !== undefined && rule.type !== 'any' && rule.type !== 'all') throw new SDKException('PROTECT_RULE_INVALID');
+                rule.type = rule.type ?? 'any';
             } else {
-                return { status: "error", messages: "Evaluation failed", completed_rules: [], uncompleted_rules: ["ProtectFlash"], failed_rule: null, reasons: "No evaluation results returned", time_taken: 0 };
+                if (rule.contains !== undefined || rule.type !== undefined) throw new SDKException('PROTECT_RULE_INVALID');
+                rule.contains = ['Failed'];
+                rule.type = 'any';
             }
+            rule.action = rule.action || action;
         }
 
-        const testCases = inputsList.map(input_text => ({ input: input_text, call_type: "protect" }));
-
-        // Validate rules
-        if (protectRulesCopy.length === 0) {
-            throw new InvalidValueType("protect_rules", protectRulesCopy, "non-empty list");
+        const completed: string[] = [];
+        const uncompleted: string[] = [];
+        let failedRule: string | undefined;
+        let failureMessage: string | undefined;
+        let executed = 0;
+        let errored = 0;
+        // Continue after a triggered rule so all requested coverage is accounted for.
+        for (let offset = 0; offset < rules.length; offset += 5) {
+            const batch = rules.slice(offset, offset + 5);
+            const outcomes = await Promise.all(batch.map(async rule => {
+                const remaining = deadline - Date.now();
+                if (remaining <= 0) return { metric: rule.metric, outcome: null };
+                executed++;
+                try {
+                    return { metric: rule.metric, outcome: await this._check_rule_sync(rule, { input: inputs, call_type: 'protect' }, remaining / 1000) };
+                } catch {
+                    errored++;
+                    return { metric: rule.metric, outcome: null };
+                }
+            }));
+            for (const { metric, outcome } of outcomes) {
+                if (!outcome) { uncompleted.push(metric); continue; }
+                completed.push(metric);
+                if (outcome[1] && !failedRule) { failedRule = metric; failureMessage = outcome[2]; }
+            }
         }
-
-        const validMetrics = new Set(Object.keys(this.metric_map));
-        const validTypes = new Set(['any', 'all']);
-
-        for (let i = 0; i < protectRulesCopy.length; i++) {
-            const rule = protectRulesCopy[i];
-            if (typeof rule !== 'object' || rule === null) {
-                throw new InvalidValueType(`Rule at index ${i}`, rule, "dictionary");
-            }
-            if (!rule.metric) {
-                throw new MissingRequiredKey(`Rule at index ${i}`, 'metric');
-            }
-            if (!validMetrics.has(rule.metric)) {
-                throw new InvalidValueType(`metric in Rule at index ${i}`, rule.metric, `one of ${[...validMetrics]}`);
-            }
-
-            const isToneMetric = rule.metric === "Tone";
-
-            if (isToneMetric) {
-                if (!rule.contains) {
-                    throw new MissingRequiredKey(`Rule for Tone metric at index ${i}`, "contains");
-                }
-                if (!Array.isArray(rule.contains) || rule.contains.length === 0) {
-                    throw new InvalidValueType(`'contains' in Tone rule at index ${i}`, rule.contains, "non-empty list");
-                }
-                if (rule.type && !validTypes.has(rule.type)) {
-                    throw new InvalidValueType(`'type' in Tone rule at index ${i}`, rule.type, `one of ${[...validTypes]}`);
-                }
-                if (!rule.type) {
-                    rule.type = "any"; // Default
-                }
-            } else {
-                if (rule.contains) {
-                     throw new SDKException(`'contains' should not be specified for ${rule.metric} metric at index ${i}. Provide it only for 'Tone' metric.`);
-                }
-                 if (rule.type) {
-                    throw new SDKException(`'type' should not be specified for ${rule.metric} metric at index ${i}. Provide it only for 'Tone' metric.`);
-                }
-                rule.contains = ["Failed"];
-                rule.type = "any";
-            }
-
-            rule._internal_reason_flag = reason;
-            if (!rule.action) rule.action = action;
+        if (Date.now() >= deadline) {
+            uncompleted.push(...completed.splice(0));
         }
-
-        const startTime = Date.now();
-        let allFailureMessages: string[] = [];
-        let allCompletedRules: string[] = [];
-        let allUncompletedRules: string[] = [];
-        let allFailureReasons: string[] = [];
-        let failedRule: string | undefined = undefined;
-
-        for (const testCase of testCases) {
-            const BATCH_SIZE = 5;
-            for (let i = 0; i < protectRulesCopy.length; i += BATCH_SIZE) {
-                const elapsedSeconds = (Date.now() - startTime) / 1000;
-                const remainingTime = Math.max(0, timeoutSeconds - elapsedSeconds);
-                if (remainingTime <= 0) {
-                    allUncompletedRules.push(...protectRulesCopy.slice(i).map((r: Record<string, any>) => r.metric));
-                    break;
-                }
-
-                const rulesBatch = protectRulesCopy.slice(i, i + BATCH_SIZE);
-                const [messages, completed, uncompleted, fReasons, fRule] = await this._process_rules_batch(rulesBatch, testCase, remainingTime);
-
-                allCompletedRules.push(...completed);
-                allUncompletedRules.push(...uncompleted);
-                if (fReasons) allFailureReasons.push(...fReasons);
-
-                if (fRule) {
-                    failedRule = fRule;
-                    allFailureMessages = messages;
-                    break;
-                }
-            }
-            if (failedRule) break;
-        }
-
-        const finalProcessingDurationSeconds = (Date.now() - startTime) / 1000;
-
-        const status = failedRule ? "failed" : "passed";
-        const baseResult: any = {
-            status,
-            completed_rules: [...new Set(allCompletedRules)],
-            uncompleted_rules: [...new Set(allUncompletedRules)],
-            failed_rule: failedRule || null,
-            messages: status === 'failed' ? allFailureMessages[0] : inputsList[0],
-            time_taken: finalProcessingDurationSeconds,
+        const complete = completed.length === rules.length;
+        const status = failedRule ? 'failed' : complete ? 'passed' : 'incomplete';
+        const reasonCode = !complete ? 'PROTECTION_INCOMPLETE' : failedRule ? 'PROTECTION_RULE_TRIGGERED' : 'CHECKS_PASSED';
+        return {
+            status, completed_rules: [...new Set(completed)], uncompleted_rules: [...new Set(uncompleted)],
+            failed_rule: failedRule ?? null,
+            messages: !complete ? 'PROTECTION_INCOMPLETE' : failedRule ? 'PROTECTION_RULE_TRIGGERED' : 'CHECKS_PASSED',
+            ...(reason ? { reasons: complete && !failedRule ? 'All checks passed' : reasonCode } : {}),
+            reasonCode, time_taken: (Date.now() - startTime) / 1000,
+            coverage: { required: rules.length, executed, completed: completed.length, skipped: rules.length - executed, errored },
         };
-
-        if (reason) {
-            baseResult.reasons = status === 'failed'
-                ? (allFailureReasons[0] || "A protection rule was triggered.")
-                : "All checks passed";
-        }
-
-        return baseResult;
     }
 }
 
-/**
- * Convenience function to evaluate input strings against protection rules.
- */
+/** Convenience function to evaluate input strings against protection rules. */
 export const protect = (
     inputs: string,
     protectRules: Record<string, any>[] | null,

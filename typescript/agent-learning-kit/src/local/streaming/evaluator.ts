@@ -17,7 +17,18 @@ import {
     ErrorEvent,
     canStreamMetric
 } from './types.js';
-import { runMetric, hasMetric, MetricResult } from '../metrics/index.js';
+import { runMetric, hasMetric, getMetric, MetricResult } from '../metrics/index.js';
+import { snapshotBoundary } from '../autoeval/types.js';
+
+// Preserve metric detail keys/counts without returning input-derived text.
+function redactDetails(value: unknown, depth = 0): unknown {
+    if (depth > 32) return undefined;
+    if (typeof value === 'string') return '[REDACTED]';
+    if (Array.isArray(value)) return value.map(item => redactDetails(item, depth + 1));
+    if (value && typeof value === 'object') return Object.fromEntries(
+        Object.entries(value).map(([key, item]) => [key, redactDetails(item, depth + 1)]));
+    return value;
+}
 
 /**
  * Streaming Evaluator - evaluates responses as they stream in.
@@ -51,13 +62,28 @@ export class StreamingEvaluator {
     private state: StreamingState;
     private handlers: StreamingEventHandler[] = [];
     private previousScores: Map<string, number> = new Map();
+    private metricErrors = new Map<string, string>();
+    private attempted = new Set<string>();
+    private finalResults = new Map<string, MetricResult>();
+    private qualityFailures = new Map<string, MetricResult>();
 
     constructor(config: StreamingEvalConfig) {
+        config = snapshotBoundary(config, 'STREAM_CONFIG_INVALID');
+        if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('STREAM_CONFIG_INVALID');
+        for (const key of ['minCharsBeforeEval', 'evalFrequency', 'maxAccumulatedLength'] as const) {
+            const value = config[key];
+            if (value !== undefined && (typeof value !== 'number' || !Number.isSafeInteger(value) || value < (key === 'minCharsBeforeEval' ? 0 : 1))) throw new Error('STREAM_CONFIG_INVALID');
+        }
+        if (config.emitChunks !== undefined && typeof config.emitChunks !== 'boolean') throw new Error('STREAM_CONFIG_INVALID');
+        for (const key of ['query', 'reference'] as const) if (config[key] !== undefined && typeof config[key] !== 'string') throw new Error('STREAM_CONFIG_INVALID');
+        if (config.context !== undefined && typeof config.context !== 'string' &&
+            (!Array.isArray(config.context) || config.context.some(value => typeof value !== 'string'))) throw new Error('STREAM_CONFIG_INVALID');
+        if (config.thresholds !== undefined && (!config.thresholds || typeof config.thresholds !== 'object' || Array.isArray(config.thresholds))) throw new Error('STREAM_CONFIG_INVALID');
         this.config = {
-            metrics: config.metrics,
+            metrics: this.snapshotMetrics(config.metrics),
             minCharsBeforeEval: config.minCharsBeforeEval ?? 50,
             evalFrequency: config.evalFrequency ?? 1,
-            thresholds: config.thresholds ?? {},
+            thresholds: { ...config.thresholds },
             emitChunks: config.emitChunks ?? true,
             maxAccumulatedLength: config.maxAccumulatedLength ?? 100000,
             context: config.context ?? '',
@@ -74,8 +100,21 @@ export class StreamingEvaluator {
             active: true
         };
 
+        for (const threshold of Object.values(this.config.thresholds)) {
+            if (typeof threshold !== 'number' || !Number.isFinite(threshold) || threshold < 0 || threshold > 1) throw new Error('STREAM_CONFIG_INVALID');
+        }
+        this.config = snapshotBoundary(this.config, 'STREAM_CONFIG_INVALID');
         // Validate metrics
         this.validateMetrics();
+    }
+
+    private snapshotMetrics(value: string[]): string[] {
+        try {
+            if (value === null || typeof value !== 'object' || typeof value[Symbol.iterator] !== 'function') throw new Error();
+            const metrics = Array.from(value);
+            if (metrics.some(name => typeof name !== 'string' || !name.trim())) throw new Error();
+            return [...new Set(metrics)];
+        } catch { throw new Error('STREAM_CONFIG_INVALID'); }
     }
 
     /**
@@ -83,12 +122,7 @@ export class StreamingEvaluator {
      */
     private validateMetrics(): void {
         for (const metric of this.config.metrics) {
-            if (!hasMetric(metric)) {
-                console.warn(`Metric '${metric}' not found, will be skipped`);
-            }
-            if (!canStreamMetric(metric)) {
-                console.warn(`Metric '${metric}' may not evaluate well during streaming`);
-            }
+            if (!hasMetric(metric)) this.metricErrors.set(metric, 'METRIC_UNAVAILABLE');
         }
     }
 
@@ -115,7 +149,7 @@ export class StreamingEvaluator {
             try {
                 handler(event);
             } catch (error) {
-                console.error('Error in event handler:', error);
+                console.error('STREAM_HANDLER_FAILED');
             }
         }
     }
@@ -124,6 +158,7 @@ export class StreamingEvaluator {
      * Add a chunk of content
      */
     addChunk(chunk: string): void {
+        if (typeof chunk !== 'string') throw new Error('STREAM_INPUT_INVALID');
         if (!this.state.active) {
             throw new Error('Cannot add chunk to completed stream');
         }
@@ -132,9 +167,11 @@ export class StreamingEvaluator {
         this.state.accumulated += chunk;
         this.state.chunkCount++;
 
-        // Truncate if needed
+        // The retained payload is a capped prefix, not evidence of full-stream
+        // coverage. Dropping any text permanently makes this session incomplete.
         if (this.state.accumulated.length > this.config.maxAccumulatedLength) {
-            this.state.accumulated = this.state.accumulated.slice(-this.config.maxAccumulatedLength);
+            this.state.accumulated = this.state.accumulated.slice(0, this.config.maxAccumulatedLength);
+            for (const metric of this.config.metrics) this.metricErrors.set(metric, 'TRUNCATED');
         }
 
         // Emit chunk event
@@ -179,42 +216,75 @@ export class StreamingEvaluator {
         this.state.lastEvalTime = Date.now();
 
         for (const metricName of this.config.metrics) {
+            const fail = (reasonCode: string) => {
+                this.metricErrors.set(metricName, reasonCode);
+                this.state.scores.delete(metricName);
+                this.finalResults.set(metricName, { score: 0, passed: false, reason: reasonCode });
+                this.emit({ type: 'error', timestamp: Date.now(), message: reasonCode });
+            };
+            const previousError = this.metricErrors.get(metricName);
+            if (previousError) { fail(previousError); continue; }
+            if (!this.state.accumulated.trim()) {
+                // An empty prefix has not run a check. Only final absence of
+                // evidence is terminal; a real NO_EVIDENCE metric result latches.
+                if (!this.state.active) fail('NO_EVIDENCE');
+                continue;
+            }
             try {
-                // Build config for the metric
-                const metricConfig = this.buildMetricConfig(metricName);
-
-                // Run metric
-                const result = runMetric(metricName, this.state.accumulated, metricConfig);
+                // Keep caller-facing result/threshold keys, but route the adapter
+                // and execution through the same case-insensitive registry identity.
+                const metricId = metricName.toLowerCase();
+                const metricConfig = this.buildMetricConfig(metricId);
+                const required = getMetric(metricId)?.requiredConfig ?? [];
+                if (required.some(key => {
+                    const value = metricConfig[key];
+                    return value === null || value === undefined || (typeof value === 'string' && !value.trim()) ||
+                        (Array.isArray(value) && (value.length === 0 || value.every(item => typeof item === 'string' && !item.trim())));
+                })) { fail('NO_EVIDENCE'); continue; }
+                this.attempted.add(metricName);
+                const rawResult = runMetric(metricId, this.state.accumulated, metricConfig);
+                const result = snapshotBoundary(rawResult, 'METRIC_RESULT_INVALID');
+                if (!result || typeof result.score !== 'number' || !Number.isFinite(result.score) || result.score < 0 || result.score > 1 ||
+                    typeof result.passed !== 'boolean' || typeof result.reason !== 'string') {
+                    fail('METRIC_RESULT_INVALID'); continue;
+                }
+                if (['INVALID_SECURITY_PATTERN', 'METRIC_CONFIG_INVALID', 'METRIC_RESULT_INVALID', 'SCHEMA_MISSING', 'SCHEMA_UNSUPPORTED', 'JUDGE_RESULT_INVALID', 'JUDGE_REQUEST_FAILED'].some(code => result.reason === code)) {
+                    fail('METRIC_VALIDATION_INCOMPLETE'); continue;
+                }
+                const details = result as MetricResult & { claims?: unknown[]; totalClaims?: number; supportedClaims?: number; unsupportedClaims?: number };
+                if (result.reason === 'NO_EVIDENCE' || details.claims?.length === 0 || details.totalClaims === 0 ||
+                    (details.supportedClaims === 0 && details.unsupportedClaims === 0)) {
+                    fail('NO_EVIDENCE'); continue;
+                }
+                const safeResult = { ...(redactDetails(result) as MetricResult), score: result.score, passed: result.passed,
+                    reason: result.passed ? 'CHECK_PASSED' : 'CHECK_FAILED' };
+                if (!result.passed && !this.qualityFailures.has(metricName)) this.qualityFailures.set(metricName, safeResult);
+                const effectiveResult = this.qualityFailures.get(metricName) ?? safeResult;
+                this.finalResults.set(metricName, effectiveResult);
 
                 // Get previous score
                 const previousScore = this.state.scores.get(metricName);
 
                 // Update score
-                this.state.scores.set(metricName, result.score);
+                this.state.scores.set(metricName, effectiveResult.score);
 
                 // Emit metric update
                 const updateEvent: MetricUpdateEvent = {
                     type: 'metric_update',
                     timestamp: Date.now(),
                     metric: metricName,
-                    score: result.score,
+                    score: effectiveResult.score,
                     previousScore,
-                    delta: previousScore !== undefined ? result.score - previousScore : undefined,
-                    passing: result.passed
+                    delta: previousScore !== undefined ? effectiveResult.score - previousScore : undefined,
+                    passing: effectiveResult.passed
                 };
                 this.emit(updateEvent);
 
                 // Check thresholds
-                this.checkThreshold(metricName, result.score, previousScore);
+                this.checkThreshold(metricName, effectiveResult.score, previousScore);
 
-            } catch (error) {
-                const errorEvent: ErrorEvent = {
-                    type: 'error',
-                    timestamp: Date.now(),
-                    message: `Error evaluating ${metricName}: ${error instanceof Error ? error.message : 'Unknown error'}`,
-                    error: error instanceof Error ? error : undefined
-                };
-                this.emit(errorEvent);
+            } catch {
+                fail('METRIC_EXECUTION_FAILED');
             }
         }
     }
@@ -234,6 +304,7 @@ export class StreamingEvaluator {
         }
         if (this.config.reference) {
             config.reference = this.config.reference;
+            if (metricName === 'context_recall') config.expected_response = this.config.reference;
         }
 
         // Response is the accumulated content
@@ -242,7 +313,7 @@ export class StreamingEvaluator {
         // For code security metrics
         config.code = this.state.accumulated;
 
-        return config;
+        return snapshotBoundary(config, 'STREAM_CONFIG_INVALID');
     }
 
     /**
@@ -267,7 +338,7 @@ export class StreamingEvaluator {
                 score: currentScore,
                 threshold,
                 direction,
-                message: `${metricName} score dropped ${direction} threshold: ${currentScore.toFixed(3)} vs ${threshold}`
+                message: isAbove ? 'THRESHOLD_ABOVE' : 'THRESHOLD_BELOW'
             };
             this.emit(alertEvent);
         }
@@ -286,17 +357,18 @@ export class StreamingEvaluator {
         // Run final evaluation
         this.evaluate();
 
-        // Build final results
-        const finalResults = new Map<string, MetricResult>();
-        for (const metricName of this.config.metrics) {
-            try {
-                const metricConfig = this.buildMetricConfig(metricName);
-                const result = runMetric(metricName, this.state.accumulated, metricConfig);
-                finalResults.set(metricName, result);
-            } catch {
-                // Skip failed metrics
-            }
-        }
+        // Use the same final execution that emitted updates; never rerun and
+        // average away a prior error. Every requested metric has an entry.
+        const finalResults = new Map(this.finalResults);
+        const required = this.config.metrics.length;
+        const complete = required > 0 && this.metricErrors.size === 0;
+        const passed = complete && [...finalResults.values()].every(result => result.passed === true);
+        const coverage = {
+            required, executed: this.attempted.size,
+            completed: required - this.metricErrors.size,
+            skipped: this.config.metrics.filter(name => !this.attempted.has(name)).length,
+            errored: [...this.metricErrors.keys()].filter(name => this.attempted.has(name)).length,
+        };
 
         const completeEvent: CompleteEvent = {
             type: 'complete',
@@ -304,6 +376,10 @@ export class StreamingEvaluator {
             finalResponse: this.state.accumulated,
             totalChunks: this.state.chunkCount,
             finalResults,
+            status: !complete ? 'incomplete' : passed ? 'passed' : 'failed',
+            reasonCode: !complete ? 'EVALUATION_INCOMPLETE' : passed ? 'CHECKS_PASSED' : 'CHECKS_FAILED',
+            coverage,
+            metricErrors: [...this.metricErrors].map(([metric, reasonCode]) => ({ metric, reasonCode })),
             elapsedMs: Date.now() - this.state.startTime
         };
 
@@ -329,7 +405,7 @@ export class StreamingEvaluator {
      * Get current state
      */
     getState(): Readonly<StreamingState> {
-        return { ...this.state };
+        return { ...this.state, scores: new Map(this.state.scores) };
     }
 
     /**
@@ -352,6 +428,11 @@ export class StreamingEvaluator {
             active: true
         };
         this.previousScores.clear();
+        this.metricErrors.clear();
+        this.finalResults.clear();
+        this.qualityFailures.clear();
+        this.attempted.clear();
+        this.validateMetrics();
     }
 }
 
@@ -385,6 +466,7 @@ export async function* streamWithEvaluation(
     chunks: AsyncIterable<string>,
     config: StreamingEvalConfig
 ): AsyncGenerator<StreamingEvalEvent, CompleteEvent> {
+    config = snapshotBoundary(config, 'STREAM_CONFIG_INVALID');
     const evaluator = new StreamingEvaluator({
         ...config,
         emitChunks: true

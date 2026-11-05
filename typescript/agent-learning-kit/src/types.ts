@@ -162,6 +162,13 @@ interface EvalResult {
 interface BatchRunResult {
   /** Array of evaluation results (null entries indicate failed evaluations) */
   eval_results: (EvalResult | null)[];
+  /** Completion is distinct from a quality verdict; absent evidence is incomplete. */
+  status?: 'completed' | 'failed' | 'incomplete';
+  /** Fixed, value-free aggregate diagnostic, including on ERROR/incomplete batches. */
+  reasonCode?: 'EVALUATION_COMPLETED' | 'EVALUATION_FAILED' | 'EVALUATION_INCOMPLETE';
+  /** Optional telemetry may fail without skipping actual evaluation. */
+  warnings?: ('TRACING_UNAVAILABLE')[];
+  coverage?: { required: number; executed: number; completed: number; skipped: number; errored: number };
 }
 
 /**
