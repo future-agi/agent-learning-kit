@@ -432,7 +432,7 @@ describe('Streaming Evaluation', () => {
             expect(secretsResult?.passed).toBe(false);
         });
 
-        it('should track response length during generation', () => {
+        it('should not validate length without a required limit', () => {
             const evaluator = new StreamingEvaluator({
                 metrics: ['length_less_than'],
                 minCharsBeforeEval: 10,
@@ -451,10 +451,11 @@ describe('Streaming Evaluation', () => {
                 evaluator.addChunk('More content added here. ');
             }
 
-            evaluator.complete();
+            const result = evaluator.complete();
 
-            // Should have multiple updates tracking length
-            expect(updates.length).toBeGreaterThan(0);
+            // Missing maxLength is not completed validation coverage.
+            expect(updates.length).toBe(0);
+            expect(result.finalResults.get('length_less_than')).toMatchObject({ passed: false, reason: 'NO_EVIDENCE' });
         });
 
         it('should evaluate faithfulness during RAG streaming', () => {

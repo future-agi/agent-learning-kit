@@ -417,7 +417,11 @@ describe('AutoEval Pipeline', () => {
             });
 
             expect(result.characteristics.inputType).toBe('rag');
-            expect(result.overallScore).toBeGreaterThan(0);
+            // Instructions contain no factual claims for the selected hallucination check.
+            expect(result.overallScore).toBe(0);
+            expect(result.passed).toBe(false);
+            expect(result.status).toBe('incomplete');
+            expect(result.metricResults.find(row => row.metric === 'hallucination_detection')?.reasonCode).toBe('NO_EVIDENCE');
         });
 
         it('should evaluate code generation', () => {

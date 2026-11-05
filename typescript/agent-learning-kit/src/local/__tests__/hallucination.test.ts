@@ -81,9 +81,10 @@ describe('Hallucination Detection', () => {
                 context: 'Python is a programming language.'
             };
             const result = hallucinationDetection(input);
-            expect(result.score).toBe(1.0);
-            expect(result.passed).toBe(true);
-            expect(result.hallucinationRate).toBe(0);
+            expect(result.score).toBe(0);
+            expect(result.passed).toBe(false);
+            expect(result.hallucinationRate).toBe(1);
+            expect(result.reason).toBe('NO_EVIDENCE');
         });
 
         it('should handle empty context', () => {
@@ -95,7 +96,7 @@ describe('Hallucination Detection', () => {
             const result = hallucinationDetection(input);
             expect(result.passed).toBe(false);
             expect(result.hallucinationRate).toBe(1.0);
-            expect(result.reason).toContain('No context');
+            expect(result.reason).toBe('NO_EVIDENCE');
         });
 
         it('should include claim analysis when enabled', () => {
@@ -143,8 +144,9 @@ describe('Hallucination Detection', () => {
                 context: 'Python is a programming language.'
             };
             const result = hallucinationDetection(input);
-            // Opinion statements should not count as factual claims
-            expect(result.reason).toContain('claim');
+            // Opinion statements are not factual claims; with no claim to check there is no evidence, so it never passes.
+            expect(result.reason).toBe('NO_EVIDENCE');
+            expect(result.passed).toBe(false);
         });
 
         it('should find evidence for supported claims', () => {
