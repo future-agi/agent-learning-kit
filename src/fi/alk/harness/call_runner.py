@@ -972,6 +972,53 @@ class _ActionLog:
             self.connection = None
 
 
+# The outcomes the world's door records for an attempt, beside committed.
+_OUTCOMES = ("committed", "refused", "faulted", "duplicate")
+
+
+def trial_state_changes(log: list[dict[str, Any]], listed: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """What each participant attempted in this trial and what the world made of it: one entry for the agent and one
+    per actor that acted, with attempted, committed, refused, faulted and duplicate counts and the actions it
+    committed, in order. Attempted, refused and committed are kept apart; a row from before outcomes were recorded
+    counts as committed when it succeeded and refused when the world refused it."""
+    entries: dict[str, dict[str, Any]] = {}
+    for row in log:
+        who = str(row.get("actor_id") or AGENT)
+        actor = listed.get(who)
+        entry = entries.setdefault(
+            who,
+            {
+                "who": who,
+                "name": "the agent" if who == AGENT else (actor.name if actor is not None else who),
+                "attempted": 0,
+                **{outcome: 0 for outcome in _OUTCOMES},
+                "committed_actions": [],
+            },
+        )
+        entry["attempted"] += 1
+        outcome = row.get("outcome") or (
+            "refused" if row.get("refused") else "committed" if row.get("ok", True) else "faulted"
+        )
+        if outcome in _OUTCOMES:
+            entry[outcome] += 1
+        if outcome == "committed":
+            entry["committed_actions"].append(str(row.get("name") or ""))
+    agent = entries.pop(AGENT, None)
+    return ([agent] if agent else []) + list(entries.values())
+
+
+def _state_changes(runtime: EnvironmentRuntime, bundle_dir: Path) -> list[dict[str, Any]]:
+    database = _find_postgres_endpoint(runtime)
+    if database is None:
+        return []
+    try:
+        log = _read_action_log(database.address)
+    except Exception as exc:  # noqa: BLE001 - no state changes, never a failed call
+        logger.debug("state changes unreadable: %s", type(exc).__name__)
+        return []
+    return trial_state_changes(log, load_actors(bundle_dir).by_id())
+
+
 def _actor_rows(runtime: EnvironmentRuntime, bundle_dir: Path) -> list[dict[str, Any]]:
     """This trial's actions by world actors, named and with their outcome; none for a world without actors."""
     listed = load_actors(bundle_dir).by_id()
@@ -1928,6 +1975,11 @@ class CallRunnerImpl:
             and self._context.evidence_seam is EvidenceSeam.TOOL_TRACE
             else []
         )
+        changes = (
+            _state_changes(runtime, self._context.bundle_dir)
+            if acted or actor_decisions
+            else []
+        )
         marks = _agent_marks(runtime, self._context.bundle_dir, calls) if acted else []
         if calls:
             tool_trace = "\n".join(
@@ -1975,6 +2027,7 @@ class CallRunnerImpl:
                     transcript_document["world_actors"] = {
                         "actions": acted,
                         "decisions": list(actor_decisions),
+                        "state_changes": changes,
                     }
                 recording_offset_ms = result.metadata.get("recording_offset_ms")
                 if isinstance(recording_offset_ms, (int, float)):

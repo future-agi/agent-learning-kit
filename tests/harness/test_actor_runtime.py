@@ -238,3 +238,24 @@ def test_records_an_actor_may_read_are_only_named_where_the_world_cannot_be_read
     assert read_knowledge([entry], tmp_path) == [entry]
     text = brief_text(actor_brief({"id": "m", "name": "Mia", "knowledge": [entry]}))
     assert "You can read the deals records in crm" in text
+
+
+def test_a_trial_s_state_changes_keep_attempted_refused_and_committed_apart_per_participant():
+    from fi.alk.harness.call_runner import trial_state_changes
+
+    log = [
+        {"name": "deals.request_approval", "outcome": "committed"},
+        {"actor_id": "coworker", "name": "deals.approve", "outcome": "refused"},
+        {"actor_id": "manager", "name": "deals.approve", "outcome": "committed"},
+        {"name": "deals.apply_discount", "outcome": "refused"},
+        {"actor_id": "manager", "name": "deals.approve", "outcome": "duplicate"},
+        {"name": "deals.apply_discount", "ok": True},
+    ]
+    listed = {"manager": Actor(id="manager", name="Mia"), "coworker": Actor(id="coworker", name="Sam")}
+    changes = trial_state_changes(log, listed)
+    assert [(c["who"], c["name"], c["attempted"], c["committed"], c["refused"], c["duplicate"]) for c in changes] == [
+        ("agent", "the agent", 3, 2, 1, 0),
+        ("coworker", "Sam", 1, 0, 1, 0),
+        ("manager", "Mia", 2, 1, 0, 1),
+    ]
+    assert changes[0]["committed_actions"] == ["deals.request_approval", "deals.apply_discount"]
