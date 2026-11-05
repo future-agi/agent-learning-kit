@@ -25,10 +25,13 @@ def verify(source_root: Path | None = None) -> dict[str, object]:
         "MODEL": "vertex_ai/gemini-3.7-flash",
         "VERTEXAI_LOCATION": "global",
     }
-    assert reference["runtime"]["environment_names"] == ["VERTEXAI_PROJECT"]
+    assert reference["runtime"]["environment_names"] == [
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "VERTEXAI_PROJECT",
+    ]
     assert (
         reference["runtime"]["authentication"]
-        == "google_application_default_credentials"
+        == "google_application_credentials_file"
     )
     assert reference["request"]["runId"] == "{{execution_id}}-{{turn_index}}"
     assert reference["request"]["messages"] == [

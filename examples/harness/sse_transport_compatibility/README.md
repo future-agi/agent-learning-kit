@@ -20,17 +20,17 @@ python examples/harness/sse_transport_compatibility/verify_reference.py \
 Start the unmodified upstream dojo from the materialized `examples` directory:
 
 ```bash
-gcloud auth application-default login
-export VERTEXAI_PROJECT="$(gcloud config get-value project)"
+export GOOGLE_APPLICATION_CREDENTIALS="/Users/rishavhada/Documents/futureagi/oss/future-agi/futureagi/Vertex_AI_Creds.json"
+export VERTEXAI_PROJECT=futureagiprimary
 export VERTEXAI_LOCATION=global
 export MODEL=vertex_ai/gemini-3.7-flash
 uv sync
 uv run dev
 ```
 
-The normal `gcloud auth login` session is not ADC. LiteLLM's Vertex provider needs the separate
-Application Default Credentials created by `gcloud auth application-default login`. Never copy the
-credential file or an access token into this reference.
+`GOOGLE_APPLICATION_CREDENTIALS` points LiteLLM at the local service-account JSON. Keep that file
+outside this reference: never copy its contents or an access token into the materialized source,
+qualification output, or repository.
 
 With the dojo running on port 8000, exercise two turns through ALK's SSE wrapper:
 

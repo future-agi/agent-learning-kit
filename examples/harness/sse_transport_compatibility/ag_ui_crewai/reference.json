@@ -40,8 +40,8 @@
       "MODEL": "vertex_ai/gemini-3.7-flash",
       "VERTEXAI_LOCATION": "global"
     },
-    "environment_names": ["VERTEXAI_PROJECT"],
-    "authentication": "google_application_default_credentials",
+    "environment_names": ["GOOGLE_APPLICATION_CREDENTIALS", "VERTEXAI_PROJECT"],
+    "authentication": "google_application_credentials_file",
     "endpoint": "/conversational_flows/backend_tool_rendering"
   },
   "request": {
