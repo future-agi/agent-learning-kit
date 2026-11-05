@@ -9,6 +9,8 @@ import { MetricResult } from '../metrics/types.js';
 // only records produced here may bypass capture. Own non-enumerable fields are
 // included, so a supplied false verdict cannot disappear during a spread.
 const boundaryRecords = new WeakSet<object>();
+// Retain the original container kind without inspecting caller objects again.
+const iterableCaptures = new WeakSet<object>();
 // Records whose graph holds scanner callbacks. Only callback-allowed captures may
 // reuse them; a data-only capture re-captures and rejects the callbacks by type,
 // without calling them.
@@ -23,6 +25,10 @@ function createBoundaryError(code: string): BoundaryError {
     // register a reason, not a caller invoking that constructor themselves.
     boundaryErrors.set(error, code);
     return error;
+}
+// Internal only: not re-exported by the public entry points.
+export function isIterableCapture(value: unknown): boolean {
+    return typeof value === 'object' && value !== null && iterableCaptures.has(value);
 }
 export function snapshotBoundary<T>(value: T, code: string, allowCallbacks = false): T {
     const active = new Set<object>();
@@ -39,6 +45,7 @@ export function snapshotBoundary<T>(value: T, code: string, allowCallbacks = fal
             if (copies.has(source)) return copies.get(source);
             active.add(source);
             let owned: any;
+            let isNonArrayIterable = false;
             if (Array.isArray(source)) {
                 // Array slots, not a caller-supplied iterator, define the evidence.
                 // Read length once, including for array proxies, without coercion.
@@ -60,6 +67,7 @@ export function snapshotBoundary<T>(value: T, code: string, allowCallbacks = fal
                     // Read their iterator property once and capture each yield once.
                     owned = Array.from({ [Symbol.iterator]: () => iterator.call(source) },
                         item => capture(item, depth + 1, reason));
+                    isNonArrayIterable = true;
                 } else {
                     const proto = Object.getPrototypeOf(source);
                     if (proto !== Object.prototype && proto !== null) throw createBoundaryError(reason);
@@ -74,6 +82,7 @@ export function snapshotBoundary<T>(value: T, code: string, allowCallbacks = fal
             }
             active.delete(source);
             Object.freeze(owned);
+            if (isNonArrayIterable) iterableCaptures.add(owned);
             copies.set(source, owned);
             const members: unknown[] = Array.isArray(owned) ? owned : Object.values(owned);
             const bearsCallbacks = members.some(member => typeof member === 'function' ||
