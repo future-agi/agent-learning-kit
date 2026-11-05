@@ -2193,9 +2193,12 @@ def scenario_tools(
             if problem:
                 return _refuse(problem)
         if args.get("pre_run"):
-            # The actors write their pre-run conversations now, once, so every trial replays the same thread.
-            from .pre_run import written
+            # Checked first, so a session that cannot be written is refused with its fix before any model is asked.
+            from .pre_run import session_problems, written
 
+            if unwritable := session_problems(args.get("pre_run"), world_root):
+                return _refuse("Not kept. " + " ".join(unwritable))
+            # The actors write their pre-run conversations now, once, so every trial replays the same thread.
             args = await written(dict(args), world_root)
 
         # A submission carrying a kept scenario's key replaces that one, under its new name if renamed,

@@ -825,3 +825,13 @@ def test_a_scenario_never_lists_the_caller_among_its_actors(tmp_path):
     ensure_caller(tmp_path)
     scenario = Scenario(name="s", instruction="x", actors=[{"id": "caller"}])
     assert any("the caller is the person" in one for one in _unlisted_actors(scenario, tmp_path))
+
+
+def test_a_pre_run_session_with_no_place_is_refused_with_its_fix_before_any_model_is_asked(tmp_path):
+    from fi.alk.harness.actors import save_actors
+    from fi.alk.harness.pre_run import session_problems
+
+    save_actors(tmp_path, ActorList(actors=[Actor(id="priya", name="Priya", play="live", permitted_actions=["slack.post"])]))
+    said = session_problems([{"actors": ["priya"], "about": "Acme", "where": {}}], tmp_path)
+    assert said == ["pre_run 1: `where.action` names the action that writes into this place"]
+    assert session_problems([{"actors": ["priya"], "about": "Acme", "where": {"action": "slack.post"}}], tmp_path) == []

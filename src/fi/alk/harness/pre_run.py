@@ -68,6 +68,24 @@ def problems(session: PreRunSession, number: int, listed: dict[str, Actor]) -> l
     return out
 
 
+def session_problems(raw: Any, root: Any) -> list[str]:
+    """Why a scenario's pre-run sessions, as written, cannot be generated or replayed; nothing when they can."""
+    from pathlib import Path
+
+    from .actors import load_actors
+
+    listed = load_actors(Path(root)).by_id()
+    out = []
+    for number, one in enumerate(raw if isinstance(raw, list) else [], start=1):
+        try:
+            session = PreRunSession.model_validate(one)
+        except Exception as invalid:  # noqa: BLE001 - said back to the writer as the fix
+            out.append(f"pre_run {number}: {str(invalid)[:200]}")
+            continue
+        out += problems(session, number, listed)
+    return out
+
+
 def _brief(actor: Actor, brief: str, session: PreRunSession, thread: list[ThreadMessage]) -> str:
     said = "\n".join(
         f"{number}. {message.actor}: {message.arguments.get('text', json.dumps(message.arguments, default=str))}"
