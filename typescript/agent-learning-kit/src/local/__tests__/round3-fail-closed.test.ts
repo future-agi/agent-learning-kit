@@ -178,7 +178,7 @@ describe('W04 round3 fail-closed', () => {
         stream.addChunk('A complete answer.'); expect(stream.complete().status).toBe('passed');
         const scanner = new Scanner(once({ enableRules: ['quality/hallucination'], context: once({ ragContext: evidence.context }) }));
         expect(scanner.scan(evidence.response).passed).toBe(true);
-        expect(() => pipeline.evaluate({ get response() { throw new Error('PRIVATE_SENTINEL'); } })).toThrow('EVALUATION_INPUT_INVALID');
+        expect(() => pipeline.evaluate({ get response(): string { throw new Error('PRIVATE_SENTINEL'); } })).toThrow('EVALUATION_INPUT_INVALID');
         }).not.toThrow();
     });
 });
