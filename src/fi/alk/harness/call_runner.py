@@ -1244,6 +1244,18 @@ def _actor_dispatcher(
     )
 
 
+def _private_actions_file(path: Path) -> Path:
+    """An empty file for this call's speaking actors' actions, readable and writable by this run's user alone, in a
+    directory only it can enter: what is written there is sent under an actor's id with the trial's token, so the
+    agent under test (another user in the same sandbox) must never be able to write to it."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    os.chmod(path.parent, 0o700)
+    path.unlink(missing_ok=True)
+    os.close(os.open(path, os.O_CREAT | os.O_WRONLY | os.O_EXCL, 0o600))
+    os.chmod(path, 0o600)
+    return path
+
+
 def _reported_actions(path: Path) -> Callable[[], list[dict[str, Any]]]:
     """The actions speaking actors decided on the call so far, as the voice engine handed them over, oldest first."""
 
@@ -1813,9 +1825,9 @@ class CallRunnerImpl:
         voices = [one for one in resolved if one.get("entered", True)]
         call_environ.pop(ACTOR_WORLD_ALIAS, None)
         # Where a speaking actor's decided actions are handed to this run, which sends them through the door.
-        actions_file = self._context.work_directory / "call-workers" / f"actor-actions-{run_id}.jsonl"
-        actions_file.parent.mkdir(parents=True, exist_ok=True)
-        actions_file.unlink(missing_ok=True)
+        actions_file = _private_actions_file(
+            self._context.work_directory / "call-workers" / f"actor-actions-{run_id}.jsonl"
+        )
         if voices:
             call_environ[ACTOR_VOICES_ALIAS] = json.dumps(
                 {

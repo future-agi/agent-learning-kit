@@ -2609,3 +2609,14 @@ def test_an_actor_that_cannot_act_is_recorded_with_the_real_reason(tmp_path, mon
     assert cr._actor_dispatcher(doc, bundle, _runtime(endpoints={"database": _postgres_endpoint()}), "t1", 60.0,
                                 why_not=why) is None
     assert why[0][0] == "no_world_door"
+
+
+def test_the_speaking_actors_actions_file_is_the_run_s_alone(tmp_path):
+    import stat
+
+    import fi.alk.harness.call_runner as cr
+
+    path = cr._private_actions_file(tmp_path / "call-workers" / "actor-actions-r1.jsonl")
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+    assert path.read_text() == ""
