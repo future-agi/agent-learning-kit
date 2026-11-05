@@ -216,8 +216,12 @@ class ActorDispatcher:
 
     # -- when --------------------------------------------------------------------------------------------------
 
-    def _moment(self, actor: Actor, elapsed: float, log: list[dict[str, Any]]) -> Moment:
-        agent_rows = [row for row in log if (row.get("actor_id") or AGENT) == AGENT and not is_pre_run(row.get("idempotency_key"))]
+    @staticmethod
+    def _agent_rows(log: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """The agent's own actions in the log, without anything written before the run."""
+        return [row for row in log if (row.get("actor_id") or AGENT) == AGENT and not is_pre_run(row.get("idempotency_key"))]
+
+    def _moment(self, actor: Actor, elapsed: float, agent_rows: list[dict[str, Any]]) -> Moment:
         return Moment(
             agent_turns=None,
             tools_called=[str(row.get("name") or "") for row in agent_rows],
@@ -232,10 +236,9 @@ class ActorDispatcher:
         if trigger.kind == "probability" and index >= 0:
             # A scheduled action's chance was drawn once, when the trial began; one still pending was drawn in.
             return ""
-        moment = self._moment(actor, elapsed, log)
-        if not due(trigger.model_dump(), moment, seed=self.seed, actor_id=actor.id):
+        agent_rows = self._agent_rows(log)
+        if not due(trigger.model_dump(), self._moment(actor, elapsed, agent_rows), seed=self.seed, actor_id=actor.id):
             return None
-        agent_rows = [row for row in log if (row.get("actor_id") or AGENT) == AGENT and not is_pre_run(row.get("idempotency_key"))]
         if trigger.kind == "on_tool":
             calls = [row for row in agent_rows if row.get("name") == trigger.tool]
             return str(calls[trigger.on_call - 1].get("action_id") or "") if len(calls) >= trigger.on_call else ""

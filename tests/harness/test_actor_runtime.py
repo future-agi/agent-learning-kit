@@ -303,16 +303,16 @@ def _history_dispatcher(history, actors):
 
 
 def test_history_is_written_by_its_actors_in_order_before_the_run_with_keys_of_its_own():
-    from fi.alk.harness.actors import HistoryEntry
+    from fi.alk.harness.actors import ThreadMessage
 
     actors = {
         "priya": Actor(id="priya", name="Priya", permitted_actions=["slack.post"]),
         "omar": Actor(id="omar", name="Omar", permitted_actions=["slack.post"]),
     }
     history = [
-        HistoryEntry(actor="priya", action="slack.post", arguments={"text": "Can we ship Friday?"}),
-        HistoryEntry(actor="omar", action="slack.post", arguments={"text": "Only if QA signs off."}),
-        HistoryEntry(actor="ghost", action="slack.post", arguments={}),
+        ThreadMessage(actor="priya", action="slack.post", arguments={"text": "Can we ship Friday?"}),
+        ThreadMessage(actor="omar", action="slack.post", arguments={"text": "Only if QA signs off."}),
+        ThreadMessage(actor="ghost", action="slack.post", arguments={}),
     ]
     for trial in range(2):
         dispatcher, sent = _history_dispatcher(history, actors)
