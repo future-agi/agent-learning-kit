@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import ast
+import io
 import os
+import stat
+import tokenize
 from pathlib import Path
 
 _SKIPPED_DIRECTORIES = {
@@ -19,6 +22,10 @@ _SKIPPED_DIRECTORIES = {
     "site-packages",
     "venv",
 }
+_READ_LIMIT = 64 * 1024 * 1024
+_FILE_LIMIT = 5_000
+_LINE_LIMIT = 64 * 1024
+_OPEN_FLAGS = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
 _OTEL_SDK_TRACE = "opentelemetry.sdk.trace"
 _OTEL_OTLP_EXPORTER = "opentelemetry.exporter.otlp"
 _OTEL_GRPC_EXPORTER = "opentelemetry.exporter.otlp.proto.grpc"
@@ -52,6 +59,8 @@ def detect_instrumentation(source_root: Path | None) -> str:
 def _python_imports(root: Path) -> set[str]:
     imported: set[str] = set()
     local: set[str] = set()
+    files_left = _FILE_LIMIT
+    bytes_left = _READ_LIMIT
     for directory, subdirectories, files in os.walk(root):
         if Path(directory) != root and any(
             name.endswith(".dist-info") for name in subdirectories
@@ -72,14 +81,53 @@ def _python_imports(root: Path) -> set[str]:
                 # Only a module at the top of the repository sits ahead of the
                 # installed package on the import path.
                 local.add(file_name[: -len(".py")])
+            if files_left <= 0:
+                continue
+            files_left -= 1
+            data = _read_source(Path(directory) / file_name, bytes_left)
+            if data is None:
+                continue
+            bytes_left -= len(data)
+            if max(map(len, data.splitlines()), default=0) > _LINE_LIMIT:
+                continue
             try:
-                tree = ast.parse(
-                    (Path(directory) / file_name).read_text(encoding="utf-8")
-                )
+                encoding, _ = tokenize.detect_encoding(io.BytesIO(data).readline)
+                tree = ast.parse(data.decode(encoding))
                 imported.update(_imports(tree))
-            except (OSError, UnicodeError, SyntaxError, ValueError, RecursionError):
+            except (
+                LookupError,
+                MemoryError,
+                RecursionError,
+                SyntaxError,
+                UnicodeError,
+                ValueError,
+            ):
                 continue
     return {name for name in imported if name.split(".")[0] not in local}
+
+
+def _read_source(path: Path, limit: int) -> bytes | None:
+    try:
+        descriptor = os.open(path, _OPEN_FLAGS)
+    except OSError:
+        return None
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
+            return None
+        chunks: list[bytes] = []
+        size = 0
+        while size <= limit:
+            chunk = os.read(descriptor, min(1 << 20, limit + 1 - size))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            size += len(chunk)
+        return None if size > limit else b"".join(chunks)
+    except OSError:
+        return None
+    finally:
+        os.close(descriptor)
 
 
 def _imports(tree: ast.AST) -> set[str]:
