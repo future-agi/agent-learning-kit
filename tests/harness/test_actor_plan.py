@@ -1082,3 +1082,18 @@ def test_a_voice_wait_open_at_hang_up_is_recorded_and_a_declined_request_is_a_la
     assert [(row["role"], row["content"], row.get("spoken")) for row in rows] == [
         ("user", "hi", None), ("actor", "Mia did not answer: declined", False),
     ]
+
+
+def test_a_speaking_actor_on_the_caller_s_model_is_counted_by_the_session_the_engine_already_meters():
+    """An actor without a model of its own talks on the session's model. Its calls count because LiveKit's activity
+    forwards that model's metrics to the session, and the engine collects the session's. Either link gone, and those
+    calls stop counting as simulator usage."""
+    import inspect
+
+    from livekit.agents.voice import agent_activity
+
+    from fi.simulate.simulation.engines import livekit as engine
+
+    assert 'self.llm.on("metrics_collected", self._on_metrics_collected)' in inspect.getsource(agent_activity)
+    assert "lambda event: self._usage_collector.collect(event.metrics)" in inspect.getsource(engine)
+    assert engine.actor_llm({"id": "mia"}, "shared", None, None) == "shared"

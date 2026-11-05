@@ -3448,9 +3448,8 @@ class LiveKitEngine(BaseEngine):
     def _call_actors_on_call(
         self, customer_agent: Any, models: Any, session: Any, *, seed: str
     ) -> CallActorsOnCall:
-        llm_config = (getattr(self, "_last_simulator_setup", None) or {}).get("llm_config")
-
         """Every actor this call carries, each in a voice of its own."""
+        llm_config = (getattr(self, "_last_simulator_setup", None) or {}).get("llm_config")
         player = getattr(customer_agent, "_background_player", None)
         base = (getattr(self, "_last_simulator_setup", None) or {}).get("tts_config")
 
