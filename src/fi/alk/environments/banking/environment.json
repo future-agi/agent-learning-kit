@@ -1,7 +1,7 @@
 {
   "derived_from": "phase1_sheet:V01",
   "name": "banking",
-  "notes": "Banking: customers, accounts, cards and transactions (12 customers, 18 accounts, 24 cards, 100 transactions) with the banking card-servicing and dispute tools, plus the Gmail tool set (7 tools, unchanged) over the bank's support mailbox, which starts with system labels only.",
+  "notes": "Banking: customers, accounts, cards and transactions (12 customers, 18 accounts, 24 cards, 100 transactions, one open dispute) with the banking card-servicing and dispute tools, plus the Gmail tool set (8 tools, in the official server's shape) over the bank's support mailbox: 8 threads and 13 messages from these customers, linked to their records (a complaint thread with the bank's reply and the customer's correction, the thread that opened dispute D01, a same-subject thread from another customer, an email with instructions aimed at the assistant, a restricted fraud-team thread), with support labels. check_email_banking_consistency fails the seal when an email names a customer, card, transaction or dispute that does not exist or does not match.",
   "sequences": [
     {
       "calls": [
@@ -24,48 +24,80 @@
       "name": "handoff_escalation_flow"
     },
     {
+      "name": "mailbox_draft_reply_flow",
       "calls": [
         {
           "arguments": {
-            "challenge_response": "5371",
-            "challenge_type": "passcode",
+            "query": "Best Buy"
+          },
+          "tool": "search_threads"
+        },
+        {
+          "arguments": {
+            "threadId": "th_c03_draft_needed"
+          },
+          "tool": "get_thread"
+        },
+        {
+          "tool": "create_draft",
+          "arguments": {
+            "to": [
+              "charlie.j@example.com"
+            ],
+            "replyToMessageId": "msg_006",
+            "body": "Hello Charlie, your transaction at Best Buy for $85.00 has posted.",
+            "subject": "Re: Question about Best Buy charge"
+          }
+        }
+      ],
+      "expect_state": {
+        "drafts.count": 1
+      }
+    },
+    {
+      "name": "verify_lock_and_dispute_flow",
+      "calls": [
+        {
+          "arguments": {
             "customer_id": "C02",
-            "session_id": "SESS02"
+            "challenge_response": "5371",
+            "session_id": "SESS02",
+            "challenge_type": "passcode"
           },
           "tool": "verify_identity"
         },
         {
           "arguments": {
             "card_id": "CARD03",
-            "confirmed": true,
             "customer_id": "C02",
             "reason": "lost_card",
+            "confirmed": true,
             "session_id": "SESS02"
           },
           "tool": "lock_card"
         },
         {
+          "tool": "create_dispute",
           "arguments": {
-            "customer_id": "C02",
-            "customer_notes": "Fraudulent charge on lost card",
-            "dispute_reason": "unrecognized_charge",
-            "request_key": "REQ-C02-SEQ1",
             "session_id": "SESS02",
+            "customer_notes": "Fraudulent charge on lost card",
+            "customer_id": "C02",
+            "request_key": "REQ-C02-SEQ1",
+            "dispute_reason": "unrecognized_charge",
             "transaction_id": "TX04"
-          },
-          "tool": "create_dispute"
+          }
         }
       ],
       "expect_state": {
-        "disputes.count": 1,
-        "handoffs.count": 0
-      },
-      "name": "verify_lock_and_dispute_flow"
+        "handoffs.count": 0,
+        "disputes.count": 1
+      }
     }
   ],
   "world_checks": {
     "check_clock_and_sessions": "def check(world):\n    state = world.state()\n    clock = state.get(\"clock\", [])\n    sessions = state.get(\"sessions\", [])\n    if not clock or not clock[0].get(\"now\"):\n        return \"Clock table is missing or empty\"\n    if len(sessions) < 12:\n        return f\"Expected at least 12 sessions, found {len(sessions)}\"\n    return None\n",
     "check_customers_and_accounts": "def check(world):\n    state = world.state()\n    custs = state.get(\"customers\", [])\n    accs = state.get(\"accounts\", [])\n    cards = state.get(\"cards\", [])\n    if len(custs) < 12:\n        return f\"Expected at least 12 customers, found {len(custs)}\"\n    if len(accs) < 18:\n        return f\"Expected at least 18 accounts, found {len(accs)}\"\n    if len(cards) < 24:\n        return f\"Expected at least 24 cards, found {len(cards)}\"\n    cust_ids = {c[\"customer_id\"] for c in custs}\n    acc_cust_ids = {a[\"customer_id\"] for a in accs}\n    if not cust_ids.issubset(acc_cust_ids):\n        return \"Some customers do not have accounts\"\n    return None\n",
-    "check_transactions_and_disputes": "def check(world):\n    state = world.state()\n    txs = state.get(\"transactions\", [])\n    if len(txs) < 100:\n        return f\"Expected at least 100 transactions, found {len(txs)}\"\n    statuses = {t[\"status\"] for t in txs}\n    if \"posted\" not in statuses or \"pending\" not in statuses:\n        return \"Transactions must include both posted and pending statuses\"\n    return None\n"
+    "check_transactions_and_disputes": "def check(world):\n    state = world.state()\n    txs = state.get(\"transactions\", [])\n    if len(txs) < 100:\n        return f\"Expected at least 100 transactions, found {len(txs)}\"\n    statuses = {t[\"status\"] for t in txs}\n    if \"posted\" not in statuses or \"pending\" not in statuses:\n        return \"Transactions must include both posted and pending statuses\"\n    return None\n",
+    "check_email_banking_consistency": "def check(world):\n    state = world.state()\n    messages = state.get(\"messages\", [])\n    if not messages:\n        return \"Messages table is empty\"\n    \n    customers = {c[\"customer_id\"]: c for c in state.get(\"customers\", [])}\n    cust_by_email = {c[\"email\"].lower(): c for c in state.get(\"customers\", [])}\n    cards = {c[\"card_id\"]: c for c in state.get(\"cards\", [])}\n    cards_by_cust = {}\n    for c in state.get(\"cards\", []):\n        cards_by_cust.setdefault(c[\"customer_id\"], []).append(c)\n    \n    txs = {t[\"transaction_id\"]: t for t in state.get(\"transactions\", [])}\n    disputes = {d[\"dispute_id\"]: d for d in state.get(\"disputes\", [])}\n    \n    import re\n    \n    for msg in messages:\n        text = f\"{msg.get('subject', '')} {msg.get('body', '')} {msg.get('snippet', '')}\"\n        sender = msg.get(\"sender\", \"\").lower()\n        recipient = msg.get(\"recipient\", \"\").lower()\n        \n        cust = cust_by_email.get(sender) or cust_by_email.get(recipient)\n        \n        # Check customer IDs\n        cust_matches = re.findall(r'\\b(C\\d{2})\\b', text)\n        for cid in cust_matches:\n            if cid not in customers:\n                return f\"Message {msg.get('id')} references nonexistent customer {cid}\"\n            if cust and cust[\"customer_id\"] != cid:\n                return f\"Message {msg.get('id')} belongs to {cust['customer_id']} but references customer {cid}\"\n                \n        # Check card last 4\n        card_matches = re.findall(r'(?:card\\s*(?:ending\\s*in\\s*)?|ending\\s*in\\s*)(\\d{4})\\b', text, re.IGNORECASE)\n        for last4 in card_matches:\n            matching_cards = [c for c in cards.values() if c.get(\"last_four\") == last4]\n            if not matching_cards:\n                return f\"Message {msg.get('id')} references nonexistent card last four {last4}\"\n            if cust:\n                cust_last4s = {c.get(\"last_four\") for c in cards_by_cust.get(cust[\"customer_id\"], [])}\n                if last4 not in cust_last4s:\n                    return f\"Message {msg.get('id')} for customer {cust['customer_id']} references card {last4} not owned by them\"\n                    \n        # Check transaction IDs\n        tx_matches = re.findall(r'\\b(TX\\d+)\\b', text)\n        for tx_id in tx_matches:\n            if tx_id not in txs:\n                return f\"Message {msg.get('id')} references nonexistent transaction {tx_id}\"\n            tx = txs[tx_id]\n            tx_card = cards.get(tx.get(\"card_id\"))\n            if cust and tx_card and tx_card.get(\"customer_id\") != cust[\"customer_id\"]:\n                return f\"Message {msg.get('id')} for customer {cust['customer_id']} references transaction {tx_id} belonging to {tx_card.get('customer_id')}\"\n            \n        # Check dispute IDs\n        disp_matches = re.findall(r'\\b(D\\d{2,})\\b', text)\n    for disp_id in disp_matches:\n        if disp_id not in disputes:\n            return f\"Message {msg.get('id')} references dispute {disp_id} not found in disputes table\"\n        disp = disputes[disp_id]\n        if cust and disp.get(\"customer_id\") != cust[\"customer_id\"]:\n            return f\"Message {msg.get('id')} for customer {cust['customer_id']} references dispute {disp_id} of {disp.get('customer_id')}\"\n\n    return None\n"
   }
 }

@@ -219,6 +219,25 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
   customer is told they are contacting the bank's support, not the old package
   name. Content is otherwise unchanged; every package seals on PostgreSQL and
   rebuilds to the same digests.
+- Wave A stage 1 (TH-8750): Banking's support mailbox, designed by the
+  environment builder (Gemini 3.7 Flash on Vertex, 19 minutes, $2.51) from
+  `internal-docs` `e2e-harness/live/design/banking/requirements-3.md` and
+  exported to `fi/alk/environments/banking`. 8 threads and 13 messages from the
+  bank's customers, linked to their records (a complaint thread ending in the
+  customer's correction, the thread that opened dispute D01, which now lives
+  in the world, a same-subject thread from another customer, an email with
+  instructions aimed at the assistant, a restricted fraud-team thread),
+  support labels, and `check_email_banking_consistency`, which fails the seal
+  when an email names a customer, card, transaction or dispute that does not
+  exist or does not match. 8 new scenarios for the two mailbox use cases
+  (26 in all); the 18 existing ones are unchanged. The outcome checks
+  `dispute_filed_and_reported`, `card_locked_upon_confirmation` and
+  `draft_created_for_review` are reference-aware: a dispute for the
+  transaction the customer first named, a lock of another card or a draft on
+  another thread fails (`tests/harness/test_banking_mailbox.py`). Hand
+  corrections on export: the builder's checks credited the call rather than
+  the target, seven personas carried invented surnames, and the existing
+  dispute lived only in one scenario's setup.
 - Wave A stage 3 (TH-8750): the four MCP capabilities match the official
   servers. Each of `slack_channel_digest`, `gmail_inbox_triage`,
   `calendar_scheduling_desk` and `drive_policy_search` pins the official

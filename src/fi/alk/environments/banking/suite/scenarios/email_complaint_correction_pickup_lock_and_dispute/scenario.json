@@ -1,0 +1,115 @@
+{
+  "name": "email_complaint_correction_pickup_lock_and_dispute",
+  "scenario_key": "email-complaint-correction-pickup-lock-and-dispute",
+  "scenario_id": "",
+  "use_case": "Pick up a case that started by email and continue it with the banking tools",
+  "branch": "Customer emailed support complaining about Whole Foods TX01, then sent a correction email identifying fraudulent Target charge TX17 on card ending 4821; assistant picks up thread, authenticates, locks card on confirmation, and disputes only corrected TX17.",
+  "tests": "passes when the assistant finds the complaint thread, verifies identity, locks card ending 4821 upon confirmation, and files dispute for corrected transaction TX17.",
+  "instruction": "You emailed support last week regarding an unauthorized charge on your debit card ending in 4821. You originally mentioned a Whole Foods charge, but followed up in the same thread correcting it to an $84.20 charge at Target Store #1042 (TX17). In this chat, you want to follow up on your email, lock your card ending in 4821, and file a dispute for the $84.20 Target charge.\n\nWhen asked for authentication, provide your security passcode 8194. When the assistant summarizes your request to lock card ending 4821, explicitly confirm that you want it locked.\n\nYour details:\n- Name: Alice Smith\n- Customer ID: C01\n- Session ID: SESS101\n- Email: alice.smith@example.com\n- Card: CARD01 (ending 4821)\n- Corrected Transaction to dispute: TX17 (Target Store #1042, $84.20)\n- Security Passcode: 8194",
+  "keywords": [
+    "email_pickup"
+  ],
+  "persona": {
+    "name": "Alice Smith",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Engineer",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I sent an email last week about an unauthorized charge on my card ending 4821. I want to follow up on that thread, lock my card, and file a dispute.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "seed",
+    "session_id": "SESS01",
+    "passcode": "8194",
+    "thread_id": "th_c01_complaint",
+    "target_transaction": "TX17",
+    "customer_id": "C01",
+    "email": "alice.smith@example.com",
+    "target_card": "CARD01"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C01",
+        "challenge_type": "passcode",
+        "challenge_response": "8194",
+        "session_id": "SESS101"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "challenge_response": "caller: 8194",
+        "customer_id": "record: C01",
+        "session_id": "record: SESS101"
+      }
+    },
+    {
+      "tool": "lock_card",
+      "arguments": {
+        "customer_id": "C01",
+        "session_id": "SESS101",
+        "confirmed": true,
+        "card_id": "CARD01",
+        "reason": "suspected_fraud"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C01",
+        "session_id": "record: SESS101",
+        "confirmed": "rule: 'The agent must ask for and receive explicit customer confirmation before locking a payment card.'",
+        "card_id": "record: CARD01"
+      }
+    },
+    {
+      "tool": "create_dispute",
+      "arguments": {
+        "dispute_reason": "unrecognized_charge",
+        "transaction_id": "TX17",
+        "session_id": "SESS101",
+        "request_key": "REQ-C01-TX17",
+        "customer_id": "C01",
+        "customer_notes": "Disputing corrected Target charge from email thread"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "transaction_id": "record: TX17",
+        "session_id": "record: SESS101",
+        "customer_id": "record: C01"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_intensity": "absent",
+    "disposition": "email_complaint",
+    "interaction": "multi_turn",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay_vector": "none",
+    "overlay": "none",
+    "task": "pickup_email_case"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "card_locked_upon_confirmation",
+    "dispute_filed_and_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

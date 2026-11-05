@@ -1,0 +1,84 @@
+{
+  "name": "draft_reply_to_customer_charge_inquiry",
+  "scenario_key": "draft-reply-to-customer-charge-inquiry",
+  "scenario_id": "",
+  "use_case": "Draft a reply on a customer's email thread for a person to review",
+  "branch": "Support agent drafts a reply on customer Charlie Johnson's inquiry thread th_c03_draft_needed regarding posted Best Buy charge TX05 for human review without sending email.",
+  "tests": "passes when the assistant checks records for transaction TX05 and creates a draft reply on thread th_c03_draft_needed for customer Charlie Johnson.",
+  "instruction": "You are a customer service supervisor asking the assistant to prepare a draft reply to Charlie Johnson's email thread th_c03_draft_needed regarding their inquiry about the $85.00 Best Buy charge (TX05) on card ending 3345. Ask the assistant to check the transaction details in the system and create a draft response to message msg_006 explaining that the charge posted on October 17, 2026.\n\nDetails:\n- Customer: Charlie Johnson\n- Email: charlie.j@example.com\n- Thread ID: th_c03_draft_needed\n- Message ID to reply: msg_006\n- Transaction: TX05 (Best Buy, $85.00, posted 2026-10-17T14:10:00Z)",
+  "keywords": [
+    "draft_reply"
+  ],
+  "persona": {
+    "name": "Alex Ward",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Customer Service",
+    "location": "United Kingdom",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Please check email thread th_c03_draft_needed and prepare a draft reply for customer Charlie Johnson regarding their inquiry about the Best Buy transaction TX05.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "message_id": "msg_006",
+    "target_transaction": "TX05",
+    "thread_id": "th_c03_draft_needed",
+    "origin": "seed"
+  },
+  "solution": [
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_c03_draft_needed"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_draft",
+      "arguments": {
+        "body": "Dear Charlie Johnson,\\n\\nWe have reviewed your account and confirmed that transaction TX05 for $85.00 at Best Buy on your debit card ending 3345 was posted on October 17, 2026.\\n\\nBest regards,\\nApex Horizon Bank Support",
+        "to": [
+          "charlie.j@example.com"
+        ],
+        "replyToMessageId": "msg_006",
+        "subject": "Re: Question about Best Buy charge"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "to": "record: ['charlie.j@example.com']",
+        "replyToMessageId": "record: msg_006"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "interaction": "single_request",
+    "interface": "clean_prose",
+    "counterparty": "authorized_representative",
+    "overlay": "none",
+    "overlay_intensity": "absent",
+    "disposition": "standard_flow",
+    "task": "draft_email_reply"
+  },
+  "sub_goals": [
+    "draft_created_for_review"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

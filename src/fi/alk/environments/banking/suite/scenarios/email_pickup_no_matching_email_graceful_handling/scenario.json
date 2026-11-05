@@ -1,0 +1,96 @@
+{
+  "name": "email_pickup_no_matching_email_graceful_handling",
+  "scenario_key": "email-pickup-no-matching-email-graceful-handling",
+  "scenario_id": "",
+  "use_case": "Pick up a case that started by email and continue it with the banking tools",
+  "branch": "Customer Diana Johnson believes she emailed earlier about Olive Garden charge TX07; mailbox search yields no thread, so assistant informs customer and disputes charge via banking tools.",
+  "tests": "passes when the assistant handles missing email search gracefully, authenticates customer, and creates dispute for TX07.",
+  "instruction": "You believe you sent an email earlier today about an unauthorized charge of $32.00 at Olive Garden (TX07) on your card ending 5567. You contact chat to follow up on your email and dispute the charge.\n\nWhen asked for authentication, provide your security passcode 7402. If the assistant tells you no email was found, proceed directly with disputing the $32.00 Olive Garden charge.\n\nYour details:\n- Name: Diana Johnson\n- Customer ID: C04\n- Session ID: SESS104\n- Email: diana.j@example.com\n- Card: CARD07 (ending 5567)\n- Transaction: TX07 (Olive Garden, $32.00)\n- Passcode: 7402",
+  "keywords": [
+    "email_pickup"
+  ],
+  "persona": {
+    "name": "Diana Johnson",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Marketing Professional",
+    "location": "Australia",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Hi there! I sent an email earlier about an unauthorized $32.00 Olive Garden charge on card 5567. Can you check my email and help me dispute it?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "email": "diana.j@example.com",
+    "origin": "seed",
+    "passcode": "7402",
+    "customer_id": "C04",
+    "session_id": "SESS04",
+    "target_card": "CARD07",
+    "target_transaction": "TX07"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "challenge_type": "passcode",
+        "session_id": "SESS104",
+        "customer_id": "C04",
+        "challenge_response": "7402"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C04",
+        "session_id": "record: SESS104",
+        "challenge_response": "caller: 7402"
+      }
+    },
+    {
+      "tool": "create_dispute",
+      "arguments": {
+        "session_id": "SESS104",
+        "dispute_reason": "unrecognized_charge",
+        "transaction_id": "TX07",
+        "request_key": "REQ-C04-TX07",
+        "customer_notes": "Disputing unauthorized Olive Garden charge",
+        "customer_id": "C04"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C04",
+        "session_id": "record: SESS104",
+        "transaction_id": "record: TX07"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "disposition": "no_prior_email",
+    "overlay_intensity": "absent",
+    "overlay": "none",
+    "interaction": "multi_turn",
+    "interface": "clean_prose",
+    "task": "pickup_email_case",
+    "overlay_vector": "none",
+    "counterparty": "authorized_representative"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "dispute_filed_and_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

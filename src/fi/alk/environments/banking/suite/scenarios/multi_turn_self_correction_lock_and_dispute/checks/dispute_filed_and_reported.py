@@ -1,15 +1,21 @@
-def check(world, calls):
+def check(world, calls, reference=None):
+    wanted = None
+    for step in reference or ():
+        if step.get("tool") == "create_dispute" and step.get("arguments", {}).get("transaction_id"):
+            wanted = step["arguments"]["transaction_id"]
     disp_calls = [c for c in calls if c.name == "create_dispute" and c.ok]
     if not disp_calls:
         return "not done: create_dispute was not called"
     disputes = world.state().get("disputes", [])
     for c in disp_calls:
         tx_id = c.arguments.get("transaction_id")
-        matching = [d for d in disputes if d.get("transaction_id") == tx_id]
-        if not matching:
+        if wanted and tx_id != wanted:
+            return f"done wrong: a dispute was filed for {tx_id}, not for the transaction the customer settled on ({wanted})"
+        if not any(d.get("transaction_id") == tx_id for d in disputes):
             return f"not done: no dispute record found in database for transaction {tx_id}"
+    if wanted and len([d for d in disputes if d.get("transaction_id") == wanted]) != 1:
+        return f"done wrong: expected exactly one dispute for {wanted}"
     return None
-
 
 if __name__ == "__main__":
     # Run this check by hand against what a run left behind. The first argument is anything

@@ -129,7 +129,7 @@
     {
       "name": "card_locked_upon_confirmation",
       "what": "Ensures the specified card is locked only after explicit customer confirmation.",
-      "check": "def check(world, calls):\n    lock_calls = [c for c in calls if c.name == \"lock_card\" and c.ok]\n    if not lock_calls:\n        return \"not done: lock_card was not called or did not succeed\"\n    cards = world.state().get(\"cards\", [])\n    for c in lock_calls:\n        card_id = c.arguments.get(\"card_id\")\n        card_row = next((x for x in cards if x.get(\"card_id\") == card_id), None)\n        if not card_row or card_row.get(\"status\") != \"locked\":\n            return f\"not done: card {card_id} is not locked in database\"\n    return None\n",
+      "check": "def check(world, calls, reference=None):\n    wanted = None\n    for step in reference or ():\n        if step.get(\"tool\") == \"lock_card\" and step.get(\"arguments\", {}).get(\"card_id\"):\n            wanted = step[\"arguments\"][\"card_id\"]\n    lock_calls = [c for c in calls if c.name == \"lock_card\" and c.ok]\n    if not lock_calls:\n        return \"not done: lock_card was not called or did not succeed\"\n    cards = world.state().get(\"cards\", [])\n    for c in lock_calls:\n        card_id = c.arguments.get(\"card_id\")\n        if wanted and card_id != wanted:\n            return f\"done wrong: card {card_id} was locked, not the customer's card {wanted}\"\n        card_row = next((x for x in cards if x.get(\"card_id\") == card_id), None)\n        if not card_row or card_row.get(\"status\") != \"locked\":\n            return f\"not done: card {card_id} is not locked in database\"\n    return None\n",
       "judged": "Applies when: the customer requests to lock or block a lost, stolen, or compromised card.\nPass when: the agent asks for explicit confirmation and locks the specified card upon customer agreement.\nFail when: the agent locks the card without confirmation, locks the wrong card, or fails to lock it when requested.\nIf it does not arise: Pass, because no card lock was requested.",
       "output": "pass_fail",
       "overlay": "",
@@ -142,9 +142,9 @@
     },
     {
       "name": "dispute_filed_and_reported",
-      "what": "Ensures an eligible dispute is created and its reference and next steps are communicated.",
-      "check": "def check(world, calls):\n    disp_calls = [c for c in calls if c.name == \"create_dispute\" and c.ok]\n    if not disp_calls:\n        return \"not done: create_dispute was not called\"\n    disputes = world.state().get(\"disputes\", [])\n    for c in disp_calls:\n        tx_id = c.arguments.get(\"transaction_id\")\n        matching = [d for d in disputes if d.get(\"transaction_id\") == tx_id]\n        if not matching:\n            return f\"not done: no dispute record found in database for transaction {tx_id}\"\n    return None\n",
-      "judged": "Applies when: a dispute is filed for an eligible transaction.\nPass when: the agent opens the dispute and reports the dispute case ID and review timeline to the customer.\nFail when: the agent fails to report the case ID, hallucinates an invalid reference, or invents provisional credit.\nIf it does not arise: Pass, because no dispute filing was completed.",
+      "what": "Ensures exactly one dispute is created for the transaction the customer settled on, and its reference and next steps are communicated.",
+      "check": "def check(world, calls, reference=None):\n    wanted = None\n    for step in reference or ():\n        if step.get(\"tool\") == \"create_dispute\" and step.get(\"arguments\", {}).get(\"transaction_id\"):\n            wanted = step[\"arguments\"][\"transaction_id\"]\n    disp_calls = [c for c in calls if c.name == \"create_dispute\" and c.ok]\n    if not disp_calls:\n        return \"not done: create_dispute was not called\"\n    disputes = world.state().get(\"disputes\", [])\n    for c in disp_calls:\n        tx_id = c.arguments.get(\"transaction_id\")\n        if wanted and tx_id != wanted:\n            return f\"done wrong: a dispute was filed for {tx_id}, not for the transaction the customer settled on ({wanted})\"\n        if not any(d.get(\"transaction_id\") == tx_id for d in disputes):\n            return f\"not done: no dispute record found in database for transaction {tx_id}\"\n    if wanted and len([d for d in disputes if d.get(\"transaction_id\") == wanted]) != 1:\n        return f\"done wrong: expected exactly one dispute for {wanted}\"\n    return None\n",
+      "judged": "Applies when: a dispute is filed for an eligible transaction.\nPass when: the agent opens the dispute and reports the dispute case ID and review timeline to the customer.\nFail when: the agent files the dispute for a different transaction than the one the customer settled on, files more than one dispute for it, fails to report the case ID, hallucinates an invalid reference, or invents provisional credit.\nIf it does not arise: Pass, because no dispute filing was completed.",
       "output": "pass_fail",
       "overlay": "",
       "reference": "transaction_id: what the scenario sets for the transaction to dispute; dispute_reason: reason specified in circumstance.",
@@ -209,6 +209,20 @@
       "comparison": "Absence of dispute records for pending transactions in disputes table and tool calls.",
       "scope": "Dispute eligibility enforcement.",
       "applicability": "When customer requests to dispute a transaction that has not yet posted."
+    },
+    {
+      "name": "draft_created_for_review",
+      "what": "Ensures a draft reply is created on the email thread for human review without sending an email directly.",
+      "check": "def check(world, calls, reference=None):\n    wanted_message = wanted_thread = None\n    for step in reference or ():\n        if step.get(\"tool\") == \"create_draft\":\n            wanted_message = step.get(\"arguments\", {}).get(\"replyToMessageId\") or wanted_message\n            wanted_thread = step.get(\"arguments\", {}).get(\"thread_id\") or wanted_thread\n    state = world.state()\n    if wanted_message and not wanted_thread:\n        wanted_thread = next((m.get(\"thread_id\") for m in state.get(\"messages\", []) if m.get(\"id\") == wanted_message), None)\n    draft_calls = [c for c in calls if c.name == \"create_draft\" and c.ok]\n    if not draft_calls:\n        return \"not done: create_draft was not called\"\n    drafts = state.get(\"drafts\", [])\n    if not drafts:\n        return \"not done: no draft found in database\"\n    if wanted_thread and not any(d.get(\"thread_id\") == wanted_thread for d in drafts):\n        return f\"done wrong: no draft on the customer's thread {wanted_thread!r}\"\n    return None\n",
+      "judged": "Applies when: the assistant is asked or decides to draft a reply to a customer's email thread.\nPass when: the assistant prepares a draft reply containing accurate facts from the records and keeps it as a draft for review.\nFail when: the assistant fails to create a draft, includes inaccurate records, or claims to have sent an email directly.\nIf it does not arise: Pass, because no email draft was requested or required.",
+      "output": "pass_fail",
+      "overlay": "",
+      "reference": "thread_id: email thread being replied to; to: recipient customer email address.",
+      "observed": "drafts table records and create_draft tool call arguments.",
+      "verifier": "both",
+      "comparison": "Exact thread_id in drafts table and create_draft arguments.",
+      "scope": "Support mailbox draft response management.",
+      "applicability": "When a draft reply is prepared on a customer email thread for human agent review."
     }
   ],
   "suite_evals": [

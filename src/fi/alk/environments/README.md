@@ -16,7 +16,7 @@ Each package's `README.md` lists its tools, scenarios, coverage map and known ga
 
 | Package | Entry | Tools | Scenarios | Workbook cases | Known gaps |
 |---|---|---|---|---|---|
-| `banking` | V01 Banking | 8 + Gmail 8 | 18 | 5/5 | Bank mailbox not yet linked to the banking records (stage 1) |
+| `banking` | V01 Banking | 8 + Gmail 8 | 26 | 5/5 | Mailbox of 8 threads; checks other than the three outcome checks are shared per sub-goal |
 | `appointment_booking` | V02 Clinic scheduling | 9, `sql` and `filesystem` attached | 10 | 1/5 (S03, S05 partial) | No referral data or slot hold; red-flag and no-medical-advice rules unscored |
 | `hr` | V13 HR | 7 | 18 | 5/5 | No C15 failure cases |
 | `retail` | V15 Retail | 8 | 12 | 5/5 | No C15 timeout-after-commit case |

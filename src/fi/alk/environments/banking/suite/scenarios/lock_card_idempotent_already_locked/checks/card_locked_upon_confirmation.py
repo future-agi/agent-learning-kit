@@ -1,15 +1,20 @@
-def check(world, calls):
+def check(world, calls, reference=None):
+    wanted = None
+    for step in reference or ():
+        if step.get("tool") == "lock_card" and step.get("arguments", {}).get("card_id"):
+            wanted = step["arguments"]["card_id"]
     lock_calls = [c for c in calls if c.name == "lock_card" and c.ok]
     if not lock_calls:
         return "not done: lock_card was not called or did not succeed"
     cards = world.state().get("cards", [])
     for c in lock_calls:
         card_id = c.arguments.get("card_id")
+        if wanted and card_id != wanted:
+            return f"done wrong: card {card_id} was locked, not the customer's card {wanted}"
         card_row = next((x for x in cards if x.get("card_id") == card_id), None)
         if not card_row or card_row.get("status") != "locked":
             return f"not done: card {card_id} is not locked in database"
     return None
-
 
 if __name__ == "__main__":
     # Run this check by hand against what a run left behind. The first argument is anything
