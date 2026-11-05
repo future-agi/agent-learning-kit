@@ -1,7 +1,8 @@
 """Plays a scenario's actors in the world, through the world's door.
 
 A mocked actor takes the actions its scenario schedules, each at its trigger, and decides nothing. A live actor
-decides its own next action from its brief each time the agent reaches it (or its activation trigger fires), up to
+decides its own next action from its brief on every new event it can see (anything addressed to it, and any action
+taken where it can act itself, by the agent or another actor), and when its activation trigger fires, up to
 `LIVE_TURNS` times a trial; `both` does the two. Every action goes to the tool proxy under the actor's id and this
 trial's token, so the proxy checks the actor's permissions and logs the attempt with what the world made of it,
 whether or not the world was called. A live decision is kept with its reason, never trusted for permission.
@@ -27,6 +28,10 @@ logger = logging.getLogger(__name__)
 POLL_SECONDS = 0.25
 # How many actions a live actor may decide in one trial.
 LIVE_TURNS = 3
+# Actions by actors in a row, with none by the agent between them, after which the actors in that run are stopped and
+# the run is recorded as the scenario's problem: actors answering each other this often with the agent idle are in a
+# loop, not taking part around the agent.
+ACTOR_ONLY_RUN = 6
 # What a live actor is asked each time it acts: one action of its own, or none.
 LIVE_ASK = (
     "Decide what you do in the world now. Reply with JSON only: "
@@ -121,6 +126,9 @@ class ActorDispatcher:
         self.live_turns: dict[str, int] = {one.id: 0 for one in self.live}
         self.answered: dict[str, set[str]] = {one.id: set() for one in self.live}
         self.woken: set[str] = set()
+        # Live actors stopped by the loop guard, and the problems the guard recorded.
+        self.stopped: set[str] = set()
+        self.problems: list[dict[str, Any]] = []
         # Actors the world waits on for at most `timeout_seconds` once their activation trigger is met, then applies
         # their fallback. `waiting` holds when each began and what began it; `settled` those that answered or fell back.
         self.timed = [
@@ -193,12 +201,11 @@ class ActorDispatcher:
     def _live_due(self, actor: Actor, elapsed: float, log: list[dict[str, Any]]) -> str | None:
         """The cause of a live actor's next turn: an agent action addressed to it not yet answered, else its
         activation trigger the first time it is met; None when nothing calls for it."""
-        if self.live_turns[actor.id] >= LIVE_TURNS or actor.id in self.fell_back:
+        if self.live_turns[actor.id] >= LIVE_TURNS or actor.id in self.fell_back or actor.id in self.stopped:
             return None
-        agent_rows = [row for row in log if (row.get("actor_id") or AGENT) == AGENT]
-        for row in agent_rows:
+        for row in log:
             key = str(row.get("action_id") or "")
-            if key and key not in self.answered[actor.id] and contacts(row.get("arguments"), actor):
+            if key and key not in self.answered[actor.id] and self._sees(actor, row):
                 self.answered[actor.id].add(key)
                 return key
         if actor.id in self.woken:
@@ -211,15 +218,39 @@ class ActorDispatcher:
             self.woken.add(actor.id)
         return cause
 
+    def _sees(self, actor: Actor, row: dict[str, Any]) -> bool:
+        """Whether an action in the log is one this actor can see: never its own or the history's; one addressed to
+        it; or one taken where it can act itself (the same action, by the agent or another actor)."""
+        if (row.get("actor_id") or AGENT) == actor.id or ":h" in str(row.get("idempotency_key") or ""):
+            return False
+        name = str(row.get("name") or "")
+        return contacts(row.get("arguments"), actor) or any(
+            name in (one, one.rsplit(".", 1)[-1], one.replace(".", "/")) for one in actor.permitted_actions
+        )
+
+    def _loop_guard(self, log: list[dict[str, Any]]) -> None:
+        """Stops the live actors in a run of `ACTOR_ONLY_RUN` actor actions with none by the agent, once per run, and
+        records it as a problem of the scenario, never of the agent."""
+        run: list[str] = []
+        for row in log:
+            who = str(row.get("actor_id") or AGENT)
+            if ":h" in str(row.get("idempotency_key") or ""):
+                continue
+            run = [] if who == AGENT else [*run, who]
+        involved = sorted({who for who in run} & {one.id for one in self.live} - self.stopped)
+        if len(run) < ACTOR_ONLY_RUN or not involved:
+            return
+        self.stopped.update(involved)
+        problem = {"actor": involved[0], "play": "problem", "problem": "actor_loop", "actors": involved,
+                   "why": f"{len(run)} actions by actors in a row with none by the agent"}
+        self.problems.append(problem)
+        self.fired.append(problem)
+
     def _situation(self, actor: Actor, log: list[dict[str, Any]]) -> str:
         """What a live actor is given to decide from: its brief, what it may do, and what has happened in the world
         that concerns it."""
         own = [row for row in log if row.get("actor_id") == actor.id]
-        asked = [
-            row
-            for row in log
-            if (row.get("actor_id") or AGENT) == AGENT and contacts(row.get("arguments"), actor)
-        ]
+        asked = [row for row in log if self._sees(actor, row)]
         allowed = "\n".join(
             f"- {name}: {self.world_actions.get(name, '')}".rstrip(": ") for name in actor.permitted_actions
         ) or "- none: you may not act in the world"
@@ -227,8 +258,10 @@ class ActorDispatcher:
             [
                 self.briefs.get(actor.id, f"You are {actor.name}."),
                 "Your actions in the world:\n" + allowed,
-                "What the agent sent that concerns you, oldest first:\n"
-                + ("\n".join(json.dumps({"action": r.get("name"), "arguments": r.get("arguments")}, default=str) for r in asked) or "nothing yet"),
+                "What you can see happened, oldest first:\n"
+                + ("\n".join(json.dumps({"by": r.get("actor_id") or AGENT, "action": r.get("name"),
+                                          "arguments": r.get("arguments")}, default=str) for r in asked)
+                   or "nothing yet"),
                 "What you have already done:\n"
                 + ("\n".join(json.dumps({"action": r.get("name"), "outcome": r.get("outcome")}, default=str) for r in own) or "nothing yet"),
                 LIVE_ASK,
@@ -371,6 +404,7 @@ class ActorDispatcher:
                     actor.id,
                     type(exc).__name__,
                 )
+        self._loop_guard(log)
         for actor in list(self.live):
             cause = self._live_due(actor, elapsed, log)
             if cause is not None:

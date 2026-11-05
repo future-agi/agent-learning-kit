@@ -471,3 +471,81 @@ def test_another_actor_answers_instead_when_the_approver_times_out(play):
     assert ("manager", "timeout", "answered_by") in _timeline(dispatcher)
     assert [headers["X-ALK-Actor"] for _url, headers in sent] == ["deputy"]
     assert sent[0][1]["X-ALK-Parent-Event"] == "a1"
+
+
+def _channel(names, decide):
+    """Live actors who can all post in one Slack channel, in a world whose log records each post."""
+    log = []
+    actors = {
+        name: Actor(id=name, name=name.title(), play="live", permitted_actions=["slack.post_message"])
+        for name in names
+    }
+
+    def send(url, headers, arguments):
+        log.append({"name": "post_message", "actor_id": headers["X-ALK-Actor"], "action_id": f"r{len(log)}",
+                    "arguments": arguments, "outcome": "committed"})
+        return 200
+
+    dispatcher = ActorDispatcher(
+        actors,
+        [ScenarioActor(id=name) for name in names],
+        trial_id="trial-1",
+        proxy_url="http://proxy/",
+        token="t0ken",
+        read_log=lambda: list(log),
+        seed="trial-1",
+        timeout=60.0,
+        clock=_Clock(),
+        send=send,
+        decide=decide,
+    )
+    return dispatcher, log
+
+
+def test_a_live_actor_acts_on_a_message_it_can_see_from_the_agent_or_another_actor_without_being_contacted():
+    seen = []
+
+    async def decide(situation):
+        seen.append(situation)
+        return '{"action": null, "why": "noted"}'
+
+    dispatcher, log = _channel(["manager", "colleague"], decide)
+    log.append({"name": "post_message", "actor_id": "agent", "action_id": "a1",
+                "arguments": {"channel": "#deals", "text": "Can deal 7 get 12%?"}})
+    asyncio.run(_ticks(dispatcher, count=2))
+    assert len(seen) == 2 and all("Can deal 7 get 12%?" in one for one in seen)
+    # An action somewhere it cannot act, addressed to no one it is, is not its business.
+    log.append({"name": "update_deal", "actor_id": "agent", "action_id": "a2", "arguments": {"deal": 7}})
+    asyncio.run(_ticks(dispatcher, count=2))
+    assert len(seen) == 2
+
+
+def test_actors_answering_each_other_with_the_agent_idle_are_stopped_and_recorded_as_the_scenario_s_problem():
+    from fi.alk.harness.actor_dispatch import ACTOR_ONLY_RUN
+
+    async def decide(situation):
+        return '{"action": "slack.post_message", "arguments": {"text": "agreed"}, "why": "replying"}'
+
+    dispatcher, log = _channel(["manager", "colleague", "lead"], decide)
+    log.append({"name": "post_message", "actor_id": "agent", "action_id": "a1", "arguments": {"text": "Thoughts?"}})
+    asyncio.run(_ticks(dispatcher, count=10))
+    actor_rows = [row for row in log if row["actor_id"] != "agent"]
+    assert ACTOR_ONLY_RUN <= len(actor_rows) < ACTOR_ONLY_RUN + 3
+    assert dispatcher.stopped == {"manager", "colleague", "lead"}
+    [problem] = dispatcher.problems
+    assert problem["problem"] == "actor_loop" and problem["actors"] == ["colleague", "lead", "manager"]
+    # The agent acting again is no reason for a stopped actor to come back this trial.
+    log.append({"name": "post_message", "actor_id": "agent", "action_id": "a9", "arguments": {"text": "Ok"}})
+    before = len(log)
+    asyncio.run(_ticks(dispatcher, count=3))
+    assert len(log) == before
+
+
+def test_a_live_actor_never_answers_its_own_action():
+    async def decide(situation):
+        return '{"action": "slack.post_message", "arguments": {"text": "noted"}, "why": "replying"}'
+
+    dispatcher, log = _channel(["manager"], decide)
+    log.append({"name": "post_message", "actor_id": "agent", "action_id": "a1", "arguments": {"text": "Thoughts?"}})
+    asyncio.run(_ticks(dispatcher, count=5))
+    assert [row["actor_id"] for row in log] == ["agent", "manager"]
