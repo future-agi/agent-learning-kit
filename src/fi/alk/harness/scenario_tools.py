@@ -81,7 +81,7 @@ from .prove import (
     workspace_bindings,
     workspace_fixture,
 )
-from .actors import Actor, cycles, load_actors
+from .actors import CALLER, Actor, cycles, load_actors
 from .scenario import (
     ANSWERED_BY,
     CALLER_AWARENESS,
@@ -367,6 +367,8 @@ def _unlisted_actors(scenario: Scenario, world_root: Path) -> list[str]:
         problems += session_problems(session, number, listed)
     if scenario.starts_with is not None and scenario.starts_with.actor not in listed:
         problems.append(f"starts_with: {scenario.starts_with.actor!r} is not an actor; add it with add_actor first")
+    if any(entry.id == CALLER for entry in scenario.actors):
+        problems.append("actors: the caller is the person in every scenario, through its persona; leave it out of actors")
     problems += _activation_problems(scenario, listed)
     for loop in cycles(listed, scenario.actors):
         problems.append(
@@ -3062,7 +3064,8 @@ def world_summary(world_root: Path) -> str:
                 "\nSUB-GOALS already defined (reuse these, do not restate them):"
             )
             lines += [f"  {one.name}: {one.what}" for one in catalogue.sub_goals]
-        acting = load_actors(world_root).actors
+        # The caller is in every scenario as the person, through its persona; it is never listed in `actors`.
+        acting = [one for one in load_actors(world_root).actors if one.id != CALLER]
         if acting:
             lines.append(
                 "\nACTORS a scenario can include in its `actors`, by id: an actor who speaks on calls with "

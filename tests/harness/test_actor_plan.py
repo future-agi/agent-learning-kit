@@ -815,3 +815,13 @@ def test_a_voice_actor_that_answered_in_time_has_no_fallback():
     cast.delivered(actor, "Approved.", 1, 1.0, 2.0)
     clock.now = 31
     assert cast.fallbacks() == []
+
+
+def test_a_scenario_never_lists_the_caller_among_its_actors(tmp_path):
+    from fi.alk.harness.actors import ensure_caller
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _unlisted_actors
+
+    ensure_caller(tmp_path)
+    scenario = Scenario(name="s", instruction="x", actors=[{"id": "caller"}])
+    assert any("the caller is the person" in one for one in _unlisted_actors(scenario, tmp_path))
