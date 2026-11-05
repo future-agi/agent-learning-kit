@@ -11,7 +11,7 @@ from fi.alk.harness.chat_call_runner import _HostedChatTarget
 from fi.alk.harness.chat_transport import create_chat_wrapper
 from fi.alk.harness.contract import RuntimeInterface, RuntimeHttpFailureRule
 from fi.simulate.agent.wrapper import AgentInput
-from fi.simulate.agent.wrappers.http import HTTPAgentWrapper
+from fi.simulate.agent.wrappers.http import HTTPAgentWrapper, _decode_json_or_sse, _select_response_value
 from fi.simulate.agent.wrappers.http_events import CompletedToolEvents, CompletedToolRows
 
 
@@ -665,3 +665,88 @@ def test_result_error_selector_preserves_keys_and_numeric_indices(native_app, pa
     assert response.metadata["external_agent"]["success"] is True
     assert response.metadata["native_completed_tools"][0]["ok"] is False
     assert response.metadata["native_completed_tools"][0]["result"] == result
+
+
+def test_a_reply_reads_as_json_server_sent_events_or_json_lines_and_nothing_else():
+    assert _decode_json_or_sse('{"content": "done"}') == {"content": "done"}
+    assert _decode_json_or_sse('data: {"content": "a"}\n\ndata: [DONE]\n') == [
+        {"content": "a"}
+    ]
+    assert _decode_json_or_sse('{"content": "a"}\n{"content": "b"}\n') == [
+        {"content": "a"},
+        {"content": "b"},
+    ]
+    for body in ("plain words\n", "", '{"content": "a"}\nnot json\n'):
+        with pytest.raises(ValueError, match="JSON lines"):
+            _decode_json_or_sse(body)
+
+
+@pytest.mark.parametrize(
+    ("body", "reply"),
+    [
+        (
+            '{"content": {"text": "Tides "}}\n{"content": {"text": "turn"}}\n{"content": {"kind": "end"}}\n',
+            "Tides turn",
+        ),
+        (
+            'data: {"content": {"text": "Tides"}}\n\ndata: {"content": {"text": "Tides turn"}}\n\n',
+            "Tides turn",
+        ),
+        (
+            'data: {"choices": [{"delta": {"content": "Tides "}}]}\n\ndata: {"choices": [{"delta": {"content": "turn"}}]}\n\n'
+            'data: {"choices": [{"delta": {"content": null}}]}\n\ndata: [DONE]\n\n',
+            "Tides turn",
+        ),
+        ('[{"content": {"text": "first"}}, {"content": {"text": "last"}}]', "last"),
+        (
+            'data: {"content": {"text": "Tides "}}\n\ndata: {"content": {"text": "turn"}}\n\n'
+            'data: {"content": {"text": "Tides turn"}}\n\n',
+            "Tides turn",
+        ),
+        (
+            '{"content": {"text": "."}}\n{"content": {"text": "."}}\n{"content": {"text": "."}}\n',
+            "...",
+        ),
+        (
+            '{"content": {"text": "a"}}\n{"content": {"text": "b"}}\n{"content": {"text": "abc"}}\n',
+            "ababc",
+        ),
+        (
+            '{"content": {"text": "T"}}\n{"content": {"text": "Ti"}}\n{"content": {"text": "Tide"}}\n'
+            '{"content": {"text": "Tide"}}\n',
+            "Tide",
+        ),
+    ],
+)
+def test_a_streamed_reply_is_its_text_deltas_joined_or_its_last_whole_text(body, reply):
+    path = "choices.0.delta.content" if "choices" in body else "content.text"
+    wrapper = HTTPAgentWrapper(
+        endpoint="http://localhost:8080/chat",
+        protocol="json_template",
+        request_template={"input": "{{messages}}"},
+        response_path=path,
+    )
+    assert (
+        wrapper._agent_response_from_payload(_decode_json_or_sse(body)).content == reply
+    )
+
+
+@pytest.mark.parametrize(
+    ("body", "path", "value"),
+    [
+        (
+            'data: {"status": "running"}\n\ndata: {"status": "running"}\n\ndata: {"status": "completed"}\n\n',
+            "status",
+            "completed",
+        ),
+        (
+            '{"session": "s-1"}\n{"session": "s-1"}\n{"session": "s-1"}\n',
+            "session",
+            "s-1",
+        ),
+    ],
+)
+def test_a_streamed_value_other_than_the_reply_text_is_its_latest_event(
+    body, path, value
+):
+    assert _select_response_value(_decode_json_or_sse(body), path) == value

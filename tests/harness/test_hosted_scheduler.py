@@ -2626,6 +2626,41 @@ def test_conversation_only_scenario_can_be_judged_without_tool_calls(
     asyncio.run(scenario())
 
 
+def test_a_call_with_only_worker_hand_offs_is_evidence_missing() -> None:
+    # A worker's run is not a tool call, so a call that made none still has no evidence for checks.
+    async def scenario() -> None:
+        outbound = FakeOutbound()
+        pool, _ = _pool(2, outbound=outbound)
+        await pool.start()
+        handoff = hs.Call(
+            name="Draft writer", arguments={}, delegated_to="Draft writer", handoff=True
+        )
+
+        class Runner:
+            async def run(
+                self, scenario: FakeScenario, runtime: EnvironmentRuntime
+            ) -> hs.CallOutcome:
+                return _call_outcome(calls=(handoff,))
+
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=Runner(),
+            outbound=outbound,
+            job_seed=1,
+        )
+        scenarios = [
+            FakeScenario(
+                "s1", "id-1", sub_goals=[FakeSubGoal("goal", lambda w, c: None)]
+            )
+        ]
+        result = await scheduler.run(scenarios)
+        assert result.receipts[0].failure.code == "evidence_missing"
+        await pool.close()
+
+    asyncio.run(scenario())
+
+
 def test_zero_turns_and_zero_calls_is_still_evidence_missing() -> None:
     # M10: unconditioned on `turns` — a 0-turn call is an unobserved agent, same as any other
     # empty-calls outcome; `evidence_missing` must fire regardless.
