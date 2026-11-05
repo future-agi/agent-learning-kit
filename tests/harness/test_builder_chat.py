@@ -2071,3 +2071,23 @@ def test_the_build_adds_actors_without_asking_and_never_drops_one(
     dropped = asyncio.run(drop.handler({"id": "friend"}))
     assert dropped["is_error"] is True and "aim_for" in dropped["content"][0]["text"]
     assert ran == [{"id": "friend"}]
+
+
+def test_stale_pre_run_sessions_are_written_again_before_a_save_seals_the_scenarios(tmp_path, monkeypatch):
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    (tmp_path / "world.sqlite").write_bytes(b"before")
+    runtime._published_fingerprint()
+    order = []
+
+    async def refresh(root, write=None):
+        order.append(("refresh", root))
+        return []
+
+    monkeypatch.setattr("fi.alk.harness.pre_run.refresh_stale", refresh)
+    monkeypatch.setattr("fi.alk.harness.bundle_author_v2.reseal_scenarios", lambda root: order.append(("reseal", root)))
+
+    (tmp_path / "world.sqlite").write_bytes(b"after")
+    asyncio.run(runtime._save_changes())
+
+    assert order == [("refresh", runtime.workspace), ("reseal", runtime.workspace)]
