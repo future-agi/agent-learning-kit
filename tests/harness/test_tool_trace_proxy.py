@@ -431,7 +431,7 @@ def test_without_a_permissions_seal_a_worker_s_action_is_attributed_but_not_limi
 
 def test_a_route_named_differently_from_its_tool_is_logged_as_the_tool(worker_proxy):
     url, rows, tmp_path = worker_proxy
-    (tmp_path / "actions.json").write_text(json.dumps({"crm.approve_discount": "grant_discount"}), encoding="utf-8")
-    assert _post(url, "/w/c-refund/crm/approve_discount", {"deal": "1"})[0] == 201
+    (tmp_path / "actions.json").write_text(json.dumps({"records.approve": "grant_discount"}), encoding="utf-8")
+    assert _post(url, "/w/c-refund/records/approve", {"deal": "1"})[0] == 201
     assert _post(url, "/ok", {"deal": "1"})[0] == 201
     assert [r["name"] for r in rows()] == ["grant_discount", "ok"]
