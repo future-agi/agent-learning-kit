@@ -277,10 +277,10 @@ def test_a_worker_s_attempts_are_its_own_participant_with_each_refusal_and_why()
         {"name": "send_reply", "outcome": "committed"},
     ]
     changes = trial_state_changes(log, {})
-    assert [(c["who"], c["attempted"], c["committed"], c["refused"]) for c in changes] == [
-        ("agent", 1, 1, 0),
-        ("worker:order_lookup", 2, 1, 1),
-        ("worker:refund", 1, 1, 0),
+    assert [(c["who"], c["name"], c["attempted"], c["committed"], c["refused"]) for c in changes] == [
+        ("agent", "the agent", 1, 1, 0),
+        ("worker:order_lookup", "order_lookup", 2, 1, 1),
+        ("worker:refund", "refund", 1, 1, 0),
     ]
     assert changes[1]["refused_actions"] == [
         {

@@ -1017,7 +1017,11 @@ def trial_state_changes(log: list[dict[str, Any]], listed: Mapping[str, Any]) ->
             who,
             {
                 "who": who,
-                "name": "the agent" if who == AGENT else (actor.name if actor is not None else who),
+                "name": "the agent"
+                if who == AGENT
+                else actor.name
+                if actor is not None
+                else str(row.get("worker_id") or who),
                 "attempted": 0,
                 **{outcome: 0 for outcome in _OUTCOMES},
                 "committed_actions": [],
