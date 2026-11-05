@@ -16,6 +16,7 @@ from fi._diagnostics import sanitize_diagnostic
 from fi.simulate.agent.wrapper import AgentInput
 from fi.simulate.agent.wrappers.http import HTTPAgentWrapper, HTTPCallFailure
 
+from .actors import with_caller_actor
 from .call_runner import (
     ArtifactUploader,
     CallRunnerContext,
@@ -27,7 +28,7 @@ from .contract import AgentContract
 from .hosted_scheduler import CallAborted, CallOutcome, Scenario, World
 from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime
-from .run.conversation import TargetConversationEnded, Transcript, converse
+from .run.conversation import ChatActors, TargetConversationEnded, Transcript, converse
 from .scenario import Scenario as ConversationScenario
 from .usage import (
     UsageDenied,
@@ -444,17 +445,58 @@ def _conversation_scenario(document: dict[str, Any]) -> ConversationScenario:
         raise CallAborted(f"chat_scenario_invalid: {exc}") from exc
 
 
+def _resolved_chat_actors(document: dict[str, Any], bundle_dir: Path) -> list[dict[str, Any]]:
+    """Every actor the scenario includes that writes in the conversation, with its brief; one that cannot reach a
+    chat agent is kept with `entered: false` and the reason, so the record still names it."""
+    from fi.simulate.simulation.call_actors import CHANNELS, known_to_others
+
+    from .actors import ScenarioActor, actor_brief, brief_text, load_actors
+    from .call_actor import actors_enabled, load_call_actors, speaking_entries
+
+    if not actors_enabled() or not document.get("actors"):
+        return []
+    listing = load_call_actors(bundle_dir)
+    full = load_actors(bundle_dir).by_id()
+    entries = [ScenarioActor.model_validate(one) for one in document.get("actors") or []]
+    resolved = []
+    for included in speaking_entries(entries, listing, set(full)):
+        actor = full.get(included.id)
+        here = {
+            **(actor.model_dump(exclude_none=True) if actor is not None else {"id": included.id}),
+            "instruction": included.instruction,
+            "trigger": included.trigger.model_dump(),
+        }
+        if actor is None or "chat" not in CHANNELS.get(str(actor.channel), {}).get("modalities", ()):
+            reason = "not_in_list" if actor is None else "not_a_chat_channel"
+            resolved.append({**here, "entered": False, "reason": reason})
+            continue
+        entry = next((one for one in document.get("actors") or [] if (one or {}).get("id") == actor.id), None)
+        resolved.append(
+            {
+                **here,
+                "situation": known_to_others(str(document.get("instruction") or "")),
+                "language": ", ".join((document.get("persona") or {}).get("languages") or []),
+                "brief": brief_text(
+                    actor_brief(actor.model_dump(exclude_none=True), entry=entry, scenario=dict(document))
+                ),
+            }
+        )
+    return resolved
+
+
 async def _drive_conversation(
     target: _HostedChatTarget,
     scenario: ConversationScenario,
     contract: AgentContract,
     bundle_dir: Path,
+    actors: ChatActors | None = None,
 ) -> Transcript:
     return await converse(
         target,
         scenario,
         contract,
         world_root=bundle_dir,
+        actors=actors,
     )
 
 
@@ -504,6 +546,24 @@ class HostedChatCallRunner:
             _scenario_document(self._context.bundle_dir, source_key),
             getattr(self._context.job, "metadata", None),
             source_key,
+        )
+        document = with_caller_actor(document, self._context.bundle_dir)
+        chat_actors = _resolved_chat_actors(document, self._context.bundle_dir)
+        if chat_actors:
+            from fi.simulate.simulation.call_actors import with_others
+
+            # The person is told who else is in the conversation, never what they will write.
+            document = {
+                **document,
+                "instruction": with_others(
+                    str(document.get("instruction") or ""),
+                    [one for one in chat_actors if one.get("entered") is not False],
+                ),
+            }
+        cast = (
+            ChatActors(chat_actors, seed=f"{self._context.job.job_id}:{scenario.scenario_key}", model=None)
+            if chat_actors
+            else None
         )
         conversation_scenario = _conversation_scenario(document)
         if not conversation_scenario.instruction.strip():
@@ -556,6 +616,7 @@ class HostedChatCallRunner:
                 conversation_scenario,
                 self._contract,
                 self._context.bundle_dir,
+                **({"actors": cast} if cast is not None else {}),
             )
         except CallAborted as exc:
             failure = exc
@@ -611,6 +672,8 @@ class HostedChatCallRunner:
         if traced_calls and not transcript.calls:
             transcript.calls.extend(traced_calls)
 
+        if cast is not None:
+            transcript.call_actors = {"resolved": chat_actors, "summary": cast.summary(), "events": cast.events}
         ended = datetime.now(timezone.utc)
         transcript_id = await self._adapter.upload_artifact(
             transcript.artifact(),
@@ -648,6 +711,7 @@ class HostedChatCallRunner:
             duration_ms=_duration_ms(started, ended),
             transcript_artifact=transcript_id,
             messages=tuple(transcript.canonical_messages()),
+            call_actors=tuple(cast.summary()) if cast is not None else (),
         )
         if failure is not None:
             failure.partial = outcome
