@@ -41,6 +41,10 @@ def _psycopg() -> Any:
     return psycopg
 
 
+def _catalogue_text(value: Any) -> str:
+    return value.decode("utf-8") if isinstance(value, bytes) else str(value)
+
+
 class PostgresStore(ContainerStore):
     """A Postgres container the agent under test is pointed at."""
 
@@ -127,7 +131,7 @@ class PostgresStore(ContainerStore):
         rows = connection.execute(
             "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename"
         ).fetchall()
-        return [row[0] for row in rows]
+        return [_catalogue_text(row[0]) for row in rows]
 
     def _primary_key(self, connection: Any, table: str) -> list[str]:
         """The primary key columns, used only to read rows back in a stable order.
@@ -149,7 +153,7 @@ class PostgresStore(ContainerStore):
             """,
             (table,),
         ).fetchall()
-        return [row[0] for row in rows]
+        return [_catalogue_text(row[0]) for row in rows]
 
     def _column_types(self, connection: Any, table: str) -> dict[str, str]:
         """Return declared column types so writes use the source schema's representation.
@@ -168,10 +172,7 @@ class PostgresStore(ContainerStore):
             (table,),
         ).fetchall()
 
-        def text(value: Any) -> str:
-            return value.decode("utf-8") if isinstance(value, bytes) else str(value)
-
-        return {text(row[0]): text(row[1]) for row in rows}
+        return {_catalogue_text(row[0]): _catalogue_text(row[1]) for row in rows}
 
     def _select_ordered(self, connection: Any, table: str) -> list[dict[str, Any]]:
         """Every row of one table, ordered by its primary key where it has one.
