@@ -709,3 +709,15 @@ def test_one_decider_serves_every_runtime_on_the_actor_s_model_and_meters_each_c
     asyncio.run(decide("brief", "sam", None))
     assert asked == ["own-model", "env-model"]
     assert [(one["actor"], one["model"]) for one in meter.rows()] == [("mia", "own-model"), ("sam", "env-model")]
+
+
+def test_actors_triggered_by_the_agent_s_calls_never_form_a_cycle_whatever_they_may_do():
+    actors = {
+        "rep": Actor(id="rep", name="R", permitted_actions=["crm.request"]),
+        "mgr": Actor(id="mgr", name="M", permitted_actions=["crm.approve"]),
+    }
+    entries = [
+        ScenarioActor(id="rep", trigger=Trigger(kind="on_tool", tool="crm.approve")),
+        ScenarioActor(id="mgr", trigger=Trigger(kind="on_tool", tool="crm.request")),
+    ]
+    assert cycles(actors, entries) == []

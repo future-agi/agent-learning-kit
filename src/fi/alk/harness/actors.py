@@ -358,22 +358,19 @@ class ScenarioActor(BaseModel):
 
 
 def cycles(actors: dict[str, "Actor"], entries: list["ScenarioActor"]) -> list[list[str]]:
-    """Actors that bring each other in: each one's trigger fires on an action only the next can take. A cycle is a
-    scenario problem refused when the scenario is written, never a loop discovered during a run."""
+    """Actors that bring each other in: each one comes in once a record exists that only the next may write. A cycle
+    is a scenario problem refused when the scenario is written, never a loop discovered during a run."""
     triggered_by: dict[str, set[str]] = {}
     for entry in entries:
         actor = actors.get(entry.id)
         if actor is None:
             continue
         trigger = entry.trigger or (actor.activation.trigger if actor.activation else None)
-        if trigger is None:
+        # Only a record can bring an actor in off another actor's action: `on_tool` and `contacted` read the agent's
+        # own actions alone, so they never chain from one actor to the next.
+        if trigger is None or trigger.kind != "conditional" or not trigger.collection:
             continue
-        if trigger.kind == "on_tool" and trigger.tool:
-            names = {trigger.tool}
-        elif trigger.kind == "conditional" and trigger.collection:
-            names = {f"{trigger.collection}.change", f"{trigger.collection}.put"}
-        else:
-            continue
+        names = {f"{trigger.collection}.change", f"{trigger.collection}.put"}
         triggered_by[entry.id] = {
             other.id
             for other in actors.values()
