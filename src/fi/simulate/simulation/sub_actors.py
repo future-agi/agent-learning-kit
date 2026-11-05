@@ -11,8 +11,9 @@ import hashlib
 import math
 import random
 import re
+import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 # Where a caller's own details start in its instruction; anyone with the caller is given only what comes before.
 DETAILS_MARK = "Your details:"
@@ -49,8 +50,8 @@ TRIGGER_ABOUT: dict[str, str] = {
     "always": "after the agent's first turn (a phone menu answers the call itself)",
     "mid_journey": "after the agent's turn `turn`",
     "on_tool": "on call `on_call` of the agent's tool `tool`, a tool that runs in the simulated world "
-    "(one that runs only inside the agent cannot be seen), or after the agent's turn 4 if that call never comes",
-    "on_keyword": "when one of `words` is in the agent's latest turn, or after the agent's turn 4 if none is said",
+    "(one that runs only inside the agent cannot be seen); never if that call never comes",
+    "on_keyword": "when one of `words` is in the agent's latest turn; never if none is said",
     "probability": "with chance `p`, drawn once per call from the run's seed",
 }
 TRIGGERS = tuple(TRIGGER_ABOUT)
@@ -113,13 +114,11 @@ TOOLS_READ_SECONDS = 1.0
 CONVERSATION_LINES = 12
 MAX_ACTIVE = 2
 TAKEOVER_AFTER_TURNS = 4
-# A sub-actor in a scenario always joins: one waiting on a tool call or a word enters at this turn if it never comes.
-LATEST_ENTRY_TURN = 4
 # Someone can only take the phone from a person who already has it: not before the agent's second turn, by
 # which point the person has spoken at least once. A trigger that fires earlier waits for that turn.
 TAKES_PHONE_FROM_TURN = 2
-# Time all sub-actors together may take in one call: writing and speaking their own lines. The agent's
-# turns and the person's never count, so a slow agent does not cut a sub-actor short.
+# Time all sub-actors together have in one call: wall clock from the first sub-actor's trigger, the agent's
+# and the person's turns included. Once it runs out every sub-actor stops and the person has the call.
 SUB_ACTOR_SECONDS = 60.0
 # Lines asked for and not yet ready; one more is dropped rather than queued behind them.
 MAX_WAITING_LINES = 2
@@ -224,9 +223,8 @@ def due(
         return moment.agent_turns >= int(trigger.get("turn") or 0) >= 1
     if kind == "on_tool":
         tool = str(trigger.get("tool") or "")
-        return moment.agent_turns >= LATEST_ENTRY_TURN or (
-            bool(tool)
-            and moment.tools_called.count(tool) >= int(trigger.get("on_call") or 1)
+        return bool(tool) and moment.tools_called.count(tool) >= int(
+            trigger.get("on_call") or 1
         )
     if kind == "on_keyword":
         words = [
@@ -235,9 +233,7 @@ def due(
             if str(one).strip()
         ]
         said = moment.last_text.casefold()
-        return moment.agent_turns >= LATEST_ENTRY_TURN or any(
-            re.search(_whole(word), said) for word in words
-        )
+        return any(re.search(_whole(word), said) for word in words)
     if kind == "probability":
         return moment.agent_turns >= 1 and drawn(
             trigger, seed=seed, sub_actor_id=sub_actor_id
@@ -286,10 +282,14 @@ class Cast:
         self,
         actors: list[dict[str, Any]],
         seed: str,
+        clock: Callable[[], float] = time.time,
     ) -> None:
         self.actors = actors
         self.seed = seed
-        self._spent = 0.0
+        self.clock = clock
+        # When the first sub-actor was triggered; the call's sub-actor time runs from then.
+        self._started: float | None = None
+        self._cut = False
         self._time_up = False
         self._waiting_lines = 0
         self._state = {
@@ -316,7 +316,11 @@ class Cast:
 
     def remaining(self) -> float:
         """Seconds left of the call's sub-actor time; all of it until the first trigger."""
-        return max(0.0, SUB_ACTOR_SECONDS - self._spent)
+        if self._cut:
+            return 0.0
+        if self._started is None:
+            return SUB_ACTOR_SECONDS
+        return max(0.0, SUB_ACTOR_SECONDS - (self.clock() - self._started))
 
     def out_of_time(self) -> bool:
         """Whether the call's sub-actor time is used up; the first time it is, every sub-actor stops."""
@@ -361,7 +365,7 @@ class Cast:
         """A line not ready within its limit, or cut off by the call's sub-actor time."""
         if cut_by_call_time:
             # It waited out the rest of the call's sub-actor time.
-            self._spent = SUB_ACTOR_SECONDS
+            self._cut = True
         self.dropped(actor, TIME_UP if self.out_of_time() else "not ready in time")
 
     def entering(self, moment: Moment) -> list[dict[str, Any]]:
@@ -386,6 +390,8 @@ class Cast:
                     self._held.add(key)
                     continue
                 self._held.discard(key)
+                if self._started is None:
+                    self._started = self.clock()
                 self._waiting.append(key)
                 self._record(key, "triggered", turn=moment.agent_turns)
         entered = []
@@ -429,7 +435,6 @@ class Cast:
         state = self._state[str(actor["id"])]
         state["lines"] += 1
         state["last_turn"] = agent_turns
-        self._spent += max(0.0, ended_at - (at if asked_at is None else asked_at))
         self._record(
             str(actor["id"]),
             "delivered",

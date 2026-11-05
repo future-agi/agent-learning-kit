@@ -9474,6 +9474,22 @@ def test_a_scenario_names_each_sub_actor_once():
     assert twice == ["sub_actors: nearby is included twice"]
 
 
+@pytest.mark.parametrize(
+    "on_call, accepted", [(-1, False), (0, False), (1, True), (2, True)]
+)
+def test_an_on_tool_trigger_counts_calls_from_the_first(on_call, accepted):
+    from pydantic import ValidationError
+
+    from fi.alk.harness.sub_actor import Trigger
+
+    if accepted:
+        trigger = Trigger(kind="on_tool", tool="lookup", on_call=on_call)
+        assert trigger.on_call == on_call
+    else:
+        with pytest.raises(ValidationError):
+            Trigger(kind="on_tool", tool="lookup", on_call=on_call)
+
+
 def test_the_list_keeps_one_entry_per_sub_actor_and_refuses_what_no_run_can_deliver(
     tmp_path, monkeypatch
 ):

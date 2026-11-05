@@ -17,10 +17,12 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
   catalogues without sub-actors are written as before.
 - A build gives a sub-actor to between 15% and 25% of its scenarios by default; `aim_for` takes the share
   the person asks for (`sub_actor_share`, 0 for none) in its place.
-- No sub-goal is about a sub-actor: a call is graded on its sub-goals whether or not a sub-actor came in,
-  and the judge reads a sub-actor's turns as someone other than the customer. Sub-goal results carry their
-  `verdict` (pass, fail, not applicable, inconclusive) alongside `held`; a scenario with sub-actors is
-  skipped with its reason while they are switched off.
+- No sub-goal is about a sub-actor: a call is graded on its sub-goals, and a call one of its scenario's
+  sub-actors never reached (not triggered, or triggered and not delivered) is errored as inconclusive
+  (`sub_actor_missing`, naming the sub-actor and why) instead of passing. The judge reads a sub-actor's
+  turns as someone other than the customer. Sub-goal results carry their `verdict` (pass, fail, not
+  applicable, inconclusive) alongside `held`; a scenario with sub-actors is skipped with its reason while
+  they are switched off.
 - World actors, behind `HARNESS_SUB_ACTORS`: people and systems listed in `actors.json` who act only through
   the world's own actions. The tool proxy lets an actor take only its `permitted_actions`, under a per-trial
   token, and logs every attempt with whose it was and what came of it (committed, refused, faulted,

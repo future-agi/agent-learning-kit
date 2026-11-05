@@ -659,9 +659,8 @@ things written for this scenario:
 - `trigger`: when they enter. `always`, `mid_journey` after the agent's turn N, `on_tool` on the Nth call
   of one of the agent's tools that runs in the world, `on_keyword` when one of its words is in the
   agent's latest turn, or `probability` with chance `p`. Pick a moment the conversation reaches before the person could be done: an early
-  turn, 2 to 4, or the tool or word the moment depends on. Apart from a `probability` draw that leaves
-  them out, a sub-actor always joins: one waiting on a tool call or a word that never comes enters after
-  the agent's turn 4. Use `probability` only where the scenario means the same thing either way; when what the scenario tests is how the agent handles this sub-actor, they
+  turn, 2 to 4, or the tool or word the moment depends on. One waiting on a tool call or a word that never
+  comes never joins, and the call is not graded. Use `probability` only where the scenario means the same thing either way; when what the scenario tests is how the agent handles this sub-actor, they
   must come in, so give them a trigger that always fires. The trigger alone decides when they speak; the
   instruction says who they are and what they say, never when. Choose the trigger from what they react
   to: an action the agent takes in the world is `on_tool` with that tool's name from the contract;

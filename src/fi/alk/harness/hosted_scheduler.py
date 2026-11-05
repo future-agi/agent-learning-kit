@@ -254,6 +254,8 @@ class CallOutcome:
     target_metrics: dict[str, Any] | None = None
     # A local path the judge can play; the artifacts above are ids the sandbox cannot read back.
     recording: str | None = None
+    # Per sub-actor in the call: whether it was triggered, how much it delivered, and why any was dropped.
+    sub_actors: tuple[dict[str, Any], ...] = ()
 
 
 class CallAborted(RuntimeError):
@@ -417,6 +419,7 @@ _CODE_DOMAIN: dict[str, FailureDomain] = {
     "judge_undecided": FailureDomain.SIMULATOR,
     "caller_off_script": FailureDomain.SIMULATOR,
     "evidence_missing": FailureDomain.SIMULATOR,
+    "sub_actor_missing": FailureDomain.SIMULATOR,
     "world_usage": FailureDomain.SIMULATOR,
     "world_unavailable": FailureDomain.ENVIRONMENT,
     "state_too_large": FailureDomain.SIMULATOR,
@@ -1528,6 +1531,19 @@ class RunResult:
     fenced: BaseException | None = None
 
 
+def _sub_actors_missing(scenario: Scenario, outcome: CallOutcome) -> str:
+    """Each of the scenario's sub-actors that never reached the agent, and why: not_triggered or
+    not_delivered. One a `probability` draw left out is absent by design and not counted."""
+    reports = {str(one.get("sub_actor")): one for one in outcome.sub_actors}
+    missing = []
+    for sub_actor_id in getattr(scenario, "sub_actors", ()):
+        report = reports.get(sub_actor_id) or {}
+        if not report.get("delivered") and report.get("drawn", True):
+            why = "not_delivered" if report.get("triggered") else "not_triggered"
+            missing.append(f"{report.get('name') or sub_actor_id} ({why})")
+    return ", ".join(missing)
+
+
 def _switched_off(scenario: Scenario) -> str:
     """Why a scenario with sub-actors or world actors is not run while they are off, or "": running it without
     them would look like a normal result for a test that never happened."""
@@ -2254,6 +2270,22 @@ class HostedScheduler:
         # Set the moment the call step returns, so a crash later in this method (e.g.
         # `world.read_only()` below) still reports the call that genuinely ran, not `null`.
         context.call = self._call_summary(call_outcome)
+        missing = _sub_actors_missing(scenario, call_outcome)
+        if missing:
+            # The scenario's sub-actor is part of the test: a call it never reached tested something
+            # else, so the call is inconclusive, never a pass.
+            return self._fault(
+                scenario,
+                world_index,
+                attempt,
+                _failure(
+                    "sub_actor_missing",
+                    f"inconclusive: did not reach the agent: {missing}",
+                ),
+                sub_goals=_unjudged(scenario.sub_goals),
+                call=self._call_summary(call_outcome),
+                retry=False,
+            )
         calls = list(
             call_outcome.calls
         )  # m12: `folder.py::_RUNNABLE` expects a list, not a tuple.

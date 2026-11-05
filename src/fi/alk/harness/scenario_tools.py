@@ -239,7 +239,7 @@ def _sub_actor_field() -> dict[str, Any]:
                             "kind": {"type": "string", "enum": list(TRIGGER_ABOUT)},
                             "turn": {"type": "integer"},
                             "tool": {"type": "string"},
-                            "on_call": {"type": "integer"},
+                            "on_call": {"type": "integer", "minimum": 1},
                             "words": {"type": "array", "items": {"type": "string"}},
                             "p": {"type": "number"},
                         },
