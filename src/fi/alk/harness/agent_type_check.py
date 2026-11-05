@@ -81,8 +81,13 @@ BROWSER_PACKAGES = frozenset(
         "firecrawl",
         "@mendable/firecrawl-js",
         "apify-client",
+        "puppeteer-extra",
+        "playwright-extra",
+        "webdriverio",
     }
 )
+# Every package in these scopes drives a browser.
+BROWSER_SCOPES = ("@crawlee/",)
 # The tools' own API names only: the bare words turn up in prompts and tracing attributes.
 TOOL_MARKER = re.compile(
     r"\bcomputer[_-]use[_-]preview\b|\bcomputer-use-20\d\d-\d\d-\d\d\b|\bComputerUse\b"
@@ -107,8 +112,12 @@ _LARGEST_RECORDS = 64 * 1024 * 1024
 # Strings are matched first and kept, so "https://..." or "src/**/*.ts" isn't read as a comment.
 # An unclosed one ends at its line or the file: a start that could fail makes a customer's odd file
 # cost the square of its size, which holds up the build's conversation until it's done.
+# A regex literal is kept the same way, so the "/*" in /\/*$/ doesn't hide the rest of the file. A
+# slash where a value is expected starts one: after punctuation or at a line's start, never after a
+# name or a number, where it divides.
 _SCRIPT_COMMENT_OR_STRING = re.compile(
-    r"""("(?:\\.|[^"\\\n])*(?:"|(?=\n)|\\?\Z)|'(?:\\.|[^'\\\n])*(?:'|(?=\n)|\\?\Z)|`(?:\\.|[^`\\])*(?:`|\\?\Z))"""
+    r"""("(?:\\.|[^"\\\n])*(?:"|(?=\n)|\\?\Z)|'(?:\\.|[^'\\\n])*(?:'|(?=\n)|\\?\Z)|`(?:\\.|[^`\\])*(?:`|\\?\Z)"""
+    r"""|(?<![^\n(,=:\[!&|?{};>])[ \t]*/(?![/*])(?:\\.|\[(?:\\.|[^\]\\\n])*\]?|[^/\\\n\[])*(?:/|(?=\n)|\\?\Z))"""
     r"""|//[^\n]*|/\*.*?(?:\*/|\Z)""",
     re.DOTALL,
 )
@@ -170,21 +179,20 @@ def _unpacked_at_top(root: Path) -> set[str]:
 
 
 def _agent_files(root: Path) -> Iterator[Path]:
-    unpacked = _unpacked_at_top(root)
+    # Unpacked distributions hold other people's code, whose SDKs name these tools whether or not
+    # this agent uses them. Their records name those files wherever they were unpacked, so the
+    # agent's own code beside them, as in a Lambda folder, is still read.
+    unpacked: set[Path] = set()
     for directory, subdirectories, files in os.walk(root):
-        # A folder of unpacked distributions holds other people's code, whose SDKs name these
-        # tools whether or not this agent uses them.
-        if Path(directory) != root and any(
-            name.endswith(".dist-info") for name in subdirectories
-        ):
-            subdirectories[:] = []
-            continue
+        here = Path(directory)
+        if any(name.endswith(".dist-info") for name in subdirectories):
+            unpacked.update(here / name for name in _unpacked_at_top(here))
         subdirectories[:] = [
             name for name in subdirectories if not _not_the_agent_dir(name)
         ]
         for name in files:
-            path = Path(directory) / name
-            if not _not_the_agent_file(name) and path.relative_to(root).as_posix() not in unpacked:
+            path = here / name
+            if not _not_the_agent_file(name) and path not in unpacked:
                 yield path
 
 
@@ -192,13 +200,23 @@ def _packages_used(path: Path) -> set[str]:
     try:
         if not path.is_file():
             return set()
-        manifest = json.loads(path.read_text(encoding="utf-8"))
+        # Windows editors often save a BOM, which json refuses.
+        manifest = json.loads(path.read_text(encoding="utf-8").removeprefix("\ufeff"))
     except (OSError, ValueError, RecursionError):
         return set()
-    dependencies = manifest.get("dependencies") if isinstance(manifest, dict) else None
-    if not isinstance(dependencies, dict):
+    if not isinstance(manifest, dict):
         return set()
-    return BROWSER_PACKAGES.intersection(dependencies)
+    names: set[str] = set()
+    # A test-automation agent usually lists its browser library as a dev dependency.
+    for field in ("dependencies", "devDependencies"):
+        listed = manifest.get(field)
+        if isinstance(listed, dict):
+            names.update(listed)
+    return {
+        name
+        for name in names
+        if name in BROWSER_PACKAGES or name.startswith(BROWSER_SCOPES)
+    }
 
 
 def _imports_in(path: Path) -> set[str]:
@@ -207,7 +225,8 @@ def _imports_in(path: Path) -> set[str]:
     try:
         if not path.is_file() or path.stat().st_size > _LARGEST_CODE_FILE:
             return set()
-        return _imports(ast.parse(path.read_text(encoding="utf-8")))
+        # From bytes, so a BOM or a coding line is honoured as Python itself would.
+        return _imports(ast.parse(path.read_bytes()))
     except (OSError, ValueError, SyntaxError, RecursionError, MemoryError):
         return set()
 
@@ -319,12 +338,18 @@ def _scan(root: Path, _files: tuple[int, int, int]) -> tuple[str, ...]:
         scanned += size
         if scanned > _LARGEST_SCAN:
             break
-        if path.name == "package.json":
-            found |= _packages_used(path)
-        else:
-            found |= _markers_in(path)
-            if path.suffix == ".py":
-                imported |= _imports_in(path)
+        # One file at a time: the tokenizer raises more than it documents (SystemError on a NUL
+        # byte in 3.12), and one odd file mustn't stop every reading from being checked.
+        try:
+            if path.name == "package.json":
+                found |= _packages_used(path)
+            else:
+                markers = _markers_in(path)
+                names = _imports_in(path) if path.suffix == ".py" else set()
+                found |= markers
+                imported |= names
+        except Exception:
+            continue
     local = _modules_at_top(root)
     for name in imported:
         top = name.split(".")[0]

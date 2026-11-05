@@ -318,7 +318,9 @@ def contract_tools(
     # What a call must hold to count as having read a second look. Calls in one model message run
     # before the model reads any answer, together or one after another, so none of them can know it.
     second_look_receipts: set[str] = set()
-    second_look_read = False
+    # Whether the latest second look has had no value back yet. A model that never sends one back
+    # must still be able to answer, or every submission earns another look until the turns run out.
+    look_unanswered = False
     found: list[str] | None = None
 
     @tool(
@@ -1106,7 +1108,9 @@ def contract_tools(
         receipt = payload.pop(SECOND_LOOK_READ, None) or (
             args.get(SECOND_LOOK_READ) if isinstance(args, dict) else None
         )
-        nonlocal refused, found, second_look_read
+        nonlocal refused, found, look_unanswered
+        # Taken before the scan's wait: a call already running when a look went out hasn't read it.
+        looked_before = bool(second_look_receipts)
         if refused or (destination / FAILURE_FILE).is_file():
             return _ok(_stop_message(destination))
         if found is None:
@@ -1122,11 +1126,15 @@ def contract_tools(
                     "job is work on websites or a computer."
                 ]
             )
-        # Once shown, it stays shown: a later rejected submission doesn't earn another look.
-        second_look_read = second_look_read or (
-            isinstance(receipt, str) and receipt in second_look_receipts
+        # A call holding a value read a look, so its answer stands. Without one, the call after a
+        # look that no value came back for is taken as the answer. Once a value came back, a call
+        # without one may have run beside it unread, so it gets a look of its own.
+        read_it = isinstance(receipt, str) and receipt in second_look_receipts
+        if read_it:
+            look_unanswered = False
+        verdict = decide(
+            claimed, found, looked_again=read_it or (looked_before and look_unanswered)
         )
-        verdict = decide(claimed, found, looked_again=second_look_read)
         if verdict == "refuse":
             # Set first: if the write fails, the model must not get a resubmission through.
             refused = True
@@ -1140,6 +1148,7 @@ def contract_tools(
         if verdict == "second_look":
             issued = _new_receipt()
             second_look_receipts.add(issued)
+            look_unanswered = True
             return _problems(
                 [
                     f"{_second_look(claimed, found)} When you submit again, set "
