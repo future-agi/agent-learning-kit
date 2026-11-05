@@ -9,9 +9,9 @@
 - [x] Run focused tests, the relevant broader suite, formatting, lint, and the offline reference verifier.
 - [x] Review the final diff for compatibility, security, and unnecessary surface.
 
-Live qualification still required outside this implementation unit:
+Live qualification:
 
-- [ ] Complete the pinned AG-UI CrewAI two-turn run with Vertex AI Gemini 3.7 Flash; the first live turn already proved RUN_FINISHED plus one get_weather start/result sequence and exposed the MESSAGES_SNAPSHOT mapping.
+- [x] Complete the pinned AG-UI CrewAI two-turn run with Vertex AI Gemini 3.7 Flash. Both turns reached RUN_FINISHED with 24 events; ALK returned 169 and 186 response characters. Raw event inspection observed one get_weather start/result sequence.
 - [ ] Qualify split `TOOL_CALL_*` / `TOOL_CALL_RESULT` pairing before claiming upstream tool-evidence support.
 
 Skipped for this unit unless a failing acceptance test requires them:
