@@ -4,6 +4,18 @@
  */
 
 import { MetricResult, MetricConfig } from './types.js';
+import { snapshotBoundary } from '../autoeval/types.js';
+
+const incomplete = (reason = 'NO_EVIDENCE'): MetricResult => ({ score: 0, passed: false, reason });
+const hasText = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0;
+const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
+
+function snapshot<T>(value: Iterable<T>): T[] {
+    try {
+        if (value === null || typeof value !== 'object' || typeof value[Symbol.iterator] !== 'function') throw new Error();
+        return Array.from(value);
+    } catch { throw new Error('METRIC_CONFIG_INVALID'); }
+}
 
 /**
  * Calculate BLEU score between response and reference
@@ -13,19 +25,24 @@ export function bleuScore(
     response: string,
     config: MetricConfig & { reference: string; ngramWeights?: number[] }
 ): MetricResult {
-    const weights = config.ngramWeights || [0.25, 0.25, 0.25, 0.25];
+    try { config = snapshotBoundary(config, 'METRIC_CONFIG_INVALID'); }
+    catch { return incomplete('METRIC_CONFIG_INVALID'); }
+    if (!config || typeof config !== 'object' || Array.isArray(config)) return incomplete('METRIC_CONFIG_INVALID');
+    if (!hasText(response) || !hasText(config.reference)) return incomplete();
+    let weights: number[];
+    try { weights = snapshot(config.ngramWeights === undefined ? [0.25, 0.25, 0.25, 0.25] : config.ngramWeights); }
+    catch { return incomplete('METRIC_CONFIG_INVALID'); }
+    if (weights.length === 0 || weights.some(weight => !finite(weight) || weight < 0) || !weights.some(weight => weight > 0)) return incomplete('METRIC_CONFIG_INVALID');
+    // Scaling may underflow a positive weight; it must still require evidence.
+    const positiveWeights = weights.map(weight => weight > 0);
+    const scale = Math.max(...weights);
+    weights = weights.map(weight => weight / scale);
     const maxN = weights.length;
 
     const responseTokens = tokenize(response);
     const referenceTokens = tokenize(config.reference);
 
-    if (responseTokens.length === 0) {
-        return {
-            score: 0.0,
-            passed: false,
-            reason: 'Empty response'
-        };
-    }
+    if (responseTokens.length === 0 || referenceTokens.length === 0) return incomplete();
 
     // Calculate n-gram precisions
     const precisions: number[] = [];
@@ -68,10 +85,10 @@ export function bleuScore(
     let logSum = 0;
     let weightSum = 0;
     for (let i = 0; i < precisions.length; i++) {
-        if (precisions[i] > 0) {
-            logSum += weights[i] * Math.log(precisions[i]);
-            weightSum += weights[i];
-        }
+        if (!positiveWeights[i]) continue;
+        if (precisions[i] === 0) return { score: 0, passed: false, reason: 'CHECK_FAILED' };
+        logSum += weights[i] * Math.log(precisions[i]);
+        weightSum += weights[i];
     }
 
     const score = weightSum > 0 ? bp * Math.exp(logSum / weightSum) : 0;
@@ -90,17 +107,16 @@ export function rougeScore(
     response: string,
     config: MetricConfig & { reference: string; variant?: 'rouge-l' | 'rouge-1' | 'rouge-2' }
 ): MetricResult {
-    const variant = config.variant || 'rouge-l';
+    try { config = snapshotBoundary(config, 'METRIC_CONFIG_INVALID'); }
+    catch { return incomplete('METRIC_CONFIG_INVALID'); }
+    if (!config || typeof config !== 'object' || Array.isArray(config)) return incomplete('METRIC_CONFIG_INVALID');
+    if (!hasText(response) || !hasText(config.reference)) return incomplete();
+    const variant = config.variant === undefined ? 'rouge-l' : config.variant;
+    if (typeof variant !== 'string' || (variant !== 'rouge-l' && variant !== 'rouge-1' && variant !== 'rouge-2')) return incomplete('METRIC_CONFIG_INVALID');
     const responseTokens = tokenize(response);
     const referenceTokens = tokenize(config.reference);
 
-    if (responseTokens.length === 0 || referenceTokens.length === 0) {
-        return {
-            score: 0.0,
-            passed: false,
-            reason: 'Empty response or reference'
-        };
-    }
+    if (responseTokens.length === 0 || referenceTokens.length === 0) return incomplete();
 
     let score: number;
 
@@ -147,16 +163,13 @@ export function recallScore(
     response: string,
     config: MetricConfig & { reference: string }
 ): MetricResult {
-    const responseTokens = new Set(tokenize(response.toLowerCase()));
-    const referenceTokens = tokenize(config.reference.toLowerCase());
-
-    if (referenceTokens.length === 0) {
-        return {
-            score: 1.0,
-            passed: true,
-            reason: 'Empty reference (trivially satisfied)'
-        };
-    }
+    try { config = snapshotBoundary(config, 'METRIC_CONFIG_INVALID'); }
+    catch { return incomplete('METRIC_CONFIG_INVALID'); }
+    if (!config || typeof config !== 'object' || Array.isArray(config)) return incomplete('METRIC_CONFIG_INVALID');
+    if (!hasText(response) || !hasText(config.reference)) return incomplete();
+    const responseTokens = new Set(tokenize(response));
+    const referenceTokens = tokenize(config.reference);
+    if (responseTokens.size === 0 || referenceTokens.length === 0) return incomplete();
 
     let matches = 0;
     for (const token of referenceTokens) {
@@ -179,6 +192,10 @@ export function levenshteinSimilarity(
     response: string,
     config: MetricConfig & { reference: string }
 ): MetricResult {
+    try { config = snapshotBoundary(config, 'METRIC_CONFIG_INVALID'); }
+    catch { return incomplete('METRIC_CONFIG_INVALID'); }
+    if (!config || typeof config !== 'object' || Array.isArray(config)) return incomplete('METRIC_CONFIG_INVALID');
+    if (!hasText(response) || !hasText(config.reference)) return incomplete();
     const distance = levenshteinDistance(response, config.reference);
     const maxLen = Math.max(response.length, config.reference.length);
     const score = maxLen > 0 ? 1 - distance / maxLen : 1;
@@ -197,30 +214,26 @@ export function numericSimilarity(
     response: string,
     config: MetricConfig & { reference: number; tolerance?: number }
 ): MetricResult {
-    const parsed = parseFloat(response.trim());
-
-    if (isNaN(parsed)) {
-        return {
-            score: 0.0,
-            passed: false,
-            reason: `Cannot parse response as number: "${response}"`
-        };
-    }
-
-    const tolerance = config.tolerance || 0;
-    const diff = Math.abs(parsed - config.reference);
+    try { config = snapshotBoundary(config, 'METRIC_CONFIG_INVALID'); }
+    catch { return incomplete('METRIC_CONFIG_INVALID'); }
+    if (!config || typeof config !== 'object' || Array.isArray(config)) return incomplete('METRIC_CONFIG_INVALID');
+    const tolerance = config.tolerance === undefined ? 0 : config.tolerance;
+    const reference = config.reference;
+    if (!finite(reference) || !finite(tolerance) || tolerance < 0) return incomplete('METRIC_CONFIG_INVALID');
+    if (!hasText(response)) return incomplete();
+    const parsed = Number(response.trim());
+    if (!finite(parsed)) return incomplete('NUMERIC_INPUT_INVALID');
+    const diff = Math.abs(parsed - reference);
     const isWithinTolerance = diff <= tolerance;
 
     // Calculate score based on relative difference
-    const maxDiff = Math.max(Math.abs(config.reference), 1);
+    const maxDiff = Math.max(Math.abs(reference), 1);
     const score = Math.max(0, 1 - diff / maxDiff);
 
     return {
         score: isWithinTolerance ? 1.0 : score,
         passed: isWithinTolerance,
-        reason: isWithinTolerance
-            ? `Value ${parsed} is within tolerance ${tolerance} of ${config.reference}`
-            : `Value ${parsed} differs from ${config.reference} by ${diff}`
+        reason: isWithinTolerance ? 'CHECK_PASSED' : 'CHECK_FAILED'
     };
 }
 
@@ -232,35 +245,24 @@ export function semanticListContains(
     response: string,
     config: MetricConfig & { items: string[]; threshold?: number }
 ): MetricResult {
-    const threshold = config.threshold || 0.5;
-    const responseWords = new Set(tokenize(response.toLowerCase()));
-
+    try { config = snapshotBoundary(config, 'METRIC_CONFIG_INVALID'); }
+    catch { return incomplete('METRIC_CONFIG_INVALID'); }
+    if (!config || typeof config !== 'object' || Array.isArray(config)) return incomplete('METRIC_CONFIG_INVALID');
+    const threshold = config.threshold === undefined ? 0.5 : config.threshold;
+    if (!finite(threshold) || threshold < 0 || threshold > 1) return incomplete('METRIC_CONFIG_INVALID');
+    let items: string[];
+    try { items = snapshot(config.items); } catch { return incomplete('METRIC_CONFIG_INVALID'); }
+    if (items.some(item => typeof item !== 'string')) return incomplete('METRIC_CONFIG_INVALID');
+    if (!hasText(response) || items.length === 0 || items.some(item => tokenize(item).length === 0)) return incomplete();
+    const responseWords = new Set(tokenize(response));
+    if (responseWords.size === 0) return incomplete();
     let matches = 0;
-    const matchedItems: string[] = [];
-    const missingItems: string[] = [];
-
-    for (const item of config.items) {
-        const itemWords = tokenize(item.toLowerCase());
-        const itemMatched = itemWords.some(word => responseWords.has(word));
-
-        if (itemMatched) {
-            matches++;
-            matchedItems.push(item);
-        } else {
-            missingItems.push(item);
-        }
+    for (const item of items) {
+        if (tokenize(item).some(word => responseWords.has(word))) matches++;
     }
-
-    const score = matches / config.items.length;
+    const score = matches / items.length;
     const passed = score >= threshold;
-
-    return {
-        score,
-        passed,
-        reason: passed
-            ? `Found ${matches}/${config.items.length} items: ${matchedItems.join(', ')}`
-            : `Missing items: ${missingItems.join(', ')}`
-    };
+    return { score, passed, reason: passed ? 'CHECK_PASSED' : 'CHECK_FAILED' };
 }
 
 // Helper functions

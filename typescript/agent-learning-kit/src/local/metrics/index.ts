@@ -26,6 +26,7 @@ export {
 } from './hallucination/index.js';
 
 import { MetricResult, MetricConfig, MetricRegistryEntry } from './types.js';
+import { snapshotBoundary } from '../autoeval/types.js';
 import * as stringMetrics from './string.js';
 import * as jsonMetrics from './json.js';
 import * as similarityMetrics from './similarity.js';
@@ -293,6 +294,7 @@ export const METRIC_REGISTRY: Map<string, MetricRegistryEntry> = new Map([
  * Get a metric by name
  */
 export function getMetric(name: string): MetricRegistryEntry | undefined {
+    if (typeof name !== 'string' || !name.trim()) throw new Error('METRIC_NAME_INVALID');
     return METRIC_REGISTRY.get(name.toLowerCase());
 }
 
@@ -300,6 +302,7 @@ export function getMetric(name: string): MetricRegistryEntry | undefined {
  * Check if a metric exists
  */
 export function hasMetric(name: string): boolean {
+    if (typeof name !== 'string' || !name.trim()) throw new Error('METRIC_NAME_INVALID');
     return METRIC_REGISTRY.has(name.toLowerCase());
 }
 
@@ -311,10 +314,16 @@ export function runMetric(
     response: string,
     config?: MetricConfig
 ): MetricResult {
-    const entry = getMetric(metricName);
-    if (!entry) {
-        throw new Error(`Unknown metric: ${metricName}`);
+    try { ({ response, config } = snapshotBoundary({ response, config }, 'METRIC_CONFIG_INVALID')); }
+    catch { return { score: 0, passed: false, reason: 'METRIC_CONFIG_INVALID' }; }
+    if (config !== undefined && (!config || typeof config !== 'object' || Array.isArray(config))) {
+        return { score: 0, passed: false, reason: 'METRIC_CONFIG_INVALID' };
     }
+    if (typeof response !== 'string') return { score: 0, passed: false, reason: 'NO_EVIDENCE' };
+    const entry = getMetric(metricName);
+    if (!entry) throw new Error('METRIC_UNKNOWN');
+    // Undefined stays omitted; each leaf owns its documented defaults. Primitive
+    // text (including JSON false/null/0) remains a legitimate application input.
     return entry.fn(response, config);
 }
 

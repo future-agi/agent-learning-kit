@@ -43,7 +43,8 @@ export { secretsDetection, noSecrets, noHardcodedSecrets } from './secrets-detec
  * console.log(result.issues.length); // 2+
  * ```
  */
-import { CodeInput, CodeSecurityConfig, CodeSecurityResult, SecurityIssue, createSecurityResult } from './types.js';
+import { CodeInput, CodeSecurityConfig, CodeSecurityResult, SecurityIssue, createSecurityResult, incompleteSecurity } from './types.js';
+import { snapshotBoundary } from '../../autoeval/types.js';
 import { sqlInjection } from './sql-injection.js';
 import { xssDetection } from './xss-detection.js';
 import { secretsDetection } from './secrets-detection.js';
@@ -52,12 +53,18 @@ export function allSecurityChecks(
     input: CodeInput,
     config: CodeSecurityConfig = {}
 ): CodeSecurityResult {
+    try { ({ input, config } = snapshotBoundary({ input, config }, 'METRIC_CONFIG_INVALID')); }
+    catch (error) { return incompleteSecurity(error instanceof Error && error.message === 'INVALID_SECURITY_PATTERN' ? 'INVALID_SECURITY_PATTERN' : 'METRIC_CONFIG_INVALID'); }
+    if (!input || !config) return incompleteSecurity('METRIC_CONFIG_INVALID');
     const allIssues: SecurityIssue[] = [];
 
     // Run all detection methods
     const sqlResult = sqlInjection(input, config);
     const xssResult = xssDetection(input, config);
     const secretsResult = secretsDetection(input, config);
+
+    const incomplete = [sqlResult, xssResult, secretsResult].find(result => result.issues.some(issue => issue.type === 'validation-incomplete'));
+    if (incomplete) return { ...incomplete, language: input.language };
 
     // Combine all issues
     allIssues.push(...sqlResult.issues);

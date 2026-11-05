@@ -5,6 +5,7 @@
  * @module local/metrics/rag/answer-relevance
  */
 
+import { snapshotBoundary } from '../../autoeval/types.js';
 import {
     RAGInput,
     RAGConfig,
@@ -40,27 +41,37 @@ export function answerRelevance(
     input: RAGInput,
     config: RAGConfig = {}
 ): RAGResult {
-    const threshold = config.threshold ?? 0.5;
-    const ngramSize = config.ngramSize ?? 2;
+    try { ({ input, config } = snapshotBoundary({ input, config }, 'METRIC_CONFIG_INVALID')); }
+    catch { return { score: 0, passed: false, reason: 'METRIC_CONFIG_INVALID' }; }
+    if (!input || typeof input !== 'object' || Array.isArray(input) ||
+        !config || typeof config !== 'object' || Array.isArray(config)) return { score: 0, passed: false, reason: 'METRIC_CONFIG_INVALID' };
+    const threshold = config.threshold === undefined ? 0.5 : config.threshold;
+    const ngramSize = config.ngramSize === undefined ? 2 : config.ngramSize;
+    if (typeof threshold !== 'number' || !Number.isFinite(threshold) || threshold < 0 || threshold > 1 ||
+        typeof ngramSize !== 'number' || !Number.isSafeInteger(ngramSize) || ngramSize < 1) {
+        return { score: 0, passed: false, reason: 'METRIC_CONFIG_INVALID' };
+    }
 
-    if (!input.response || input.response.trim().length === 0) {
+    if (typeof input.response !== 'string' || input.response.trim().length === 0) {
         return {
             score: 0,
             passed: false,
-            reason: 'No response provided'
+            reason: 'NO_EVIDENCE'
         };
     }
 
-    if (!input.query || input.query.trim().length === 0) {
+    if (typeof input.query !== 'string' || input.query.trim().length === 0) {
         return {
-            score: 1.0,
-            passed: true,
-            reason: 'No query provided to check relevance'
+            score: 0,
+            passed: false,
+            reason: 'NO_EVIDENCE'
         };
     }
 
     const queryTokens = tokenize(input.query);
     const responseTokens = tokenize(input.response);
+
+    if (queryTokens.length === 0 || responseTokens.length === 0) return { score: 0, passed: false, reason: 'NO_EVIDENCE' };
 
     // Calculate multiple relevance signals
     const tokenOverlap = jaccardSimilarity(queryTokens, responseTokens);

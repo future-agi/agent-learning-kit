@@ -5,6 +5,7 @@
  * @module local/metrics/rag/context-recall
  */
 
+import { snapshotBoundary } from '../../autoeval/types.js';
 import {
     RAGInput,
     RAGConfig,
@@ -41,10 +42,23 @@ export function contextRecall(
     input: RAGInput,
     config: RAGConfig = {}
 ): RAGResult {
-    const threshold = config.threshold ?? 0.5;
-    const similarityThreshold = config.similarityThreshold ?? 0.3;
+    try { ({ input, config } = snapshotBoundary({ input, config }, 'METRIC_CONFIG_INVALID')); }
+    catch { return { score: 0, passed: false, reason: 'METRIC_CONFIG_INVALID' }; }
+    if (!input || typeof input !== 'object' || Array.isArray(input) ||
+        !config || typeof config !== 'object' || Array.isArray(config)) return { score: 0, passed: false, reason: 'METRIC_CONFIG_INVALID' };
+    const threshold = config.threshold === undefined ? 0.5 : config.threshold;
+    const similarityThreshold = config.similarityThreshold === undefined ? 0.3 : config.similarityThreshold;
+    if (typeof threshold !== 'number' || !Number.isFinite(threshold) || threshold < 0 || threshold > 1 ||
+        typeof similarityThreshold !== 'number' || !Number.isFinite(similarityThreshold) || similarityThreshold <= 0 || similarityThreshold > 1) {
+        return { score: 0, passed: false, reason: 'METRIC_CONFIG_INVALID' };
+    }
 
-    const contexts = normalizeContext(input.context);
+    if ((typeof input.context !== 'string' && !Array.isArray(input.context)) ||
+        (Array.isArray(input.context) && input.context.some(value => typeof value !== 'string')) ||
+        (input.expected_response !== undefined && typeof input.expected_response !== 'string') ||
+        (input.ground_truth_contexts !== undefined && !Array.isArray(input.ground_truth_contexts))) return { score: 0, passed: false, reason: 'NO_EVIDENCE', recall: 0 };
+    const contexts = normalizeContext(input.context).filter(c => tokenize(c).length > 0);
+    if (contexts.length === 0) return { score: 0, passed: false, reason: 'NO_EVIDENCE', recall: 0 };
     const combinedContext = contexts.join(' ');
     const contextTokens = tokenize(combinedContext);
 
@@ -58,20 +72,15 @@ export function contextRecall(
         references = extractSentences(input.expected_response);
     } else {
         return {
-            score: 1.0,
-            passed: true,
-            reason: 'No ground truth provided, assuming full recall',
-            recall: 1.0
+            score: 0,
+            passed: false,
+            reason: 'NO_EVIDENCE',
+            recall: 0
         };
     }
 
-    if (references.length === 0) {
-        return {
-            score: 1.0,
-            passed: true,
-            reason: 'No references to check recall against',
-            recall: 1.0
-        };
+    if (references.length === 0 || references.some(reference => typeof reference !== 'string' || tokenize(reference).length === 0)) {
+        return { score: 0, passed: false, reason: 'NO_EVIDENCE', recall: 0 };
     }
 
     // Check which references are covered by retrieved contexts

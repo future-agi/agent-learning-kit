@@ -5,6 +5,8 @@
  * @module local/metrics/code/secrets-detection
  */
 
+import { snapshotBoundary } from '../../autoeval/types.js';
+import { incompleteSecurity } from './types.js';
 import {
     CodeInput,
     CodeSecurityConfig,
@@ -197,11 +199,23 @@ export function secretsDetection(
     input: CodeInput,
     config: CodeSecurityConfig = {}
 ): CodeSecurityResult {
+    try { ({ input, config } = snapshotBoundary({ input, config }, 'METRIC_CONFIG_INVALID')); }
+    catch (error) { return incompleteSecurity(error instanceof Error && error.message === 'INVALID_SECURITY_PATTERN' ? 'INVALID_SECURITY_PATTERN' : 'METRIC_CONFIG_INVALID'); }
+    // The shared snapshot owns records but also preserves primitives/iterables.
+    // Only its nonarray object result is a configuration record.
+    if (!input || !config || typeof config !== 'object' || Array.isArray(config)) return incompleteSecurity('METRIC_CONFIG_INVALID');
     const { code, language } = input;
     const issues: SecurityIssue[] = [];
+    const threshold = config.threshold === undefined ? 1 : config.threshold;
+    const severity = config.minSeverity === undefined ? 'low' : config.minSeverity;
+    if (typeof threshold !== 'number' || !Number.isFinite(threshold) || threshold < 0 || threshold > 1 ||
+        typeof severity !== 'string' || !['low', 'medium', 'high', 'critical'].some(value => severity === value) ||
+        (config.checkComments !== undefined && typeof config.checkComments !== 'boolean')) {
+        return { ...createSecurityResult([{ type: 'validation-incomplete', severity: 'critical', match: '', description: 'METRIC_CONFIG_INVALID' }]), score: 0, passed: false, reason: 'METRIC_CONFIG_INVALID' };
+    }
 
-    if (!code || code.trim().length === 0) {
-        return createSecurityResult([], config);
+    if (typeof code !== 'string' || code.trim().length === 0) {
+        return { ...createSecurityResult([{ type: 'validation-incomplete', severity: 'critical', match: '', description: 'NO_EVIDENCE' }], config), score: 0, passed: false, reason: 'NO_EVIDENCE' };
     }
 
     const lines = code.split('\n');
@@ -227,19 +241,18 @@ export function secretsDetection(
 
             // Check if in comment
             const line = lines[lineNumber - 1] || '';
-            const isComment = config.checkComments === false ? false :
+            const isComment = config.checkComments !== false ? false :
                 line.trim().startsWith('//') ||
                 line.trim().startsWith('#') ||
                 line.trim().startsWith('*');
 
-            // Check if it's an environment variable reference (not a hardcoded value)
-            const isEnvRef = /process\.env|os\.environ|getenv|ENV\[/.test(line);
+            // Only the matched span can qualify as an environment reference;
+            // an unrelated expression on the same line cannot exempt this match.
+            const isEnvRef = /process\.env|os\.environ|getenv|ENV\[/.test(match[0]);
 
             if (!isComment && !isEnvRef) {
                 // Mask the actual secret in the match
-                const maskedMatch = match[0].length > 20
-                    ? match[0].substring(0, 10) + '***' + match[0].substring(match[0].length - 5)
-                    : match[0].substring(0, 5) + '***';
+                const maskedMatch = '[REDACTED]';
 
                 issues.push({
                     type,
@@ -253,22 +266,35 @@ export function secretsDetection(
         }
     }
 
-    // Check custom patterns
-    if (config.customPatterns) {
-        for (const patternStr of config.customPatterns) {
+    // Snapshot caller iterables once; never validate a consumed iterator.
+    let patterns: string[];
+    try {
+        const value = config.customPatterns;
+        if (value !== undefined && (value === null || typeof value !== 'object' || typeof value[Symbol.iterator] !== 'function')) throw new Error();
+        patterns = value === undefined ? [] : Array.from(value);
+        if (patterns.some(pattern => typeof pattern !== 'string')) throw new Error();
+    } catch {
+        return { ...createSecurityResult([...issues, { type: 'validation-incomplete', severity: 'critical', match: '', description: 'INVALID_SECURITY_PATTERN' }], config), score: 0, passed: false, reason: 'INVALID_SECURITY_PATTERN' };
+    }
+    {
+        for (const patternStr of patterns) {
             try {
+                if (typeof patternStr !== 'string') throw new Error('INVALID_SECURITY_PATTERN');
                 const customPattern = new RegExp(patternStr, 'gi');
                 let match;
                 while ((match = customPattern.exec(code)) !== null) {
+                    if (match[0].length === 0) throw new Error('INVALID_SECURITY_PATTERN');
+                    const line = code.slice(code.lastIndexOf('\n', match.index - 1) + 1, match.index + match[0].length).trim();
+                    if (config.checkComments === false && /^(?:\/\/|#|\*|--|\{\/\*)/.test(line)) continue;
                     issues.push({
                         type: 'custom-secret',
                         severity: 'high',
-                        match: match[0].substring(0, 10) + '***',
+                        match: '[REDACTED]',
                         description: 'Custom secret pattern matched'
                     });
                 }
             } catch {
-                // Invalid regex, skip
+                return { ...createSecurityResult([...issues, { type: 'validation-incomplete', severity: 'critical', match: '', description: 'INVALID_SECURITY_PATTERN' }], config), score: 0, passed: false, reason: 'INVALID_SECURITY_PATTERN' };
             }
         }
     }

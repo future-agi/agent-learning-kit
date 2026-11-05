@@ -5,6 +5,7 @@
  * @module local/metrics/rag/context-precision
  */
 
+import { snapshotBoundary } from '../../autoeval/types.js';
 import {
     RAGInput,
     RAGConfig,
@@ -41,18 +42,28 @@ export function contextPrecision(
     input: RAGInput,
     config: RAGConfig = {}
 ): RAGResult {
-    const threshold = config.threshold ?? 0.5;
-    const similarityThreshold = config.similarityThreshold ?? 0.3;
-
+    try { ({ input, config } = snapshotBoundary({ input, config }, 'METRIC_CONFIG_INVALID')); }
+    catch { return { score: 0, passed: false, reason: 'METRIC_CONFIG_INVALID' }; }
+    if (!input || typeof input !== 'object' || Array.isArray(input) ||
+        !config || typeof config !== 'object' || Array.isArray(config)) return { score: 0, passed: false, reason: 'METRIC_CONFIG_INVALID' };
+    const threshold = config.threshold === undefined ? 0.5 : config.threshold;
+    const similarityThreshold = config.similarityThreshold === undefined ? 0.3 : config.similarityThreshold;
+    if (typeof threshold !== 'number' || !Number.isFinite(threshold) || threshold < 0 || threshold > 1 ||
+        typeof similarityThreshold !== 'number' || !Number.isFinite(similarityThreshold) || similarityThreshold <= 0 || similarityThreshold > 1) {
+        return { score: 0, passed: false, reason: 'METRIC_CONFIG_INVALID' };
+    }
+    if ((typeof input.context !== 'string' && !Array.isArray(input.context)) ||
+        (Array.isArray(input.context) && input.context.some(value => typeof value !== 'string'))) {
+        return { score: 0, passed: false, reason: 'NO_EVIDENCE' };
+    }
     const contexts = normalizeContext(input.context);
-    const queryTokens = tokenize(input.query);
-
-    if (contexts.length === 0) {
-        return {
-            score: 0,
-            passed: false,
-            reason: 'No context provided'
-        };
+    const queryTokens = tokenize(typeof input.query === 'string' ? input.query : '');
+    const references = input.ground_truth_contexts;
+    if (contexts.length === 0 || contexts.every(value => tokenize(value).length === 0) ||
+        (references !== undefined && (!Array.isArray(references) || references.length === 0 ||
+            references.some(value => typeof value !== 'string' || tokenize(value).length === 0))) ||
+        (references === undefined && queryTokens.length === 0)) {
+        return { score: 0, passed: false, reason: 'NO_EVIDENCE' };
     }
 
     // Calculate relevance for each context chunk

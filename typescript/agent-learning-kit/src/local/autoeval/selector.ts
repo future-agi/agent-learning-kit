@@ -10,8 +10,55 @@ import {
     AutoEvalConfig,
     SelectedMetric,
     MetricCategory,
-    AutoEvalInput
+    AutoEvalInput,
+    snapshotBoundary
 } from './types.js';
+
+const CATEGORIES = ['string', 'json', 'similarity', 'rag', 'security', 'hallucination', 'quality'];
+// Local validators deliberately do not add a shared/public contract.
+function record(value: unknown): value is Record<string, unknown> {
+    return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+function validInput(input: AutoEvalInput): boolean {
+    return record(input) && typeof input.response === 'string' &&
+        (['query', 'reference', 'code'] as const).every(key => input[key] === undefined || typeof input[key] === 'string') &&
+        (input.context === undefined || typeof input.context === 'string' ||
+            (Array.isArray(input.context) && input.context.every(value => typeof value === 'string'))) &&
+        (input.metadata === undefined || record(input.metadata));
+}
+function validCharacteristics(chars: ContentCharacteristics): boolean {
+    return record(chars) && typeof chars.inputType === 'string' &&
+        ['text', 'json', 'code', 'rag', 'qa', 'conversation', 'structured', 'unknown'].includes(chars.inputType) &&
+        (['hasJson', 'hasCode', 'hasContext', 'hasReference', 'isQA'] as const).every(key => typeof chars[key] === 'boolean') &&
+        (chars.codeLanguage === undefined || typeof chars.codeLanguage === 'string') &&
+        typeof chars.lengthCategory === 'string' && ['short', 'medium', 'long'].includes(chars.lengthCategory) &&
+        Array.isArray(chars.domains) && chars.domains.every(value => typeof value === 'string');
+}
+function validConfig(config: AutoEvalConfig): boolean {
+    if (!record(config)) return false;
+    for (const key of ['minConfidence', 'passThreshold', 'maxMetrics'] as const) {
+        const value = config[key];
+        if (value !== undefined && (typeof value !== 'number' || !Number.isFinite(value) || value < 0 ||
+            (key === 'maxMetrics' ? !Number.isSafeInteger(value) : value > 1))) return false;
+    }
+    for (const key of ['enableSecurityChecks', 'enableHallucinationCheck'] as const) {
+        if (config[key] !== undefined && typeof config[key] !== 'boolean') return false;
+    }
+    for (const key of ['includeCategories', 'excludeCategories'] as const) {
+        const value = config[key];
+        if (value !== undefined && (!Array.isArray(value) || value.some(category => typeof category !== 'string' || !CATEGORIES.includes(category)))) return false;
+    }
+    // Weight values are evaluated per metric by the pipeline, not by selection.
+    return config.metricWeights === undefined || record(config.metricWeights);
+}
+function validMetric(metric: SelectedMetric): boolean {
+    return record(metric) && typeof metric.name === 'string' && metric.name.trim().length > 0 &&
+        typeof metric.category === 'string' && CATEGORIES.includes(metric.category) &&
+        typeof metric.confidence === 'number' && Number.isFinite(metric.confidence) && metric.confidence >= 0 && metric.confidence <= 1 &&
+        typeof metric.reason === 'string' &&
+        (metric.requiredConfig === undefined || (Array.isArray(metric.requiredConfig) &&
+            metric.requiredConfig.every(value => typeof value === 'string' && value.trim().length > 0)));
+}
 
 /**
  * Metric definition for selection
@@ -86,7 +133,7 @@ const METRIC_DEFINITIONS: MetricDefinition[] = [
     {
         name: 'context_recall',
         category: 'rag',
-        requiredConfig: ['query', 'context'],
+        requiredConfig: ['query', 'context', 'reference'],
         relevance: (chars) => chars.hasContext && chars.isQA ? 0.85 : 0,
         reasonTemplate: 'Evaluating recall of context retrieval'
     },
@@ -177,6 +224,10 @@ export function selectMetrics(
     input: AutoEvalInput,
     config: AutoEvalConfig = {}
 ): SelectedMetric[] {
+    ({ chars, input, config } = snapshotBoundary({ chars, input, config }, 'EVALUATION_CONFIG_INVALID'));
+    if (!validConfig(config)) throw new Error('EVALUATION_CONFIG_INVALID');
+    if (!validCharacteristics(chars) || !validInput(input)) throw new Error('EVALUATION_INPUT_INVALID');
+    if (!input.response.trim()) return [];
     const {
         minConfidence = 0.5,
         maxMetrics = 10,
@@ -209,7 +260,7 @@ export function selectMetrics(
         const confidence = metric.relevance(chars, input);
 
         // Skip low confidence metrics
-        if (confidence < minConfidence) {
+        if (confidence <= 0 || confidence < minConfidence) {
             continue;
         }
 
@@ -251,7 +302,7 @@ function canSatisfyConfig(required: string[], input: AutoEvalInput): boolean {
                 break;
             case 'context':
                 if (!input.context) return false;
-                if (Array.isArray(input.context) && input.context.length === 0) return false;
+                if (Array.isArray(input.context) && !input.context.some(value => value.trim().length > 0)) return false;
                 if (typeof input.context === 'string' && !input.context.trim()) return false;
                 break;
             case 'reference':
@@ -277,6 +328,7 @@ function canSatisfyConfig(required: string[], input: AutoEvalInput): boolean {
  * Get recommended metrics for a specific input type
  */
 export function getRecommendedMetrics(inputType: string): string[] {
+    if (typeof inputType !== 'string') throw new Error('EVALUATION_INPUT_INVALID');
     const recommendations: Record<string, string[]> = {
         'text': ['one_line', 'length_between'],
         'json': ['is_json', 'contains_json'],
@@ -288,7 +340,8 @@ export function getRecommendedMetrics(inputType: string): string[] {
         'unknown': ['one_line']
     };
 
-    return recommendations[inputType] || recommendations['unknown'];
+    return Object.prototype.hasOwnProperty.call(recommendations, inputType)
+        ? recommendations[inputType] : recommendations['unknown'];
 }
 
 /**
@@ -298,13 +351,19 @@ export function buildMetricConfig(
     metric: SelectedMetric,
     input: AutoEvalInput
 ): Record<string, unknown> {
+    ({ metric, input } = snapshotBoundary({ metric, input }, 'EVALUATION_INPUT_INVALID'));
+    if (!validInput(input)) throw new Error('EVALUATION_INPUT_INVALID');
+    if (!validMetric(metric)) throw new Error('EVALUATION_CONFIG_INVALID');
     const config: Record<string, unknown> = {};
 
     // Map input fields to config
     if (input.query) config.query = input.query;
     if (input.response) config.response = input.response;
     if (input.context) config.context = input.context;
-    if (input.reference) config.reference = input.reference;
+    if (input.reference) {
+        config.reference = input.reference;
+        if (metric.name.toLowerCase() === 'context_recall') config.expected_response = input.reference;
+    }
     if (input.code) {
         config.code = input.code;
     } else if (metric.category === 'security' && input.response) {

@@ -5,6 +5,7 @@
  * @module local/metrics/rag/context-relevance
  */
 
+import { snapshotBoundary } from '../../autoeval/types.js';
 import {
     RAGInput,
     RAGConfig,
@@ -42,25 +43,37 @@ export function contextRelevance(
     input: RAGInput,
     config: RAGConfig = {}
 ): RAGResult {
-    const threshold = config.threshold ?? 0.5;
-    const ngramSize = config.ngramSize ?? 2;
+    try { ({ input, config } = snapshotBoundary({ input, config }, 'METRIC_CONFIG_INVALID')); }
+    catch { return { score: 0, passed: false, reason: 'METRIC_CONFIG_INVALID' }; }
+    if (!input || typeof input !== 'object' || Array.isArray(input) ||
+        !config || typeof config !== 'object' || Array.isArray(config)) return { score: 0, passed: false, reason: 'METRIC_CONFIG_INVALID' };
+    const threshold = config.threshold === undefined ? 0.5 : config.threshold;
+    if (typeof threshold !== 'number' || !Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
+        return { score: 0, passed: false, reason: 'METRIC_CONFIG_INVALID' };
+    }
+    const ngramSize = config.ngramSize === undefined ? 2 : config.ngramSize;
+    if (typeof ngramSize !== 'number' || !Number.isSafeInteger(ngramSize) || ngramSize < 1) return { score: 0, passed: false, reason: 'METRIC_CONFIG_INVALID' };
 
+    if ((typeof input.context !== 'string' && !Array.isArray(input.context)) ||
+        (Array.isArray(input.context) && input.context.some(value => typeof value !== 'string'))) return { score: 0, passed: false, reason: 'NO_EVIDENCE' };
+    // Preserve source slots and the original denominator. Empty chunks score
+    // zero; their positions are never reassigned to a different source chunk.
     const contexts = normalizeContext(input.context);
-    const queryTokens = tokenize(input.query);
+    const queryTokens = tokenize(typeof input.query === 'string' ? input.query : '');
 
-    if (contexts.length === 0) {
+    if (contexts.length === 0 || contexts.every(value => tokenize(value).length === 0)) {
         return {
             score: 0,
             passed: false,
-            reason: 'No context provided'
+            reason: 'NO_EVIDENCE'
         };
     }
 
-    if (!input.query || input.query.trim().length === 0) {
+    if (queryTokens.length === 0) {
         return {
-            score: 1.0,
-            passed: true,
-            reason: 'No query provided to check relevance'
+            score: 0,
+            passed: false,
+            reason: 'NO_EVIDENCE'
         };
     }
 
@@ -70,6 +83,7 @@ export function contextRelevance(
 
     for (let i = 0; i < contexts.length; i++) {
         const contextTokens = tokenize(contexts[i]);
+        if (contextTokens.length === 0) { chunkScores.push(0); continue; }
 
         // Multiple relevance signals
         const tokenSim = jaccardSimilarity(queryTokens, contextTokens);
@@ -120,27 +134,39 @@ export function contextUtilization(
     input: RAGInput,
     config: RAGConfig = {}
 ): RAGResult {
-    const threshold = config.threshold ?? 0.5;
+    try { ({ input, config } = snapshotBoundary({ input, config }, 'METRIC_CONFIG_INVALID')); }
+    catch { return { score: 0, passed: false, reason: 'METRIC_CONFIG_INVALID' }; }
+    if (!input || typeof input !== 'object' || Array.isArray(input) ||
+        !config || typeof config !== 'object' || Array.isArray(config)) return { score: 0, passed: false, reason: 'METRIC_CONFIG_INVALID' };
+    const threshold = config.threshold === undefined ? 0.5 : config.threshold;
+    if (typeof threshold !== 'number' || !Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
+        return { score: 0, passed: false, reason: 'METRIC_CONFIG_INVALID' };
+    }
 
+    if ((typeof input.context !== 'string' && !Array.isArray(input.context)) ||
+        (Array.isArray(input.context) && input.context.some(value => typeof value !== 'string'))) return { score: 0, passed: false, reason: 'NO_EVIDENCE' };
+    // Preserve source slots and the original denominator. Empty chunks score
+    // zero; their positions are never reassigned to a different source chunk.
     const contexts = normalizeContext(input.context);
 
-    if (contexts.length === 0) {
+    if (contexts.length === 0 || contexts.every(value => tokenize(value).length === 0)) {
         return {
             score: 0,
             passed: false,
-            reason: 'No context provided'
+            reason: 'NO_EVIDENCE'
         };
     }
 
-    if (!input.response || input.response.trim().length === 0) {
+    if (typeof input.response !== 'string' || input.response.trim().length === 0) {
         return {
             score: 0,
             passed: false,
-            reason: 'No response provided'
+            reason: 'NO_EVIDENCE'
         };
     }
 
     const responseTokens = tokenize(input.response);
+    if (responseTokens.length === 0) return { score: 0, passed: false, reason: 'NO_EVIDENCE' };
 
     // Check how much of each context is reflected in response
     const utilizationScores: number[] = [];

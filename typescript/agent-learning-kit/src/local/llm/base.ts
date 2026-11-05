@@ -3,6 +3,7 @@
  * @module local/llm/base
  */
 
+import { snapshotBoundary } from '../autoeval/types.js';
 import {
     BaseLLM,
     BaseLLMConfig,
@@ -33,10 +34,10 @@ export abstract class AbstractLLM implements BaseLLM {
     protected config: Required<BaseLLMConfig>;
 
     constructor(config: BaseLLMConfig = {}) {
-        this.config = {
-            ...DEFAULT_CONFIG,
-            ...config
-        };
+        config = snapshotBoundary(config, 'JUDGE_CONFIG_INVALID');
+        if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('JUDGE_CONFIG_INVALID');
+        this.config = snapshotBoundary({ ...DEFAULT_CONFIG, ...config }, 'JUDGE_CONFIG_INVALID');
+        for (const value of Object.values(this.config)) if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) throw new Error('JUDGE_CONFIG_INVALID');
     }
 
     abstract isAvailable(): Promise<boolean>;
@@ -52,6 +53,8 @@ export abstract class AbstractLLM implements BaseLLM {
         criteria: string,
         context?: string
     ): Promise<JudgeResult> {
+        if (typeof query !== 'string' || typeof response !== 'string' || typeof criteria !== 'string' ||
+            (context !== undefined && typeof context !== 'string')) return { score: 0, passed: false, reason: 'JUDGE_INPUT_INVALID' };
         const systemPrompt = `You are an expert evaluator. Your task is to evaluate the quality of AI-generated responses based on specific criteria.
 
 You MUST respond with a JSON object containing:
@@ -76,18 +79,25 @@ ${response}`;
 
         userPrompt += `\n\n## Your Evaluation (respond with JSON only)`;
 
-        const rawResponse = await this.chat([
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userPrompt }
-        ]);
-
-        return this.parseJudgeResponse(rawResponse);
+        try {
+            const rawResponse = await this.chat([
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: userPrompt }
+            ]);
+            // The SDK system prompt declares 0..1, regardless of observed magnitude.
+            return this.parseJudgeResponse(rawResponse, 1);
+        } catch {
+            return { score: 0, passed: false, reason: 'JUDGE_REQUEST_FAILED', rawResponse: undefined };
+        }
     }
 
     /**
      * Batch evaluate multiple queries
      */
     async batchJudge(evaluations: JudgeInput[]): Promise<JudgeResult[]> {
+        try { evaluations = snapshotBoundary(evaluations, 'JUDGE_INPUT_INVALID'); }
+        catch { return [{ score: 0, passed: false, reason: 'JUDGE_INPUT_INVALID' }]; }
+        if (!Array.isArray(evaluations) || evaluations.length === 0) return [{ score: 0, passed: false, reason: 'NO_EVIDENCE' }];
         const results: JudgeResult[] = [];
 
         for (const evalItem of evaluations) {
@@ -103,7 +113,7 @@ ${response}`;
                 results.push({
                     score: 0,
                     passed: false,
-                    reason: `Evaluation failed: ${(error as Error).message}`,
+                    reason: 'JUDGE_REQUEST_FAILED',
                     rawResponse: undefined
                 });
             }
@@ -115,72 +125,59 @@ ${response}`;
     /**
      * Parse judge response into structured result
      */
-    protected parseJudgeResponse(response: string): JudgeResult {
-        const trimmed = response.trim();
-
-        // Try direct JSON parse
-        try {
-            const parsed = JSON.parse(trimmed);
-            return this.validateJudgeResult(parsed, response);
-        } catch {
-            // Continue with other parsing strategies
-        }
-
-        // Try extracting JSON from code block
-        const codeBlockMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-        if (codeBlockMatch) {
-            try {
-                const parsed = JSON.parse(codeBlockMatch[1]);
-                return this.validateJudgeResult(parsed, response);
-            } catch {
-                // Continue with other strategies
+    protected parseJudgeResponse(response: string, declaredScale?: number): JudgeResult {
+        if (typeof response !== 'string') return { score: 0, passed: false, reason: 'JUDGE_RESULT_INVALID' };
+        const candidates: unknown[] = [];
+        const starts: number[] = [];
+        let quoted = false;
+        let escaped = false;
+        // Enumerate balanced objects, including nested objects, in every fence
+        // and in prose. A quoted evaluated-output verdict is not privileged.
+        for (let index = 0; index < response.length; index++) {
+            const char = response[index];
+            if (starts.length > 0 && quoted) {
+                if (escaped) escaped = false;
+                else if (char === '\\') escaped = true;
+                else if (char === '"') quoted = false;
+                continue;
+            }
+            if (starts.length > 0 && char === '"') { quoted = true; continue; }
+            if (char === '{') starts.push(index);
+            if (char === '}' && starts.length > 0) {
+                const start = starts.pop()!;
+                try {
+                    const candidate = JSON.parse(response.slice(start, index + 1));
+                    if (Object.prototype.hasOwnProperty.call(candidate, 'score') || Object.prototype.hasOwnProperty.call(candidate, 'passed')) candidates.push(candidate);
+                } catch { /* Not a protocol object. */ }
             }
         }
-
-        // Try extracting embedded JSON
-        const jsonMatch = trimmed.match(/\{[\s\S]*"score"[\s\S]*\}/);
-        if (jsonMatch) {
-            try {
-                const parsed = JSON.parse(jsonMatch[0]);
-                return this.validateJudgeResult(parsed, response);
-            } catch {
-                // Continue with regex extraction
-            }
-        }
-
-        // Fallback: extract score using regex
-        const scoreMatch = trimmed.match(/(?:score|rating)[:\s]*(\d+\.?\d*)/i);
-        if (scoreMatch) {
-            const score = this.normalizeScore(parseFloat(scoreMatch[1]));
-            return {
-                score,
-                passed: score >= 0.5,
-                reason: 'Score extracted from unstructured response',
-                rawResponse: response
-            };
-        }
-
-        // Default fallback
-        return {
-            score: 0.5,
-            passed: true,
-            reason: 'Could not parse judge response, using default score',
-            rawResponse: response
-        };
+        if (candidates.length > 1) return { score: 0, passed: false, reason: 'NO_EVIDENCE', rawResponse: undefined };
+        if (candidates.length !== 1 || starts.length > 0) return { score: 0, passed: false, reason: 'JUDGE_RESULT_INVALID', rawResponse: undefined };
+        return this.validateJudgeResult(candidates[0], response, declaredScale);
     }
 
     /**
      * Validate and normalize judge result
      */
-    protected validateJudgeResult(parsed: any, rawResponse: string): JudgeResult {
-        let score = typeof parsed.score === 'number' ? parsed.score : 0.5;
-        score = this.normalizeScore(score);
-
+    protected validateJudgeResult(parsed: any, rawResponse: string, declaredScale?: number): JudgeResult {
+        try { parsed = snapshotBoundary(parsed, 'JUDGE_RESULT_INVALID'); }
+        catch { return { score: 0, passed: false, reason: 'JUDGE_RESULT_INVALID', rawResponse: undefined }; }
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) ||
+            typeof parsed.score !== 'number' || !Number.isFinite(parsed.score) ||
+            ('passed' in parsed && typeof parsed.passed !== 'boolean')) {
+            return { score: 0, passed: false, reason: 'JUDGE_RESULT_INVALID', rawResponse: undefined };
+        }
+        if ((declaredScale !== undefined && declaredScale !== 1 && declaredScale !== 10 && declaredScale !== 100) ||
+            parsed.score < 0 || parsed.score > (declaredScale === undefined ? 100 : declaredScale)) {
+            return { score: 0, passed: false, reason: 'NO_EVIDENCE', rawResponse: undefined };
+        }
+        const score = declaredScale === undefined ? this.normalizeScore(parsed.score) : parsed.score / declaredScale;
+        const passed = score >= 0.5 && (parsed.passed === undefined || parsed.passed === true);
         return {
-            score,
-            passed: parsed.passed ?? score >= 0.5,
-            reason: parsed.reason || 'No reason provided',
-            rawResponse
+            score, passed,
+            reason: passed ? 'JUDGE_PASSED' : 'JUDGE_FAILED',
+            // Keep the key, not untrusted provider text that can echo input.
+            rawResponse: undefined,
         };
     }
 
@@ -188,7 +185,9 @@ ${response}`;
      * Normalize score to 0-1 range
      */
     protected normalizeScore(score: number): number {
-        // Handle scores on different scales
+        // Residual for provider-subclass/caller parsing with NO declared scale:
+        // scores <=1 are read on 0..1, scores <=10 on 0..10; ask for 0..1.
+        // SDK judge() always supplies its explicit scale and does not use this.
         if (score > 10) {
             score = score / 100; // 0-100 scale
         } else if (score > 1) {

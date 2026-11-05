@@ -153,6 +153,10 @@ export interface ScanResult {
     scanDurationMs: number;
     /** Summary message */
     summary: string;
+    status?: 'passed' | 'failed' | 'incomplete';
+    reasonCode?: string;
+    ruleErrors?: { ruleIndex: number; reasonCode: 'RULE_UNKNOWN' | 'RULE_EXECUTION_FAILED' | 'RULE_RESULT_INVALID' | 'NO_EVIDENCE' }[];
+    coverage?: { required: number; executed: number; completed: number; skipped: number; errored: number };
 }
 
 /**

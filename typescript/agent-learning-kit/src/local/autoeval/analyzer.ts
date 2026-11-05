@@ -9,8 +9,27 @@ import {
     AutoEvalInput,
     ContentCharacteristics,
     InputType,
-    CODE_LANGUAGE_PATTERNS
+    CODE_LANGUAGE_PATTERNS,
+    snapshotBoundary
 } from './types.js';
+
+// These validators only inspect values owned by snapshotBoundary.
+function validInput(input: AutoEvalInput): boolean {
+    return !!input && typeof input === 'object' && !Array.isArray(input) &&
+        typeof input.response === 'string' &&
+        (['query', 'reference', 'code'] as const).every(key => input[key] === undefined || typeof input[key] === 'string') &&
+        (input.context === undefined || typeof input.context === 'string' ||
+            (Array.isArray(input.context) && input.context.every(value => typeof value === 'string'))) &&
+        (input.metadata === undefined || (!!input.metadata && typeof input.metadata === 'object' && !Array.isArray(input.metadata)));
+}
+function validCharacteristics(chars: ContentCharacteristics): boolean {
+    return !!chars && typeof chars === 'object' && !Array.isArray(chars) &&
+        typeof chars.inputType === 'string' && ['text', 'json', 'code', 'rag', 'qa', 'conversation', 'structured', 'unknown'].includes(chars.inputType) &&
+        (['hasJson', 'hasCode', 'hasContext', 'hasReference', 'isQA'] as const).every(key => typeof chars[key] === 'boolean') &&
+        (chars.codeLanguage === undefined || typeof chars.codeLanguage === 'string') &&
+        typeof chars.lengthCategory === 'string' && ['short', 'medium', 'long'].includes(chars.lengthCategory) &&
+        Array.isArray(chars.domains) && chars.domains.every(value => typeof value === 'string');
+}
 
 /**
  * Analyze input content to determine characteristics.
@@ -19,6 +38,8 @@ import {
  * @returns Detected content characteristics
  */
 export function analyzeContent(input: AutoEvalInput): ContentCharacteristics {
+    input = snapshotBoundary(input, 'EVALUATION_INPUT_INVALID');
+    if (!validInput(input)) throw new Error('EVALUATION_INPUT_INVALID');
     const { query, response, context, reference, code } = input;
 
     // Detect JSON
@@ -38,7 +59,7 @@ export function analyzeContent(input: AutoEvalInput): ContentCharacteristics {
 
     // Check for context
     const hasContext = !!(context && (
-        (Array.isArray(context) && context.length > 0) ||
+        (Array.isArray(context) && context.some(value => value.trim().length > 0)) ||
         (typeof context === 'string' && context.trim().length > 0)
     ));
 
@@ -275,6 +296,8 @@ function determineInputType(characteristics: {
  * Get a human-readable description of the detected characteristics
  */
 export function describeCharacteristics(chars: ContentCharacteristics): string {
+    chars = snapshotBoundary(chars, 'EVALUATION_INPUT_INVALID');
+    if (!validCharacteristics(chars)) throw new Error('EVALUATION_INPUT_INVALID');
     const parts: string[] = [];
 
     parts.push(`Input type: ${chars.inputType}`);

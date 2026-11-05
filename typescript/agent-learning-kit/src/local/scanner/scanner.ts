@@ -18,6 +18,8 @@ import {
     compareSeverity
 } from './types.js';
 import { BUILTIN_RULES, getDefaultRules, getRuleById, getRulesByTag } from './rules.js';
+import { hallucinationExtractSentences, isFactualClaim, hallucinationTokenize } from '../metrics/hallucination/types.js';
+import { snapshotBoundary } from '../autoeval/types.js';
 
 /**
  * Scanner Pipeline - comprehensive content scanning.
@@ -49,6 +51,7 @@ export class Scanner {
     private defaultConfig: ScanConfig;
 
     constructor(config: ScanConfig = {}) {
+        config = this.snapshotConfig(config);
         this.defaultConfig = {
             minSeverity: 'low',
             maxFindings: 1000,
@@ -68,12 +71,46 @@ export class Scanner {
         }
     }
 
+    private snapshotList<T>(value: Iterable<T>): T[] {
+        if (value === null || typeof value !== 'object' || typeof value[Symbol.iterator] !== 'function') throw new Error('SCAN_CONFIG_INVALID');
+        return Array.from(value);
+    }
+
+    private snapshotConfig(config: ScanConfig): ScanConfig {
+        try {
+            const owned = snapshotBoundary(config, 'SCAN_CONFIG_INVALID', true);
+            if (!owned || typeof owned !== 'object' || Array.isArray(owned)) throw new Error();
+            const copy = { ...owned };
+            for (const key of ['enableRules', 'disableRules', 'includeCategories', 'excludeCategories'] as const) {
+                if (copy[key] === undefined) continue;
+                const values = this.snapshotList(copy[key]!);
+                if (values.some(value => typeof value !== 'string' || !value.trim())) throw new Error();
+                (copy as Record<string, unknown>)[key] = values;
+            }
+            if (copy.customRules !== undefined) copy.customRules = this.snapshotList(copy.customRules);
+            for (const key of ['minSeverity', 'failOnSeverity'] as const) {
+                const value = copy[key];
+                if (value !== undefined && (typeof value !== 'string' || !Object.prototype.hasOwnProperty.call(SEVERITY_VALUES, value))) throw new Error();
+            }
+            if (copy.includeSuggestions !== undefined && typeof copy.includeSuggestions !== 'boolean') throw new Error();
+            if (copy.maxFindings !== undefined && (typeof copy.maxFindings !== 'number' || !Number.isSafeInteger(copy.maxFindings) || copy.maxFindings < 0)) throw new Error();
+            if (copy.context !== undefined && (!copy.context || typeof copy.context !== 'object' || Array.isArray(copy.context))) throw new Error();
+            const context = copy.context;
+            for (const key of ['contentType', 'language', 'filePath', 'query', 'reference'] as const) {
+                if (context?.[key] !== undefined && typeof context[key] !== 'string') throw new Error();
+            }
+            if (context?.ragContext !== undefined && typeof context.ragContext !== 'string' &&
+                (!Array.isArray(context.ragContext) || context.ragContext.some(value => typeof value !== 'string'))) throw new Error();
+            return snapshotBoundary(copy, 'SCAN_CONFIG_INVALID', true);
+        } catch { throw new Error('SCAN_CONFIG_INVALID'); }
+    }
+
     /**
      * Load built-in default rules
      */
     private loadDefaultRules(): void {
         for (const rule of BUILTIN_RULES) {
-            this.rules.set(rule.id, rule);
+            this.addRule(rule);
         }
     }
 
@@ -81,7 +118,19 @@ export class Scanner {
      * Add a custom rule
      */
     addRule(rule: ScanRule): void {
-        this.rules.set(rule.id, rule);
+        try {
+            const owned = snapshotBoundary(rule, 'SCAN_CONFIG_INVALID', true);
+            if (!owned || typeof owned !== 'object' || Array.isArray(owned)) throw new Error();
+            const copy = { ...owned };
+            if (typeof copy.id !== 'string' || !copy.id.trim() || typeof copy.category !== 'string' ||
+                typeof copy.severity !== 'string' || !Object.prototype.hasOwnProperty.call(SEVERITY_VALUES, copy.severity) ||
+                typeof copy.enabledByDefault !== 'boolean' || typeof copy.check !== 'function') throw new Error();
+            if (copy.tags !== undefined) {
+                copy.tags = this.snapshotList(copy.tags);
+                if (copy.tags.some(tag => typeof tag !== 'string')) throw new Error();
+            }
+            this.rules.set(copy.id, snapshotBoundary(copy, 'SCAN_CONFIG_INVALID', true));
+        } catch { throw new Error('SCAN_CONFIG_INVALID'); }
     }
 
     /**
@@ -109,8 +158,11 @@ export class Scanner {
      * Scan content for issues
      */
     scan(content: string, config?: ScanConfig): ScanResult {
+        if (typeof content !== 'string') throw new Error('SCAN_INPUT_INVALID');
         const startTime = Date.now();
-        const mergedConfig = { ...this.defaultConfig, ...config };
+        const overrides = this.snapshotConfig(config === undefined ? {} : config);
+        const mergedConfig = { ...this.defaultConfig, ...overrides };
+        for (const rule of overrides.customRules ?? []) this.addRule(rule);
 
         // Determine which rules to run
         const rulesToRun = this.selectRules(mergedConfig);
@@ -119,13 +171,39 @@ export class Scanner {
         const allFindings: Finding[] = [];
         const rulesExecuted: string[] = [];
 
-        for (const rule of rulesToRun) {
+        const ruleErrors: NonNullable<ScanResult['ruleErrors']> = [];
+        const unknownRules = (mergedConfig.enableRules ?? []).filter(spec =>
+            spec.startsWith('tag:')
+                ? !this.getAllRules().some(r => r.tags?.includes(spec.slice(4)))
+                : !this.rules.has(spec));
+        unknownRules.forEach((_, ruleIndex) => ruleErrors.push({ ruleIndex, reasonCode: 'RULE_UNKNOWN' }));
+        let executed = 0;
+        for (const [ruleIndex, rule] of rulesToRun.entries()) {
+            const ragContext = mergedConfig.context?.ragContext;
+            const missingRagEvidence = rule.id === 'quality/hallucination' &&
+                rule.check === getRuleById('quality/hallucination')?.check &&
+                ((!ragContext || (Array.isArray(ragContext) ? ragContext : [ragContext]).every(value => hallucinationTokenize(value).length === 0)) ||
+                    !hallucinationExtractSentences(content).some(isFactualClaim));
+            if (!content.trim() || missingRagEvidence) {
+                ruleErrors.push({ ruleIndex, reasonCode: 'NO_EVIDENCE' });
+                continue;
+            }
             try {
-                const findings = rule.check(content, mergedConfig.context);
-                allFindings.push(...findings);
+                executed++;
+                const rawFindings = rule.check(content, mergedConfig.context);
+                const findings = Array.isArray(rawFindings) ? snapshotBoundary(rawFindings, 'RULE_RESULT_INVALID') : null;
+                if (!findings || findings.some(f => !f || typeof f.severity !== 'string' ||
+                    !Object.prototype.hasOwnProperty.call(SEVERITY_VALUES, f.severity) || typeof f.category !== 'string' ||
+                    typeof f.confidence !== 'number' || !Number.isFinite(f.confidence) || f.confidence < 0 || f.confidence > 1)) {
+                    ruleErrors.push({ ruleIndex, reasonCode: 'RULE_RESULT_INVALID' });
+                    continue;
+                }
+                // Do not echo matched input or arbitrary custom-rule diagnostics.
+                allFindings.push(...findings.map(f => ({ ...f, match: undefined, metadata: undefined,
+                    title: 'RULE_FINDING', description: 'RULE_FINDING', suggestion: f.suggestion ? 'REVIEW_FINDING' : undefined })));
                 rulesExecuted.push(rule.id);
-            } catch (error) {
-                console.error(`Error executing rule ${rule.id}:`, error);
+            } catch {
+                ruleErrors.push({ ruleIndex, reasonCode: 'RULE_EXECUTION_FAILED' });
             }
         }
 
@@ -154,15 +232,24 @@ export class Scanner {
 
         // Determine pass/fail
         const failThreshold = mergedConfig.failOnSeverity || 'high';
-        const passed = !filteredFindings.some(f =>
-            meetsSeverityThreshold(f.severity, failThreshold)
-        );
-
-        // Generate summary
-        const summary = this.generateSummary(filteredFindings, passed);
+        const complete = rulesToRun.length > 0 && ruleErrors.length === 0 &&
+            Object.prototype.hasOwnProperty.call(SEVERITY_VALUES, failThreshold);
+        // Presentation filters and maxFindings must not hide a blocking finding.
+        const passed = complete && !allFindings.some(f => meetsSeverityThreshold(f.severity, failThreshold));
+        const coverage = {
+            required: rulesToRun.length + unknownRules.length, executed,
+            completed: rulesExecuted.length,
+            skipped: unknownRules.length + ruleErrors.filter(e => e.reasonCode === 'NO_EVIDENCE').length,
+            errored: ruleErrors.filter(e => e.reasonCode === 'RULE_EXECUTION_FAILED' || e.reasonCode === 'RULE_RESULT_INVALID').length,
+        };
+        const summary = !complete ? 'SCAN_INCOMPLETE' : !passed ? 'CHECKS_FAILED' : this.generateSummary(filteredFindings, true);
 
         return {
             passed,
+            status: !complete ? 'incomplete' : passed ? 'passed' : 'failed',
+            reasonCode: !complete ? 'SCAN_INCOMPLETE' : passed ? 'CHECKS_PASSED' : 'CHECKS_FAILED',
+            coverage,
+            ruleErrors,
             totalFindings: filteredFindings.length,
             findingsBySeverity,
             findingsByCategory,
@@ -180,7 +267,7 @@ export class Scanner {
         let selectedRules: ScanRule[] = [];
 
         // Start with default enabled rules or all rules
-        if (config.enableRules && config.enableRules.length > 0) {
+        if (config.enableRules !== undefined) {
             // Enable specific rules
             for (const ruleSpec of config.enableRules) {
                 // Check if it's a tag
@@ -222,7 +309,7 @@ export class Scanner {
         }
 
         // Filter by category
-        if (config.includeCategories && config.includeCategories.length > 0) {
+        if (config.includeCategories !== undefined) {
             selectedRules = selectedRules.filter(r =>
                 config.includeCategories!.includes(r.category)
             );
@@ -257,7 +344,7 @@ export class Scanner {
         }
 
         // Filter by category
-        if (config.includeCategories && config.includeCategories.length > 0) {
+        if (config.includeCategories !== undefined) {
             filtered = filtered.filter(f =>
                 config.includeCategories!.includes(f.category)
             );
