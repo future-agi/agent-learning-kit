@@ -10091,7 +10091,7 @@ def test_a_scenario_naming_an_actor_the_world_does_not_list_is_not_kept(
         ],
     )
     assert _unlisted_actors(scenario, tmp_path) == [
-        "actors: 'ghost' is not a world actor; add it with add_actor first"
+        "actors: 'ghost' is not an actor; add it with add_actor first"
     ]
     from fi.alk.harness.folder import document_for
 

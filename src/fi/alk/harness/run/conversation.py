@@ -317,6 +317,35 @@ class ChatActors:
         return out
 
 
+async def _started_by_event(
+    target: Target, starts_with: Any, on_exchange: Callable[[Exchange], Any] | None
+) -> Transcript:
+    """One invocation of the agent by an actor's message, and whatever it answers; no one else speaks. What it did
+    is in the world, which is what the run is graded on."""
+    transcript = Transcript()
+
+    def record(exchange: Exchange) -> None:
+        transcript.exchanges.append(exchange)
+        if on_exchange:
+            on_exchange(exchange)
+
+    await target.open()
+    try:
+        record(Exchange("actor", starts_with.text, time.time(), {"id": starts_with.actor, "name": starts_with.actor}))
+        try:
+            reply = await target.say(starts_with.text)
+        except TargetConversationEnded as ended:
+            reply = ended.final_message
+        if reply:
+            record(Exchange("agent", reply, time.time()))
+        transcript.ended = FINISHED
+    finally:
+        await target.close()
+    transcript.calls = list(target.world.calls) if hasattr(target, "world") else []
+    transcript.spent_usd = target.spent_usd
+    return transcript
+
+
 async def converse(
     target: Target,
     scenario: Scenario,
@@ -328,7 +357,11 @@ async def converse(
     actors: ChatActors | None = None,
 ) -> Transcript:
     """Run one scenario as a conversation and return what happened. `actors` write in it too, each when its trigger
-    fires after an agent turn; the agent reads their message as theirs, and the person is told it."""
+    fires after an agent turn; the agent reads their message as theirs, and the person is told it. An event-started
+    scenario (`starts_with`) has no person: the agent is invoked once by that actor's message."""
+    starts_with = getattr(scenario, "starts_with", None)
+    if starts_with is not None:
+        return await _started_by_event(target, starts_with, on_exchange)
     transcript = Transcript()
     from ..simulator import load_simulator_prompt
 

@@ -20,7 +20,7 @@ from urllib import error, request
 
 from fi.simulate.simulation.call_actors import seeded
 
-from .actors import AGENT, Actor, ScenarioActor, ScheduledAction
+from .actors import AGENT, Actor, HistoryEntry, ScenarioActor, ScheduledAction
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +80,7 @@ class ActorDispatcher:
         decide: Decide | None = None,
         briefs: dict[str, str] | None = None,
         world_actions: dict[str, str] | None = None,
+        history: list[HistoryEntry] | None = None,
     ) -> None:
         self.proxy_url = proxy_url.rstrip("/")
         self.token = token
@@ -106,6 +107,8 @@ class ActorDispatcher:
         ]
         self.started: float | None = None
         self.fired: list[dict[str, Any]] = []
+        self.actors = actors
+        self.history = list(history or [])
         # Live actors: those the scenario includes whose record plays them live, each with its brief.
         self.decide = decide
         self.briefs = briefs or {}
@@ -250,6 +253,29 @@ class ActorDispatcher:
         status = await asyncio.to_thread(self.send, url, headers, arguments)
         self.fired.append({"actor": actor.id, "play": "live", "turn": turn, "action": action, "status": status,
                            "why": decision.get("why"), "parent": cause or None})
+
+    async def write_history(self) -> None:
+        """Writes the scenario's history through the world's door, in order, before the run starts. Each entry has
+        its own key (`h<n>`), so a retry never writes it twice and a history row is told apart from the run's."""
+        for number, entry in enumerate(self.history, start=1):
+            actor = self.actors.get(entry.actor)
+            if actor is None:
+                self.fired.append({"actor": entry.actor, "play": "history", "action": entry.action, "status": None,
+                                   "error": "not_listed"})
+                continue
+            headers = {
+                "X-ALK-Actor": actor.id,
+                "X-ALK-Actor-Token": self.token,
+                "Idempotency-Key": f"{self.trial_id}:{actor.id}:h{number}",
+            }
+            url = f"{self.proxy_url}/{entry.action.replace('.', '/')}"
+            try:
+                status = await asyncio.to_thread(self.send, url, headers, entry.arguments)
+            except Exception as exc:  # noqa: BLE001 - one entry that cannot be sent never stops the rest
+                self.fired.append({"actor": actor.id, "play": "history", "action": entry.action, "status": None,
+                                   "error": type(exc).__name__})
+                continue
+            self.fired.append({"actor": actor.id, "play": "history", "action": entry.action, "status": status})
 
     async def tick(self) -> None:
         """Fires every pending action whose trigger is met now, and gives each live actor a turn when something calls

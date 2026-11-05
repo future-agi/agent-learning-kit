@@ -25,7 +25,7 @@ from typing import Any, ClassVar
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from .actors import ScenarioActor
+from .actors import Fault, HistoryEntry, ScenarioActor, StartsWith
 from .catalogue import Catalogue
 from .simulator import variables_in
 
@@ -315,6 +315,13 @@ class Scenario(BaseModel):
     # The environment's actors this scenario includes, by id from `actors.json`: what each says here and when (an
     # actor that speaks on calls) and the actions each takes in the world. Empty: the person alone.
     actors: list[ScenarioActor] = Field(default_factory=list)
+    # What actors wrote in the world before the run starts, in order; the same on every trial and never graded.
+    history: list[HistoryEntry] = Field(default_factory=list)
+    # An event-started run: the agent is invoked once by this actor's message, with no caller, and graded from what it
+    # did in the world.
+    starts_with: StartsWith | None = None
+    # Timeouts the world gives the agent's calls in this scenario (WO-1); never shown to any actor.
+    faults: list[Fault] = Field(default_factory=list)
 
     max_turns: int = 10
 

@@ -524,6 +524,9 @@ def _load_one(
     # those declared tools.  Inferring this from arbitrary step names creates false infrastructure
     # failures for conversational agents and requires an ever-growing pseudo-tool denylist.
     requires_tool_evidence = bool(set(solution_tools) & (declared_tools or set()))
+    if body.get("starts_with"):
+        # An event-started run that leaves the world untouched is graded as such, never errored for no evidence.
+        requires_tool_evidence = False
 
     setup_code = _read_text(folder / _SETUP_PY, label=folder.name)
     ready_code = _read_text(folder / _READY_PY, label=folder.name)

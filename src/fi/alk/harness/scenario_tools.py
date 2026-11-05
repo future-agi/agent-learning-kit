@@ -294,17 +294,74 @@ def _actor_fields() -> dict[str, Any]:
                 },
                 "required": ["id"],
             },
-        }
+        },
+        "history": {
+            "type": "array",
+            "description": "What actors wrote in the world before the run starts, in order: earlier messages in a "
+            "thread, notes, records the agent will find. Each entry is one of that actor's permitted actions with its "
+            "arguments, written in that actor's own words and from what that actor would know. It is the same on "
+            "every trial and is never graded. Leave it out when the world starts as seeded.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "actor": {"type": "string"},
+                    "action": {"type": "string"},
+                    "arguments": {"type": "object"},
+                },
+                "required": ["actor", "action"],
+                "additionalProperties": False,
+            },
+        },
+        "faults": {
+            "type": "array",
+            "description": "Timeouts the world gives the agent's own calls in this scenario, to test how it copes: "
+            "`timeout_before_commit` (the world never sees the call) or `timeout_after_commit` (the world makes the "
+            "change and the agent never hears back, so a careless retry makes it twice), on the agent's `on_call`th "
+            "call of `action`, the world action as the environment names it. A check reading the world then fails a "
+            "duplicate, or one system changed without the other. Never shown to any actor or the person.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string"},
+                    "mode": {"type": "string", "enum": ["timeout_before_commit", "timeout_after_commit"]},
+                    "on_call": {"type": "integer", "minimum": 1},
+                    "delay_seconds": {"type": "number", "minimum": 0, "maximum": 30},
+                },
+                "required": ["action", "mode"],
+                "additionalProperties": False,
+            },
+        },
+        "starts_with": {
+            "type": "object",
+            "description": "Only for an agent started by an event rather than by a person: the one message from an "
+            "actor that invokes it (a meeting-ended notice, a new ticket). The run has no caller; the agent is graded "
+            "on what it did in the world.",
+            "properties": {"actor": {"type": "string"}, "text": {"type": "string"}},
+            "required": ["actor", "text"],
+            "additionalProperties": False,
+        },
     }
 
 
 def _unlisted_actors(scenario: Scenario, world_root: Path) -> list[str]:
     listed = load_actors(world_root).by_id()
-    return [
-        f"actors: {entry.id!r} is not a world actor; add it with add_actor first"
+    problems = [
+        f"actors: {entry.id!r} is not an actor; add it with add_actor first"
         for entry in scenario.actors
         if entry.id not in listed
     ]
+    for number, entry in enumerate(scenario.history, start=1):
+        actor = listed.get(entry.actor)
+        if actor is None:
+            problems.append(f"history {number}: {entry.actor!r} is not an actor; add it with add_actor first")
+        elif entry.action not in actor.permitted_actions:
+            problems.append(
+                f"history {number}: {entry.actor} may not {entry.action}; it may "
+                + (", ".join(actor.permitted_actions) or "do nothing in the world")
+            )
+    if scenario.starts_with is not None and scenario.starts_with.actor not in listed:
+        problems.append(f"starts_with: {scenario.starts_with.actor!r} is not an actor; add it with add_actor first")
+    return problems
 
 
 def _mailbox_fields() -> dict[str, Any]:

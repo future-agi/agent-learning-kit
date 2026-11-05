@@ -66,6 +66,7 @@ from fi.simulate.simulation.call_actors import (
 from .actor_dispatch import ActorDispatcher, live_decision
 from .actors import (
     AGENT,
+    HistoryEntry,
     ScenarioActor,
     actor_brief,
     brief_text,
@@ -983,6 +984,9 @@ def trial_state_changes(log: list[dict[str, Any]], listed: Mapping[str, Any]) ->
     counts as committed when it succeeded and refused when the world refused it."""
     entries: dict[str, dict[str, Any]] = {}
     for row in log:
+        if ":h" in str(row.get("idempotency_key") or ""):
+            # Written before the run: the trial's starting point, not a change made during it.
+            continue
         who = str(row.get("actor_id") or AGENT)
         actor = listed.get(who)
         entry = entries.setdefault(
@@ -1108,6 +1112,17 @@ def _write_trial_token(path: Path, token: str) -> None:
             raise PrivateTokenUnavailable(str(error)) from error
 
 
+def _write_trial_state(runtime: EnvironmentRuntime, faults: list[Any]) -> None:
+    """This trial's faults, beside the actor token where the world's door reads them; written by the runner only."""
+    token_path = runtime.metadata.get("actor_proof_path")
+    if not isinstance(token_path, str):
+        if faults:
+            logger.warning("faults cannot be set: this world has no tool proxy reading trial state")
+        return
+    path = Path(token_path).with_name("trial.json")
+    path.write_text(json.dumps({"faults": list(faults)}), encoding="utf-8")
+
+
 def _actor_dispatcher(
     doc: Mapping[str, Any],
     bundle_dir: Path,
@@ -1116,7 +1131,7 @@ def _actor_dispatcher(
     budget: float,
 ) -> ActorDispatcher | None:
     """The scenario's world actors for this trial, with a fresh token only they and the proxy hold."""
-    if not doc.get("actors") or not actors_enabled():
+    if not (doc.get("actors") or doc.get("history")) or not actors_enabled():
         return None
     proxy = runtime.endpoints.get("tool_proxy")
     database = _find_postgres_endpoint(runtime)
@@ -1171,6 +1186,7 @@ def _actor_dispatcher(
         cast,
         decide=live_decision if briefs else None,
         briefs=briefs,
+        history=[HistoryEntry.model_validate(one) for one in doc.get("history") or []],
         world_actions=world_actions,
         trial_id=trial_id,
         proxy_url=proxy.address,
@@ -1854,8 +1870,20 @@ class CallRunnerImpl:
             return SimulationReport.model_validate(result)
 
         async def place_with_actors() -> SimulationReport:
+            faults = list(doc.get("faults") or [])
+            if faults:
+                _write_trial_state(runtime, faults)
+            try:
+                return await place_with_world_actors()
+            finally:
+                if faults:
+                    _write_trial_state(runtime, [])
+
+        async def place_with_world_actors() -> SimulationReport:
             if actors is None:
                 return await place()
+            # What the actors wrote before T0 is in the world before the call starts.
+            await actors.write_history()
             acting = asyncio.create_task(actors.run())
             try:
                 return await place()

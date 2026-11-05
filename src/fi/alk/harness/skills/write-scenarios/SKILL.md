@@ -1871,3 +1871,20 @@ the problem, and everything built afterwards inherits it.
 Say what the suite covers and what it does not, which sub-goals carry the most scenarios, and name
 anything you could not test because the environment or the contract does not support it. Report the
 honest number: a smaller suite that is entirely real is worth more than a padded one.
+
+## History and event-started runs
+
+Only when the environment lists actors. When the agent will find something that actors wrote before the run (an
+earlier thread, a note, a record), give it in `history`: each entry one of that actor's permitted actions, in order,
+written as that actor would write it, knowing only what that actor knows. It is the same on every trial and never
+graded; never put the answer to the scenario in it. For an agent started by an event rather than by a person, give
+`starts_with`: the one actor message that invokes it. That scenario has no caller, so its instruction says what
+happened, and its sub-goals are graded from what the agent did in the world, including doing nothing.
+
+## Faults and two systems
+
+When the agent's work spans two systems (a deal updated in the CRM and the approval posted in team chat), a scenario
+can give one call a fault in `faults`: a timeout before the world commits it, or after it commits with the answer
+lost. The check reads the world, so it fails what a real outage would leave wrong: the same change made twice by a
+careless retry, or one system changed without the other. Give a fault only where the scenario is about coping with it.
+

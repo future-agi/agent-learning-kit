@@ -259,3 +259,121 @@ def test_a_trial_s_state_changes_keep_attempted_refused_and_committed_apart_per_
         ("manager", "Mia", 2, 1, 0, 1),
     ]
     assert changes[0]["committed_actions"] == ["deals.request_approval", "deals.apply_discount"]
+
+
+def _history_dispatcher(history, actors):
+    from fi.alk.harness.actor_dispatch import ActorDispatcher
+
+    sent = []
+
+    def send(url, headers, arguments):
+        sent.append((url, headers, arguments))
+        return 200
+
+    dispatcher = ActorDispatcher(
+        actors,
+        [],
+        trial_id="trial-2",
+        proxy_url="http://proxy/",
+        token="t0ken",
+        read_log=list,
+        seed="trial-2",
+        timeout=60.0,
+        send=send,
+        history=history,
+    )
+    return dispatcher, sent
+
+
+def test_history_is_written_by_its_actors_in_order_before_the_run_with_keys_of_its_own():
+    from fi.alk.harness.actors import HistoryEntry
+
+    actors = {
+        "priya": Actor(id="priya", name="Priya", permitted_actions=["slack.post"]),
+        "omar": Actor(id="omar", name="Omar", permitted_actions=["slack.post"]),
+    }
+    history = [
+        HistoryEntry(actor="priya", action="slack.post", arguments={"text": "Can we ship Friday?"}),
+        HistoryEntry(actor="omar", action="slack.post", arguments={"text": "Only if QA signs off."}),
+        HistoryEntry(actor="ghost", action="slack.post", arguments={}),
+    ]
+    for trial in range(2):
+        dispatcher, sent = _history_dispatcher(history, actors)
+        asyncio.run(dispatcher.write_history())
+        # The same history on every trial, each entry under its own actor and a history key.
+        assert [(h["X-ALK-Actor"], h["Idempotency-Key"], a["text"]) for _, h, a in sent] == [
+            ("priya", "trial-2:priya:h1", "Can we ship Friday?"),
+            ("omar", "trial-2:omar:h2", "Only if QA signs off."),
+        ]
+        assert dispatcher.fired[-1]["error"] == "not_listed"
+
+
+def test_history_rows_are_the_trial_s_starting_point_never_its_state_changes():
+    from fi.alk.harness.call_runner import trial_state_changes
+
+    log = [
+        {"actor_id": "priya", "name": "slack.post", "outcome": "committed", "idempotency_key": "t:priya:h1"},
+        {"name": "slack.post", "outcome": "committed"},
+    ]
+    assert [c["who"] for c in trial_state_changes(log, {"priya": Actor(id="priya", name="Priya")})] == ["agent"]
+
+
+def test_an_event_started_run_invokes_the_agent_once_with_no_caller(monkeypatch):
+    from fi.alk.harness.actors import StartsWith
+
+    agent = _Agent(["Posted the summary to #launch."])
+    monkeypatch.setattr(conv, "Stage", lambda *a, **k: pytest.fail("no caller is simulated"))
+    scenario = SimpleNamespace(
+        instruction="", max_turns=4, starts_with=StartsWith(actor="notetaker", text="Meeting ended: launch sync")
+    )
+    transcript = asyncio.run(conv.converse(agent, scenario, SimpleNamespace()))
+    assert agent.heard == ["Meeting ended: launch sync"]
+    assert [one["role"] for one in transcript.canonical_messages()] == ["actor", "assistant"]
+    assert transcript.ended == conv.FINISHED
+
+
+def test_an_event_started_scenario_is_graded_even_when_the_agent_leaves_the_world_untouched(tmp_path):
+    from fi.alk.harness.catalogue import Catalogue, SubGoal, save_catalogue
+    from fi.alk.harness.folder import write_folder
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_source import load_scenarios
+
+    catalogue = Catalogue(sub_goals=[SubGoal(name="posted", what="posted the summary", judged="x")])
+    save_catalogue(catalogue, tmp_path)
+    scenario = Scenario(
+        name="meeting-ended",
+        scenario_key="meeting-ended",
+        instruction="The launch sync ended.",
+        sub_goals=["posted"],
+        solution=[{"tool": "post", "arguments": {}}],
+        starts_with={"actor": "notetaker", "text": "Meeting ended"},
+    )
+    write_folder(scenario, catalogue, tmp_path)
+    (tmp_path / "contract.json").write_text('{"tools": [{"name": "post"}]}')
+    [loaded] = load_scenarios(tmp_path)
+    assert loaded.requires_tool_evidence is False
+
+
+def test_faults_are_for_graders_only_and_a_world_with_them_gets_the_full_action_log(tmp_path):
+    from fi.alk.harness.actors import EVALUATOR_ONLY
+    from fi.alk.harness.bundle_author_v2 import _TOOL_TRACE_DDL, _action_log_seed
+
+    assert "faults" in EVALUATOR_ONLY["scenario_fields"]
+    folder = tmp_path / "scenarios" / "refund-timeout"
+    folder.mkdir(parents=True)
+    (folder / "scenario.json").write_text(
+        json.dumps({"name": "refund-timeout", "faults": [{"action": "refunds.create", "mode": "timeout_after_commit"}]})
+    )
+    assert _action_log_seed(tmp_path).startswith(_TOOL_TRACE_DDL)
+    brief = brief_text(actor_brief(_MANAGER, entry={"id": "manager"}, scenario={**_SCENARIO, "faults": [{"x": 1}]}))
+    assert "timeout" not in brief and "faults" not in brief
+
+
+def test_the_runner_writes_a_trial_s_faults_where_the_door_reads_them_and_clears_them(tmp_path):
+    from fi.alk.harness.call_runner import _write_trial_state
+
+    runtime = SimpleNamespace(metadata={"actor_proof_path": str(tmp_path / "actor-token")})
+    _write_trial_state(runtime, [{"action": "refunds.create", "mode": "timeout_before_commit"}])
+    assert json.loads((tmp_path / "trial.json").read_text())["faults"][0]["action"] == "refunds.create"
+    _write_trial_state(runtime, [])
+    assert json.loads((tmp_path / "trial.json").read_text()) == {"faults": []}

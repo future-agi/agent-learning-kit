@@ -155,11 +155,26 @@ _TOOL_TRACE_DDL = (
 )
 
 
+def _sets_trial_state(authoring: Path) -> bool:
+    """Whether any scenario writes history or sets faults: both need the full action log."""
+    for document in Path(authoring).glob("scenarios/*/scenario.json"):
+        try:
+            body = json.loads(document.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(body, dict) and (body.get("faults") or body.get("history")):
+            return True
+    return False
+
+
 def _action_log_seed(authoring: Path) -> str:
-    """The action log and who may do what in the world; a world without actors is seeded exactly as before."""
+    """The action log and who may do what in the world; a world without actors, history or faults is seeded exactly
+    as before."""
     listing = load_actors(authoring)
     return (
-        _TOOL_TRACE_DDL + actors_seed(listing) if listing.actors else _AGENT_TRACE_DDL
+        _TOOL_TRACE_DDL + actors_seed(listing)
+        if listing.actors or _sets_trial_state(authoring)
+        else _AGENT_TRACE_DDL
     )
 
 

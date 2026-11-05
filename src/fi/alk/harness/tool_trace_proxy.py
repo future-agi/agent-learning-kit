@@ -65,6 +65,30 @@ def _trial_token() -> str:
         return ""
 
 
+def _trial_faults() -> list[dict]:
+    """This trial's faults on the agent's calls, written by the runner beside the token; never from a request."""
+    if not ACTOR_PROOF_FILE:
+        return []
+    try:
+        with open(os.path.join(os.path.dirname(ACTOR_PROOF_FILE), "trial.json"), encoding="utf-8") as handle:
+            faults = json.load(handle).get("faults") or []
+    except (OSError, ValueError, AttributeError):
+        return []
+    return [one for one in faults if isinstance(one, dict)]
+
+
+def _agent_calls(name: str) -> int:
+    """How many times the agent has already sent this action in this trial."""
+    try:
+        with psycopg.connect(DATABASE_URL, autocommit=True) as connection:
+            row = connection.execute(
+                "SELECT count(*) FROM _alk_tool_trace WHERE name = %s AND actor_id = 'agent'", (name,)
+            ).fetchone()
+    except Exception:
+        return 0
+    return int(row[0]) if row else 0
+
+
 def _record(
     name: str,
     arguments: object,
@@ -234,6 +258,9 @@ class Handler(BaseHTTPRequestHandler):
                     f"{self._action()} is not permitted for {actor}",
                 )
                 return
+        if not actor and (fault := self._fault()) is not None:
+            self._faulted(body, arguments, fault)
+            return
         # Only an actor's retries are answered from the first result; the agent's reach the world as they always have.
         key = (self.headers.get("idempotency-key") or "").strip() if actor else ""
         if not key:
@@ -261,6 +288,43 @@ class Handler(BaseHTTPRequestHandler):
             # Answered from the first result; the world never sees the same action twice.
             self._log(name, arguments, earlier[1], "duplicate", idempotency_key=key)
             self._reply(200, earlier[1])
+
+    def _fault(self) -> dict | None:
+        """The fault this trial sets on this call of the agent's, if any: by action and which call of it."""
+        action = self._action()
+        faults = [one for one in _trial_faults() if one.get("action") == action]
+        if not faults:
+            return None
+        call = _agent_calls(self._name()) + 1
+        return next((one for one in faults if int(one.get("on_call") or 1) == call), None)
+
+    def _faulted(self, body: bytes, arguments: object, fault: dict) -> None:
+        """A timeout the scenario sets: before commit the world never sees the call; after commit it does and the
+        agent never hears back. Either way the agent waits, then gets 504, and may retry; a retry is not deduplicated,
+        so a second commit is what a check can catch."""
+        delay = min(max(float(fault.get("delay_seconds", 30)), 0.0), 30.0)
+        name = self._name()
+        if fault.get("mode") == "timeout_after_commit":
+            outgoing = request.Request(
+                UPSTREAM + self.path,
+                data=body if self.command != "GET" else None,
+                method=self.command,
+                headers={"content-type": self.headers.get("content-type", "application/json")},
+            )
+            try:
+                with request.urlopen(outgoing, timeout=30) as response:
+                    content = response.read()
+                    status = int(response.status)
+                result = json.loads(content) if content else None
+                self._log(
+                    name, arguments, result, "committed" if status < 400 else "refused", "response_lost"
+                )
+            except Exception as exc:  # noqa: BLE001 - the world failing is a fault of its own
+                self._log(name, arguments, None, "faulted", f"{type(exc).__name__}: unavailable")
+        else:
+            self._log(name, arguments, None, "faulted", "timeout_before_commit")
+        time.sleep(delay)
+        self._reply(504, {"detail": "tool_upstream_timeout"})
 
     def _name(self) -> str:
         return self.path.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1] or "unknown"

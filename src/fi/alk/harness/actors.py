@@ -203,6 +203,38 @@ class ScheduledAction(BaseModel):
     trigger: Trigger = Field(default_factory=Trigger)
 
 
+class HistoryEntry(BaseModel):
+    """One thing an actor wrote in the world before the run starts (a message in a thread, a note, a record): one of
+    its permitted actions with its arguments. Written the same way before every trial."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    actor: str = Field(min_length=1)
+    action: str = Field(min_length=1)
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
+class Fault(BaseModel):
+    """A timeout the world gives the agent on one call of one action: before commit the world never sees it; after
+    commit it does and the agent never hears back. Graders read it; no actor or agent ever does."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: str = Field(min_length=1)
+    mode: Literal["timeout_before_commit", "timeout_after_commit"]
+    on_call: int = Field(default=1, ge=1)
+    delay_seconds: float = Field(default=30.0, ge=0, le=30)
+
+
+class StartsWith(BaseModel):
+    """What starts an event-started run: one actor's message to the agent, with no caller at all."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    actor: str = Field(min_length=1)
+    text: str = Field(min_length=1)
+
+
 class ScenarioActor(BaseModel):
     """An actor in one scenario: what it says there and when it comes in to say it (for an actor that speaks on
     calls), what it knows there, and the actions it takes in the world, in order."""
@@ -266,6 +298,7 @@ EVALUATOR_ONLY = {
         "setup_code",
         "ready_code",
         "coverage",
+        "faults",
     ],
     "files": ["sub_goals.json", "certification.json", "runtime-validation.json"],
 }
