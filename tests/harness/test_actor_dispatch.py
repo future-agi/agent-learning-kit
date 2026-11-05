@@ -568,3 +568,28 @@ def test_a_scenario_s_own_trigger_decides_when_the_world_starts_waiting_on_an_ac
     clock.now += 100
     asyncio.run(here.tick())
     assert "manager" in here.waiting
+
+
+def test_a_speaking_actor_s_wait_and_fallback_are_its_cast_s_so_the_world_sends_only_what_the_call_reports():
+    clock, sent = _Clock(), []
+    speaking = {"channel": "audio_handoff", "voice": "v1", "role": "the caller's manager", "play": "live",
+                "permitted_actions": ["deals.approve"]}
+    actors = {
+        "manager": Actor(id="manager", name="Mia", **speaking,
+                         activation={"trigger": {"kind": "always"}, "timeout_seconds": 30, "fallback": "deals.approve"}),
+        "sister": Actor(id="sister", name="Sue", **speaking,
+                        activation={"trigger": {"kind": "on_keyword", "words": ["refund"]}}),
+    }
+    # The call's cast took the fallback for the manager and reported it once.
+    reported = [{"actor": "manager", "action": "deals.approve", "arguments": {}, "why": "timeout fallback"}]
+    dispatcher = ActorDispatcher(
+        actors,
+        [ScenarioActor(id="manager"), ScenarioActor(id="sister")],
+        trial_id="trial-1", proxy_url="http://proxy/", token="t0ken", read_log=lambda: [_ASKED], seed="trial-1",
+        timeout=60.0, clock=clock, send=lambda url, headers, arguments: sent.append(headers) or 200,
+        reported=lambda: list(reported),
+    )
+    asyncio.run(_wait_out(dispatcher, clock, 31))
+    asyncio.run(dispatcher.send_reported())
+    assert [headers["Idempotency-Key"] for headers in sent] == ["trial-1:manager:v1"]
+    assert not [one for one in dispatcher.record() if one["play"] in ("waiting", "timeout", "not_triggered")]

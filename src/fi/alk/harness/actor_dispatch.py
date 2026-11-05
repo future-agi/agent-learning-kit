@@ -195,17 +195,22 @@ class ActorDispatcher:
         self.answered: dict[str, set[str]] = {one.id: set() for one in self.live}
         self.woken: set[str] = set()
         self.problems: list[dict[str, Any]] = []
-        # When each actor comes in here: the scenario's own trigger, else the actor's own activation.
+        # When each actor comes in here: the scenario's own trigger, else the actor's own activation. A speaking
+        # actor's trigger, wait and fallback belong to its channel's cast; here it only has its scheduled actions and
+        # the actions its channel reports.
         self.triggers = {
             entry.id: entry.trigger or actors[entry.id].activation.trigger
             for entry in cast
-            if entry.id in actors and (entry.trigger is not None or actors[entry.id].activation is not None)
+            if entry.id in actors
+            and not actors[entry.id].channel
+            and (entry.trigger is not None or actors[entry.id].activation is not None)
         }
         # Actors the world waits on for at most `timeout_seconds` once due, then applies their fallback.
         self.timed = [
             actors[entry.id]
             for entry in cast
             if entry.id in actors
+            and not actors[entry.id].channel
             and actors[entry.id].activation is not None
             and actors[entry.id].activation.timeout_seconds > 0
         ]
