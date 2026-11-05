@@ -250,19 +250,22 @@ describe('HybridEvaluator non-heuristic capture routes with offline stubs', () =
         expect(messageReads).toBe(0);
     });
 
-    it('R5-LE18 contains captured cloud conversion failures before backend dispatch', async () => {
+    it('R5-LE18 converts a captured record field with the SDK-owned ordinary object tag', async () => {
         const evaluate = jest.fn().mockResolvedValue({ eval_results: [] });
         const hybrid = new HybridEvaluator({ cloudEvaluator: { evaluate } as unknown as Evaluator });
         const result = await hybrid.evaluate('coherence', [{ response: { nested: 'text' } }]);
-        expect(result.errors).toEqual([{ metric: 'coherence', error: 'METRIC_EXECUTION_FAILED' }]);
-        expect(evaluate).not.toHaveBeenCalled();
+        expect(result.errors).toEqual([]);
+        expect(evaluate).toHaveBeenCalledTimes(1);
+        expect(evaluate).toHaveBeenCalledWith(
+            'coherence', { response: ['[object Object]'] }, { modelName: 'gpt-4o' }
+        );
     });
 });
 
 describe('LocalEvaluator fixed diagnostics', () => {
-    it('R5-LE19 keeps strict mode throwing without interpolating the metric name', () => {
+    it('R5-LE19 throws METRIC_NOT_LOCAL in strict mode and returns that code otherwise', () => {
         const evaluator = new LocalEvaluator({ strictMode: true });
-        expect(() => evaluator.evaluate('coherence', [{ response: 'text' }])).toThrow("Metric 'coherence' cannot run locally");
+        expect(() => evaluator.evaluate('coherence', [{ response: 'text' }])).toThrow(/^METRIC_NOT_LOCAL$/);
         expect(new LocalEvaluator().evaluate('coherence', [{ response: 'text' }]).errors)
             .toEqual([{ metric: 'coherence', error: 'METRIC_NOT_LOCAL' }]);
     });
