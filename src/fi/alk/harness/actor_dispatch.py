@@ -2,8 +2,8 @@
 
 A mocked actor takes the actions its scenario schedules, each at its trigger, and decides nothing. A live actor
 decides its own next action from its brief on every new event it can see (anything addressed to it, and any action
-taken where it can act itself, by the agent or another actor), and when its activation trigger fires, up to
-`LIVE_TURNS` times a trial; `both` does the two. Every action goes to the tool proxy under the actor's id and this
+taken where it can act itself, by the agent or another actor), and when its activation trigger fires, for as long as
+the trial lasts or until the loop guard stops it; `both` does the two. Every action goes to the tool proxy under the actor's id and this
 trial's token, so the proxy checks the actor's permissions and logs the attempt with what the world made of it,
 whether or not the world was called. A live decision is kept with its reason, never trusted for permission.
 """
@@ -26,8 +26,6 @@ from .actors import AGENT, Actor, HistoryEntry, ScenarioActor, ScheduledAction
 logger = logging.getLogger(__name__)
 
 POLL_SECONDS = 0.25
-# How many actions a live actor may decide in one trial.
-LIVE_TURNS = 3
 # Actions by actors in a row, with none by the agent between them, after which the actors in that run are stopped and
 # the run is recorded as the scenario's problem: actors answering each other this often with the agent idle are in a
 # loop, not taking part around the agent.
@@ -207,7 +205,7 @@ class ActorDispatcher:
     def _live_due(self, actor: Actor, elapsed: float, log: list[dict[str, Any]]) -> str | None:
         """The cause of a live actor's next turn: an agent action addressed to it not yet answered, else its
         activation trigger the first time it is met; None when nothing calls for it."""
-        if self.live_turns[actor.id] >= LIVE_TURNS or actor.id in self.fell_back or actor.id in self.stopped:
+        if actor.id in self.fell_back or actor.id in self.stopped:
             return None
         for row in log:
             key = str(row.get("action_id") or "")
@@ -424,7 +422,7 @@ class ActorDispatcher:
         over and it is cancelled."""
         while (
             self.pending
-            or any(self.live_turns[one.id] < LIVE_TURNS for one in self.live)
+            or any(one.id not in self.stopped and one.id not in self.fell_back for one in self.live)
             or any(one.id not in self.settled for one in self.timed)
         ):
             await self.tick()

@@ -106,12 +106,8 @@ def described(entries: dict[str, str]) -> str:
     return "; ".join(f"`{name}`: {about}" for name, about in entries.items())
 
 
-# Fixed limits, the same for every scenario, so no actor and no group of them can take over a call.
-LIMITS: dict[str, int] = {
-    "audio_mix": 3,
-    "audio_handoff": 3,
-    "ivr": 3,
-}
+# Call-wide limits, the same for every scenario, so no group of actors can take over a call from the person whose
+# task it is: how many take part at once, the agent turns they may take, and their time. No actor has a limit of its own.
 HANDOFF_LINE_SECONDS = 15.0
 # The speaking actors one call carries, as JSON. Set per call and cleared otherwise.
 ACTOR_VOICES_ALIAS = "HARNESS_ACTOR_VOICES"
@@ -418,15 +414,12 @@ class Cast:
         return entered
 
     def may_speak(self, actor: dict[str, Any], agent_turns: int) -> bool:
-        """Whether this actor may take part on this turn, within its own limit and the call's."""
+        """Whether this actor may take part on this turn, within the call's limits."""
         key = str(actor["id"])
         state = self._state[key]
         if not state["entered"] or state["done"] or self.out_of_time():
             return False
-        if (
-            state["lines"] >= LIMITS.get(str(actor.get("channel")), 1)
-            or self._activity >= TAKEOVER_AFTER_TURNS
-        ):
+        if self._activity >= TAKEOVER_AFTER_TURNS:
             self.finish(actor, "limit reached")
             return False
         if actor.get("channel") == "audio_mix" and state["lines"]:

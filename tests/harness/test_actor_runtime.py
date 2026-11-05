@@ -189,6 +189,22 @@ def test_an_actor_whose_word_never_comes_never_writes_and_is_recorded_not_trigge
     assert cast.summary()[0]["triggered"] is False and cast.summary()[0]["delivered"] == 0
 
 
+def test_an_actor_in_a_chat_writes_each_time_it_is_named_within_the_call_wide_budget(monkeypatch):
+    from fi.simulate.simulation.call_actors import TAKEOVER_AFTER_TURNS
+
+    cast = _cast({"kind": "always"}, monkeypatch, lines=[f"line {n}" for n in range(10)])
+
+    async def lines():
+        out = []
+        for turn in range(1, 10):
+            out += await cast.due_lines(agent_turns=turn, last_text="Mia, what do you think?", tools_called=[],
+                                        conversation=[])
+        return out
+
+    written = asyncio.run(lines())
+    assert len(written) == TAKEOVER_AFTER_TURNS > 2
+
+
 def test_an_actor_that_cannot_reach_a_chat_is_kept_with_the_reason(monkeypatch):
     cast = conv.ChatActors(
         [{"id": "near", "name": "Rowan", "entered": False, "reason": "not_a_chat_channel"}], seed="s", model=None

@@ -365,13 +365,11 @@ def test_a_live_actor_that_decides_nothing_or_answers_badly_sends_nothing_and_sa
     assert [(one["decided"], one["why"]) for one in dispatcher.fired] == [(None, "needs the deal value"), (None, None)]
 
 
-def test_a_live_actor_has_a_limited_number_of_turns_a_trial():
-    from fi.alk.harness.actor_dispatch import LIVE_TURNS
-
-    log = [{**_ASKED, "action_id": f"a{n}"} for n in range(LIVE_TURNS + 2)]
+def test_a_live_actor_answers_every_time_it_is_reached_with_no_limit_of_its_own():
+    log = [{**_ASKED, "action_id": f"a{n}"} for n in range(6)]
     dispatcher, sent, asked = _live("live", [], log)
-    asyncio.run(_ticks(dispatcher, count=LIVE_TURNS + 3))
-    assert len(asked) == LIVE_TURNS
+    asyncio.run(_ticks(dispatcher, count=8))
+    assert len(asked) == 6
 
 
 def test_an_actor_played_both_ways_takes_its_scheduled_action_and_answers_live():

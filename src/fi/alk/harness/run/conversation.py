@@ -227,14 +227,15 @@ def _message(turn: Exchange) -> dict[str, Any]:
 
 class ChatActors:
     """The actors who write in one chat conversation: when each comes in (its trigger, as on a call), what it writes
-    (from its brief), and what happened to each, recorded as a call records them. Each writes at most `lines` times."""
+    (from its brief), and what happened to each, recorded as a call records them. As on a call, actors write on at most
+`TAKEOVER_AFTER_TURNS` of the agent's turns in all, so the conversation stays the person's."""
 
-    def __init__(self, actors: list[dict[str, Any]], *, seed: str, model: str | None, lines: int = 2) -> None:
+    def __init__(self, actors: list[dict[str, Any]], *, seed: str, model: str | None) -> None:
         self.actors = [one for one in actors if one.get("entered", True) is not False]
         self.skipped = [one for one in actors if one.get("entered", True) is False]
         self.seed = seed
         self.model = model
-        self.lines = lines
+        self.turns_taken = 0
         self.written: dict[str, list[str]] = {str(one["id"]): [] for one in self.actors}
         self.triggered: set[str] = set()
         self.events: list[dict[str, Any]] = []
@@ -243,14 +244,14 @@ class ChatActors:
         self, *, agent_turns: int, last_text: str, tools_called: list[str], conversation: list[str]
     ) -> list[tuple[dict[str, Any], str]]:
         """The lines actors write now, after the agent's latest turn, in the scenario's order."""
-        from fi.simulate.simulation.call_actors import Moment, due, line_brief
+        from fi.simulate.simulation.call_actors import TAKEOVER_AFTER_TURNS, Moment, due, line_brief
 
+        if self.turns_taken >= TAKEOVER_AFTER_TURNS:
+            return []
         moment = Moment(agent_turns=agent_turns, last_text=last_text, tools_called=tools_called)
         out = []
         for actor in self.actors:
             key = str(actor["id"])
-            if len(self.written[key]) >= self.lines:
-                continue
             fired = key in self.triggered or due(
                 dict(actor.get("trigger") or {}), moment, seed=self.seed, actor_id=key
             )
@@ -279,6 +280,8 @@ class ChatActors:
             self.written[key].append(line)
             self.events.append({"actor": key, "kind": "delivered", "name": actor.get("name"), "text": line})
             out.append((actor, line))
+        if out:
+            self.turns_taken += 1
         return out
 
     async def _write(self, brief: str) -> str:

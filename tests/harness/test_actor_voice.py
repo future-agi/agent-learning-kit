@@ -201,19 +201,16 @@ def test_a_third_call_actor_waits_for_room_and_enters_in_the_scenario_s_order():
     ] == ["triggered"]
 
 
-def test_limits_and_the_call_wide_budget_hand_the_call_back_to_the_person():
+def test_an_actor_has_no_line_limit_of_its_own_and_the_call_wide_budget_hands_the_call_back_to_the_person():
     cast = Cast([_actor("one"), _actor("two")], "run")
     cast.entering(Moment(2))
-    for turn in range(1, registry.LIMITS["audio_handoff"] + 1):
+    for turn in range(1, 8):
         assert cast.may_speak(cast.actors[0], turn)
         cast.delivered(cast.actors[0], f"line {turn}", turn, 0.0, 0.0)
-    assert not cast.may_speak(cast.actors[0], 9)
-    assert {"kind": "finished", "reason": "limit reached"}.items() <= cast.events[
-        -1
-    ].items()
     for _ in range(registry.TAKEOVER_AFTER_TURNS):
         cast.took_turn()
     assert not cast.may_speak(cast.actors[1], 10)
+    assert {"kind": "finished", "reason": "limit reached"}.items() <= cast.events[-1].items()
 
 
 def test_a_background_voice_never_speaks_on_two_turns_in_a_row(monkeypatch):
