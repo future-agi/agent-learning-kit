@@ -1190,15 +1190,20 @@ def test_a_parent_no_recorded_hand_off_carries_is_unknown_not_kept() -> None:
 _OPENAI_AGENTS_RUN = """
 from opentelemetry.trace import set_span_in_context
 # The OpenAI Agents SDK opens each run as an agent-kind span with no agent name; agents run inside it.
+# Between them sit the SDK's own run and turn spans, as traceAI records a real Runner.run.
 run = tracer.start_span("Agent workflow", attributes={"gen_ai.span.kind": "AGENT"})
-lead = tracer.start_span("Lead", context=set_span_in_context(run), attributes={"gen_ai.span.kind": "AGENT"})
-ask = tracer.start_span("ask_research", context=set_span_in_context(lead), attributes={
+steps = tracer.start_span("Agent workflow", context=set_span_in_context(run), attributes={"gen_ai.span.kind": "CHAIN"})
+lead = tracer.start_span("Lead", context=set_span_in_context(steps), attributes={"gen_ai.span.kind": "AGENT"})
+turn = tracer.start_span("turn", context=set_span_in_context(lead), attributes={"gen_ai.span.kind": "CHAIN"})
+ask = tracer.start_span("ask_research", context=set_span_in_context(turn), attributes={
     "gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "ask_research", "input.value": "q"})
 worker = tracer.start_span("Research", context=set_span_in_context(ask), attributes={"gen_ai.span.kind": "AGENT"})
 worker.end()
 ask.end()
+turn.end()
 lead.end()
 LATER
+steps.end()
 run.end()
 """
 
@@ -1218,7 +1223,7 @@ def test_a_later_agent_in_the_same_run_without_a_recorded_transfer_stays_unknown
     # A second agent opened in the run was handed control; until the framework records who handed it, its calls are
     # not placed at the top.
     later = """
-billing = tracer.start_span("Billing", context=set_span_in_context(run), attributes={"gen_ai.span.kind": "AGENT"})
+billing = tracer.start_span("Billing", context=set_span_in_context(steps), attributes={"gen_ai.span.kind": "AGENT"})
 with trace.use_span(billing, end_on_exit=True):
     with span("refund", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "refund"}):
         pass
@@ -1251,4 +1256,40 @@ def test_a_transfer_recorded_by_another_instrumentation_counts_once_the_named_ag
     )
     assert _placed(_sealed(tmp_path)) == [
         ("transfer_to_agent", "transferred", "root_agent", "observed", ""),
+    ]
+
+
+def test_an_adk_transfer_without_its_arguments_hands_control_to_the_agent_that_runs_next_in_the_workflow(
+    tmp_path: Path,
+) -> None:
+    # ADK 2 records the transfer tool without its arguments unless content capture is on, ends the root agent, then
+    # runs the agent it transferred to beside it in the same workflow span.
+    _run(
+        tmp_path,
+        """
+        from opentelemetry.trace import set_span_in_context
+        flow = tracer.start_span("invoke_workflow root_agent", attributes={"gen_ai.operation.name": "invoke_workflow",
+                                                                         "gen_ai.span.kind": "CHAIN"})
+        root = tracer.start_span("invoke_agent root_agent", context=set_span_in_context(flow), attributes={
+            "gen_ai.operation.name": "invoke_agent", "gen_ai.agent.name": "root_agent", "gen_ai.span.kind": "AGENT"})
+        move = tracer.start_span("execute_tool transfer_to_agent", context=set_span_in_context(root), attributes={
+            "gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "transfer_to_agent",
+            "gen_ai.tool.type": "TransferToAgentTool", "gen_ai.span.kind": "TOOL"})
+        move.end()
+        root.end()
+        leaf = tracer.start_span("invoke_agent leaf_agent", context=set_span_in_context(flow), attributes={
+            "gen_ai.operation.name": "invoke_agent", "gen_ai.agent.name": "leaf_agent", "gen_ai.span.kind": "AGENT"})
+        with trace.use_span(leaf, end_on_exit=True):
+            with span("execute_tool look_up_tide", **{"gen_ai.operation.name": "execute_tool",
+                                                      "gen_ai.tool.name": "look_up_tide", "gen_ai.span.kind": "TOOL"}):
+                pass
+        flow.end()
+    """,
+    )
+    rows = _sealed(tmp_path)
+    transfer = next(r for r in rows if r["name"] == "transfer_to_agent")
+    assert transfer["delegated_to"] == "leaf_agent"
+    assert _placed(rows) == [
+        ("transfer_to_agent", "transferred", "root_agent", "observed", ""),
+        ("look_up_tide", "tool_call", "leaf_agent", "observed", transfer["span_id"]),
     ]

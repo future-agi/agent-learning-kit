@@ -207,13 +207,13 @@ class _ToolSpans:
                 span,
                 parent.span_id if parent is not None else None,
             )
-            above = self._live.get(parent.span_id) if parent is not None else None
-            if (
-                above is not None
-                and _kind(span) == "AGENT"
-                and _kind(above[0]) == "AGENT"
-            ):
-                self._opened.setdefault(parent.span_id, context.span_id)
+            if _kind(span) == "AGENT":
+                # Through the framework's own turn and run spans, to the agent span this run opened in.
+                holder = self._above(context.span_id, ("AGENT",))
+                if holder is not None:
+                    self._opened.setdefault(
+                        holder.get_span_context().span_id, context.span_id
+                    )
             if parent is None and _kind(span) != "TOOL":
                 try:
                     joined = self._job_record(span, context.span_id, ended=False)
@@ -303,6 +303,15 @@ class _ToolSpans:
             if parent in self._jobs:
                 return _hex(parent), "observed"
             kind = _kind(above[0])
+            if (
+                agent is not None
+                and kind not in ("AGENT", "TOOL")
+                and (parent in self._transfers or parent in self._candidates)
+            ):
+                # A transfer made by an agent that has since ended, in the run this agent started in.
+                handed = self._transfer_into(parent, agent)
+                if handed:
+                    return handed, "observed"
             if kind == "AGENT":
                 if (
                     agent is not None
@@ -341,7 +350,7 @@ class _ToolSpans:
         """The transfer made in the run ``scope`` that names the agent run ``agent`` started under it."""
         if agent not in self._transferred:
             name = self._agent_name(self._live[agent][0])
-            self._confirm_transfer(scope, name)
+            self._confirm_above(agent, name)
             pending = self._transfers.get(scope) or []
             match = next((one for one in pending if one[1] == name), None)
             if match is None:
@@ -353,11 +362,14 @@ class _ToolSpans:
     def _confirm_transfer(self, scope, name) -> None:
         """Write the held built-in transfer in ``scope`` that names ``name`` as a control pass, now that it ran."""
         held = self._candidates.get(scope) or []
-        match = next((one for one in held if one[1] == name), None)
+        match = next((one for one in held if one[1] == name), None) or next(
+            (one for one in held if one[1] is None), None
+        )
         if match is None:
-            return
+            return False
         held.remove(match)
-        record, target = match
+        record, target, _ = match
+        target = target or name
         record.update(transfer=True, delegated_to=target[:256])
         record.pop("ended_at", None)
         pending = self._transfers.get(scope, [])
@@ -366,10 +378,27 @@ class _ToolSpans:
         with self._lock:
             _append(self._path, record)
             self._appended = True
+        return True
+
+    def _confirm_above(self, span_id, name) -> None:
+        """Confirm a held transfer for the agent run ``span_id`` named ``name``, in the spans it opened inside, up to
+        the nearest agent; an agent started by a tool call was handed work by that call, not control."""
+        entry = self._live.get(span_id)
+        parent = entry[1] if entry else None
+        while parent is not None and parent in self._live:
+            if parent in self._candidates and self._confirm_transfer(parent, name):
+                return
+            if _kind(self._live[parent][0]) in ("AGENT", "TOOL"):
+                return
+            parent = self._live[parent][1]
 
     def _settle_candidates(self, scope) -> None:
-        """A run ended without starting the agent a held transfer named: it was an ordinary tool call."""
-        for record, _ in self._candidates.pop(scope, None) or []:
+        """A run ended without starting the agent a held transfer named: an ordinary tool call, or the framework's
+        transfer with no agent recorded as taking over."""
+        for record, _, framework in self._candidates.pop(scope, None) or []:
+            if framework:
+                record.update(transfer=True)
+                record.pop("ended_at", None)
             with self._lock:
                 _append(self._path, record)
                 self._appended = True
@@ -411,9 +440,8 @@ class _ToolSpans:
             if kind == "AGENT":
                 handing = self._above(span_id, ("TOOL",))
                 name = self._agent_name(span)
-                scope = self._above(span_id, ("AGENT",))
-                if scope is not None and name:
-                    self._confirm_transfer(scope.get_span_context().span_id, name)
+                if name:
+                    self._confirm_above(span_id, name)
                 if handing is not None and name:
                     self._handed[handing.get_span_context().span_id] = name
                 handed_from = _first(span.attributes or {}, _HANDED_FROM_KEYS)
@@ -437,6 +465,13 @@ class _ToolSpans:
                         self._wrapped.add(outer.get_span_context().span_id)
                     self._write(span, span_id)
         finally:
+            above = entry[1] if entry is not None else None
+            if kind == "AGENT" and above in self._live:
+                # A transfer outlives the agent that made it: the agent it names may start after it, in the same run.
+                for held in (self._candidates, self._transfers):
+                    moved = held.pop(span_id, None)
+                    if moved:
+                        held[above] = held.get(above, []) + moved
             if span_id in self._candidates:
                 self._settle_candidates(span_id)
             self._opened.pop(span_id, None)
@@ -579,10 +614,20 @@ class _ToolSpans:
         if delegated:
             record["delegated_to"] = delegated[:256]
         target = _transfer_target(attributes)
-        candidate = None if target else _builtin_transfer_target(attributes, name)
-        if candidate and agent is not None and len(self._candidates) < _LAUNCHES_MAX:
+        # The framework's own transfer tool with no recorded target hands control to the next agent run in this run.
+        framework = attributes.get("gen_ai.tool.type") in _TRANSFER_TOOL_TYPES
+        candidate = (
+            None if target or framework else _builtin_transfer_target(attributes, name)
+        )
+        if (
+            (candidate or (framework and not target))
+            and agent is not None
+            and len(self._candidates) < _LAUNCHES_MAX
+        ):
             scope = agent.get_span_context().span_id
-            self._candidates.setdefault(scope, []).append((record, candidate))
+            self._candidates.setdefault(scope, []).append(
+                (record, candidate, framework)
+            )
             return
         if target:
             # Control passed to the agent the framework named; nothing returns from a control pass.
