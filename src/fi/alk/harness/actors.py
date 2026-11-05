@@ -736,7 +736,15 @@ def actor_rules() -> dict[str, Any]:
 
     from .call_actor import channel_modalities
 
+    from fi.simulate.simulation.call_actors import LIMIT_DEFAULTS
+
     return {
+        # Each actor limit's default where nothing is set: on a phone line, and in a chat (none for the call-wide
+        # ones). The editor shows these; a run reads the same values.
+        "limits": {
+            "voice": dict(LIMIT_DEFAULTS),
+            "chat": {**{key: None for key in LIMIT_DEFAULTS}, "max_messages": LIMIT_DEFAULTS["max_messages"]},
+        },
         "schema": ACTOR_RULES_SCHEMA,
         "evaluator_only": EVALUATOR_ONLY,
         "brief_inputs": BRIEF_INPUTS,

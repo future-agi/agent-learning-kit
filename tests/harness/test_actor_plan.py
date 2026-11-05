@@ -835,3 +835,12 @@ def test_a_pre_run_session_with_no_place_is_refused_with_its_fix_before_any_mode
     said = session_problems([{"actors": ["priya"], "about": "Acme", "where": {}}], tmp_path)
     assert said == ["pre_run 1: `where.action` names the action that writes into this place"]
     assert session_problems([{"actors": ["priya"], "about": "Acme", "where": {"action": "slack.post"}}], tmp_path) == []
+
+
+@pytest.mark.parametrize("channel", ["voice", "chat"])
+def test_the_sealed_limit_defaults_are_the_ones_a_run_uses(channel):
+    from fi.alk.harness.actors import actor_rules
+
+    sealed = actor_rules()["limits"][channel]
+    used = Limits().resolved(channel)
+    assert {key: used[key] for key in sealed} == sealed
