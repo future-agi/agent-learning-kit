@@ -2627,6 +2627,43 @@ def test_a_world_actor_s_actions_are_sealed_with_the_transcript_never_as_the_age
     ] == [("approve", "reviewer")]
 
 
+def test_a_worker_s_refused_attempt_is_sealed_in_the_trial_s_state_changes_without_any_actor(
+    tmp_path, monkeypatch
+) -> None:
+    _job_obj, context = _context(
+        tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE
+    )
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    columns = ["name", "arguments", "result", "ok", "error", "at", "action_id", "actor_id", "worker_id", "outcome",
+               "refusal_code", "refusal"]
+    rows = [
+        ("update_status", {}, None, False, "", 1.0, "a1", "agent", "order_lookup", "refused", "not_permitted",
+         "orders.update_status is not permitted for order_lookup"),
+    ]
+    monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
+
+    async def place_call(spec):
+        return _report(
+            transcript="user: hello", messages=[{"role": "user", "content": "hello"}]
+        )
+
+    adapter = FakeAdapter()
+    runner = cr.CallRunnerImpl(adapter, context, place_call=place_call)
+    _run(
+        runner,
+        _FakeScenario("k1"),
+        _runtime(
+            endpoints={"database": _postgres_endpoint()},
+            metadata={"livekit_agent_name": "agent-w0"},
+        ),
+    )
+    sealed = {kind: data for kind, _key, data in adapter.uploads}
+    changes = json.loads(sealed[cr.ArtifactKind.TRANSCRIPT])["world_actors"]["state_changes"]
+    assert [(one["who"], one["refused"], one["refused_actions"][0]["code"]) for one in changes] == [
+        ("worker:order_lookup", 1, "not_permitted")
+    ]
+
+
 def test_a_trial_s_actor_token_holds_only_while_its_call_runs(
     tmp_path, monkeypatch
 ) -> None:
