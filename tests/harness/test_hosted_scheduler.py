@@ -4675,3 +4675,91 @@ def test_a_scenario_with_sub_actors_is_never_run_while_they_are_off_and_says_why
         "sub-actors are switched off",
     )
     assert ran.status == "passed" and ran.reason is None
+
+
+def _run_with_friend(monkeypatch, summary, sub_goals) -> hs.ResultReceipt:
+    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+
+    async def scenario() -> hs.ResultReceipt:
+        outbound = FakeOutbound()
+        pool, _ = _pool(1, outbound=outbound)
+        await pool.start()
+        outcome = replace(_call_outcome(), sub_actors=(summary,) if summary else ())
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=FakeCallRunner({"s1": outcome}),
+            outbound=outbound,
+            job_seed=1,
+        )
+        one = FakeScenario(
+            "s1", "id-1", sub_goals=sub_goals, requires_tool_evidence=False
+        )
+        # As `scenario_source` compiles it for a hosted run: the ids alone.
+        one.sub_actors = ("friend",)
+        result = await asyncio.wait_for(scheduler.run([one]), timeout=5.0)
+        await pool.close()
+        return result.receipts[0]
+
+    return asyncio.run(scenario())
+
+
+def _friend(**seen) -> dict:
+    return {
+        "sub_actor": "friend",
+        "name": "Rowan",
+        "triggered": True,
+        "delivered": 0,
+        "dropped": [],
+        **seen,
+    }
+
+
+@pytest.mark.parametrize(
+    "seen, why",
+    [
+        (_friend(dropped=["not ready in time"]), "Rowan (not_delivered)"),
+        (_friend(triggered=False), "Rowan (not_triggered)"),
+        (None, "friend (not_triggered)"),
+    ],
+)
+def test_a_call_its_sub_actor_never_reached_is_inconclusive_never_a_pass(
+    monkeypatch, seen, why
+) -> None:
+    receipt = _run_with_friend(
+        monkeypatch, seen, [FakeSubGoal("booked", lambda w, c: None)]
+    )
+    assert receipt.status == "errored"
+    assert (receipt.failure.code, receipt.failure.message) == (
+        "sub_actor_missing",
+        f"inconclusive: did not reach the agent: {why}",
+    )
+    assert [one.verdict for one in receipt.sub_goals] == [None]
+
+
+def test_a_sub_actor_a_probability_draw_left_out_leaves_the_call_graded(
+    monkeypatch,
+) -> None:
+    receipt = _run_with_friend(
+        monkeypatch,
+        _friend(triggered=False, drawn=False),
+        [FakeSubGoal("booked", lambda w, c: None)],
+    )
+    assert (receipt.status, receipt.failure) == ("passed", None)
+
+
+def test_a_sub_actor_that_came_in_leaves_the_call_s_result_as_graded(
+    monkeypatch,
+) -> None:
+    receipt = _run_with_friend(
+        monkeypatch,
+        _friend(delivered=1),
+        [FakeSubGoal("booked", lambda w, c: None)],
+    )
+    assert (receipt.status, receipt.failure) == ("passed", None)
+    failed = _run_with_friend(
+        monkeypatch,
+        _friend(delivered=1, dropped=["voice failed"]),
+        [FakeSubGoal("booked", lambda w, c: "booked for the wrong time")],
+    )
+    assert failed.status == "failed"

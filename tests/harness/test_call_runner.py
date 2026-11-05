@@ -2132,10 +2132,15 @@ def test_a_call_keeps_who_its_sub_actors_were_and_what_happened_to_each(
 
     adapter = FakeAdapter()
     runner = cr.CallRunnerImpl(adapter, context, place_call=place_call)
-    _run(
+    outcome = _run(
         runner,
         _FakeScenario("k1"),
         _runtime(metadata={"livekit_agent_name": "agent-w0"}),
+    )
+    # The grader reads every sub-actor, the one that could not enter as never triggered.
+    assert outcome.sub_actors == (
+        *summary,
+        {"sub_actor": "other", "name": "Kai", "triggered": False},
     )
     [transcript] = [
         json.loads(data)

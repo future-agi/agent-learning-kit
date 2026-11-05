@@ -1756,6 +1756,12 @@ class CallRunnerImpl:
                 else None
             ),
             target_metrics=_target_metrics(case),
+            sub_actors=tuple(took_part.get("sub_actors") or ())
+            + tuple(
+                {"sub_actor": one["id"], "name": one.get("name"), "triggered": False}
+                for one in sub_actors
+                if one.get("entered") is False
+            ),
         )
 
         if case is None:
