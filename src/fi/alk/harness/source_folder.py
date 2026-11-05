@@ -32,13 +32,23 @@ class SubfolderNotFound(Exception):
         self.subfolder = subfolder
 
 
+def is_within(path: PurePath, folder: PurePath) -> bool:
+    """Whether ``path`` is ``folder`` or inside it.
+
+    ``is_relative_to`` builds every parent of the path on 3.12, so a crafted path thousands of
+    parts long costs it seconds; comparing the parts costs their number.
+    """
+    prefix = folder.parts
+    return path.parts[: len(prefix)] == prefix
+
+
 def _inside(path: Path, folder: Path) -> bool:
-    return path == folder or folder in path.parents
+    return is_within(path, folder)
 
 
 def contains_or_is_above(place: PurePath, folder: PurePath) -> bool:
     """Whether ``place`` is ``folder``, a folder inside it, or a folder above it."""
-    return place.is_relative_to(folder) or folder.is_relative_to(place)
+    return is_within(place, folder) or is_within(folder, place)
 
 
 def contract_folder(contract: Any) -> str:

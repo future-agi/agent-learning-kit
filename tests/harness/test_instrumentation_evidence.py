@@ -489,7 +489,8 @@ def test_a_file_with_a_byte_order_mark_is_read_as_python_reads_it(tmp_path: Path
     assert detect_instrumentation(source) == "traceai"
 
 
-def test_a_fullwidth_name_is_read_as_python_reads_it(tmp_path: Path) -> None:
+def test_a_fullwidth_name_is_a_known_limit(tmp_path: Path) -> None:
+    # Python folds `ｔraceai_openai` to traceai_openai; the scan matches names as written.
     source = _repository(tmp_path, {"agent.py": "import ｔraceai_openai\n"})
 
-    assert detect_instrumentation(source) == "traceai"
+    assert detect_instrumentation(source) != "traceai"

@@ -15,16 +15,16 @@ import stat
 from collections import deque
 from enum import Enum
 from pathlib import Path, PurePosixPath
-from typing import AbstractSet, Iterable, Mapping, TYPE_CHECKING, Literal
+from typing import AbstractSet, Callable, Iterable, Mapping, TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, Field
 import yaml
 
 from fi.simulate.runtime.spec import SecretRef
 
-from .python_source import ParseBudget, parsed
+from .python_source import ParseBudget, parsed, utf8_size
 from .secrets import process_secret_environment_names
-from .source_folder import SubfolderNotFound, agent_folder, agent_scope, in_agent_scope
+from .source_folder import SubfolderNotFound, agent_folder, agent_scope, in_agent_scope, is_within
 
 if TYPE_CHECKING:
     from .contract import Runtime
@@ -143,9 +143,18 @@ _MAX_FILE_BYTES = 1_000_000
 # The import walk's whole budget: a file limit alone still allows minutes of reading.
 _MAX_WALK_BYTES = 32_000_000
 _MAX_WALK_IMPORTS = 20_000
+# How many folders below the repository the import walk follows. Honest repositories nest a
+# dozen or so; resolving a path costs a lookup for each of its folders, and Linux allows 2,000.
+_DEEPEST_FOLLOWED = 64
 _SCRIPT_SUFFIXES = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
 _SCRIPT_IMPORT = re.compile(
     r"""(?:\bfrom\s*|\bimport\s*(?:\(\s*)?|\brequire\s*\(\s*)["']([^"'\n]+)["']"""
+)
+# An import, or a whole string: matched from the left, a string holding import text is taken
+# from its opening quote, before the words in it can be read as an import.
+_SCRIPT_IMPORT_OR_STRING = re.compile(
+    _SCRIPT_IMPORT.pattern
+    + r"""|"(?:\\.|[^"\\\n])*"?|'(?:\\.|[^'\\\n])*'?|`(?:\\.|[^`\\])*`?"""
 )
 # A type-only import runs nothing. The keyword is matched alone, and the quotes after it found
 # by `_without_type_imports`, so the text is scanned once, however many keywords it holds.
@@ -645,6 +654,14 @@ def discover_credentials(
     )
 
 
+def _file_inside(candidate: Path, root: Path, deepest: int) -> Path | None:
+    """``candidate`` resolved, if it's a plain file in ``root`` at most ``deepest`` parts long."""
+    if len(candidate.parts) > deepest or not _plain_file(candidate):
+        return None
+    resolved = candidate.resolve()
+    return resolved if len(resolved.parts) <= deepest and is_within(resolved, root) else None
+
+
 def _plain_file(path: Path) -> bool:
     """A regular file small enough to read: a committed link can point at anything."""
     try:
@@ -657,7 +674,8 @@ def _plain_file(path: Path) -> bool:
 def _python_imports(
     content: str, limit: int = _MAX_FILE_BYTES, budget: ParseBudget | None = None
 ) -> list[tuple[int, str]]:
-    if len(content) > limit or (budget is not None and not budget.spend(content)):
+    # In bytes, as the file's size is: the parser's cost follows them, not the characters.
+    if utf8_size(content) > limit or (budget is not None and not budget.spend(content)):
         return []
     tree = parsed(content)
     if tree is None:
@@ -679,8 +697,8 @@ def _script_imports(content: str) -> list[str]:
     # Here because agent_type_check imports this module.
     from .agent_type_check import _SCRIPT_COMMENT_OR_STRING, _script_kept
 
-    code = _SCRIPT_COMMENT_OR_STRING.sub(_script_kept, content)
-    return _SCRIPT_IMPORT.findall(_without_type_imports(code))
+    code = _without_type_imports(_SCRIPT_COMMENT_OR_STRING.sub(_script_kept, content))
+    return [hit.group(1) for hit in _SCRIPT_IMPORT_OR_STRING.finditer(code) if hit.group(1)]
 
 
 def _without_type_imports(code: str) -> str:
@@ -689,13 +707,39 @@ def _without_type_imports(code: str) -> str:
 
     One regular expression doing this rescans the reach after every keyword, which a file of
     nothing but keywords turns into seconds a megabyte, holding the interpreter throughout. Here
-    each search for a quote starts where the last one ended or later, or reuses its answer.
+    the searches for opening quotes and those for closing ones each start where the last of
+    their kind did or later, and each kind keeps its own answer, so the code is scanned at most
+    twice over.
     """
     kept: list[str] = []
     done = 0
+    opening_after = _next_quote_or_line_end(code)
+    closing_after = _next_quote_or_line_end(code)
+    for keyword in _SCRIPT_TYPE_KEYWORD.finditer(code):
+        if keyword.start() < done:
+            continue
+        opening = opening_after(keyword.end())
+        if opening == len(code) or code[opening] == "\n":
+            continue
+        if opening - keyword.end() > _SCRIPT_TYPE_REACH:
+            continue
+        closing = closing_after(opening + 1)
+        if closing == len(code) or code[closing] == "\n":
+            continue
+        kept.append(code[done : keyword.start()])
+        done = closing + 1
+    kept.append(code[done:])
+    return "".join(kept)
+
+
+def _next_quote_or_line_end(code: str) -> Callable[[int], int]:
+    """Where the first quote or line end at or after a position is, or the code's end.
+
+    Asked from positions that only grow, it scans each stretch of ``code`` once.
+    """
     searched_from = stop = -1
 
-    def next_stop(position: int) -> int:
+    def after(position: int) -> int:
         # No quote or line end lies between searched_from and stop, so the answer stands.
         nonlocal searched_from, stop
         if not searched_from <= position <= stop:
@@ -703,21 +747,7 @@ def _without_type_imports(code: str) -> str:
             searched_from, stop = position, hit.start() if hit else len(code)
         return stop
 
-    for keyword in _SCRIPT_TYPE_KEYWORD.finditer(code):
-        if keyword.start() < done:
-            continue
-        opening = next_stop(keyword.end())
-        if opening == len(code) or code[opening] == "\n":
-            continue
-        if opening - keyword.end() > _SCRIPT_TYPE_REACH:
-            continue
-        closing = next_stop(opening + 1)
-        if closing == len(code) or code[closing] == "\n":
-            continue
-        kept.append(code[done : keyword.start()])
-        done = closing + 1
-    kept.append(code[done:])
-    return "".join(kept)
+    return after
 
 
 def imported_by_agent(
@@ -734,10 +764,10 @@ def imported_by_agent(
     Python imports, and JavaScript or TypeScript imports written as a path. A package name that
     only a workspace or a path alias can resolve isn't followed. A conversation waiting on the
     answer passes tighter parse limits than bundling's: a Python file is followed only if it's
-    at most ``parse_limit`` characters and the walk has parsed under ``parse_budget``, and a
-    script only while the walk has read under ``script_budget``. It tries at most
-    ``import_limit`` import names in all (bundling's 20,000 when not given), each costing a few
-    lookups on disk.
+    at most ``parse_limit`` bytes and the walk has parsed under ``parse_budget``, and a script
+    only while the walk has matched under ``script_budget``. It tries at most ``import_limit``
+    import names in all (bundling's 20,000 when not given), each costing a few lookups on disk.
+    Nothing more than ``_DEEPEST_FOLLOWED`` folders below the repository is followed.
     """
     root = Path(root).resolve()
     try:
@@ -745,21 +775,34 @@ def imported_by_agent(
     except SubfolderNotFound:
         return frozenset()
     python_bases = (folder, folder / "src", root, root / "src")
+    deepest = len(root.parts) + _DEEPEST_FOLLOWED
+    # Each candidate is looked up once in the whole walk: resolving one costs a lookup for each
+    # folder in it, and a chain of packages names the same ones from every file.
+    looked_up: dict[Path, Path | None] = {}
 
     def found_at(candidates: Iterable[Path]) -> Path | None:
         for candidate in candidates:
-            if _plain_file(candidate) and candidate.resolve().is_relative_to(root):
-                return candidate.resolve()
+            if candidate not in looked_up:
+                looked_up[candidate] = _file_inside(candidate, root, deepest)
+            if (hit := looked_up[candidate]) is not None:
+                return hit
         return None
 
     def python_modules(path: Path, level: int, name: str) -> list[Path]:
         module = name.split(".")
+        if len(module) > _DEEPEST_FOLLOWED:
+            return []
         for start in (path.parents[level - 1],) if level else python_bases:
             target = start.joinpath(*module)
             if hit := found_at((target.with_suffix(".py"), target / "__init__.py")):
                 # Importing a module runs every package above it first.
-                above = (start.joinpath(*module[:depth]) / "__init__.py" for depth in range(1, len(module)))
-                return [hit, *filter(None, (found_at((one,)) for one in above))]
+                packages: list[Path] = []
+                directory = start
+                for part in module[:-1]:
+                    directory = directory / part
+                    if package := found_at((directory / "__init__.py",)):
+                        packages.append(package)
+                return [hit, *packages]
         return []
 
     def script_module(path: Path, name: str) -> Path | None:
@@ -795,14 +838,19 @@ def imported_by_agent(
     ):
         # The folder's own files first, so the budgets can't spend themselves on a chain.
         path = pending.popleft()
-        if not _plain_file(path):
+        if len(path.parts) > deepest or not _plain_file(path):
             continue
         read += 1
         try:
-            content = path.read_text(encoding="utf-8-sig", errors="replace")
+            with path.open("rb") as handle:
+                raw = handle.read(_MAX_FILE_BYTES + 1)
         except OSError:
             continue
-        bytes_read += len(content)
+        if len(raw) > _MAX_FILE_BYTES:
+            continue  # Grew since it was looked at.
+        bytes_read += len(raw)
+        # As read_text reads it, line ends included.
+        content = raw.decode("utf-8-sig", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
         hits: list[Path] = []
         if path.suffix == ".py":
             names = list(dict.fromkeys(_python_imports(content, parse_limit, parse_budget)))

@@ -983,7 +983,10 @@ class LocalSandbox:
                         job.metadata.get("environment_value_names", [])
                     ),
                 )
-                credential_manifest = discover_credentials(
+                # The import walk reads the agent's files at bundling's limits, seconds on a
+                # crafted repository; off the loop, the server keeps answering meanwhile.
+                credential_manifest = await asyncio.to_thread(
+                    discover_credentials,
                     source,
                     secret_refs=job.agent.secret_refs,
                     provided_environment=job.agent.config,

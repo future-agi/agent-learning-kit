@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 import yaml
 
 from .contract import Runtime
-from .source_folder import contains_or_is_above
+from .source_folder import contains_or_is_above, is_within
 
 
 COMPOSE_SERVICE_OUTSIDE_FOLDER = "runtime_compose_service_outside_subfolder"
@@ -164,14 +164,21 @@ def _select_runtime(
         # Every service the stack runs, not only the control one: a helper that builds a sibling
         # ships the sibling's files, and its keys go unasked.
         folder = (root / runtime.source_subfolder).resolve()
+        # Services that share a build (a YAML alias costs nothing to repeat) are checked once.
+        checked: dict[tuple[Path, str, str], bool] = {}
         for name, service in services.items():
+            # With no control service the whole file runs, but `docker compose up` starts a
+            # service behind a profile only when that profile is asked for, which no one does.
+            if not control and service.get("profiles"):
+                continue
             if _builds_outside_folder(
                 service,
                 service_bases.get(name, compose.parent),
                 folder,
                 public_environment or {},
+                checked,
             ):
-                raise RuntimeSelectionError(COMPOSE_SERVICE_OUTSIDE_FOLDER)
+                raise RuntimeSelectionError(f"{COMPOSE_SERVICE_OUTSIDE_FOLDER}: {name}")
     services = {
         name: {
             key: _interpolate_structure(value, public_environment or {})
@@ -204,7 +211,11 @@ def _select_runtime(
 
 
 def _builds_outside_folder(
-    service: Any, base: Path, folder: Path, public_environment: dict[str, str]
+    service: Any,
+    base: Path,
+    folder: Path,
+    public_environment: dict[str, str],
+    checked: dict[tuple[Path, str, str], bool] | None = None,
 ) -> bool:
     """True when the service builds a folder that is neither the agent's nor above it."""
     if not isinstance(service, dict) or not service.get("build"):
@@ -213,16 +224,38 @@ def _builds_outside_folder(
     context = str(build.get("context", ".") if isinstance(build, dict) else build)
     if "://" in context:
         return False
-    built = (base / context).resolve()
-    places = [built]
     dockerfile = build.get("dockerfile") if isinstance(build, dict) else None
+    key = (base, context, str(dockerfile or ""))
+    if checked is not None and key in checked:
+        return checked[key]
+    built = _resolved(base, context)
+    places = [built]
     if dockerfile:
         # A root context with a sibling's Dockerfile still builds the sibling.
-        places.append((built / str(dockerfile)).resolve().parent)
-    return any(
-        not contains_or_is_above(place, folder)
-        for place in places
-    )
+        places.append(_resolved(built, str(dockerfile)).parent)
+    outside = any(not contains_or_is_above(place, folder) for place in places)
+    if checked is not None:
+        checked[key] = outside
+    return outside
+
+
+def _resolved(base: Path, value: str) -> Path:
+    """``base / value`` resolved, each of its parts charged to the selection's budget.
+
+    Resolving costs a lookup on disk for each part, in one call, so a long path or many of
+    them could hold the save for seconds; a path past the system's limit can't be opened anyway.
+    """
+    if len(value) > _LONGEST_PATH:
+        raise RuntimeSelectionError("compose_source_path_invalid")
+    budget = _SELECTION_BUDGET.get()
+    if budget is not None:
+        parts = len(base.parts) + value.count("/") + 1
+        # Each lookup walks the path up to its part, so a deep path costs more a part: about
+        # 2 us at 100 parts and 5 us at 400 on 3.12.3. Linux allows 2,000.
+        budget[0] -= parts * (1 + parts // 256)
+        if budget[0] < 0:
+            raise RuntimeSelectionError("compose_structural_interpolation_limit")
+    return (base / value).resolve()
 
 
 def _runtime_compose_services(
@@ -247,9 +280,7 @@ def _runtime_compose_services(
             continue
         build = _interpolate_structure(service["build"], public_environment)
         context = build.get("context", ".") if isinstance(build, dict) else build
-        if (
-            (service_bases or {}).get(name, root) / str(context)
-        ).resolve() != component:
+        if _resolved((service_bases or {}).get(name, root), str(context)) != component:
             continue
         ports = _interpolate_structure(service.get("ports") or [], public_environment)
         targets = [
@@ -310,6 +341,11 @@ def _runtime_compose_services(
         service = services.get(name)
         if not isinstance(service, dict):
             raise RuntimeSelectionError(f"compose_dependency_missing: {name}")
+        for key in ("network_mode", "ipc", "pid"):
+            # Compose takes a string here. Writing out anything else, as the check below does,
+            # costs what an alias tree expands to: a few hundred bytes can reach gigabytes.
+            if service.get(key) and not isinstance(service[key], str):
+                raise RuntimeSelectionError(f"compose_invalid: {name} {key} must be a string")
         unsupported = [
             key
             for key in ("links", "volumes_from", "network_mode", "ipc", "pid")
@@ -356,11 +392,13 @@ def _runtime_compose_services(
     omitted = set(services) - selected
     for name in selected if validate_environment_dependencies else ():
         environment = services[name].get("environment") or {}
-        values = (
-            environment.values()
-            if isinstance(environment, dict)
-            else (str(item).partition("=")[2] for item in environment)
-        )
+        values = list(environment.values() if isinstance(environment, dict) else environment)
+        # A value is a string, a number, a boolean or empty; anything else is an alias tree,
+        # whose text would cost what it expands to.
+        if any(isinstance(value, (list, dict)) for value in values):
+            raise RuntimeSelectionError(f"compose_invalid: {name} environment values must be plain")
+        if not isinstance(environment, dict):
+            values = [str(item).partition("=")[2] for item in values]
         for value in values:
             try:
                 value = _interpolate_structure(str(value or ""), public_environment)
@@ -394,6 +432,8 @@ def _runtime_compose_services(
 
 # YAML aliases let a few hundred bytes stand for billions of nodes, and this copies each one.
 _STRUCTURE_NODES = 100_000
+# Linux's PATH_MAX.
+_LONGEST_PATH = 4096
 _LARGEST_STRING = 65536
 _BRACE = re.compile(r"\$\{|\}")
 _VARIABLE = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)")
@@ -620,7 +660,7 @@ def _load_compose(
     def load(path):
         nonlocal total_bytes
         path = path.resolve()
-        if not path.is_relative_to(root) or not path.is_file():
+        if not is_within(path, root) or not path.is_file():
             raise RuntimeSelectionError("compose_include_path_invalid")
         if path in active:
             raise RuntimeSelectionError("compose_include_cycle")
@@ -656,7 +696,11 @@ def _load_compose(
             if not isinstance(include, str):
                 raise RuntimeSelectionError("compose_include_unsupported")
             include = _interpolate_structure(include, environment)
-            if Path(include).is_absolute() or "://" in include:
+            if (
+                len(include) > _LONGEST_PATH
+                or Path(include).is_absolute()
+                or "://" in include
+            ):
                 raise RuntimeSelectionError("compose_include_path_invalid")
             child = load(path.parent / include)
             for key, value in child.items():
@@ -687,8 +731,8 @@ def _rebase_service(service, base, destination, root, environment):
             or value.startswith("~")
         ):
             raise RuntimeSelectionError("compose_source_path_invalid")
-        path = (base / value).resolve()
-        if not path.is_relative_to(root):
+        path = _resolved(base, value)
+        if not is_within(path, root):
             raise RuntimeSelectionError("compose_source_path_escape")
         return "./" + os.path.relpath(path, destination)
 

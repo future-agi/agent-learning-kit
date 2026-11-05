@@ -1069,6 +1069,37 @@ def test_bad_subfolder_keeps_canceled(tmp_path, cloning, hosted_github_job):
     assert not state.get("failure")
 
 
+def test_the_credentials_walk_runs_off_the_servers_loop(
+    tmp_path, cloning, monkeypatch, hosted_github_job
+):
+    import threading
+
+    from fi.alk.harness import sandbox_server
+
+    # The walk reads the agent's files at bundling's limits: seconds, on a crafted repository.
+    sandbox = LocalSandbox(tmp_path / "state")
+    threads: list[threading.Thread] = []
+    discover = sandbox_server.discover_credentials
+
+    def recorded(*args, **kwargs):
+        threads.append(threading.current_thread())
+        return discover(*args, **kwargs)
+
+    def stop(*args, **kwargs):
+        raise RuntimeError("stop after the credentials are written")
+
+    monkeypatch.setattr(sandbox_server, "discover_credentials", recorded)
+    monkeypatch.setattr(cloning, "resolve_worker_secrets", stop)
+
+    async def run():
+        response = sandbox.submit(_github_request("agents/a"))
+        await sandbox._tasks[response.job.job_id]
+
+    asyncio.run(run())
+
+    assert threads and threading.main_thread() not in threads
+
+
 def test_subfolder_scopes_credentials(tmp_path, cloning, monkeypatch, hosted_github_job):
     sandbox = LocalSandbox(tmp_path / "state")
 

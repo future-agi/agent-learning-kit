@@ -1807,7 +1807,8 @@ The private conversation must capture actual completed tool evidence after recom
         system_prompt += (
             f" This agent is the folder {folder}. Keep the working "
             "folder and the paths in the command inside it. The Compose file may sit in it or "
-            "above it, but the control service must build this folder or one above it."
+            "above it, but every service the stack runs must build this folder or one above it, or be "
+            "pulled as an image."
         )
     briefing = (
         "Repair the generated runtime plan for this repository.\n\nDIAGNOSTICS\n"

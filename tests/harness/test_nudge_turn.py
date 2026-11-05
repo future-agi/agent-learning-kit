@@ -871,6 +871,17 @@ def test_an_invariant_revision_cannot_cite_a_siblings_file(tmp_path):
     assert nudge.revise_invariant(root, args, source).startswith("Not changed")
     assert (root / ARTIFACT).read_bytes() == before
 
+    # Its own file is cited, and recorded, as it is with no folder.
+    own = {**args, "source_path": "agents/a/db/seed.sql"}
+    assert nudge.revise_invariant(root, own, source) == "revised, cites agents/a/db/seed.sql"
+    revised = next(
+        check
+        for check in json.loads((root / ARTIFACT).read_text(encoding="utf-8"))["checks"]
+        if check["name"] == "cart_starts_empty"
+    )
+    assert revised["violations_sql"] == args["violations_sql"]
+    assert [one["path"] for one in revised["evidence"]] == ["agents/a/db/seed.sql"]
+
     _record_folder(root, "")
     assert nudge.revise_invariant(root, args, source) == "revised, cites agents/b/db/seed.sql"
 

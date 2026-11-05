@@ -11,7 +11,7 @@ import stat
 import tempfile
 import threading
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
 import pytest
@@ -1098,13 +1098,13 @@ def test_the_walk_reads_each_of_the_folders_files_once(tmp_path, monkeypatch):
         },
     )
     reads: list[Path] = []
-    read_text = Path.read_text
+    opened = Path.open
 
     def counted(path, *args, **kwargs):
         reads.append(path.resolve())
-        return read_text(path, *args, **kwargs)
+        return opened(path, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "read_text", counted)
+    monkeypatch.setattr(Path, "open", counted)
 
     reached = imported_by_agent(repo, "agents/a")
 
@@ -2211,10 +2211,12 @@ def test_a_comment_past_the_tokenize_total_does_not_refuse_a_browser_reading(tmp
     assert not (destination / FAILURE_FILE).exists()
 
 
-def test_a_fullwidth_name_is_found_as_python_reads_it(tmp_path):
+def test_a_fullwidth_name_is_a_known_limit(tmp_path):
+    # Python folds `ｐlaywright` to playwright, but folding every file at the save cost seconds
+    # on a crafted one, and only a crafted file spells a name this way.
     repo = _tree(tmp_path, {"agent.py": "import \uff50laywright.sync_api\n"})
 
-    assert browser_tools_found(repo) == ["playwright"]
+    assert browser_tools_found(repo) == []
 
 
 def _type_keywords(size: int) -> str:
@@ -2240,6 +2242,8 @@ def test_a_crafted_script_does_not_hold_up_the_conversation(tmp_path):
 
     # Each keyword cost the old pattern a 1,000-character rescan: 0.6 s for this file, on the loop.
     files = {f"agents/a/t{n}.ts": _type_keywords(1_000_000) for n in range(3)}
+    # And each keyword the strip's closing search a rescan of the line after its quote.
+    files["agents/a/r.ts"] = _quote_left_open(1_000_000)
     repo = _tree(tmp_path / "repo", {**files, "agents/a/agent.py": "x = 1\n"})
     destination = tmp_path / "out"
     server = contract_tools(destination, source_root=repo, scan_root=repo, subfolder="agents/a")
@@ -2265,15 +2269,46 @@ def test_a_crafted_script_does_not_hold_up_the_conversation(tmp_path):
                 worst[0], last = max(worst[0], now - last), now
 
         beating = asyncio.create_task(beat())
+        started = time.perf_counter()
         result = await server.tools[0].handler(reading)
+        waited = time.perf_counter() - started
         done.set()
         await beating
-        return result, worst[0]
+        return result, worst[0], waited
 
-    result, worst = asyncio.run(save())
+    result, worst, waited = asyncio.run(save())
 
     assert not result.get("is_error"), result
     assert worst < 0.25
+    assert waited < 2
+
+
+def _quote_left_open(size: int) -> str:
+    """Lines of 83 type keywords within reach of one opening quote, whose string never closes."""
+    line = "import type " * 83 + '"'
+    line += "a" * (size // 10 - len(line) - 1) + "\n"
+    return line * 10
+
+
+def test_the_type_import_strip_scans_the_code_at_most_twice(monkeypatch):
+    from fi.alk.harness import credentials
+
+    code = _quote_left_open(1_000_000)
+    scanned = [0]
+    search = credentials._SCRIPT_QUOTE_OR_LINE_END.search
+
+    class Counting:
+        def search(self, text, position):
+            hit = search(text, position)
+            scanned[0] += (hit.end() if hit else len(text)) - position
+            return hit
+
+    monkeypatch.setattr(credentials, "_SCRIPT_QUOTE_OR_LINE_END", Counting())
+
+    # No string closes on its line, so nothing is dropped.
+    assert credentials._without_type_imports(code) == code
+    # Rescanning each keyword's line would be 83 times over.
+    assert scanned[0] <= 2 * len(code)
 
 
 _SHARED_IMPORT = 'import { x } from "../../common/web.js";\n'
@@ -2358,3 +2393,148 @@ def test_the_scan_reads_scripts_only_up_to_their_own_total(tmp_path, monkeypatch
     monkeypatch.setattr(agent_type_check, "_LARGEST_SCRIPT_SCAN", limit)
 
     assert browser_tools_found(repo) == expected
+
+
+def test_a_long_run_of_combining_marks_is_not_parsed():
+    from fi.alk.harness.python_source import parsed
+
+    # On 3.11 and 3.12.3 the parser folds such a name by insertion sort, seconds a file.
+    assert parsed("x = a" + "\u0301" * 32) is None
+    assert parsed("x = a" + "\u0f73" * 16) is None  # Each decomposes to two marks.
+    assert parsed("x = a" + "\u0301" * 31) is not None
+    # A composed letter's own mark starts the run: é is e and one mark.
+    assert parsed("x = \u00e9" + "\u0301" * 31) is None
+    assert parsed("x = 'caf\u00e9 n\u00e4ive r\u00e9sum\u00e9 \u1ec7'\n# \u0928\u092e\u0938\u094d\u0924\u0947 \u8fd9\u662f\u6ce8\u91ca\n") is not None
+
+
+def test_a_parse_budget_counts_bytes():
+    from fi.alk.harness.python_source import ParseBudget
+
+    budget = ParseBudget(4)
+
+    assert budget.spend("éé")
+    assert not budget.spend("é")
+
+
+def test_the_walk_counts_its_parse_limit_in_bytes(tmp_path):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    # 64 K two-byte characters: 128 KB in the file, but half that in characters.
+    repo = _tree(
+        tmp_path / "repo",
+        {
+            "agents/a/main.py": "import common.web\n# " + "é" * (64 * 1024),
+            "common/__init__.py": "",
+            "common/web.py": "",
+        },
+    )
+    shared = (repo / "common" / "web.py").resolve()
+
+    assert shared not in imported_by_agent(repo, "agents/a", parse_limit=128 * 1024)
+    assert shared in imported_by_agent(repo, "agents/a", parse_limit=256 * 1024)
+
+
+def _nested_packages(repo: Path, depth: int) -> Path:
+    directory = repo
+    for _ in range(depth):
+        directory = directory / "p"
+        directory.mkdir(parents=True)
+        (directory / "__init__.py").write_text("")
+    return directory
+
+
+def test_a_chain_of_nested_packages_does_not_hold_up_a_folder_save(tmp_path):
+    # Every name rebuilt and resolved each package above it: 58 s for 358 of them.
+    repo = tmp_path / "repo"
+    (repo / "agents" / "a").mkdir(parents=True)
+    _nested_packages(repo, 300)
+    (repo / "agents" / "a" / "agent.py").write_text(
+        "".join("import " + ".".join(["p"] * n) + "\n" for n in range(1, 301))
+    )
+    server = contract_tools(tmp_path / "out", source_root=repo, scan_root=repo, subfolder="agents/a")
+    reading = {
+        "agent": "a",
+        "modality": "chat",
+        "real_use_cases": ["o"],
+        "hard_constraints": ["be polite"],
+        "data_store": {"kind": "none"},
+        "runtime": {"language": "python"},
+        "tools": [{"name": "add", "args": ["i"]}],
+    }
+
+    started = time.perf_counter()
+    result = asyncio.run(server.tools[0].handler(reading))
+
+    assert not result.get("is_error"), result
+    assert time.perf_counter() - started < 2
+
+
+def test_the_walk_looks_up_each_package_once(tmp_path, monkeypatch):
+    from fi.alk.harness import credentials
+
+    repo = tmp_path / "repo"
+    (repo / "agents" / "a").mkdir(parents=True)
+    _nested_packages(repo, 20)
+    (repo / "agents" / "a" / "agent.py").write_text(
+        "".join("import " + ".".join(["p"] * n) + "\n" for n in range(1, 21))
+    )
+    looked: list[Path] = []
+    look_up = credentials._file_inside
+
+    def counted(candidate, *args):
+        looked.append(candidate)
+        return look_up(candidate, *args)
+
+    monkeypatch.setattr(credentials, "_file_inside", counted)
+
+    credentials.imported_by_agent(repo, "agents/a")
+
+    packages = [path for path in looked if path.name == "__init__.py"]
+    assert packages and len(packages) == len(set(packages))
+
+
+@pytest.mark.parametrize("depth, followed", [(64, True), (65, False)])
+def test_the_walk_follows_packages_only_so_deep(tmp_path, depth, followed):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    repo = tmp_path / "repo"
+    (repo / "agents" / "a").mkdir(parents=True)
+    deepest = _nested_packages(repo, depth - 1)
+    (deepest / "web.py").write_text("")
+    (repo / "agents" / "a" / "agent.py").write_text(
+        "import " + ".".join(["p"] * (depth - 1) + ["web"]) + "\n"
+    )
+
+    assert ((deepest / "web.py").resolve() in imported_by_agent(repo, "agents/a")) is followed
+
+
+def test_import_text_inside_a_script_string_is_not_followed():
+    from fi.alk.harness.credentials import _script_imports
+
+    code = (
+        "const s = 'import { l } from \"../b/agent\"';\n"
+        'const t = `require("../d")`;\n'
+        "import y from './c';\n"
+    )
+
+    assert _script_imports(code) == ["./c"]
+
+
+@pytest.mark.parametrize(
+    "folder, shared, found",
+    [
+        # The agent and the file it imports both under e2e/: the agent's own code.
+        ("e2e/agent", "e2e/shared/web.py", ["playwright"]),
+        ("browser_tests/agent", "browser_tests/common/web.py", ["playwright"]),
+        # A test helper beside the agent's folder is still a test helper.
+        ("agents/a", "tests/helpers/web.py", []),
+    ],
+)
+def test_test_folders_are_judged_below_what_the_agent_shares(tmp_path, folder, shared, found):
+    module = ".".join(PurePosixPath(shared).with_suffix("").parts)
+    repo = _tree(
+        tmp_path / "repo",
+        {f"{folder}/agent.py": f"import {module}\n", shared: "import playwright\n"},
+    )
+
+    assert browser_tools_in_agent(repo, folder) == found

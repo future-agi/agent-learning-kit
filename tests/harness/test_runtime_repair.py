@@ -2626,6 +2626,8 @@ def test_repair_prompt_names_the_folder(tmp_path, monkeypatch) -> None:
             )
 
     assert "This agent is the folder agents/a." in prompts[0]
+    # Every service is checked at the save, not only the control one.
+    assert "every service the stack runs must build this folder" in prompts[0]
     assert "Compose file may sit in it or above it" in prompts[0]
     assert "This agent is the folder" not in prompts[-1]
 

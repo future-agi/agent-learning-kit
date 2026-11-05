@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import secrets
 import sys
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -54,7 +56,8 @@ from .runtime_selection import (
     RuntimeSelectionError,
     select_runtime,
 )
-from .source_folder import SubfolderNotFound, agent_folder, bind_runtime
+from .python_source import utf8_size
+from .source_folder import SubfolderNotFound, agent_folder, bind_runtime, is_within
 
 CONTRACT_SERVER = "contract"
 
@@ -264,10 +267,17 @@ def _checked_contract(
 def _save_contract(contract: AgentContract, destination: Path) -> dict[str, Any]:
     destination.mkdir(parents=True, exist_ok=True)
     path = destination / "contract.json"
-    path.write_text(
-        json.dumps(contract.model_dump(), indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    # Written beside it and moved into place: a write that fails partway leaves the contract an
+    # earlier call was told was saved as it was.
+    partial = destination / f".contract.json.{os.getpid()}.{threading.get_ident()}"
+    try:
+        partial.write_text(
+            json.dumps(contract.model_dump(), indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        os.replace(partial, path)
+    finally:
+        partial.unlink(missing_ok=True)
     return _ok(
         f"Accepted and saved to {path}.\n"
         f"{len(contract.tools)} tools: {', '.join(sorted(contract.tool_names()))}\n"
@@ -277,7 +287,11 @@ def _save_contract(contract: AgentContract, destination: Path) -> dict[str, Any]
     )
 
 
+# One prompt file, and what the excerpt copies from all of them: the same file named a hundred
+# times would otherwise write a hundred of it into contract.json.
 _LARGEST_PROMPT_FILE = 1024 * 1024
+# What the copy reads from distinct files in all.
+_LARGEST_PROMPT_READ = 4 * _LARGEST_PROMPT_FILE
 
 
 def _copy_prompt(contract: AgentContract, source_root: Path) -> list[str]:
@@ -285,27 +299,46 @@ def _copy_prompt(contract: AgentContract, source_root: Path) -> list[str]:
     root = source_root.resolve()
     parts: list[str] = []
     problems: list[str] = []
+    lines_of: dict[Path, list[str]] = {}
+    read = copied = 0
     for index, where in enumerate(contract.system_prompt_from):
         path = (root / where.path).resolve()
-        if not path.is_relative_to(root) or not path.is_file():
+        if not is_within(path, root) or not path.is_file():
             problems.append(f"system_prompt_from[{index}]: {where.path} is not a file in the source")
             continue
-        with path.open("rb") as handle:
-            raw = handle.read(_LARGEST_PROMPT_FILE + 1)
-        if len(raw) > _LARGEST_PROMPT_FILE:
-            problems.append(
-                f"system_prompt_from[{index}]: {where.path} is larger than 1 MiB; name the "
-                "file the prompt is written in"
-            )
-            continue
-        lines = raw.decode("utf-8", errors="replace").splitlines()
+        if path not in lines_of:
+            with path.open("rb") as handle:
+                raw = handle.read(_LARGEST_PROMPT_FILE + 1)
+            if len(raw) > _LARGEST_PROMPT_FILE:
+                problems.append(
+                    f"system_prompt_from[{index}]: {where.path} is larger than 1 MiB; name the "
+                    "file the prompt is written in"
+                )
+                continue
+            read += len(raw)
+            if read > _LARGEST_PROMPT_READ:
+                problems.append(
+                    f"system_prompt_from[{index}]: the files named so far come to more than "
+                    "4 MiB; name only the files the prompt is written in"
+                )
+                break
+            lines_of[path] = raw.decode("utf-8", errors="replace").splitlines()
+        lines = lines_of[path]
         if not 1 <= where.start_line <= where.end_line <= len(lines):
             problems.append(
                 f"system_prompt_from[{index}]: lines {where.start_line}-{where.end_line} are "
                 f"outside {where.path}, which has {len(lines)} lines"
             )
             continue
-        parts.append("\n".join(lines[where.start_line - 1 : where.end_line]))
+        excerpt = "\n".join(lines[where.start_line - 1 : where.end_line])
+        copied += utf8_size(excerpt)
+        if copied > _LARGEST_PROMPT_FILE:
+            problems.append(
+                f"system_prompt_from[{index}]: the lines named so far come to more than 1 MiB; "
+                "name only the prompt's own lines, once each"
+            )
+            break
+        parts.append(excerpt)
     if parts and not problems:
         contract.system_prompt_excerpt = "\n\n".join(parts)
     return problems
@@ -393,7 +426,7 @@ def _builds_a_sibling(source_root: Path, runtime: Runtime, subfolder: str) -> st
             compose_bytes=_SAVE_YAML_BYTES - spent,
         )
     except RuntimeSelectionError as refused:
-        if str(refused) == COMPOSE_SERVICE_OUTSIDE_FOLDER:
+        if str(refused).startswith(f"{COMPOSE_SERVICE_OUTSIDE_FOLDER}:"):
             return str(refused)
     except Exception as exc:  # noqa: BLE001 - bundling selects again and owns the failure
         # Logged, so a bug here doesn't switch the check off unseen; the type only, as the

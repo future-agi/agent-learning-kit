@@ -24,7 +24,7 @@ from .failure_file import FAILURE_FILE
 from .instrumentation_evidence import _SKIPPED_DIRECTORIES, _imports
 from .job import FailureDomain, HarnessFailure, HarnessStage
 from .python_source import LARGEST_PARSED_MODULE, ParseBudget, TokenBudget, parsed, read_module
-from .source_folder import agent_folder
+from .source_folder import agent_folder, is_within
 
 AGENT_TYPE_UNSUPPORTED = "agent_type_unsupported"
 # EX_CONFIG, which the platform doesn't retry even if it can't read the file.
@@ -418,6 +418,15 @@ def _files_in(folder: Path) -> list[Path]:
         return []
 
 
+def _below_shared(path: Path, folder: Path) -> tuple[str, ...]:
+    """The folders holding ``path`` below the deepest one it shares with the agent's folder."""
+    held, named = path.parent.parts, folder.parts
+    common = 0
+    while common < min(len(held), len(named)) and held[common] == named[common]:
+        common += 1
+    return held[common:]
+
+
 def browser_tools_in_agent(source_root: Path, subfolder: str) -> list[str]:
     """What one agent of a repository uses: its folder, what it imports, and the files directly
     in the folders above it. A sibling's browser tool says nothing about this agent.
@@ -429,7 +438,7 @@ def browser_tools_in_agent(source_root: Path, subfolder: str) -> list[str]:
     above = [
         path
         for parent in folder.parents
-        if parent.is_relative_to(root)
+        if is_within(parent, root)
         for path in _files_in(parent)
         if not _not_the_agent_file(path.name)
     ]
@@ -438,7 +447,7 @@ def browser_tools_in_agent(source_root: Path, subfolder: str) -> list[str]:
     unpacked = {
         parent / name
         for parent in (folder, *folder.parents)
-        if parent.is_relative_to(root)
+        if is_within(parent, root)
         for name in _unpacked_at_top(parent)
         if PurePosixPath(name).parts and not PurePosixPath(name).is_absolute()
     }
@@ -456,10 +465,9 @@ def browser_tools_in_agent(source_root: Path, subfolder: str) -> list[str]:
         )
         if not _not_the_agent_file(path.name)
         and not unpacked.intersection((path, *path.parents))
-        and not any(
-            _TEST_FOLDER.fullmatch(part.lower())
-            for part in path.relative_to(root).parent.parts
-        )
+        # Only the folders the agent reaches it through: a whole repository under `e2e/` is
+        # still the agent's own code.
+        and not any(_TEST_FOLDER.fullmatch(part.lower()) for part in _below_shared(path, folder))
     ]
     # A shared script's dependencies are declared in its package, at or above it.
     manifests = [
@@ -467,7 +475,7 @@ def browser_tools_in_agent(source_root: Path, subfolder: str) -> list[str]:
         for path in shared
         if path.suffix != ".py"
         for parent in path.parents
-        if parent.is_relative_to(root) and (parent / "package.json").is_file()
+        if is_within(parent, root) and (parent / "package.json").is_file()
     ]
     return list(
         _tools_in(

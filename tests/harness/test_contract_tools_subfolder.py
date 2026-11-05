@@ -1016,7 +1016,16 @@ def test_each_reference_is_charged_however_little_it_builds(repo, copies, refuse
         _select_compose(repo, {"A": ""})
 
 
-@pytest.mark.parametrize("text, refused", [("x" * 536 + "$A", False), ("x" * 537 + "$A", True)])
+@pytest.mark.parametrize(
+    "text, refused",
+    [
+        ("x" * 536 + "$A", False),
+        ("x" * 537 + "$A", True),
+        # What it keeps after the last reference, too.
+        ("${A}" + "x" * 536, False),
+        ("${A}" + "x" * 537, True),
+    ],
+)
 def test_what_a_string_keeps_counts_towards_what_it_builds(repo, text, refused):
     from fi.alk.harness.runtime_selection import RuntimeSelectionError
 
@@ -1026,6 +1035,20 @@ def test_what_a_string_keeps_counts_towards_what_it_builds(repo, text, refused):
             _select_compose(repo, {"A": "y" * 65_000})
     else:
         _select_compose(repo, {"A": "y" * 65_000})
+
+
+@pytest.mark.parametrize("copies, refused", [(3, False), (4, True)])
+def test_each_brace_is_charged(repo, copies, refused):
+    from fi.alk.harness.runtime_selection import RuntimeSelectionError
+
+    # 16,000 `${A}` a copy: 32,000 with its closing brace charged, 16,000 with the `$` alone, so
+    # a fourth copy passes 100,000 only when the braces count.
+    _deploy(repo / "agents" / "a", "${A}" * 16_000, copies)
+    if refused:
+        with pytest.raises(RuntimeSelectionError, match="^compose_structural_interpolation_limit$"):
+            _select_compose(repo, {"A": ""})
+    else:
+        _select_compose(repo, {"A": ""})
 
 
 def test_an_earlier_contract_is_saved_when_the_later_ones_write_fails(tmp_path, repo, monkeypatch):
@@ -1157,7 +1180,193 @@ def test_every_service_the_stack_runs_is_checked_for_a_sibling(repo, helper, ima
         "compose_image_services": ["helper"] if image_only else [],
     }
     if refused:
-        with pytest.raises(RuntimeSelectionError, match=f"^{COMPOSE_SERVICE_OUTSIDE_FOLDER}$"):
+        with pytest.raises(RuntimeSelectionError, match=f"^{COMPOSE_SERVICE_OUTSIDE_FOLDER}: helper$"):
             select_runtime(repo, runtime, validate_environment_dependencies=False)
     else:
         select_runtime(repo, runtime, validate_environment_dependencies=False)
+
+
+def _helpers(count: int, build: str) -> str:
+    names = [f"h{n}" for n in range(count)]
+    return (
+        f"x-b: &b {build}\nservices:\n  agent:\n    build: .\n"
+        f"    depends_on: [{', '.join(names)}]\n"
+        + "".join(f"  {name}:\n    build: *b\n" for name in names)
+    )
+
+
+def test_services_sharing_a_build_are_checked_once(repo, monkeypatch):
+    from fi.alk.harness import runtime_selection
+
+    # An alias gives every helper the same build at no cost in the file.
+    (repo / "agents" / "a" / "Dockerfile").write_text("FROM python\n")
+    (repo / "agents" / "a" / "compose.yaml").write_text(
+        _helpers(20, "{context: ., dockerfile: Dockerfile}")
+    )
+    resolved: list[str] = []
+    real = runtime_selection._resolved
+    monkeypatch.setattr(
+        runtime_selection,
+        "_resolved",
+        lambda base, value: resolved.append(value) or real(base, value),
+    )
+
+    _select_compose(repo, {})
+
+    assert resolved.count("Dockerfile") == 1
+
+
+def test_a_build_path_past_the_systems_limit_is_refused(repo):
+    from fi.alk.harness.runtime_selection import RuntimeSelectionError
+
+    (repo / "agents" / "a" / "compose.yaml").write_text(
+        "services:\n  agent:\n    build: ." + "/x" * 2048 + "\n"
+    )
+
+    with pytest.raises(RuntimeSelectionError, match="^compose_source_path_invalid$"):
+        _select_compose(repo, {})
+
+
+def test_each_part_of_a_build_path_is_charged(repo):
+    from fi.alk.harness.runtime_selection import RuntimeSelectionError
+
+    # 60 builds of 2,000 parts each: each resolve looks up every part, 120,000 lookups.
+    names = [f"h{n}" for n in range(60)]
+    (repo / "agents" / "a" / "compose.yaml").write_text(
+        "services:\n  agent:\n    build: .\n"
+        f"    depends_on: [{', '.join(names)}]\n"
+        + "".join(f"  {name}:\n    build: ./{name}" + "/x" * 2000 + "\n" for name in names)
+    )
+
+    with pytest.raises(RuntimeSelectionError, match="^compose_structural_interpolation_limit$"):
+        _select_compose(repo, {})
+
+
+@pytest.mark.parametrize("key", ["network_mode", "ipc", "pid"])
+def test_a_mode_that_is_not_a_string_is_refused(repo, key):
+    from fi.alk.harness.runtime_selection import RuntimeSelectionError
+
+    # Ten levels of such a list expand to gigabytes when written out.
+    (repo / "agents" / "a" / "compose.yaml").write_text(
+        f"x-l: &l [a, b]\nservices:\n  agent:\n    build: .\n    {key}: *l\n"
+    )
+
+    with pytest.raises(RuntimeSelectionError, match=f"^compose_invalid: agent {key} must be a string$"):
+        _select_compose(repo, {})
+
+
+@pytest.mark.parametrize("environment", ["{A: [x, y]}", "[{A: x}]"])
+def test_an_environment_value_that_is_not_plain_is_refused(repo, environment):
+    from fi.alk.harness.runtime_selection import RuntimeSelectionError, select_runtime
+
+    (repo / "agents" / "a" / "compose.yaml").write_text(
+        f"services:\n  agent:\n    build: .\n    environment: {environment}\n"
+    )
+
+    with pytest.raises(RuntimeSelectionError, match="^compose_invalid: agent environment values must be plain$"):
+        select_runtime(
+            repo,
+            {
+                "language": "python",
+                "execution": "compose",
+                "compose_file": "agents/a/compose.yaml",
+                "service": "agent",
+                "source_subfolder": "agents/a",
+                "workdir": "agents/a",
+            },
+            validate_environment_dependencies=True,
+        )
+
+
+@pytest.mark.parametrize("profiles, refused", [("", True), ("    profiles: [debug]\n", False)])
+def test_with_no_control_service_a_service_behind_a_profile_is_not_checked(repo, profiles, refused):
+    from fi.alk.harness.runtime_selection import COMPOSE_SERVICE_OUTSIDE_FOLDER, RuntimeSelectionError, select_runtime
+
+    (repo / "agents" / "b" / "Dockerfile").write_text("FROM python\n")
+    (repo / "agents" / "a" / "compose.yaml").write_text(
+        "services:\n  agent:\n    build: .\n  helper:\n    build: ../b\n" + profiles
+    )
+    # Found by looking in the folder, with no service named: the whole file runs.
+    runtime = {
+        "language": "python",
+        "execution": "auto",
+        "source_subfolder": "agents/a",
+        "workdir": "agents/a",
+    }
+    if refused:
+        with pytest.raises(RuntimeSelectionError, match=f"^{COMPOSE_SERVICE_OUTSIDE_FOLDER}: helper$"):
+            select_runtime(repo, runtime, validate_environment_dependencies=False)
+    else:
+        select_runtime(repo, runtime, validate_environment_dependencies=False)
+
+
+@pytest.mark.parametrize("entries, refused", [(1, False), (2, True)])
+def test_the_prompt_copies_at_most_1_mib_in_all(tmp_path, repo, entries, refused):
+    # Named twice, 600 KB of lines copy twice: a model naming one file a hundred times wrote
+    # 100 MB into contract.json.
+    lines = 6000
+    (repo / "agents" / "a" / "prompt.txt").write_text(("#" * 99 + "\n") * lines)
+
+    result = accept_contract(
+        payload(
+            runtime={"language": "python"},
+            system_prompt_from=[
+                {"path": "agents/a/prompt.txt", "start_line": 1, "end_line": lines}
+            ]
+            * entries,
+        ),
+        tmp_path / "out",
+        source_root=repo,
+        subfolder="agents/a",
+    )
+
+    assert bool(result.get("is_error")) is refused, result
+    if refused:
+        assert "more than 1 MiB" in result["content"][0]["text"]
+
+
+def test_a_write_that_fails_partway_leaves_the_saved_contract(tmp_path, repo, monkeypatch):
+    from fi.alk.harness import tools
+    from fi.alk.harness.contract import AgentContract
+
+    destination = tmp_path / "out"
+    accept_contract(payload(runtime={"language": "python"}), destination, source_root=repo, subfolder="agents/a")
+    saved = (destination / "contract.json").read_text()
+    contract = AgentContract.model_validate_json(saved)
+    write_text = Path.write_text
+
+    def fails_partway(path, text, *args, **kwargs):
+        write_text(path, text[: len(text) // 2], *args, **kwargs)
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Path, "write_text", fails_partway)
+
+    with pytest.raises(OSError):
+        tools._save_contract(contract.model_copy(update={"notes": "later"}), destination)
+
+    assert (destination / "contract.json").read_text() == saved
+    assert sorted(path.name for path in destination.iterdir()) == ["contract.json"]
+
+
+@pytest.mark.parametrize("files, refused", [(4, False), (5, True)])
+def test_the_prompt_reads_at_most_4_mib_of_files_in_all(tmp_path, repo, files, refused):
+    # Line 1 of each, but each file is read whole to find its lines.
+    for n in range(files):
+        (repo / "agents" / "a" / f"p{n}.txt").write_text("Be brief.\n" + "#" * 1_000_000)
+
+    result = accept_contract(
+        payload(
+            runtime={"language": "python"},
+            system_prompt_from=[
+                {"path": f"agents/a/p{n}.txt", "start_line": 1, "end_line": 1}
+                for n in range(files)
+            ],
+        ),
+        tmp_path / "out",
+        source_root=repo,
+        subfolder="agents/a",
+    )
+
+    assert bool(result.get("is_error")) is refused, result
+    if refused:
+        assert "more than 4 MiB" in result["content"][0]["text"]
