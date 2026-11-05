@@ -152,23 +152,27 @@ _TOOL_TRACE_DDL = (
     "actor_id text NOT NULL DEFAULT 'agent', worker_id text, parent_event_id text, "
     "outcome text NOT NULL DEFAULT 'committed', refusal text, refusal_code text, "
     "on_behalf_of text, idempotency_key text);\n"
+    # The columns a prebuilt world's own tool server writes, so one row carries both sets.
+    "ALTER TABLE _alk_tool_trace ADD COLUMN IF NOT EXISTS agent_tool text, "
+    "ADD COLUMN IF NOT EXISTS provider_call_id text, ADD COLUMN IF NOT EXISTS tool_call_id text, "
+    "ADD COLUMN IF NOT EXISTS status text;\n"
 )
 
 
 def _sets_trial_state(authoring: Path) -> bool:
-    """Whether any scenario writes history or sets faults: both need the full action log."""
+    """Whether any scenario has a pre-run session or sets faults: both need the full action log."""
     for document in Path(authoring).glob("scenarios/*/scenario.json"):
         try:
             body = json.loads(document.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        if isinstance(body, dict) and (body.get("faults") or body.get("history")):
+        if isinstance(body, dict) and (body.get("faults") or body.get("pre_run") or body.get("history")):
             return True
     return False
 
 
 def _action_log_seed(authoring: Path) -> str:
-    """The action log and who may do what in the world; a world without actors, history or faults is seeded exactly
+    """The action log and who may do what in the world; a world without actors, pre-run sessions or faults is seeded exactly
     as before."""
     listing = load_actors(authoring)
     return (
@@ -3661,6 +3665,11 @@ def author_bundle_v2(
             shutil.copy2(
                 Path(__file__).with_name("tool_trace_proxy.py"),
                 generated / "proxy.py",
+            )
+            # The proxy is one surface of the world's door, which it imports from beside it.
+            shutil.copy2(
+                Path(__file__).with_name("world_door.py"),
+                generated / "world_door.py",
             )
         if any(process.name == "mcp-toolbox" for process in plan.processes):
             toolbox = _mcp_toolbox_definition(source_root)
