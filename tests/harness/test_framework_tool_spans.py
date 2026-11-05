@@ -15,7 +15,11 @@ from pathlib import Path
 
 import pytest
 
-from fi.alk.harness import call_runner, simulation_mark_bootstrap
+from fi.alk.harness import (
+    call_runner,
+    simulation_mark_bootstrap,
+    simulation_worker_events,
+)
 from fi.alk.harness.world.runtime import Call
 
 _PRELUDE = """
@@ -30,6 +34,13 @@ def span(name, **attributes):
 """
 
 
+def _place_hook(hook: Path) -> None:
+    for module in (simulation_mark_bootstrap, simulation_worker_events):
+        (hook / Path(module.__file__).name).write_bytes(
+            Path(module.__file__).read_bytes()
+        )
+
+
 def _run(
     tmp_path: Path,
     body: str,
@@ -38,9 +49,7 @@ def _run(
 ) -> list[dict]:
     hook = tmp_path / "hook"
     hook.mkdir()
-    (hook / "simulation_mark_bootstrap.py").write_bytes(
-        Path(simulation_mark_bootstrap.__file__).read_bytes()
-    )
+    _place_hook(hook)
     (hook / "sitecustomize.py").write_text(
         "import simulation_mark_bootstrap\nsimulation_mark_bootstrap.install()\n"
     )
@@ -690,9 +699,7 @@ def test_an_openai_agents_app_that_sets_its_own_trace_processors_is_still_observ
     }.items():
         (tmp_path / path).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / path).write_text(source)
-    (tmp_path / "hook/simulation_mark_bootstrap.py").write_bytes(
-        Path(simulation_mark_bootstrap.__file__).read_bytes()
-    )
+    _place_hook(tmp_path / "hook")
     script = (
         f"from agents import get_trace_provider, set_trace_processors\nclass Own: pass\n{app}\n"
         "print([type(p).__name__ for p in get_trace_provider()._multi_processor._processors])"
@@ -733,9 +740,7 @@ def test_an_autogen_tool_call_is_written_with_its_arguments_and_result_beside_it
     }.items():
         (tmp_path / path).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / path).write_text(source)
-    (tmp_path / "hook/simulation_mark_bootstrap.py").write_bytes(
-        Path(simulation_mark_bootstrap.__file__).read_bytes()
-    )
+    _place_hook(tmp_path / "hook")
     script = textwrap.dedent("""
         import asyncio
         from autogen_core.tools import BaseTool
@@ -799,7 +804,7 @@ def test_checks_grade_a_launch_once_and_a_hand_off_made_by_a_tool_call() -> None
 
 
 def test_a_job_joins_the_launch_that_named_its_whole_id() -> None:
-    from fi.alk.harness.simulation_mark_bootstrap import _names
+    from fi.alk.harness.simulation_worker_events import _names
 
     assert _names('{"task_id": "1"}', "1")
     assert _names("job a1b2-c3 started", "a1b2-c3")
@@ -810,7 +815,7 @@ def test_a_job_joins_the_launch_that_named_its_whole_id() -> None:
 def test_spans_that_never_end_do_not_stop_observation(monkeypatch) -> None:
     from types import SimpleNamespace
 
-    from fi.alk.harness import simulation_mark_bootstrap as bootstrap
+    from fi.alk.harness import simulation_worker_events as bootstrap
 
     monkeypatch.setattr(bootstrap, "_LIVE_SPANS_MAX", 2)
     observer = bootstrap._ToolSpans("/dev/null")
@@ -835,7 +840,7 @@ def test_a_span_starting_or_ending_waits_for_another_thread_s_bookkeeping(
     import threading
     from types import SimpleNamespace
 
-    from fi.alk.harness import simulation_mark_bootstrap as bootstrap
+    from fi.alk.harness import simulation_worker_events as bootstrap
 
     observer = bootstrap._ToolSpans(str(tmp_path / "calls.jsonl"))
     one = SimpleNamespace(
@@ -903,9 +908,7 @@ def test_a_framework_whose_instrumentor_is_missing_is_reported_unobserved(
 ) -> None:
     hook = tmp_path / "hook"
     hook.mkdir()
-    (hook / "simulation_mark_bootstrap.py").write_bytes(
-        Path(simulation_mark_bootstrap.__file__).read_bytes()
-    )
+    _place_hook(hook)
     (hook / "sitecustomize.py").write_text(
         "import simulation_mark_bootstrap\nsimulation_mark_bootstrap.install()\n"
     )

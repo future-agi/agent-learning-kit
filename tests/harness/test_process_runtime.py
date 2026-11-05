@@ -9308,6 +9308,7 @@ def test_mark_hook_written_with_its_module_first_on_pythonpath_for_every_exporti
         ]
         assert sorted(path.name for path in world.iterdir()) == [
             "simulation_mark_bootstrap.py",
+            "simulation_worker_events.py",
             "sitecustomize.py",
         ]
         assert (
@@ -9749,6 +9750,7 @@ def test_small_mark_hook_says_so_when_the_mark_module_is_broken(
     world = captured["world_dir"]
     assert sorted(path.name for path in world.iterdir()) == [
         "simulation_mark_bootstrap.py",
+        "simulation_worker_events.py",
         "sitecustomize.py",
     ]
     _replace_mark_module(world, _BROKEN_MARK_MODULES[source])
