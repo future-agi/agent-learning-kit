@@ -246,9 +246,12 @@ export function secretsDetection(
                 line.trim().startsWith('#') ||
                 line.trim().startsWith('*');
 
-            // Only the matched span can qualify as an environment reference;
-            // an unrelated expression on the same line cannot exempt this match.
-            const isEnvRef = /process\.env|os\.environ|getenv|ENV\[/.test(match[0]);
+            // Literal contents are never evidence of an environment lookup.
+            // Only the bearer pattern can consume an unquoted process.env
+            // property value. Require that whole assignment span, not a marker
+            // substring or a quoted value; other environment APIs do not match.
+            const isEnvRef = type === 'bearer-token' &&
+                /^[A-Za-z]+["']?\s*[:=]\s*process\.env\.[A-Za-z_$][A-Za-z0-9_$]*$/.test(match[0]);
 
             if (!isComment && !isEnvRef) {
                 // Mask the actual secret in the match

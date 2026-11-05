@@ -37,7 +37,11 @@ export abstract class AbstractLLM implements BaseLLM {
         config = snapshotBoundary(config, 'JUDGE_CONFIG_INVALID');
         if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('JUDGE_CONFIG_INVALID');
         this.config = snapshotBoundary({ ...DEFAULT_CONFIG, ...config }, 'JUDGE_CONFIG_INVALID');
-        for (const value of Object.values(this.config)) if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) throw new Error('JUDGE_CONFIG_INVALID');
+        // Provider-specific fields are preserved; only base numeric fields share this range check.
+        for (const field of ['temperature', 'maxTokens', 'timeout'] as const) {
+            const value = this.config[field];
+            if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) throw new Error('JUDGE_CONFIG_INVALID');
+        }
     }
 
     abstract isAvailable(): Promise<boolean>;
