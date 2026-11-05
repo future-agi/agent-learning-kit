@@ -110,8 +110,11 @@ describe('W04 round3 fail-closed', () => {
         expect(hallucinationDetection(evidence, { includeClaimAnalysis: null } as any)).toMatchObject({ passed: false, reason: 'METRIC_CONFIG_INVALID' });
         expect(faithfulness(evidence, { threshold: null } as any)).toMatchObject({ passed: false, reason: 'METRIC_CONFIG_INVALID' });
     });
-    test('R3-C05 sparse weights are valid, positive zero-precision orders are retained', () => {
-        expect(bleuScore('alpha', { reference: 'alpha' })).toMatchObject({ passed: false, score: 0 });
+    test('R3-C05 sparse weights are valid, positive zero-precision orders are smoothed', () => {
+        const result = bleuScore('alpha', { reference: 'alpha' });
+        expect(result.score).toBeCloseTo(0.1778279410038923, 12);
+        expect(result.passed).toBe(false);
+        expect(result.reason).toBe('BLEU score: 0.1778');
         expect(bleuScore('alpha', { reference: 'alpha', ngramWeights: [1, 0, 0, 0] })).toMatchObject({ passed: true, score: 1 });
         expect(bleuScore('alpha', { reference: 'alpha', ngramWeights: [0, 0] }).passed).toBe(false);
     });
