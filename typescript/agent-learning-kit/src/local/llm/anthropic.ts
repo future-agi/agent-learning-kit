@@ -48,12 +48,13 @@ export class AnthropicLLM extends AbstractLLM {
 
     constructor(config: AnthropicConfig = {}) {
         super(config);
-        const fullConfig = { ...ANTHROPIC_DEFAULTS, ...config };
+        // AbstractLLM already captured caller fields; never read the original config again.
+        const fullConfig = { ...ANTHROPIC_DEFAULTS, ...(this.config as AnthropicConfig) };
         this.model = fullConfig.model!;
         this.baseUrl = fullConfig.baseUrl!;
 
         // Get API key from config or environment
-        this.apiKey = config.apiKey || process.env.ANTHROPIC_API_KEY || '';
+        this.apiKey = fullConfig.apiKey || process.env.ANTHROPIC_API_KEY || '';
     }
 
     /**

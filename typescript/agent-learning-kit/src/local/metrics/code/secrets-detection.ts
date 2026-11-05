@@ -179,6 +179,72 @@ const SECRET_PATTERNS: Array<{
     }
 ];
 
+function isSourceLineBreak(char: string): boolean {
+    const point = char.charCodeAt(0);
+    return char === '\r' || char === '\n' || point === 0x2028 || point === 0x2029;
+}
+
+/**
+ * Locate bare bearer tokens in a conservative JS/Python lexical subset.
+ * This is an exemption allowlist, not a parser: uncertain syntax stops the
+ * allowlist, never the secret scan. In particular, templates (including their
+ * interpolations), regex literals and triple-quoted strings are not unwrapped.
+ */
+function unquotedBearerStarts(code: string): Set<number> {
+    const starts = new Set<number>();
+    let index = 0;
+    while (index < code.length) {
+        const char = code[index];
+        if (char === '#' || code.startsWith('//', index)) {
+            while (index < code.length && !isSourceLineBreak(code[index])) index++;
+            continue;
+        }
+        if (code.startsWith('/*', index)) {
+            const end = code.indexOf('*/', index + 2);
+            const nested = code.indexOf('/*', index + 2);
+            if (end === -1 || (nested !== -1 && nested < end)) return starts;
+            index = end + 2;
+            continue;
+        }
+        if (char === '"' || char === "'") {
+            // Prefixed strings and multiline quoting have language-specific
+            // rules. Do not guess where they end and then grant an exemption.
+            if (code.startsWith(char.repeat(3), index) ||
+                (index > 0 && /[A-Za-z0-9_$]/.test(code[index - 1]))) return starts;
+            const quote = char;
+            index++;
+            let closed = false;
+            while (index < code.length) {
+                const next = code[index];
+                if (next === '\\') {
+                    index += code[index + 1] === '\r' && code[index + 2] === '\n' ? 3 : 2;
+                } else if (next === quote) {
+                    index++;
+                    closed = true;
+                    break;
+                } else if (isSourceLineBreak(next)) {
+                    return starts;
+                } else {
+                    index++;
+                }
+            }
+            if (!closed) return starts;
+            continue;
+        }
+        // Slash may open a regex; backticks may nest through interpolation.
+        // Other unsupported syntax (e.g. heredocs) likewise stays ambiguous.
+        if (!/[A-Za-z0-9_$\s{}()[\].,:;=+*!&|^-]/.test(char) ||
+            (char === '[' && (code[index + 1] === '[' || code[index + 1] === '='))) return starts;
+        if ((char === 'b' || char === 'B') &&
+            code.slice(index, index + 6).toLowerCase() === 'bearer' &&
+            (index === 0 || /[\s{[(,;.]/.test(code[index - 1]))) {
+            starts.add(index);
+        }
+        index++;
+    }
+    return starts;
+}
+
 /**
  * Detect hardcoded secrets in code.
  *
@@ -219,6 +285,7 @@ export function secretsDetection(
     }
 
     const lines = code.split('\n');
+    let unquotedBearer: Set<number> | undefined;
 
     // Check each pattern
     for (const { pattern, severity, type, description, suggestion } of SECRET_PATTERNS) {
@@ -246,12 +313,15 @@ export function secretsDetection(
                 line.trim().startsWith('#') ||
                 line.trim().startsWith('*');
 
-            // Literal contents are never evidence of an environment lookup.
-            // Only the bearer pattern can consume an unquoted process.env
-            // property value. Require that whole assignment span, not a marker
-            // substring or a quoted value; other environment APIs do not match.
-            const isEnvRef = type === 'bearer-token' &&
-                /^[A-Za-z]+["']?\s*[:=]\s*process\.env\.[A-Za-z_$][A-Za-z0-9_$]*$/.test(match[0]);
+            // A matching substring cannot establish its own lexical context.
+            // Only exempt a whole, bare environment assignment/property in
+            // known code, never a literal, comment, identifier suffix or an
+            // ambiguous expression. Other environment APIs do not match here.
+            const isEnvShape = type === 'bearer-token' &&
+                /^[A-Za-z]+\s*[:=]\s*process\.env\.[A-Za-z_$][A-Za-z0-9_$]*$/.test(match[0]) &&
+                /^(?:\$[A-Za-z0-9_$]*)?[ \t]*(?:$|[,;\r\n}\])])/.test(code.slice(matchIndex + match[0].length));
+            if (isEnvShape && unquotedBearer === undefined) unquotedBearer = unquotedBearerStarts(code);
+            const isEnvRef = isEnvShape && unquotedBearer?.has(matchIndex) === true;
 
             if (!isComment && !isEnvRef) {
                 // Mask the actual secret in the match

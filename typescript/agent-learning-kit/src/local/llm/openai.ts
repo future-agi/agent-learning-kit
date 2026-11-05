@@ -50,13 +50,14 @@ export class OpenAILLM extends AbstractLLM {
 
     constructor(config: OpenAIConfig = {}) {
         super(config);
-        const fullConfig = { ...OPENAI_DEFAULTS, ...config };
+        // AbstractLLM already captured caller fields; never read the original config again.
+        const fullConfig = { ...OPENAI_DEFAULTS, ...(this.config as OpenAIConfig) };
         this.model = fullConfig.model!;
         this.baseUrl = fullConfig.baseUrl!;
         this.organization = fullConfig.organization;
 
         // Get API key from config or environment
-        this.apiKey = config.apiKey || process.env.OPENAI_API_KEY || '';
+        this.apiKey = fullConfig.apiKey || process.env.OPENAI_API_KEY || '';
     }
 
     /**
