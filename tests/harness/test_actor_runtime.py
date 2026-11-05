@@ -150,13 +150,14 @@ def _run(monkeypatch, cast, agent, person):
     return asyncio.run(conv.converse(agent, scenario, SimpleNamespace(), actors=cast))
 
 
-def _cast(trigger, monkeypatch, lines=("Why Friday?",)):
+def _cast(trigger, monkeypatch, lines=("Why Friday?",), limits=None):
     cast = conv.ChatActors(
-        [{**_MANAGER, "trigger": trigger, "brief": "You are Mia."}], seed="run", model=None
+        [{**_MANAGER, "trigger": trigger, "brief": "You are Mia."}], seed="run", model=None, limits=limits
     )
     written = list(lines)
 
-    async def write(brief):
+    async def write(actor, brief):
+        # Plain text is a line; nothing is a wait.
         return written.pop(0) if written else ""
 
     monkeypatch.setattr(cast, "_write", write)
@@ -189,20 +190,20 @@ def test_an_actor_whose_word_never_comes_never_writes_and_is_recorded_not_trigge
     assert cast.summary()[0]["triggered"] is False and cast.summary()[0]["delivered"] == 0
 
 
-def test_an_actor_in_a_chat_writes_each_time_it_is_named_within_the_call_wide_budget(monkeypatch):
-    from fi.simulate.simulation.call_actors import TAKEOVER_AFTER_TURNS
-
-    cast = _cast({"kind": "always"}, monkeypatch, lines=[f"line {n}" for n in range(10)])
+@pytest.mark.parametrize("limits, expected", [(None, 9), ({"caller_takes_back_after_turns": 4}, 4)])
+def test_a_chat_actor_is_free_and_only_the_environment_s_limit_stops_it(monkeypatch, limits, expected):
+    # K-4, K-26: no hard-coded cap; an actor decides on every agent turn, within the limits the environment sets.
+    cast = _cast({"kind": "always"}, monkeypatch, lines=[f"line {n}" for n in range(10)], limits=limits)
 
     async def lines():
         out = []
         for turn in range(1, 10):
-            out += await cast.due_lines(agent_turns=turn, last_text="Mia, what do you think?", tools_called=[],
+            out += await cast.due_lines(agent_turns=turn, last_text="Anything else?", tools_called=[],
                                         conversation=[])
         return out
 
     written = asyncio.run(lines())
-    assert len(written) == TAKEOVER_AFTER_TURNS > 2
+    assert len(written) == expected
 
 
 def test_an_actor_that_cannot_reach_a_chat_is_kept_with_the_reason(monkeypatch):
@@ -286,17 +287,17 @@ def _history_dispatcher(history, actors):
         sent.append((url, headers, arguments))
         return 200
 
+    from fi.alk.harness.actor_dispatch import HttpActs
+    from fi.alk.harness.actors import PreRunSession
+
     dispatcher = ActorDispatcher(
         actors,
         [],
+        act=HttpActs("http://proxy/", "t0ken", 60.0, send),
         trial_id="trial-2",
-        proxy_url="http://proxy/",
-        token="t0ken",
         read_log=list,
         seed="trial-2",
-        timeout=60.0,
-        send=send,
-        history=history,
+        pre_run=[PreRunSession(thread=history)],
     )
     return dispatcher, sent
 
@@ -315,7 +316,7 @@ def test_history_is_written_by_its_actors_in_order_before_the_run_with_keys_of_i
     ]
     for trial in range(2):
         dispatcher, sent = _history_dispatcher(history, actors)
-        asyncio.run(dispatcher.write_history())
+        asyncio.run(dispatcher.replay())
         # The same history on every trial, each entry under its own actor and a history key.
         assert [(h["X-ALK-Actor"], h["Idempotency-Key"], a["text"]) for _, h, a in sent] == [
             ("priya", "trial-2:priya:h1", "Can we ship Friday?"),
@@ -399,7 +400,6 @@ def test_a_way_of_speaking_sent_as_the_actor_s_surface_is_said_back_never_saved(
     from fi.alk.harness.actors import load_actors
     from fi.alk.harness.world.tools import world_actor_tools
 
-    monkeypatch.setenv("HARNESS_ACTORS", "1")
     add, _drop = world_actor_tools(tmp_path, SimpleNamespace(modality="voice", model_dump=lambda: {}))
     out = asyncio.run(add.handler({"id": "dana", "name": "Dana", "role": "a coworker", "surface": "audio_mix"}))
     assert out.get("is_error") and "send it as `channel`" in out["content"][0]["text"]
@@ -413,7 +413,6 @@ def test_a_voice_actor_s_brief_reads_the_world_records_it_may_see(tmp_path, monk
     from fi.alk.harness import call_runner as cr
     from fi.alk.harness.call_actor import CallActor, CallActorList, save_call_actors
 
-    monkeypatch.setenv("HARNESS_ACTORS", "1")
     save_call_actors(tmp_path, CallActorList(call_actors=[CallActor(id="near", name="Rowan", role="a coworker", channel="audio_mix")]))
     from fi.alk.harness.actors import load_actors
 

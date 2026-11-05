@@ -71,6 +71,7 @@ from .call_actor_voice import (
     at_level,
     with_call_actor_turns,
     world_access,
+    world_records,
 )
 from fi.simulate.agent.definition import (
     AgentDefinition,
@@ -3529,6 +3530,8 @@ class LiveKitEngine(BaseEngine):
             play=play if player is not None else None,
             say=say,
             tools_called=world_access(os.environ.get(ACTOR_WORLD_ALIAS, "")),
+            records=world_records(os.environ.get(ACTOR_WORLD_ALIAS, "")),
+            limits=_bound_call_actors()["limits"],
             conversation=conversation,
         )
 
@@ -4497,17 +4500,28 @@ def _with_voice(tts_config: Any, voice: str, **delivery: Any) -> Any:
     return tts_config.model_copy(update={field: voice, **delivery})
 
 
+def _bound_call_actors() -> dict[str, Any]:
+    """The speaking actors this call carries and the limits in force; set per scenario by the call runner, as
+    `{"voices": [...], "limits": {...}}` (a bare list is voices with the default limits)."""
+    try:
+        bound = json.loads(os.environ.get(ACTOR_VOICES_ALIAS, "") or "[]")
+    except ValueError:
+        return {"voices": [], "limits": None}
+    if isinstance(bound, list):
+        bound = {"voices": bound, "limits": None}
+    if not isinstance(bound, dict):
+        return {"voices": [], "limits": None}
+    voices = bound.get("voices")
+    limits = bound.get("limits")
+    return {
+        "voices": [one for one in voices if isinstance(one, dict)] if isinstance(voices, list) else [],
+        "limits": limits if isinstance(limits, dict) else None,
+    }
+
+
 def _bound_call_actor_voices() -> list[dict[str, Any]]:
     """The speaking actors this call carries; set per scenario by the call runner."""
-    try:
-        voices = json.loads(os.environ.get(ACTOR_VOICES_ALIAS, "") or "[]")
-    except ValueError:
-        return []
-    return (
-        [one for one in voices if isinstance(one, dict)]
-        if isinstance(voices, list)
-        else []
-    )
+    return _bound_call_actors()["voices"]
 
 
 def _answered_by_voicemail() -> bool:

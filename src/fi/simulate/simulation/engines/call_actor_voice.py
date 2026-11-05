@@ -197,9 +197,13 @@ class CallActorsOnCall:
         tools_called: Callable[[], list[str]] | None = None,
         conversation: Callable[[], list[str]] = list,
         clock: Callable[[], float] = time.time,
+        records: Callable[[str], list[dict[str, Any]]] | None = None,
+        limits: dict[str, Any] | None = None,
     ) -> None:
         self.voices = {str(voice.actor["id"]): voice for voice in voices}
-        self.cast = Cast([voice.actor for voice in voices], seed, clock)
+        self.cast = Cast([voice.actor for voice in voices], seed, clock, limits)
+        # Read only for an actor that comes in once a record exists (`conditional`).
+        self.records = records
         self.play = play
         self.say = say
         # Read only for an actor that enters on a tool call: the person's turn waits on it.
@@ -274,7 +278,7 @@ class CallActorsOnCall:
             except asyncio.TimeoutError:
                 logger.warning("actors: the tool trace took too long to read")
         moment = Moment(
-            agent_turns=self.agent_turns, last_text=text, tools_called=tools
+            agent_turns=self.agent_turns, last_text=text, tools_called=tools, records=self.records
         )
         self.cast.entering(moment)
         heard = [*self.conversation(), f"The agent: {text}"]
@@ -465,6 +469,24 @@ def with_call_actor_turns(
         )
         ordered.insert(index, line)
     return ordered
+
+
+def world_records(dsn: str) -> Callable[[str], list[dict[str, Any]]] | None:
+    """The world's records of one collection, read from the run's world database; None without one."""
+    if not dsn:
+        return None
+    from fi.alk.harness.world.stores.postgres import AttachedPostgresStore
+
+    store = AttachedPostgresStore(dsn)
+
+    def records(collection: str) -> list[dict[str, Any]]:
+        try:
+            return list(store.table(collection))
+        except Exception as exc:  # noqa: BLE001 - unreadable records are not there yet
+            logger.warning("actors could not read the world's records", exc_info=redacted_exc_info(exc))
+            return []
+
+    return records
 
 
 def world_access(dsn: str) -> Callable[[], list[str]] | None:

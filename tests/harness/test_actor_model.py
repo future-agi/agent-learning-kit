@@ -62,7 +62,7 @@ def test_a_full_record_round_trips_and_open_values_are_kept(tmp_path):
         ({"parent": "nobody"}, "brought in by an actor that is not listed"),
         (
             {"activation": {"fallback": "nobody"}},
-            "falls back to an actor that is not listed",
+            "falls back to .nobody., which is neither an actor",
         ),
         ({"constraints": {"secret": ["x"]}}, "Extra inputs"),
         ({"behaviour": {"response_timing": {"kind": "later"}}}, "kind"),

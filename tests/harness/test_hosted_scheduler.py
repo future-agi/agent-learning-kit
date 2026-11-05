@@ -4295,6 +4295,8 @@ def test_a_call_with_no_words_and_no_actions_is_not_judged(monkeypatch) -> None:
     receipt, alone = _two_judged(monkeypatch, _all, silent=True)
     assert alone == []
     assert receipt.status == "errored" and receipt.failure.code == "judge_undecided"
+    # Its evidence never arrived: each judged sub-goal reads unmeasured, never pass, fail or a blank.
+    assert {goal.verdict for goal in receipt.sub_goals} == {"unmeasured"}
 
 
 def test_a_call_whose_only_evidence_is_its_recording_is_still_judged(monkeypatch) -> None:
@@ -4637,46 +4639,7 @@ def test_job_tool_requirement_uses_observed_calls(required, with_calls, expected
     asyncio.run(scenario())
 
 
-def test_a_scenario_with_actors_is_never_run_while_they_are_off_and_says_why(
-    monkeypatch,
-) -> None:
-    monkeypatch.delenv("HARNESS_ACTORS", raising=False)
-
-    async def scenario() -> tuple[hs.RunResult, FakeCallRunner]:
-        outbound = FakeOutbound()
-        pool, _ = _pool(1, outbound=outbound)
-        await pool.start()
-        runner = FakeCallRunner({"plain": _call_outcome()})
-        scheduler = hs.HostedScheduler(
-            pool=pool,
-            world_factory=FakeWorldFactory(),
-            call_runner=runner,
-            outbound=outbound,
-            job_seed=1,
-        )
-        with_one = FakeScenario(
-            "with-one", "id-1", sub_goals=[FakeSubGoal("g", lambda w, c: None)]
-        )
-        with_one.actors = ("friend",)
-        plain = FakeScenario(
-            "plain",
-            "id-2",
-            sub_goals=[FakeSubGoal("g", lambda w, c: None)],
-            requires_tool_evidence=False,
-        )
-        result = await asyncio.wait_for(scheduler.run([with_one, plain]), timeout=5.0)
-        await pool.close()
-        return result, runner
-
-    result, runner = asyncio.run(scenario())
-    assert [call[0] for call in runner.calls] == ["plain"]
-    skipped, ran = result.receipts
-    assert (skipped.status, skipped.reason) == ("skipped", "actors are switched off")
-    assert ran.status == "passed" and ran.reason is None
-
-
 def _run_with_friend(monkeypatch, summary, sub_goals) -> hs.ResultReceipt:
-    monkeypatch.setenv("HARNESS_ACTORS", "1")
 
     async def scenario() -> hs.ResultReceipt:
         outbound = FakeOutbound()
@@ -4730,7 +4693,7 @@ def test_a_call_its_call_actor_never_reached_is_inconclusive_never_a_pass(
     assert receipt.status == "errored"
     assert (receipt.failure.code, receipt.failure.message) == (
         "actor_missing",
-        f"inconclusive: did not reach the agent: {why}",
+        f"inconclusive: scenario problem, not the agent's: did not reach the agent: {why}",
     )
     assert [one.verdict for one in receipt.sub_goals] == [None]
 

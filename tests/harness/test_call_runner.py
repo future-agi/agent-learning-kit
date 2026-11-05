@@ -2135,7 +2135,6 @@ def test_a_call_keeps_who_its_call_actors_were_and_what_happened_to_each(
     from fi.alk.harness.call_actor import CallActor, CallActorList, save_call_actors
     from fi.simulate.simulation.call_actors import LOUDNESS_RANGE
 
-    monkeypatch.setenv("HARNESS_ACTORS", "1")
     _job_obj, context = _context(tmp_path=tmp_path)
     _write_scenario_doc(context.bundle_dir, scenario_key="k1")
     document = context.bundle_dir / "scenarios" / "k1" / "scenario.json"
@@ -2248,7 +2247,7 @@ def _with_actors(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def test_world_actors_act_only_when_switched_on_with_a_proxy_taking_actor_requests(
+def test_actors_act_only_with_a_proxy_taking_actor_requests(
     tmp_path, monkeypatch
 ) -> None:
     bundle = _with_actors(tmp_path / "bundle")
@@ -2261,9 +2260,6 @@ def test_world_actors_act_only_when_switched_on_with_a_proxy_taking_actor_reques
         endpoints={"tool_proxy": proxy, "database": _postgres_endpoint()},
         metadata={"actor_proof_path": str(token)},
     )
-    monkeypatch.delenv("HARNESS_ACTORS", raising=False)
-    assert cr._actor_dispatcher(doc, bundle, ready, "t1", 60.0) is None
-    monkeypatch.setenv("HARNESS_ACTORS", "1")
     assert cr._actor_dispatcher({}, bundle, ready, "t1", 60.0) is None
     assert (
         cr._actor_dispatcher(
@@ -2276,15 +2272,15 @@ def test_world_actors_act_only_when_switched_on_with_a_proxy_taking_actor_reques
         is None
     )
     dispatcher = cr._actor_dispatcher(doc, bundle, ready, "t1", 60.0)
-    assert dispatcher is not None and dispatcher.proxy_url == "http://127.0.0.1:9"
-    assert token.read_text() == dispatcher.token and len(dispatcher.token) == 64
+    assert dispatcher is not None and dispatcher.act.proxy_url == "http://127.0.0.1:9"
+    assert token.read_text() == dispatcher.act.token and len(dispatcher.act.token) == 64
     assert token.stat().st_mode & 0o777 == 0o600
     elsewhere = tmp_path / "elsewhere"
     elsewhere.write_text("untouched")
     token.unlink()
     token.symlink_to(elsewhere)
     assert (
-        cr._actor_dispatcher(doc, bundle, ready, "t2", 60.0).token != dispatcher.token
+        cr._actor_dispatcher(doc, bundle, ready, "t2", 60.0).act.token != dispatcher.act.token
     )
     assert elsewhere.read_text() == "untouched" and not token.is_symlink()
 
@@ -2463,7 +2459,6 @@ def test_a_trial_s_actor_token_holds_only_while_its_call_runs(
     body["actors"] = [{"id": "reviewer", "actions": [{"action": "records.approve"}]}]
     document.write_text(json.dumps(body))
     _with_actors(context.bundle_dir)
-    monkeypatch.setenv("HARNESS_ACTORS", "1")
     monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg([], ["name", "at"]))
     token = tmp_path / "w0" / "tool-proxy" / "actor-token"
     elsewhere = tmp_path / "elsewhere"
@@ -2568,11 +2563,10 @@ def test_an_actor_on_the_agent_s_tool_waits_for_the_route_the_log_records_for_it
             "actor_proof_path": str(tmp_path / "w0" / "tool-proxy" / "actor-token")
         },
     )
-    monkeypatch.setenv("HARNESS_ACTORS", "1")
     dispatcher = cr._actor_dispatcher(doc, bundle, ready, "t1", 60.0)
     log = [{"name": "request_approval", "actor_id": "agent", "action_id": "a1"}]
     [(_actor, action)] = [(one[0], one[2]) for one in dispatcher.pending]
-    assert dispatcher._cause(_actor, action, 0.0, log) == "a1"
+    assert dispatcher._cause(_actor, action.trigger, 0.0, log, 0) == "a1"
 
 
 def test_a_trial_token_that_cannot_be_given_to_the_proxy_user_is_never_widened(tmp_path, monkeypatch):

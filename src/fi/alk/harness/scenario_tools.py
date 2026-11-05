@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from fi.simulate.simulation.call_actors import (
+    EVALUATED_BY,
     TRIGGER_ABOUT,
     at_least,
     available_channels,
@@ -37,7 +38,6 @@ from .call_actor import (
     load_call_actors,
     speaking_entries,
     scenario_problems,
-    actors_enabled,
 )
 from .catalogue import (
     CONTRACT_FIELDS,
@@ -81,7 +81,7 @@ from .prove import (
     workspace_bindings,
     workspace_fixture,
 )
-from .actors import load_actors
+from .actors import Actor, cycles, load_actors
 from .scenario import (
     ANSWERED_BY,
     CALLER_AWARENESS,
@@ -206,9 +206,7 @@ def _no_longer_hold(
 
 
 def _actor_fields() -> dict[str, Any]:
-    """The world-actor field, withheld entirely when the switch is off."""
-    if not actors_enabled():
-        return {}
+    """The actors field of a scenario."""
     return {
         "actors": {
             "type": "array",
@@ -244,6 +242,9 @@ def _actor_fields() -> dict[str, Any]:
                             "on_call": {"type": "integer", "minimum": 1},
                             "words": {"type": "array", "items": {"type": "string"}},
                             "p": {"type": "number"},
+                            "seconds": {"type": "number"},
+                            "collection": {"type": "string", "description": "conditional: the collection"},
+                            "where": {"type": "object", "description": "conditional: fields the record must hold"},
                         },
                         "required": ["kind"],
                     },
@@ -265,6 +266,7 @@ def _actor_fields() -> dict[str, Any]:
                                                 "after_seconds",
                                                 "probability",
                                                 "always",
+                                                "conditional",
                                             ],
                                         },
                                         "tool": {
@@ -283,6 +285,8 @@ def _actor_fields() -> dict[str, Any]:
                                             "type": "number",
                                             "description": "probability, 0 to 1",
                                         },
+                                        "collection": {"type": "string", "description": "conditional"},
+                                        "where": {"type": "object", "description": "conditional"},
                                     },
                                     "required": ["kind"],
                                     "additionalProperties": False,
@@ -295,21 +299,28 @@ def _actor_fields() -> dict[str, Any]:
                 "required": ["id"],
             },
         },
-        "history": {
+        "pre_run": {
             "type": "array",
-            "description": "What actors wrote in the world before the run starts, in order: earlier messages in a "
-            "thread, notes, records the agent will find. Each entry is one of that actor's permitted actions with its "
-            "arguments, written in that actor's own words and from what that actor would know. It is the same on "
-            "every trial and is never graded. Leave it out when the world starts as seeded.",
+            "description": "Conversations that happened before the run, each in its own place of the world (a channel "
+            "thread, a DM, an email chain, a ticket's comments), that the agent will find. Give the situation only: "
+            "who was in it (`actors`, any number of the environment's actors, the caller included), where (`where`: "
+            "the action that writes there and the arguments naming the place, plus `reply` when replies use another "
+            "action and an id from the first message), and what it was about (`about`). The actors write the messages "
+            "themselves when the scenario is kept; never write their lines. A mocked actor's messages, if any, go in "
+            "`thread`. Sessions are written in order and replayed into the world before every trial; they are never "
+            "graded. `per_trial` writes a fresh conversation inside each trial instead. Leave it out when the world "
+            "starts as seeded.",
             "items": {
                 "type": "object",
                 "properties": {
-                    "actor": {"type": "string"},
-                    "action": {"type": "string"},
-                    "arguments": {"type": "object"},
+                    "actors": {"type": "array", "items": {"type": "string"}},
+                    "where": {"type": "object"},
+                    "about": {"type": "string"},
+                    "per_trial": {"type": "boolean"},
+                    "max_messages": {"type": "integer", "minimum": 1},
+                    "thread": {"type": "array", "items": {"type": "object"}},
                 },
-                "required": ["actor", "action"],
-                "additionalProperties": False,
+                "required": ["actors", "where", "about"],
             },
         },
         "faults": {
@@ -350,18 +361,42 @@ def _unlisted_actors(scenario: Scenario, world_root: Path) -> list[str]:
         for entry in scenario.actors
         if entry.id not in listed
     ]
-    for number, entry in enumerate(scenario.history, start=1):
-        actor = listed.get(entry.actor)
-        if actor is None:
-            problems.append(f"history {number}: {entry.actor!r} is not an actor; add it with add_actor first")
-        elif entry.action not in actor.permitted_actions:
-            problems.append(
-                f"history {number}: {entry.actor} may not {entry.action}; it may "
-                + (", ".join(actor.permitted_actions) or "do nothing in the world")
-            )
+    from .pre_run import problems as session_problems
+
+    for number, session in enumerate(scenario.pre_run, start=1):
+        problems += session_problems(session, number, listed)
     if scenario.starts_with is not None and scenario.starts_with.actor not in listed:
         problems.append(f"starts_with: {scenario.starts_with.actor!r} is not an actor; add it with add_actor first")
+    problems += _activation_problems(scenario, listed)
+    for loop in cycles(listed, scenario.actors):
+        problems.append(
+            "actors: " + " and ".join(loop) + " bring each other in (each one's trigger is an action only the next "
+            "can take): a cycle no run can settle; give one of them a trigger of its own"
+        )
     return problems
+
+
+def _activation_problems(scenario: Scenario, listed: dict[str, Actor]) -> list[str]:
+    """Each actor whose trigger (the scenario's, else its own) its runtime cannot evaluate: refused when written, never
+    a trigger that silently never fires."""
+    out = []
+    for entry in scenario.actors:
+        actor = listed.get(entry.id)
+        if actor is None:
+            continue
+        trigger = entry.trigger or (actor.activation.trigger if actor.activation else None)
+        if trigger is None:
+            continue
+        runtime = "speaking" if actor.channel else "world"
+        if trigger.kind not in EVALUATED_BY[runtime]:
+            who = "speaks on the call" if actor.channel else "acts through the world"
+            out.append(
+                f"actors: {entry.id} {who}, where `{trigger.kind}` cannot be evaluated; use one of "
+                + ", ".join(sorted(EVALUATED_BY[runtime]))
+            )
+        if trigger.kind == "conditional" and not trigger.collection:
+            out.append(f"actors: {entry.id}: conditional needs the `collection` whose record brings them in")
+    return out
 
 
 def _mailbox_fields() -> dict[str, Any]:
@@ -1145,8 +1180,6 @@ def _call_actors_that_cannot_run(
     """Why the scenario's actors that speak on the call cannot, or nothing."""
     if not scenario.actors:
         return []
-    if not actors_enabled():
-        return ["actors: actors are switched off in this environment, so leave actors empty"]
     listing = listing or CallActorList()
     speaking = speaking_entries(scenario.actors, listing)
     if not speaking:
@@ -1239,6 +1272,12 @@ def accept_scenario(
         return _err(f"Not kept. {invalid}"[:600])
     if unlisted := _unlisted_actors(scenario, world_root):
         return _err("Not kept. " + " ".join(unlisted))
+    if scenario.starts_with is not None and spoken:
+        # No transport delivers an event to a voice agent: the scenario would run as an ordinary call instead.
+        return _err(
+            "Not kept. starts_with: this agent is reached by a call, and nothing can deliver an event to it; an "
+            "event-started scenario is only for an agent reached by messages"
+        )
     scenario.branch = _without_kind_label(scenario.branch)
     if not spoken:
         scenario.background_noise = False
@@ -1610,8 +1649,6 @@ def scenario_tools(
 
     def usable_call_actors() -> list[str]:
         """The listed actors a run can deliver to this agent."""
-        if not actors_enabled():
-            return []
         channels = available_channels("voice" if _is_spoken(contract) else "chat")
         return [
             one.id
@@ -1833,11 +1870,10 @@ def scenario_tools(
         "is refused until it names a sub-goal that fails when that overlay is mishandled, so this "
         "is what makes one available. Leave it empty for an ordinary task sub-goal."
         + (
-            " `actor` names the actor this sub-goal is about, by id, when it grades how the agent dealt with that "
-            "actor: it reads not applicable on a call the actor never came into and inconclusive when the actor came "
-            "in and never reached the agent. Leave it empty for a sub-goal about the person's task."
-            if actors_enabled()
-            else ""
+            " `actor` names the actor this sub-goal depends on, by id, when it grades how the agent dealt with that "
+            "actor (it always grades the agent, never the actor): it reads not applicable on a call the actor never "
+            "came into and inconclusive when the actor came in and never reached the agent. Leave it empty for a "
+            "sub-goal about the person's task."
         ),
         schema(
             {
@@ -1847,7 +1883,7 @@ def scenario_tools(
                 "judged": str,
                 "output": str,
                 "overlay": str,
-                **({"actor": str} if actors_enabled() else {}),
+                "actor": str,
                 **CONTRACT_SCHEMA,
             },
             ["name", "what"],
@@ -1861,7 +1897,7 @@ def scenario_tools(
             judged=str(args.get("judged") or ""),
             output=str(args.get("output") or "pass_fail"),
             overlay=str(args.get("overlay") or ""),
-            actor=str(args.get("actor") or "") if actors_enabled() else "",
+            actor=str(args.get("actor") or ""),
             **{field: str(args.get(field) or "") for field in CONTRACT_FIELDS},
         )
         problems = validate_sub_goal(sub_goal)
@@ -2154,6 +2190,11 @@ def scenario_tools(
             problem = scenario_problem(args)
             if problem:
                 return _refuse(problem)
+        if args.get("pre_run"):
+            # The actors write their pre-run conversations now, once, so every trial replays the same thread.
+            from .pre_run import written
+
+            args = await written(dict(args), world_root)
 
         # A submission carrying a kept scenario's key replaces that one, under its new name if renamed,
         # so the checks below never count it against itself.
@@ -2425,8 +2466,6 @@ def scenario_tools(
                             "the environment's default share. Leave it out otherwise.",
                         }
                     }
-                    if actors_enabled()
-                    else {}
                 ),
                 "axes": {
                     "type": "object",
@@ -3023,7 +3062,7 @@ def world_summary(world_root: Path) -> str:
                 "\nSUB-GOALS already defined (reuse these, do not restate them):"
             )
             lines += [f"  {one.name}: {one.what}" for one in catalogue.sub_goals]
-        acting = load_actors(world_root).actors if actors_enabled() else []
+        acting = load_actors(world_root).actors
         if acting:
             lines.append(
                 "\nACTORS a scenario can include in its `actors`, by id: an actor who speaks on calls with "

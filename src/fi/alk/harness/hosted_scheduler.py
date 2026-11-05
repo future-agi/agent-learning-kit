@@ -46,10 +46,9 @@ from typing import Any, Awaitable, Callable, Protocol, Sequence
 
 from . import observability
 from .job import FailureDomain, HarnessStage
-from .call_actor import actors_enabled
 from .checks import reference_of, takes_reference
 from .joint_judge import OFF_SCRIPT
-from .judge import INCONCLUSIVE, NOT_APPLICABLE, verdict_named
+from .judge import INCONCLUSIVE, NOT_APPLICABLE, UNMEASURED, verdict_named
 from .judge import judge_sub_goal as _judge
 from .outbound import (
     HostedAttemptSupersededError,
@@ -256,6 +255,8 @@ class CallOutcome:
     recording: str | None = None
     # Per actor in the call: whether it was triggered, how much it delivered, and why any was dropped.
     call_actors: tuple[dict[str, Any], ...] = ()
+    # Every action an actor took in the world this trial, with when and its outcome.
+    world_actions: tuple[dict[str, Any], ...] = ()
 
 
 class CallAborted(RuntimeError):
@@ -325,6 +326,8 @@ class SubGoalResult:
     held: bool | None
     reason: str | None
     judged: bool
+    # What it was decided from (`world_state`, `transcript`, `recording`, `tool_calls`).
+    evidence: tuple[str, ...] = field(default=(), compare=False)
     # Derived from held and reason, so a result changed with `replace` never disagrees with it.
     verdict: str | None = field(default=None, init=False)
 
@@ -1545,7 +1548,25 @@ def _call_actors_missing(scenario: Scenario, outcome: CallOutcome) -> str:
         if not report.get("delivered") and report.get("drawn", True):
             why = "not_delivered" if report.get("triggered") else "not_triggered"
             missing.append(f"{report.get('name') or actor_id} ({why})")
+    # An actor acting through the world that could not act at all (no door, not listed) is the scenario's problem too.
+    for report in outcome.call_actors:
+        actor_id = str(report.get("actor") or "")
+        if report.get("problem") in ("not_listed", "no_world_door") and actor_id not in graded:
+            missing.append(f"{report.get('name') or actor_id} ({report.get('problem')})")
     return ", ".join(missing)
+
+
+def _evidence_of(goal: Any, outcome: CallOutcome) -> tuple[str, ...]:
+    """What a sub-goal was decided from: a check reads the world's state and the agent's calls; a judged one reads the
+    transcript, and the recording on a call that has one."""
+    out: list[str] = []
+    if getattr(goal, "check", ""):
+        out += ["world_state", "tool_calls"]
+    if getattr(goal, "judged", ""):
+        out.append("transcript")
+        if outcome.recording:
+            out.append("recording")
+    return tuple(dict.fromkeys(out))
 
 
 def _about_an_actor(goal: Any, result: SubGoalResult, outcome: CallOutcome) -> SubGoalResult:
@@ -1564,14 +1585,6 @@ def _about_an_actor(goal: Any, result: SubGoalResult, outcome: CallOutcome) -> S
     return result
 
 
-def _switched_off(scenario: Scenario) -> str:
-    """Why a scenario with actors is not run while they are off, or "": running it without them would look like a
-    normal result for a test that never happened."""
-    if actors_enabled():
-        return ""
-    return "actors are switched off" if getattr(scenario, "actors", ()) else ""
-
-
 def _skipped_receipt(scenario: Scenario) -> ResultReceipt:
     # Exact body per outbound-channels.md Channel 2, "skipped receipt body (exact)".
     return ResultReceipt(
@@ -1584,7 +1597,7 @@ def _skipped_receipt(scenario: Scenario) -> ResultReceipt:
         evaluations=(),
         call=None,
         failure=None,
-        reason=_switched_off(scenario) or None,
+        reason=None,
     )
 
 
@@ -1771,8 +1784,6 @@ class HostedScheduler:
                     or self._pool.fenced is not None
                     or self._cancel_requested()
                 ):
-                    return
-                if _switched_off(scenario):
                     return
                 context = _ScenarioContext()
                 try:
@@ -2298,7 +2309,7 @@ class HostedScheduler:
                 attempt,
                 _failure(
                     "actor_missing",
-                    f"inconclusive: did not reach the agent: {missing}",
+                    f"inconclusive: scenario problem, not the agent's: did not reach the agent: {missing}",
                 ),
                 sub_goals=_unjudged(scenario.sub_goals),
                 call=self._call_summary(call_outcome),
@@ -2413,12 +2424,25 @@ class HostedScheduler:
                 )
             )
 
-        # A call with no words, no actions and no recording leaves its judged sub-goals undecided, never guessed.
+        # A call with no words, no actions and no recording leaves its judged sub-goals unmeasured, never guessed.
+        if judged_pending and not (calls or call_outcome.messages or call_outcome.recording):
+            for slot, goal in judged_pending:
+                sub_goal_results[slot] = SubGoalResult(
+                    name=goal.name,
+                    held=None,
+                    reason=f"{UNMEASURED}the call left no words, actions or recording to judge it from",
+                    judged=True,
+                )
         if judged_pending and (calls or call_outcome.messages or call_outcome.recording):
             # A scenario's judged sub-goals can run together, but judge batches from parallel
             # worlds must not overlap on the shared provider session.
             async with self._judge_batch_lock:
                 offered = {"scenario": scenario, "recording": call_outcome.recording}
+                if call_outcome.call_actors or call_outcome.world_actions:
+                    offered["actors"] = {
+                        "summary": list(call_outcome.call_actors),
+                        "actions": list(call_outcome.world_actions),
+                    }
                 joint_verdicts, off_script = await self._judge_jointly(
                     [goal for _, goal in judged_pending], check_handle, calls, call_outcome, offered
                 )
@@ -2520,14 +2544,18 @@ class HostedScheduler:
                 attempt,
                 _failure(
                     "actor_missing",
-                    "inconclusive: an actor these sub-goals are about never reached the agent: "
+                    "inconclusive: scenario problem, not the agent's: an actor these sub-goals depend on never reached the agent: "
                     + ", ".join(unreached),
                 ),
                 sub_goals=tuple(sub_goal_results),
                 call=self._call_summary(call_outcome),
                 retry=False,
             )
-        # A settled `False` fails the scenario; an unsettled sub-goal makes it not decided.
+        sub_goal_results = [
+            replace(result, evidence=_evidence_of(goal, call_outcome))
+            for goal, result in zip(scenario.sub_goals, sub_goal_results)
+        ]
+        # A settled `False` fails the scenario; an unsettled sub-goal (unmeasured included) makes it not decided.
         if any(result.held is False for result in sub_goal_results):
             status = "failed"
         elif any(result.held is None for result in sub_goal_results):

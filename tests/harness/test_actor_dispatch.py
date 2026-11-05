@@ -6,8 +6,20 @@ import asyncio
 
 import pytest
 
-from fi.alk.harness.actor_dispatch import ActorDispatcher
+from fi.alk.harness.actor_dispatch import ActorDispatcher as _Dispatcher
+from fi.alk.harness.actor_dispatch import HttpActs
 from fi.alk.harness.actors import Actor, ActorList, ScenarioActor
+
+
+def ActorDispatcher(actors, cast, *, proxy_url, token, timeout, send=None, decide=None, **rest):  # noqa: N802
+    """The dispatcher over the HTTP surface, as the voice runner builds it; `decide` reads only the situation."""
+    wrapped = None
+    if decide is not None:
+
+        def wrapped(situation, actor):
+            return decide(situation)
+
+    return _Dispatcher(actors, cast, act=HttpActs(proxy_url, token, timeout, send), decide=wrapped, **rest)
 
 
 class _Clock:
@@ -266,9 +278,9 @@ def test_an_action_s_request_is_bounded_by_the_call_s_budget(monkeypatch):
 
     seen = []
     monkeypatch.setattr(
-        actor_dispatch,
+        actor_dispatch.HttpActs,
         "_send",
-        lambda url, headers, arguments, timeout: seen.append(timeout) or 201,
+        lambda self, url, headers, arguments: seen.append(self.timeout) or {"status": 201},
     )
     dispatcher = ActorDispatcher(
         {"reviewer": Actor(id="reviewer", name="Robin")},
@@ -458,7 +470,7 @@ def test_an_approver_that_answers_in_time_has_no_fallback():
     approve = {"action": "deals.approve", "trigger": {"kind": "contacted"}}
     dispatcher, clock, sent = _approver("decline", answers=[approve])
     asyncio.run(_wait_out(dispatcher, clock, 60))
-    assert _timeline(dispatcher) == [("manager", "waiting", None), ("manager", "mocked", None)]
+    assert _timeline(dispatcher) == [("manager", "waiting", None), ("manager", "mocked", "committed")]
     assert len(sent) == 1
 
 
@@ -518,9 +530,8 @@ def test_a_live_actor_acts_on_a_message_it_can_see_from_the_agent_or_another_act
     assert len(seen) == 2
 
 
-def test_actors_answering_each_other_with_the_agent_idle_are_stopped_and_recorded_as_the_scenario_s_problem():
-    from fi.alk.harness.actor_dispatch import ACTOR_ONLY_RUN
-
+def test_many_actors_each_answering_once_with_the_agent_idle_are_never_stopped_by_a_count():
+    # K-26: ten people each posting once is a conversation, not a loop; no count stops actors at run time.
     async def decide(situation):
         return '{"action": "slack.post_message", "arguments": {"text": "agreed"}, "why": "replying"}'
 
@@ -528,15 +539,8 @@ def test_actors_answering_each_other_with_the_agent_idle_are_stopped_and_recorde
     log.append({"name": "post_message", "actor_id": "agent", "action_id": "a1", "arguments": {"text": "Thoughts?"}})
     asyncio.run(_ticks(dispatcher, count=10))
     actor_rows = [row for row in log if row["actor_id"] != "agent"]
-    assert ACTOR_ONLY_RUN <= len(actor_rows) < ACTOR_ONLY_RUN + 3
-    assert dispatcher.stopped == {"manager", "colleague", "lead"}
-    [problem] = dispatcher.problems
-    assert problem["problem"] == "actor_loop" and problem["actors"] == ["colleague", "lead", "manager"]
-    # The agent acting again is no reason for a stopped actor to come back this trial.
-    log.append({"name": "post_message", "actor_id": "agent", "action_id": "a9", "arguments": {"text": "Ok"}})
-    before = len(log)
-    asyncio.run(_ticks(dispatcher, count=3))
-    assert len(log) == before
+    assert len(actor_rows) > 6
+    assert not any(one.get("problem") == "actor_loop" for one in dispatcher.fired)
 
 
 def test_a_live_actor_never_answers_its_own_action():

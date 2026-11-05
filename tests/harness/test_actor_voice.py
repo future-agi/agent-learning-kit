@@ -207,7 +207,7 @@ def test_an_actor_has_no_line_limit_of_its_own_and_the_call_wide_budget_hands_th
     for turn in range(1, 8):
         assert cast.may_speak(cast.actors[0], turn)
         cast.delivered(cast.actors[0], f"line {turn}", turn, 0.0, 0.0)
-    for _ in range(registry.TAKEOVER_AFTER_TURNS):
+    for _ in range(registry.LIMIT_DEFAULTS["caller_takes_back_after_turns"]):
         cast.took_turn()
     assert not cast.may_speak(cast.actors[1], 10)
     assert {"kind": "finished", "reason": "limit reached"}.items() <= cast.events[-1].items()
@@ -356,7 +356,7 @@ def test_a_line_that_plays_past_the_call_actor_time_is_cut_and_frees_the_phone(
             [voice], seed="run", play=never_done, say=never_done, clock=lambda: 1.0
         )
         # The first trigger was all but 50 ms of the call's actor time ago.
-        call.cast._started = 1.0 - (registry.ACTOR_SECONDS - 0.05)
+        call.cast._started = 1.0 - (registry.LIMIT_DEFAULTS["actor_seconds_per_call"] - 0.05)
         holding = await asyncio.wait_for(call.agent_turn("Which date?"), 1.0)
         await asyncio.wait_for(asyncio.gather(*call._pending.values()), 1.0)
         return holding, call.cast.holder, call.events()
@@ -699,9 +699,6 @@ def test_a_scenario_s_call_actors_reach_the_call_resolved_in_voices_no_one_else_
             {"id": "gone", "instruction": "x"},
         ],
     }
-    monkeypatch.delenv("HARNESS_ACTORS", raising=False)
-    assert _resolved_call_actors(doc, tmp_path, "deepgram", "", "run") == []
-    monkeypatch.setenv("HARNESS_ACTORS", "1")
     voiced = _resolved_call_actors(doc, tmp_path, "deepgram", "", "run")
     # Every included actor stays on the record; one that cannot speak says why.
     assert [(one["id"], one.get("entered"), one.get("reason")) for one in voiced] == [
@@ -752,7 +749,6 @@ def test_a_call_actor_on_a_tool_waits_for_the_name_the_trace_logs_that_tool_unde
 ):
     from fi.alk.harness.call_runner import _resolved_call_actors
 
-    monkeypatch.setenv("HARNESS_ACTORS", "1")
     (tmp_path / "contract.json").write_text(
         json.dumps(
             {
@@ -779,7 +775,6 @@ def test_a_call_actor_with_no_voice_of_its_own_does_not_enter(
 ):
     from fi.alk.harness.call_runner import _resolved_call_actors
 
-    monkeypatch.setenv("HARNESS_ACTORS", "1")
     doc = _one_call_actor(tmp_path, {"kind": "always"})
     [near] = _resolved_call_actors(doc, tmp_path, provider, "", "run")
     assert (near["id"], near["entered"], near["reason"]) == (
@@ -889,9 +884,9 @@ def test_the_call_s_call_actor_time_runs_out_and_every_call_actor_stops_with_the
     )
     # Nothing counts before the first trigger.
     now[0] = 500.0
-    assert cast.remaining() == registry.ACTOR_SECONDS
+    assert cast.remaining() == registry.LIMIT_DEFAULTS["actor_seconds_per_call"]
     assert len(cast.entering(Moment(2))) == 2
-    assert cast.remaining() == registry.ACTOR_SECONDS
+    assert cast.remaining() == registry.LIMIT_DEFAULTS["actor_seconds_per_call"]
     # From the first trigger the wall clock counts, whoever is speaking: one 5 s line in 30 s.
     cast.delivered(cast.actors[0], "a line", 2, 520.0, 525.0, 515.0)
     now[0] = 530.0
@@ -956,7 +951,7 @@ def test_lines_cut_off_by_the_call_s_call_actor_time_say_so():
         )
         call.cast.entering(Moment(2))
         # The first trigger was all but 50 ms of the call's actor time ago.
-        offset[0] = registry.ACTOR_SECONDS - 0.05
+        offset[0] = registry.LIMIT_DEFAULTS["actor_seconds_per_call"] - 0.05
         holding = await call.agent_turn("Hello")
         await call.close()
         return holding, said, call.summary()

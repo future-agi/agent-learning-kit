@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -161,6 +162,84 @@ class _HostedToolStore:
         return self._store.add(collection, dict(record))
 
 
+def chat_door(world: Any, mirror_dsn: str | None, roster: dict[str, dict[str, Any]], faults: list[Any]) -> Any:
+    """The world's door for a chat run: the world's own handlers run every call, the trial's action log is kept in
+    memory (mirrored to the world's table when it keeps actors), and who may do what is the environment's actor list."""
+    from .world_door import AGENT, DictRoster, HandlerExecutor, MemoryLog, PostgresLog, RecordExecutor, Routed, TeeLog, WorldDoor
+
+    def handle(call: Any) -> tuple[bool, Any, str] | None:
+        made = len(getattr(world, "calls", []))
+        result = world.handle_tool_call({"name": call.name, "arguments": call.arguments})
+        if call.actor != AGENT and hasattr(world, "calls"):
+            # An actor's action is in the action log, never in the agent's own calls that grading reads.
+            del world.calls[made:]
+        if result is None:
+            return None
+        return bool(getattr(result, "success", True)), getattr(result, "result", None), str(result.content)
+
+    records = None
+    if mirror_dsn:
+        from .world_door import PostgresRecords
+
+        records = RecordExecutor(PostgresRecords(mirror_dsn))
+    return WorldDoor(
+        Routed(HandlerExecutor(handle), records),
+        TeeLog(MemoryLog(), PostgresLog(mirror_dsn) if mirror_dsn else None),
+        DictRoster(roster),
+        faults=lambda: [one for one in faults if isinstance(one, dict)],
+    )
+
+
+def _record_fields(listing: Any, actor_id: str) -> dict[str, Any]:
+    """The fields of an actor's record its chat turns need beyond its brief: what it may do, its limits, its model."""
+    actor = listing.by_id().get(actor_id)
+    if actor is None:
+        return {}
+    return {"permitted_actions": list(actor.permitted_actions), "max_lines": actor.max_lines, "model": actor.model}
+
+
+def _world_actors_record(
+    door: Any, listing: Any, dispatcher: Any, cast: Any, meter: Any, limits: dict[str, Any]
+) -> dict[str, Any] | None:
+    """What actors did in the world this trial and what it changed, sealed beside the transcript as a call seals it;
+    None when no actor took part."""
+    from .call_runner import actor_rows, approvals, trial_state_changes
+
+    listed = listing.by_id()
+    try:
+        log = door.log.rows()
+    except Exception:  # noqa: BLE001 - no record, never a failed call
+        log = []
+    acted = actor_rows(log, listed)
+    decisions = dispatcher.record() if dispatcher is not None else []
+    if cast is not None:
+        decisions += [
+            {"actor": one["actor"], "play": "live", "action": one.get("action"),
+             "outcome": (one.get("outcome") or {}).get("outcome"), "why": one.get("why")}
+            for one in cast.events
+            if one.get("kind") == "acted"
+        ]
+    if not acted and not decisions:
+        return None
+    return {
+        "actions": acted,
+        "decisions": decisions,
+        "state_changes": trial_state_changes(log, listed),
+        "approvals": approvals(log, decisions),
+        "limits": dict(limits),
+        "usage": meter.rows(),
+    }
+
+
+def _chat_actor_summary(cast: Any, world_record: dict[str, Any] | None, listing: Any) -> tuple[dict[str, Any], ...]:
+    """The call's actor summary: the actors who wrote in the conversation and every actor that acted in the world."""
+    from .actor_dispatch import world_summary
+
+    speaking = tuple(cast.summary()) if cast is not None else ()
+    decisions = (world_record or {}).get("decisions") or []
+    return speaking + tuple(world_summary(decisions, listing.by_id(), {str(one.get("actor")) for one in speaking}))
+
+
 def _tool_world(
     bundle_dir: Path,
     contract: AgentContract,
@@ -307,6 +386,7 @@ class _HostedChatTarget:
         scenario_key: str,
         scenario_id: str,
         faults: list[dict[str, Any]] | None = None,
+        door: Any = None,
     ) -> None:
         self._wrapper = wrapper
         self._contract = contract
@@ -316,9 +396,8 @@ class _HostedChatTarget:
         self._messages: list[dict[str, Any]] = []
         self._tool_call_ids: set[str] = set()
         self._turn = 0
-        # The scenario's timeouts on the agent's calls, as the HTTP door applies them; the calls of each action so far.
-        self._faults = [one for one in faults or [] if isinstance(one, dict)]
-        self._sent: dict[str, int] = {}
+        # The world's door for the agent's calls: permission, faults and the action log, as at the HTTP door.
+        self._door = door if door is not None else chat_door(world, None, {}, faults or [])
 
     async def open(self) -> None:
         return
@@ -332,33 +411,25 @@ class _HostedChatTarget:
         return tool
 
     def _world_call(self, call_id: str, name: str, arguments: Any) -> str:
-        """One of the agent's calls in the generated world, with the scenario's timeout on it if it has one: before
-        commit the world never runs it; after commit it runs and the agent never hears back. Either way the agent is
-        told it timed out and may retry, and a retry is not deduplicated, as at the HTTP door."""
-        action = self._action(name)
-        self._sent[action] = self._sent.get(action, 0) + 1
-        fault = next(
-            (
-                one
-                for one in self._faults
-                if one.get("action") in (action, name) and int(one.get("on_call") or 1) == self._sent[action]
-            ),
-            None,
-        )
-        if fault is not None and fault.get("mode") == "timeout_before_commit":
-            self.world._record(
-                Call(name=name, arguments=dict(arguments or {}), result=None, ok=False, error="timeout_before_commit")
-            )
+        """One of the agent's calls in the generated world, through the world's door: the scenario's timeout on it if
+        it has one (before commit the world never runs it; after commit it runs and the agent never hears back), then
+        the answer the world gave. A retry is not deduplicated, as at the HTTP door."""
+        from .world_door import ToolCall
+
+        del call_id
+        arguments = dict(arguments or {}) if isinstance(arguments, Mapping) else {}
+        outcome = self._door.enter(ToolCall(action=self._action(name), name=name, arguments=arguments))
+        if outcome.fault is not None:
+            if outcome.fault.get("mode") == "timeout_after_commit":
+                if self.world.calls:
+                    # Committed, with the answer lost on the way back.
+                    self.world.calls[-1].error = "response_lost"
+            else:
+                self.world._record(
+                    Call(name=name, arguments=arguments, result=None, ok=False, error="timeout_before_commit")
+                )
             return "Error: the request timed out"
-        result = self.world.handle_tool_call({"id": call_id, "name": name, "arguments": arguments})
-        if result is None:
-            return f"no such tool {name}"
-        if fault is not None and fault.get("mode") == "timeout_after_commit":
-            if self.world.calls:
-                # Committed, with the answer lost on the way back.
-                self.world.calls[-1].error = "response_lost"
-            return "Error: the request timed out"
-        return result.content
+        return outcome.answer().decode("utf-8", errors="replace")
 
     async def say(self, utterance: str) -> str:
         self._messages.append({"role": "user", "content": utterance})
@@ -489,9 +560,9 @@ def _resolved_chat_actors(
     from fi.simulate.simulation.call_actors import CHANNELS, known_to_others
 
     from .actors import ScenarioActor, actor_brief, brief_text, load_actors, with_knowledge_read
-    from .call_actor import actors_enabled, load_call_actors, speaking_entries
+    from .call_actor import load_call_actors, speaking_entries
 
-    if not actors_enabled() or not document.get("actors"):
+    if not document.get("actors"):
         return []
     listing = load_call_actors(bundle_dir)
     full = load_actors(bundle_dir).by_id()
@@ -613,8 +684,37 @@ class HostedChatCallRunner:
                     [one for one in chat_actors if one.get("entered") is not False],
                 ),
             }
+        # The world's door for this trial: the agent's calls and the actors' actions, one rule set, one log.
+        from .actor_dispatch import DoorActs, build_dispatcher
+        from .actor_meter import ActorMeter
+        from .actors import load_actors
+        from .call_runner import actor_limits
+
+        listing = load_actors(self._context.bundle_dir)
+        world_db = runtime.endpoints.get("world_db")
+        door = chat_door(
+            target_world,
+            world_db.address if listing.actors and world_db is not None and world_db.protocol == "postgres" else None,
+            {
+                one.id: {"permitted_actions": list(one.permitted_actions), "on_behalf_of": one.on_behalf_of}
+                for one in listing.actors
+            },
+            list(document.get("faults") or []),
+        )
+        acts = DoorActs(door)
+        meter = ActorMeter()
+        limits = actor_limits(document, self._context.bundle_dir, "chat")
+        records = getattr(getattr(target_world, "store", None), "records", None)
+        trial = f"{self._context.job.job_id}:{scenario.scenario_key}"
+        dispatcher = build_dispatcher(
+            document, self._context.bundle_dir, act=acts, read_log=door.log.rows, records=records,
+            trial_id=trial, meter=meter,
+        )
         cast = (
-            ChatActors(chat_actors, seed=f"{self._context.job.job_id}:{scenario.scenario_key}", model=None)
+            ChatActors(
+                [{**one, **_record_fields(listing, str(one.get("id")))} for one in chat_actors],
+                seed=trial, model=None, limits=limits, act=acts, records=records, meter=meter,
+            )
             if chat_actors
             else None
         )
@@ -651,7 +751,12 @@ class HostedChatCallRunner:
         transcript: Transcript | None = None
         failure: CallAborted | None = None
         _clear_file_tool_calls(runtime)
+        acting: asyncio.Task[None] | None = None
         try:
+            if dispatcher is not None:
+                # What the actors wrote before T0 is in the world before the conversation starts.
+                await dispatcher.replay()
+                acting = asyncio.create_task(dispatcher.run())
             transcript = await _drive_conversation(
                 _HostedChatTarget(
                     wrapper=wrapper,
@@ -659,7 +764,7 @@ class HostedChatCallRunner:
                     world=target_world,
                     scenario_key=scenario.scenario_key,
                     scenario_id=scenario.scenario_id,
-                    faults=list(document.get("faults") or []),
+                    door=door,
                 ),
                 conversation_scenario,
                 self._contract,
@@ -704,6 +809,10 @@ class HostedChatCallRunner:
                     scenario_key=scenario.scenario_key,
                 )
         finally:
+            if acting is not None:
+                acting.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await acting
             await _record_text_usage(
                 self._context.usage_reporter,
                 scenario_key=scenario.scenario_key,
@@ -722,6 +831,9 @@ class HostedChatCallRunner:
 
         if cast is not None:
             transcript.call_actors = {"resolved": chat_actors, "summary": cast.summary(), "events": cast.events}
+        world_record = _world_actors_record(door, listing, dispatcher, cast, meter, limits)
+        if world_record is not None:
+            transcript.world_actors = world_record
         ended = datetime.now(timezone.utc)
         transcript_id = await self._adapter.upload_artifact(
             transcript.artifact(),
@@ -759,7 +871,8 @@ class HostedChatCallRunner:
             duration_ms=_duration_ms(started, ended),
             transcript_artifact=transcript_id,
             messages=tuple(transcript.canonical_messages()),
-            call_actors=tuple(cast.summary()) if cast is not None else (),
+            call_actors=_chat_actor_summary(cast, world_record, listing),
+            world_actions=tuple((world_record or {}).get("actions") or ()),
         )
         if failure is not None:
             failure.partial = outcome

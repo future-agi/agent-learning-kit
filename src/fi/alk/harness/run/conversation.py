@@ -67,6 +67,8 @@ class Transcript:
     simulator_output_tokens: int = 0
     # Who else was in the conversation and what happened to each, as a call's record keeps it.
     call_actors: dict[str, Any] | None = None
+    # What actors did in the world and what it changed, as a call's record keeps it.
+    world_actors: dict[str, Any] | None = None
 
     def spoken(self) -> str:
         return "\n".join(f"{turn.speaker}: {turn.text}" for turn in self.exchanges)
@@ -88,6 +90,7 @@ class Transcript:
                     ],
                     "ended": self.ended,
                     **({"call_actors": self.call_actors} if self.call_actors else {}),
+                    **({"world_actors": self.world_actors} if self.world_actors else {}),
                 },
                 sort_keys=True,
             )
@@ -226,79 +229,114 @@ def _message(turn: Exchange) -> dict[str, Any]:
 
 
 class ChatActors:
-    """The actors who write in one chat conversation: when each comes in (its trigger, as on a call), what it writes
-    (from its brief), and what happened to each, recorded as a call records them. As on a call, actors write on at most
-`TAKEOVER_AFTER_TURNS` of the agent's turns in all, so the conversation stays the person's."""
+    """The actors who write in one chat conversation. Each comes in when its trigger is met (one definition with every
+    other runtime, `due`), and from then on is asked after every agent turn what it does: write a message, act in the
+    world through the door, both, or wait. Nothing caps an actor but the limits the environment sets (`limits`, and
+    an actor's own `max_lines`); what happened to each is recorded as a call records it."""
 
-    def __init__(self, actors: list[dict[str, Any]], *, seed: str, model: str | None) -> None:
+    def __init__(
+        self,
+        actors: list[dict[str, Any]],
+        *,
+        seed: str,
+        model: str | None,
+        limits: dict[str, Any] | None = None,
+        act: Callable[..., Any] | None = None,
+        records: Callable[[str], list[dict[str, Any]]] | None = None,
+        meter: Any = None,
+    ) -> None:
         self.actors = [one for one in actors if one.get("entered", True) is not False]
         self.skipped = [one for one in actors if one.get("entered", True) is False]
         self.seed = seed
         self.model = model
+        self.limits = dict(limits or {})
+        # Sends an actor's action through the world's door: `act(actor_id, action, arguments, key=, parent=)`.
+        self.act = act
+        self.records = records
+        self.meter = meter
         self.turns_taken = 0
         self.written: dict[str, list[str]] = {str(one["id"]): [] for one in self.actors}
         self.triggered: set[str] = set()
+        self.done: set[str] = set()
+        self.decisions = 0
         self.events: list[dict[str, Any]] = []
+
+    def _room(self) -> bool:
+        cap = self.limits.get("caller_takes_back_after_turns")
+        return cap is None or self.turns_taken < int(cap)
 
     async def due_lines(
         self, *, agent_turns: int, last_text: str, tools_called: list[str], conversation: list[str]
     ) -> list[tuple[dict[str, Any], str]]:
-        """The lines actors write now, after the agent's latest turn, in the scenario's order."""
-        from fi.simulate.simulation.call_actors import TAKEOVER_AFTER_TURNS, Moment, due, line_brief
+        """The lines actors write now, after the agent's latest turn, in the scenario's order; their actions in the
+        world are sent as they decide them."""
+        from fi.simulate.simulation.call_actors import Moment, decision_brief, due, read_decision
 
-        if self.turns_taken >= TAKEOVER_AFTER_TURNS:
+        if not self._room():
             return []
-        moment = Moment(agent_turns=agent_turns, last_text=last_text, tools_called=tools_called)
+        moment = Moment(
+            agent_turns=agent_turns, last_text=last_text, tools_called=tools_called, records=self.records
+        )
+        cap = self.limits.get("max_active")
         out = []
         for actor in self.actors:
             key = str(actor["id"])
-            fired = key in self.triggered or due(
-                dict(actor.get("trigger") or {}), moment, seed=self.seed, actor_id=key
-            )
-            if not fired:
+            if key in self.done:
                 continue
-            first = key not in self.triggered
-            self.triggered.add(key)
-            if not first and not self.written[key]:
-                continue
-            if not first:
-                # After its first message an actor writes again only when the agent speaks to it by name.
-                name = str(actor.get("name") or "")
-                if not name or name.casefold() not in last_text.casefold():
+            if key not in self.triggered:
+                if not due(dict(actor.get("trigger") or {}), moment, seed=self.seed, actor_id=key):
                     continue
-            brief = line_brief(
+                if cap is not None and len(self.triggered - self.done) >= int(cap):
+                    self.events.append({"actor": key, "kind": "dropped", "reason": "no room: max_active"})
+                    continue
+                self.triggered.add(key)
+                self.events.append({"actor": key, "kind": "triggered", "turn": agent_turns})
+            if actor.get("max_lines") is not None and len(self.written[key]) >= int(actor["max_lines"]):
+                self.done.add(key)
+                self.events.append({"actor": key, "kind": "finished", "reason": "its own line limit reached"})
+                continue
+            brief = decision_brief(
                 actor,
                 situation=str(actor.get("situation") or ""),
                 said=self.written[key],
                 conversation=conversation,
                 language=str(actor.get("language") or ""),
+                actions={one: "" for one in actor.get("permitted_actions") or []} if self.act else {},
             )
-            line = await self._write(brief)
-            if not line:
-                self.events.append({"actor": key, "kind": "dropped", "reason": "wrote nothing"})
+            decision = read_decision(await self._write(actor, brief))
+            if decision.action and self.act is not None:
+                self.decisions += 1
+                outcome = await self.act(
+                    key, decision.action, decision.arguments, key=f"{self.seed}:{key}:c{self.decisions}", parent=None
+                )
+                self.events.append(
+                    {"actor": key, "kind": "acted", "action": decision.action, "outcome": outcome, "why": decision.why}
+                )
+            if not decision.line:
+                if decision.waits:
+                    self.events.append({"actor": key, "kind": "waited", "why": decision.why})
                 continue
-            self.written[key].append(line)
-            self.events.append({"actor": key, "kind": "delivered", "name": actor.get("name"), "text": line})
-            out.append((actor, line))
+            self.written[key].append(decision.line)
+            self.events.append({"actor": key, "kind": "delivered", "name": actor.get("name"), "text": decision.line})
+            out.append((actor, decision.line))
         if out:
             self.turns_taken += 1
         return out
 
-    async def _write(self, brief: str) -> str:
+    async def _write(self, actor: dict[str, Any], brief: str) -> str:
+        model = actor.get("model") or self.limits.get("model") or self.model
         stage = Stage(
-            SessionSpec(
-                system_prompt=brief + "\n\nWrite only your next message, as plain text.",
-                max_turns=1,
-                model=chosen_model(self.model),
-                gated=False,
-            ),
+            SessionSpec(system_prompt=brief, max_turns=1, model=chosen_model(model), gated=False),
             name="actor",
         )
         await stage.__aenter__()
         try:
-            return (await stage.say("Write your message now.")).text.strip()
+            turn = await stage.say("Decide now.")
         finally:
             await stage.__aexit__(None, None, None)
+        if self.meter is not None:
+            self.meter.add(str(actor["id"]), chosen_model(model), turn)
+        return turn.text.strip()
 
     def summary(self) -> list[dict[str, Any]]:
         """Each actor the conversation included: triggered, delivered, dropped, as a call records them."""
@@ -469,6 +507,7 @@ async def converse(
             transcript.simulator_input_tokens,
             transcript.simulator_output_tokens,
         ) = getattr(customer, "simulator_tokens", (0, 0))
+        _with_actor_usage(transcript, actors)
         setattr(exc, "partial_transcript", transcript)
         trace_path = getattr(target, "trace_path", None)
         trace = getattr(exc, "trace", None)
@@ -489,4 +528,16 @@ async def converse(
         transcript.simulator_input_tokens,
         transcript.simulator_output_tokens,
     ) = getattr(customer, "simulator_tokens", (0, 0))
+    _with_actor_usage(transcript, actors)
     return transcript
+
+
+def _with_actor_usage(transcript: Transcript, actors: ChatActors | None) -> None:
+    """Actors' model calls are simulator usage like the caller's: counted into the call's tokens and cost."""
+    meter = getattr(actors, "meter", None)
+    if meter is None:
+        return
+    tokens_in, tokens_out, cost = meter.totals()
+    transcript.simulator_input_tokens += tokens_in
+    transcript.simulator_output_tokens += tokens_out
+    transcript.spent_usd += cost

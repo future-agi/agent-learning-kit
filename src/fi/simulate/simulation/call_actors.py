@@ -55,7 +55,11 @@ CHANNELS: dict[str, dict[str, Any]] = {
 }
 
 TRIGGER_ABOUT: dict[str, str] = {
-    "always": "after the agent's first turn (a phone menu answers the call itself)",
+    "always": "present from the start: at the first moment its channel allows (after the agent's first turn for "
+    "someone who speaks; at once for someone acting through the world; a phone menu answers the call itself)",
+    "after_seconds": "`seconds` after the trial starts (someone acting through the world)",
+    "contacted": "when the agent reaches one of its identities (someone acting through the world)",
+    "conditional": "once a record of `collection` matching every field of `where` exists in the world",
     "mid_journey": "after the agent's turn `turn`",
     "on_tool": "on call `on_call` of the agent's tool `tool`, a tool that runs in the simulated world "
     "(one that runs only inside the agent cannot be seen); never if that call never comes",
@@ -116,14 +120,20 @@ ACTOR_WORLD_ALIAS = "HARNESS_ACTOR_WORLD"
 TOOLS_READ_SECONDS = 1.0
 # How much of the conversation an actor hears before writing a line.
 CONVERSATION_LINES = 12
-MAX_ACTIVE = 2
-TAKEOVER_AFTER_TURNS = 4
+# The defaults for every limit nobody set, per run (K-26): two voices on one phone line, the caller back after four
+# agent turns, a minute of actors per call, a long ceiling on a pre-run conversation. Each is a setting on the
+# environment's actor list, overridable per scenario; `None` there is no limit.
+LIMIT_DEFAULTS: dict[str, Any] = {
+    "max_active": 2,
+    "caller_takes_back_after_turns": 4,
+    "actor_seconds_per_call": 60.0,
+    "max_messages": 500,
+}
 # Someone can only take the phone from a person who already has it: not before the agent's second turn, by
 # which point the person has spoken at least once. A trigger that fires earlier waits for that turn.
 TAKES_PHONE_FROM_TURN = 2
-# Time all actors together have in one call: wall clock from the first actor's trigger, the agent's
-# and the person's turns included. Once it runs out every actor stops and the person has the call.
-ACTOR_SECONDS = 60.0
+# Time all actors together have in one call (`actor_seconds_per_call`): wall clock from the first actor's trigger, the
+# agent's and the person's turns included. Once it runs out every actor stops and the person has the call.
 # Lines asked for and not yet ready; one more is dropped rather than queued behind them.
 MAX_WAITING_LINES = 2
 TIME_UP = "actor time used up"
@@ -182,11 +192,26 @@ def limited(gain: float, peak: int) -> float:
 
 @dataclass
 class Moment:
-    """What a run knows after one step of the agent: enough to decide whether an actor is due."""
+    """What a run knows now, the same shape for every runtime: enough to decide whether an actor is due.
 
-    agent_turns: int
+    `agent_turns` is None where turns are not how the run moves (an actor acting through the world beside the call):
+    there "present from the start" means at once. `contacted` is whether the agent has reached one of the actor's
+    identities; `records` reads the world's records of one collection, where the runtime can read them.
+    """
+
+    agent_turns: int | None
     last_text: str = ""
     tools_called: list[str] = field(default_factory=list)
+    elapsed: float = 0.0
+    contacted: bool = False
+    records: Callable[[str], list[dict[str, Any]]] | None = None
+
+
+# What each runtime can evaluate. A scenario giving an actor a kind its runtime cannot is refused when written.
+EVALUATED_BY: dict[str, frozenset[str]] = {
+    "speaking": frozenset({"always", "mid_journey", "on_tool", "on_keyword", "probability", "conditional"}),
+    "world": frozenset({"always", "after_seconds", "on_tool", "contacted", "probability", "conditional"}),
+}
 
 
 def _whole(word: str) -> str:
@@ -217,14 +242,34 @@ def drawn(trigger: dict[str, Any], *, seed: str, actor_id: str) -> bool:
     return seeded(seed, actor_id, "enters").random() < float(trigger.get("p") or 0)
 
 
+def matches(record: dict[str, Any], where: dict[str, Any]) -> bool:
+    """Whether a record holds every field of `where` with the same value."""
+    return all(record.get(key) == value for key, value in (where or {}).items())
+
+
 def due(
     trigger: dict[str, Any], moment: Moment, *, seed: str, actor_id: str
 ) -> bool:
+    """Whether an actor with this trigger is due now. One definition for every runtime."""
     kind = str(trigger.get("kind") or "always")
+    turns = moment.agent_turns
     if kind == "always":
-        return moment.agent_turns >= 1
+        return turns is None or turns >= 1
+    if kind == "after_seconds":
+        return moment.elapsed >= float(trigger.get("seconds") or 0)
+    if kind == "contacted":
+        return moment.contacted
+    if kind == "conditional":
+        collection = str(trigger.get("collection") or "")
+        if not collection or moment.records is None:
+            return False
+        try:
+            rows = moment.records(collection)
+        except Exception:  # noqa: BLE001 - unreadable records are not there yet
+            return False
+        return any(matches(row, trigger.get("where") or {}) for row in rows or [] if isinstance(row, dict))
     if kind == "mid_journey":
-        return moment.agent_turns >= int(trigger.get("turn") or 0) >= 1
+        return turns is not None and turns >= int(trigger.get("turn") or 0) >= 1
     if kind == "on_tool":
         tool = str(trigger.get("tool") or "")
         return bool(tool) and moment.tools_called.count(tool) >= int(
@@ -239,7 +284,7 @@ def due(
         said = moment.last_text.casefold()
         return any(re.search(_whole(word), said) for word in words)
     if kind == "probability":
-        return moment.agent_turns >= 1 and drawn(
+        return (turns is None or turns >= 1) and drawn(
             trigger, seed=seed, actor_id=actor_id
         )
     return False
@@ -284,6 +329,85 @@ def line_brief(
     return "\n\n".join(part for part in parts if part)
 
 
+# What an actor is asked each time something it can see happens, on every runtime: one decision, a line to say, an
+# action to take in the world, or both, or to wait.
+DECISION_ASK = (
+    "Decide what you do now. Reply with JSON only: "
+    '{"line": "<what you say now, or null>", "action": "<one of your actions, or null>", "arguments": {...}, '
+    '"why": "<one sentence>"}. Use null for both to wait.'
+)
+
+
+@dataclass
+class Decision:
+    """One actor decision: what it says (delivered by its channel) and what it does (sent through the world's door)."""
+
+    line: str = ""
+    action: str = ""
+    arguments: dict[str, Any] = field(default_factory=dict)
+    why: str = ""
+
+    @property
+    def waits(self) -> bool:
+        return not self.line and not self.action
+
+
+def decision_brief(
+    actor: dict[str, Any],
+    *,
+    situation: str,
+    said: list[str],
+    conversation: list[str],
+    language: str,
+    seen: list[str] | None = None,
+    actions: dict[str, str] | None = None,
+    speaks: bool = True,
+) -> str:
+    """What an actor is given to decide from, on any runtime: its brief and the conversation (when it speaks), what it
+    can see happened in the world, and the actions it may take."""
+    parts = [line_brief(actor, situation=situation, said=said, conversation=conversation, language=language)] if speaks else [
+        str(actor.get("brief") or f"You are {actor.get('name') or 'someone'}.")
+    ]
+    allowed = actions or {}
+    parts.append(
+        "Your actions in the world:\n"
+        + ("\n".join(f"- {name}: {about}".rstrip(": ") for name, about in allowed.items()) or "- none")
+    )
+    parts.append("What you can see happened in the world, oldest first:\n" + ("\n".join(seen or []) or "nothing yet"))
+    if not speaks:
+        parts.append("You do not speak on this conversation; leave `line` null.")
+    parts.append(DECISION_ASK)
+    return "\n\n".join(part for part in parts if part)
+
+
+def read_decision(raw: Any) -> Decision:
+    """A model's reply as a decision; anything unreadable is a wait, and plain text is a line."""
+    import json
+
+    if isinstance(raw, dict):
+        parsed: Any = raw
+    else:
+        text = str(raw or "").strip()
+        start, end = text.find("{"), text.rfind("}")
+        parsed = None
+        if 0 <= start < end:
+            try:
+                parsed = json.loads(text[start : end + 1])
+            except ValueError:
+                parsed = None
+        if parsed is None:
+            return Decision(line=text)
+    if not isinstance(parsed, dict):
+        return Decision()
+    arguments = parsed.get("arguments") if isinstance(parsed.get("arguments"), dict) else {}
+    return Decision(
+        line=str(parsed.get("line") or "").strip(),
+        action=str(parsed.get("action") or "").strip(),
+        arguments=arguments,
+        why=str(parsed.get("why") or "").strip(),
+    )
+
+
 class Cast:
     """Every actor in one call: who enters when, the call-wide budget, and what happened to each.
 
@@ -295,10 +419,16 @@ class Cast:
         actors: list[dict[str, Any]],
         seed: str,
         clock: Callable[[], float] = time.time,
+        limits: dict[str, Any] | None = None,
     ) -> None:
         self.actors = actors
         self.seed = seed
         self.clock = clock
+        # The limits in force for this call; a key set to None is no limit.
+        given = dict(LIMIT_DEFAULTS if limits is None else limits)
+        self.max_active: int | None = given.get("max_active")
+        self.takes_back_after: int | None = given.get("caller_takes_back_after_turns")
+        self.seconds: float | None = given.get("actor_seconds_per_call")
         # When the first actor was triggered; the call's actor time runs from then.
         self._started: float | None = None
         self._cut = False
@@ -330,9 +460,11 @@ class Cast:
         """Seconds left of the call's actor time; all of it until the first trigger."""
         if self._cut:
             return 0.0
+        if self.seconds is None:
+            return float("inf")
         if self._started is None:
-            return ACTOR_SECONDS
-        return max(0.0, ACTOR_SECONDS - (self.clock() - self._started))
+            return self.seconds
+        return max(0.0, self.seconds - (self.clock() - self._started))
 
     def out_of_time(self) -> bool:
         """Whether the call's actor time is used up; the first time it is, every actor stops."""
@@ -397,7 +529,7 @@ class Cast:
             ):
                 if (
                     actor.get("channel") == "audio_handoff"
-                    and moment.agent_turns < TAKES_PHONE_FROM_TURN
+                    and (moment.agent_turns or 0) < TAKES_PHONE_FROM_TURN
                 ):
                     self._held.add(key)
                     continue
@@ -407,7 +539,7 @@ class Cast:
                 self._waiting.append(key)
                 self._record(key, "triggered", turn=moment.agent_turns)
         entered = []
-        while self._waiting and len(self._active()) < MAX_ACTIVE:
+        while self._waiting and (self.max_active is None or len(self._active()) < self.max_active):
             key = self._waiting.pop(0)
             self._state[key]["entered"] = True
             entered.append(next(one for one in self.actors if str(one["id"]) == key))
@@ -419,8 +551,11 @@ class Cast:
         state = self._state[key]
         if not state["entered"] or state["done"] or self.out_of_time():
             return False
-        if self._activity >= TAKEOVER_AFTER_TURNS:
+        if self.takes_back_after is not None and self._activity >= self.takes_back_after:
             self.finish(actor, "limit reached")
+            return False
+        if actor.get("max_lines") is not None and state["lines"] >= int(actor["max_lines"]):
+            self.finish(actor, "its own line limit reached")
             return False
         if actor.get("channel") == "audio_mix" and state["lines"]:
             if state["last_turn"] == agent_turns - 1:

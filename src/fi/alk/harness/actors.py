@@ -7,7 +7,9 @@ every action enters the world, never in a prompt.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
@@ -22,6 +24,14 @@ ACTORS_SCHEMA = "futureagi.actors.v1"
 AGENT = "agent"
 # The environment's caller, an actor like any other; each scenario still writes its persona for itself.
 CALLER = "caller"
+# The idempotency key of a message replayed before the run: `<trial>:<actor>:h<n>`. Matched at its end only, so an
+# actor whose id starts with `h` is never read as one.
+_PRE_RUN_KEY = re.compile(r":h[0-9]+$")
+
+
+def is_pre_run(key: object) -> bool:
+    """Whether an action-log row was written before the run started (a pre-run session's message)."""
+    return bool(_PRE_RUN_KEY.search(str(key or "")))
 
 
 class Constraints(BaseModel):
@@ -56,8 +66,45 @@ class Activation(BaseModel):
 
     trigger: "Trigger" = Field(default_factory=lambda: Trigger())
     timeout_seconds: float = Field(default=0.0, ge=0)
-    # `silent`, `decline`, or another actor's id who answers instead.
+    # `silent`, `decline`, one of the actor's own permitted actions taken for it, or another actor's id who answers
+    # instead.
     fallback: str = "silent"
+
+
+class Limits(BaseModel):
+    """Every limit on actors, as a setting: on the environment's list, overridable per scenario. `None` is no limit.
+    A value left unset takes the default for the channel the run uses (a phone line carries at most two voices)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_active: int | None = Field(default=None, ge=1)
+    caller_takes_back_after_turns: int | None = Field(default=None, ge=1)
+    actor_seconds_per_call: float | None = Field(default=None, gt=0)
+    max_messages: int | None = Field(default=None, ge=1)
+    # The model actors are played on; unset is the caller simulator's own.
+    model: str | None = Field(default=None, max_length=120)
+
+    def merged(self, override: "Limits | None") -> "Limits":
+        """These limits with a scenario's own values on top."""
+        if override is None:
+            return self
+        return self.model_copy(update=override.model_dump(exclude_unset=True))
+
+    def resolved(self, modality: str) -> dict[str, Any]:
+        """The limits in force for one run: what is set, else the channel's default."""
+        from fi.simulate.simulation.call_actors import LIMIT_DEFAULTS
+
+        spoken = modality in ("voice", "audio")
+        defaults = {
+            "max_active": LIMIT_DEFAULTS["max_active"] if spoken else None,
+            "caller_takes_back_after_turns": LIMIT_DEFAULTS["caller_takes_back_after_turns"] if spoken else None,
+            "actor_seconds_per_call": LIMIT_DEFAULTS["actor_seconds_per_call"] if spoken else None,
+            "max_messages": LIMIT_DEFAULTS["max_messages"],
+            "model": None,
+        }
+        given = self.model_dump(exclude_unset=True)
+        return {key: given.get(key, value) for key, value in defaults.items()}
+
 
 
 class Actor(BaseModel):
@@ -96,6 +143,11 @@ class Actor(BaseModel):
     # answering before them. Empty: it does not speak on calls, it acts through the world.
     channel: str | None = None
     loudness_ratio: float | None = Field(default=None, gt=0, le=1)
+    # The model this actor is played on; unset is the environment's choice, else the caller simulator's.
+    model: str | None = Field(default=None, max_length=120)
+    # How many turns a live actor takes and lines a speaking one says in a trial; unset is no limit.
+    max_turns: int | None = Field(default=None, ge=1)
+    max_lines: int | None = Field(default=None, ge=1)
     # Who last set the record and each field; written by the platform, never taken from a client.
     provenance: dict[str, Any] = Field(default_factory=dict)
 
@@ -135,6 +187,7 @@ class Actor(BaseModel):
 
 class ActorList(BaseModel):
     actors: list[Actor] = Field(default_factory=list)
+    limits: Limits = Field(default_factory=Limits)
 
     @field_validator("actors")
     @classmethod
@@ -157,10 +210,15 @@ class ActorList(BaseModel):
             fallback = (
                 one.activation.fallback if one.activation is not None else "silent"
             )
-            if fallback not in ("silent", "decline") and fallback not in known - {
-                one.id
-            }:
-                raise ValueError(f"{one.id} falls back to an actor that is not listed")
+            if (
+                fallback not in ("silent", "decline")
+                and fallback not in known - {one.id}
+                and fallback not in one.permitted_actions
+            ):
+                raise ValueError(
+                    f"{one.id} falls back to {fallback!r}, which is neither an actor on the list nor one of its own "
+                    "permitted actions"
+                )
         parents = {one.id: one.parent for one in actors}
         for one in actors:
             seen, at = {one.id}, one.parent
@@ -189,6 +247,7 @@ class Trigger(BaseModel):
         "probability",
         "mid_journey",
         "on_keyword",
+        "conditional",
     ] = "always"
     seconds: float = Field(default=0.0, ge=0)
     tool: str = ""
@@ -197,6 +256,9 @@ class Trigger(BaseModel):
     # mid_journey: the person's turn from which the actor may speak; on_keyword: the words that bring it in.
     turn: int = Field(default=0, ge=0)
     words: list[str] = Field(default_factory=list)
+    # conditional: present once a record of `collection` matching every `where` field exists in the world.
+    collection: str = ""
+    where: dict[str, Any] = Field(default_factory=dict)
 
 
 class ScheduledAction(BaseModel):
@@ -205,15 +267,61 @@ class ScheduledAction(BaseModel):
     trigger: Trigger = Field(default_factory=Trigger)
 
 
-class HistoryEntry(BaseModel):
-    """One thing an actor wrote in the world before the run starts (a message in a thread, a note, a record): one of
-    its permitted actions with its arguments. Written the same way before every trial."""
+class Reference(BaseModel):
+    """An argument filled at replay from an earlier message's result: the id a thread reply needs is only known once
+    the world has taken the message it replies to."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    message: int = Field(ge=1)
+    field: str = Field(min_length=1)
+
+
+class ThreadMessage(BaseModel):
+    """One message an actor wrote before the run (a post, a reply, an email, a note): one of its permitted actions
+    with its arguments, and the arguments that refer to an earlier message of the same session."""
 
     model_config = ConfigDict(extra="forbid")
 
     actor: str = Field(min_length=1)
     action: str = Field(min_length=1)
     arguments: dict[str, Any] = Field(default_factory=dict)
+    refers: dict[str, Reference] = Field(default_factory=dict)
+
+
+# Kept for scenarios written before pre-run sessions: one typed entry is one message.
+HistoryEntry = ThreadMessage
+
+
+class PreRunSession(BaseModel):
+    """A conversation that happened before the run, in one place of the world, generated by the actors in it from
+    their briefs. `about` is the situation; `thread` the messages the actors wrote, replayed into the world before
+    every trial (or written afresh inside each trial when `per_trial`)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    actors: list[str] = Field(default_factory=list)
+    # The action that writes into the place and the arguments naming the place: a channel, a thread, a ticket.
+    where: dict[str, Any] = Field(default_factory=dict)
+    about: str = ""
+    per_trial: bool = False
+    max_messages: int | None = Field(default=None, ge=1)
+    thread: list[ThreadMessage] = Field(default_factory=list)
+    # What the thread was generated from; a different fingerprint means it is stale and is written again.
+    fingerprint: str = ""
+
+
+def session_fingerprint(session: PreRunSession, actors: dict[str, "Actor"]) -> str:
+    """What a session's thread depends on: its situation, its place and the records of the actors in it."""
+    material = {
+        "about": session.about,
+        "where": session.where,
+        "actors": [
+            actors[one].model_dump(mode="json", exclude={"provenance"}) if one in actors else {"id": one}
+            for one in sorted(session.actors)
+        ],
+    }
+    return hashlib.sha256(json.dumps(material, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
 
 class Fault(BaseModel):
@@ -247,6 +355,47 @@ class ScenarioActor(BaseModel):
     # Overrides the actor's own activation for this scenario.
     trigger: Trigger | None = None
     actions: list[ScheduledAction] = Field(default_factory=list)
+
+
+def cycles(actors: dict[str, "Actor"], entries: list["ScenarioActor"]) -> list[list[str]]:
+    """Actors that bring each other in: each one's trigger fires on an action only the next can take. A cycle is a
+    scenario problem refused when the scenario is written, never a loop discovered during a run."""
+    triggered_by: dict[str, set[str]] = {}
+    for entry in entries:
+        actor = actors.get(entry.id)
+        if actor is None:
+            continue
+        trigger = entry.trigger or (actor.activation.trigger if actor.activation else None)
+        if trigger is None:
+            continue
+        if trigger.kind == "on_tool" and trigger.tool:
+            names = {trigger.tool}
+        elif trigger.kind == "conditional" and trigger.collection:
+            names = {f"{trigger.collection}.change", f"{trigger.collection}.put"}
+        else:
+            continue
+        triggered_by[entry.id] = {
+            other.id
+            for other in actors.values()
+            if other.id != entry.id
+            and any(name in (one, one.rsplit(".", 1)[-1]) for one in other.permitted_actions for name in names)
+        }
+    found: list[list[str]] = []
+    for start in triggered_by:
+        path, at = [start], start
+        while True:
+            nexts = sorted(triggered_by.get(at, set()) & set(triggered_by))
+            if not nexts:
+                break
+            at = nexts[0]
+            if at == start:
+                if sorted(path) not in [sorted(one) for one in found]:
+                    found.append(path)
+                break
+            if at in path:
+                break
+            path.append(at)
+    return found
 
 
 def load_actors(root: Path) -> ActorList:
@@ -316,6 +465,8 @@ BRIEF_INPUTS = [
     ["actor", "prompt"],
     ["actor", "surface"],
     ["actor", "knowledge"],
+    # Who the actor is in each service, so a live actor can name itself where a world's tool asks (`actor_id`).
+    ["actor", "identities"],
     ["scenario", "instruction"],
     ["scenario", "knowledge"],
     ["caller", "situation"],
@@ -489,6 +640,7 @@ def brief_text(items: list[dict[str, Any]]) -> str:
         "actor.prompt": "Your instructions",
         "actor.surface": "Where you act",
         "actor.knowledge": "What you know",
+        "actor.identities": "Who you are in each service (use this as your id where an action asks for one)",
         "scenario.instruction": "What you do here",
         "scenario.knowledge": "What you know here",
         "caller.situation": "What is going on (the other person's situation, not yours)",

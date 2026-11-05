@@ -14,7 +14,7 @@ from urllib import error, request
 import pytest
 
 from fi.alk.bench._docker import docker_available
-from fi.alk.harness.actor_dispatch import ActorDispatcher
+from fi.alk.harness.actor_dispatch import ActorDispatcher, HttpActs
 from fi.alk.harness.actors import Actor, ActorList, ScenarioActor, actors_seed
 from fi.alk.harness.bundle_author_v2 import _TOOL_TRACE_DDL
 
@@ -190,12 +190,10 @@ def test_the_coworker_cannot_authorise_the_change_the_reviewer_can_and_the_trial
     dispatcher = ActorDispatcher(
         ACTORS.by_id(),
         cast,
+        act=HttpActs(url, TOKEN, 30.0),
         trial_id="t1",
-        proxy_url=url,
-        token=TOKEN,
         read_log=log,
         seed="t1",
-        timeout=30.0,
     )
 
     async def trial() -> None:
