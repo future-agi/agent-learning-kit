@@ -118,11 +118,13 @@ class Actor(BaseModel):
             named = str(self.persona.get("name") or "").strip()
             if named and named != self.name:
                 raise ValueError(f"its persona is named {named!r} but the actor is {self.name!r}")
-        hidden = set(EVALUATOR_ONLY["files"])
         for one in self.knowledge:
             named = [str(path) for path in one.get("paths") or []] if one.get("kind") == "files" else []
-            if any(Path(path).name in hidden for path in named):
-                raise ValueError("an actor never sees what only the evaluator reads: " + ", ".join(sorted(hidden)))
+            refused = [path for path in named if not knowledge_file_allowed(path)]
+            if refused:
+                raise ValueError(
+                    "an actor never sees what only the evaluator reads or the harness's own files: " + ", ".join(refused)
+                )
         if self.channel is not None:
             if self.channel not in CHANNELS:
                 raise ValueError(f"channel {self.channel!r} is not one of {sorted(CHANNELS)}")
@@ -320,6 +322,31 @@ BRIEF_INPUTS = [
 ]
 # Fields of one actor that no other actor is given.
 PRIVATE_TO_ACTOR = ["goal", "prompt", "instruction", "actions"]
+# Files an actor's knowledge may never name: what only the evaluator reads, and the harness's own files, which are how
+# the environment is built rather than anything a person in it would read.
+NOT_KNOWLEDGE = {
+    "files": [
+        "contract.json",
+        "manifest.json",
+        "actors.json",
+        "actor_rules.json",
+        "credentials.json",
+        "world.py",
+        "world.sqlite",
+        "simulator_prompt.md",
+        "source-data-invariants.json",
+        "scenarios.json",
+    ],
+    "prefixes": ["generic-harness/", "handlers/", "seed/", "scenarios/", "checks/", "."],
+}
+
+
+def knowledge_file_allowed(path: str) -> bool:
+    """Whether an actor may be given this environment file to read."""
+    name = str(path).strip().lstrip("/")
+    return bool(name) and ".." not in Path(name).parts and Path(name).name not in EVALUATOR_ONLY["files"] and (
+        name not in NOT_KNOWLEDGE["files"] and not any(name.startswith(prefix) for prefix in NOT_KNOWLEDGE["prefixes"])
+    )
 # How the world names an action: the route a tool's entrypoint calls, with `/` read as `.` (the tool proxy's rule).
 WORLD_ACTIONS = {
     "from": "tool_entrypoints",
@@ -380,7 +407,6 @@ def read_knowledge(
     """An actor's knowledge with the environment's files and records it may see read in: a `files` entry gets each
     file's text (bounded), a `records` entry the collection's rows matching its `where` (bounded) when the world's
     records can be read here. Never an evaluator-only file, and never a path outside the environment."""
-    hidden = set(EVALUATOR_ONLY["files"])
     base = Path(root).resolve()
     out = []
     for one in knowledge:
@@ -391,7 +417,7 @@ def read_knowledge(
             read = []
             for name in one.get("paths") or []:
                 path = (base / str(name)).resolve()
-                if path.name in hidden or base not in path.parents or not path.is_file():
+                if not knowledge_file_allowed(str(name)) or base not in path.parents or not path.is_file():
                     continue
                 read.append({"path": str(name), "text": path.read_text(encoding="utf-8", errors="replace")[:KNOWLEDGE_FILE_CHARS]})
             out.append({**one, "read": read})
@@ -530,6 +556,8 @@ def actor_rules() -> dict[str, Any]:
         "evaluator_only": EVALUATOR_ONLY,
         "brief_inputs": BRIEF_INPUTS,
         "private_to_actor": PRIVATE_TO_ACTOR,
+        # Files an actor's knowledge may never name, beside the evaluator-only ones.
+        "not_knowledge": NOT_KNOWLEDGE,
         # The caller's situation as given to anyone else: its instruction up to this mark.
         "situation_before": DETAILS_MARK,
         "reserved_ids": [AGENT],

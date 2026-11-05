@@ -468,3 +468,25 @@ def test_a_chat_agent_s_in_process_call_timed_out_after_commit_commits_and_a_ret
 def test_a_chat_call_with_no_fault_is_answered_as_the_world_answers():
     target, world = _chat_target([])
     assert target._world_call("c1", "update_deal", {"discount": 5}) == '{"ok": true}'
+
+
+@pytest.mark.parametrize(
+    "path, allowed",
+    [
+        ("docs/policy.md", True),
+        ("kb/pricing.csv", True),
+        ("sub_goals.json", False),
+        ("data/certification.json", False),
+        ("contract.json", False),
+        ("world.sqlite", False),
+        ("generic-harness/world-ir.json", False),
+        ("scenarios/a/scenario.json", False),
+        ("../outside.txt", False),
+        (".env", False),
+    ],
+)
+def test_an_actor_may_read_the_environment_s_own_documents_never_the_evaluator_s_or_the_harness_s(path, allowed):
+    from fi.alk.harness.actors import actor_rules, knowledge_file_allowed
+
+    assert knowledge_file_allowed(path) is allowed
+    assert "not_knowledge" in actor_rules()
