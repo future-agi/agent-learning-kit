@@ -712,12 +712,24 @@ def _build_spec(
     )
 
 
+def _world_records(runtime: Any) -> Callable[[str], list[dict[str, Any]]] | None:
+    """The trial's world records, one collection at a time, for an actor's knowledge; None where none can be read."""
+    endpoint = _find_postgres_endpoint(runtime) if runtime is not None else None
+    if endpoint is None:
+        return None
+    from .world.stores.postgres import AttachedPostgresStore
+
+    store = AttachedPostgresStore(endpoint.address)
+    return store.table
+
+
 def _resolved_call_actors(
     doc: Mapping[str, Any],
     bundle_dir: Any,
     tts_provider: str,
     cartesia_key: str,
     seed: str,
+    records: Callable[[str], list[dict[str, Any]]] | None = None,
 ) -> list[dict[str, Any]]:
     """Every actor the scenario includes, resolved from the environment's list with what it does
     here. One that can speak has a voice no one else on the call has and a level of its own; one that
@@ -799,13 +811,14 @@ def _resolved_call_actors(
                 # The same view the platform shows as what this actor sees.
                 "brief": brief_text(
                     actor_brief(
-                        with_knowledge_read(full[actor.id].model_dump(exclude_none=True), bundle_dir) or {},
+                        with_knowledge_read(full[actor.id].model_dump(exclude_none=True), bundle_dir, records) or {},
                         entry=with_knowledge_read(
                             next(
                                 (one for one in doc.get("actors") or [] if (one or {}).get("id") == actor.id),
                                 None,
                             ),
                             bundle_dir,
+                            records,
                         ),
                         scenario=dict(doc),
                     )
@@ -1205,6 +1218,7 @@ def _actor_dispatcher(
         )
         return None
     cast = [ScenarioActor.model_validate(entry) for entry in doc.get("actors") or []]
+    records = _world_records(runtime)
     contract_path = bundle_dir / "contract.json"
     contract = (
         json.loads(contract_path.read_text(encoding="utf-8"))
@@ -1219,8 +1233,8 @@ def _actor_dispatcher(
     briefs = {
         entry.id: brief_text(
             actor_brief(
-                with_knowledge_read(listed[entry.id].model_dump(exclude_none=True), bundle_dir) or {},
-                entry=with_knowledge_read(entry.model_dump(), bundle_dir),
+                with_knowledge_read(listed[entry.id].model_dump(exclude_none=True), bundle_dir, records) or {},
+                entry=with_knowledge_read(entry.model_dump(), bundle_dir, records),
                 scenario=dict(doc),
             )
         )
@@ -1881,6 +1895,7 @@ class CallRunnerImpl:
             voice_providers(setting)[1],
             setting("CARTESIA_API_KEY"),
             run_id,
+            _world_records(runtime),
         )
         # Only an actor that can speak reaches the call; the record keeps every one.
         voices = [one for one in resolved if one.get("entered", True)]

@@ -308,6 +308,7 @@ class _HostedChatTarget:
         world: GeneratedWorld,
         scenario_key: str,
         scenario_id: str,
+        faults: list[dict[str, Any]] | None = None,
     ) -> None:
         self._wrapper = wrapper
         self._contract = contract
@@ -317,9 +318,49 @@ class _HostedChatTarget:
         self._messages: list[dict[str, Any]] = []
         self._tool_call_ids: set[str] = set()
         self._turn = 0
+        # The scenario's timeouts on the agent's calls, as the HTTP door applies them; the calls of each action so far.
+        self._faults = [one for one in faults or [] if isinstance(one, dict)]
+        self._sent: dict[str, int] = {}
 
     async def open(self) -> None:
         return
+
+    def _action(self, tool: str) -> str:
+        """A tool's world action, named as the HTTP door names it (its route with `/` as `.`), else the tool."""
+        for entry in self._contract.tool_entrypoints or []:
+            entry = entry if isinstance(entry, dict) else entry.model_dump()
+            if entry.get("tool") == tool and str(entry.get("endpoint") or "").strip("/"):
+                return str(entry["endpoint"]).strip("/").replace("/", ".")
+        return tool
+
+    def _world_call(self, call_id: str, name: str, arguments: Any) -> str:
+        """One of the agent's calls in the generated world, with the scenario's timeout on it if it has one: before
+        commit the world never runs it; after commit it runs and the agent never hears back. Either way the agent is
+        told it timed out and may retry, and a retry is not deduplicated, as at the HTTP door."""
+        action = self._action(name)
+        self._sent[action] = self._sent.get(action, 0) + 1
+        fault = next(
+            (
+                one
+                for one in self._faults
+                if one.get("action") in (action, name) and int(one.get("on_call") or 1) == self._sent[action]
+            ),
+            None,
+        )
+        if fault is not None and fault.get("mode") == "timeout_before_commit":
+            self.world._record(
+                Call(name=name, arguments=dict(arguments or {}), result=None, ok=False, error="timeout_before_commit")
+            )
+            return "Error: the request timed out"
+        result = self.world.handle_tool_call({"id": call_id, "name": name, "arguments": arguments})
+        if result is None:
+            return f"no such tool {name}"
+        if fault is not None and fault.get("mode") == "timeout_after_commit":
+            if self.world.calls:
+                # Committed, with the answer lost on the way back.
+                self.world.calls[-1].error = "response_lost"
+            return "Error: the request timed out"
+        return result.content
 
     async def say(self, utterance: str) -> str:
         self._messages.append({"role": "user", "content": utterance})
@@ -395,12 +436,7 @@ class _HostedChatTarget:
                     if not isinstance(result_content, str):
                         result_content = json.dumps(result_content, default=str)
                 else:
-                    result = self.world.handle_tool_call(
-                        {"id": call_id, "name": name, "arguments": arguments}
-                    )
-                    result_content = (
-                        result.content if result is not None else f"no such tool {name}"
-                    )
+                    result_content = self._world_call(call_id, name, arguments)
                 self._messages.append(
                     {
                         "role": "tool",
@@ -628,6 +664,7 @@ class HostedChatCallRunner:
                     world=target_world,
                     scenario_key=scenario.scenario_key,
                     scenario_id=scenario.scenario_id,
+                    faults=list(document.get("faults") or []),
                 ),
                 conversation_scenario,
                 self._contract,
