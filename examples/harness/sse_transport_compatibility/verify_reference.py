@@ -21,6 +21,14 @@ def verify(source_root: Path | None = None) -> dict[str, object]:
     assert re.fullmatch(r"[0-9a-f]{40}", source["commit"])
     assert source["repository"].startswith("https://github.com/")
     assert reference["runtime"]["endpoint"].startswith("/conversational_flows/")
+    assert reference["request"]["runId"] == "{{execution_id}}-{{turn_index}}"
+    assert reference["request"]["messages"] == [
+        {
+            "id": "user-{{execution_id}}-{{turn_index}}",
+            "role": "user",
+            "content": "{{new_message_content}}",
+        }
+    ]
     assert reference["sse"]["completion"]["values"] == ["RUN_FINISHED"]
     assert reference["sse"]["failure"]["values"] == ["RUN_ERROR"]
     assert qualification["requires_credentials"] is True

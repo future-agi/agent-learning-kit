@@ -309,7 +309,7 @@ class HTTPAgentWrapper(AgentWrapper):
                         self._post_sse(request_payload, headers, endpoint=endpoint),
                         timeout=self._remaining_timeout(),
                     )
-                except TimeoutError as exc:
+                except (TimeoutError, asyncio.TimeoutError) as exc:
                     self._stream_trace = {
                         **self._stream_trace,
                         "stream_state": "incomplete",
@@ -363,9 +363,15 @@ class HTTPAgentWrapper(AgentWrapper):
                 exc,
                 (urllib.error.URLError, httpx.HTTPError, TimeoutError, ConnectionError),
             )
-            timeout_error = isinstance(exc, (TimeoutError, httpx.TimeoutException)) or (
-                isinstance(exc, urllib.error.URLError)
-                and isinstance(exc.reason, TimeoutError)
+            timeout_error = (
+                isinstance(
+                    exc, (TimeoutError, asyncio.TimeoutError, httpx.TimeoutException)
+                )
+                or self._stream_trace.get("stream_reason") == "sse_deadline"
+                or (
+                    isinstance(exc, urllib.error.URLError)
+                    and isinstance(exc.reason, TimeoutError)
+                )
             )
             if self.secret_values is not None:
                 secrets = {
@@ -707,8 +713,13 @@ class HTTPAgentWrapper(AgentWrapper):
                             _response_error_text(value)
                             or f"HTTP target returned status {status}",
                         )
-                    content_type = response.headers.get("content-type", "").lower()
-                    if not content_type.startswith("text/event-stream"):
+                    content_type = (
+                        response.headers.get("content-type", "")
+                        .partition(";")[0]
+                        .strip()
+                        .lower()
+                    )
+                    if content_type != "text/event-stream":
                         raise _ResponseFailure(
                             "stream", status, "SSE endpoint did not return text/event-stream"
                         )
@@ -738,6 +749,15 @@ class HTTPAgentWrapper(AgentWrapper):
                             return status, list(complete.payloads), complete
                     raise reducer.incomplete(bytes_received=decoder.bytes_received)
         except asyncio.CancelledError:
+            self._response_text = reducer.text[:4096]
+            self._stream_trace = {
+                "stream_state": "incomplete",
+                "stream_reason": "sse_cancelled",
+                "stream_bytes_received": decoder.bytes_received,
+                "stream_events_received": reducer.events_received,
+                "stream_duplicate_events": reducer.duplicate_events,
+                "stream_last_event_id": reducer.last_event_id,
+            }
             raise
         except httpx.TimeoutException as exc:
             self._response_text = reducer.text[:4096]

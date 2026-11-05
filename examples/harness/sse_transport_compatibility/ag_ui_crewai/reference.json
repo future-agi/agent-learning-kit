@@ -37,9 +37,15 @@
   },
   "request": {
     "threadId": "{{thread_id}}",
-    "runId": "{{execution_id}}",
+    "runId": "{{execution_id}}-{{turn_index}}",
     "state": {},
-    "messages": "{{messages}}",
+    "messages": [
+      {
+        "id": "user-{{execution_id}}-{{turn_index}}",
+        "role": "user",
+        "content": "{{new_message_content}}"
+      }
+    ],
     "tools": [],
     "context": [],
     "forwardedProps": {}

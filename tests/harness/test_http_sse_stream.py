@@ -100,6 +100,7 @@ def test_decoder_handles_comments_multiline_data_and_duplicate_ids():
     )
     raw = b"\xef\xbb\xbf: heartbeat\r\rid: one\rdata: hello\rdata: world\r\r"
     frames = decoder.feed(raw)
+    frames.extend(decoder.finish())
     assert len(frames) == 1
     assert frames[0].data == "hello\nworld"
     reducer.accept(frames[0], bytes_received=decoder.bytes_received)
@@ -110,6 +111,19 @@ def test_decoder_handles_comments_multiline_data_and_duplicate_ids():
     )
     assert done.text == "hello\nworld"
     assert done.duplicate_events == 1
+
+
+def test_decoder_preserves_crlf_fields_across_byte_boundaries():
+    decoder = SSEDecoder()
+    frames = []
+    raw = b"event: update\r\nid: seven\r\ndata: hello\r\ndata: world\r\n\r\n"
+    for byte in raw:
+        frames.extend(decoder.feed(bytes([byte])))
+    frames.extend(decoder.finish())
+    assert len(frames) == 1
+    assert frames[0].event == "update"
+    assert frames[0].event_id == "seven"
+    assert frames[0].data == "hello\nworld"
 
 
 def test_decoder_rejects_invalid_utf8_json_and_bounds(monkeypatch):
@@ -125,6 +139,16 @@ def test_decoder_rejects_invalid_utf8_json_and_bounds(monkeypatch):
     monkeypatch.setattr("fi.simulate.agent.wrappers.http_stream.MAX_STREAM_BYTES", 8)
     with pytest.raises(SSEProtocolError, match="response exceeds"):
         SSEDecoder().feed(b"123456789")
+
+
+def test_decoder_counts_processed_and_pending_bytes_toward_event_limit(monkeypatch):
+    monkeypatch.setattr(
+        "fi.simulate.agent.wrappers.http_stream.MAX_STREAM_EVENT_BYTES", 16
+    )
+    decoder = SSEDecoder()
+    decoder.feed(b"data: a\r\n")
+    with pytest.raises(SSEProtocolError, match="event exceeds"):
+        decoder.feed(b"data: bc")
 
 
 def test_reducer_rejects_conflicting_ids_and_event_limit(monkeypatch):
@@ -176,7 +200,12 @@ def sse_server():
             state["requests"].append(("POST", self.path))
             state["cookie_headers"].append(self.headers.get("Cookie", ""))
             self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream")
+            self.send_header(
+                "Content-Type",
+                "text/event-streaming"
+                if case == "invalid_media"
+                else "text/event-stream",
+            )
             self.send_header("Cache-Control", "no-cache")
             if case == "events":
                 self.send_header("X-Conversation-ID", "conversation-1")
@@ -209,6 +238,13 @@ def sse_server():
                 return
             if case == "idle":
                 state["cancel_started"].set()
+                state["release"].wait(3)
+                return
+            if case == "partial_idle":
+                self.wfile.write(
+                    _event({"type": "TEXT_MESSAGE_CONTENT", "delta": "partial"})
+                )
+                self.wfile.flush()
                 state["release"].wait(3)
                 return
             if case == "tools":
@@ -351,11 +387,29 @@ def test_cancellation_closes_stream_and_next_call_succeeds():
 
 def test_live_stream_has_an_absolute_deadline():
     with sse_server() as (endpoint, _state):
-        response = asyncio.run(_wrapper(endpoint, timeout=0.1).call(_input("idle")))
+        response = asyncio.run(
+            _wrapper(endpoint, timeout=0.1, secret_values={}).call(
+                _input("partial_idle")
+            )
+        )
         trace = response.metadata["external_agent"]
         assert trace["success"] is False
         assert trace["failure_stage"] == "stream"
         assert trace["stream_reason"] == "sse_deadline"
+        assert trace["timeout_error"] is True
+        assert trace["stream_events_received"] == 1
+        assert trace["response_excerpt"] == "partial"
+
+
+def test_live_stream_rejects_content_type_prefixes():
+    with sse_server() as (endpoint, _state):
+        response = asyncio.run(
+            _wrapper(endpoint, secret_values={}).call(_input("invalid_media"))
+        )
+        trace = response.metadata["external_agent"]
+        assert trace["success"] is False
+        assert trace["failure_stage"] == "stream"
+        assert response.content == ""
 
 
 def test_completed_response_tools_are_retained_only_after_success():

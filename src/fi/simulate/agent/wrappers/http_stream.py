@@ -146,30 +146,39 @@ class SSEDecoder:
             if not positions:
                 break
             position = min(positions)
+            if (
+                not final
+                and self._buffer[position] == "\r"
+                and position + 1 == len(self._buffer)
+            ):
+                break
             line = self._buffer[:position]
             consumed = 2 if self._buffer[position : position + 2] == "\r\n" else 1
             self._buffer = self._buffer[position + consumed :]
-            frame = self._line(line)
+            frame = self._line(line, delimiter_bytes=consumed)
             if frame is not None:
                 frames.append(frame)
         if final and self._buffer:
             line, self._buffer = self._buffer, ""
             if line.endswith("\r"):
                 line = line[:-1]
-            frame = self._line(line)
+            frame = self._line(line, delimiter_bytes=0)
             if frame is not None:
                 frames.append(frame)
-        elif len(self._buffer.encode("utf-8")) > MAX_STREAM_EVENT_BYTES:
+        pending_bytes = len(self._buffer.encode("utf-8")) + len(
+            self._decoder.getstate()[0]
+        )
+        if self._event_bytes + pending_bytes > MAX_STREAM_EVENT_BYTES:
             raise SSEProtocolError("sse_limit", "SSE event exceeds 65536 bytes")
         return frames
 
-    def _line(self, line: str) -> SSEFrame | None:
+    def _line(self, line: str, *, delimiter_bytes: int) -> SSEFrame | None:
         if self._first_line:
             line = line.removeprefix("\ufeff")
             self._first_line = False
         if not self._event_lines and not line and not self._event_bytes:
             return None
-        self._event_bytes += len(line.encode("utf-8")) + 1
+        self._event_bytes += len(line.encode("utf-8")) + delimiter_bytes
         if self._event_bytes > MAX_STREAM_EVENT_BYTES:
             raise SSEProtocolError("sse_limit", "SSE event exceeds 65536 bytes")
         if not line:
