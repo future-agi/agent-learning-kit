@@ -156,9 +156,27 @@ class Call:
     worker_label: str = ""
     task_id: str = ""
     task_label: str = ""
+    # The worker this call handed work to, when the call is a hand-off, and when that worker returned.
+    delegated_to: str = ""
+    ended_at: float = 0.0
+    # The runtime's own ids for the event (`event_id`, `parent_event_id`, `started_event_id`), as it reported them.
+    runtime_ids: dict[str, str] = field(default_factory=dict)
+    # A worker's run the runtime reported in place of a tool call: kept in the trace, never graded.
+    handoff: bool = False
+    # The hand-off this call ran in, by its event id, as the runtime's own record links them: "observed" when it
+    # did, "unknown" when it gave no evidence. Never inferred from tool names or event order.
+    parent_span_id: str = ""
+    relationship: str = ""
+    # A control pass the framework recorded as one: the agent it names takes over, and nothing returns.
+    transferred: bool = False
+    # Part of the arguments or the result was left out to keep the record bounded.
+    input_omitted: bool = False
+    output_omitted: bool = False
+    # Why the world refused it, as its action log coded it (`not_permitted`, `deadline_passed`); empty otherwise.
+    refusal_code: str = ""
 
 
-def tool_call_attribution(record: Mapping[str, Any]) -> dict[str, str]:
+def tool_call_attribution(record: Mapping[str, Any]) -> dict[str, Any]:
     def text(key: str) -> str:
         value = record.get(key)
         return value if isinstance(value, str) else ""
@@ -168,6 +186,99 @@ def tool_call_attribution(record: Mapping[str, Any]) -> dict[str, str]:
         "worker_label": text("agent_role"),
         "task_id": text("task_id"),
         "task_label": text("task_name"),
+        "delegated_to": text("delegated_to"),
+        "parent_span_id": text("parent_span_id"),
+        "relationship": "observed" if text("relationship") == "observed" else "",
+        **{
+            key: record.get(field) is True
+            for key, field in (
+                ("transferred", "transfer"),
+                ("input_omitted", "input_omitted"),
+                ("output_omitted", "output_omitted"),
+            )
+        },
+    }
+
+
+_RUNTIME_ID_FIELDS = ("event_id", "parent_event_id", "started_event_id")
+
+
+def runtime_ids(record: dict[str, Any]) -> dict[str, str]:
+    """The ids a runtime's own event carries on a traced call, kept as it wrote them."""
+    return {key: str(record[key]) for key in _RUNTIME_ID_FIELDS if record.get(key)}
+
+
+def graded_calls(calls: Sequence[Call]) -> list[Call]:
+    """The calls checks grade: no worker's run, and no job's hand-off repeating the call that launched it."""
+    plain = {call.name for call in calls if not call.delegated_to}
+    return [
+        call
+        for call in calls
+        if not call.handoff
+        and not (
+            call.delegated_to
+            and call.runtime_ids.get("parent_event_id")
+            and call.name in plain
+        )
+    ]
+
+
+def _worker_event(call: Call) -> dict[str, Any]:
+    """Where a call sits among the app's agents, as the runtime recorded it, for a call any runtime attributed."""
+    if not (
+        call.runtime_ids
+        or call.worker_id
+        or call.worker_label
+        or call.delegated_to
+        or call.relationship
+    ):
+        return {}
+    kind = "tool_call"
+    if call.transferred:
+        kind = "transferred"
+    elif call.delegated_to:
+        kind = "delegated"
+    observed = call.relationship == "observed"
+    return {
+        "span_id": call.runtime_ids.get("event_id", ""),
+        "parent_span_id": call.parent_span_id if observed else "",
+        "kind": kind,
+        "agent": call.worker_id or call.worker_label,
+        "relationship": "observed" if observed else "unknown",
+    }
+
+
+def trace_row(call: Call) -> dict[str, Any]:
+    """One call as the sealed tool trace keeps it, with who in the agent made it when the runtime said."""
+    return {
+        "name": call.name,
+        "arguments": call.arguments,
+        "result": call.result,
+        "ok": call.ok,
+        "error": call.error,
+        "refused": call.refused,
+        "at": call.at,
+        **{
+            key: getattr(call, key)
+            for key in (
+                "worker_id",
+                "worker_label",
+                "task_id",
+                "task_label",
+                "delegated_to",
+                "ended_at",
+            )
+            if getattr(call, key)
+        },
+        **({"runtime_ids": call.runtime_ids} if call.runtime_ids else {}),
+        # Why the world refused it, as its action log coded it.
+        **({"refusal_code": call.refusal_code} if call.refusal_code else {}),
+        **{
+            key: True
+            for key in ("input_omitted", "output_omitted")
+            if getattr(call, key)
+        },
+        **_worker_event(call),
     }
 
 

@@ -21,8 +21,10 @@ from .call_runner import (
     ArtifactUploader,
     CallRunnerContext,
     _clear_file_tool_calls,
-    _collect_file_tool_calls,
     _with_scenario_edits,
+    _write_trial_state,
+    collect_seam_calls,
+    worker_deadline,
 )
 from .contract import AgentContract
 from .hosted_scheduler import CallAborted, CallOutcome, Scenario, World
@@ -36,7 +38,7 @@ from .usage import (
     failure_domain_for_code,
     simulator_funding,
 )
-from .world.runtime import Call, GeneratedWorld
+from .world.runtime import Call, GeneratedWorld, trace_row
 from .world.stores.postgres import AttachedPostgresStore
 
 logger = logging.getLogger(__name__)
@@ -651,6 +653,9 @@ class HostedChatCallRunner:
         transcript: Transcript | None = None
         failure: CallAborted | None = None
         _clear_file_tool_calls(runtime)
+        deadline = worker_deadline(document)
+        if deadline:
+            _write_trial_state(runtime, [], deadline)
         try:
             transcript = await _drive_conversation(
                 _HostedChatTarget(
@@ -704,6 +709,9 @@ class HostedChatCallRunner:
                     scenario_key=scenario.scenario_key,
                 )
         finally:
+            if deadline:
+                # One trial's deadline never carries into the next.
+                _write_trial_state(runtime, [])
             await _record_text_usage(
                 self._context.usage_reporter,
                 scenario_key=scenario.scenario_key,
@@ -713,12 +721,10 @@ class HostedChatCallRunner:
                 failure=failure,
             )
 
-        # The submitted agent may execute tools entirely inside its Python process instead
-        # of returning tool requests over HTTP. These observed calls belong to the same attempt;
-        # do not replay the tool through the generated world or fabricate evidence from text.
-        traced_calls = _collect_file_tool_calls(runtime)
-        if traced_calls and not transcript.calls:
-            transcript.calls.extend(traced_calls)
+        # The submitted agent may execute tools inside its own process or against the world's services instead of
+        # returning tool requests over HTTP. These observed calls belong to the same attempt; do not replay the tool
+        # through the generated world or fabricate evidence from text.
+        transcript.calls[:] = collect_seam_calls(runtime, self._context.evidence_seam, transcript.calls)
 
         if cast is not None:
             transcript.call_actors = {"resolved": chat_actors, "summary": cast.summary(), "events": cast.events}
@@ -731,19 +737,7 @@ class HostedChatCallRunner:
         calls = tuple(transcript.calls)
         if calls:
             tool_trace = "\n".join(
-                json.dumps(
-                    {
-                        "name": call.name,
-                        "arguments": call.arguments,
-                        "result": call.result,
-                        "ok": call.ok,
-                        "error": call.error,
-                        "refused": call.refused,
-                        "at": call.at,
-                    },
-                    sort_keys=True,
-                    default=str,
-                )
+                json.dumps(trace_row(call), sort_keys=True, default=str)
                 for call in calls
             ).encode("utf-8")
             await self._adapter.upload_artifact(

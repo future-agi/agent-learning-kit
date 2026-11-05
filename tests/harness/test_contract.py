@@ -180,3 +180,109 @@ def test_http_server_keeps_source_owned_message_template_argument():
     command = ["server", "--chat-template", "{{messages}}"]
     runtime = Runtime(command=command, interface={"kind": "http", "protocol": "openai_chat", "port": 8080, "path": "/v1/chat/completions"})
     assert runtime.command == command
+
+
+def test_declared_workers_name_contract_tools_and_reach_the_brief():
+    contract = AgentContract.model_validate(
+        {
+            "agent": "returns",
+            "real_use_cases": ["refund an order"],
+            "tools": [{"name": "get_order"}, {"name": "issue_refund"}],
+            "workers": [
+                {
+                    "id": "order_lookup",
+                    "name": "Order-lookup worker",
+                    "tools": ["get_order"],
+                },
+                {"id": "refund", "name": "Refund worker", "tools": ["issue_refund"]},
+            ],
+        }
+    )
+    assert validate_contract(contract) == []
+    assert "order_lookup (Order-lookup worker): get_order" in contract.brief()
+
+
+def test_a_worker_without_an_id_of_its_own_is_returned_to_authoring_and_keeps_only_contract_tools():
+    contract = AgentContract.model_validate(
+        {
+            "agent": "returns",
+            "real_use_cases": ["refund an order"],
+            "tools": [{"name": "get_order"}],
+            "workers": [
+                {"id": "order_lookup", "tools": ["get_order", "send_email"]},
+                {"id": "order_lookup", "name": "Second"},
+                {"id": " "},
+            ],
+        }
+    )
+    problems = validate_contract(contract)
+    assert [one.split(":")[0] for one in problems] == [
+        "worker[2]",
+        "duplicate-worker-ids",
+    ]
+    assert "duplicate-worker-ids:order_lookup:" in problems[1]
+    assert [(one.id, one.tools) for one in contract.workers] == [
+        ("order_lookup", ["get_order"]),
+        ("order_lookup", []),
+        (" ", []),
+    ]
+    fixed = contract.model_copy(
+        update={
+            "workers": [
+                contract.workers[0],
+                contract.workers[1].model_copy(update={"id": "refunds"}),
+            ]
+        }
+    )
+    assert validate_contract(fixed) == []
+
+
+def test_contract_without_workers_is_unchanged():
+    contract = AgentContract.model_validate(
+        {"agent": "plain", "real_use_cases": ["answer"], "tools": [{"name": "a"}]}
+    )
+    assert contract.workers == []
+    assert "WORKERS" not in contract.brief()
+
+
+def test_a_sub_goal_names_the_task_or_one_worker_and_a_task_subject_is_saved_as_before(tmp_path):
+    import json
+
+    from fi.alk.harness.catalogue import Catalogue, SubGoal, save_catalogue
+
+    assert SubGoal(name="a").subject == "task" and SubGoal(name="a").worker == ""
+    assert SubGoal(name="b", subject="worker:refund").worker == "refund"
+    for bad in ("refund", "worker:", "agent:x"):
+        with pytest.raises(ValidationError, match="subject is task or worker"):
+            SubGoal(name="c", subject=bad)
+    path = save_catalogue(Catalogue(sub_goals=[SubGoal(name="a"), SubGoal(name="b", subject="worker:refund")]), tmp_path)
+    saved = json.loads(path.read_text())["sub_goals"]
+    assert "subject" not in saved[0] and saved[1]["subject"] == "worker:refund"
+
+
+def test_a_worker_allowed_a_tool_it_does_not_hold_is_returned_to_authoring():
+    contract = AgentContract.model_validate(
+        {
+            "agent": "returns",
+            "real_use_cases": ["refund an order"],
+            "tools": [{"name": "get_order"}, {"name": "issue_refund"}],
+            "workers": [
+                {"id": "order_lookup", "tools": ["get_order"], "allowed_tools": ["get_order"]},
+                {"id": "refund", "tools": ["issue_refund"], "allowed_tools": ["get_order"]},
+            ],
+        }
+    )
+    assert [one.split(": ")[0] for one in validate_contract(contract)] == [
+        "worker[1]:allowed-tools-it-does-not-hold:get_order"
+    ]
+
+
+def test_a_scenario_s_worker_budget_is_positive_and_absent_from_its_document_when_unset():
+    from fi.alk.harness.folder import document_for
+    from fi.alk.harness.scenario import Scenario
+
+    plain = Scenario(name="a", instruction="x")
+    assert "worker_budget_seconds" not in document_for(plain)
+    assert document_for(plain.model_copy(update={"worker_budget_seconds": 20}))["worker_budget_seconds"] == 20
+    with pytest.raises(ValidationError):
+        Scenario(name="a", instruction="x", worker_budget_seconds=0)

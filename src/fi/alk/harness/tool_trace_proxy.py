@@ -17,6 +17,15 @@ UPSTREAM = os.environ.get("UPSTREAM_URL", "").rstrip("/")
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 # This trial's actor token; a request naming an actor without it is the agent's.
 ACTOR_PROOF_FILE = os.environ.get("ACTOR_PROOF_FILE", "")
+# This trial's worker channels, {token: worker id}: a worker reaches the world under /w/<token>/.
+WORKER_CHANNELS_FILE = os.environ.get("WORKER_CHANNELS_FILE", "")
+# The sealed per-worker allow-lists beside this file, {"worker:<id>": {"allow": [...]}}; a bundle without it does not
+# limit workers.
+WORKER_PERMISSIONS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "permissions.json")
+# The tool each world action is, {"orders.get": "get_order"}, sealed beside this file; a route without one is named by
+# its last path segment.
+ACTIONS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "actions.json")
+_CHANNEL_PREFIX = "/w/"
 
 
 # One request per idempotency key at a time, so a retry racing the first never reaches the world twice.
@@ -57,6 +66,15 @@ def _logs_actors() -> bool:
     return _LOG_SHAPE["actors"]
 
 
+def _read_json(path: str) -> dict | None:
+    try:
+        with open(path, encoding="utf-8") as handle:
+            loaded = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    return loaded if isinstance(loaded, dict) else None
+
+
 def _trial_token() -> str:
     try:
         with open(ACTOR_PROOF_FILE, encoding="utf-8") as handle:
@@ -65,16 +83,17 @@ def _trial_token() -> str:
         return ""
 
 
-def _trial_faults() -> list[dict]:
-    """This trial's faults on the agent's calls, written by the runner beside the token; never from a request."""
+def _trial_state() -> dict:
+    """This trial's state, written by the runner beside the token; never from a request."""
     if not ACTOR_PROOF_FILE:
-        return []
-    try:
-        with open(os.path.join(os.path.dirname(ACTOR_PROOF_FILE), "trial.json"), encoding="utf-8") as handle:
-            faults = json.load(handle).get("faults") or []
-    except (OSError, ValueError, AttributeError):
-        return []
-    return [one for one in faults if isinstance(one, dict)]
+        return {}
+    return _read_json(os.path.join(os.path.dirname(ACTOR_PROOF_FILE), "trial.json")) or {}
+
+
+def _trial_faults() -> list[dict]:
+    """This trial's faults on the agent's calls."""
+    faults = _trial_state().get("faults") or []
+    return [one for one in faults if isinstance(one, dict)] if isinstance(faults, list) else []
 
 
 def _agent_calls(name: str) -> int:
@@ -99,6 +118,7 @@ def _record(
     refusal_code: str | None = None,
     idempotency_key: str | None = None,
     actor_id: str = "agent",
+    worker_id: str | None = None,
     parent_event_id: str | None = None,
     on_behalf_of: str | None = None,
 ) -> None:
@@ -113,14 +133,14 @@ def _record(
     )
     try:
         extended = _logs_actors()
-        if not extended and actor_id != "agent":
+        if not extended and (actor_id != "agent" or worker_id):
             return
         with psycopg.connect(DATABASE_URL, autocommit=True) as connection:
             if extended:
                 connection.execute(
                     "INSERT INTO _alk_tool_trace(name, arguments, result, ok, error, at, action_id, "
-                    "outcome, refusal, refusal_code, idempotency_key, actor_id, parent_event_id, on_behalf_of) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    "outcome, refusal, refusal_code, idempotency_key, actor_id, worker_id, parent_event_id, "
+                    "on_behalf_of) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                     (
                         *row,
                         uuid.uuid4().hex,
@@ -129,6 +149,7 @@ def _record(
                         refusal_code,
                         idempotency_key,
                         actor_id,
+                        worker_id,
                         parent_event_id,
                         on_behalf_of,
                     ),
@@ -207,10 +228,31 @@ class Handler(BaseHTTPRequestHandler):
             arguments = {"_raw": body.decode("utf-8", errors="replace")}
         self._as: dict[str, str | None] = {
             "actor_id": "agent",
+            "worker_id": None,
             "parent_event_id": (self.headers.get("x-alk-parent-event") or "").strip()
             or None,
             "on_behalf_of": None,
         }
+        if self.path.startswith(_CHANNEL_PREFIX):
+            token, _, rest = self.path[len(_CHANNEL_PREFIX) :].partition("/")
+            # The token is the channel's credential: it is stripped here and never logged or forwarded.
+            self.path = "/" + rest
+            worker = ((_read_json(WORKER_CHANNELS_FILE) or {}).get(token) or "") if token else ""
+            if not worker:
+                self._refuse(arguments, "identity_conflict", "this channel does not belong to a worker of this trial")
+                return
+            self._as["worker_id"] = worker
+            deadline = _trial_state().get("worker_deadline_at")
+            if isinstance(deadline, (int, float)) and time.time() > deadline:
+                self._refuse(arguments, "deadline_passed", f"the deadline for {worker} has passed")
+                return
+            if os.path.exists(WORKER_PERMISSIONS_FILE):
+                # Present and unreadable denies: a broken seal never widens what a worker may do. A worker is
+                # checked as an actor is, through permitted(), and refused into the same action log.
+                allowed = ((_read_json(WORKER_PERMISSIONS_FILE) or {}).get(f"worker:{worker}") or {}).get("allow")
+                if not permitted(allowed, self._action()):
+                    self._refuse(arguments, "not_permitted", f"{self._action()} is not permitted for {worker}")
+                    return
         actor = (self.headers.get("x-alk-actor") or "").strip()
         if actor:
             token = _trial_token()
@@ -327,7 +369,8 @@ class Handler(BaseHTTPRequestHandler):
         self._reply(504, {"detail": "tool_upstream_timeout"})
 
     def _name(self) -> str:
-        return self.path.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1] or "unknown"
+        named = (_read_json(ACTIONS_FILE) or {}).get(self._action())
+        return str(named) if named else self.path.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1] or "unknown"
 
     def _send(self, body: bytes, arguments: object, key: str | None) -> None:
         outgoing = request.Request(

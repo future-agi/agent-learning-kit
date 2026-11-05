@@ -806,6 +806,27 @@ def configuration_addresses_from_endpoints(
 
 _PLACEHOLDER = re.compile(r"\{\{([^{}]+)\}\}")
 _NAMED_PLACEHOLDER = re.compile(r"^(PORT|HOST)_(.+)$")
+# A declared worker's own channel at this world's tool proxy; see `_worker_channel`.
+WORKER_CHANNEL_PLACEHOLDER = re.compile(r"^WORKER_CHANNEL_([A-Za-z0-9_.-]+)$")
+WORKER_CHANNELS_FILE = "worker-channels.json"
+
+
+def _worker_channel(world_dir: Path, worker: str) -> str:
+    """This world's channel token for one worker, minted on first use and kept in the tool proxy's world directory,
+    which the proxy reads to tell workers apart. A sibling of `world_dir`: every process of a world shares a parent."""
+    path = world_dir.parent / "tool-proxy" / WORKER_CHANNELS_FILE
+    try:
+        channels = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        channels = {}
+    token = next((key for key, value in channels.items() if value == worker), None)
+    if token is None:
+        token = secrets.token_hex(16)
+        channels[token] = worker
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(channels), encoding="utf-8")
+        path.chmod(0o644)
+    return token
 
 
 def render_template(
@@ -834,6 +855,9 @@ def render_template(
             return str(world_dir)
         if token == "DB_NAME":
             return f"w{world_index}"
+        channel = WORKER_CHANNEL_PLACEHOLDER.match(token)
+        if channel:
+            return _worker_channel(world_dir, channel.group(1))
         named = _NAMED_PLACEHOLDER.match(token)
         if named:
             kind, name = named.groups()
@@ -2318,16 +2342,18 @@ def spawn_source_process(
                         _SIMULATION_MARK_SITECUSTOMIZE, encoding="utf-8"
                     )
                 sitecustomize_hook.chmod(0o444)
-        if mark_hook_due:
-            # The customer's interpreter has no `fi.alk`, so the module sits beside the hook.
-            mark_module = world_dir / "simulation_mark_bootstrap.py"
-            if not mark_module.exists():
-                mark_module.write_bytes(
-                    Path(__file__)
-                    .with_name("simulation_mark_bootstrap.py")
-                    .read_bytes()
-                )
-                mark_module.chmod(0o444)
+        if mark_hook_due or process.environment.get("ALK_OBSERVE_FRAMEWORKS") == "1":
+            # The customer's interpreter has no `fi.alk`, so the modules sit beside the hook.
+            for module_name in (
+                "simulation_mark_bootstrap.py",
+                "simulation_worker_events.py",
+            ):
+                mark_module = world_dir / module_name
+                if not mark_module.exists():
+                    mark_module.write_bytes(
+                        Path(__file__).with_name(module_name).read_bytes()
+                    )
+                    mark_module.chmod(0o444)
         if process.environment.get("ALK_CREWAI_TOOL_TRACE") == "1":
             observer = world_dir / "crewai_runtime_observer_bootstrap.py"
             if not observer.exists():

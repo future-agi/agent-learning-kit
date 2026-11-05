@@ -2626,6 +2626,41 @@ def test_conversation_only_scenario_can_be_judged_without_tool_calls(
     asyncio.run(scenario())
 
 
+def test_a_call_with_only_worker_hand_offs_is_evidence_missing() -> None:
+    # A worker's run is not a tool call, so a call that made none still has no evidence for checks.
+    async def scenario() -> None:
+        outbound = FakeOutbound()
+        pool, _ = _pool(2, outbound=outbound)
+        await pool.start()
+        handoff = hs.Call(
+            name="Draft writer", arguments={}, delegated_to="Draft writer", handoff=True
+        )
+
+        class Runner:
+            async def run(
+                self, scenario: FakeScenario, runtime: EnvironmentRuntime
+            ) -> hs.CallOutcome:
+                return _call_outcome(calls=(handoff,))
+
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=Runner(),
+            outbound=outbound,
+            job_seed=1,
+        )
+        scenarios = [
+            FakeScenario(
+                "s1", "id-1", sub_goals=[FakeSubGoal("goal", lambda w, c: None)]
+            )
+        ]
+        result = await scheduler.run(scenarios)
+        assert result.receipts[0].failure.code == "evidence_missing"
+        await pool.close()
+
+    asyncio.run(scenario())
+
+
 def test_zero_turns_and_zero_calls_is_still_evidence_missing() -> None:
     # M10: unconditioned on `turns` — a 0-turn call is an unobserved agent, same as any other
     # empty-calls outcome; `evidence_missing` must fire regardless.
@@ -4780,3 +4815,100 @@ def test_a_sub_goal_about_an_actor_is_settled_by_whether_the_actor_came_in(monke
     assert [one.verdict for one in receipt.sub_goals] == ["pass", verdict]
     if status == "errored":
         assert receipt.failure.code == "actor_missing" and "asked_the_friend" in receipt.failure.message
+
+
+def _graded(goals, outcome):
+    async def scenario():
+        outbound = FakeOutbound()
+        pool, _ = _pool(1, outbound=outbound)
+        await pool.start()
+
+        class Runner:
+            async def run(self, scenario, runtime):
+                return outcome
+
+        scheduler = hs.HostedScheduler(
+            pool=pool, world_factory=FakeWorldFactory(), call_runner=Runner(), outbound=outbound, job_seed=1
+        )
+        result = await scheduler.run([FakeScenario("s1", "id-1", sub_goals=goals)])
+        await pool.close()
+        return result.receipts[0]
+
+    return asyncio.run(scenario())
+
+
+@dataclass
+class _WorkerGoal(FakeSubGoal):
+    worker: str = ""
+
+    @property
+    def subject(self) -> str:
+        return f"worker:{self.worker}" if self.worker else "task"
+
+
+def test_a_worker_s_check_reads_only_that_worker_s_calls_and_without_any_is_inconclusive() -> None:
+    calls = (
+        hs.Call(name="get_order", arguments={}, worker_id="order_lookup"),
+        hs.Call(name="issue_refund", arguments={}, worker_id="refund"),
+        hs.Call(name="send_reply", arguments={}),
+    )
+    seen: dict[str, list[str]] = {}
+
+    def lane(name):
+        def check(world, given):
+            seen[name] = [one.name for one in given]
+
+        return check
+
+    receipt = _graded(
+        [
+            _WorkerGoal("lookup_read_only", lane("lookup"), worker="order_lookup"),
+            _WorkerGoal("task_done", lane("task")),
+            _WorkerGoal("audit_logged", lambda w, c: None, worker="audit"),
+        ],
+        _call_outcome(turns=2, calls=calls),
+    )
+    assert seen == {"lookup": ["get_order"], "task": ["get_order", "issue_refund", "send_reply"]}
+    lookup, task, audit = receipt.sub_goals
+    assert (lookup.verdict, task.verdict) == ("pass", "pass")
+    assert (lookup.subject, task.subject, audit.subject) == ("worker:order_lookup", "task", "worker:audit")
+    # Absence is never a pass: a worker with nothing in the world's log cannot be graded.
+    assert (audit.verdict, audit.held) == ("inconclusive", None)
+    assert audit.reason == "Inconclusive: worker audit made no tool call the world recorded"
+
+
+def test_a_worker_s_failed_check_is_reported_beside_the_task_s_verdict_not_folded_into_it() -> None:
+    calls = (hs.Call(name="update_order_status", arguments={}, worker_id="order_lookup"),)
+    outcome = _call_outcome(turns=2, calls=calls)
+    receipt = _graded(
+        [
+            _WorkerGoal("lookup_read_only", lambda w, c: "the lookup worker wrote an order", worker="order_lookup"),
+            _WorkerGoal("audit_logged", lambda w, c: None, worker="audit"),
+            _WorkerGoal("reply_truthful", lambda w, c: None),
+        ],
+        outcome,
+    )
+    worker, audit, task = receipt.sub_goals
+    # Neither a worker's failure nor a worker that left nothing to grade decides the task.
+    assert (worker.verdict, audit.verdict, task.verdict, receipt.status) == ("fail", "inconclusive", "pass", "passed")
+    failed = _graded([_WorkerGoal("reply_truthful", lambda w, c: "claimed a refund")], outcome)
+    assert failed.status == "failed"
+
+
+def test_a_worker_that_passed_its_deadline_has_its_own_checks_inconclusive_and_the_task_still_graded() -> None:
+    calls = (
+        hs.Call(name="get_order", arguments={}, worker_id="order_lookup"),
+        hs.Call(name="issue_refund", arguments={}, worker_id="refund", ok=False, refused=True,
+                refusal_code="deadline_passed"),
+    )
+    receipt = _graded(
+        [
+            _WorkerGoal("refund_done", lambda w, c: "no refund", worker="refund"),
+            _WorkerGoal("lookup_done", lambda w, c: None, worker="order_lookup"),
+            _WorkerGoal("reply_truthful", lambda w, c: None),
+        ],
+        _call_outcome(turns=2, calls=calls),
+    )
+    refund, lookup, task = receipt.sub_goals
+    assert (refund.verdict, lookup.verdict, task.verdict) == ("inconclusive", "pass", "pass")
+    assert refund.reason == "Inconclusive: worker refund passed its deadline, so its result is partial"

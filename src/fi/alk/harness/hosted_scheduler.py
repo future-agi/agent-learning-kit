@@ -73,7 +73,7 @@ from .world.errors import (
     WorldUnavailable,
     WorldUsageError,
 )
-from .world.runtime import Call
+from .world.runtime import Call, graded_calls
 
 logger = logging.getLogger(__name__)
 
@@ -325,6 +325,8 @@ class SubGoalResult:
     held: bool | None
     reason: str | None
     judged: bool
+    # Whose result: the task, or `worker:<id>`; reported beside the task verdict, never folded into it.
+    subject: str = "task"
     # Derived from held and reason, so a result changed with `replace` never disagrees with it.
     verdict: str | None = field(default=None, init=False)
 
@@ -2304,7 +2306,7 @@ class HostedScheduler:
                 call=self._call_summary(call_outcome),
                 retry=False,
             )
-        calls = list(
+        calls = graded_calls(
             call_outcome.calls
         )  # m12: `folder.py::_RUNNABLE` expects a list, not a tuple.
         if not calls and (
@@ -2354,10 +2356,30 @@ class HostedScheduler:
                     )
                 )
                 continue
+            worker = getattr(goal, "worker", "")
+            lane = [one for one in calls if getattr(one, "worker_id", "") == worker] if worker else calls
+            inconclusive = (
+                f"worker {worker} made no tool call the world recorded"
+                if not lane
+                else f"worker {worker} passed its deadline, so its result is partial"
+                if any(getattr(one, "refusal_code", "") == "deadline_passed" for one in lane)
+                else ""
+            ) if worker else ""
+            if inconclusive:
+                # A worker's own check with nothing, or only part, of its work recorded: never a pass, never a fail.
+                sub_goal_results.append(
+                    SubGoalResult(
+                        name=goal.name,
+                        held=None,
+                        reason=f"{INCONCLUSIVE}{inconclusive}",
+                        judged=goal.judged != "",
+                    )
+                )
+                continue
             outcome = await _run_phase(
                 goal.check,
                 check_handle,
-                calls,
+                lane,
                 *((reference_of(getattr(scenario, "solution", None) or ()),) if takes_reference(goal.check) else ()),
                 timeout=CHECK_TIMEOUT_SECONDS,
                 phase="check",
@@ -2484,6 +2506,11 @@ class HostedScheduler:
                 )
                 sub_goal_results[slot] = replace(judged, held=False, reason=reason or None)
 
+        subjects = {goal.name: getattr(goal, "subject", "task") or "task" for goal in scenario.sub_goals}
+        sub_goal_results = [
+            replace(result, subject=subjects.get(result.name, "task")) for result in sub_goal_results
+        ]
+
         if broken_failure is not None:
             return self._fault(
                 scenario,
@@ -2527,10 +2554,11 @@ class HostedScheduler:
                 call=self._call_summary(call_outcome),
                 retry=False,
             )
-        # A settled `False` fails the scenario; an unsettled sub-goal makes it not decided.
-        if any(result.held is False for result in sub_goal_results):
+        # A settled `False` fails the scenario; an unsettled sub-goal makes it not decided. A worker's own sub-goals are
+        # reported beside the task's verdict, never folded into it.
+        if any(result.held is False and result.subject == "task" for result in sub_goal_results):
             status = "failed"
-        elif any(result.held is None for result in sub_goal_results):
+        elif any(result.held is None and result.subject == "task" for result in sub_goal_results):
             return self._fault(
                 scenario,
                 world_index,

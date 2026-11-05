@@ -37,6 +37,7 @@ import json
 import random
 import logging
 import os
+import time
 import secrets
 import stat
 import tempfile
@@ -112,7 +113,7 @@ from .simulator_voice import (
     voice_providers,
 )
 from .world.errors import WorldUnavailable
-from .world.runtime import Call, tool_call_attribution
+from .world.runtime import Call, runtime_ids, tool_call_attribution, trace_row
 
 logger = logging.getLogger(__name__)
 
@@ -950,9 +951,31 @@ def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
                 error=error,
                 refused=not ok,
                 at=at,
+                # The worker the world saw make it, by the channel it came through.
+                worker_id=str(record.get("worker_id") or ""),
+                refusal_code=str(record.get("refusal_code") or ""),
             )
         )
     return tuple(calls)
+
+
+def collect_seam_calls(
+    runtime: EnvironmentRuntime,
+    seam: EvidenceSeam | None,
+    observed: Sequence[Call] = (),
+) -> tuple[Call, ...]:
+    """The calls a world observed for one attempt: calls another source saw, else the agent's own in-process trace,
+    else where its bundle says evidence lands, joined with the trace file's span lines. Every runner reads them here,
+    so a voice and a chat call agree."""
+    written, from_spans = _read_file_tool_calls(runtime)
+    calls = list(observed) or written
+    if not calls and seam is EvidenceSeam.HTTP_TOOL:
+        calls = list(_collect_http_tool_calls(runtime))
+    elif not calls and seam is EvidenceSeam.TOOL_TRACE:
+        calls = list(_collect_tool_trace_calls(runtime))
+    # Unrecognized/None (should not happen for a `kind: process` bundle past preflight) degrades to the span lines
+    # alone, keeping this on the scheduler's own evidence_missing path, never a raw exception.
+    return _merge_span_calls(calls, from_spans)
 
 
 def _read_action_log(
@@ -991,25 +1014,33 @@ _OUTCOMES = ("committed", "refused", "faulted", "duplicate")
 
 
 def trial_state_changes(log: list[dict[str, Any]], listed: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """What each participant attempted in this trial and what the world made of it: one entry for the agent and one
-    per actor that acted, with attempted, committed, refused, faulted and duplicate counts and the actions it
-    committed, in order. Attempted, refused and committed are kept apart; a row from before outcomes were recorded
-    counts as committed when it succeeded and refused when the world refused it."""
+    """What each participant attempted in this trial and what the world made of it: one entry for the agent, one per
+    actor that acted and one per agent worker the world told apart (`worker:<id>`, by the channel it came through),
+    with attempted, committed, refused, faulted and duplicate counts, the actions it committed and the ones the world
+    refused with why, in order. Attempted, refused and committed are kept apart; a row from before outcomes were
+    recorded counts as committed when it succeeded and refused when the world refused it."""
     entries: dict[str, dict[str, Any]] = {}
     for row in log:
         if ":h" in str(row.get("idempotency_key") or ""):
             # Written before the run: the trial's starting point, not a change made during it.
             continue
         who = str(row.get("actor_id") or AGENT)
+        if who == AGENT and row.get("worker_id"):
+            who = f"worker:{row['worker_id']}"
         actor = listed.get(who)
         entry = entries.setdefault(
             who,
             {
                 "who": who,
-                "name": "the agent" if who == AGENT else (actor.name if actor is not None else who),
+                "name": "the agent"
+                if who == AGENT
+                else actor.name
+                if actor is not None
+                else str(row.get("worker_id") or who),
                 "attempted": 0,
                 **{outcome: 0 for outcome in _OUTCOMES},
                 "committed_actions": [],
+                "refused_actions": [],
             },
         )
         entry["attempted"] += 1
@@ -1020,6 +1051,15 @@ def trial_state_changes(log: list[dict[str, Any]], listed: Mapping[str, Any]) ->
             entry[outcome] += 1
         if outcome == "committed":
             entry["committed_actions"].append(str(row.get("name") or ""))
+        elif outcome == "refused":
+            # An attempted violation stays visible: what was tried and why the world said no.
+            entry["refused_actions"].append(
+                {
+                    "action": str(row.get("name") or ""),
+                    "code": str(row.get("refusal_code") or ""),
+                    "reason": str(row.get("refusal") or row.get("error") or ""),
+                }
+            )
     agent = entries.pop(AGENT, None)
     return ([agent] if agent else []) + list(entries.values())
 
@@ -1125,15 +1165,29 @@ def _write_trial_token(path: Path, token: str) -> None:
             raise PrivateTokenUnavailable(str(error)) from error
 
 
-def _write_trial_state(runtime: EnvironmentRuntime, faults: list[Any]) -> None:
-    """This trial's faults, beside the actor token where the world's door reads them; written by the runner only."""
+def _write_trial_state(
+    runtime: EnvironmentRuntime,
+    faults: list[Any],
+    worker_deadline_at: float | None = None,
+) -> None:
+    """This trial's faults and its workers' deadline, beside the actor token where the world's door reads them;
+    written by the runner only. Past the deadline the world refuses every worker's call (`deadline_passed`)."""
     token_path = runtime.metadata.get("actor_proof_path")
     if not isinstance(token_path, str):
-        if faults:
-            logger.warning("faults cannot be set: this world has no tool proxy reading trial state")
+        if faults or worker_deadline_at:
+            logger.warning("trial state cannot be set: this world has no tool proxy reading it")
         return
     path = Path(token_path).with_name("trial.json")
-    path.write_text(json.dumps({"faults": list(faults)}), encoding="utf-8")
+    state: dict[str, Any] = {"faults": list(faults)}
+    if worker_deadline_at:
+        state["worker_deadline_at"] = worker_deadline_at
+    path.write_text(json.dumps(state), encoding="utf-8")
+
+
+def worker_deadline(document: Mapping[str, Any]) -> float | None:
+    """When this trial's workers stop being allowed to act: its start plus the scenario's worker budget, if any."""
+    budget = document.get("worker_budget_seconds")
+    return time.time() + budget if isinstance(budget, (int, float)) and budget > 0 else None
 
 
 def _actor_dispatcher(
@@ -1231,20 +1285,34 @@ def _clear_file_tool_calls(runtime: EnvironmentRuntime) -> None:
 # Marks lines written by livekit_tool_trace_bootstrap._record. That module is copied into the
 # agent's interpreter as a standalone sitecustomize, so it cannot import this constant.
 _LIVEKIT_HOOK_SOURCE = "livekit"
+_SPAN_SOURCE = "otel"
 _MISSING = object()
 
 
 def _collect_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
+    return _with_span_calls((), runtime)
+
+
+def _with_span_calls(
+    observed: Sequence[Call], runtime: EnvironmentRuntime
+) -> tuple[Call, ...]:
+    """Calls another source saw, else the trace file's own lines, joined with the file's span lines."""
+    written, from_spans = _read_file_tool_calls(runtime)
+    return _merge_span_calls(list(observed) or written, from_spans)
+
+
+def _read_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[list[Call], list[Call]]:
     path = _tool_trace_file(runtime)
     if path is None or not path.is_file():
-        return ()
+        return [], []
     calls: list[Call] = []
     # Agent-written calls not yet timed by the hook line for the same call.
     untimed: list[Call] = []
+    from_spans: list[Call] = []
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:
-        return ()
+        return [], []
     for line in lines:
         try:
             record = json.loads(line)
@@ -1256,7 +1324,10 @@ def _collect_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
         if not isinstance(name, str) or not name:
             continue
         arguments = record.get("arguments")
-        if isinstance(arguments, str):
+        if isinstance(arguments, str) and not arguments.strip():
+            # A span that recorded no arguments.
+            arguments = {}
+        elif isinstance(arguments, str):
             try:
                 arguments = json.loads(arguments)
             except ValueError:
@@ -1273,8 +1344,15 @@ def _collect_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
             ok=not is_error,
             error=str(output) if is_error and output is not None else None,
             **tool_call_attribution(record),
+            runtime_ids=runtime_ids(record),
+            handoff=record.get("kind") == "handoff",
             at=float(raw_at) if isinstance(raw_at, (int, float)) else 0.0,
         )
+        ended = record.get("ended_at")
+        call.ended_at = float(ended) if isinstance(ended, (int, float)) else 0.0
+        if record.get("source") == _SPAN_SOURCE:
+            from_spans.append(call)
+            continue
         if record.get("source") != _LIVEKIT_HOOK_SOURCE:
             calls.append(call)
             if not call.at:
@@ -1306,7 +1384,96 @@ def _collect_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
             continue
         untimed.remove(written)
         written.at = call.at
-    return tuple(calls)
+    return calls, from_spans
+
+
+def _tool_key(name: str) -> str:
+    """A tool's name as two tracers of one call may spell it ("Delegate work" or "delegate_work")."""
+    return "".join(ch for ch in name.lower() if ch.isalnum())
+
+
+def _keep_recorded_parents(from_spans: list[Call]) -> None:
+    """A span's parent stands only when it is a hand-off the spans recorded; a call of an agent run the framework
+    records as handed control sits in that control pass."""
+    handed = {
+        span.runtime_ids.get("event_id")
+        for span in from_spans
+        if span.delegated_to or span.transferred
+    } - {None}
+    passed = {
+        span.runtime_ids.get("event_id")
+        for span in from_spans
+        if span.transferred and span.handoff
+    } - {None}
+    for span in from_spans:
+        agent_run = span.runtime_ids.get("parent_event_id")
+        if (
+            span.relationship == "observed"
+            and not span.parent_span_id
+            and agent_run in passed
+        ):
+            span.parent_span_id = agent_run
+        elif span.parent_span_id and span.parent_span_id not in handed:
+            span.parent_span_id, span.relationship = "", ""
+
+
+def _merge_span_calls(calls: list[Call], from_spans: list[Call]) -> tuple[Call, ...]:
+    """Count a call a framework span and another tracer both report once, with the span's agent, hand-off and times."""
+    # A background job is written when it starts and again when it ends; the later line carries its return.
+    ended = {
+        span.runtime_ids.get("event_id")
+        for span in from_spans
+        if span.delegated_to and span.ended_at
+    } - {None}
+    from_spans = [
+        span
+        for span in from_spans
+        if not (
+            span.delegated_to
+            and not span.ended_at
+            and span.runtime_ids.get("event_id") in ended
+        )
+    ]
+    _keep_recorded_parents(from_spans)
+    if not calls:
+        # A span is written when it ends, so a hand-off lands after the calls it led to.
+        return tuple(sorted(from_spans, key=lambda call: call.at))
+    launched = {span.runtime_ids.get("event_id"): span.name for span in from_spans}
+    merged = list(calls)
+    unpaired = list(calls)
+    for span in from_spans:
+        if (
+            span.delegated_to
+            and launched.get(span.runtime_ids.get("parent_event_id")) == span.name
+        ):
+            # A job's hand-off sits under the call that launched it and is not that call again.
+            merged.append(span)
+            continue
+        same_tool = [c for c in unpaired if _tool_key(c.name) == _tool_key(span.name)]
+        # Same outcome first: a refusal can read as a failure to one tracer and a returned value to the other.
+        other = next(
+            (c for c in same_tool if c.ok == span.ok),
+            same_tool[0] if same_tool else None,
+        )
+        if other is None:
+            merged.append(span)
+            continue
+        unpaired.remove(other)
+        if not (other.worker_id or other.worker_label):
+            other.worker_id, other.worker_label = span.worker_id, span.worker_label
+        other.delegated_to = other.delegated_to or span.delegated_to
+        other.transferred = other.transferred or span.transferred
+        other.ended_at = other.ended_at or span.ended_at
+        if not other.runtime_ids:
+            # The span's place among the agents goes with its ids: a parent is an id in the same record.
+            other.runtime_ids = span.runtime_ids
+            other.parent_span_id, other.relationship = (
+                span.parent_span_id,
+                span.relationship,
+            )
+        # A span starts when the call does; another tracer may stamp a call only once it reads its result.
+        other.at = span.at or other.at
+    return tuple(sorted(merged, key=lambda call: call.at))
 
 
 def _target_metrics(case: Any) -> dict[str, Any] | None:
@@ -1886,12 +2053,14 @@ class CallRunnerImpl:
 
         async def place_with_actors() -> SimulationReport:
             faults = list(doc.get("faults") or [])
-            if faults:
-                _write_trial_state(runtime, faults)
+            deadline = worker_deadline(doc)
+            if faults or deadline:
+                _write_trial_state(runtime, faults, deadline)
             try:
                 return await place_with_world_actors()
             finally:
-                if faults:
+                if faults or deadline:
+                    # One trial's faults and deadline never carry into the next.
                     _write_trial_state(runtime, [])
 
         async def place_with_world_actors() -> SimulationReport:
@@ -2020,23 +2189,19 @@ class CallRunnerImpl:
         )
         changes = (
             _state_changes(runtime, self._context.bundle_dir)
-            if acted or actor_decisions
+            if case is not None
+            and self._context.evidence_seam is EvidenceSeam.TOOL_TRACE
             else []
+        )
+        # A worker the world told apart is kept beside the actors, so its refused attempts are never lost.
+        workers_acted = any(
+            str(entry.get("who") or "").startswith("worker:") for entry in changes
         )
         marks = _agent_marks(runtime, self._context.bundle_dir, calls) if acted else []
         if calls:
             tool_trace = "\n".join(
                 json.dumps(
-                    {
-                        "name": call.name,
-                        "arguments": call.arguments,
-                        "result": call.result,
-                        "ok": call.ok,
-                        "error": call.error,
-                        "refused": call.refused,
-                        "at": call.at,
-                        **(marks[index] if marks else {}),
-                    },
+                    {**trace_row(call), **(marks[index] if marks else {})},
                     sort_keys=True,
                     default=str,
                 )
@@ -2063,7 +2228,7 @@ class CallRunnerImpl:
                         "summary": took_part.get("call_actors") or [],
                         "events": took_part.get("call_actor_events") or [],
                     }
-                if acted or actor_decisions:
+                if acted or actor_decisions or workers_acted:
                     # Kept out of the tool trace, whose every line is one of the agent's own calls. `decisions` is
                     # what each actor chose and why (live) or was scheduled to do (mocked); `actions` what the world
                     # made of it.
@@ -2275,16 +2440,4 @@ class CallRunnerImpl:
         return replace(base, calls=calls)
 
     def _collect_calls(self, runtime: EnvironmentRuntime) -> tuple[Call, ...]:
-        seam = self._context.evidence_seam
-        file_calls = _collect_file_tool_calls(runtime)
-        if file_calls:
-            return file_calls
-        if seam is EvidenceSeam.HTTP_TOOL:
-            return _collect_http_tool_calls(runtime)
-        if seam is EvidenceSeam.TOOL_TRACE:
-            return _collect_tool_trace_calls(runtime)
-        # Unrecognized/None (should not happen for a `kind: process` bundle past preflight --
-        # bundle_v2.py requires `evidence_seam` whenever `kind is PROCESS` -- but degrading rather
-        # than crashing keeps this on the scheduler's own evidence_missing path, never a raw
-        # exception).
-        return ()
+        return collect_seam_calls(runtime, self._context.evidence_seam)

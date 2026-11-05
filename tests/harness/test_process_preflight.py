@@ -1653,3 +1653,26 @@ def test_config_file_alias_is_admitted_only_for_declared_target_secret(tmp_path,
             preflight_bundle(tmp_path, manifest, parallelism=2, secret_refs=refs)
     else:
         preflight_bundle(tmp_path, manifest, parallelism=2, secret_refs=refs)
+
+
+def test_a_worker_channel_placeholder_needs_the_bundle_s_tool_proxy(tmp_path: Path) -> None:
+    def mutate(body: dict[str, Any]) -> dict[str, Any]:
+        body["processes"][1]["environment"]["REFUND_API_URL"] = "{{WORKER_CHANNEL_refund}}"
+        return body
+
+    manifest = _build_bundle(tmp_path, body_overrides=mutate)
+    with pytest.raises(PreflightError, match="needs this bundle's tool proxy"):
+        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+
+
+def test_a_worker_channel_placeholder_is_accepted_beside_a_tool_proxy(tmp_path: Path) -> None:
+    def mutate(body: dict[str, Any]) -> dict[str, Any]:
+        # Only the name matters to the vocabulary: the bundle has a process called tool-proxy.
+        body["processes"][0]["name"] = "tool-proxy"
+        body["processes"][1]["depends_on"] = ["tool-proxy"]
+        body["capabilities"]["database"]["service"] = "tool-proxy"
+        body["processes"][1]["environment"]["REFUND_API_URL"] = "{{DATABASE_URL}}/w/{{WORKER_CHANNEL_refund}}"
+        return body
+
+    manifest = _build_bundle(tmp_path, body_overrides=mutate)
+    assert preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS) is None

@@ -762,10 +762,60 @@ def test_hook_module_imports_only_the_standard_library_and_uses_python_39_syntax
         "functools",
         "importlib.machinery",
         "importlib.util",
+        "importlib",
         "inspect",
         "os",
         "sys",
         "urllib.parse",
+        # Imported only inside a process that already uses OpenTelemetry, to give a span asked for
+        # before any provider was set one; never at the hook's own import.
+        "opentelemetry.sdk.trace",
+        "opentelemetry.sdk.trace.export",
+        "opentelemetry.exporter.otlp.proto.http.trace_exporter",
+        # Imported only inside a process that has just imported the OpenAI Agents SDK.
+        "agents.tracing",
+    }
+    top_level = {
+        node.names[0].name if isinstance(node, ast.Import) else node.module
+        for node in tree.body
+        if isinstance(node, (ast.Import, ast.ImportFrom))
+    }
+    assert not {
+        name
+        for name in top_level
+        if name and name.startswith(("opentelemetry", "agents"))
+    }
+
+
+def test_worker_event_module_imports_only_the_standard_library_and_uses_python_39_syntax() -> (
+    None
+):
+    """It sits beside the hook in the customer's interpreter, under the same constraints."""
+    tree = ast.parse(
+        (_HARNESS / "simulation_worker_events.py").read_text(encoding="utf-8"),
+        feature_version=(3, 9),
+    )
+    imported = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    } | {
+        node.module or ""
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.level == 0
+    }
+    assert not any(
+        isinstance(node, ast.ImportFrom) and node.level for node in ast.walk(tree)
+    )
+    assert imported == {
+        "__future__",
+        "collections",
+        "functools",
+        "json",
+        "os",
+        "threading",
+        "time",
     }
 
 

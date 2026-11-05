@@ -9412,6 +9412,7 @@ def test_mark_hook_written_with_its_module_first_on_pythonpath_for_every_exporti
         ]
         assert sorted(path.name for path in world.iterdir()) == [
             "simulation_mark_bootstrap.py",
+            "simulation_worker_events.py",
             "sitecustomize.py",
         ]
         assert (
@@ -9471,6 +9472,15 @@ def test_mark_hook_written_with_its_module_first_on_pythonpath_for_every_exporti
     world = captured["world_dir"]
     assert (world / "sitecustomize.py").read_bytes() == _LIVEKIT_HOOK.read_bytes()
     assert not (world / "simulation_mark_bootstrap.py").exists()
+
+    # Framework observation reads spans through the mark module, exported or not.
+    observed = both.model_copy(
+        update={"environment": {**both.environment, "ALK_OBSERVE_FRAMEWORKS": "1"}}
+    )
+    captured = _spawn(tmp_path / "observed", observed)
+    assert (
+        captured["world_dir"] / "simulation_mark_bootstrap.py"
+    ).read_bytes() == _MARK_HOOK.read_bytes()
 
     # A reset spawns again in the same directory, whose files the process's own user now owns
     # read-only: they are reused, never rewritten.
@@ -9844,6 +9854,7 @@ def test_small_mark_hook_says_so_when_the_mark_module_is_broken(
     world = captured["world_dir"]
     assert sorted(path.name for path in world.iterdir()) == [
         "simulation_mark_bootstrap.py",
+        "simulation_worker_events.py",
         "sitecustomize.py",
     ]
     _replace_mark_module(world, _BROKEN_MARK_MODULES[source])
@@ -10542,3 +10553,29 @@ def test_only_the_call_runner_learns_where_the_tool_proxy_reads_a_trial_s_actor_
         "actor_proof_path"
     ] == str(tmp_path / "worlds" / "w2" / "tool-proxy" / "actor-token")
     assert "actor_proof_path" not in metadata({})
+
+
+def test_each_worker_gets_its_own_channel_token_per_world_written_where_the_tool_proxy_reads_it(tmp_path: Path) -> None:
+    import json
+
+    plan = pr.plan_ports(_manifest(), instances=2)
+
+    def render(world: int, value: str) -> str:
+        return pr.render_template(
+            value,
+            process_name="agent",
+            world_index=world,
+            world_dir=tmp_path / "worlds" / f"w{world}" / "agent",
+            port_plan=plan,
+            configuration_addresses={"TOOLS_API_URL": "http://proxy"},
+        )
+
+    lookup = render(0, "{{TOOLS_API_URL}}/w/{{WORKER_CHANNEL_order_lookup}}")
+    refund = render(0, "{{WORKER_CHANNEL_refund}}")
+    # A second render of the same world (a restart) keeps the channel; another world gets its own.
+    assert render(0, "{{TOOLS_API_URL}}/w/{{WORKER_CHANNEL_order_lookup}}") == lookup
+    other = render(1, "{{WORKER_CHANNEL_refund}}")
+    token = lookup.rsplit("/", 1)[-1]
+    assert lookup.startswith("http://proxy/w/") and len(token) == 32 and len({token, refund, other}) == 3
+    channels = json.loads((tmp_path / "worlds" / "w0" / "tool-proxy" / "worker-channels.json").read_text())
+    assert channels == {token: "order_lookup", refund: "refund"}

@@ -401,3 +401,43 @@ def test_failed_worker_uploads_partial_evidence_before_raising(tmp_path, monkeyp
     assert adapter.uploads == [b"partial transcript", b"http failure trace"]
     assert failure.value.partial.transcript_artifact == "transcript-1"
     assert failure.value.partial.turns == 2
+
+
+def test_an_isolated_chat_call_keeps_the_bundle_s_evidence_seam(tmp_path, monkeypatch):
+    from dataclasses import replace
+
+    from fi.alk.harness.bundle_v2 import EvidenceSeam
+
+    class Stop(Exception):
+        pass
+
+    seen = {}
+
+    class Runner:
+        def __init__(self, _adapter, context):
+            seen["worker"] = context.evidence_seam
+            raise Stop
+
+    async def worker(_module, payload, *, environ, work_directory):
+        seen["payload"] = payload["evidence_seam"]
+        monkeypatch.setattr(chat_worker.sys, "stdin", io.StringIO(json.dumps(payload)))
+        monkeypatch.setattr(chat_worker.sys, "argv", ["chat_worker", str(tmp_path / "result.json")])
+        await chat_worker.main()
+
+    monkeypatch.setattr(chat_worker, "run_json_worker", worker)
+    monkeypatch.setattr(chat_call_runner, "HostedChatCallRunner", Runner)
+    context = replace(_context(tmp_path), evidence_seam=EvidenceSeam.TOOL_TRACE)
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1",
+        world_index=0,
+        bundle_digest="sha256:" + "a" * 64,
+        state=RuntimeState.READY,
+        endpoints={"target_http": RuntimeEndpoint(capability="target_http", protocol="http", address="http://x")},
+    )
+    with pytest.raises(Exception):
+        asyncio.run(
+            chat_worker.IsolatedChatCallRunner(_Adapter(), context).run(
+                SimpleNamespace(scenario_key="one", source_scenario_key="one", scenario_id="id-1"), runtime
+            )
+        )
+    assert seen == {"payload": "tool_trace", "worker": EvidenceSeam.TOOL_TRACE}

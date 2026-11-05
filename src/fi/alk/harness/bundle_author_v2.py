@@ -65,9 +65,11 @@ from .bundle_v2 import (
     load_bundle_v2,
     seal_bundle_v2,
 )
-from .contract import DataStore, Runtime, ToolEntry, runtime_public_environment
+from .contract import AgentContract, DataStore, Runtime, ToolEntry, runtime_public_environment
 from .generated_runtime import (
     GeneratedRuntimeError,
+    framework_instrumentation_command,
+    uv_run_project,
     _python_language_version,
     select_python_extras,
     python_workspace_root,
@@ -167,13 +169,13 @@ def _sets_trial_state(authoring: Path) -> bool:
     return False
 
 
-def _action_log_seed(authoring: Path) -> str:
-    """The action log and who may do what in the world; a world without actors, history or faults is seeded exactly
-    as before."""
+def _action_log_seed(authoring: Path, *, workers: bool = False) -> str:
+    """The action log and who may do what in the world; a world without actors, history, faults or limited workers is
+    seeded exactly as before."""
     listing = load_actors(authoring)
     return (
         _TOOL_TRACE_DDL + actors_seed(listing)
-        if listing.actors or _sets_trial_state(authoring)
+        if listing.actors or workers or _sets_trial_state(authoring)
         else _AGENT_TRACE_DDL
     )
 
@@ -2013,11 +2015,54 @@ def _tool_proxy_process() -> SourceProcess:
             "UPSTREAM_URL": "{{TOOLS_UPSTREAM_URL}}",
             "DATABASE_URL": "{{WORLD_DATABASE_URL}}",
             "ACTOR_PROOF_FILE": "{{WORLD_DIR}}/actor-token",
+            "WORKER_CHANNELS_FILE": "{{WORLD_DIR}}/worker-channels.json",
         },
         started_check=StartedCheck(port=True, timeout_seconds=180),
         user=ProcessUser.SVC_TOOLS,
         depends_on=["tools-api", "world-db"],
     )
+
+
+def _tool_actions(contract: AgentContract) -> dict[str, str]:
+    """Each service-backed tool's world action, as the tool proxy names it (the path the tool calls, dotted), mapped
+    to the tool's own name. A route is often named differently from its tool (`get_order` -> `/orders/get`)."""
+    return {
+        entry.endpoint.strip("/").replace("/", "."): entry.tool
+        for entry in contract.tool_entrypoints
+        if entry.endpoint.strip()
+    }
+
+
+def _worker_permissions(contract_body: dict[str, Any] | None) -> dict[str, dict[str, list[str]]]:
+    """Each declared worker's allow-list, as the tool proxy names world actions."""
+    contract = AgentContract.model_validate(contract_body or {})
+    action_of = {tool: action for action, tool in _tool_actions(contract).items()}
+    return {
+        f"worker:{worker.id}": {"allow": sorted({action_of.get(tool, tool) for tool in worker.allowed_tools or worker.tools})}
+        for worker in contract.workers
+    }
+
+
+def _with_worker_channels(plan: EnvironmentPlanV2, contract_body: dict[str, Any] | None) -> EnvironmentPlanV2:
+    """Point each separately wired worker's tool address at its own channel on the tool proxy, so the world can tell
+    the workers apart and hold each to its own tools."""
+    if not any(process.name == "tool-proxy" for process in plan.processes):
+        return plan
+    workers = AgentContract.model_validate(contract_body or {}).workers
+    channels = {
+        one.address_env: f"{{{{TOOLS_API_URL}}}}/w/{{{{WORKER_CHANNEL_{one.id}}}}}"
+        for one in workers
+        if one.binding == "separate" and one.address_env.strip()
+    }
+    if not channels:
+        return plan
+    processes = tuple(
+        process.model_copy(update={"environment": {**process.environment, **channels}})
+        if isinstance(process, SourceProcess) and process.name == plan.control_service
+        else process
+        for process in plan.processes
+    )
+    return replace(plan, processes=processes)
 
 
 def _mcp_toolbox_definition(root: Path) -> tuple[Path, dict[str, Any]] | None:
@@ -3086,19 +3131,30 @@ def resolve_environment_plan(
         for process in normalized_processes
     ]
 
+    # A voice agent's tool calls are traced by its LiveKit worker, never twice.
     if (
         not isinstance(selected, ComposeSelection)
         and runtime_model.command
-        and contract_interface_kind == "command"
+        and str(contract_modality or "").strip().lower() != "voice"
     ):
         trace_environment = _source_tool_trace_environment(
-            root, runtime_model, tool_entrypoints or []
+            root,
+            runtime_model,
+            (tool_entrypoints or []) if contract_interface_kind == "command" else [],
         )
         if trace_environment:
             processes = [
-                process.model_copy(update={
-                    "environment": {**process.environment, **trace_environment},
-                })
+                process.model_copy(
+                    update={
+                        "environment": {**process.environment, **trace_environment},
+                        "build_commands": [
+                            *process.build_commands,
+                            framework_instrumentation_command(
+                                uv_run_project(process.run_command)
+                            ),
+                        ],
+                    }
+                )
                 if isinstance(process, SourceProcess) and process.name == control_name
                 else process
                 for process in processes
@@ -3125,12 +3181,14 @@ def _source_tool_trace_environment(
             declared.append({
                 "name": entry.tool, "module": entry.module, "callable": entry.callable,
             })
-    if not declared:
-        return {}
+    # Every Python agent's framework spans are read for its tool calls and the agent that made
+    # each, so any multi-agent source is observed without changes to it.
     environment = {
         "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
-        "ALK_TOOL_TRACE_BINDINGS": json.dumps(declared, sort_keys=True),
+        "ALK_OBSERVE_FRAMEWORKS": "1",
     }
+    if declared:
+        environment["ALK_TOOL_TRACE_BINDINGS"] = json.dumps(declared, sort_keys=True)
     component = _runtime_component(source, runtime.workdir)
     project = _pyproject_document(component / "pyproject.toml").get("project", {})
     requirements = list(project.get("dependencies", []))
@@ -3156,6 +3214,15 @@ _SOURCE_TOOL_TRACE_VERSION = 1
 
 
 def _uses_source_tool_trace(processes: Sequence[Any]) -> bool:
+    """Whether ALK traces the source's tools or its framework spans; LiveKit's own trace alone does not count."""
+    return any(
+        {"ALK_TOOL_TRACE_BINDINGS", "ALK_OBSERVE_FRAMEWORKS"}
+        & set(getattr(process, "environment", None) or {})
+        for process in processes
+    )
+
+
+def _binds_source_tools(processes: Sequence[Any]) -> bool:
     return any(
         "ALK_TOOL_TRACE_BINDINGS" in (getattr(process, "environment", None) or {})
         for process in processes
@@ -3416,12 +3483,9 @@ def _with_source_tool_trace(
             if key not in {"HARNESS_TOOL_TRACE", "ALK_TOOL_TRACE_BINDINGS"}
         }
         if bindings:
-            environment.update(
-                {
-                    "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
-                    "ALK_TOOL_TRACE_BINDINGS": json.dumps(bindings),
-                }
-            )
+            environment["ALK_TOOL_TRACE_BINDINGS"] = json.dumps(bindings)
+        if bindings or "ALK_OBSERVE_FRAMEWORKS" in environment:
+            environment["HARNESS_TOOL_TRACE"] = "{{WORLD_DIR}}/agent-tool-calls.jsonl"
         updated.append(process.model_copy(update={"environment": environment}))
     return tuple(updated)
 
@@ -3593,7 +3657,7 @@ def author_bundle_v2(
         if contract_modality == "chat"
         else []
     )
-    if trace_bindings and not _uses_source_tool_trace(plan.processes):
+    if trace_bindings and not _binds_source_tools(plan.processes):
         plan = replace(
             plan,
             processes=_with_source_tool_trace(
@@ -3632,6 +3696,7 @@ def author_bundle_v2(
         plan = _package_process_sources(
             source_root, temporary, plan, Runtime.model_validate(runtime or {}),
         )
+        plan = _with_worker_channels(plan, contract_body)
         (temporary / "credentials.json").write_text(
             credential_manifest.model_dump_json(indent=2) + "\n", encoding="utf-8"
         )
@@ -3662,6 +3727,18 @@ def author_bundle_v2(
                 Path(__file__).with_name("tool_trace_proxy.py"),
                 generated / "proxy.py",
             )
+            # Only when routes and tools are recorded, so a bundle without them seals exactly as before.
+            actions = _tool_actions(AgentContract.model_validate(contract_body or {}))
+            if actions:
+                (generated / "actions.json").write_text(
+                    json.dumps(actions, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+                )
+            # Only with declared workers, likewise.
+            permissions = _worker_permissions(contract_body)
+            if permissions:
+                (generated / "permissions.json").write_text(
+                    json.dumps(permissions, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+                )
         if any(process.name == "mcp-toolbox" for process in plan.processes):
             toolbox = _mcp_toolbox_definition(source_root)
             if toolbox is None:
@@ -3682,7 +3759,10 @@ def author_bundle_v2(
         prefix = (
             "CREATE TABLE IF NOT EXISTS harness_seed_sentinel (id text PRIMARY KEY);\n"
             "INSERT INTO harness_seed_sentinel(id) VALUES ('ready') ON CONFLICT DO NOTHING;\n"
-            + _action_log_seed(authoring_root)
+            # A worker's refused attempt is kept in the same action log as an actor's.
+            + _action_log_seed(
+                authoring_root, workers=bool(_worker_permissions(contract_body))
+            )
         )
         generic_pipeline = job.metadata.get("generic_harness_v1") is True
         if generic_pipeline:
@@ -4138,7 +4218,7 @@ def _carry_contract(
     traced_command = (
         isinstance(interface, dict)
         and str(interface.get("kind") or "").strip().lower() == "command"
-        and _uses_source_tool_trace(processes)
+        and _binds_source_tools(processes)
     )
     if (
         str(body.get("modality") or "").strip().lower() == "chat"

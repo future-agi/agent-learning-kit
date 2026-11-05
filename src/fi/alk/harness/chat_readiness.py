@@ -11,6 +11,7 @@ from fi.simulate.agent.wrapper import AgentInput
 from .chat_transport import create_chat_wrapper
 from .diagnostics import HarnessDiagnostic
 from .job import HarnessStage
+from .world.runtime import graded_calls, trace_row
 
 
 def _failure_code(trace):
@@ -236,8 +237,10 @@ async def probe_chat_workflow(
     secret_values,
     redaction_values,
     timeout=300.0,
+    evidence_seam=None,
 ):
-    """Exercise a private conversation and require observed tool execution evidence."""
+    """Exercise a private conversation and require observed tool execution evidence, read from where the bundle's
+    own runs read it (`evidence_seam`), so readiness and a real run agree."""
     from .authoring_runtime_validation import RuntimeValidationError
     from .call_runner import CallRunnerContext
     from .chat_call_runner import HostedChatCallRunner
@@ -279,22 +282,19 @@ async def probe_chat_workflow(
         )
 
     async def retain_interrupted_conversation(exc):
-        from dataclasses import asdict
-
-        from .call_runner import _collect_file_tool_calls
+        from .call_runner import collect_seam_calls
         from .outbound import ArtifactKind
 
         transcript = getattr(exc, "partial_transcript", None)
         if transcript is None:
             return
-        if not transcript.calls:
-            transcript.calls.extend(_collect_file_tool_calls(runtime))
-        receipt["tool_call_count"] = len(transcript.calls)
+        transcript.calls[:] = collect_seam_calls(runtime, evidence_seam, transcript.calls)
+        receipt["tool_call_count"] = len(graded_calls(transcript.calls))
         receipt["turns"] = len(transcript.exchanges)
         await artifacts.upload_artifact(transcript.artifact(), kind=ArtifactKind.TRANSCRIPT)
         if transcript.calls:
             trace = "\n".join(
-                json.dumps(asdict(call), sort_keys=True, default=str)
+                json.dumps(trace_row(call), sort_keys=True, default=str)
                 for call in transcript.calls
             ).encode("utf-8")
             await artifacts.upload_artifact(trace, kind=ArtifactKind.TOOL_TRACE)
@@ -306,7 +306,7 @@ async def probe_chat_workflow(
                 job=job,
                 bundle_dir=bundle,
                 work_directory=folder,
-                evidence_seam=None,
+                evidence_seam=evidence_seam,
                 target_provider_secret_values=secret_values,
                 attempt_number=1,
                 source_directory=source,
@@ -314,21 +314,22 @@ async def probe_chat_workflow(
         )
         async with asyncio.timeout(timeout):
             outcome = await runner.run(scenario, runtime)
-        receipt["tool_call_count"] = len(outcome.calls)
+        graded = graded_calls(outcome.calls)
+        receipt["tool_call_count"] = len(graded)
         receipt["turns"] = outcome.turns
         from .contract import has_executable_tool_workflow
 
         requires_tool_evidence = getattr(job, "require_tool_workflow", False) or (
             has_executable_tool_workflow(runner._contract, include_construct=False)
         )
-        if not outcome.calls and requires_tool_evidence:
+        if not graded and requires_tool_evidence:
             raise failure(
                 "chat_tool_evidence_unverified",
                 "Required tool evidence was not captured. Inspect source-supported "
                 "observation mapping. This may be target noncompliance; do not "
                 "fabricate evidence or change business logic.",
             )
-        if not outcome.calls:
+        if not graded:
             receipt["tool_evidence_status"] = "not_observed"
         receipt["status"] = "passed"
     except RuntimeValidationError:
@@ -340,7 +341,7 @@ async def probe_chat_workflow(
         ) from exc
     except CallAborted as exc:
         if exc.partial is not None:
-            receipt["tool_call_count"] = len(exc.partial.calls)
+            receipt["tool_call_count"] = len(graded_calls(exc.partial.calls))
             receipt["turns"] = exc.partial.turns
         raise failure(_failure_code(artifacts.trace), str(exc)) from exc
     except asyncio.CancelledError as exc:
