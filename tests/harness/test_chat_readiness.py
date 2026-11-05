@@ -1193,7 +1193,11 @@ def test_private_workflow_deadline_and_cancellation_keep_completed_evidence(tmp_
     ]
     tool_trace = next(receipt_path.parent.glob("tool_trace-*.json"))
     call, handed = (json.loads(line) for line in tool_trace.read_text().splitlines())
-    assert (handed["delegated_to"], handed["kind"], "handoff" in handed) == ("Accounts worker", "delegated", False)
+    assert (handed["delegated_to"], handed["kind"], "handoff" in handed) == (
+        "Accounts worker",
+        "delegated",
+        False,
+    )
     assert call["name"] == "lookup_account"
     assert call["arguments"] == {"account_id": "A-1"}
     assert call["result"]["active"] is True

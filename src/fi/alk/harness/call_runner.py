@@ -914,7 +914,7 @@ def _tool_key(name: str) -> str:
 
 def _keep_recorded_parents(from_spans: list[Call]) -> None:
     """A span's parent stands only when it is a hand-off the spans recorded; a call of an agent run the framework
-    records as handed control sits in that control pass."""
+    records as handed control sits in that control pass, on that record alone (`parent_event_id` and `passed`)."""
     handed = {
         span.runtime_ids.get("event_id")
         for span in from_spans
@@ -927,12 +927,8 @@ def _keep_recorded_parents(from_spans: list[Call]) -> None:
     } - {None}
     for span in from_spans:
         agent_run = span.runtime_ids.get("parent_event_id")
-        if (
-            span.relationship == "observed"
-            and not span.parent_span_id
-            and agent_run in passed
-        ):
-            span.parent_span_id = agent_run
+        if not span.parent_span_id and agent_run in passed:
+            span.parent_span_id, span.relationship = agent_run, "observed"
         elif span.parent_span_id and span.parent_span_id not in handed:
             span.parent_span_id, span.relationship = "", ""
 

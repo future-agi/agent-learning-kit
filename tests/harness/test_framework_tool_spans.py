@@ -1140,6 +1140,37 @@ def test_an_agent_the_framework_records_as_handed_control_holds_its_calls(
     assert "ended_at" not in rows[0]
 
 
+def test_an_agent_handed_control_inside_an_openai_agents_run_holds_its_calls(
+    tmp_path: Path,
+) -> None:
+    # The same hand-off as traceAI records a real Runner.run: both agents sit under the run's name-less agent span.
+    records = _run(
+        tmp_path,
+        """
+        from opentelemetry.trace import set_span_in_context
+        run = tracer.start_span("Agent workflow", attributes={"gen_ai.span.kind": "AGENT"})
+        steps = tracer.start_span("Agent workflow", context=set_span_in_context(run),
+                                  attributes={"gen_ai.span.kind": "CHAIN"})
+        with trace.use_span(steps):
+            with span("Triage", **{"fi.span.kind": "AGENT", "graph.node.id": "Triage"}):
+                with span("lookup", **{"fi.span.kind": "TOOL", "gen_ai.tool.name": "lookup"}):
+                    pass
+            with span("Refunds", **{"fi.span.kind": "AGENT", "graph.node.id": "Refunds"}) as refunds:
+                with span("issue_refund", **{"fi.span.kind": "TOOL", "gen_ai.tool.name": "issue_refund"}):
+                    pass
+                refunds.set_attribute("graph.node.parent_id", "Triage")
+        steps.end()
+        run.end()
+    """,
+    )
+    passed = next(r for r in records if r.get("transfer"))
+    refund = next(row for row in _sealed(tmp_path) if row["name"] == "issue_refund")
+    assert (refund["parent_span_id"], refund["relationship"]) == (
+        passed["event_id"],
+        "observed",
+    )
+
+
 def test_each_payload_says_whether_part_of_it_was_left_out(tmp_path: Path) -> None:
     records = _run(
         tmp_path,
@@ -1293,3 +1324,120 @@ def test_an_adk_transfer_without_its_arguments_hands_control_to_the_agent_that_r
         ("transfer_to_agent", "transferred", "root_agent", "observed", ""),
         ("look_up_tide", "tool_call", "leaf_agent", "observed", transfer["span_id"]),
     ]
+
+
+_ADK_UNNAMED_TRANSFER = """
+from opentelemetry.trace import set_span_in_context
+flow = tracer.start_span("invoke_workflow root_agent", attributes={"gen_ai.operation.name": "invoke_workflow",
+                                                                 "gen_ai.span.kind": "CHAIN"})
+BEFORE
+root = tracer.start_span("invoke_agent root_agent", context=set_span_in_context(flow), attributes={
+    "gen_ai.operation.name": "invoke_agent", "gen_ai.agent.name": "root_agent", "gen_ai.span.kind": "AGENT"})
+move = tracer.start_span("execute_tool transfer_to_agent", context=set_span_in_context(root), attributes={
+    "gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "transfer_to_agent",
+    "gen_ai.tool.type": "TransferToAgentTool", "gen_ai.span.kind": "TOOL"})
+move.end()
+root.end()
+AFTER
+with trace.use_span(other, end_on_exit=True):
+    with span("execute_tool look_up_tide", **{"gen_ai.operation.name": "execute_tool",
+                                              "gen_ai.tool.name": "look_up_tide", "gen_ai.span.kind": "TOOL"}):
+        pass
+flow.end()
+"""
+
+
+def test_an_adk_transfer_without_its_arguments_is_not_taken_by_an_agent_that_started_before_it(
+    tmp_path: Path,
+) -> None:
+    started = """
+other = tracer.start_span("invoke_agent side_agent", context=set_span_in_context(flow), attributes={
+    "gen_ai.operation.name": "invoke_agent", "gen_ai.agent.name": "side_agent", "gen_ai.span.kind": "AGENT"})
+"""
+    _run(
+        tmp_path, _ADK_UNNAMED_TRANSFER.replace("BEFORE", started).replace("AFTER", "")
+    )
+    rows = _sealed(tmp_path)
+    transfer = next(r for r in rows if r["name"] == "transfer_to_agent")
+    tide = next(r for r in rows if r["name"] == "look_up_tide")
+    assert "delegated_to" not in transfer
+    assert tide["parent_span_id"] != transfer["span_id"]
+
+
+def test_a_later_agent_under_an_adk_workflow_with_no_transfer_into_it_has_an_unknown_place(
+    tmp_path: Path,
+) -> None:
+    later = """
+leaf = tracer.start_span("invoke_agent leaf_agent", context=set_span_in_context(flow), attributes={
+    "gen_ai.operation.name": "invoke_agent", "gen_ai.agent.name": "leaf_agent", "gen_ai.span.kind": "AGENT"})
+leaf.end()
+other = tracer.start_span("invoke_agent other_agent", context=set_span_in_context(flow), attributes={
+    "gen_ai.operation.name": "invoke_agent", "gen_ai.agent.name": "other_agent", "gen_ai.span.kind": "AGENT"})
+"""
+    _run(tmp_path, _ADK_UNNAMED_TRANSFER.replace("BEFORE", "").replace("AFTER", later))
+    tide = next(r for r in _sealed(tmp_path) if r["name"] == "look_up_tide")
+    assert (tide["parent_span_id"], tide["relationship"]) == ("", "unknown")
+
+
+def test_a_call_under_an_agent_whose_parent_gave_way_to_newer_spans_has_an_unknown_place(
+    tmp_path: Path,
+) -> None:
+    _run(
+        tmp_path,
+        """
+        import simulation_worker_events
+        from opentelemetry.trace import set_span_in_context
+        simulation_worker_events._LIVE_SPANS_MAX = 3
+        lead = tracer.start_span("Lead", attributes={"gen_ai.span.kind": "AGENT", "gen_ai.agent.name": "Lead"})
+        held = [tracer.start_span(f"step {n}", context=set_span_in_context(lead), attributes={
+            "gen_ai.span.kind": "CHAIN"}) for n in range(2)]
+        worker = tracer.start_span("Research", context=set_span_in_context(lead), attributes={
+            "gen_ai.span.kind": "AGENT", "gen_ai.agent.name": "Research"})
+        with trace.use_span(worker, end_on_exit=True):
+            with span("search_notes", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "search_notes"}):
+                pass
+        for one in held:
+            one.end()
+        lead.end()
+    """,
+    )
+    search = next(r for r in _sealed(tmp_path) if r["name"] == "search_notes")
+    assert search["relationship"] == "unknown"
+
+
+def test_held_transfers_are_bounded_across_one_agent_s_calls(tmp_path: Path) -> None:
+    _run(
+        tmp_path,
+        """
+        import simulation_worker_events
+        from opentelemetry.trace import set_span_in_context
+        simulation_worker_events._LAUNCHES_MAX = 2
+        root = tracer.start_span("invoke_agent root_agent", attributes={
+            "gen_ai.operation.name": "invoke_agent", "gen_ai.agent.name": "root_agent", "gen_ai.span.kind": "AGENT"})
+        for _ in range(3):
+            tracer.start_span("execute_tool transfer_to_agent", context=set_span_in_context(root), attributes={
+                "gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "transfer_to_agent",
+                "gen_ai.tool.type": "TransferToAgentTool", "gen_ai.span.kind": "TOOL"}).end()
+        root.end()
+    """,
+    )
+    assert sorted(row["kind"] for row in _sealed(tmp_path)) == [
+        "tool_call",
+        "transferred",
+        "transferred",
+    ]
+
+
+def test_an_adk_transfer_without_its_arguments_is_not_taken_by_the_agent_that_made_it(
+    tmp_path: Path,
+) -> None:
+    again = """
+other = tracer.start_span("invoke_agent root_agent", context=set_span_in_context(flow), attributes={
+    "gen_ai.operation.name": "invoke_agent", "gen_ai.agent.name": "root_agent", "gen_ai.span.kind": "AGENT"})
+"""
+    _run(tmp_path, _ADK_UNNAMED_TRANSFER.replace("BEFORE", "").replace("AFTER", again))
+    rows = _sealed(tmp_path)
+    transfer = next(r for r in rows if r["name"] == "transfer_to_agent")
+    tide = next(r for r in rows if r["name"] == "look_up_tide")
+    assert "delegated_to" not in transfer
+    assert tide["parent_span_id"] != transfer["span_id"]

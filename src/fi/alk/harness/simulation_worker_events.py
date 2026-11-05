@@ -201,8 +201,11 @@ class _ToolSpans:
         parent = getattr(span, "parent", None)
         with self._lock:
             if len(self._live) >= _LIVE_SPANS_MAX:
-                # A span that never ended (a dropped generator, a long-lived server) gives way to new ones.
-                self._live.pop(next(iter(self._live)))
+                # A span that never ended (a dropped generator, a long-lived server) gives way to new ones; it then
+                # reads as closed, so what ran under it is unknown rather than the top of the app's work.
+                evicted = next(iter(self._live))
+                self._live.pop(evicted)
+                self._closed[evicted] = None
             self._live[context.span_id] = (
                 span,
                 parent.span_id if parent is not None else None,
@@ -214,6 +217,11 @@ class _ToolSpans:
                     self._opened.setdefault(
                         holder.get_span_context().span_id, context.span_id
                     )
+                else:
+                    # The first agent under the trace's own top span (a workflow or chain) is the top of the work.
+                    top = self._top(context.span_id)
+                    if top is not None:
+                        self._opened.setdefault(top, context.span_id)
             if parent is None and _kind(span) != "TOOL":
                 try:
                     joined = self._job_record(span, context.span_id, ended=False)
@@ -287,13 +295,22 @@ class _ToolSpans:
             span_id = entry[1]
         return None
 
+    def _top(self, span_id):
+        """The parentless span the app's trace for ``span_id`` started at, when it is not ``span_id`` itself."""
+        top, parent, seen = None, (self._live.get(span_id) or (None, None))[1], set()
+        while parent is not None and parent in self._live and parent not in seen:
+            seen.add(parent)
+            top, parent = parent, self._live[parent][1]
+        return top if parent is None else None
+
     def _delegation(self, span_id):
         """The hand-off ``span_id`` ran in, read from the span tree only: ``(event id, "observed")``, ``("",
         "observed")`` under an agent that nothing handed work to, and ``("", "unknown")`` when the tree does not say."""
-        agent = None
+        agent = last = None
         entry = self._live.get(span_id)
         parent = entry[1] if entry else None
         while parent is not None:
+            last = parent
             above = self._live.get(parent)
             if above is None:
                 # A parent the app's tracer never recorded (the caller's context) is outside the app: the agent
@@ -338,6 +355,13 @@ class _ToolSpans:
                 ):
                     return _hex(above[1]), "observed"
             parent = above[1]
+        if (
+            agent is not None
+            and last != agent
+            and self._opened.get(last, agent) != agent
+        ):
+            # A later agent under the trace's top span, with no transfer recorded into it: handed control by someone.
+            return "", "unknown"
         return "", "observed" if agent is not None else "unknown"
 
     def _container(self, entry) -> bool:
@@ -359,16 +383,24 @@ class _ToolSpans:
             self._transferred[agent] = match[0]
         return self._transferred[agent]
 
-    def _confirm_transfer(self, scope, name) -> None:
-        """Write the held built-in transfer in ``scope`` that names ``name`` as a control pass, now that it ran."""
+    def _confirm_transfer(self, scope, name, started) -> None:
+        """Write the held built-in transfer in ``scope`` that names ``name`` as a control pass, now that it ran; one
+        with no recorded target goes only to another agent that started after it ended."""
         held = self._candidates.get(scope) or []
         match = next((one for one in held if one[1] == name), None) or next(
-            (one for one in held if one[1] is None), None
+            (
+                one
+                for one in held
+                if one[1] is None
+                and started >= one[3]
+                and name != one[0].get("agent_key")
+            ),
+            None,
         )
         if match is None:
             return False
         held.remove(match)
-        record, target, _ = match
+        record, target, _, _ = match
         target = target or name
         record.update(transfer=True, delegated_to=target[:256])
         record.pop("ended_at", None)
@@ -385,8 +417,11 @@ class _ToolSpans:
         the nearest agent; an agent started by a tool call was handed work by that call, not control."""
         entry = self._live.get(span_id)
         parent = entry[1] if entry else None
+        started = (entry[0].start_time or 0) if entry else 0
         while parent is not None and parent in self._live:
-            if parent in self._candidates and self._confirm_transfer(parent, name):
+            if parent in self._candidates and self._confirm_transfer(
+                parent, name, started
+            ):
                 return
             if _kind(self._live[parent][0]) in ("AGENT", "TOOL"):
                 return
@@ -395,7 +430,7 @@ class _ToolSpans:
     def _settle_candidates(self, scope) -> None:
         """A run ended without starting the agent a held transfer named: an ordinary tool call, or the framework's
         transfer with no agent recorded as taking over."""
-        for record, _, framework in self._candidates.pop(scope, None) or []:
+        for record, _, framework, _ in self._candidates.pop(scope, None) or []:
             if framework:
                 record.update(transfer=True)
                 record.pop("ended_at", None)
@@ -622,11 +657,11 @@ class _ToolSpans:
         if (
             (candidate or (framework and not target))
             and agent is not None
-            and len(self._candidates) < _LAUNCHES_MAX
+            and sum(len(held) for held in self._candidates.values()) < _LAUNCHES_MAX
         ):
             scope = agent.get_span_context().span_id
             self._candidates.setdefault(scope, []).append(
-                (record, candidate, framework)
+                (record, candidate, framework, span.end_time or 0)
             )
             return
         if target:
