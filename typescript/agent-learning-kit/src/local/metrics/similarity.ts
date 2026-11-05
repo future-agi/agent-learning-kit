@@ -4,7 +4,7 @@
  */
 
 import { MetricResult, MetricConfig } from './types.js';
-import { snapshotBoundary } from '../autoeval/types.js';
+import { snapshotBoundary, isIterableCapture } from '../autoeval/types.js';
 
 const incomplete = (reason = 'NO_EVIDENCE'): MetricResult => ({ score: 0, passed: false, reason });
 const hasText = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0;
@@ -27,6 +27,7 @@ export function bleuScore(
     try { config = snapshotBoundary(config, 'METRIC_CONFIG_INVALID'); }
     catch { return incomplete('METRIC_CONFIG_INVALID'); }
     if (!config || typeof config !== 'object' || Array.isArray(config)) return incomplete('METRIC_CONFIG_INVALID');
+    if (Array.isArray(config.reference) && isIterableCapture(config.reference)) return incomplete();
     if (typeof response !== 'string') return incomplete();
     const references = Array.isArray(config.reference) ? config.reference : [config.reference];
     if (references.length === 0 || references.some(reference => typeof reference !== 'string')) return incomplete();
