@@ -391,3 +391,80 @@ def test_a_way_of_speaking_sent_as_the_actor_s_surface_is_said_back_never_saved(
     ok = asyncio.run(add.handler({"id": "dana", "name": "Dana", "role": "a coworker", "channel": "audio_mix"}))
     assert not ok.get("is_error")
     assert load_actors(tmp_path).by_id()["dana"].channel == "audio_mix"
+
+
+def test_a_voice_actor_s_brief_reads_the_world_records_it_may_see(tmp_path, monkeypatch):
+    from fi.alk.harness import call_runner as cr
+    from fi.alk.harness.call_actor import CallActor, CallActorList, save_call_actors
+
+    monkeypatch.setenv("HARNESS_ACTORS", "1")
+    save_call_actors(tmp_path, CallActorList(call_actors=[CallActor(id="near", name="Rowan", role="a coworker", channel="audio_mix")]))
+    from fi.alk.harness.actors import load_actors
+
+    listing = load_actors(tmp_path)
+    listing.actors[0] = listing.actors[0].model_copy(
+        update={"knowledge": [{"kind": "records", "store": "crm", "collection": "deals", "where": {"id": 7}}]}
+    )
+    save_actors(tmp_path, listing)
+    doc = {
+        "instruction": "You want the discount applied.",
+        "persona": {"name": "Sam", "languages": ["English"]},
+        "actors": [{"id": "near", "instruction": "You want them to hurry.", "trigger": {"kind": "always"}}],
+    }
+    rows = {"deals": [{"id": 7, "value": 900}, {"id": 8, "value": 50}]}
+    [resolved] = cr._resolved_call_actors(doc, tmp_path, "deepgram", "", "run", rows.get)
+    assert '"value": 900' in resolved["brief"] and '"value": 50' not in resolved["brief"]
+
+
+class _InProcessWorld:
+    """A generated world whose tools run in process: each call commits and is recorded."""
+
+    def __init__(self):
+        from fi.alk.harness.world.runtime import Call
+
+        self.Call = Call
+        self.calls = []
+        self.committed = []
+
+    def _record(self, call):
+        self.calls.append(call)
+        return call
+
+    def handle_tool_call(self, call):
+        self.committed.append(dict(call["arguments"]))
+        self._record(self.Call(name=call["name"], arguments=dict(call["arguments"]), result={"ok": True}))
+        return SimpleNamespace(content='{"ok": true}')
+
+
+def _chat_target(faults):
+    from fi.alk.harness import chat_call_runner as chat
+
+    contract = SimpleNamespace(tool_entrypoints=[{"tool": "update_deal", "endpoint": "crm/update_deal"}])
+    world = _InProcessWorld()
+    target = chat._HostedChatTarget(
+        wrapper=None, contract=contract, world=world, scenario_key="s", scenario_id="s-1", faults=faults
+    )
+    return target, world
+
+
+def test_a_chat_agent_s_in_process_call_timed_out_before_commit_never_changes_the_world():
+    target, world = _chat_target([{"action": "crm.update_deal", "mode": "timeout_before_commit"}])
+    assert target._world_call("c1", "update_deal", {"discount": 10}) == "Error: the request timed out"
+    assert world.committed == [] and world.calls[0].error == "timeout_before_commit" and not world.calls[0].ok
+    # The retry is the agent's second call: it commits once.
+    assert target._world_call("c2", "update_deal", {"discount": 10}) == '{"ok": true}'
+    assert world.committed == [{"discount": 10}]
+
+
+def test_a_chat_agent_s_in_process_call_timed_out_after_commit_commits_and_a_retry_commits_again():
+    target, world = _chat_target([{"action": "crm.update_deal", "mode": "timeout_after_commit", "on_call": 1}])
+    assert target._world_call("c1", "update_deal", {"discount": 10}) == "Error: the request timed out"
+    assert world.committed == [{"discount": 10}] and world.calls[0].error == "response_lost"
+    target._world_call("c2", "update_deal", {"discount": 10})
+    # Not deduplicated: the check can fail the duplicate the careless retry made.
+    assert world.committed == [{"discount": 10}, {"discount": 10}]
+
+
+def test_a_chat_call_with_no_fault_is_answered_as_the_world_answers():
+    target, world = _chat_target([])
+    assert target._world_call("c1", "update_deal", {"discount": 5}) == '{"ok": true}'
