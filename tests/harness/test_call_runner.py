@@ -2835,3 +2835,18 @@ def test_a_worker_s_call_carries_the_worker_and_why_the_world_refused_it(monkeyp
     monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
     calls = cr._collect_tool_trace_calls(_runtime(endpoints={"database": _postgres_endpoint()}))
     assert [(one.worker_id, one.refusal_code) for one in calls] == [("order_lookup", ""), ("refund", "deadline_passed")]
+
+
+def test_the_sealed_trace_row_keeps_why_the_world_refused_a_call() -> None:
+    from fi.alk.harness.world.runtime import Call, trace_row
+
+    refused = Call(
+        name="get_order",
+        arguments={},
+        ok=False,
+        refused=True,
+        worker_id="order_lookup",
+        refusal_code="deadline_passed",
+    )
+    assert trace_row(refused)["refusal_code"] == "deadline_passed"
+    assert "refusal_code" not in trace_row(Call(name="get_order", arguments={}))

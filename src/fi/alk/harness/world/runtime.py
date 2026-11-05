@@ -271,6 +271,8 @@ def trace_row(call: Call) -> dict[str, Any]:
             if getattr(call, key)
         },
         **({"runtime_ids": call.runtime_ids} if call.runtime_ids else {}),
+        # Why the world refused it, as its action log coded it.
+        **({"refusal_code": call.refusal_code} if call.refusal_code else {}),
         **{
             key: True
             for key in ("input_omitted", "output_omitted")
