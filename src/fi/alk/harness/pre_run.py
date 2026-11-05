@@ -178,22 +178,11 @@ async def written(document: dict[str, Any], root: Any, write: Write | None = Non
 
 
 def _model_writer(default_model: str | None) -> Write:
-    async def write(brief: str, actor: Actor) -> str:
-        from .backends import SessionSpec
-        from .config import chosen_model
-        from .session import Stage
+    """A session's messages on the one actor decider."""
+    from .actor_model import decider
 
-        stage = Stage(
-            SessionSpec(system_prompt=brief, max_turns=1, model=chosen_model(actor.model or default_model), gated=False),
-            name="actor",
-        )
-        await stage.__aenter__()
-        try:
-            return (await stage.say("Write now, or pass.")).text
-        finally:
-            await stage.__aexit__(None, None, None)
-
-    return write
+    decide = decider(None, default_model)
+    return lambda brief, actor: decide(brief, actor.id, actor.model)
 
 
 async def refresh_stale(authoring: Any, write: Write | None = None) -> list[str]:

@@ -638,28 +638,8 @@ def _field(result: Any, path: str) -> Any:
 
 
 def live_decider(meter: Any = None, default_model: str | None = None) -> Decide:
-    """One live actor turn on the model the actor's record or the environment names: the model reads the actor's
-    situation and answers with its decision; the call is metered when a meter is given."""
+    """The dispatcher's live turns on the one actor decider."""
+    from .actor_model import decider
 
-    async def decide(situation: str, actor: Actor) -> str:
-        from .backends import SessionSpec
-        from .config import chosen_model
-        from .session import Stage
-
-        model = chosen_model(actor.model or default_model)
-        stage = Stage(SessionSpec(system_prompt=situation, max_turns=1, model=model, gated=False), name="actor")
-        await stage.__aenter__()
-        try:
-            turn = await stage.say("Decide now.")
-        finally:
-            await stage.__aexit__(None, None, None)
-        if meter is not None:
-            meter.add(actor.id, model, turn)
-        return turn.text
-
-    return decide
-
-
-async def live_decision(situation: str) -> str:
-    """Kept for callers that decide without an actor record: the harness's own model."""
-    return await live_decider()(situation, Actor(id="someone", name="someone"))
+    decide = decider(meter, default_model)
+    return lambda situation, actor: decide(situation, actor.id, actor.model)

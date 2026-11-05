@@ -678,3 +678,34 @@ def test_a_speaking_live_actor_is_decided_by_its_channel_only_never_also_by_the_
     dispatcher.decide = lambda situation, actor: decided.append(actor.id) or '{"action": "crm.approve"}'
     asyncio.run(dispatcher.tick())
     assert dispatcher.live == [] and decided == [] and sent == []
+
+
+def test_one_decider_serves_every_runtime_on_the_actor_s_model_and_meters_each_call(monkeypatch):
+    from types import SimpleNamespace
+
+    from fi.alk.harness import session
+    from fi.alk.harness.actor_meter import ActorMeter
+    from fi.alk.harness.actor_model import decider
+
+    asked: list = []
+
+    class _Stage:
+        def __init__(self, spec, name):
+            asked.append(spec.model)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return None
+
+        async def say(self, text):
+            return SimpleNamespace(text="ok", tokens_in=3, tokens_out=2, cost_usd=0.0)
+
+    monkeypatch.setattr(session, "Stage", _Stage)
+    meter = ActorMeter()
+    decide = decider(meter, "env-model")
+    assert asyncio.run(decide("brief", "mia", "own-model")) == "ok"
+    asyncio.run(decide("brief", "sam", None))
+    assert asked == ["own-model", "env-model"]
+    assert [(one["actor"], one["model"]) for one in meter.rows()] == [("mia", "own-model"), ("sam", "env-model")]

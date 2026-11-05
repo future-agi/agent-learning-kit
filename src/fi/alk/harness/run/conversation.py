@@ -324,19 +324,10 @@ class ChatActors:
         return out
 
     async def _write(self, actor: dict[str, Any], brief: str) -> str:
-        model = actor.get("model") or self.limits.get("model") or self.model
-        stage = Stage(
-            SessionSpec(system_prompt=brief, max_turns=1, model=chosen_model(model), gated=False),
-            name="actor",
-        )
-        await stage.__aenter__()
-        try:
-            turn = await stage.say("Decide now.")
-        finally:
-            await stage.__aexit__(None, None, None)
-        if self.meter is not None:
-            self.meter.add(str(actor["id"]), chosen_model(model), turn)
-        return turn.text.strip()
+        from ..actor_model import decider
+
+        decide = decider(self.meter, self.limits.get("model") or self.model)
+        return (await decide(brief, str(actor["id"]), actor.get("model"))).strip()
 
     def summary(self) -> list[dict[str, Any]]:
         """Each actor the conversation included: triggered, delivered, dropped, as a call records them."""
