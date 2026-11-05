@@ -474,7 +474,8 @@ class CallActorsOnCall:
 def with_call_actor_turns(
     messages: list[dict[str, Any]], events: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    """The call's messages with each delivered actor line placed where it was heard."""
+    """The call's messages with each delivered actor line placed where it was heard, and each declined request as a
+    labelled row at the moment it was decided: never spoken, so never in the actor's voice."""
     spoken = [
         {
             "role": "actor",
@@ -486,9 +487,10 @@ def with_call_actor_turns(
             "stopped_speaking_at": event.get("ended_at"),
             "interrupted": False,
             "e2e_latency": None,
+            **({"spoken": False} if event.get("kind") == "timeout" else {}),
         }
         for event in events
-        if event.get("kind") == "delivered" and event.get("text")
+        if event.get("kind") in ("delivered", "timeout") and event.get("text") and event.get("at") is not None
     ]
     if not spoken:
         return messages

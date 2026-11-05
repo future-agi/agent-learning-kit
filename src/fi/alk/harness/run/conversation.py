@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 from itertools import accumulate
 from typing import Any, Callable
 
+from fi.simulate.simulation.call_actors import declined_line
+
 from ..backends import SessionSpec
 
 from ..config import chosen_model
@@ -339,9 +341,10 @@ class ChatActors:
         for actor, fallback, outcome in self.waits.expired(self.actors):
             key = str(actor["id"])
             self.done.add(key)
-            self.events.append({"actor": key, "kind": "timeout", "fallback": fallback, "outcome": outcome})
+            self.events.append({"actor": key, "kind": "timeout", "fallback": fallback, "outcome": outcome,
+                                "reason": f"no answer in time: {outcome}"})
             if outcome == "declined":
-                out.append((actor, "(did not answer: declined)"))
+                out.append((actor, declined_line(actor)))
             elif outcome == "fallback_action" and self.act is not None:
                 self.decisions += 1
                 await self.act(key, fallback, {}, key=f"{self.seed}:{key}:fallback", parent=None)
@@ -352,9 +355,12 @@ class ChatActors:
                     self.events.append({"actor": fallback, "kind": "triggered", "instead_of": key})
         return out
 
-    def unresolved(self) -> list[str]:
-        """Actors still waited on when the conversation ended."""
-        return self.waits.open()
+    def end(self) -> None:
+        """The conversation is over: a wait still open is recorded as such, as the world records its own."""
+        for key in self.waits.open():
+            self.events.append({"actor": key, "kind": "timeout", "outcome": "unresolved_at_end",
+                                "reason": "no answer in time: unresolved_at_end"})
+            self.waits.settled.add(key)
 
     async def _write(self, actor: dict[str, Any], brief: str) -> str:
         from ..actor_model import decider
@@ -370,7 +376,11 @@ class ChatActors:
                 "name": one.get("name"),
                 "triggered": str(one["id"]) in self.triggered,
                 "delivered": len(self.written[str(one["id"])]),
-                "dropped": [e.get("reason") for e in self.events if e["actor"] == one["id"] and e["kind"] == "dropped"],
+                "dropped": [
+                    e.get("reason")
+                    for e in self.events
+                    if e["actor"] == one["id"] and e["kind"] in ("dropped", "timeout")
+                ],
             }
             for one in self.actors
         ]
@@ -490,7 +500,9 @@ async def converse(
                 for actor, line in written:
                     record("actor", line, {"id": actor["id"], "name": actor.get("name")})
                     try:
-                        answer = await target.say(f"{actor.get('name') or 'Someone else'}: {line}")
+                        # A declined request reads as the labelled line it is, never as the actor writing it.
+                        labelled = line == declined_line(actor)
+                        answer = await target.say(line if labelled else f"{actor.get('name') or 'Someone else'}: {line}")
                     except TargetConversationEnded as ended:
                         if ended.final_message:
                             record("agent", ended.final_message)
@@ -531,7 +543,7 @@ async def converse(
             transcript.simulator_input_tokens,
             transcript.simulator_output_tokens,
         ) = getattr(customer, "simulator_tokens", (0, 0))
-        _with_actor_usage(transcript, actors)
+        _close_actors(transcript, actors)
         setattr(exc, "partial_transcript", transcript)
         trace_path = getattr(target, "trace_path", None)
         trace = getattr(exc, "trace", None)
@@ -552,12 +564,15 @@ async def converse(
         transcript.simulator_input_tokens,
         transcript.simulator_output_tokens,
     ) = getattr(customer, "simulator_tokens", (0, 0))
-    _with_actor_usage(transcript, actors)
+    _close_actors(transcript, actors)
     return transcript
 
 
-def _with_actor_usage(transcript: Transcript, actors: ChatActors | None) -> None:
-    """Actors' model calls are simulator usage like the caller's: counted into the call's tokens and cost."""
+def _close_actors(transcript: Transcript, actors: ChatActors | None) -> None:
+    """The conversation is over: open waits are recorded, and actors' model calls are counted as simulator usage like
+    the caller's, into the call's tokens and cost."""
+    if actors is not None:
+        actors.end()
     meter = getattr(actors, "meter", None)
     if meter is None:
         return

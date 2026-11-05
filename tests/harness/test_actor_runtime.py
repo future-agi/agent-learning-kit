@@ -505,3 +505,23 @@ def test_an_actor_may_read_the_environment_s_own_documents_never_the_evaluator_s
 
     assert knowledge_file_allowed(path) is allowed
     assert "not_knowledge" in actor_rules()
+
+
+def test_a_chat_actor_that_declines_reaches_the_agent_as_a_labelled_line_never_in_its_own_words(monkeypatch):
+    clock = SimpleNamespace(now=0.0)
+    cast = conv.ChatActors(
+        [{**_MANAGER, "trigger": {"kind": "always"}, "brief": "You are Mia.", "timeout_seconds": 30,
+          "fallback": "decline"}],
+        seed="run", model=None, clock=lambda: clock.now,
+    )
+
+    async def wait(actor, brief):
+        clock.now += 20
+        return ""
+
+    monkeypatch.setattr(cast, "_write", wait)
+    agent = _Agent(["Hello.", "Let me ask my manager.", "Okay."])
+    person = _Person(["Move my order.", "Please do.", "Thanks."])
+    _run(monkeypatch, cast, agent, person)
+    assert "Mia did not answer: declined" in agent.heard
+    assert "Mia: Mia did not answer: declined" not in agent.heard

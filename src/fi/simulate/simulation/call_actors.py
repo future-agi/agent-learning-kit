@@ -646,8 +646,10 @@ class Cast:
         expired = self.waits.expired(self.actors)
         for actor, fallback, outcome in expired:
             key = str(actor["id"])
-            self._record(key, "timeout", fallback=fallback, outcome=outcome,
-                         **({"text": declined_line(actor)} if outcome == "declined" else {}))
+            self._record(
+                key, "timeout", fallback=fallback, outcome=outcome, reason=f"no answer in time: {outcome}",
+                **({"text": declined_line(actor), "at": self.clock()} if outcome == "declined" else {}),
+            )
             self.finish(actor, "timed out")
             if outcome == "answered_by" and fallback in self._state and not self._state[fallback]["entered"]:
                 self._held.add(fallback)
@@ -676,6 +678,10 @@ class Cast:
         for key in self._waiting:
             self._record(key, "dropped", reason="call ended before there was room")
         self._waiting.clear()
+        # A wait still open when the call ends is recorded as such, as the world records its own.
+        for key in self.waits.open():
+            self._record(key, "timeout", outcome="unresolved_at_end", reason="no answer in time: unresolved_at_end")
+            self.waits.settled.add(key)
 
     def _record(self, key: str, kind: str, **details: Any) -> None:
         actor = next(one for one in self.actors if str(one["id"]) == key)
@@ -709,7 +715,7 @@ class Cast:
                 "dropped": [
                     e["reason"]
                     for e in self.events
-                    if e["kind"] == "dropped" and e["actor"] == str(actor["id"])
+                    if e["kind"] in ("dropped", "timeout") and e["actor"] == str(actor["id"])
                 ],
             }
             for actor in self.actors

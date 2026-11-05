@@ -386,14 +386,14 @@ def test_actor_model_calls_are_metered_into_the_simulator_usage():
     from types import SimpleNamespace
 
     from fi.alk.harness.actor_meter import ActorMeter
-    from fi.alk.harness.run.conversation import Transcript, _with_actor_usage
+    from fi.alk.harness.run.conversation import Transcript, _close_actors
 
     meter = ActorMeter()
     meter.add(
         "manager", "flash", SimpleNamespace(tokens_in=10, tokens_out=4, cost_usd=0.01)
     )
     transcript = Transcript(simulator_input_tokens=100, simulator_output_tokens=50)
-    _with_actor_usage(transcript, SimpleNamespace(meter=meter))
+    _close_actors(transcript, SimpleNamespace(meter=meter, end=lambda: None))
     assert (transcript.simulator_input_tokens, transcript.simulator_output_tokens) == (
         110,
         54,
@@ -800,7 +800,7 @@ def test_a_per_trial_session_is_written_inside_each_trial_and_each_trial_keeps_i
     "fallback, line, acted",
     [
         ("silent", None, []),
-        ("decline", "(did not answer: declined)", []),
+        ("decline", "Mia did not answer: declined", []),
         ("crm.reject", None, ["crm.reject"]),
     ],
 )
@@ -1030,3 +1030,55 @@ def test_an_approval_that_timed_out_reads_the_fallback_as_its_decision_and_every
     # With no time for the decision, every write after the request came before it.
     assert line["before_decision"] == [{"action": "orders.cancel", "outcome": "committed"}]
     assert line["acted_before_decision"] is True
+
+
+def test_a_wait_still_open_when_the_conversation_ends_is_recorded_and_a_timeout_reads_in_the_summary():
+    from fi.alk.harness.run import conversation as conv
+
+    clock = _Clock()
+    cast = conv.ChatActors(
+        [
+            {"id": "mia", "name": "Mia", "trigger": {"kind": "always"}, "timeout_seconds": 30, "fallback": "silent"},
+            {"id": "dev", "name": "Dev", "trigger": {"kind": "always"}, "timeout_seconds": 300, "fallback": "silent"},
+        ],
+        seed="t", model=None, clock=clock,
+    )
+
+    async def wait(actor, brief):
+        return '{"line": null, "action": null, "why": "thinking"}'
+
+    cast._write = wait
+
+    async def turns():
+        await cast.due_lines(agent_turns=1, last_text="", tools_called=[], conversation=[])
+        clock.now = 31
+        await cast.due_lines(agent_turns=2, last_text="", tools_called=[], conversation=[])
+
+    asyncio.run(turns())
+    conv._close_actors(conv.Transcript(), cast)
+    dropped = {row["actor"]: row["dropped"] for row in cast.summary()}
+    assert dropped == {"mia": ["no answer in time: timed_out"], "dev": ["no answer in time: unresolved_at_end"]}
+
+
+def test_a_voice_wait_open_at_hang_up_is_recorded_and_a_declined_request_is_a_labelled_unspoken_row():
+    from fi.simulate.simulation.call_actors import Cast
+    from fi.simulate.simulation.engines.call_actor_voice import with_call_actor_turns
+
+    clock = _Clock()
+    actors = [
+        {"id": "mia", "name": "Mia", "trigger": {"kind": "always"}, "timeout_seconds": 30, "fallback": "decline"},
+        {"id": "dev", "name": "Dev", "trigger": {"kind": "always"}, "timeout_seconds": 300, "fallback": "silent"},
+    ]
+    cast = Cast(actors, "s", clock, limits={"max_active": None, "caller_takes_back_after_turns": None,
+                                            "actor_seconds_per_call": None})
+    cast.entering(Moment(agent_turns=1))
+    clock.now = 31
+    cast.fallbacks()
+    cast.hang_up()
+    dropped = {row["actor"]: row["dropped"] for row in cast.summary()}
+    assert "no answer in time: declined" in dropped["mia"]
+    assert "no answer in time: unresolved_at_end" in dropped["dev"]
+    rows = with_call_actor_turns([{"role": "user", "content": "hi", "created_at": 1.0}], cast.events)
+    assert [(row["role"], row["content"], row.get("spoken")) for row in rows] == [
+        ("user", "hi", None), ("actor", "Mia did not answer: declined", False),
+    ]
