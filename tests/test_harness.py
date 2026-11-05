@@ -10255,3 +10255,36 @@ def test_the_writer_is_told_which_world_actors_there_are_only_when_switched_on(
         ),
     )
     assert "  reviewer: Robin, reviewer; may records.approve" in world_summary(tmp_path)
+
+
+def _with_actor_listed(root, **fields):
+    from fi.alk.harness.actors import Actor, ActorList, save_actors
+
+    save_actors(root, ActorList(actors=[Actor(id="mia", name="Mia", play="live", **fields)]))
+
+
+def test_a_trigger_its_runtime_cannot_evaluate_is_refused_when_the_scenario_is_written(tmp_path):
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    # A speaking actor is brought in by the conversation; elapsed seconds are only kept by the world.
+    _with_actor_listed(root, channel="audio_mix", voice="v1", role="the caller's sister")
+    said = accept_scenario(
+        _delta(actors=[{"id": "mia", "trigger": {"kind": "after_seconds", "seconds": 30}}]),
+        world_root=root, catalogue=catalogue, kept=[],
+    )
+    assert said.get("is_error")
+    assert "mia speaks on the call, where `after_seconds` cannot be evaluated" in said["content"][0]["text"]
+
+
+def test_an_event_started_scenario_for_an_agent_reached_by_a_call_is_refused(tmp_path):
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    _with_actor_listed(root, permitted_actions=["add"])
+    said = accept_scenario(
+        _delta(actors=[{"id": "mia"}], starts_with={"actor": "mia", "text": "New order in."}),
+        world_root=root, catalogue=catalogue, kept=[], spoken=True,
+    )
+    assert said.get("is_error")
+    assert "nothing can deliver an event to it" in said["content"][0]["text"]

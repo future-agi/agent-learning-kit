@@ -13,6 +13,7 @@ import threading
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -4762,3 +4763,44 @@ def test_a_sub_goal_about_an_actor_is_settled_by_whether_the_actor_came_in(monke
     assert [one.verdict for one in receipt.sub_goals] == ["pass", verdict]
     if status == "errored":
         assert receipt.failure.code == "actor_missing" and "asked_the_friend" in receipt.failure.message
+
+
+@pytest.mark.parametrize("problem", ["no_world_door", "no_private_token", "not_listed"])
+def test_an_actor_that_could_not_act_names_itself_and_why_in_the_verdict(problem) -> None:
+    outcome = replace(
+        _call_outcome(),
+        call_actors=({"actor": "mia", "name": "Mia", "triggered": False, "delivered": 0, "problem": problem},),
+    )
+    scenario = SimpleNamespace(sub_goals=[], speaking_actors=())
+    assert hs._call_actors_missing(scenario, outcome) == f"Mia ({problem})"
+    # A sub-goal about that actor settles it there instead.
+    scenario = SimpleNamespace(sub_goals=[FakeSubGoal("approved", lambda w, c: None, actor="mia")], speaking_actors=())
+    assert hs._call_actors_missing(scenario, outcome) == ""
+
+
+@pytest.mark.parametrize(
+    "row, verdict",
+    [
+        ({"triggered": False, "delivered": 0}, "not_applicable"),
+        ({"triggered": True, "delivered": 0}, "inconclusive"),
+        ({"triggered": True, "delivered": 1}, "pass"),
+    ],
+)
+def test_a_sub_goal_about_an_actor_that_acts_through_the_world_reads_its_record(row, verdict) -> None:
+    outcome = replace(_call_outcome(), call_actors=({"actor": "mia", "name": "Mia", "acts_in_world": True, **row},))
+    graded = hs.SubGoalResult(name="approved", held=True, reason="the refund was approved", judged=False)
+    goal = FakeSubGoal("approved", lambda w, c: None, actor="mia")
+    assert hs._about_an_actor(goal, graded, outcome).verdict == verdict
+
+
+@pytest.mark.parametrize(
+    "goal, recording, evidence",
+    [
+        (SimpleNamespace(check="x", judged=""), None, ("world_state", "tool_calls")),
+        (SimpleNamespace(check="", judged="j"), None, ("transcript",)),
+        (SimpleNamespace(check="", judged="j"), "call.wav", ("transcript", "recording")),
+        (SimpleNamespace(check="x", judged="j"), "call.wav", ("world_state", "tool_calls", "transcript", "recording")),
+    ],
+)
+def test_each_sub_goal_says_what_it_was_decided_from(goal, recording, evidence) -> None:
+    assert hs._evidence_of(goal, replace(_call_outcome(), recording=recording)) == evidence
