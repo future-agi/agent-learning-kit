@@ -18,54 +18,53 @@ function snapshot<T>(value: Iterable<T>): T[] {
 }
 
 /**
- * Calculate BLEU score between response and reference
- * Simplified implementation for local evaluation
+ * Sentence BLEU matching Python ALK's NLTK method1 defaults.
  */
 export function bleuScore(
     response: string,
-    config: MetricConfig & { reference: string; ngramWeights?: number[] }
+    config: MetricConfig & { reference: string | string[]; ngramWeights?: number[] }
 ): MetricResult {
     try { config = snapshotBoundary(config, 'METRIC_CONFIG_INVALID'); }
     catch { return incomplete('METRIC_CONFIG_INVALID'); }
     if (!config || typeof config !== 'object' || Array.isArray(config)) return incomplete('METRIC_CONFIG_INVALID');
-    if (!hasText(response) || !hasText(config.reference)) return incomplete();
+    if (typeof response !== 'string') return incomplete();
+    const references = Array.isArray(config.reference) ? config.reference : [config.reference];
+    if (references.length === 0 || references.some(reference => typeof reference !== 'string')) return incomplete();
+
+    // Python str.split(): includes U+001C..001F and U+0085, excludes U+FEFF.
+    // Do not use the shared tokenizer: BLEU preserves case and punctuation.
+    const splitTokens = (text: string): string[] => text
+        .split(/[\x09-\x0d\x1c-\x20\x85\xa0\u{1680}\u{2000}-\u{200a}\u{2028}\u{2029}\u{202f}\u{205f}\u{3000}]+/u)
+        .filter(token => token.length > 0);
+    const responseTokens = splitTokens(response);
+    const referenceTokens = references.map(splitTokens);
+    if (responseTokens.length === 0 || referenceTokens.some(tokens => tokens.length === 0)) return incomplete();
+
     let weights: number[];
     try { weights = snapshot(config.ngramWeights === undefined ? [0.25, 0.25, 0.25, 0.25] : config.ngramWeights); }
     catch { return incomplete('METRIC_CONFIG_INVALID'); }
     if (weights.length === 0 || weights.some(weight => !finite(weight) || weight < 0) || !weights.some(weight => weight > 0)) return incomplete('METRIC_CONFIG_INVALID');
-    // Scaling may underflow a positive weight; it must still require evidence.
-    const positiveWeights = weights.map(weight => weight > 0);
-    const scale = Math.max(...weights);
-    weights = weights.map(weight => weight / scale);
-    const maxN = weights.length;
 
-    const responseTokens = tokenize(response);
-    const referenceTokens = tokenize(config.reference);
-
-    if (responseTokens.length === 0 || referenceTokens.length === 0) return incomplete();
-
-    // Calculate n-gram precisions
-    const precisions: number[] = [];
-    for (let n = 1; n <= maxN; n++) {
+    let logSum = 0;
+    for (let n = 1; n <= weights.length; n++) {
         const responseNgrams = getNgrams(responseTokens, n);
-        const referenceNgrams = getNgrams(referenceTokens, n);
-
-        if (responseNgrams.length === 0) {
-            precisions.push(0);
-            continue;
+        const maximumCounts = new Map<string, number>();
+        for (const tokens of referenceTokens) {
+            const counts = new Map<string, number>();
+            for (const ngram of getNgrams(tokens, n)) {
+                const key = ngram.join(' ');
+                counts.set(key, (counts.get(key) || 0) + 1);
+            }
+            for (const [key, count] of counts) {
+                maximumCounts.set(key, Math.max(maximumCounts.get(key) || 0, count));
+            }
         }
 
         let matches = 0;
-        const referenceCounts = new Map<string, number>();
-        for (const ngram of referenceNgrams) {
-            const key = ngram.join(' ');
-            referenceCounts.set(key, (referenceCounts.get(key) || 0) + 1);
-        }
-
         const usedCounts = new Map<string, number>();
         for (const ngram of responseNgrams) {
             const key = ngram.join(' ');
-            const refCount = referenceCounts.get(key) || 0;
+            const refCount = maximumCounts.get(key) || 0;
             const usedCount = usedCounts.get(key) || 0;
             if (usedCount < refCount) {
                 matches++;
@@ -73,25 +72,26 @@ export function bleuScore(
             }
         }
 
-        precisions.push(matches / responseNgrams.length);
+        // NLTK returns zero without unigram overlap, even if its weight is zero.
+        if (n === 1 && matches === 0) return { score: 0, passed: false, reason: 'BLEU score: 0.0000' };
+        // method1 smooths only zero numerators, including absent n-gram orders.
+        const precision = (matches === 0 ? 0.1 : matches) / Math.max(1, responseNgrams.length);
+        logSum += weights[n - 1] * Math.log(precision);
     }
 
-    // Calculate brevity penalty
-    const bp = responseTokens.length >= referenceTokens.length
-        ? 1.0
-        : Math.exp(1 - referenceTokens.length / responseTokens.length);
-
-    // Calculate weighted geometric mean
-    let logSum = 0;
-    let weightSum = 0;
-    for (let i = 0; i < precisions.length; i++) {
-        if (!positiveWeights[i]) continue;
-        if (precisions[i] === 0) return { score: 0, passed: false, reason: 'CHECK_FAILED' };
-        logSum += weights[i] * Math.log(precisions[i]);
-        weightSum += weights[i];
+    // Closest reference length; equal distances choose the shorter reference.
+    const responseLength = responseTokens.length;
+    let referenceLength = referenceTokens[0].length;
+    for (const tokens of referenceTokens) {
+        const distance = Math.abs(tokens.length - responseLength);
+        const closestDistance = Math.abs(referenceLength - responseLength);
+        if (distance < closestDistance || (distance === closestDistance && tokens.length < referenceLength)) {
+            referenceLength = tokens.length;
+        }
     }
-
-    const score = weightSum > 0 ? bp * Math.exp(logSum / weightSum) : 0;
+    const bp = responseLength > referenceLength ? 1 : Math.exp(1 - referenceLength / responseLength);
+    // NLTK uses the supplied weights as-is, without scaling or normalization.
+    const score = bp * Math.exp(logSum);
 
     return {
         score,
