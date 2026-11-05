@@ -185,13 +185,13 @@ describe('Local Evaluation Integration Tests', () => {
         );
         expect(exactResult.results.eval_results[0]?.output).toBeGreaterThan(0.9);
 
-        // Similar should be moderate
+        // Similar text matches Python sentence BLEU with method1 smoothing.
         const similarResult = evaluator.evaluate(
           'bleu_score',
           [{ response: 'The cat is sitting on the mat' }],
           { reference: 'The cat sat on the mat' }
         );
-        expect(similarResult.results.eval_results[0]?.output).toBeGreaterThan(0.3);
+        expect(similarResult.results.eval_results[0]?.output).toBeCloseTo(0.2056, 4);
 
         // Completely different should be low
         const differentResult = evaluator.evaluate(

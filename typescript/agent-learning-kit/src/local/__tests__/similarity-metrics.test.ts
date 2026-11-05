@@ -31,12 +31,12 @@ describe('Similarity Metrics', () => {
             expect(result.score).toBeCloseTo(Math.pow(1 / 12, 1 / 4), 12);
         });
 
-        it('R4-BLEU-LEGACY-ZERO returns zero without a shared four-gram', () => {
+        it('R4-BLEU-LEGACY-ZERO smooths a missing shared four-gram', () => {
             const result = bleuScore('the cat sat on the mat', {
                 reference: 'the cat is on the mat'
             });
-            // Precisions 5/6, 3/5, 1/4, 0 require unsmoothed BLEU = 0.
-            expect(result.score).toBe(0);
+            // Method1 precisions 5/6, 3/5, 1/4, 0.1/3; BP = 1.
+            expect(result.score).toBeCloseTo(0.25406637407730737, 12);
             expect(result.passed).toBe(false);
         });
 

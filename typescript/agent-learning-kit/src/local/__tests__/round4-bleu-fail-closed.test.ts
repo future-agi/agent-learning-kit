@@ -7,27 +7,28 @@ import {
     semanticListContains
 } from '../metrics/similarity';
 
-describe('Round 4 BLEU positive-weight membership', () => {
-    it('R4-BLEU-01 keeps a positive bigram order when normalization underflows', () => {
+describe('Round 4 BLEU weights with Python method1 smoothing', () => {
+    it('R4-BLEU-01 uses raw extreme weights with a smoothed bigram precision', () => {
         const result = bleuScore('alpha', {
             reference: 'alpha',
             ngramWeights: [Number.MAX_VALUE, Number.MIN_VALUE]
         });
 
-        expect(result.score).toBe(0);
-        expect(result.passed).toBe(false);
-        expect(result.reason).toBe('CHECK_FAILED');
+        // exp(Number.MIN_VALUE * log(0.1)) rounds to 1, as in Python.
+        expect(result.score).toBe(1);
+        expect(result.passed).toBe(true);
+        expect(result.reason).toBe('BLEU score: 1.0000');
     });
 
-    it('R4-BLEU-02 keeps a later positive order among intentionally zero weights', () => {
+    it('R4-BLEU-02 smooths a later positive order among intentionally zero weights', () => {
         const result = bleuScore('alpha beta gamma', {
             reference: 'alpha beta gamma',
             ngramWeights: [Number.MAX_VALUE, 0, 0, Number.MIN_VALUE]
         });
 
-        expect(result.score).toBe(0);
-        expect(result.passed).toBe(false);
-        expect(result.reason).toBe('CHECK_FAILED');
+        expect(result.score).toBe(1);
+        expect(result.passed).toBe(true);
+        expect(result.reason).toBe('BLEU score: 1.0000');
     });
 
     it('R4-BLEU-03 preserves explicitly sparse unigram weights', () => {
@@ -50,13 +51,13 @@ describe('Round 4 BLEU positive-weight membership', () => {
         expect(result.passed).toBe(true);
     });
 
-    it('R4-BLEU-05 retains an ordinary positive zero-precision order without smoothing', () => {
+    it('R4-BLEU-05 smooths zero precision without normalizing the weights', () => {
         const result = bleuScore('alpha', {
             reference: 'alpha',
             ngramWeights: [1, 1]
         });
 
-        expect(result.score).toBe(0);
+        expect(result.score).toBeCloseTo(0.1, 12);
         expect(result.passed).toBe(false);
     });
 
@@ -80,7 +81,7 @@ describe('Round 4 BLEU positive-weight membership', () => {
         expect(result.passed).toBe(false);
     });
 
-    it('R4-BLEU-08 snapshots the declared weights once before preserving membership', () => {
+    it('R4-BLEU-08 snapshots the declared weights once before smoothing', () => {
         let reads = 0;
         const result = bleuScore('alpha', {
             reference: 'alpha',
@@ -91,8 +92,8 @@ describe('Round 4 BLEU positive-weight membership', () => {
         });
 
         expect(reads).toBe(1);
-        expect(result.score).toBe(0);
-        expect(result.passed).toBe(false);
+        expect(result.score).toBe(1);
+        expect(result.passed).toBe(true);
     });
 
     it.each([
