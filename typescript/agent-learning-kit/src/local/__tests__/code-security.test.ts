@@ -248,7 +248,7 @@ const safeQuery = "SELECT * FROM users WHERE id = ?";
 
         it('should detect JWT token', () => {
             const code = `
-                const token = "eyJhbG" + "ciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
+                const token = "${'eyJhbG'}ciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
             `;
             const result = secretsDetection({ code });
             expect(result.passed).toBe(false);
@@ -344,7 +344,7 @@ const safeQuery = "SELECT * FROM users WHERE id = ?";
             const code = `
                 const awsKey = "AKIAIOSFODNN7EXAMPLE";
                 const apiKey = "sk-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKL";
-                const jwt = "eyJhbG" + "ciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U";
+                const jwt = "${'eyJhbG'}ciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U";
             `;
             const result = allSecurityChecks({ code });
             expect(result.severityCounts.critical).toBeGreaterThanOrEqual(2);
@@ -355,7 +355,7 @@ const safeQuery = "SELECT * FROM users WHERE id = ?";
     describe('Severity Configuration', () => {
         it('should filter by minimum severity', () => {
             const code = `
-                const jwt = "eyJhbG" + "ciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U";
+                const jwt = "${'eyJhbG'}ciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U";
             `;
             // JWT is medium severity
             const resultAll = secretsDetection({ code }, { minSeverity: 'low' });
