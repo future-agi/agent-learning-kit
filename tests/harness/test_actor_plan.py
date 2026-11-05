@@ -340,3 +340,13 @@ def test_a_voice_actor_with_actions_decides_its_line_and_its_action_in_one_turn(
     text, audio, _done = asyncio.run(voice.line(["The agent: May I apply 12%?"]))
     assert text == "Approved, go ahead." and audio is None
     assert reported[0]["action"] == "crm.approve" and reported[0]["arguments"] == {"deal": 7}
+
+
+def test_a_built_environment_lists_the_caller_once_and_an_empty_caller_changes_no_scenario(tmp_path):
+    from fi.alk.harness.actors import CALLER, ensure_caller, load_actors, with_caller_actor
+
+    assert ensure_caller(tmp_path) is True
+    assert ensure_caller(tmp_path) is False
+    assert [one.id for one in load_actors(tmp_path).actors] == [CALLER]
+    doc = {"instruction": "Move my order.", "persona": {"name": "Asha"}}
+    assert with_caller_actor(doc, tmp_path) == doc

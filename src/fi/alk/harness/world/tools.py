@@ -1846,6 +1846,10 @@ def world_tools(
         schema({"notes": str}, []),
     )
     async def save_world(args: dict[str, Any]) -> dict[str, Any]:
+        # The caller is an actor like any other, listed from the first build so the editor always shows it.
+        from ..actors import ensure_caller
+
+        ensure_caller(destination)
         runtime_tools = _runtime_owned()
         runtime_only = bool(contract.tools) and set(contract.tool_names()).issubset(
             runtime_tools

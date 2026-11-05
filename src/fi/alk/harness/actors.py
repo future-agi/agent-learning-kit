@@ -599,6 +599,13 @@ def with_knowledge_read(
     return {**record, "knowledge": read_knowledge(record["knowledge"], root, records)}
 
 
+# A record's fields at their defaults: nothing anyone wrote, so never part of a brief.
+_UNSET_FIELDS: dict[str, tuple[Any, ...]] = {
+    "constraints": (Constraints().model_dump(),),
+    "behaviour": (Behaviour().model_dump(), Behaviour().model_dump(mode="json")),
+}
+
+
 def actor_brief(
     actor: dict[str, Any],
     *,
@@ -622,7 +629,8 @@ def actor_brief(
                 if scenario is not None and actor.get("id") != CALLER
                 else None
             )
-        if value in (None, "", [], {}):
+        if value in (None, "", [], {}) or value in _UNSET_FIELDS.get(field, ()):
+            # A field left at its default says nothing about the actor, so it is never given as if it did.
             continue
         items.append({"input": f"{source}.{field}", "value": value, "source": source})
     return items
@@ -674,6 +682,18 @@ def _knowledge_line(one: Any) -> str:
             return f"- {named[0].upper()}{named[1:]}:\n{rows or '(none)'}"
         return f"- You can read {named}"
     return "- " + json.dumps(one, ensure_ascii=False, sort_keys=True)
+
+
+def ensure_caller(root: Path) -> bool:
+    """Lists the caller as an actor when the environment does not yet: the record the editor shows and edits, empty
+    so every scenario plays exactly as before until someone gives it a goal, knowledge or behaviour. True when
+    written."""
+    listing = load_actors(Path(root))
+    if CALLER in listing.by_id():
+        return False
+    caller = Actor(id=CALLER, name="The caller", side="caller", role="the person the agent serves in each scenario")
+    save_actors(Path(root), listing.model_copy(update={"actors": [caller, *listing.actors]}))
+    return True
 
 
 def with_caller_actor(doc: dict[str, Any], root: Path) -> dict[str, Any]:
