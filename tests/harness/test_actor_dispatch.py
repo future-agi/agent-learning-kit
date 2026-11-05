@@ -286,3 +286,114 @@ def test_an_action_s_request_is_bounded_by_the_call_s_budget(monkeypatch):
     )
     asyncio.run(dispatcher.tick())
     assert seen == [42.0]
+
+
+def _live(play, decisions, log, activation=None):
+    sent, asked = [], []
+    manager = Actor(
+        id="manager",
+        name="Mia",
+        identities={"slack": "@mia"},
+        permitted_actions=["deals.approve"],
+        play=play,
+        **({"activation": activation} if activation else {}),
+    )
+
+    def send(url, headers, arguments):
+        sent.append((url, headers, arguments))
+        return 200
+
+    async def decide(situation):
+        asked.append(situation)
+        return decisions.pop(0) if decisions else '{"action": null, "why": "nothing to do"}'
+
+    dispatcher = ActorDispatcher(
+        {"manager": manager},
+        [ScenarioActor.model_validate({"id": "manager", "actions": [{"action": "deals.approve"}]})],
+        trial_id="trial-1",
+        proxy_url="http://proxy/",
+        token="t0ken",
+        read_log=lambda: list(log),
+        seed="trial-1",
+        timeout=60.0,
+        clock=_Clock(),
+        send=send,
+        decide=decide,
+        briefs={"manager": "You are Mia, the store manager. Approve up to 15%."},
+        world_actions={"deals.approve": "Approve a pending discount"},
+    )
+    return dispatcher, sent, asked
+
+
+_ASKED = {"action_id": "a1", "name": "slack.post", "arguments": {"to": "@mia", "text": "Approve 12% for deal 7?"}}
+
+
+def test_a_live_actor_decides_its_action_when_the_agent_reaches_it_and_the_world_still_checks_it():
+    log = []
+    dispatcher, sent, asked = _live(
+        "live", ['Sure. {"action": "deals.approve", "arguments": {"deal": 7}, "why": "12% is within my limit"}'], log
+    )
+    asyncio.run(_ticks(dispatcher))
+    # Nothing reached it yet, so it decides nothing; a live-only actor takes no scheduled action.
+    assert sent == [] and asked == []
+    log.append(_ASKED)
+    asyncio.run(_ticks(dispatcher))
+    assert sent == [
+        (
+            "http://proxy/deals/approve",
+            {
+                "X-ALK-Actor": "manager",
+                "X-ALK-Actor-Token": "t0ken",
+                "Idempotency-Key": "trial-1:manager:l1",
+                "X-ALK-Parent-Event": "a1",
+            },
+            {"deal": 7},
+        )
+    ]
+    # It decides from its brief, what it may do, and what the agent sent it; once per request.
+    assert len(asked) == 1
+    assert "Approve up to 15%" in asked[0] and "deals.approve: Approve a pending discount" in asked[0]
+    assert "Approve 12% for deal 7?" in asked[0]
+    assert dispatcher.fired[-1]["why"] == "12% is within my limit"
+
+
+def test_a_live_actor_that_decides_nothing_or_answers_badly_sends_nothing_and_says_why():
+    log = [_ASKED, {**_ASKED, "action_id": "a2"}]
+    dispatcher, sent, _ = _live("live", ['{"action": null, "why": "needs the deal value"}', "not json"], log)
+    asyncio.run(_ticks(dispatcher))
+    assert sent == []
+    assert [(one["decided"], one["why"]) for one in dispatcher.fired] == [(None, "needs the deal value"), (None, None)]
+
+
+def test_a_live_actor_has_a_limited_number_of_turns_a_trial():
+    from fi.alk.harness.actor_dispatch import LIVE_TURNS
+
+    log = [{**_ASKED, "action_id": f"a{n}"} for n in range(LIVE_TURNS + 2)]
+    dispatcher, sent, asked = _live("live", [], log)
+    asyncio.run(_ticks(dispatcher, count=LIVE_TURNS + 3))
+    assert len(asked) == LIVE_TURNS
+
+
+def test_an_actor_played_both_ways_takes_its_scheduled_action_and_answers_live():
+    log = [_ASKED]
+    dispatcher, sent, _ = _live(
+        "both", ['{"action": "deals.approve", "arguments": {"deal": 7}, "why": "ok"}'], log
+    )
+    asyncio.run(_ticks(dispatcher))
+    keys = [headers["Idempotency-Key"] for _, headers, _ in sent]
+    assert keys == ["trial-1:manager:0", "trial-1:manager:l1"]
+
+
+def test_a_mocked_actor_never_calls_a_model():
+    dispatcher, sent, asked = _live("mocked", [], [_ASKED])
+    asyncio.run(_ticks(dispatcher))
+    assert asked == [] and [h["Idempotency-Key"] for _, h, _ in sent] == ["trial-1:manager:0"]
+
+
+def test_a_live_actor_comes_in_on_its_activation_trigger_once_when_no_one_reaches_it():
+    log = [{"action_id": "c1", "name": "crm.update", "arguments": {}}]
+    dispatcher, sent, asked = _live(
+        "live", [], log, activation={"trigger": {"kind": "on_tool", "tool": "crm.update"}}
+    )
+    asyncio.run(_ticks(dispatcher))
+    assert len(asked) == 1

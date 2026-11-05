@@ -445,12 +445,14 @@ def _conversation_scenario(document: dict[str, Any]) -> ConversationScenario:
         raise CallAborted(f"chat_scenario_invalid: {exc}") from exc
 
 
-def _resolved_chat_actors(document: dict[str, Any], bundle_dir: Path) -> list[dict[str, Any]]:
+def _resolved_chat_actors(
+    document: dict[str, Any], bundle_dir: Path, records: Any = None
+) -> list[dict[str, Any]]:
     """Every actor the scenario includes that writes in the conversation, with its brief; one that cannot reach a
     chat agent is kept with `entered: false` and the reason, so the record still names it."""
     from fi.simulate.simulation.call_actors import CHANNELS, known_to_others
 
-    from .actors import ScenarioActor, actor_brief, brief_text, load_actors
+    from .actors import ScenarioActor, actor_brief, brief_text, load_actors, with_knowledge_read
     from .call_actor import actors_enabled, load_call_actors, speaking_entries
 
     if not actors_enabled() or not document.get("actors"):
@@ -477,7 +479,11 @@ def _resolved_chat_actors(document: dict[str, Any], bundle_dir: Path) -> list[di
                 "situation": known_to_others(str(document.get("instruction") or "")),
                 "language": ", ".join((document.get("persona") or {}).get("languages") or []),
                 "brief": brief_text(
-                    actor_brief(actor.model_dump(exclude_none=True), entry=entry, scenario=dict(document))
+                    actor_brief(
+                        with_knowledge_read(actor.model_dump(exclude_none=True), bundle_dir, records) or {},
+                        entry=with_knowledge_read(entry, bundle_dir, records),
+                        scenario=dict(document),
+                    )
                 ),
             }
         )
@@ -548,7 +554,18 @@ class HostedChatCallRunner:
             source_key,
         )
         document = with_caller_actor(document, self._context.bundle_dir)
-        chat_actors = _resolved_chat_actors(document, self._context.bundle_dir)
+        target_world = _tool_world(
+            self._context.bundle_dir,
+            self._contract,
+            runtime,
+            self._context.source_directory,
+        )
+        # An actor's knowledge of the world's records is read from this trial's own store.
+        chat_actors = _resolved_chat_actors(
+            document,
+            self._context.bundle_dir,
+            getattr(getattr(target_world, "store", None), "records", None),
+        )
         if chat_actors:
             from fi.simulate.simulation.call_actors import with_others
 
@@ -568,12 +585,6 @@ class HostedChatCallRunner:
         conversation_scenario = _conversation_scenario(document)
         if not conversation_scenario.instruction.strip():
             raise CallAborted("chat_scenario_invalid: instruction is empty")
-        target_world = _tool_world(
-            self._context.bundle_dir,
-            self._contract,
-            runtime,
-            self._context.source_directory,
-        )
         from .chat_transport import create_chat_wrapper
 
         wrapper = create_chat_wrapper(

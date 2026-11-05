@@ -8,6 +8,7 @@ every action enters the world, never in a prompt.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
 
@@ -87,6 +88,10 @@ class Actor(BaseModel):
     identities: dict[str, str] = Field(default_factory=dict)
     on_behalf_of: str | None = None
     activation: Activation | None = None
+    # How the actor is played in the world: `mocked` takes only the actions each scenario schedules for it, `live`
+    # decides its own actions from its brief when the agent reaches it (or its activation trigger fires), `both` does
+    # the two.
+    play: Literal["mocked", "live", "both"] = "mocked"
     # How the actor is heard or seen on a call when it speaks in one: beside the person, taking over from them, or
     # answering before them. Empty: it does not speak on calls, it acts through the world.
     channel: str | None = None
@@ -329,6 +334,61 @@ REFERENCES = {
 ACYCLIC = ["parent"]
 
 
+# How much of one file, and how many records of one collection, an actor's brief carries.
+KNOWLEDGE_FILE_CHARS = 4000
+KNOWLEDGE_RECORDS = 20
+
+
+def read_knowledge(
+    knowledge: list[Any],
+    root: Path,
+    records: Callable[[str], list[dict[str, Any]]] | None = None,
+) -> list[Any]:
+    """An actor's knowledge with the environment's files and records it may see read in: a `files` entry gets each
+    file's text (bounded), a `records` entry the collection's rows matching its `where` (bounded) when the world's
+    records can be read here. Never an evaluator-only file, and never a path outside the environment."""
+    hidden = set(EVALUATOR_ONLY["files"])
+    base = Path(root).resolve()
+    out = []
+    for one in knowledge:
+        if not isinstance(one, dict) or one.get("kind") not in ("files", "records"):
+            out.append(one)
+            continue
+        if one["kind"] == "files":
+            read = []
+            for name in one.get("paths") or []:
+                path = (base / str(name)).resolve()
+                if path.name in hidden or base not in path.parents or not path.is_file():
+                    continue
+                read.append({"path": str(name), "text": path.read_text(encoding="utf-8", errors="replace")[:KNOWLEDGE_FILE_CHARS]})
+            out.append({**one, "read": read})
+            continue
+        rows = []
+        if records is not None:
+            where = one.get("where") if isinstance(one.get("where"), dict) else {}
+            try:
+                rows = [
+                    row
+                    for row in records(str(one.get("collection") or ""))
+                    if all(row.get(key) == value for key, value in where.items())
+                ][:KNOWLEDGE_RECORDS]
+            except Exception:  # noqa: BLE001 - an unreadable store leaves the entry named, never a failed call
+                rows = []
+        out.append({**one, "read": rows} if records is not None else one)
+    return out
+
+
+def with_knowledge_read(
+    record: dict[str, Any] | None,
+    root: Path,
+    records: Callable[[str], list[dict[str, Any]]] | None = None,
+) -> dict[str, Any] | None:
+    """An actor's record, or its scenario entry, with its `knowledge` read in."""
+    if not record or not record.get("knowledge"):
+        return record
+    return {**record, "knowledge": read_knowledge(record["knowledge"], root, records)}
+
+
 def actor_brief(
     actor: dict[str, Any],
     *,
@@ -392,10 +452,16 @@ def _knowledge_line(one: Any) -> str:
     if kind == "facts":
         return f"- {one.get('text') or ''}"
     if kind == "files":
+        if one.get("read"):
+            return "\n".join(f"- The file {item['path']}:\n{item['text']}" for item in one["read"])
         return "- You can read these files: " + ", ".join(map(str, one.get("paths") or []))
     if kind == "records":
         where = f" where {one['where']}" if one.get("where") else ""
-        return f"- You can read the {one.get('collection') or 'records'} records in {one.get('store') or 'the world'}{where}"
+        named = f"the {one.get('collection') or 'records'} records in {one.get('store') or 'the world'}{where}"
+        if "read" in one:
+            rows = "\n".join(json.dumps(row, ensure_ascii=False, sort_keys=True, default=str) for row in one["read"])
+            return f"- {named[0].upper()}{named[1:]}:\n{rows or '(none)'}"
+        return f"- You can read {named}"
     return "- " + json.dumps(one, ensure_ascii=False, sort_keys=True)
 
 
@@ -408,7 +474,7 @@ def with_caller_actor(doc: dict[str, Any], root: Path) -> dict[str, Any]:
         return doc
     own = [
         item
-        for item in actor_brief(caller.model_dump(exclude_none=True))
+        for item in actor_brief(with_knowledge_read(caller.model_dump(exclude_none=True), root) or {})
         if item["input"] in ("actor.goal", "actor.constraints", "actor.behaviour", "actor.knowledge", "actor.prompt")
     ]
     instruction = str(doc.get("instruction") or "")

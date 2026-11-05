@@ -63,8 +63,16 @@ from fi.simulate.simulation.call_actors import (
     with_others,
 )
 
-from .actor_dispatch import ActorDispatcher
-from .actors import AGENT, ScenarioActor, actor_brief, brief_text, load_actors, with_caller_actor
+from .actor_dispatch import ActorDispatcher, live_decision
+from .actors import (
+    AGENT,
+    ScenarioActor,
+    actor_brief,
+    brief_text,
+    load_actors,
+    with_caller_actor,
+    with_knowledge_read,
+)
 from .background_noise import place_of, scenario_source
 from .bundle_v2 import EvidenceSeam
 from .call_actor import (
@@ -789,14 +797,13 @@ def _resolved_call_actors(
                 # The same view the platform shows as what this actor sees.
                 "brief": brief_text(
                     actor_brief(
-                        full[actor.id].model_dump(exclude_none=True),
-                        entry=next(
-                            (
-                                one
-                                for one in doc.get("actors") or []
-                                if (one or {}).get("id") == actor.id
+                        with_knowledge_read(full[actor.id].model_dump(exclude_none=True), bundle_dir) or {},
+                        entry=with_knowledge_read(
+                            next(
+                                (one for one in doc.get("actors") or [] if (one or {}).get("id") == actor.id),
+                                None,
                             ),
-                            None,
+                            bundle_dir,
                         ),
                         scenario=dict(doc),
                     )
@@ -1092,9 +1099,32 @@ def _actor_dispatcher(
         if action.trigger.kind == "on_tool":
             # The log records the route the agent's tool calls, which can differ from the tool's name.
             action.trigger.tool = logged_tool_name(contract, action.trigger.tool)
+    listed = load_actors(bundle_dir).by_id()
+    briefs = {
+        entry.id: brief_text(
+            actor_brief(
+                with_knowledge_read(listed[entry.id].model_dump(exclude_none=True), bundle_dir) or {},
+                entry=with_knowledge_read(entry.model_dump(), bundle_dir),
+                scenario=dict(doc),
+            )
+        )
+        for entry in cast
+        if entry.id in listed and listed[entry.id].play != "mocked"
+    }
+    about = {
+        str(one.get("name")): str(one.get("description") or "") for one in contract.get("tools") or [] if isinstance(one, dict)
+    }
+    world_actions = {
+        route.replace("/", "."): about.get(str(entry.get("tool") or ""), "")
+        for entry in contract.get("tool_entrypoints") or []
+        if isinstance(entry, dict) and (route := str(entry.get("endpoint") or "").strip("/"))
+    }
     return ActorDispatcher(
-        load_actors(bundle_dir).by_id(),
+        listed,
         cast,
+        decide=live_decision if briefs else None,
+        briefs=briefs,
+        world_actions=world_actions,
         trial_id=trial_id,
         proxy_url=proxy.address,
         token=token,
@@ -1814,6 +1844,7 @@ class CallRunnerImpl:
                 scenario_key=scenario.scenario_key,
                 started_at=started_at,
                 call_actors=resolved,
+                actor_decisions=list(actors.fired) if actors is not None else [],
             )
         except (CallAborted, WorldUnavailable):
             # `_translate_report`'s own typed control-flow (non-completed status, no test case,
@@ -1845,6 +1876,7 @@ class CallRunnerImpl:
         scenario_key: str,
         started_at: datetime,
         call_actors: Sequence[dict[str, Any]] = (),
+        actor_decisions: Sequence[dict[str, Any]] = (),
     ) -> CallOutcome:
         case = report.test_cases[0] if report.test_cases else None
         took_part = (
@@ -1936,9 +1968,14 @@ class CallRunnerImpl:
                         "summary": took_part.get("call_actors") or [],
                         "events": took_part.get("call_actor_events") or [],
                     }
-                if acted:
-                    # Kept out of the tool trace, whose every line is one of the agent's own calls.
-                    transcript_document["world_actors"] = {"actions": acted}
+                if acted or actor_decisions:
+                    # Kept out of the tool trace, whose every line is one of the agent's own calls. `decisions` is
+                    # what each actor chose and why (live) or was scheduled to do (mocked); `actions` what the world
+                    # made of it.
+                    transcript_document["world_actors"] = {
+                        "actions": acted,
+                        "decisions": list(actor_decisions),
+                    }
                 recording_offset_ms = result.metadata.get("recording_offset_ms")
                 if isinstance(recording_offset_ms, (int, float)):
                     transcript_document["recording_offset_ms"] = int(

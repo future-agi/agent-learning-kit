@@ -204,3 +204,37 @@ def test_an_actor_that_cannot_reach_a_chat_is_kept_with_the_reason(monkeypatch):
             "reason": "not_a_chat_channel",
         }
     ]
+
+
+def test_an_actor_s_knowledge_reads_the_environment_s_files_and_records_but_never_what_only_the_evaluator_reads(tmp_path):
+    from fi.alk.harness.actors import read_knowledge
+
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "policy.md").write_text("Discounts above 15% need the regional manager.")
+    (tmp_path / "sub_goals.json").write_text('{"secret": "the answer key"}')
+    outside = tmp_path.parent / "outside.txt"
+    outside.write_text("not the environment's")
+    rows = {"deals": [{"id": 7, "owner": "mia", "value": 900}, {"id": 8, "owner": "sam", "value": 50}]}
+    read = read_knowledge(
+        [
+            {"kind": "facts", "text": "You manage the north store."},
+            {"kind": "files", "paths": ["docs/policy.md", "sub_goals.json", "../outside.txt"]},
+            {"kind": "records", "store": "crm", "collection": "deals", "where": {"owner": "mia"}},
+        ],
+        tmp_path,
+        rows.get,
+    )
+    text = brief_text(actor_brief({"id": "manager", "name": "Mia", "knowledge": read}))
+    assert "Discounts above 15% need the regional manager." in text
+    assert '"value": 900' in text and '"value": 50' not in text
+    assert "the answer key" not in text and "not the environment's" not in text
+    assert "You manage the north store." in text
+
+
+def test_records_an_actor_may_read_are_only_named_where_the_world_cannot_be_read(tmp_path):
+    from fi.alk.harness.actors import read_knowledge
+
+    entry = {"kind": "records", "store": "crm", "collection": "deals"}
+    assert read_knowledge([entry], tmp_path) == [entry]
+    text = brief_text(actor_brief({"id": "m", "name": "Mia", "knowledge": [entry]}))
+    assert "You can read the deals records in crm" in text
