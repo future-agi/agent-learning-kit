@@ -198,15 +198,21 @@ def test_document_echoes_subfolder_exactly(tmp_path: Path, value: str) -> None:
     [("agents/a", "agents/b"), ("agents/a", None), (None, "agents/a")],
 )
 def test_no_document_when_the_bundle_came_from_another_folder(
-    tmp_path: Path, built_from: str | None, job_names: str | None
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    built_from: str | None,
+    job_names: str | None,
 ) -> None:
     _write_bundle(
         tmp_path, _contract_from("p", built_from) if built_from else _contract("p")
     )
 
-    payload = _provision(tmp_path, SourceKind.GITHUB, subfolder=job_names)
+    with caplog.at_level(logging.WARNING, logger=ss.__name__):
+        payload = _provision(tmp_path, SourceKind.GITHUB, subfolder=job_names)
 
     assert payload.get("agent") is None
+    # Told apart from any other bad document.
+    assert any("detail=subfolder_mismatch" in record.getMessage() for record in caplog.records)
 
 
 @pytest.mark.parametrize("subfolder", [None, ""])

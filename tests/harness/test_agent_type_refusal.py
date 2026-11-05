@@ -6,6 +6,7 @@ import asyncio
 import errno
 import json
 import os
+import re
 import stat
 import tempfile
 import threading
@@ -429,8 +430,12 @@ def test_an_odd_regex_literal_stays_quick_and_hides_nothing(tmp_path, line):
     assert time.monotonic() - started < 5
 
 
-def test_a_file_the_tokenizer_breaks_on_costs_only_that_file(tmp_path):
-    (tmp_path / "blob.py").write_bytes(b" x = 1\n\x00")
+@pytest.mark.parametrize(
+    # The second names a marker, so it's tokenized; a NUL byte breaks the tokenizer on 3.12.
+    "blob", [b" x = 1\n\x00", b"# computer_use\n x = 1\n\x00"], ids=["plain", "named"]
+)
+def test_a_file_the_tokenizer_breaks_on_costs_only_that_file(tmp_path, blob):
+    (tmp_path / "blob.py").write_bytes(blob)
     (tmp_path / "agent.py").write_text(
         "from playwright.sync_api import sync_playwright\n", encoding="utf-8"
     )
@@ -698,10 +703,10 @@ def test_a_second_scan_of_unchanged_files_reuses_the_first(tmp_path, monkeypatch
     _tree(tmp_path, {"a.py": "import playwright\n"})
     assert browser_tools_found(tmp_path) == ["playwright"]
 
-    def read_again(_path):
+    def read_again(*_args):
         pytest.fail("scanned again")
 
-    monkeypatch.setattr(agent_type_check, "_markers_in", read_again)
+    monkeypatch.setattr(agent_type_check, "read_module", read_again)
     assert browser_tools_found(tmp_path) == ["playwright"]
 
 
@@ -985,6 +990,71 @@ def test_scan_finds_the_agents_own_folder(tmp_path):
             },
             ["puppeteer"],
         ),
+        (
+            {
+                "packages/shared/package.json": json.dumps({"dependencies": {"puppeteer": "1"}}),
+                "packages/shared/src/browse.ts": "export const x = 1;\n",
+                "agents/a/index.ts": 'import "../../packages/shared/src/browse";\n',
+            },
+            ["puppeteer"],
+        ),
+        (
+            {
+                "examples/common/web.py": "import playwright\n",
+                "agents/a/agent.py": "import examples.common.web\n",
+            },
+            ["playwright"],
+        ),
+        (
+            {
+                "common/__init__.py": "from . import web\n",
+                "common/web.py": "import playwright\n",
+                "common/util.py": "x = 1\n",
+                "agents/a/agent.py": "from common.util import x\n",
+            },
+            ["playwright"],
+        ),
+        # Someone else's package, unpacked beside the code, may name a tool it doesn't use here.
+        (
+            {
+                "somepkg/__init__.py": 'TOOL = {"type": "computer_20241022"}\n',
+                "somepkg-1.0.dist-info/RECORD": "somepkg/__init__.py,,\n",
+                "agents/a/agent.py": "import somepkg\n",
+            },
+            [],
+        ),
+        (
+            {
+                "agents/a/ui.js": '// const browse = require("../b/browse");\n',
+                "agents/b/browse.js": 'const TOOL = "computer_20241022";\n',
+            },
+            [],
+        ),
+        (
+            {
+                "agents/a/agent.py": "import somepkg\n",
+                "agents/a/somepkg/__init__.py": 'TOOL = {"type": "computer_20241022"}\n',
+                "agents/a/somepkg-1.0.dist-info/RECORD": "somepkg/__init__.py,,\n",
+            },
+            [],
+        ),
+        (
+            {
+                "agents/a/agent.py": "import somepkg\n",
+                "agents/somepkg/__init__.py": 'TOOL = {"type": "computer_20241022"}\n',
+                "agents/somepkg-1.0.dist-info/RECORD": "somepkg/__init__.py,,\n",
+            },
+            [],
+        ),
+        # A RECORD line naming no folder doesn't hide all the shared code.
+        (
+            {
+                "agents/a/agent.py": "import common.web\n",
+                "common/web.py": "import playwright\n",
+                "odd-1.0.dist-info/RECORD": ",,\n./x,,\n./,,\n/,,\n.//,,\n./.,,\n",
+            },
+            ["playwright"],
+        ),
         ({"agents/a/x.py": "x = 1\n", "agent.py": "import playwright\n"}, ["playwright"]),
         (
             {
@@ -1016,6 +1086,32 @@ def test_scan_covers_what_the_agent_reaches(tmp_path, files, expected):
     assert browser_tools_in_agent(_tree(tmp_path / "repo", files), "agents/a") == expected
 
 
+def test_the_walk_reads_each_of_the_folders_files_once(tmp_path, monkeypatch):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    repo = _tree(
+        tmp_path / "repo",
+        {
+            "agents/a/agent.py": "import helper\nimport common.web\n",
+            "agents/a/helper.py": "import agent\n",
+            "common/web.py": "import helper\n",
+        },
+    )
+    reads: list[Path] = []
+    read_text = Path.read_text
+
+    def counted(path, *args, **kwargs):
+        reads.append(path.resolve())
+        return read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", counted)
+
+    reached = imported_by_agent(repo, "agents/a")
+
+    assert (repo / "common" / "web.py").resolve() in reached
+    assert len(reads) == len(set(reads)) == 3
+
+
 def test_a_chat_reading_of_an_agent_with_a_shared_browser_tool_gets_a_second_look(tmp_path):
     repo = _tree(
         tmp_path / "repo",
@@ -1029,6 +1125,53 @@ def test_a_chat_reading_of_an_agent_with_a_shared_browser_tool_gets_a_second_loo
     _submitter_in(output, repo, "agents/a")(_reading("chat"))
 
     assert not (output / "contract.json").exists()
+
+
+@pytest.mark.parametrize(
+    "files",
+    [
+        {"agents/a/routes.ts": 'const note = from "/";\n'},
+        {"agents/a/deep.py": "from " + "." * 40 + " import x\n"},
+    ],
+    ids=["script", "python"],
+)
+def test_an_odd_import_does_not_stop_the_save(tmp_path, files):
+    output = tmp_path / "out"
+
+    answer = _submitter_in(output, _tree(tmp_path / "repo", files), "agents/a")(_reading("chat"))
+
+    assert not answer.get("is_error"), answer
+    assert (output / "contract.json").exists()
+
+
+def test_the_package_walk_stops_at_the_repo_root(tmp_path):
+    (tmp_path / "package.json").write_text(
+        json.dumps({"dependencies": {"puppeteer": "1"}}), encoding="utf-8"
+    )
+    repo = _tree(
+        tmp_path / "repo",
+        {
+            "lib/browse.js": "export const x = 1;\n",
+            "agents/a/index.js": 'import "../../lib/browse";\n',
+        },
+    )
+
+    assert browser_tools_in_agent(repo, "agents/a") == []
+
+
+def test_scan_stops_at_the_repo_root(tmp_path):
+    (tmp_path / "agent.py").write_text("import playwright\n", encoding="utf-8")
+    repo = _tree(tmp_path / "repo", {"agents/a/agent.py": "x = 1\n"})
+
+    assert browser_tools_in_agent(repo, "agents/a") == []
+
+
+def test_scan_answers_when_a_linked_folder_leads_out_of_the_repo(tmp_path):
+    outside = _tree(tmp_path / "outside", {"web.py": "import playwright\n"})
+    repo = _tree(tmp_path / "repo", {"agents/a/agent.py": "import linked.web\n"})
+    (repo / "linked").symlink_to(outside, target_is_directory=True)
+
+    assert browser_tools_in_agent(repo, "agents/a") == []
 
 
 def test_scan_of_a_missing_folder_finds_nothing(tmp_path):
@@ -1930,3 +2073,288 @@ def test_set_modality_tool_no_longer_offers_browser():
 def test_browser_stays_a_known_modality():
     assert "browser" in known_modalities()
     assert "browser" in _submit_tool(contract_tools(Path("unused"))).input_schema["properties"]["modality"]["enum"]
+
+
+def _padded(line: str, size: int) -> str:
+    return line + "#" * (size - len(line.encode()))
+
+
+@pytest.mark.parametrize("over, expected", [(0, ["playwright"]), (1, [])])
+def test_python_is_parsed_up_to_the_limit_and_skipped_past_it(tmp_path, over, expected):
+    from fi.alk.harness.python_source import LARGEST_PARSED_MODULE
+
+    repo = _tree(tmp_path, {"agent.py": _padded("import playwright\n", LARGEST_PARSED_MODULE + over)})
+
+    assert browser_tools_found(repo) == expected
+
+
+def test_only_python_naming_a_browser_tool_is_parsed(tmp_path, monkeypatch):
+    repo = _tree(
+        tmp_path,
+        {
+            "a.py": "import os\n",
+            "b.py": "import selenium\n",
+            "c.py": 'TOOL = "computer_20241022"\n',
+            "d.py": "from langchain_community.agent_toolkits import PlayWrightBrowserToolkit\n",
+        },
+    )
+    seen: list[str] = []
+    real = agent_type_check.parsed
+    monkeypatch.setattr(agent_type_check, "parsed", lambda text: seen.append(text) or real(text))
+
+    assert browser_tools_found(repo) == ["PlayWrightBrowserToolkit", "computer-use tool", "selenium"]
+    assert "import os\n" not in seen and len(seen) == 3
+
+
+@pytest.mark.parametrize("total, expected", [(16, ["selenium"]), (15, [])])
+def test_the_scan_parses_python_only_up_to_its_total(tmp_path, monkeypatch, total, expected):
+    from fi.alk.harness import python_source
+
+    repo = _tree(tmp_path, {"a.py": "import selenium\n", "b.py": "import playwright\n"})
+    monkeypatch.setattr(python_source, "LARGEST_PARSED_TOTAL", total)
+
+    assert browser_tools_found(repo) == expected
+
+
+def test_the_walk_while_the_conversation_waits_follows_only_small_files(tmp_path):
+    from fi.alk.harness.credentials import imported_by_agent
+    from fi.alk.harness.python_source import LARGEST_PARSED_MODULE
+
+    repo = _tree(
+        tmp_path / "repo",
+        {
+            "agents/a/agent.py": "import common.big\n",
+            "common/big.py": _padded("import common.web\n", LARGEST_PARSED_MODULE + 1),
+            "common/web.py": "from playwright.sync_api import sync_playwright\n",
+        },
+    )
+
+    assert browser_tools_in_agent(repo, "agents/a") == []
+    # Bundling, with no conversation waiting, still follows it.
+    assert (repo / "common" / "web.py").resolve() in imported_by_agent(repo, "agents/a")
+
+
+@pytest.mark.parametrize("total, expected", [(36, ["playwright"]), (35, [])])
+def test_the_walk_while_the_conversation_waits_parses_only_up_to_its_total(
+    tmp_path, monkeypatch, total, expected
+):
+    from fi.alk.harness import python_source
+
+    repo = _tree(
+        tmp_path / "repo",
+        {
+            "agents/a/agent.py": "import common.mid\n",
+            "common/mid.py": "import common.web\n",
+            "common/web.py": "import playwright\n",
+        },
+    )
+    monkeypatch.setattr(python_source, "LARGEST_PARSED_TOTAL", total)
+
+    assert browser_tools_in_agent(repo, "agents/a") == expected
+
+
+def test_python_without_a_marker_is_not_tokenized(tmp_path, monkeypatch):
+    import tokenize
+
+    repo = _tree(tmp_path, {"agent.py": "import selenium  # computer\n"})
+    monkeypatch.setattr(tokenize, "generate_tokens", lambda *args: pytest.fail("tokenized"))
+
+    assert browser_tools_found(repo) == ["selenium"]
+
+
+_IN_A_COMMENT = "# not used here: computer_20241022\nx = 1\n"
+_IN_CODE = 'TOOL = "computer_20241022"\n'
+
+
+@pytest.mark.parametrize(
+    "text, total, expected",
+    [
+        (_IN_A_COMMENT, len(_IN_A_COMMENT), []),
+        (_IN_CODE, len(_IN_CODE), ["computer-use tool"]),
+        # Past the total a comment can't be told from code, so neither is read.
+        (_IN_A_COMMENT, len(_IN_A_COMMENT) - 1, []),
+        (_IN_CODE, len(_IN_CODE) - 1, []),
+    ],
+)
+def test_past_the_tokenize_total_python_markers_are_not_read(
+    tmp_path, monkeypatch, text, total, expected
+):
+    from fi.alk.harness import python_source
+
+    repo = _tree(tmp_path, {"agent.py": text})
+    monkeypatch.setattr(python_source, "LARGEST_TOKENIZED_TOTAL", total)
+
+    assert browser_tools_found(repo) == expected
+
+
+def test_a_comment_past_the_tokenize_total_does_not_refuse_a_browser_reading(tmp_path):
+    from fi.alk.harness.python_source import LARGEST_TOKENIZED_TOTAL
+    from fi.alk.harness.tools import contract_tools
+
+    # Honest: one file past the total, whose only marker is a comment.
+    body = "# Unlike computer_20241022, this agent only chats.\n" + "x = 1\n" * (
+        LARGEST_TOKENIZED_TOTAL // 6 + 1
+    )
+    repo = _tree(tmp_path / "repo", {"agent.py": body})
+    destination = tmp_path / "out"
+    server = contract_tools(destination, source_root=repo, scan_root=repo)
+    reading = {
+        "agent": "a",
+        "modality": "browser",
+        "real_use_cases": ["o"],
+        "tools": [{"name": "add", "args": ["i"]}],
+    }
+
+    result = asyncio.run(server.tools[0].handler(reading))
+
+    assert "- second-look:" in result["content"][0]["text"], result
+    assert not (destination / FAILURE_FILE).exists()
+
+
+def test_a_fullwidth_name_is_found_as_python_reads_it(tmp_path):
+    repo = _tree(tmp_path, {"agent.py": "import \uff50laywright.sync_api\n"})
+
+    assert browser_tools_found(repo) == ["playwright"]
+
+
+def _type_keywords(size: int) -> str:
+    return "import type " * (size // len("import type "))
+
+
+def test_script_type_imports_are_dropped_as_before():
+    from fi.alk.harness.credentials import _script_imports
+
+    code = (
+        'import type { A } from "./types";\n'
+        'export type { B } from "./b";\n'
+        'import { c } from "./c";\n'
+        # The quote past the keyword's reach: not dropped, as before.
+        "import type { F }" + " " * 1000 + "from './far';\n"
+    )
+
+    assert _script_imports(code) == ["./c", "./far"]
+
+
+def test_a_crafted_script_does_not_hold_up_the_conversation(tmp_path):
+    from fi.alk.harness.tools import contract_tools
+
+    # Each keyword cost the old pattern a 1,000-character rescan: 0.6 s for this file, on the loop.
+    files = {f"agents/a/t{n}.ts": _type_keywords(1_000_000) for n in range(3)}
+    repo = _tree(tmp_path / "repo", {**files, "agents/a/agent.py": "x = 1\n"})
+    destination = tmp_path / "out"
+    server = contract_tools(destination, source_root=repo, scan_root=repo, subfolder="agents/a")
+    reading = {
+        "agent": "a",
+        "modality": "chat",
+        "real_use_cases": ["o"],
+        "hard_constraints": ["be polite"],
+        "data_store": {"kind": "none"},
+        "runtime": {"language": "python"},
+        "tools": [{"name": "add", "args": ["i"]}],
+    }
+
+    async def save():
+        worst = [0.0]
+        done = asyncio.Event()
+
+        async def beat():
+            last = time.perf_counter()
+            while not done.is_set():
+                await asyncio.sleep(0.01)
+                now = time.perf_counter()
+                worst[0], last = max(worst[0], now - last), now
+
+        beating = asyncio.create_task(beat())
+        result = await server.tools[0].handler(reading)
+        done.set()
+        await beating
+        return result, worst[0]
+
+    result, worst = asyncio.run(save())
+
+    assert not result.get("is_error"), result
+    assert worst < 0.25
+
+
+_SHARED_IMPORT = 'import { x } from "../../common/web.js";\n'
+
+
+@pytest.mark.parametrize(
+    "budget, followed", [(len(_SHARED_IMPORT), True), (len(_SHARED_IMPORT) - 1, False)]
+)
+def test_the_walk_while_the_conversation_waits_reads_scripts_only_up_to_a_total(
+    tmp_path, monkeypatch, budget, followed
+):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    script = _SHARED_IMPORT
+    repo = _tree(
+        tmp_path / "repo",
+        {"agents/a/main.js": script, "common/web.js": 'const server = "@playwright/mcp";\n'},
+    )
+    monkeypatch.setattr(agent_type_check, "_WALKED_SCRIPTS", budget)
+
+    assert browser_tools_in_agent(repo, "agents/a") == (["Playwright MCP"] if followed else [])
+    # Bundling, with no conversation waiting, reads them all.
+    assert (repo / "common" / "web.js").resolve() in imported_by_agent(repo, "agents/a")
+
+
+_OLD_TYPE_IMPORT = re.compile(r"""\b(?:import|export)\s+type\b[^"'\n]{0,1000}["'][^"'\n]*["']""")
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        'import type { A } from "./a";',
+        "export  type * from './b';",
+        'import type A from "./a\nimport { b } from "./b";',
+        'import type { A } from "./a',
+        "import type { A }\nfrom './a';",
+        'import typeA from "./a";',
+        "import type" + " " * 1000 + "'./edge';",
+        "import type" + " " * 1001 + "'./past';",
+        'import type x import type y "z"; import type "w"',
+        "import type " * 50 + '"q" import type \'r\'',
+        'import type { A } from "./a" + \'b\';',
+        "",
+    ],
+)
+def test_the_type_import_strip_matches_the_pattern_it_replaced(code):
+    from fi.alk.harness.credentials import _without_type_imports
+
+    assert _without_type_imports(code) == _OLD_TYPE_IMPORT.sub("", code)
+
+
+@pytest.mark.parametrize("limit, followed", [(3, True), (2, False)])
+@pytest.mark.parametrize("kind", ["python", "script"])
+def test_the_walk_while_the_conversation_waits_tries_only_so_many_imports(
+    tmp_path, monkeypatch, limit, followed, kind
+):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    # Two names that resolve nowhere, then the shared file, all in one file.
+    files = (
+        {"agents/a/main.py": "import nowhere1\nimport nowhere2\nimport common.web\n", "common/__init__.py": "", "common/web.py": "import playwright\n"}
+        if kind == "python"
+        else {"agents/a/main.js": 'import "./nowhere1";\nimport "./nowhere2";\nimport "../../common/web.js";\n', "common/web.js": 'const s = "@playwright/mcp";\n'}
+    )
+    repo = _tree(tmp_path / "repo", files)
+    monkeypatch.setattr(agent_type_check, "_WALKED_IMPORTS", limit)
+
+    found = browser_tools_in_agent(repo, "agents/a")
+    assert bool(found) is followed, found
+    # Bundling tries them all.
+    shared = repo / "common" / ("web.py" if kind == "python" else "web.js")
+    assert shared.resolve() in imported_by_agent(repo, "agents/a")
+
+
+@pytest.mark.parametrize("limit, expected", [(80, ["Playwright MCP"]), (79, [])])
+def test_the_scan_reads_scripts_only_up_to_their_own_total(tmp_path, monkeypatch, limit, expected):
+    # Python is read first and doesn't count towards it.
+    repo = _tree(
+        tmp_path,
+        {"a.js": "x" * 40, "b.js": 'const s = "@playwright/mcp";' + "x" * 12, "agent.py": "x = 1\n" * 50},
+    )
+    monkeypatch.setattr(agent_type_check, "_LARGEST_SCRIPT_SCAN", limit)
+
+    assert browser_tools_found(repo) == expected

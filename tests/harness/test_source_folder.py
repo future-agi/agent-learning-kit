@@ -79,6 +79,22 @@ def test_agent_folder_refuses_a_real_folder_past_the_length_limit(repo: Path) ->
         agent_folder(repo, deep)
 
 
+def test_agent_folder_accepts_a_real_folder_at_the_length_limit(repo: Path) -> None:
+    deep = "/".join(["d"] * 255 + ["dd"])
+    assert len(deep) == 512
+    (repo / deep).mkdir(parents=True)
+    (repo / deep / "agent.py").write_text("x = 1\n")
+
+    assert agent_folder(repo, deep) == (repo / deep).resolve()
+
+
+def test_a_long_bad_value_keeps_the_failure_within_the_platforms_limit() -> None:
+    failure = source_folder.subfolder_not_found("a" * 100_000)
+
+    assert len(failure.message) <= 2000
+    assert len(failure.details["subfolder"]) <= 512
+
+
 def test_agent_folder_refuses_an_absolute_path_inside_the_repo(repo: Path) -> None:
     with pytest.raises(SubfolderNotFound):
         agent_folder(repo, str(repo.resolve() / "agents" / "a"))

@@ -947,7 +947,8 @@ def revise_invariant(workspace: Path, args: dict[str, Any], source: Path | None)
                 ],
                 "scenarios": held.get("scenarios") or [],
             },
-            source_files(Path(source), folder),
+            # The citation was checked against the folder above; this only records the file.
+            {cites: Path(source).resolve() / cites},
         )
         kept = [revised if one is held else one for one in checks]
         done = f"revised, cites {cites}"

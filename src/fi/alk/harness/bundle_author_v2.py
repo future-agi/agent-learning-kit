@@ -71,7 +71,7 @@ from .generated_runtime import (
 )
 from .credentials import assess_configuration, discover_credentials
 from .secrets import process_secret_environment_names
-from .runtime_selection import ComposeSelection, select_runtime
+from .runtime_selection import ComposeSelection, bounded_yaml_load, select_runtime
 from .agent_type_check import EXIT_REFUSED
 from .source_folder import (
     SubfolderNotFound,
@@ -1127,6 +1127,9 @@ _SECRET_ENVIRONMENT_NAME = re.compile(
 )
 
 
+_LARGEST_RUNTIME_MANIFEST = 1024 * 1024
+
+
 def _declared_runtime_environment(source: Path) -> dict[str, str]:
     """Load public, non-secret process defaults declared by the repository.
 
@@ -1140,7 +1143,12 @@ def _declared_runtime_environment(source: Path) -> dict[str, str]:
     if not path.is_file():
         return {}
     try:
-        body = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        # Read, not stat: a link to a file such as /proc/self/pagemap has size 0 and no end.
+        with path.open("rb") as manifest:
+            raw = manifest.read(_LARGEST_RUNTIME_MANIFEST + 1)
+        if len(raw) > _LARGEST_RUNTIME_MANIFEST:
+            raise BundleAuthorError("runtime_manifest_invalid: alk.yaml is larger than 1 MiB")
+        body = bounded_yaml_load(raw.decode("utf-8")) or {}
     except (OSError, yaml.YAMLError) as exc:
         raise BundleAuthorError(f"runtime_manifest_invalid: {exc}") from exc
     if not isinstance(body, dict):

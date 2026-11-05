@@ -12,6 +12,7 @@ import hashlib
 import json
 import re
 import stat
+from collections import deque
 from enum import Enum
 from pathlib import Path, PurePosixPath
 from typing import AbstractSet, Iterable, Mapping, TYPE_CHECKING, Literal
@@ -21,6 +22,7 @@ import yaml
 
 from fi.simulate.runtime.spec import SecretRef
 
+from .python_source import ParseBudget, parsed
 from .secrets import process_secret_environment_names
 from .source_folder import SubfolderNotFound, agent_folder, agent_scope, in_agent_scope
 
@@ -138,10 +140,19 @@ _CONFIG_NAMES = {
 }
 _MAX_FILES = 2_000
 _MAX_FILE_BYTES = 1_000_000
+# The import walk's whole budget: a file limit alone still allows minutes of reading.
+_MAX_WALK_BYTES = 32_000_000
+_MAX_WALK_IMPORTS = 20_000
 _SCRIPT_SUFFIXES = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
 _SCRIPT_IMPORT = re.compile(
-    r"""(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)["']([^"'\n]+)["']"""
+    r"""(?:\bfrom\s*|\bimport\s*(?:\(\s*)?|\brequire\s*\(\s*)["']([^"'\n]+)["']"""
 )
+# A type-only import runs nothing. The keyword is matched alone, and the quotes after it found
+# by `_without_type_imports`, so the text is scanned once, however many keywords it holds.
+_SCRIPT_TYPE_KEYWORD = re.compile(r"\b(?:import|export)\s+type\b")
+_SCRIPT_QUOTE_OR_LINE_END = re.compile(r"""["'\n]""")
+# How far after the keyword the module's quote may start.
+_SCRIPT_TYPE_REACH = 1000
 
 _ENV_DECLARATION = re.compile(
     r"(?m)^(?:export[ \t]+)?([A-Z][A-Z0-9_]{2,})[ \t]*=[ \t]*([^\r\n#]*)"
@@ -446,7 +457,16 @@ def discover_credentials(
     scope = agent_scope(root, agent_subfolder) if agent_subfolder else None
     named_compose = (root / agent_compose_file).resolve() if agent_compose_file else None
 
-    for path in _candidate_files(root, scan_paths=scan_paths):
+    candidates = _candidate_files(root, scan_paths=scan_paths)
+    if scope is not None:
+        # The file limit must not leave the agent's own files unread.
+        candidates.sort(
+            key=lambda path: not (
+                path in imported
+                or in_agent_scope(PurePosixPath(path.relative_to(root).as_posix()), scope)
+            )
+        )
+    for path in candidates:
         if scanned >= _MAX_FILES:
             truncated = True
             break
@@ -494,8 +514,8 @@ def discover_credentials(
                 },
             )
             item["required"] = bool(item["required"]) or (required and agents_own)
-            item["declared_default"] = (
-                bool(item["declared_default"]) or declared_default
+            item["declared_default"] = bool(item["declared_default"]) or (
+                declared_default and agents_own
             )
             detected = item["detected_from"]
             assert isinstance(detected, set)
@@ -634,10 +654,13 @@ def _plain_file(path: Path) -> bool:
     return stat.S_ISREG(details.st_mode) and details.st_size <= _MAX_FILE_BYTES
 
 
-def _python_imports(content: str) -> list[tuple[int, str]]:
-    try:
-        tree = ast.parse(content)
-    except (SyntaxError, ValueError, RecursionError, MemoryError):
+def _python_imports(
+    content: str, limit: int = _MAX_FILE_BYTES, budget: ParseBudget | None = None
+) -> list[tuple[int, str]]:
+    if len(content) > limit or (budget is not None and not budget.spend(content)):
+        return []
+    tree = parsed(content)
+    if tree is None:
         return []
     names: list[tuple[int, str]] = []
     for node in ast.walk(tree):
@@ -652,11 +675,69 @@ def _python_imports(content: str) -> list[tuple[int, str]]:
     return [(level, name) for level, name in names if name]
 
 
-def imported_by_agent(root: Path, subfolder: str) -> frozenset[Path]:
+def _script_imports(content: str) -> list[str]:
+    # Here because agent_type_check imports this module.
+    from .agent_type_check import _SCRIPT_COMMENT_OR_STRING, _script_kept
+
+    code = _SCRIPT_COMMENT_OR_STRING.sub(_script_kept, content)
+    return _SCRIPT_IMPORT.findall(_without_type_imports(code))
+
+
+def _without_type_imports(code: str) -> str:
+    """``code`` without its type-only imports: the keyword, then within 1,000 characters on its
+    line a quoted module name.
+
+    One regular expression doing this rescans the reach after every keyword, which a file of
+    nothing but keywords turns into seconds a megabyte, holding the interpreter throughout. Here
+    each search for a quote starts where the last one ended or later, or reuses its answer.
+    """
+    kept: list[str] = []
+    done = 0
+    searched_from = stop = -1
+
+    def next_stop(position: int) -> int:
+        # No quote or line end lies between searched_from and stop, so the answer stands.
+        nonlocal searched_from, stop
+        if not searched_from <= position <= stop:
+            hit = _SCRIPT_QUOTE_OR_LINE_END.search(code, position)
+            searched_from, stop = position, hit.start() if hit else len(code)
+        return stop
+
+    for keyword in _SCRIPT_TYPE_KEYWORD.finditer(code):
+        if keyword.start() < done:
+            continue
+        opening = next_stop(keyword.end())
+        if opening == len(code) or code[opening] == "\n":
+            continue
+        if opening - keyword.end() > _SCRIPT_TYPE_REACH:
+            continue
+        closing = next_stop(opening + 1)
+        if closing == len(code) or code[closing] == "\n":
+            continue
+        kept.append(code[done : keyword.start()])
+        done = closing + 1
+    kept.append(code[done:])
+    return "".join(kept)
+
+
+def imported_by_agent(
+    root: Path,
+    subfolder: str,
+    *,
+    parse_limit: int = _MAX_FILE_BYTES,
+    parse_budget: ParseBudget | None = None,
+    script_budget: ParseBudget | None = None,
+    import_limit: int | None = None,
+) -> frozenset[Path]:
     """The files the agent's folder imports, followed as far as they go.
 
     Python imports, and JavaScript or TypeScript imports written as a path. A package name that
-    only a workspace or a path alias can resolve isn't followed.
+    only a workspace or a path alias can resolve isn't followed. A conversation waiting on the
+    answer passes tighter parse limits than bundling's: a Python file is followed only if it's
+    at most ``parse_limit`` characters and the walk has parsed under ``parse_budget``, and a
+    script only while the walk has read under ``script_budget``. It tries at most
+    ``import_limit`` import names in all (bundling's 20,000 when not given), each costing a few
+    lookups on disk.
     """
     root = Path(root).resolve()
     try:
@@ -671,13 +752,15 @@ def imported_by_agent(root: Path, subfolder: str) -> frozenset[Path]:
                 return candidate.resolve()
         return None
 
-    def python_module(path: Path, level: int, name: str) -> Path | None:
+    def python_modules(path: Path, level: int, name: str) -> list[Path]:
         module = name.split(".")
         for start in (path.parents[level - 1],) if level else python_bases:
             target = start.joinpath(*module)
             if hit := found_at((target.with_suffix(".py"), target / "__init__.py")):
-                return hit
-        return None
+                # Importing a module runs every package above it first.
+                above = (start.joinpath(*module[:depth]) / "__init__.py" for depth in range(1, len(module)))
+                return [hit, *filter(None, (found_at((one,)) for one in above))]
+        return []
 
     def script_module(path: Path, name: str) -> Path | None:
         for start in (path.parent,) if name.startswith(".") else (folder, root):
@@ -695,32 +778,58 @@ def imported_by_agent(root: Path, subfolder: str) -> frozenset[Path]:
         return None
 
     seen: set[Path] = set()
-    pending = [
+    pending = deque(
         path
         for path in sorted(folder.rglob("*"))
         if path.suffix in {".py", *_SCRIPT_SUFFIXES}
         and not any(part in _IGNORED_PARTS for part in path.relative_to(folder).parts)
-    ]
-    read = 0
-    while pending and read < _MAX_FILES:
-        path = pending.pop()
+    )
+    own = set(pending)  # Read once already, so importing one doesn't queue it again.
+    read = bytes_read = imports_tried = 0
+    import_limit = _MAX_WALK_IMPORTS if import_limit is None else import_limit
+    while (
+        pending
+        and read < _MAX_FILES
+        and bytes_read < _MAX_WALK_BYTES
+        and imports_tried < import_limit
+    ):
+        # The folder's own files first, so the budgets can't spend themselves on a chain.
+        path = pending.popleft()
         if not _plain_file(path):
             continue
         read += 1
         try:
-            content = path.read_text(encoding="utf-8", errors="replace")
+            content = path.read_text(encoding="utf-8-sig", errors="replace")
         except OSError:
             continue
+        bytes_read += len(content)
+        hits: list[Path] = []
         if path.suffix == ".py":
-            hits = [
-                python_module(path, level, name) for level, name in _python_imports(content)
-            ]
+            names = list(dict.fromkeys(_python_imports(content, parse_limit, parse_budget)))
+            # One file can hold more names than the walk may try; the rest aren't tried.
+            names = names[: import_limit - imports_tried]
+            imports_tried += len(names)
+            for level, name in names:
+                try:
+                    hits.extend(python_modules(path, level, name))
+                except (IndexError, ValueError, OSError):
+                    continue  # An import that can't be a path in this repository.
+        elif script_budget is not None and not script_budget.spend(content):
+            continue
         else:
-            hits = [script_module(path, name) for name in _SCRIPT_IMPORT.findall(content)]
+            names = list(dict.fromkeys(_script_imports(content)))
+            names = names[: import_limit - imports_tried]
+            imports_tried += len(names)
+            for name in names:
+                try:
+                    hits.extend(filter(None, (script_module(path, name),)))
+                except (ValueError, OSError):
+                    continue
         for hit in hits:
-            if hit is not None and hit not in seen:
+            if hit not in seen:
                 seen.add(hit)
-                pending.append(hit)
+                if hit not in own:
+                    pending.append(hit)
     return frozenset(seen)
 
 

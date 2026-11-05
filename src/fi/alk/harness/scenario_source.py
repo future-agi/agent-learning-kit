@@ -744,7 +744,7 @@ class BundleScenarioSource:
                     (contract.get("runtime") or {}).get("source_subfolder") or ""
                 )
                 if built_from != (job.source.subfolder or ""):
-                    raise AgentBuildError("subfolder_mismatch")
+                    raise AgentBuildError("agent_invalid", "subfolder_mismatch")
                 authored_agent = {
                     "sdk_version": _sdk_version,
                     "agent": build_authored_agent(
@@ -752,10 +752,13 @@ class BundleScenarioSource:
                     ),
                 }
             except Exception as exc:
+                # A field path can name the customer's own keys, so only the mismatch is named.
+                mismatch = getattr(exc, "detail", "") == "subfolder_mismatch"
                 logger.warning(
-                    "authored agent not built: class=%s code=%s",
+                    "authored agent not built: class=%s code=%s%s",
                     type(exc).__name__,
                     getattr(exc, "code", ""),
+                    " detail=subfolder_mismatch" if mismatch else "",
                 )
         registered = await register_with_platform(
             scenarios_client,

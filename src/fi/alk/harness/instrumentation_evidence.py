@@ -4,6 +4,8 @@ import ast
 import os
 from pathlib import Path
 
+from .python_source import ParseBudget, parsed, read_module
+
 _SKIPPED_DIRECTORIES = {
     ".git",
     ".hg",
@@ -19,6 +21,8 @@ _SKIPPED_DIRECTORIES = {
     "site-packages",
     "venv",
 }
+# A file that names none of these can't import them, so it isn't parsed.
+_NAMES = (b"fi_instrumentation", b"traceai_", b"opentelemetry")
 _OTEL_SDK_TRACE = "opentelemetry.sdk.trace"
 _OTEL_OTLP_EXPORTER = "opentelemetry.exporter.otlp"
 _OTEL_GRPC_EXPORTER = "opentelemetry.exporter.otlp.proto.grpc"
@@ -52,33 +56,33 @@ def detect_instrumentation(source_root: Path | None) -> str:
 def _python_imports(root: Path) -> set[str]:
     imported: set[str] = set()
     local: set[str] = set()
+    budget = ParseBudget()
     for directory, subdirectories, files in os.walk(root):
         if Path(directory) != root and any(
             name.endswith(".dist-info") for name in subdirectories
         ):
             subdirectories[:] = []
             continue
-        subdirectories[:] = [
+        # In name order: past the total, what's read mustn't depend on how the disk lists it.
+        subdirectories[:] = sorted(
             name for name in subdirectories if name not in _SKIPPED_DIRECTORIES
-        ]
+        )
         if Path(directory).parent == root and "__init__.py" in files:
             # Only a package at the top of the repository sits ahead of the
             # installed one; app/opentelemetry is imported as app.opentelemetry.
             local.add(Path(directory).name)
-        for file_name in files:
+        for file_name in sorted(files):
             if not file_name.endswith(".py"):
                 continue
             if Path(directory) == root:
                 # Only a module at the top of the repository sits ahead of the
                 # installed package on the import path.
                 local.add(file_name[: -len(".py")])
-            try:
-                tree = ast.parse(
-                    (Path(directory) / file_name).read_text(encoding="utf-8")
-                )
-                imported.update(_imports(tree))
-            except (OSError, UnicodeError, SyntaxError, ValueError, RecursionError):
+            text = read_module(Path(directory) / file_name, needles=_NAMES)
+            if text is None or not budget.spend(text):
                 continue
+            if (tree := parsed(text)) is not None:
+                imported.update(_imports(tree))
     return {name for name in imported if name.split(".")[0] not in local}
 
 

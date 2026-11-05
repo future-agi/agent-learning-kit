@@ -7,7 +7,6 @@ and it needs no job or session, so a reading can be checked without a build.
 
 from __future__ import annotations
 
-import ast
 import csv
 import fnmatch
 import io
@@ -17,13 +16,14 @@ import re
 import tokenize
 from collections.abc import Iterable, Iterator, Sequence
 from functools import lru_cache
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
 from .credentials import imported_by_agent
 from .failure_file import FAILURE_FILE
 from .instrumentation_evidence import _SKIPPED_DIRECTORIES, _imports
 from .job import FailureDomain, HarnessFailure, HarnessStage
+from .python_source import LARGEST_PARSED_MODULE, ParseBudget, TokenBudget, parsed, read_module
 from .source_folder import agent_folder
 
 AGENT_TYPE_UNSUPPORTED = "agent_type_unsupported"
@@ -103,13 +103,31 @@ NOT_THE_AGENT = frozenset(
 # What the world registry already treats as a browser.
 BROWSER_MODALITIES = frozenset({"browser", "computer_use", "cua"})
 
+# Every match of TOOL_MARKER starts with one of these, inside one name or string, so a file
+# without one has no marker, and isn't tokenized to strip its comments.
+_MARKER_START = re.compile(
+    r"computer[_-]?[uU]se|ComputerUse|computer_\d{8}|@playwright/mcp|mcp-server-playwright"
+)
 _TOOLKIT = "PlayWrightBrowserToolkit"
+# A Python file that names none of these holds no browser import or tool marker, so it isn't parsed.
+_PYTHON_NAMES = (
+    *(name.encode() for name in sorted(BROWSER_IMPORTS)),
+    _TOOLKIT.encode(),
+    b"omputer",
+)
 _TEST_FILES = ("test_*.py", "*_test.py", "conftest.py", "*.test.*", "*.spec.*")
 _SCRIPT_SUFFIXES = frozenset({".js", ".ts", ".mjs", ".cjs", ".tsx", ".jsx"})
 _LARGEST_CODE_FILE = 1024 * 1024
 # Past this a repository holds the conversation up for longer than the rest of the scan is worth.
 _LARGEST_SCAN = 128 * 1024 * 1024
+# Scripts are read by regular expressions that call back for every string or comment: 128 MB of
+# crafted ones held the save 13 s. An agent's own scripts are far smaller.
+_LARGEST_SCRIPT_SCAN = 16 * 1024 * 1024
 _LARGEST_RECORD = 1024 * 1024
+# The scripts the walk reads to follow imports, while the conversation waits; bundling reads 32 MB.
+_WALKED_SCRIPTS = 2 * 1024 * 1024
+# The import names it tries then, each a few lookups on disk: about 0.5 s at most.
+_WALKED_IMPORTS = 5_000
 _LARGEST_RECORDS = 64 * 1024 * 1024
 # Strings are matched first and kept, so "https://..." or "src/**/*.ts" isn't read as a comment.
 # An unclosed one ends at its line or the file: a start that could fail makes a customer's odd file
@@ -221,16 +239,18 @@ def _packages_used(path: Path) -> set[str]:
     }
 
 
-def _imports_in(path: Path) -> set[str]:
+def _imports_in(text: str) -> set[str]:
     # One file at a time: a customer's odd file can run the parser out of memory, and that mustn't
     # take the rest of the scan, or the reading it serves, down with it.
-    try:
-        if not path.is_file() or path.stat().st_size > _LARGEST_CODE_FILE:
-            return set()
-        # From bytes, so a BOM or a coding line is honoured as Python itself would.
-        return _imports(ast.parse(path.read_bytes()))
-    except (OSError, ValueError, SyntaxError, RecursionError, MemoryError):
-        return set()
+    tree = parsed(text)
+    return set() if tree is None else _imports(tree)
+
+
+def _largest_read(path: Path) -> int:
+    # Python is parsed, which costs a crafted file the square of its size.
+    if path.suffix == ".py":
+        return min(_LARGEST_CODE_FILE, LARGEST_PARSED_MODULE)
+    return _LARGEST_CODE_FILE
 
 
 def _modules_at_top(root: Path) -> set[str]:
@@ -264,22 +284,36 @@ def _script_kept(hit: re.Match[str]) -> str:
     return kept
 
 
-def _markers_in(path: Path) -> set[str]:
-    try:
-        if not path.is_file() or path.stat().st_size > _LARGEST_CODE_FILE:
-            return set()
-        text = path.read_text(encoding="utf-8")
-        code = (
-            _python_code(text)
-            if path.suffix == ".py"
-            else _SCRIPT_COMMENT_OR_STRING.sub(_script_kept, text)
-        )
-    except (OSError, ValueError, SyntaxError, tokenize.TokenError):
+def _python_markers(text: str, tokens: TokenBudget) -> set[str]:
+    if not _MARKER_START.search(text):
         return set()
+    if not tokens.spend(text):
+        # Past the total, comments can't be told from code, and a marker in one would refuse a
+        # browser reading without its second look; so the file's markers aren't read, and the
+        # model's reading stands.
+        return set()
+    try:
+        return _markers(_python_code(text))
+    except (ValueError, SyntaxError, tokenize.TokenError):
+        return set()
+
+
+def _markers(code: str) -> set[str]:
     return {
         "Playwright MCP" if "playwright" in hit.group() else "computer-use tool"
         for hit in TOOL_MARKER.finditer(code)
     }
+
+
+def _markers_in(path: Path) -> set[str]:
+    """A script's markers; Python's are read by ``_python_markers``."""
+    try:
+        if not path.is_file() or path.stat().st_size > _LARGEST_CODE_FILE:
+            return set()
+        text = path.read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return set()
+    return _markers(_SCRIPT_COMMENT_OR_STRING.sub(_script_kept, text))
 
 
 def _file_size(path: Path) -> int:
@@ -335,23 +369,31 @@ def _scan(root: Path, _files: tuple[int, int, int]) -> tuple[str, ...]:
 def _tools_in(paths: Iterable[Path], local: set[str]) -> tuple[str, ...]:
     found: set[str] = set()
     imported: set[str] = set()
-    scanned = 0
+    scanned = scripts = 0
+    budget = ParseBudget()
+    tokens = TokenBudget()
     for path in sorted(filter(_is_read, paths), key=_reading_order):
         size = _file_size(path)
         # Never read, so it mustn't use up the limit before the code that is.
-        if size > _LARGEST_CODE_FILE:
+        if size > _largest_read(path):
             continue
         scanned += size
         if scanned > _LARGEST_SCAN:
             break
+        if path.suffix in _SCRIPT_SUFFIXES:
+            scripts += size
+            if scripts > _LARGEST_SCRIPT_SCAN:
+                continue
         # One file at a time: the tokenizer raises more than it documents (SystemError on a NUL
         # byte in 3.12), and one odd file mustn't stop every reading from being checked.
         try:
             if path.name == "package.json":
                 found |= _packages_used(path)
-            else:
-                markers = _markers_in(path)
-                names = _imports_in(path) if path.suffix == ".py" else set()
+            elif path.suffix != ".py":
+                found |= _markers_in(path)
+            elif (text := read_module(path, _largest_read(path), _PYTHON_NAMES)) is not None:
+                markers = _python_markers(text, tokens)
+                names = _imports_in(text) if budget.spend(text) else set()
                 found |= markers
                 imported |= names
         except Exception:
@@ -367,6 +409,15 @@ def _tools_in(paths: Iterable[Path], local: set[str]) -> tuple[str, ...]:
     return tuple(sorted({name.replace("_", "-") for name in found}))
 
 
+def _files_in(folder: Path) -> list[Path]:
+    try:
+        return [
+            path for path in sorted(folder.iterdir()) if path.is_file() and not path.is_symlink()
+        ]
+    except OSError:
+        return []
+
+
 def browser_tools_in_agent(source_root: Path, subfolder: str) -> list[str]:
     """What one agent of a repository uses: its folder, what it imports, and the files directly
     in the folders above it. A sibling's browser tool says nothing about this agent.
@@ -379,20 +430,44 @@ def browser_tools_in_agent(source_root: Path, subfolder: str) -> list[str]:
         path
         for parent in folder.parents
         if parent.is_relative_to(root)
-        for path in sorted(parent.iterdir())
-        if path.is_file() and not path.is_symlink() and not _not_the_agent_file(path.name)
+        for path in _files_in(parent)
+        if not _not_the_agent_file(path.name)
     ]
+    # An import the agent wrote says this code is its own, whatever the folder is called, unless
+    # it's a test helper or someone else's package, unpacked beside the agent or above it.
+    unpacked = {
+        parent / name
+        for parent in (folder, *folder.parents)
+        if parent.is_relative_to(root)
+        for name in _unpacked_at_top(parent)
+        if PurePosixPath(name).parts and not PurePosixPath(name).is_absolute()
+    }
     shared = [
         path
-        for path in sorted(imported_by_agent(root, subfolder))
+        for path in sorted(
+            imported_by_agent(
+                root,
+                subfolder,
+                parse_limit=LARGEST_PARSED_MODULE,
+                parse_budget=ParseBudget(),
+                script_budget=ParseBudget(_WALKED_SCRIPTS),
+                import_limit=_WALKED_IMPORTS,
+            )
+        )
         if not _not_the_agent_file(path.name)
-        and not any(_not_the_agent_dir(part) for part in path.relative_to(root).parent.parts)
+        and not unpacked.intersection((path, *path.parents))
+        and not any(
+            _TEST_FOLDER.fullmatch(part.lower())
+            for part in path.relative_to(root).parent.parts
+        )
     ]
-    # A shared script's dependencies are declared beside it, not in the script.
+    # A shared script's dependencies are declared in its package, at or above it.
     manifests = [
-        path.parent / "package.json"
+        parent / "package.json"
         for path in shared
-        if path.suffix != ".py" and (path.parent / "package.json").is_file()
+        if path.suffix != ".py"
+        for parent in path.parents
+        if parent.is_relative_to(root) and (parent / "package.json").is_file()
     ]
     return list(
         _tools_in(

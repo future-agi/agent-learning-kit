@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import secrets
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -48,7 +49,11 @@ from .contract import (
 )
 from .failure_file import FAILURE_FILE, write_failure_file
 from .instrumentation_evidence import detect_instrumentation
-from .runtime_selection import select_runtime
+from .runtime_selection import (
+    COMPOSE_SERVICE_OUTSIDE_FOLDER,
+    RuntimeSelectionError,
+    select_runtime,
+)
 from .source_folder import SubfolderNotFound, agent_folder, bind_runtime
 
 CONTRACT_SERVER = "contract"
@@ -165,6 +170,26 @@ def accept_contract(
     A plain function rather than only a tool body, so the rule that decides whether a contract
     is usable can be exercised and reasoned about without standing up a session.
     """
+    checked = _checked_contract(
+        payload,
+        source_root=source_root,
+        require_setup_contract=require_setup_contract,
+        subfolder=subfolder,
+    )
+    if isinstance(checked, dict):
+        return checked
+    return _save_contract(checked, destination)
+
+
+def _checked_contract(
+    payload: dict[str, Any],
+    *,
+    source_root: Path | None,
+    require_setup_contract: bool,
+    subfolder: str | None,
+) -> AgentContract | dict[str, Any]:
+    """The contract to save, or the problems to send back. It reads the customer's files and
+    writes nothing, so the tool runs it off the event loop."""
     arrived = sorted(payload) if isinstance(payload, dict) else [type(payload).__name__]
     payload = _without_nulls(unwrapped(payload))
     try:
@@ -194,8 +219,6 @@ def accept_contract(
         problems.extend(_copy_prompt(contract, source_root))
     runtime = contract.runtime
     if subfolder and source_root is not None:
-        from .bundle_author_v2 import BundleAuthorError, _declared_runtime_environment
-
         try:
             runtime = Runtime.model_validate(
                 bind_runtime(
@@ -213,29 +236,20 @@ def accept_contract(
                     f"runtime_command_shell_forbidden: {runtime.command[0]}; name the program "
                     f"and its arguments directly so the command stays in {subfolder}"
                 )
-            # What selection would refuse (a service building a sibling) is told to the model
-            # here. It sees the values bundling sees, or it refuses what bundling accepts.
-            select_runtime(
-                source_root,
-                runtime.model_dump(),
-                public_environment={
-                    **_declared_runtime_environment(agent_folder(source_root, subfolder)),
-                    **runtime_public_environment(runtime.model_dump()),
-                },
-                validate_environment_dependencies=False,
-            )
+            if refusal := _builds_a_sibling(source_root, runtime, subfolder):
+                problems.append(refusal)
         except SubfolderNotFound:
             problems.append(
                 f"subfolder_not_found: {subfolder} is not a folder with files in the source, "
                 "so no description of it can be saved."
             )
-        except (BundleAuthorError, ValueError) as invalid:
+        except ValueError as invalid:
             problems.append(str(invalid))
     elif runtime is not None and runtime.source_subfolder:
         runtime = runtime.model_copy(update={"source_subfolder": ""})
     if problems:
         return _problems(problems, arrived)
-    contract = contract.model_copy(
+    return contract.model_copy(
         update={
             "instrumentation": detect_instrumentation(
                 agent_folder(source_root, subfolder)
@@ -246,6 +260,8 @@ def accept_contract(
         }
     )
 
+
+def _save_contract(contract: AgentContract, destination: Path) -> dict[str, Any]:
     destination.mkdir(parents=True, exist_ok=True)
     path = destination / "contract.json"
     path.write_text(
@@ -261,6 +277,9 @@ def accept_contract(
     )
 
 
+_LARGEST_PROMPT_FILE = 1024 * 1024
+
+
 def _copy_prompt(contract: AgentContract, source_root: Path) -> list[str]:
     """Replace the quoted excerpt with the lines `system_prompt_from` names, as written."""
     root = source_root.resolve()
@@ -271,7 +290,15 @@ def _copy_prompt(contract: AgentContract, source_root: Path) -> list[str]:
         if not path.is_relative_to(root) or not path.is_file():
             problems.append(f"system_prompt_from[{index}]: {where.path} is not a file in the source")
             continue
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        with path.open("rb") as handle:
+            raw = handle.read(_LARGEST_PROMPT_FILE + 1)
+        if len(raw) > _LARGEST_PROMPT_FILE:
+            problems.append(
+                f"system_prompt_from[{index}]: {where.path} is larger than 1 MiB; name the "
+                "file the prompt is written in"
+            )
+            continue
+        lines = raw.decode("utf-8", errors="replace").splitlines()
         if not 1 <= where.start_line <= where.end_line <= len(lines):
             problems.append(
                 f"system_prompt_from[{index}]: lines {where.start_line}-{where.end_line} are "
@@ -331,6 +358,50 @@ def _second_look(claimed: str, found: list[str]) -> str:
     )
 
 
+# alk.yaml and the Compose files together; the largest real Compose file seen is 53 KB.
+_SAVE_YAML_BYTES = 128 * 1024
+
+
+def _builds_a_sibling(source_root: Path, runtime: Runtime, subfolder: str) -> str | None:
+    """The refusal when the runtime's service builds another agent's folder, told to the model
+    here because it can fix that. Any other fault in selecting is left for bundling to meet, as
+    it does with no folder: the model can't repair a Compose file nobody can read."""
+    from .bundle_author_v2 import _declared_runtime_environment
+
+    # Overlays run `docker compose config`, and a file past real sizes takes seconds to read,
+    # which the save would wait for; bundling refuses the same service, so they're left to it.
+    if runtime.compose_overrides:
+        return None
+    try:
+        folder = agent_folder(source_root, subfolder)
+        manifest = folder / "alk.yaml"
+        spent = 0
+        if manifest.is_file():
+            with manifest.open("rb") as handle:
+                spent = len(handle.read(_SAVE_YAML_BYTES + 1))
+        if spent > _SAVE_YAML_BYTES:
+            return None
+        select_runtime(
+            source_root,
+            runtime.model_dump(),
+            # The values bundling sees, or this refuses what bundling accepts.
+            public_environment={
+                **_declared_runtime_environment(folder),
+                **runtime_public_environment(runtime.model_dump()),
+            },
+            validate_environment_dependencies=False,
+            compose_bytes=_SAVE_YAML_BYTES - spent,
+        )
+    except RuntimeSelectionError as refused:
+        if str(refused) == COMPOSE_SERVICE_OUTSIDE_FOLDER:
+            return str(refused)
+    except Exception as exc:  # noqa: BLE001 - bundling selects again and owns the failure
+        # Logged, so a bug here doesn't switch the check off unseen; the type only, as the
+        # message can quote a line of the customer's file.
+        print(f"sibling check skipped: {type(exc).__name__}", file=sys.stderr)
+    return None
+
+
 def _tools_in_agent_folder(scan_root: Path | None, subfolder: str | None) -> list[str]:
     """The browser tools this agent uses, which a sibling's aren't."""
     if not scan_root or not subfolder:
@@ -387,6 +458,9 @@ def contract_tools(
     # must still be able to answer, or every submission earns another look until the turns run out.
     look_unanswered = False
     found: list[str] | None = None
+    # Calls in one message check side by side, so the one sent last can finish first; it's the
+    # model's last word, and an earlier call that finishes later mustn't write over it.
+    sent = saved = 0
 
     @tool(
         "submit_contract",
@@ -1173,9 +1247,11 @@ def contract_tools(
         receipt = payload.pop(SECOND_LOOK_READ, None) or (
             args.get(SECOND_LOOK_READ) if isinstance(args, dict) else None
         )
-        nonlocal refused, found, look_unanswered
+        nonlocal refused, found, look_unanswered, sent, saved
         # Taken before the scan's wait: a call already running when a look went out hasn't read it.
         looked_before = bool(second_look_receipts)
+        sent += 1
+        mine = sent
         if refused or (destination / FAILURE_FILE).is_file():
             return _ok(_stop_message(destination))
         if found is None:
@@ -1448,13 +1524,28 @@ def contract_tools(
             return _problems(
                 say + ["If any of these genuinely does not apply, submit again as is."]
             )
-        return accept_contract(
+        # The checks read the customer's files, which can take a second on a crafted one, so
+        # they run off the loop. The write stays here, after a refusal that came meanwhile.
+        checked = await asyncio.to_thread(
+            _checked_contract,
             payload,
-            destination,
             source_root=source_root,
             require_setup_contract=require_setup_contract,
             subfolder=subfolder,
         )
+        if isinstance(checked, dict):
+            return checked
+        if refused or (destination / FAILURE_FILE).is_file():
+            return _ok(_stop_message(destination))
+        if mine < saved:
+            return _ok(
+                "Not saved: a contract submitted after this one, in the same turn, was saved "
+                "instead. Don't submit this one again."
+            )
+        result = _save_contract(checked, destination)
+        # After the write: if it raised, nothing was saved for an earlier call to defer to.
+        saved = mine
+        return result
 
     return tool_server(name=CONTRACT_SERVER, version="0.1.0", tools=[submit_contract])
 

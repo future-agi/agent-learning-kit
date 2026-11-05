@@ -93,6 +93,8 @@ def subfolder_not_found(
     message: str | None = None,
     details: dict[str, Any] | None = None,
 ) -> HarnessFailure:
+    # The platform refuses a failure message over 2,000 characters.
+    subfolder = subfolder[:_FOLDER_MAX]
     return HarnessFailure(
         domain=FailureDomain.AGENT,
         stage=HarnessStage.ACQUIRING_SOURCE,
@@ -100,7 +102,7 @@ def subfolder_not_found(
         message=message
         or (
             f"The folder '{subfolder}' is not in this repository at the commit being built, "
-            "is not a folder, or is empty. Check the path and the branch."
+            "is not a folder, is empty, or is not a valid path. Check the path and the branch."
         ),
         retryable=False,
         details={"subfolder": subfolder, **(details or {})},
