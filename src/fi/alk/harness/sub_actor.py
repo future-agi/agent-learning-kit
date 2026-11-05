@@ -73,7 +73,7 @@ class Trigger(BaseModel):
     kind: str = "always"
     turn: int = 0
     tool: str = ""
-    on_call: int = 1
+    on_call: int = Field(default=1, ge=1)
     words: list[str] = Field(default_factory=list)
     p: float = 0.0
 
