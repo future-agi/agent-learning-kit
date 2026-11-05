@@ -162,20 +162,41 @@ class _HostedToolStore:
         return self._store.add(collection, dict(record))
 
 
-def chat_door(world: Any, mirror_dsn: str | None, roster: dict[str, dict[str, Any]], faults: list[Any]) -> Any:
+def chat_door(
+    world: Any,
+    mirror_dsn: str | None,
+    roster: dict[str, dict[str, Any]],
+    faults: list[Any],
+) -> Any:
     """The world's door for a chat run: the world's own handlers run every call, the trial's action log is kept in
     memory (mirrored to the world's table when it keeps actors), and who may do what is the environment's actor list."""
-    from .world_door import AGENT, DictRoster, HandlerExecutor, MemoryLog, PostgresLog, RecordExecutor, Routed, TeeLog, WorldDoor
+    from .world_door import (
+        AGENT,
+        DictRoster,
+        HandlerExecutor,
+        MemoryLog,
+        PostgresLog,
+        RecordExecutor,
+        Routed,
+        TeeLog,
+        WorldDoor,
+    )
 
     def handle(call: Any) -> tuple[bool, Any, str] | None:
         made = len(getattr(world, "calls", []))
-        result = world.handle_tool_call({"name": call.name, "arguments": call.arguments})
+        result = world.handle_tool_call(
+            {"name": call.name, "arguments": call.arguments}
+        )
         if call.actor != AGENT and hasattr(world, "calls"):
             # An actor's action is in the action log, never in the agent's own calls that grading reads.
             del world.calls[made:]
         if result is None:
             return None
-        return bool(getattr(result, "success", True)), getattr(result, "result", None), str(result.content)
+        return (
+            bool(getattr(result, "success", True)),
+            getattr(result, "result", None),
+            str(result.content),
+        )
 
     records = None
     if mirror_dsn:
@@ -190,16 +211,13 @@ def chat_door(world: Any, mirror_dsn: str | None, roster: dict[str, dict[str, An
     )
 
 
-def _record_fields(listing: Any, actor_id: str) -> dict[str, Any]:
-    """The fields of an actor's record its chat turns need beyond its brief: what it may do, its limits, its model."""
-    actor = listing.by_id().get(actor_id)
-    if actor is None:
-        return {}
-    return {"permitted_actions": list(actor.permitted_actions), "max_lines": actor.max_lines, "model": actor.model}
-
-
 def _world_actors_record(
-    door: Any, listing: Any, dispatcher: Any, cast: Any, meter: Any, limits: dict[str, Any]
+    door: Any,
+    listing: Any,
+    dispatcher: Any,
+    cast: Any,
+    meter: Any,
+    limits: dict[str, Any],
 ) -> dict[str, Any] | None:
     """What actors did in the world this trial and what it changed, sealed beside the transcript as a call seals it;
     None when no actor took part."""
@@ -214,8 +232,13 @@ def _world_actors_record(
     decisions = dispatcher.record() if dispatcher is not None else []
     if cast is not None:
         decisions += [
-            {"actor": one["actor"], "play": "live", "action": one.get("action"),
-             "outcome": (one.get("outcome") or {}).get("outcome"), "why": one.get("why")}
+            {
+                "actor": one["actor"],
+                "play": "live",
+                "action": one.get("action"),
+                "outcome": (one.get("outcome") or {}).get("outcome"),
+                "why": one.get("why"),
+            }
             for one in cast.events
             if one.get("kind") == "acted"
         ]
@@ -231,13 +254,19 @@ def _world_actors_record(
     }
 
 
-def _chat_actor_summary(cast: Any, world_record: dict[str, Any] | None, listing: Any) -> tuple[dict[str, Any], ...]:
+def _chat_actor_summary(
+    cast: Any, world_record: dict[str, Any] | None, listing: Any
+) -> tuple[dict[str, Any], ...]:
     """The call's actor summary: the actors who wrote in the conversation and every actor that acted in the world."""
     from .actor_dispatch import world_summary
 
     speaking = tuple(cast.summary()) if cast is not None else ()
     decisions = (world_record or {}).get("decisions") or []
-    return speaking + tuple(world_summary(decisions, listing.by_id(), {str(one.get("actor")) for one in speaking}))
+    return speaking + tuple(
+        world_summary(
+            decisions, listing.by_id(), {str(one.get("actor")) for one in speaking}
+        )
+    )
 
 
 def _tool_world(
@@ -249,8 +278,11 @@ def _tool_world(
     if runtime.metadata.get("observation_mode") == "native":
         import random
         from .world.observation import ObservationWorld, http_endpoints
+
         return ObservationWorld(
-            runtime.world_index, random.Random(0), http_endpoints(runtime),
+            runtime.world_index,
+            random.Random(0),
+            http_endpoints(runtime),
             observations=contract.runtime.observations if contract.runtime else {},
         )
     endpoint = runtime.endpoints.get("world_db")
@@ -397,7 +429,9 @@ class _HostedChatTarget:
         self._tool_call_ids: set[str] = set()
         self._turn = 0
         # The world's door for the agent's calls: permission, faults and the action log, as at the HTTP door.
-        self._door = door if door is not None else chat_door(world, None, {}, faults or [])
+        self._door = (
+            door if door is not None else chat_door(world, None, {}, faults or [])
+        )
 
     async def open(self) -> None:
         return
@@ -406,7 +440,9 @@ class _HostedChatTarget:
         """A tool's world action, named as the HTTP door names it (its route with `/` as `.`), else the tool."""
         for entry in self._contract.tool_entrypoints or []:
             entry = entry if isinstance(entry, dict) else entry.model_dump()
-            if entry.get("tool") == tool and str(entry.get("endpoint") or "").strip("/"):
+            if entry.get("tool") == tool and str(entry.get("endpoint") or "").strip(
+                "/"
+            ):
                 return str(entry["endpoint"]).strip("/").replace("/", ".")
         return tool
 
@@ -418,7 +454,9 @@ class _HostedChatTarget:
 
         del call_id
         arguments = dict(arguments or {}) if isinstance(arguments, Mapping) else {}
-        outcome = self._door.enter(ToolCall(action=self._action(name), name=name, arguments=arguments))
+        outcome = self._door.enter(
+            ToolCall(action=self._action(name), name=name, arguments=arguments)
+        )
         if outcome.fault is not None:
             if outcome.fault.get("mode") == "timeout_after_commit":
                 if self.world.calls:
@@ -426,7 +464,13 @@ class _HostedChatTarget:
                     self.world.calls[-1].error = "response_lost"
             else:
                 self.world._record(
-                    Call(name=name, arguments=arguments, result=None, ok=False, error="timeout_before_commit")
+                    Call(
+                        name=name,
+                        arguments=arguments,
+                        result=None,
+                        ok=False,
+                        error="timeout_before_commit",
+                    )
                 )
             return "Error: the request timed out"
         return outcome.answer().decode("utf-8", errors="replace")
@@ -455,8 +499,10 @@ class _HostedChatTarget:
                 raise HTTPCallFailure(trace)
             for observed in (response.metadata or {}).get("native_completed_tools", []):
                 _record_completed_tool_call(
-                    self.world, name=observed["name"],
-                    arguments=observed["arguments"], response=observed,
+                    self.world,
+                    name=observed["name"],
+                    arguments=observed["arguments"],
+                    response=observed,
                 )
             conversation_ended = bool(
                 (response.metadata or {}).get("conversation_ended")
@@ -559,35 +605,61 @@ def _resolved_chat_actors(
     chat agent is kept with `entered: false` and the reason, so the record still names it."""
     from fi.simulate.simulation.call_actors import CHANNELS, known_to_others
 
-    from .actors import ScenarioActor, actor_brief, brief_text, load_actors, with_knowledge_read
+    from .actors import (
+        ScenarioActor,
+        actor_brief,
+        brief_text,
+        load_actors,
+        with_knowledge_read,
+    )
     from .call_actor import load_call_actors, speaking_entries
 
     if not document.get("actors"):
         return []
     listing = load_call_actors(bundle_dir)
     full = load_actors(bundle_dir).by_id()
-    entries = [ScenarioActor.model_validate(one) for one in document.get("actors") or []]
+    entries = [
+        ScenarioActor.model_validate(one) for one in document.get("actors") or []
+    ]
     resolved = []
     for included in speaking_entries(entries, listing, set(full), full):
         actor = full.get(included.id)
         here = {
-            **(actor.model_dump(exclude_none=True) if actor is not None else {"id": included.id}),
+            **(
+                actor.model_dump(exclude_none=True)
+                if actor is not None
+                else {"id": included.id}
+            ),
             "instruction": included.instruction,
             "trigger": included.trigger.model_dump(),
         }
-        if actor is None or "chat" not in CHANNELS.get(str(actor.channel), {}).get("modalities", ()):
+        if actor is None or "chat" not in CHANNELS.get(str(actor.channel), {}).get(
+            "modalities", ()
+        ):
             reason = "not_in_list" if actor is None else "not_a_chat_channel"
             resolved.append({**here, "entered": False, "reason": reason})
             continue
-        entry = next((one for one in document.get("actors") or [] if (one or {}).get("id") == actor.id), None)
+        entry = next(
+            (
+                one
+                for one in document.get("actors") or []
+                if (one or {}).get("id") == actor.id
+            ),
+            None,
+        )
         resolved.append(
             {
                 **here,
                 "situation": known_to_others(str(document.get("instruction") or "")),
-                "language": ", ".join((document.get("persona") or {}).get("languages") or []),
+                "language": ", ".join(
+                    (document.get("persona") or {}).get("languages") or []
+                ),
                 "brief": brief_text(
                     actor_brief(
-                        with_knowledge_read(actor.model_dump(exclude_none=True), bundle_dir, records) or {},
+                        with_knowledge_read(
+                            actor.model_dump(exclude_none=True), bundle_dir, records
+                        )
+                        or {},
                         entry=with_knowledge_read(entry, bundle_dir, records),
                         scenario=dict(document),
                     )
@@ -687,16 +759,23 @@ class HostedChatCallRunner:
         # The world's door for this trial: the agent's calls and the actors' actions, one rule set, one log.
         from .actor_dispatch import DoorActs, build_dispatcher
         from .actor_meter import ActorMeter
-        from .actors import load_actors
+        from .actors import acting_fields, load_actors
         from .call_runner import actor_limits
 
         listing = load_actors(self._context.bundle_dir)
         world_db = runtime.endpoints.get("world_db")
         door = chat_door(
             target_world,
-            world_db.address if listing.actors and world_db is not None and world_db.protocol == "postgres" else None,
+            world_db.address
+            if listing.actors
+            and world_db is not None
+            and world_db.protocol == "postgres"
+            else None,
             {
-                one.id: {"permitted_actions": list(one.permitted_actions), "on_behalf_of": one.on_behalf_of}
+                one.id: {
+                    "permitted_actions": list(one.permitted_actions),
+                    "on_behalf_of": one.on_behalf_of,
+                }
                 for one in listing.actors
             },
             list(document.get("faults") or []),
@@ -707,13 +786,26 @@ class HostedChatCallRunner:
         records = getattr(getattr(target_world, "store", None), "records", None)
         trial = f"{self._context.job.job_id}:{scenario.scenario_key}"
         dispatcher = build_dispatcher(
-            document, self._context.bundle_dir, act=acts, read_log=door.log.rows, records=records,
-            trial_id=trial, meter=meter,
+            document,
+            self._context.bundle_dir,
+            act=acts,
+            read_log=door.log.rows,
+            records=records,
+            trial_id=trial,
+            meter=meter,
         )
         cast = (
             ChatActors(
-                [{**one, **_record_fields(listing, str(one.get("id")))} for one in chat_actors],
-                seed=trial, model=None, limits=limits, act=acts, records=records, meter=meter,
+                [
+                    {**one, **acting_fields(listing.by_id().get(str(one.get("id"))))}
+                    for one in chat_actors
+                ],
+                seed=trial,
+                model=None,
+                limits=limits,
+                act=acts,
+                records=records,
+                meter=meter,
             )
             if chat_actors
             else None
@@ -791,8 +883,7 @@ class HostedChatCallRunner:
                 ),
                 code=(
                     "call_failed"
-                    if isinstance(status, int)
-                    and status in {408, 429, 502, 503, 504}
+                    if isinstance(status, int) and status in {408, 429, 502, 503, 504}
                     else "target_agent_failed"
                 ),
             )
@@ -830,8 +921,14 @@ class HostedChatCallRunner:
             transcript.calls.extend(traced_calls)
 
         if cast is not None:
-            transcript.call_actors = {"resolved": chat_actors, "summary": cast.summary(), "events": cast.events}
-        world_record = _world_actors_record(door, listing, dispatcher, cast, meter, limits)
+            transcript.call_actors = {
+                "resolved": chat_actors,
+                "summary": cast.summary(),
+                "events": cast.events,
+            }
+        world_record = _world_actors_record(
+            door, listing, dispatcher, cast, meter, limits
+        )
         if world_record is not None:
             transcript.world_actors = world_record
         ended = datetime.now(timezone.utc)

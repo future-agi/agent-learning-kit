@@ -97,14 +97,19 @@ class Limits(BaseModel):
         spoken = modality in ("voice", "audio")
         defaults = {
             "max_active": LIMIT_DEFAULTS["max_active"] if spoken else None,
-            "caller_takes_back_after_turns": LIMIT_DEFAULTS["caller_takes_back_after_turns"] if spoken else None,
-            "actor_seconds_per_call": LIMIT_DEFAULTS["actor_seconds_per_call"] if spoken else None,
+            "caller_takes_back_after_turns": LIMIT_DEFAULTS[
+                "caller_takes_back_after_turns"
+            ]
+            if spoken
+            else None,
+            "actor_seconds_per_call": LIMIT_DEFAULTS["actor_seconds_per_call"]
+            if spoken
+            else None,
             "max_messages": LIMIT_DEFAULTS["max_messages"],
             "model": None,
         }
         given = self.model_dump(exclude_unset=True)
         return {key: given.get(key, value) for key, value in defaults.items()}
-
 
 
 class Actor(BaseModel):
@@ -169,19 +174,30 @@ class Actor(BaseModel):
             Persona.model_validate(self.persona)
             named = str(self.persona.get("name") or "").strip()
             if named and named != self.name:
-                raise ValueError(f"its persona is named {named!r} but the actor is {self.name!r}")
+                raise ValueError(
+                    f"its persona is named {named!r} but the actor is {self.name!r}"
+                )
         for one in self.knowledge:
-            named = [str(path) for path in one.get("paths") or []] if one.get("kind") == "files" else []
+            named = (
+                [str(path) for path in one.get("paths") or []]
+                if one.get("kind") == "files"
+                else []
+            )
             refused = [path for path in named if not knowledge_file_allowed(path)]
             if refused:
                 raise ValueError(
-                    "an actor never sees what only the evaluator reads or the harness's own files: " + ", ".join(refused)
+                    "an actor never sees what only the evaluator reads or the harness's own files: "
+                    + ", ".join(refused)
                 )
         if self.channel is not None:
             if self.channel not in CHANNELS:
-                raise ValueError(f"channel {self.channel!r} is not one of {sorted(CHANNELS)}")
+                raise ValueError(
+                    f"channel {self.channel!r} is not one of {sorted(CHANNELS)}"
+                )
             if not self.role.strip():
-                raise ValueError("an actor who speaks on calls needs a role: who they are to the person")
+                raise ValueError(
+                    "an actor who speaks on calls needs a role: who they are to the person"
+                )
         return self
 
 
@@ -317,11 +333,15 @@ def session_fingerprint(session: PreRunSession, actors: dict[str, "Actor"]) -> s
         "about": session.about,
         "where": session.where,
         "actors": [
-            actors[one].model_dump(mode="json", exclude={"provenance"}) if one in actors else {"id": one}
+            actors[one].model_dump(mode="json", exclude={"provenance"})
+            if one in actors
+            else {"id": one}
             for one in sorted(session.actors)
         ],
     }
-    return hashlib.sha256(json.dumps(material, sort_keys=True, default=str).encode()).hexdigest()[:16]
+    return hashlib.sha256(
+        json.dumps(material, sort_keys=True, default=str).encode()
+    ).hexdigest()[:16]
 
 
 class Fault(BaseModel):
@@ -357,7 +377,9 @@ class ScenarioActor(BaseModel):
     actions: list[ScheduledAction] = Field(default_factory=list)
 
 
-def cycles(actors: dict[str, "Actor"], entries: list["ScenarioActor"]) -> list[list[str]]:
+def cycles(
+    actors: dict[str, "Actor"], entries: list["ScenarioActor"]
+) -> list[list[str]]:
     """Actors that bring each other in: each one's trigger fires on an action only the next can take. A cycle is a
     scenario problem refused when the scenario is written, never a loop discovered during a run."""
     triggered_by: dict[str, set[str]] = {}
@@ -365,7 +387,9 @@ def cycles(actors: dict[str, "Actor"], entries: list["ScenarioActor"]) -> list[l
         actor = actors.get(entry.id)
         if actor is None:
             continue
-        trigger = entry.trigger or (actor.activation.trigger if actor.activation else None)
+        trigger = entry.trigger or (
+            actor.activation.trigger if actor.activation else None
+        )
         if trigger is None:
             continue
         if trigger.kind == "on_tool" and trigger.tool:
@@ -378,7 +402,11 @@ def cycles(actors: dict[str, "Actor"], entries: list["ScenarioActor"]) -> list[l
             other.id
             for other in actors.values()
             if other.id != entry.id
-            and any(name in (one, one.rsplit(".", 1)[-1]) for one in other.permitted_actions for name in names)
+            and any(
+                name in (one, one.rsplit(".", 1)[-1])
+                for one in other.permitted_actions
+                for name in names
+            )
         }
     found: list[list[str]] = []
     for start in triggered_by:
@@ -488,16 +516,31 @@ NOT_KNOWLEDGE = {
         "source-data-invariants.json",
         "scenarios.json",
     ],
-    "prefixes": ["generic-harness/", "handlers/", "seed/", "scenarios/", "checks/", "."],
+    "prefixes": [
+        "generic-harness/",
+        "handlers/",
+        "seed/",
+        "scenarios/",
+        "checks/",
+        ".",
+    ],
 }
 
 
 def knowledge_file_allowed(path: str) -> bool:
     """Whether an actor may be given this environment file to read."""
     name = str(path).strip().lstrip("/")
-    return bool(name) and ".." not in Path(name).parts and Path(name).name not in EVALUATOR_ONLY["files"] and (
-        name not in NOT_KNOWLEDGE["files"] and not any(name.startswith(prefix) for prefix in NOT_KNOWLEDGE["prefixes"])
+    return (
+        bool(name)
+        and ".." not in Path(name).parts
+        and Path(name).name not in EVALUATOR_ONLY["files"]
+        and (
+            name not in NOT_KNOWLEDGE["files"]
+            and not any(name.startswith(prefix) for prefix in NOT_KNOWLEDGE["prefixes"])
+        )
     )
+
+
 # How the world names an action: the route a tool's entrypoint calls, with `/` read as `.` (the tool proxy's rule).
 WORLD_ACTIONS = {
     "from": "tool_entrypoints",
@@ -568,9 +611,20 @@ def read_knowledge(
             read = []
             for name in one.get("paths") or []:
                 path = (base / str(name)).resolve()
-                if not knowledge_file_allowed(str(name)) or base not in path.parents or not path.is_file():
+                if (
+                    not knowledge_file_allowed(str(name))
+                    or base not in path.parents
+                    or not path.is_file()
+                ):
                     continue
-                read.append({"path": str(name), "text": path.read_text(encoding="utf-8", errors="replace")[:KNOWLEDGE_FILE_CHARS]})
+                read.append(
+                    {
+                        "path": str(name),
+                        "text": path.read_text(encoding="utf-8", errors="replace")[
+                            :KNOWLEDGE_FILE_CHARS
+                        ],
+                    }
+                )
             out.append({**one, "read": read})
             continue
         rows = []
@@ -672,16 +726,35 @@ def _knowledge_line(one: Any) -> str:
         return f"- {one.get('text') or ''}"
     if kind == "files":
         if one.get("read"):
-            return "\n".join(f"- The file {item['path']}:\n{item['text']}" for item in one["read"])
-        return "- You can read these files: " + ", ".join(map(str, one.get("paths") or []))
+            return "\n".join(
+                f"- The file {item['path']}:\n{item['text']}" for item in one["read"]
+            )
+        return "- You can read these files: " + ", ".join(
+            map(str, one.get("paths") or [])
+        )
     if kind == "records":
         where = f" where {one['where']}" if one.get("where") else ""
         named = f"the {one.get('collection') or 'records'} records in {one.get('store') or 'the world'}{where}"
         if "read" in one:
-            rows = "\n".join(json.dumps(row, ensure_ascii=False, sort_keys=True, default=str) for row in one["read"])
+            rows = "\n".join(
+                json.dumps(row, ensure_ascii=False, sort_keys=True, default=str)
+                for row in one["read"]
+            )
             return f"- {named[0].upper()}{named[1:]}:\n{rows or '(none)'}"
         return f"- You can read {named}"
     return "- " + json.dumps(one, ensure_ascii=False, sort_keys=True)
+
+
+def acting_fields(actor: "Actor | None") -> dict[str, Any]:
+    """What a speaking actor's turn needs from its record beyond its brief, on any channel: what it may do in the
+    world, its own line limit and its model."""
+    if actor is None:
+        return {}
+    return {
+        "permitted_actions": list(actor.permitted_actions),
+        "max_lines": actor.max_lines,
+        "model": actor.model,
+    }
 
 
 def ensure_caller(root: Path) -> bool:
@@ -691,8 +764,15 @@ def ensure_caller(root: Path) -> bool:
     listing = load_actors(Path(root))
     if CALLER in listing.by_id():
         return False
-    caller = Actor(id=CALLER, name="The caller", side="caller", role="the person the agent serves in each scenario")
-    save_actors(Path(root), listing.model_copy(update={"actors": [caller, *listing.actors]}))
+    caller = Actor(
+        id=CALLER,
+        name="The caller",
+        side="caller",
+        role="the person the agent serves in each scenario",
+    )
+    save_actors(
+        Path(root), listing.model_copy(update={"actors": [caller, *listing.actors]})
+    )
     return True
 
 
@@ -705,8 +785,17 @@ def with_caller_actor(doc: dict[str, Any], root: Path) -> dict[str, Any]:
         return doc
     own = [
         item
-        for item in actor_brief(with_knowledge_read(caller.model_dump(exclude_none=True), root) or {})
-        if item["input"] in ("actor.goal", "actor.constraints", "actor.behaviour", "actor.knowledge", "actor.prompt")
+        for item in actor_brief(
+            with_knowledge_read(caller.model_dump(exclude_none=True), root) or {}
+        )
+        if item["input"]
+        in (
+            "actor.goal",
+            "actor.constraints",
+            "actor.behaviour",
+            "actor.knowledge",
+            "actor.prompt",
+        )
     ]
     instruction = str(doc.get("instruction") or "")
     return {
@@ -719,7 +808,11 @@ def with_caller_actor(doc: dict[str, Any], root: Path) -> dict[str, Any]:
 def actor_rules() -> dict[str, Any]:
     """Everything this release decides about actors, sealed into each bundle so the platform reads the rules of the
     release that built it instead of keeping its own copy."""
-    from fi.simulate.simulation.call_actors import CHANNELS, DETAILS_MARK, LOUDNESS_RANGE
+    from fi.simulate.simulation.call_actors import (
+        CHANNELS,
+        DETAILS_MARK,
+        LOUDNESS_RANGE,
+    )
 
     from .call_actor import channel_modalities
 
@@ -771,8 +864,12 @@ def actor_record_schema() -> dict[str, Any]:
         "default": None,
         "description": "How the actor speaks in the conversation, if it does; empty: it never speaks there",
     }
-    fields["surface"]["description"] = "Where the actor acts in the world; never how it speaks (that is `channel`)"
-    fields["side"]["description"] = "Whose side the actor is on, for reading the cast; it changes no rule"
+    fields["surface"]["description"] = (
+        "Where the actor acts in the world; never how it speaks (that is `channel`)"
+    )
+    fields["side"]["description"] = (
+        "Whose side the actor is on, for reading the cast; it changes no rule"
+    )
     fields["play"]["description"] = (
         "mocked: only the actions each scenario gives it; live: decides its own actions from what it sees when "
         "reached; both"
@@ -780,7 +877,10 @@ def actor_record_schema() -> dict[str, Any]:
     persona = Persona.model_json_schema()
     fields["persona"] = {**persona, "additionalProperties": True}
     # One that speaks on calls says who they are to the person.
-    body["if"] = {"properties": {"channel": {"type": "string"}}, "required": ["channel"]}
+    body["if"] = {
+        "properties": {"channel": {"type": "string"}},
+        "required": ["channel"],
+    }
     body["then"] = {"properties": {"role": {"minLength": 1}}, "required": ["role"]}
     return body
 
