@@ -146,8 +146,13 @@ class ActorDispatcher:
         records: Callable[[str], list[dict[str, Any]]] | None = None,
         names_actor: set[str] | None = None,
         reported: Callable[[], list[dict[str, Any]]] | None = None,
+        write_session: Decide | None = None,
+        session_briefs: dict[str, str] | None = None,
     ) -> None:
         self.act = act
+        # Writes a `per_trial` pre-run session's messages inside this trial, from each actor's own brief.
+        self.write_session = write_session
+        self.session_briefs = session_briefs or {}
         # Actions speaking actors decided on the call, handed over by the voice engine, sent from here.
         self.reported = reported
         self.reported_sent = 0
@@ -420,8 +425,13 @@ class ActorDispatcher:
         """Writes every pre-run session's thread through the world's door, in order, before the run starts. Each
         message has its own key (`h<n>`), and an argument that refers to an earlier message of its session is filled
         from what the world answered for it (the id a reply needs only exists once that message is in)."""
+        from .pre_run import generate
+
         number = 0
         for session in self.pre_run:
+            if session.per_trial and self.write_session is not None:
+                # A fresh conversation for this trial, written by its actors now; the record keeps it.
+                session = await generate(session, self.actors, self.session_briefs, self.write_session)
             answered: dict[int, Any] = {}
             for position, message in enumerate(session.thread, start=1):
                 number += 1
@@ -552,6 +562,12 @@ def build_dispatcher(
             entry.trigger.tool = logged_tool_name(contract, entry.trigger.tool)
     listing = load_actors(bundle_dir)
     listed = listing.by_id()
+    sessions = [PreRunSession.model_validate(one) for one in doc.get("pre_run") or []]
+    in_sessions = {one for session in sessions if session.per_trial for one in session.actors if one in listed}
+    session_briefs = {
+        actor_id: brief_text(actor_brief(listed[actor_id].model_dump(exclude_none=True), scenario=dict(doc)))
+        for actor_id in in_sessions
+    }
     briefs = {
         entry.id: brief_text(
             actor_brief(
@@ -589,7 +605,9 @@ def build_dispatcher(
         act=act,
         decide=live_decider(meter, listing.limits.model) if briefs else None,
         briefs=briefs,
-        pre_run=[PreRunSession.model_validate(one) for one in doc.get("pre_run") or []],
+        pre_run=sessions,
+        write_session=live_decider(meter, listing.limits.model) if in_sessions else None,
+        session_briefs=session_briefs,
         world_actions=world_actions,
         trial_id=trial_id,
         read_log=read_log,

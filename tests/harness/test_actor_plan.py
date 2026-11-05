@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
@@ -721,3 +722,25 @@ def test_actors_triggered_by_the_agent_s_calls_never_form_a_cycle_whatever_they_
         ScenarioActor(id="mgr", trigger=Trigger(kind="on_tool", tool="crm.request")),
     ]
     assert cycles(actors, entries) == []
+
+
+def test_a_per_trial_session_is_written_inside_each_trial_and_each_trial_keeps_its_own_thread():
+    actors = {"priya": Actor(id="priya", name="Priya", play="live", permitted_actions=["slack.post"])}
+    session = PreRunSession(actors=["priya"], where={"action": "slack.post", "arguments": {"channel": "#leads"}},
+                            about="Acme wants 20%", per_trial=True)
+    threads = []
+    for trial, said in (("t1", "Twenty?"), ("t2", "Too much.")):
+        sent: list = []
+        turns = iter([json.dumps({"text": said}), json.dumps({"text": None})])
+
+        async def write(brief, actor, turns=turns):
+            return next(turns)
+
+        dispatcher = ActorDispatcher(
+            actors, [], act=HttpActs("http://p", "t", 5, _sent_to(sent)), trial_id=trial, read_log=list, seed=trial,
+            pre_run=[session], write_session=write, session_briefs={"priya": "You are Priya."},
+        )
+        asyncio.run(dispatcher.replay())
+        threads.append([one["arguments"]["text"] for one in dispatcher.fired if one["play"] == "history"])
+        assert sent[0][1]["Idempotency-Key"] == f"{trial}:priya:h1"
+    assert threads == [["Twenty?"], ["Too much."]]
