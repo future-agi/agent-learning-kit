@@ -104,6 +104,7 @@ from fi.simulate.simulation.bridge import LiveKitAudioBridge
 from fi.simulate.simulation.bridge.audio import PCMResampler
 from fi.simulate.simulation.livekit_models import (
     LiveKitModels,
+    build_livekit_llm,
     build_livekit_models,
     build_livekit_tts,
 )
@@ -3447,6 +3448,8 @@ class LiveKitEngine(BaseEngine):
     def _call_actors_on_call(
         self, customer_agent: Any, models: Any, session: Any, *, seed: str
     ) -> CallActorsOnCall:
+        llm_config = (getattr(self, "_last_simulator_setup", None) or {}).get("llm_config")
+
         """Every actor this call carries, each in a voice of its own."""
         player = getattr(customer_agent, "_background_player", None)
         base = (getattr(self, "_last_simulator_setup", None) or {}).get("tts_config")
@@ -3518,7 +3521,9 @@ class LiveKitEngine(BaseEngine):
             voices.append(
                 CallActorVoice(
                     actor=actor,
-                    model=models.llm,
+                    model=actor_llm(
+                        actor, models.llm, llm_config, getattr(customer_agent, "_usage_collector", None)
+                    ),
                     tts=tts,
                     situation=str(actor.get("situation") or ""),
                     language=str(actor.get("language") or ""),
@@ -5608,6 +5613,22 @@ def _target_evidence_base_url(target: VoiceProviderTarget | None) -> str | None:
         parsed = urlsplit(str(target.api_url))
         return f"{parsed.scheme}://{parsed.netloc}"
     return None
+
+
+def actor_llm(actor: dict[str, Any], shared: Any, llm_config: Any, collector: Any, build: Any = None) -> Any:
+    """A speaking actor's own model when it names one, on the simulator's provider, its calls counted as simulator
+    usage like the caller's. Otherwise the caller's model, whose calls the session already counts."""
+    named = str(actor.get("model") or "")
+    if not named or llm_config is None or named == getattr(llm_config, "model", None):
+        return shared
+    try:
+        own = (build or build_livekit_llm)(llm_config.model_copy(update={"model": named}))
+    except Exception:  # noqa: BLE001 - an actor on the caller's model is still played
+        logger.warning("actor %s cannot use model %s; it uses the caller's", actor.get("id"), named)
+        return shared
+    if collector is not None:
+        own.on("metrics_collected", collector.collect)
+    return own
 
 
 def _default_simulator_llm_config() -> LLMConfig:

@@ -990,3 +990,28 @@ def test_the_sealed_limit_defaults_are_the_ones_a_run_uses(channel):
     sealed = actor_rules()["limits"][channel]
     used = Limits().resolved(channel)
     assert {key: used[key] for key in sealed} == sealed
+
+
+def test_a_speaking_actor_that_names_a_model_talks_on_it_and_is_counted_as_simulator_usage():
+    from fi.simulate.agent.definition import LLMConfig
+    from fi.simulate.simulation.engines.livekit import actor_llm
+
+    class Model:
+        def __init__(self, config):
+            self.config, self.listeners = config, []
+
+        def on(self, event, callback):
+            self.listeners.append((event, callback))
+
+    class Collector:
+        def collect(self, metrics):
+            pass
+
+    config = LLMConfig(provider="google", model="caller-model")
+    collector = Collector()
+    shared = object()
+    own = actor_llm({"id": "mia", "model": "actor-model"}, shared, config, collector, build=Model)
+    assert own.config.model == "actor-model" and own.config.provider == "google"
+    assert own.listeners == [("metrics_collected", collector.collect)]
+    assert actor_llm({"id": "dev"}, shared, config, collector, build=Model) is shared
+    assert actor_llm({"id": "ana", "model": "caller-model"}, shared, config, collector, build=Model) is shared
