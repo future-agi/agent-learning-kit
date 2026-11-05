@@ -569,7 +569,14 @@ def actor_record_schema() -> dict[str, Any]:
     fields["channel"] = {
         "anyOf": [{"type": "string", "enum": sorted(CHANNELS)}, {"type": "null"}],
         "default": None,
+        "description": "How the actor speaks in the conversation, if it does; empty: it never speaks there",
     }
+    fields["surface"]["description"] = "Where the actor acts in the world; never how it speaks (that is `channel`)"
+    fields["side"]["description"] = "Whose side the actor is on, for reading the cast; it changes no rule"
+    fields["play"]["description"] = (
+        "mocked: only the actions each scenario gives it; live: decides its own actions from what it sees when "
+        "reached; both"
+    )
     persona = Persona.model_json_schema()
     fields["persona"] = {**persona, "additionalProperties": True}
     # One that speaks on calls says who they are to the person.

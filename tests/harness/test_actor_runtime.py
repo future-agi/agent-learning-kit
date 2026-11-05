@@ -377,3 +377,17 @@ def test_the_runner_writes_a_trial_s_faults_where_the_door_reads_them_and_clears
     assert json.loads((tmp_path / "trial.json").read_text())["faults"][0]["action"] == "refunds.create"
     _write_trial_state(runtime, [])
     assert json.loads((tmp_path / "trial.json").read_text()) == {"faults": []}
+
+
+def test_a_way_of_speaking_sent_as_the_actor_s_surface_is_said_back_never_saved(tmp_path, monkeypatch):
+    from fi.alk.harness.actors import load_actors
+    from fi.alk.harness.world.tools import world_actor_tools
+
+    monkeypatch.setenv("HARNESS_ACTORS", "1")
+    add, _drop = world_actor_tools(tmp_path, SimpleNamespace(modality="voice", model_dump=lambda: {}))
+    out = asyncio.run(add.handler({"id": "dana", "name": "Dana", "role": "a coworker", "surface": "audio_mix"}))
+    assert out.get("is_error") and "send it as `channel`" in out["content"][0]["text"]
+    assert load_actors(tmp_path).actors == []
+    ok = asyncio.run(add.handler({"id": "dana", "name": "Dana", "role": "a coworker", "channel": "audio_mix"}))
+    assert not ok.get("is_error")
+    assert load_actors(tmp_path).by_id()["dana"].channel == "audio_mix"

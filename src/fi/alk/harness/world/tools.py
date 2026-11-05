@@ -641,6 +641,12 @@ def world_actor_tools(
         listing = load_actors(destination)
         current = listing.by_id().get(str(args.get("id") or ""))
         given = {name: value for name, value in args.items() if name != "provenance"}
+        if given.get("surface") in CHANNELS:
+            # A way of speaking sent as the place it acts: said back, never saved as a surface no world has.
+            return _err(
+                f"Not added: {given['surface']!r} is how an actor speaks in the conversation; send it as `channel`. "
+                "`surface` is where it acts in the world."
+            )
         try:
             base = current.model_dump(exclude_none=True) if current is not None else {}
             # A nested field merges the keys sent into what it has, as the top level does.
