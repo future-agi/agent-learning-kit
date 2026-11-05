@@ -101,18 +101,24 @@ describe('LocalEvaluator', () => {
 
             expect(() => {
                 strictEvaluator.evaluate('coherence', [{ response: 'test' }]);
-            }).toThrow("Metric 'coherence' cannot run locally");
+            }).toThrow(/^METRIC_NOT_LOCAL$/);
         });
 
-        it('should handle evaluation errors gracefully', () => {
+        it('should preserve invalid-regex zero-score diagnostics without an exception row', () => {
             const result = evaluator.evaluate(
                 'regex',
                 [{ response: 'test' }],
                 { pattern: '[invalid' } // Invalid regex
             );
 
-            expect(result.errors).toHaveLength(1);
-            expect(result.results.eval_results[0]?.output).toBeNull();
+            expect(result.errors).toEqual([]);
+            expect(result.results.eval_results).toEqual([{
+                name: 'regex',
+                output: 0,
+                reason: 'METRIC_CONFIG_INVALID',
+                runtime: 0,
+                output_type: 'score'
+            }]);
         });
 
         it('should extract response from different input keys', () => {
