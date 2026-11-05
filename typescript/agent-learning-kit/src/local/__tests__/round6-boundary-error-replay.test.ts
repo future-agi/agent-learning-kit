@@ -1,4 +1,3 @@
-import { describe, expect, it } from '@jest/globals';
 import { Evaluator } from '../../evaluator.js';
 import { analyzeContent } from '../autoeval/analyzer.js';
 import { selectMetrics } from '../autoeval/selector.js';

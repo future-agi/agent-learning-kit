@@ -1,4 +1,3 @@
-import { describe, expect, it } from '@jest/globals';
 import { secretsDetection } from '../metrics/code/secrets-detection.js';
 import { allSecurityChecks } from '../metrics/code/index.js';
 
