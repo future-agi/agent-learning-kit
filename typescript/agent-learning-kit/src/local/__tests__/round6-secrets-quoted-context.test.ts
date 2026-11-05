@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from '@jest/globals';
 import { secretsDetection } from '../metrics/code/secrets-detection.js';
 import { allSecurityChecks } from '../metrics/code/index.js';
 
@@ -148,15 +148,13 @@ describe('secretsDetection: fixed diagnostics remain unchanged', () => {
         expect(JSON.stringify(result)).not.toContain(setting);
     });
 
-    it('keeps invalid custom-pattern diagnostics fixed and prior issues redacted', () => {
+    it('keeps invalid custom-pattern diagnostics fixed with only the incomplete-validation sentinel', () => {
         const result = secretsDetection({ code: `const header = "${header}";` }, { customPatterns: ['['] });
         expect(result.passed).toBe(false);
         expect(result.score).toBe(0);
         expect(result.reason).toBe('INVALID_SECURITY_PATTERN');
-        expect(result.issues).toEqual(expect.arrayContaining([
-            expect.objectContaining({ type: 'bearer-token', match: '[REDACTED]' }),
-            expect.objectContaining({ type: 'validation-incomplete', description: 'INVALID_SECURITY_PATTERN' }),
-        ]));
+        // Incomplete validation keeps only the fixed sentinel, never earlier issues.
+        expect(result.issues.map(issue => issue.type)).toEqual(['validation-incomplete']);
         expect(JSON.stringify(result)).not.toContain(setting);
     });
 

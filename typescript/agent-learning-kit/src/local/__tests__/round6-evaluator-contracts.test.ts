@@ -29,6 +29,34 @@ describe('Round 6 evaluator contracts', () => {
             .toEqual([{ metric, error: 'METRIC_NOT_LOCAL' }]);
     });
 
+    it('R6-EC08 keeps a hostile metric name out of the whole error object and console/stderr', () => {
+        const evaluator = new LocalEvaluator({ strictMode: true });
+        const metric = 'SYNTHETIC_HOSTILE_METRIC_NAME\nFORGED_LINE';
+        const spies = ['error', 'warn', 'log', 'info', 'debug'].map(level =>
+            jest.spyOn(console, level as 'error').mockImplementation(() => undefined));
+        const stderr = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
+        let thrown: unknown;
+        try {
+            evaluator.evaluate(metric, [{ response: 'text' }]);
+        } catch (error) {
+            thrown = error;
+        } finally {
+            spies.forEach(spy => spy.mockRestore());
+            stderr.mockRestore();
+        }
+        expect(thrown).toBeInstanceOf(Error);
+        const error = thrown as Error & { cause?: unknown };
+        expect(error.message).toBe('METRIC_NOT_LOCAL');
+        expect(error.cause).toBeUndefined();
+        for (const key of Object.getOwnPropertyNames(error)) {
+            expect(String((error as unknown as Record<string, unknown>)[key])).not.toContain('SYNTHETIC_HOSTILE_METRIC_NAME');
+        }
+        expect(String(error)).not.toContain('SYNTHETIC_HOSTILE_METRIC_NAME');
+        for (const spy of [...spies, stderr]) {
+            expect(JSON.stringify(spy.mock.calls)).not.toContain('SYNTHETIC_HOSTILE_METRIC_NAME');
+        }
+    });
+
     it('R6-EC02 sends a primitive response and an ordinary record-valued additional field to cloud', async () => {
         const { cloudResult, evaluate, hybrid } = cloudFixture();
         const result = await hybrid.evaluate('coherence', [{
