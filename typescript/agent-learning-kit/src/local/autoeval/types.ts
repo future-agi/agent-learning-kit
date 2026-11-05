@@ -9,6 +9,10 @@ import { MetricResult } from '../metrics/types.js';
 // only records produced here may bypass capture. Own non-enumerable fields are
 // included, so a supplied false verdict cannot disappear during a spread.
 const boundaryRecords = new WeakSet<object>();
+// Records whose graph holds scanner callbacks. Only callback-allowed captures may
+// reuse them; a data-only capture re-captures and rejects the callbacks by type,
+// without calling them.
+const callbackRecords = new WeakSet<object>();
 // Keep trusted reasons private: escaped errors and their diagnostics are mutable.
 // Identity lookups never inspect a rejected value's prototype or properties.
 const boundaryErrors = new WeakMap<object, string>();
@@ -31,7 +35,7 @@ export function snapshotBoundary<T>(value: T, code: string, allowCallbacks = fal
             // cross a separate data boundary. They are never interpreted as data.
             if (allowCallbacks && typeof source === 'function') return source;
             if (typeof source !== 'object' || depth > 64 || active.has(source)) throw createBoundaryError(reason);
-            if (boundaryRecords.has(source)) return source;
+            if (boundaryRecords.has(source) || (allowCallbacks && callbackRecords.has(source))) return source;
             if (copies.has(source)) return copies.get(source);
             active.add(source);
             let owned: any;
@@ -71,7 +75,10 @@ export function snapshotBoundary<T>(value: T, code: string, allowCallbacks = fal
             active.delete(source);
             Object.freeze(owned);
             copies.set(source, owned);
-            boundaryRecords.add(owned);
+            const members: unknown[] = Array.isArray(owned) ? owned : Object.values(owned);
+            const bearsCallbacks = members.some(member => typeof member === 'function' ||
+                (typeof member === 'object' && member !== null && callbackRecords.has(member)));
+            (bearsCallbacks ? callbackRecords : boundaryRecords).add(owned);
             return owned;
         } catch (error) {
             const trustedReason = typeof error === 'object' && error !== null
