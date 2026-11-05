@@ -167,3 +167,25 @@ def test_the_sealed_rules_say_which_agents_each_channel_reaches_and_that_a_perso
     with pytest.raises(ValidationError, match="persona is named"):
         Actor.model_validate({**_PARTNER, "persona": {"name": "Alex"}})
     jsonschema.validate(_PARTNER, rules["records"]["actors.json"])
+
+
+def test_a_scenario_need_not_say_when_an_actor_comes_in_it_comes_in_on_its_own_activation():
+    from fi.alk.harness.actors import ScenarioActor
+    from fi.alk.harness.call_actor import CallActor, CallActorList, speaking_entries
+
+    own = {
+        "lead": Actor(id="lead", name="Lee", role="the team lead", channel="audio_handoff", activation={"trigger": {"kind": "mid_journey", "turn": 3}}),
+        "friend": Actor(id="friend", name="Kai", role="a friend", channel="audio_mix"),
+    }
+    listing = CallActorList(
+        call_actors=[CallActor(id=key, name=one.name, role=one.role, channel=one.channel) for key, one in own.items()]
+    )
+    entries = [
+        ScenarioActor(id="lead"),
+        ScenarioActor(id="friend"),
+        ScenarioActor.model_validate({"id": "lead", "trigger": {"kind": "on_keyword", "words": ["price"]}}),
+    ]
+    lead, friend, here = speaking_entries(entries, listing, None, own)
+    assert (lead.trigger.kind, lead.trigger.turn) == ("mid_journey", 3)
+    assert friend.trigger.kind == "always" and lead.instruction == ""
+    assert here.trigger.kind == "on_keyword"

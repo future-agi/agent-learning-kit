@@ -497,7 +497,7 @@ def _resolved_chat_actors(
     full = load_actors(bundle_dir).by_id()
     entries = [ScenarioActor.model_validate(one) for one in document.get("actors") or []]
     resolved = []
-    for included in speaking_entries(entries, listing, set(full)):
+    for included in speaking_entries(entries, listing, set(full), full):
         actor = full.get(included.id)
         here = {
             **(actor.model_dump(exclude_none=True) if actor is not None else {"id": included.id}),

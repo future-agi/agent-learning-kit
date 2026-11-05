@@ -12,6 +12,7 @@ import json
 import os
 import re
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any, Callable
 
 from pydantic import BaseModel, Field, model_serializer, model_validator
@@ -100,17 +101,24 @@ class ScenarioCallActor(BaseModel):
 
 
 def speaking_entries(
-    entries: list[Any], listing: CallActorList, every_listed: set[str] | None = None
+    entries: list[Any],
+    listing: CallActorList,
+    every_listed: set[str] | None = None,
+    own: Mapping[str, Any] | None = None,
 ) -> list[ScenarioCallActor]:
     """A scenario's actors that speak on the call (listed with a channel), each with what it says and when. With
     `every_listed`, the ids of the whole actor list, an entry missing from the list is kept too, so the call's record
-    can say it was not there."""
+    can say it was not there. An entry with no trigger of its own comes in on the actor's own activation (`own`, the
+listed records by id), else from the start."""
     speaking = []
     for entry in entries:
         missing = every_listed is not None and entry.id not in every_listed
         if listing.get(entry.id) is None and not missing:
             continue
-        trigger = entry.trigger.model_dump(exclude_unset=True) if entry.trigger is not None else {}
+        record = (own or {}).get(entry.id)
+        default = record.activation.trigger if record is not None and record.activation is not None else None
+        chosen = entry.trigger or default
+        trigger = chosen.model_dump(exclude_unset=True) if chosen is not None else {}
         speaking.append(
             ScenarioCallActor(
                 id=entry.id,
@@ -243,10 +251,6 @@ def scenario_problems(
         seen.add(entry.id)
         if person and actor.name.strip().lower() == person.strip().lower():
             problems.append(f"{entry.id} has the simulated user's name, {person}")
-        if not entry.instruction.strip():
-            problems.append(
-                f"{entry.id} needs an instruction: who they are here and what they do"
-            )
         channel = CHANNELS.get(actor.channel) or {}
         if modality not in channel.get("modalities", ()):
             problems.append(

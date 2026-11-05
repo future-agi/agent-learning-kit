@@ -9358,12 +9358,8 @@ _SECOND = {
             {},
             "ghost is not on the environment's list",
         ),
-        (
-            {"id": "nearby", "instruction": " "},
-            "voice",
-            {},
-            "nearby needs an instruction",
-        ),
+        # With no instruction of its own here, the actor plays from its own record.
+        ({"id": "nearby", "instruction": " "}, "voice", {}, ""),
         (_NEARBY, "chat", {}, "which a chat scenario cannot carry"),
         (
             _MENU,

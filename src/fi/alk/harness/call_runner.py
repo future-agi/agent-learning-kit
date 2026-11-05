@@ -741,6 +741,7 @@ def _resolved_call_actors(
         [ScenarioActor.model_validate(entry) for entry in doc.get("actors") or []],
         listing,
         set(full),
+        full,
     )
     if not speaking:
         return []

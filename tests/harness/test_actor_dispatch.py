@@ -549,3 +549,20 @@ def test_a_live_actor_never_answers_its_own_action():
     log.append({"name": "post_message", "actor_id": "agent", "action_id": "a1", "arguments": {"text": "Thoughts?"}})
     asyncio.run(_ticks(dispatcher, count=5))
     assert [row["actor_id"] for row in log] == ["agent", "manager"]
+
+
+def test_a_scenario_s_own_trigger_decides_when_the_world_starts_waiting_on_an_actor():
+    dispatcher, clock, sent = _approver("silent")
+    assert dispatcher.triggers["manager"].kind == "contacted"
+    actors = dict(dispatcher.actors)
+    here = ActorDispatcher(
+        actors,
+        [ScenarioActor.model_validate({"id": "manager", "trigger": {"kind": "after_seconds", "seconds": 100}})],
+        trial_id="trial-1", proxy_url="http://proxy/", token="t0ken", read_log=lambda: [_ASKED], seed="trial-1",
+        timeout=60.0, clock=clock, send=lambda *args: 200,
+    )
+    asyncio.run(here.tick())
+    assert here.waiting == {}
+    clock.now += 100
+    asyncio.run(here.tick())
+    assert "manager" in here.waiting

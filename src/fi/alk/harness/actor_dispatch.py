@@ -131,6 +131,12 @@ class ActorDispatcher:
         self.problems: list[dict[str, Any]] = []
         # Actors the world waits on for at most `timeout_seconds` once their activation trigger is met, then applies
         # their fallback. `waiting` holds when each began and what began it; `settled` those that answered or fell back.
+        # When each actor comes in here: the scenario's own trigger, else the actor's own activation.
+        self.triggers = {
+            entry.id: entry.trigger or actors[entry.id].activation.trigger
+            for entry in cast
+            if entry.id in actors and (entry.trigger is not None or actors[entry.id].activation is not None)
+        }
         self.timed = [
             actors[entry.id]
             for entry in cast
@@ -210,7 +216,7 @@ class ActorDispatcher:
                 return key
         if actor.id in self.woken:
             return None
-        trigger = (actor.activation.trigger if actor.activation else None)
+        trigger = self.triggers.get(actor.id)
         if trigger is None or trigger.kind == "contacted":
             return None
         cause = self._cause(actor, ScheduledAction(action="activation", trigger=trigger), elapsed, log)
@@ -315,7 +321,7 @@ class ActorDispatcher:
                 continue
             activation = actor.activation
             if actor.id not in self.waiting:
-                cause = self._cause(actor, ScheduledAction(action="activation", trigger=activation.trigger), elapsed, log)
+                cause = self._cause(actor, ScheduledAction(action="activation", trigger=self.triggers[actor.id]), elapsed, log)
                 if cause is not None:
                     self.waiting[actor.id] = (self.clock(), cause)
                     self.fired.append({"actor": actor.id, "play": "waiting", "timeout_seconds": activation.timeout_seconds,
