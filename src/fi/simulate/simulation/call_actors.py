@@ -408,6 +408,54 @@ def read_decision(raw: Any) -> Decision:
     )
 
 
+class Waits:
+    """How long the run waits for a speaking actor once it is due, and what happens when it does not answer in time:
+    the same rule the world uses for an actor acting through it. `silent` is a time-out, `decline` a declined request
+    (a labelled line, never spoken in the actor's voice), one of its own actions taken for it, or another actor who
+    answers instead."""
+
+    def __init__(self, clock: Callable[[], float] = time.time) -> None:
+        self.clock = clock
+        self.started: dict[str, float] = {}
+        self.settled: set[str] = set()
+
+    def due(self, actor: dict[str, Any]) -> None:
+        """The actor is due: its wait starts now, once, when it has a timeout."""
+        key = str(actor["id"])
+        if float(actor.get("timeout_seconds") or 0) > 0 and key not in self.started and key not in self.settled:
+            self.started[key] = self.clock()
+
+    def answered(self, actor: dict[str, Any]) -> None:
+        self.settled.add(str(actor["id"]))
+
+    def expired(self, actors: list[dict[str, Any]]) -> list[tuple[dict[str, Any], str, str]]:
+        """Each actor whose wait ran out unanswered, with its fallback and the outcome to record; each only once."""
+        out = []
+        for actor in actors:
+            key = str(actor["id"])
+            if key in self.settled or key not in self.started:
+                continue
+            if self.clock() - self.started[key] < float(actor.get("timeout_seconds") or 0):
+                continue
+            self.settled.add(key)
+            fallback = str(actor.get("fallback") or "silent")
+            outcome = (
+                {"silent": "timed_out", "decline": "declined"}.get(fallback)
+                or ("fallback_action" if fallback in (actor.get("permitted_actions") or []) else "answered_by")
+            )
+            out.append((actor, fallback, outcome))
+        return out
+
+    def open(self) -> list[str]:
+        """Actors still waited on, for the record at the end of the call."""
+        return [key for key in self.started if key not in self.settled]
+
+
+def declined_line(actor: dict[str, Any]) -> str:
+    """What the transcript says for an actor whose fallback is to decline: a labelled line, not its voice."""
+    return f"{actor.get('name') or actor.get('id')} did not answer: declined"
+
+
 class Cast:
     """Every actor in one call: who enters when, the call-wide budget, and what happened to each.
 
@@ -427,6 +475,8 @@ class Cast:
         # The limits in force for this call; a key set to None is no limit.
         given = dict(LIMIT_DEFAULTS if limits is None else limits)
         self.max_active: int | None = given.get("max_active")
+        # How long the call waits for an actor once it is due, and its fallback when it does not answer.
+        self.waits = Waits(clock)
         self.takes_back_after: int | None = given.get("caller_takes_back_after_turns")
         self.seconds: float | None = given.get("actor_seconds_per_call")
         # When the first actor was triggered; the call's actor time runs from then.
@@ -538,6 +588,7 @@ class Cast:
                     self._started = self.clock()
                 self._waiting.append(key)
                 self._record(key, "triggered", turn=moment.agent_turns)
+                self.waits.due(actor)
         entered = []
         while self._waiting and (self.max_active is None or len(self._active()) < self.max_active):
             key = self._waiting.pop(0)
@@ -579,6 +630,7 @@ class Cast:
         state = self._state[str(actor["id"])]
         state["lines"] += 1
         state["last_turn"] = agent_turns
+        self.waits.answered(actor)
         self._record(
             str(actor["id"]),
             "delivered",
@@ -587,6 +639,19 @@ class Cast:
             ended_at=ended_at,
             asked_at=asked_at,
         )
+
+    def fallbacks(self) -> list[tuple[dict[str, Any], str, str]]:
+        """Each actor whose wait ran out unanswered: recorded with its fallback, and out of the call. Another actor
+        named as the fallback comes in next. A declined request is recorded as a labelled line, never voiced."""
+        expired = self.waits.expired(self.actors)
+        for actor, fallback, outcome in expired:
+            key = str(actor["id"])
+            self._record(key, "timeout", fallback=fallback, outcome=outcome,
+                         **({"text": declined_line(actor)} if outcome == "declined" else {}))
+            self.finish(actor, "timed out")
+            if outcome == "answered_by" and fallback in self._state and not self._state[fallback]["entered"]:
+                self._held.add(fallback)
+        return expired
 
     def not_entered(self, actor: dict[str, Any], reason: str) -> None:
         """An actor that cannot enter this call at all, with the reason."""

@@ -744,3 +744,74 @@ def test_a_per_trial_session_is_written_inside_each_trial_and_each_trial_keeps_i
         threads.append([one["arguments"]["text"] for one in dispatcher.fired if one["play"] == "history"])
         assert sent[0][1]["Idempotency-Key"] == f"{trial}:priya:h1"
     assert threads == [["Twenty?"], ["Too much."]]
+
+
+@pytest.mark.parametrize(
+    "fallback, line, acted",
+    [("silent", None, []), ("decline", "(did not answer: declined)", []), ("crm.reject", None, ["crm.reject"])],
+)
+def test_a_chat_actor_that_does_not_answer_in_time_gets_its_fallback(fallback, line, acted):
+    from fi.alk.harness.run import conversation as conv
+
+    clock = _Clock()
+    sent: list = []
+
+    async def act(actor_id, action, arguments, *, key, parent):
+        sent.append(action)
+        return {"outcome": "committed"}
+
+    cast = conv.ChatActors(
+        [{"id": "mia", "name": "Mia", "trigger": {"kind": "always"}, "brief": "You are Mia.", "timeout_seconds": 30,
+          "fallback": fallback, "permitted_actions": ["crm.reject"]}],
+        seed="t", model=None, act=act, clock=clock,
+    )
+
+    async def wait(actor, brief):
+        return '{"line": null, "action": null, "why": "thinking"}'
+
+    cast._write = wait
+
+    async def turns():
+        first = await cast.due_lines(agent_turns=1, last_text="", tools_called=[], conversation=[])
+        clock.now = 31
+        return first, await cast.due_lines(agent_turns=2, last_text="", tools_called=[], conversation=[])
+
+    first, second = asyncio.run(turns())
+    assert first == []
+    assert [text for _, text in second] == ([line] if line else [])
+    assert sent == acted
+    assert any(one["kind"] == "timeout" and one["fallback"] == fallback for one in cast.events)
+
+
+def test_a_voice_actor_that_does_not_answer_in_time_is_recorded_with_its_fallback_never_voiced():
+    from fi.simulate.simulation.call_actors import Cast
+
+    clock = _Clock()
+    actors = [
+        {"id": "mia", "name": "Mia", "trigger": {"kind": "always"}, "timeout_seconds": 30, "fallback": "decline"},
+        {"id": "dev", "name": "Dev", "trigger": {"kind": "on_keyword", "words": ["never"]}},
+        {"id": "ana", "name": "Ana", "trigger": {"kind": "always"}, "timeout_seconds": 30, "fallback": "dev"},
+    ]
+    cast = Cast(actors, "s", clock, limits={"max_active": None, "caller_takes_back_after_turns": None,
+                                            "actor_seconds_per_call": None})
+    cast.entering(Moment(agent_turns=1))
+    clock.now = 31
+    expired = cast.fallbacks()
+    assert [(actor["id"], outcome) for actor, _, outcome in expired] == [("mia", "declined"), ("ana", "answered_by")]
+    declined = next(one for one in cast.events if one.get("actor") == "mia" and one.get("kind") == "timeout")
+    assert declined["text"] == "Mia did not answer: declined"
+    # The actor named as the fallback comes in next, whatever its own trigger.
+    assert [one["id"] for one in cast.entering(Moment(agent_turns=2))] == ["dev"]
+
+
+def test_a_voice_actor_that_answered_in_time_has_no_fallback():
+    from fi.simulate.simulation.call_actors import Cast
+
+    clock = _Clock()
+    actor = {"id": "mia", "name": "Mia", "trigger": {"kind": "always"}, "timeout_seconds": 30, "fallback": "decline"}
+    cast = Cast([actor], "s", clock, limits={"max_active": None, "caller_takes_back_after_turns": None,
+                                              "actor_seconds_per_call": None})
+    cast.entering(Moment(agent_turns=1))
+    cast.delivered(actor, "Approved.", 1, 1.0, 2.0)
+    clock.now = 31
+    assert cast.fallbacks() == []

@@ -686,7 +686,15 @@ def acting_fields(actor: "Actor | None") -> dict[str, Any]:
     world, its own line limit and its model."""
     if actor is None:
         return {}
-    return {"permitted_actions": list(actor.permitted_actions), "max_lines": actor.max_lines, "model": actor.model}
+    activation = actor.activation
+    return {
+        "permitted_actions": list(actor.permitted_actions),
+        "max_lines": actor.max_lines,
+        "model": actor.model,
+        # How long the run waits for it once due, and what happens if it does not answer.
+        "timeout_seconds": activation.timeout_seconds if activation else 0,
+        "fallback": activation.fallback if activation else "silent",
+    }
 
 
 def ensure_caller(root: Path) -> bool:

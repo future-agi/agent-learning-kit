@@ -244,7 +244,10 @@ class ChatActors:
         act: Callable[..., Any] | None = None,
         records: Callable[[str], list[dict[str, Any]]] | None = None,
         meter: Any = None,
+        clock: Callable[[], float] = time.time,
     ) -> None:
+        from fi.simulate.simulation.call_actors import Waits
+
         self.actors = [one for one in actors if one.get("entered", True) is not False]
         self.skipped = [one for one in actors if one.get("entered", True) is False]
         self.seed = seed
@@ -260,6 +263,8 @@ class ChatActors:
         self.done: set[str] = set()
         self.decisions = 0
         self.events: list[dict[str, Any]] = []
+        # How long the conversation waits for an actor once due, and its fallback when it does not answer.
+        self.waits = Waits(clock)
 
     def _room(self) -> bool:
         cap = self.limits.get("caller_takes_back_after_turns")
@@ -291,6 +296,7 @@ class ChatActors:
                     continue
                 self.triggered.add(key)
                 self.events.append({"actor": key, "kind": "triggered", "turn": agent_turns})
+                self.waits.due(actor)
             if actor.get("max_lines") is not None and len(self.written[key]) >= int(actor["max_lines"]):
                 self.done.add(key)
                 self.events.append({"actor": key, "kind": "finished", "reason": "its own line limit reached"})
@@ -312,16 +318,43 @@ class ChatActors:
                 self.events.append(
                     {"actor": key, "kind": "acted", "action": decision.action, "outcome": outcome, "why": decision.why}
                 )
+                self.waits.answered(actor)
             if not decision.line:
                 if decision.waits:
                     self.events.append({"actor": key, "kind": "waited", "why": decision.why})
                 continue
             self.written[key].append(decision.line)
             self.events.append({"actor": key, "kind": "delivered", "name": actor.get("name"), "text": decision.line})
+            self.waits.answered(actor)
             out.append((actor, decision.line))
+        out += await self._fall_back()
         if out:
             self.turns_taken += 1
         return out
+
+    async def _fall_back(self) -> list[tuple[dict[str, Any], str]]:
+        """Each actor whose wait ran out: its fallback applied and recorded. A declined request is a labelled line,
+        never written in the actor's own words."""
+        out = []
+        for actor, fallback, outcome in self.waits.expired(self.actors):
+            key = str(actor["id"])
+            self.done.add(key)
+            self.events.append({"actor": key, "kind": "timeout", "fallback": fallback, "outcome": outcome})
+            if outcome == "declined":
+                out.append((actor, "(did not answer: declined)"))
+            elif outcome == "fallback_action" and self.act is not None:
+                self.decisions += 1
+                await self.act(key, fallback, {}, key=f"{self.seed}:{key}:fallback", parent=None)
+            elif outcome == "answered_by":
+                instead = next((one for one in self.actors if str(one["id"]) == fallback), None)
+                if instead is not None and fallback not in self.triggered:
+                    self.triggered.add(fallback)
+                    self.events.append({"actor": fallback, "kind": "triggered", "instead_of": key})
+        return out
+
+    def unresolved(self) -> list[str]:
+        """Actors still waited on when the conversation ended."""
+        return self.waits.open()
 
     async def _write(self, actor: dict[str, Any], brief: str) -> str:
         from ..actor_model import decider
