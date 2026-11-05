@@ -1042,15 +1042,60 @@ def test_a_framework_s_own_transfer_is_a_control_pass_and_holds_the_leaf_worker_
     ]
 
 
-def test_a_tool_named_like_a_transfer_without_the_framework_s_evidence_is_a_tool_call_of_unknown_place(
+def test_adk_s_built_in_transfer_recorded_as_a_plain_function_is_a_control_pass_once_the_named_agent_runs(
     tmp_path: Path,
 ) -> None:
-    # The same spans, but the framework does not mark the tool as its transfer: nothing records the control pass, so
-    # the leaf's call is not placed under it, nor presented as the root's.
-    _run(tmp_path, _ROOT_TRANSFER.replace("TOOL_TYPE", "FunctionTool"))
+    # Older ADK releases record their own transfer_to_agent as a FunctionTool; the named agent then starting in the
+    # same run is the evidence that control passed.
+    records = _run(tmp_path, _ROOT_TRANSFER.replace("TOOL_TYPE", "FunctionTool"))
+    transfer = next(r for r in records if r["name"] == "transfer_to_agent")
+    assert (transfer.get("transfer"), transfer["delegated_to"]) == (True, "leaf_agent")
+    assert _placed(_sealed(tmp_path)) == [
+        ("transfer_to_agent", "transferred", "root_agent", "observed", ""),
+        ("look_up_tide", "tool_call", "leaf_agent", "observed", transfer["event_id"]),
+    ]
+
+
+def test_a_transfer_named_call_whose_agent_never_runs_is_a_tool_call_and_the_leaf_s_place_stays_unknown(
+    tmp_path: Path,
+) -> None:
+    # The call names an agent that never starts: nothing records a control pass, so it stays an ordinary tool call
+    # and the agent that did run is not placed under it.
+    _run(
+        tmp_path,
+        _ROOT_TRANSFER.replace("TOOL_TYPE", "FunctionTool").replace(
+            '{"agent_name": "leaf_agent"}', '{"agent_name": "billing_agent"}'
+        ),
+    )
     assert _placed(_sealed(tmp_path)) == [
         ("transfer_to_agent", "tool_call", "root_agent", "observed", ""),
         ("look_up_tide", "tool_call", "leaf_agent", "unknown", ""),
+    ]
+
+
+def test_the_top_agent_under_the_caller_s_context_hands_off_at_the_top_level(
+    tmp_path: Path,
+) -> None:
+    # The app's coordinator runs inside a context its own tracer never recorded (the request that reached it): the
+    # coordinator is the top of the app's work, so its hand-off is observed at the top level.
+    _run(
+        tmp_path,
+        """
+        from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags, set_span_in_context
+        outside = NonRecordingSpan(SpanContext(trace_id=7, span_id=99, is_remote=True, trace_flags=TraceFlags(1)))
+        lead = tracer.start_span("Lead", context=set_span_in_context(outside), attributes={
+            "gen_ai.span.kind": "AGENT", "gen_ai.agent.name": "Lead"})
+        ask = tracer.start_span("ask_research", context=set_span_in_context(lead), attributes={
+            "gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "ask_research", "input.value": "q"})
+        run = tracer.start_span("Research", context=set_span_in_context(ask), attributes={
+            "gen_ai.span.kind": "AGENT", "gen_ai.agent.name": "Research"})
+        run.end()
+        ask.end()
+        lead.end()
+    """,
+    )
+    assert _placed(_sealed(tmp_path)) == [
+        ("ask_research", "delegated", "Lead", "observed", ""),
     ]
 
 

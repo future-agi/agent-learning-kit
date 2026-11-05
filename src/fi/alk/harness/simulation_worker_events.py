@@ -60,6 +60,7 @@ _PAYLOAD_MAX = 4096
 # names the agent in its ``agent_name`` argument; the OpenAI Agents SDK's instrumentation names, on the agent that was
 # handed control, the agent that handed it.
 _TRANSFER_TOOL_TYPES = ("TransferToAgentTool",)
+_BUILTIN_TRANSFER = "transfer_to_agent"
 _TRANSFER_ARGUMENT_KEYS = ("gcp.vertex.agent.tool_call_args",) + _TOOL_ARGUMENT_KEYS
 _HANDED_FROM_KEYS = ("graph.node.parent_id",)
 
@@ -138,6 +139,23 @@ def _transfer_target(attributes):
     return target if isinstance(target, str) and target else None
 
 
+def _builtin_transfer_target(attributes, name):
+    """The agent named by a call to ADK's own ``transfer_to_agent`` function, which older releases record as a plain
+    ``FunctionTool``. Only a candidate: it becomes a control pass once that agent starts in the same run."""
+    if (
+        name != _BUILTIN_TRANSFER
+        or _first(attributes, ("gcp.vertex.agent.tool_call_args",)) is None
+    ):
+        return None
+    try:
+        target = json.loads(_first(attributes, _TRANSFER_ARGUMENT_KEYS) or "").get(
+            "agent_name"
+        )
+    except (ValueError, AttributeError):
+        return None
+    return target if isinstance(target, str) and target else None
+
+
 def _same_tool(one, other):
     """Whether two spans name the same tool, as two instrumentations of one call spell it."""
 
@@ -169,6 +187,11 @@ class _ToolSpans:
         # then each agent run handed control, with the event id of the transfer that handed it.
         self._transfers = {}
         self._transferred = {}
+        # Calls to ADK's built-in transfer function by the run they were made in, held until the agent they name
+        # starts there (a control pass) or the run ends (a plain tool call).
+        self._candidates = {}
+        # Spans that ended, so a parent never seen can be told from one that already closed.
+        self._closed = collections.OrderedDict()
         self._appended = False
         # Spans start and end on the process's own threads.
         self._lock = threading.RLock()
@@ -266,7 +289,10 @@ class _ToolSpans:
         while parent is not None:
             above = self._live.get(parent)
             if above is None:
-                return "", "unknown"
+                # A parent the app's tracer never recorded (the caller's context) is outside the app: the agent
+                # below it is the top of the app's own work. One that already closed says nothing.
+                outside = agent is not None and parent not in self._closed
+                return "", "observed" if outside else "unknown"
             if parent in self._jobs:
                 return _hex(parent), "observed"
             kind = _kind(above[0])
@@ -293,6 +319,7 @@ class _ToolSpans:
         """The transfer made in the run ``scope`` that names the agent run ``agent`` started under it."""
         if agent not in self._transferred:
             name = self._agent_name(self._live[agent][0])
+            self._confirm_transfer(scope, name)
             pending = self._transfers.get(scope) or []
             match = next((one for one in pending if one[1] == name), None)
             if match is None:
@@ -300,6 +327,30 @@ class _ToolSpans:
             pending.remove(match)
             self._transferred[agent] = match[0]
         return self._transferred[agent]
+
+    def _confirm_transfer(self, scope, name) -> None:
+        """Write the held built-in transfer in ``scope`` that names ``name`` as a control pass, now that it ran."""
+        held = self._candidates.get(scope) or []
+        match = next((one for one in held if one[1] == name), None)
+        if match is None:
+            return
+        held.remove(match)
+        record, target = match
+        record.update(transfer=True, delegated_to=target[:256])
+        record.pop("ended_at", None)
+        pending = self._transfers.get(scope, [])
+        if len(self._transfers) + len(pending) < _LAUNCHES_MAX:
+            self._transfers[scope] = pending + [(record["event_id"], target)]
+        with self._lock:
+            _append(self._path, record)
+            self._appended = True
+
+    def _settle_candidates(self, scope) -> None:
+        """A run ended without starting the agent a held transfer named: it was an ordinary tool call."""
+        for record, _ in self._candidates.pop(scope, None) or []:
+            with self._lock:
+                _append(self._path, record)
+                self._appended = True
 
     def _agent_name(self, agent):
         """An agent span's own name, else the tool that handed it the work; never a method-like span name."""
@@ -338,6 +389,8 @@ class _ToolSpans:
             if kind == "AGENT":
                 handing = self._above(span_id, ("TOOL",))
                 name = self._agent_name(span)
+                if entry is not None and name:
+                    self._confirm_transfer(entry[1], name)
                 if handing is not None and name:
                     self._handed[handing.get_span_context().span_id] = name
                 handed_from = _first(span.attributes or {}, _HANDED_FROM_KEYS)
@@ -361,6 +414,11 @@ class _ToolSpans:
                         self._wrapped.add(outer.get_span_context().span_id)
                     self._write(span, span_id)
         finally:
+            if span_id in self._candidates:
+                self._settle_candidates(span_id)
+            self._closed[span_id] = None
+            if len(self._closed) > _LIVE_SPANS_MAX:
+                self._closed.popitem(last=False)
             if kind != "TOOL":
                 self._handed.pop(span_id, None)
             for one in (self._transfers, self._transferred):
@@ -497,6 +555,11 @@ class _ToolSpans:
         if delegated:
             record["delegated_to"] = delegated[:256]
         target = _transfer_target(attributes)
+        candidate = None if target else _builtin_transfer_target(attributes, name)
+        if candidate and agent is not None and len(self._candidates) < _LAUNCHES_MAX:
+            scope = agent.get_span_context().span_id
+            self._candidates.setdefault(scope, []).append((record, candidate))
+            return
         if target:
             # Control passed to the agent the framework named; nothing returns from a control pass.
             record.update(transfer=True, delegated_to=target[:256])
