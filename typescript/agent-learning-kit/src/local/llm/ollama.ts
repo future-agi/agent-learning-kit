@@ -48,7 +48,8 @@ export class OllamaLLM extends AbstractLLM {
 
     constructor(config: OllamaConfig = {}) {
         super(config);
-        const fullConfig = { ...OLLAMA_DEFAULTS, ...config };
+        // AbstractLLM already captured caller fields; never read the original config again.
+        const fullConfig = { ...OLLAMA_DEFAULTS, ...(this.config as OllamaConfig) };
         this.model = fullConfig.model;
         this.baseUrl = fullConfig.baseUrl;
     }

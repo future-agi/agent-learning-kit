@@ -41,6 +41,27 @@ function isCapturedRecord(value: unknown): value is Record<string, any> {
     return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+/**
+ * Preserve ordinary cloud field stringification using only captured data.
+ * Records use the ordinary object tag; arrays use comma-separated elements,
+ * with null/undefined elements empty, including inside nested arrays. Never
+ * ask a captured record (which has no prototype) to coerce itself to a string.
+ */
+function capturedCloudFieldToString(value: unknown): string {
+    if (Array.isArray(value)) {
+        const elements: string[] = [];
+        for (let index = 0; index < value.length; index++) {
+            const element: unknown = value[index];
+            elements.push(element === null || element === undefined
+                ? ''
+                : capturedCloudFieldToString(element));
+        }
+        return elements.join(',');
+    }
+    if (isCapturedRecord(value)) return '[object Object]';
+    return String(value);
+}
+
 function validateCapturedEvaluation(inputs: unknown, config: unknown): void {
     if (!Array.isArray(inputs) || !isCapturedRecord(config)) {
         throw new Error('METRIC_CONFIG_INVALID');
@@ -128,7 +149,7 @@ export class LocalEvaluator {
         const errors: Array<{ metric: string; error: string }> = [];
 
         if (!this.canRunLocally(metricName)) {
-            if (this.config.strictMode) throw new Error(`Metric '${metricName}' cannot run locally`);
+            if (this.config.strictMode) throw new Error('METRIC_NOT_LOCAL');
             return evaluationFailure(metricName, 'METRIC_NOT_LOCAL');
         }
 
@@ -385,7 +406,7 @@ export class HybridEvaluator {
                     if (!transformedInputs[key]) {
                         transformedInputs[key] = [];
                     }
-                    transformedInputs[key].push(String(value));
+                    transformedInputs[key].push(capturedCloudFieldToString(value));
                 }
             }
 
