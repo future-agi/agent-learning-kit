@@ -1018,8 +1018,11 @@ class HostedChatRuntime:
         if fingerprint == self._published_fingerprint() and not force:
             return {"applied": True, "unchanged": True, "message": "nothing is waiting to be saved"}
         from .bundle_author_v2 import reseal_scenarios
+        from .pre_run import refresh_stale
 
         try:
+            # A pre-run session written from an actor record that has since changed is written again before sealing.
+            await refresh_stale(self.workspace)
             await asyncio.to_thread(reseal_scenarios, self.workspace)
         except Exception as exc:  # noqa: BLE001 - reported to the model, never swallowed
             traceback.print_exc()

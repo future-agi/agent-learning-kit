@@ -194,3 +194,33 @@ def _model_writer(default_model: str | None) -> Write:
             await stage.__aexit__(None, None, None)
 
     return write
+
+
+async def refresh_stale(authoring: Any, write: Write | None = None) -> list[str]:
+    """Before sealing: every scenario whose pre-run session is stale (never written, or written from an actor record
+    or situation that has since changed) gets that session written again, so nothing stale is ever sealed. Returns the
+    scenarios rewritten. A scenario that cannot be read is left for the seal's own checks."""
+    from pathlib import Path
+
+    from .actors import load_actors
+
+    root = Path(authoring)
+    listed = load_actors(root).by_id()
+    rewritten = []
+    for path in sorted(root.glob("scenarios/*/scenario.json")):
+        try:
+            document = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(document, dict) or not document.get("pre_run"):
+            continue
+        try:
+            sessions = [PreRunSession.model_validate(one) for one in document["pre_run"]]
+        except Exception:  # noqa: BLE001 - an unreadable session is the seal's to refuse
+            continue
+        if not any(stale(one, listed) for one in sessions):
+            continue
+        updated = await written(document, root, write)
+        path.write_text(json.dumps(updated, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        rewritten.append(path.parent.name)
+    return rewritten

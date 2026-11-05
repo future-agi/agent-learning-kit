@@ -886,6 +886,11 @@ async def validate_once(
         phase = "runtime"
         try:
             bundle = work / "bundle"
+            if not readiness_only:
+                # A pre-run session written from an actor record that has since changed is written again first.
+                from .pre_run import refresh_stale
+
+                await refresh_stale(authoring)
             manifest = await asyncio.to_thread(
                 author_bundle_v2,
                 source=source,

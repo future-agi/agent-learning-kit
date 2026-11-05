@@ -264,3 +264,79 @@ def test_a_world_tool_that_asks_who_acts_gets_the_actor_s_identity_there():
     )
     asyncio.run(dispatcher.tick())
     assert sent[0][2] == {"text": "hi", "actor_id": "U-priya"}
+
+
+def test_a_session_whose_actor_record_changed_is_written_again_before_sealing(tmp_path):
+    import json
+
+    from fi.alk.harness.actors import save_actors, session_fingerprint
+    from fi.alk.harness.pre_run import refresh_stale
+
+    priya = Actor(id="priya", name="Priya", play="live", permitted_actions=["slack.post"])
+    save_actors(tmp_path, ActorList(actors=[priya]))
+    session = PreRunSession(actors=["priya"], where={"action": "slack.post", "arguments": {"channel": "#leads"}},
+                            about="Acme wants 20%")
+    fresh = session.model_copy(update={"thread": [{"actor": "priya", "action": "slack.post", "arguments": {"text": "old"}}],
+                                       "fingerprint": session_fingerprint(session, {"priya": priya})})
+    folder = tmp_path / "scenarios" / "acme"
+    folder.mkdir(parents=True)
+    (folder / "scenario.json").write_text(json.dumps({"name": "acme", "pre_run": [fresh.model_dump(mode="json")]}))
+    written = []
+
+    async def write(brief, actor):
+        written.append(actor.id)
+        return '{"text": "new"}' if len(written) == 1 else '{"text": null}'
+
+    assert asyncio.run(refresh_stale(tmp_path, write)) == []
+    # Priya's record changes: her session is stale and is written again from her new record.
+    save_actors(tmp_path, ActorList(actors=[priya.model_copy(update={"goal": "Hold the price"})]))
+    assert asyncio.run(refresh_stale(tmp_path, write)) == ["acme"]
+    sealed = json.loads((folder / "scenario.json").read_text())["pre_run"][0]
+    assert [one["arguments"]["text"] for one in sealed["thread"]] == ["new"]
+    assert sealed["fingerprint"] != fresh.fingerprint
+
+
+def test_a_speaking_actor_s_decided_action_is_sent_through_the_door_by_the_run_never_by_the_voice_engine(tmp_path):
+    import json
+
+    from fi.alk.harness.call_runner import _reported_actions
+    from fi.simulate.simulation.engines.livekit import _action_reporter
+
+    handed = tmp_path / "actor-actions.jsonl"
+    report = _action_reporter(str(handed))
+    report({"actor": "manager", "action": "crm.approve", "arguments": {"deal": 7}, "why": "within my limit"})
+    sent: list = []
+    manager = Actor(id="manager", name="Mia", channel="audio_handoff", role="manager", permitted_actions=["crm.approve"])
+    dispatcher = ActorDispatcher(
+        {"manager": manager}, [ScenarioActor(id="manager")], act=HttpActs("http://p", "tok", 5, _sent_to(sent)),
+        trial_id="t", read_log=list, seed="t", reported=_reported_actions(handed),
+    )
+    asyncio.run(dispatcher.tick())
+    asyncio.run(dispatcher.tick())
+    # Sent once, under the actor's id and this trial's token, by the harness side.
+    assert [(url, h["X-ALK-Actor"], h["X-ALK-Actor-Token"], a) for url, h, a in sent] == [
+        ("http://p/crm/approve", "manager", "tok", {"deal": 7})
+    ]
+    assert dispatcher.fired[-1]["channel"] == "voice" and json.loads(handed.read_text().splitlines()[0])["actor"] == "manager"
+
+
+def test_a_voice_actor_with_actions_decides_its_line_and_its_action_in_one_turn(monkeypatch):
+    from fi.simulate.simulation.engines import call_actor_voice
+
+    reported: list = []
+
+    async def complete(model, context):
+        return '{"line": "Approved, go ahead.", "action": "crm.approve", "arguments": {"deal": 7}, "why": "ok"}'
+
+    async def voiced(tts, text):
+        return None
+
+    monkeypatch.setattr(call_actor_voice, "complete_text", complete)
+    monkeypatch.setattr(call_actor_voice, "voiced", voiced)
+    voice = call_actor_voice.CallActorVoice(
+        actor={"id": "manager", "name": "Mia", "channel": "audio_handoff", "permitted_actions": ["crm.approve"]},
+        model=None, tts=None, situation="", language="", report_action=reported.append,
+    )
+    text, audio, _done = asyncio.run(voice.line(["The agent: May I apply 12%?"]))
+    assert text == "Approved, go ahead." and audio is None
+    assert reported[0]["action"] == "crm.approve" and reported[0]["arguments"] == {"deal": 7}
