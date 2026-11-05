@@ -1185,3 +1185,70 @@ def test_a_parent_no_recorded_hand_off_carries_is_unknown_not_kept() -> None:
     assert {
         key: trace_row(merged)[key] for key in ("parent_span_id", "relationship")
     } == {"parent_span_id": "", "relationship": "unknown"}
+
+
+_OPENAI_AGENTS_RUN = """
+from opentelemetry.trace import set_span_in_context
+# The OpenAI Agents SDK opens each run as an agent-kind span with no agent name; agents run inside it.
+run = tracer.start_span("Agent workflow", attributes={"gen_ai.span.kind": "AGENT"})
+lead = tracer.start_span("Lead", context=set_span_in_context(run), attributes={"gen_ai.span.kind": "AGENT"})
+ask = tracer.start_span("ask_research", context=set_span_in_context(lead), attributes={
+    "gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "ask_research", "input.value": "q"})
+worker = tracer.start_span("Research", context=set_span_in_context(ask), attributes={"gen_ai.span.kind": "AGENT"})
+worker.end()
+ask.end()
+lead.end()
+LATER
+run.end()
+"""
+
+
+def test_the_first_agent_in_an_openai_agents_run_hands_off_at_the_top_level(
+    tmp_path: Path,
+) -> None:
+    _run(tmp_path, _OPENAI_AGENTS_RUN.replace("LATER", ""))
+    assert _placed(_sealed(tmp_path)) == [
+        ("ask_research", "delegated", "Lead", "observed", ""),
+    ]
+
+
+def test_a_later_agent_in_the_same_run_without_a_recorded_transfer_stays_unknown(
+    tmp_path: Path,
+) -> None:
+    # A second agent opened in the run was handed control; until the framework records who handed it, its calls are
+    # not placed at the top.
+    later = """
+billing = tracer.start_span("Billing", context=set_span_in_context(run), attributes={"gen_ai.span.kind": "AGENT"})
+with trace.use_span(billing, end_on_exit=True):
+    with span("refund", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "refund"}):
+        pass
+"""
+    _run(tmp_path, _OPENAI_AGENTS_RUN.replace("LATER", later))
+    refund = next(r for r in _sealed(tmp_path) if r["name"] == "refund")
+    assert refund["relationship"] == "unknown"
+
+
+def test_a_transfer_recorded_by_another_instrumentation_counts_once_the_named_agent_runs_under_a_model_call(
+    tmp_path: Path,
+) -> None:
+    # traceAI's ADK instrumentation records the transfer as a plain tool with its arguments in `input.value`, under the
+    # model call; the named agent then runs inside the root agent with no tool calls of its own.
+    _run(
+        tmp_path,
+        """
+        from opentelemetry.trace import set_span_in_context
+        root = tracer.start_span("root_agent", attributes={"fi.span.kind": "AGENT", "gen_ai.agent.name": "root_agent"})
+        llm = tracer.start_span("call_llm", context=set_span_in_context(root), attributes={"fi.span.kind": "LLM"})
+        move = tracer.start_span("transfer_to_agent", context=set_span_in_context(llm), attributes={
+            "fi.span.kind": "TOOL", "tool.name": "transfer_to_agent", "input.value": '{"agent_name": "leaf_agent"}'})
+        move.end()
+        llm.end()
+        leaf = tracer.start_span("leaf_agent", context=set_span_in_context(root), attributes={
+            "fi.span.kind": "AGENT", "gen_ai.agent.name": "leaf_agent"})
+        leaf.end()
+        root.end()
+    """,
+    )
+    assert _placed(_sealed(tmp_path)) == [
+        ("transfer_to_agent", "transferred", "root_agent", "observed", ""),
+    ]

@@ -140,12 +140,10 @@ def _transfer_target(attributes):
 
 
 def _builtin_transfer_target(attributes, name):
-    """The agent named by a call to ADK's own ``transfer_to_agent`` function, which older releases record as a plain
-    ``FunctionTool``. Only a candidate: it becomes a control pass once that agent starts in the same run."""
-    if (
-        name != _BUILTIN_TRANSFER
-        or _first(attributes, ("gcp.vertex.agent.tool_call_args",)) is None
-    ):
+    """The agent named by a call to ADK's own ``transfer_to_agent`` function, which older releases and other
+    instrumentations record as a plain function. Only a candidate: it becomes a control pass once that agent starts in
+    the same agent run, and an ordinary tool call if the run ends first."""
+    if name != _BUILTIN_TRANSFER:
         return None
     try:
         target = json.loads(_first(attributes, _TRANSFER_ARGUMENT_KEYS) or "").get(
@@ -190,6 +188,8 @@ class _ToolSpans:
         # Calls to ADK's built-in transfer function by the run they were made in, held until the agent they name
         # starts there (a control pass) or the run ends (a plain tool call).
         self._candidates = {}
+        # The first agent run opened directly inside each open agent span.
+        self._opened = {}
         # Spans that ended, so a parent never seen can be told from one that already closed.
         self._closed = collections.OrderedDict()
         self._appended = False
@@ -207,6 +207,13 @@ class _ToolSpans:
                 span,
                 parent.span_id if parent is not None else None,
             )
+            above = self._live.get(parent.span_id) if parent is not None else None
+            if (
+                above is not None
+                and _kind(span) == "AGENT"
+                and _kind(above[0]) == "AGENT"
+            ):
+                self._opened.setdefault(parent.span_id, context.span_id)
             if parent is None and _kind(span) != "TOOL":
                 try:
                     joined = self._job_record(span, context.span_id, ended=False)
@@ -297,6 +304,15 @@ class _ToolSpans:
                 return _hex(parent), "observed"
             kind = _kind(above[0])
             if kind == "AGENT":
+                if (
+                    agent is not None
+                    and self._opened.get(parent) == agent
+                    and self._container(above)
+                ):
+                    # The framework's trace container (the OpenAI Agents SDK opens one per run as an agent span with
+                    # no agent name): the first agent run inside it is the top of the app's work. A later one was
+                    # handed control and stays unknown until the framework records the transfer.
+                    return "", "observed"
                 if agent is not None:
                     handed = self._transfer_into(parent, agent)
                     return (handed, "observed") if handed else ("", "unknown")
@@ -314,6 +330,12 @@ class _ToolSpans:
                     return _hex(above[1]), "observed"
             parent = above[1]
         return "", "observed" if agent is not None else "unknown"
+
+    def _container(self, entry) -> bool:
+        """An agent-kind span at the top of the app's trace that names no agent: a run's container, not an agent."""
+        above = entry[1]
+        top = above is None or (above not in self._live and above not in self._closed)
+        return top and not _first(entry[0].attributes or {}, _AGENT_NAME_KEYS)
 
     def _transfer_into(self, scope, agent):
         """The transfer made in the run ``scope`` that names the agent run ``agent`` started under it."""
@@ -389,8 +411,9 @@ class _ToolSpans:
             if kind == "AGENT":
                 handing = self._above(span_id, ("TOOL",))
                 name = self._agent_name(span)
-                if entry is not None and name:
-                    self._confirm_transfer(entry[1], name)
+                scope = self._above(span_id, ("AGENT",))
+                if scope is not None and name:
+                    self._confirm_transfer(scope.get_span_context().span_id, name)
                 if handing is not None and name:
                     self._handed[handing.get_span_context().span_id] = name
                 handed_from = _first(span.attributes or {}, _HANDED_FROM_KEYS)
@@ -416,6 +439,7 @@ class _ToolSpans:
         finally:
             if span_id in self._candidates:
                 self._settle_candidates(span_id)
+            self._opened.pop(span_id, None)
             self._closed[span_id] = None
             if len(self._closed) > _LIVE_SPANS_MAX:
                 self._closed.popitem(last=False)
