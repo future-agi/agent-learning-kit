@@ -202,7 +202,7 @@ def test_declared_workers_name_contract_tools_and_reach_the_brief():
     assert "order_lookup (Order-lookup worker): get_order" in contract.brief()
 
 
-def test_a_worker_without_an_id_of_its_own_is_dropped_and_keeps_only_contract_tools():
+def test_a_worker_without_an_id_of_its_own_is_returned_to_authoring_and_keeps_only_contract_tools():
     contract = AgentContract.model_validate(
         {
             "agent": "returns",
@@ -215,10 +215,26 @@ def test_a_worker_without_an_id_of_its_own_is_dropped_and_keeps_only_contract_to
             ],
         }
     )
-    assert validate_contract(contract) == []
-    assert [(one.id, one.name, one.tools) for one in contract.workers] == [
-        ("order_lookup", "", ["get_order"])
+    problems = validate_contract(contract)
+    assert [one.split(":")[0] for one in problems] == [
+        "worker[2]",
+        "duplicate-worker-ids",
     ]
+    assert "duplicate-worker-ids:order_lookup:" in problems[1]
+    assert [(one.id, one.tools) for one in contract.workers] == [
+        ("order_lookup", ["get_order"]),
+        ("order_lookup", []),
+        (" ", []),
+    ]
+    fixed = contract.model_copy(
+        update={
+            "workers": [
+                contract.workers[0],
+                contract.workers[1].model_copy(update={"id": "refunds"}),
+            ]
+        }
+    )
+    assert validate_contract(fixed) == []
 
 
 def test_contract_without_workers_is_unchanged():

@@ -1165,15 +1165,17 @@ class AgentContract(BaseModel):
 
     @model_validator(mode="after")
     def _resolvable_workers(self) -> AgentContract:
-        # Derived, not refused: one worker per id, holding only tools the contract has.
-        seen: set[str] = set()
-        workers = []
-        for worker in self.workers:
-            if worker.id.strip() and worker.id not in seen:
-                seen.add(worker.id)
-                tools = [tool for tool in worker.tools if tool in self.tool_names()]
-                workers.append(worker.model_copy(update={"tools": tools}))
-        self.workers = workers
+        # A worker holds only tools the contract has; its id is checked by `validate_contract`.
+        self.workers = [
+            worker.model_copy(
+                update={
+                    "tools": [
+                        tool for tool in worker.tools if tool in self.tool_names()
+                    ]
+                }
+            )
+            for worker in self.workers
+        ]
         return self
 
     def tool_names(self) -> set[str]:
@@ -1500,4 +1502,17 @@ def validate_contract(contract: AgentContract) -> list[str]:
     duplicates = sorted({name for name in names if names.count(name) > 1})
     if duplicates:
         problems.append(f"duplicate-tool-names:{','.join(duplicates)}")
+    for index, worker in enumerate(contract.workers):
+        if not worker.id.strip():
+            problems.append(
+                f"worker[{index}]:no-id: give this worker the id the agent's source uses for it, "
+                "one that no other worker has."
+            )
+    worker_ids = [worker.id for worker in contract.workers if worker.id.strip()]
+    repeated = sorted({one for one in worker_ids if worker_ids.count(one) > 1})
+    if repeated:
+        problems.append(
+            f"duplicate-worker-ids:{','.join(repeated)}: each worker is one agent of the app: "
+            "merge the entries that are the same agent, or give each its own id."
+        )
     return problems
