@@ -151,12 +151,16 @@ class WorldDoor:
         *,
         faults: Callable[[], list[dict[str, Any]]] = list,
         write_seconds: float = LOG_WRITE_SECONDS,
+        faults_by_tool: bool = False,
     ) -> None:
         self.executor = executor
         self.log = log
         self.roster = roster
         self.faults = faults
         self.write_seconds = write_seconds
+        # A fault names the world action (`crm.update`); a surface whose calls are named by the tool (the chat runner)
+        # also matches the tool's own name, as it always has. Over HTTP the action alone, as the proxy always did.
+        self.faults_by_tool = faults_by_tool
         self._keys_lock = threading.Lock()
         self._key_locks: dict[str, threading.Lock] = {}
 
@@ -244,7 +248,8 @@ class WorldDoor:
             faults = [one for one in self.faults() or [] if isinstance(one, dict)]
         except Exception:  # noqa: BLE001 - unreadable faults are no faults
             return None
-        named = [one for one in faults if one.get("action") in (call.action, call.name)]
+        names = (call.action, call.name) if self.faults_by_tool else (call.action,)
+        named = [one for one in faults if one.get("action") in names]
         if not named:
             return None
         try:

@@ -190,3 +190,15 @@ def test_an_unreachable_log_never_changes_the_answer(surface, upstream):
 
     door, via, _ = _door(surface, upstream, log=_Down())
     assert _enter(door, ToolCall(action="crm.update", name="update"), via).outcome == "committed"
+
+
+def test_over_http_a_fault_names_the_world_action_and_never_hits_another_service_s_call(upstream):
+    # Byte for byte with the proxy before the door: a fault matches the action only, so `crm.get` never faults `chat.get`.
+    faults = [{"action": "crm.get", "mode": "timeout_before_commit"}]
+    door, via, _ = _door("proxy over HTTP", upstream, faults=faults)
+    assert _enter(door, ToolCall(action="chat.get", name="get"), via).fault is None
+    door, via, _ = _door("proxy over HTTP", upstream, faults=faults)
+    assert _enter(door, ToolCall(action="crm.get", name="get"), via).fault is not None
+    # A fault written as the bare tool name never fired at the proxy, and still does not.
+    door, via, _ = _door("proxy over HTTP", upstream, faults=[{"action": "get", "mode": "timeout_before_commit"}])
+    assert _enter(door, ToolCall(action="crm.get", name="get"), via).fault is None

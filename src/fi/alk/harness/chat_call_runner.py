@@ -187,6 +187,7 @@ def chat_door(world: Any, mirror_dsn: str | None, roster: dict[str, dict[str, An
         TeeLog(MemoryLog(), PostgresLog(mirror_dsn) if mirror_dsn else None),
         DictRoster(roster),
         faults=lambda: [one for one in faults if isinstance(one, dict)],
+        faults_by_tool=True,
     )
 
 
