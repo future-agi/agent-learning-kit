@@ -121,6 +121,18 @@ class ActorDispatcher:
         self.live_turns: dict[str, int] = {one.id: 0 for one in self.live}
         self.answered: dict[str, set[str]] = {one.id: set() for one in self.live}
         self.woken: set[str] = set()
+        # Actors the world waits on for at most `timeout_seconds` once their activation trigger is met, then applies
+        # their fallback. `waiting` holds when each began and what began it; `settled` those that answered or fell back.
+        self.timed = [
+            actors[entry.id]
+            for entry in cast
+            if entry.id in actors
+            and actors[entry.id].activation is not None
+            and actors[entry.id].activation.timeout_seconds > 0
+        ]
+        self.waiting: dict[str, tuple[float, str]] = {}
+        self.settled: set[str] = set()
+        self.fell_back: set[str] = set()
 
     def _cause(
         self,
@@ -167,6 +179,7 @@ class ActorDispatcher:
             headers["X-ALK-Parent-Event"] = cause
         url = f"{self.proxy_url}/{action.action.replace('.', '/')}"
         status = await asyncio.to_thread(self.send, url, headers, action.arguments)
+        self._answered(actor)
         self.fired.append(
             {
                 "actor": actor.id,
@@ -180,7 +193,7 @@ class ActorDispatcher:
     def _live_due(self, actor: Actor, elapsed: float, log: list[dict[str, Any]]) -> str | None:
         """The cause of a live actor's next turn: an agent action addressed to it not yet answered, else its
         activation trigger the first time it is met; None when nothing calls for it."""
-        if self.live_turns[actor.id] >= LIVE_TURNS:
+        if self.live_turns[actor.id] >= LIVE_TURNS or actor.id in self.fell_back:
             return None
         agent_rows = [row for row in log if (row.get("actor_id") or AGENT) == AGENT]
         for row in agent_rows:
@@ -251,8 +264,58 @@ class ActorDispatcher:
         arguments = decision.get("arguments") if isinstance(decision.get("arguments"), dict) else {}
         # Sent whatever it chose: the world, not the decision, decides whether it may.
         status = await asyncio.to_thread(self.send, url, headers, arguments)
+        self._answered(actor)
         self.fired.append({"actor": actor.id, "play": "live", "turn": turn, "action": action, "status": status,
                            "why": decision.get("why"), "parent": cause or None})
+
+    def _answered(self, actor: Actor) -> None:
+        """An action sent by an actor the world is waiting on is its answer: no fallback for it."""
+        if actor.id in self.waiting:
+            self.settled.add(actor.id)
+
+    def _wait_on(self, elapsed: float, log: list[dict[str, Any]]) -> list[Actor]:
+        """Starts the wait for each actor whose activation trigger is met now, recorded with its timeout and
+        fallback; returns those whose wait has run out without an answer."""
+        due = []
+        for actor in self.timed:
+            if actor.id in self.settled:
+                continue
+            activation = actor.activation
+            if actor.id not in self.waiting:
+                cause = self._cause(actor, ScheduledAction(action="activation", trigger=activation.trigger), elapsed, log)
+                if cause is not None:
+                    self.waiting[actor.id] = (self.clock(), cause)
+                    self.fired.append({"actor": actor.id, "play": "waiting", "timeout_seconds": activation.timeout_seconds,
+                                       "fallback": activation.fallback, "parent": cause or None})
+            elif self.clock() - self.waiting[actor.id][0] >= activation.timeout_seconds:
+                due.append(actor)
+        return due
+
+    async def _fall_back(self, actor: Actor, log: list[dict[str, Any]]) -> None:
+        """No answer within its timeout: its fallback is the outcome, recorded as the timeout's, and it takes no more
+        part. `silent` is a time-out, `decline` the request declined, another actor's id that actor answering
+        instead. Nothing is said or done in the actor's own name."""
+        self.settled.add(actor.id)
+        self.fell_back.add(actor.id)
+        self.pending = [one for one in self.pending if one[0].id != actor.id]
+        fallback = actor.activation.fallback
+        cause = self.waiting[actor.id][1]
+        outcome = {"silent": "timed_out", "decline": "declined"}.get(fallback, "answered_by")
+        self.fired.append({"actor": actor.id, "play": "timeout", "fallback": fallback, "outcome": outcome,
+                           "timeout_seconds": actor.activation.timeout_seconds, "parent": cause or None})
+        instead = self.actors.get(fallback) if outcome == "answered_by" else None
+        if instead is None or instead.id in self.fell_back:
+            return
+        if instead.play in ("live", "both"):
+            if instead not in self.live:
+                self.live.append(instead)
+                self.live_turns[instead.id] = 0
+                self.answered[instead.id] = set()
+            await self._live_turn(instead, cause, log)
+            return
+        for one, index, action in [one for one in self.pending if one[0].id == instead.id]:
+            self.pending.remove((one, index, action))
+            await self._fire(one, index, action, cause)
 
     async def write_history(self) -> None:
         """Writes the scenario's history through the world's door, in order, before the run starts. Each entry has
@@ -283,7 +346,7 @@ class ActorDispatcher:
         if self.started is None:
             self.started = self.clock()
         log: list[dict[str, Any]] = []
-        if self.live or any(
+        if self.live or self.timed or any(
             action.trigger.kind in ("on_tool", "contacted")
             for _, _, action in self.pending
         ):
@@ -292,6 +355,8 @@ class ActorDispatcher:
             except Exception:  # noqa: BLE001 - an unreadable log this tick is retried next tick
                 log = []
         elapsed = self.clock() - self.started
+        # Waits start before this tick's actions are sent, so an answer sent in the same tick counts.
+        timed_out = self._wait_on(elapsed, log)
         for actor, index, action in list(self.pending):
             cause = self._cause(actor, action, elapsed, log)
             if cause is None:
@@ -306,15 +371,22 @@ class ActorDispatcher:
                     actor.id,
                     type(exc).__name__,
                 )
-        for actor in self.live:
+        for actor in list(self.live):
             cause = self._live_due(actor, elapsed, log)
             if cause is not None:
                 await self._live_turn(actor, cause, log)
+        for actor in timed_out:
+            if actor.id not in self.settled:
+                await self._fall_back(actor, log)
 
     async def run(self) -> None:
         """Fires every scheduled action once, when its trigger is met, and plays live actors; runs until the trial is
         over and it is cancelled."""
-        while self.pending or any(self.live_turns[one.id] < LIVE_TURNS for one in self.live):
+        while (
+            self.pending
+            or any(self.live_turns[one.id] < LIVE_TURNS for one in self.live)
+            or any(one.id not in self.settled for one in self.timed)
+        ):
             await self.tick()
             await asyncio.sleep(POLL_SECONDS)
 

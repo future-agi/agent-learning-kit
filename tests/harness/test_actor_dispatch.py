@@ -397,3 +397,77 @@ def test_a_live_actor_comes_in_on_its_activation_trigger_once_when_no_one_reache
     )
     asyncio.run(_ticks(dispatcher))
     assert len(asked) == 1
+
+
+def _approver(fallback, *, answers=None, instead_play="mocked"):
+    """A manager the agent reaches on Slack, waited on for 30 s; `answers` is its scheduled approval, if any."""
+    clock, sent = _Clock(), []
+    actors = {
+        "manager": Actor(
+            id="manager",
+            name="Mia",
+            identities={"slack": "@mia"},
+            permitted_actions=["deals.approve"],
+            activation={"trigger": {"kind": "contacted"}, "timeout_seconds": 30, "fallback": fallback},
+        ),
+        "deputy": Actor(id="deputy", name="Dev", permitted_actions=["deals.approve"], play=instead_play),
+    }
+    cast = [{"id": "manager", "actions": answers or []}]
+    if fallback == "deputy":
+        cast.append({"id": "deputy", "actions": [{"action": "deals.approve", "trigger": {"kind": "after_seconds", "seconds": 999}}]})
+    dispatcher = ActorDispatcher(
+        actors,
+        [ScenarioActor.model_validate(one) for one in cast],
+        trial_id="trial-1",
+        proxy_url="http://proxy/",
+        token="t0ken",
+        read_log=lambda: [_ASKED],
+        seed="trial-1",
+        timeout=60.0,
+        clock=clock,
+        send=lambda url, headers, arguments: sent.append((url, headers)) or 200,
+        decide=lambda situation: '{"action": "deals.approve", "why": "covering for Mia"}',
+    )
+    return dispatcher, clock, sent
+
+
+def _timeline(dispatcher):
+    return [(one["actor"], one["play"], one.get("outcome")) for one in dispatcher.fired]
+
+
+async def _wait_out(dispatcher, clock, seconds):
+    await dispatcher.tick()
+    clock.now += seconds
+    await dispatcher.tick()
+    await dispatcher.tick()
+
+
+@pytest.mark.parametrize(
+    "fallback, outcome", [("silent", "timed_out"), ("decline", "declined")]
+)
+def test_an_approver_that_does_not_answer_in_time_gets_its_fallback_recorded_and_nothing_sent(fallback, outcome):
+    dispatcher, clock, sent = _approver(fallback)
+    asyncio.run(_wait_out(dispatcher, clock, 29))
+    assert _timeline(dispatcher) == [("manager", "waiting", None)]
+    asyncio.run(_wait_out(dispatcher, clock, 1))
+    assert _timeline(dispatcher) == [("manager", "waiting", None), ("manager", "timeout", outcome)]
+    assert dispatcher.fired[0]["parent"] == "a1" and dispatcher.fired[1]["timeout_seconds"] == 30
+    assert sent == []
+    assert not dispatcher.pending and dispatcher.settled == {"manager"}
+
+
+def test_an_approver_that_answers_in_time_has_no_fallback():
+    approve = {"action": "deals.approve", "trigger": {"kind": "contacted"}}
+    dispatcher, clock, sent = _approver("decline", answers=[approve])
+    asyncio.run(_wait_out(dispatcher, clock, 60))
+    assert _timeline(dispatcher) == [("manager", "waiting", None), ("manager", "mocked", None)]
+    assert len(sent) == 1
+
+
+@pytest.mark.parametrize("play", ["mocked", "live"])
+def test_another_actor_answers_instead_when_the_approver_times_out(play):
+    dispatcher, clock, sent = _approver("deputy", instead_play=play)
+    asyncio.run(_wait_out(dispatcher, clock, 30))
+    assert ("manager", "timeout", "answered_by") in _timeline(dispatcher)
+    assert [headers["X-ALK-Actor"] for _url, headers in sent] == ["deputy"]
+    assert sent[0][1]["X-ALK-Parent-Event"] == "a1"
