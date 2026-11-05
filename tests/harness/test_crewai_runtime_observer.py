@@ -260,6 +260,27 @@ finally:
     assert len(records[0]["output"]["result"]) == 4096
 
 
+def test_each_payload_says_whether_bounding_left_part_of_it_out(tmp_path: Path) -> None:
+    _fake_crewai(tmp_path)
+    script = """
+from crewai.events.event_bus import CrewAIEventsBus
+from crewai.events.types.tool_usage_events import ToolUsageFinishedEvent
+bus = CrewAIEventsBus()
+try:
+    for args, output in (({'query': 'x' * 5000}, 'ok'), ({'query': 'q'}, ['y'] * 17), ({'query': 'q'}, 'ok')):
+        assert bus.emit(None, ToolUsageFinishedEvent(tool_name='lookup', tool_args=args, output=output)) is bus.future
+finally:
+    bus.release.set()
+    bus.executor.shutdown()
+"""
+    _, records = _run(tmp_path, script)
+
+    assert [
+        (one.get("input_omitted", False), one.get("output_omitted", False))
+        for one in records
+    ] == [(True, False), (False, True), (False, False)]
+
+
 def test_each_agent_a_flow_runs_is_a_hand_off_from_the_flow_with_its_return(
     tmp_path: Path,
 ) -> None:

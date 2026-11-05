@@ -312,7 +312,7 @@ def test_a_runtime_s_hand_off_keeps_when_the_worker_returned_and_is_never_graded
         row["at"],
         row["ended_at"],
         row["kind"],
-    ) == ("DraftFlow", "Draft checker", 4.0, 6.5, "handoff")
+    ) == ("DraftFlow", "Draft checker", 4.0, 6.5, "delegated")
     assert graded_calls(calls) == []
 
 

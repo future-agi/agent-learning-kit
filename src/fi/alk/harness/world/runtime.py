@@ -163,9 +163,18 @@ class Call:
     runtime_ids: dict[str, str] = field(default_factory=dict)
     # A worker's run the runtime reported in place of a tool call: kept in the trace, never graded.
     handoff: bool = False
+    # The hand-off this call ran in, by its event id, as the runtime's own record links them: "observed" when it
+    # did, "unknown" when it gave no evidence. Never inferred from tool names or event order.
+    parent_span_id: str = ""
+    relationship: str = ""
+    # A control pass the framework recorded as one: the agent it names takes over, and nothing returns.
+    transferred: bool = False
+    # Part of the arguments or the result was left out to keep the record bounded.
+    input_omitted: bool = False
+    output_omitted: bool = False
 
 
-def tool_call_attribution(record: Mapping[str, Any]) -> dict[str, str]:
+def tool_call_attribution(record: Mapping[str, Any]) -> dict[str, Any]:
     def text(key: str) -> str:
         value = record.get(key)
         return value if isinstance(value, str) else ""
@@ -176,6 +185,16 @@ def tool_call_attribution(record: Mapping[str, Any]) -> dict[str, str]:
         "task_id": text("task_id"),
         "task_label": text("task_name"),
         "delegated_to": text("delegated_to"),
+        "parent_span_id": text("parent_span_id"),
+        "relationship": "observed" if text("relationship") == "observed" else "",
+        **{
+            key: record.get(field) is True
+            for key, field in (
+                ("transferred", "transfer"),
+                ("input_omitted", "input_omitted"),
+                ("output_omitted", "output_omitted"),
+            )
+        },
     }
 
 
@@ -202,6 +221,31 @@ def graded_calls(calls: Sequence[Call]) -> list[Call]:
     ]
 
 
+def _worker_event(call: Call) -> dict[str, Any]:
+    """Where a call sits among the app's agents, as the runtime recorded it, for a call any runtime attributed."""
+    if not (
+        call.runtime_ids
+        or call.worker_id
+        or call.worker_label
+        or call.delegated_to
+        or call.relationship
+    ):
+        return {}
+    kind = "tool_call"
+    if call.transferred:
+        kind = "transferred"
+    elif call.delegated_to:
+        kind = "delegated"
+    observed = call.relationship == "observed"
+    return {
+        "span_id": call.runtime_ids.get("event_id", ""),
+        "parent_span_id": call.parent_span_id if observed else "",
+        "kind": kind,
+        "agent": call.worker_id or call.worker_label,
+        "relationship": "observed" if observed else "unknown",
+    }
+
+
 def trace_row(call: Call) -> dict[str, Any]:
     """One call as the sealed tool trace keeps it, with who in the agent made it when the runtime said."""
     return {
@@ -225,7 +269,12 @@ def trace_row(call: Call) -> dict[str, Any]:
             if getattr(call, key)
         },
         **({"runtime_ids": call.runtime_ids} if call.runtime_ids else {}),
-        **({"kind": "handoff"} if call.handoff else {}),
+        **{
+            key: True
+            for key in ("input_omitted", "output_omitted")
+            if getattr(call, key)
+        },
+        **_worker_event(call),
     }
 
 

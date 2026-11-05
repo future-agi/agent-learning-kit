@@ -20,7 +20,8 @@ from fi.alk.harness import (
     simulation_mark_bootstrap,
     simulation_worker_events,
 )
-from fi.alk.harness.world.runtime import Call
+from fi.alk.harness.process_runtime import EnvironmentRuntime, RuntimeState
+from fi.alk.harness.world.runtime import Call, trace_row
 
 _PRELUDE = """
 from opentelemetry import trace
@@ -72,6 +73,32 @@ def _run(
     if not trace.exists():
         return []
     return [json.loads(line) for line in trace.read_text().splitlines()]
+
+
+def _sealed(tmp_path: Path) -> list[dict]:
+    """The hook's lines as the sandbox reads and seals them."""
+    runtime = EnvironmentRuntime(
+        runtime_id="rt-1",
+        world_index=0,
+        bundle_digest="sha256:" + "0" * 64,
+        state=RuntimeState.READY,
+        endpoints={},
+        metadata={"tool_trace_path": str(tmp_path / "calls.jsonl")},
+    )
+    return [trace_row(call) for call in call_runner._collect_file_tool_calls(runtime)]
+
+
+def _placed(rows: list[dict]) -> list[tuple]:
+    return [
+        (
+            row["name"],
+            row["kind"],
+            row["agent"],
+            row["relationship"],
+            row["parent_span_id"],
+        )
+        for row in rows
+    ]
 
 
 def _by_tool(records: list[dict]) -> dict[str, tuple]:
@@ -930,3 +957,186 @@ def test_a_framework_whose_instrumentor_is_missing_is_reported_unobserved(
         "simulation mark hook: unobserved smolagents, its instrumentor is not installed"
         in result.stderr
     )
+
+
+def test_two_open_hand_offs_to_one_worker_each_hold_their_own_calls(
+    tmp_path: Path,
+) -> None:
+    # The coordinator asks the same worker twice at once; the two runs end in the other order.
+    _run(
+        tmp_path,
+        """
+        from opentelemetry.trace import set_span_in_context
+        lead = tracer.start_span("Lead", attributes={"gen_ai.span.kind": "AGENT", "gen_ai.agent.name": "Lead"})
+        asks, runs, searches = [], [], []
+        for query in ("q1", "q2"):
+            ask = tracer.start_span("ask_research", context=set_span_in_context(lead), attributes={
+                "gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "ask_research", "input.value": query})
+            run = tracer.start_span("Research", context=set_span_in_context(ask), attributes={
+                "gen_ai.span.kind": "AGENT", "gen_ai.agent.name": "Research"})
+            searches.append(tracer.start_span("search_notes", context=set_span_in_context(run), attributes={
+                "gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "search_notes", "input.value": query}))
+            asks.append(ask)
+            runs.append(run)
+        for one in (1, 0):
+            searches[one].end()
+            runs[one].end()
+            asks[one].end()
+        lead.end()
+    """,
+    )
+    rows = _sealed(tmp_path)
+    asks = {
+        row["arguments"]["raw"]: row for row in rows if row["name"] == "ask_research"
+    }
+    searches = {
+        row["arguments"]["raw"]: row for row in rows if row["name"] == "search_notes"
+    }
+    for query in ("q1", "q2"):
+        assert _placed([asks[query], searches[query]]) == [
+            ("ask_research", "delegated", "Lead", "observed", ""),
+            (
+                "search_notes",
+                "tool_call",
+                "Research",
+                "observed",
+                asks[query]["span_id"],
+            ),
+        ]
+    assert asks["q1"]["span_id"] != asks["q2"]["span_id"]
+
+
+_ROOT_TRANSFER = """
+from opentelemetry.trace import set_span_in_context
+root = tracer.start_span("invoke_agent root_agent", attributes={"gen_ai.operation.name": "invoke_agent"})
+root.set_attribute("gen_ai.agent.name", "root_agent")
+transfer = tracer.start_span("execute_tool transfer_to_agent", context=set_span_in_context(root), attributes={
+    "gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "transfer_to_agent",
+    "gen_ai.tool.type": "TOOL_TYPE", "gcp.vertex.agent.tool_call_args": '{"agent_name": "leaf_agent"}'})
+transfer.end()
+leaf = tracer.start_span("invoke_agent leaf_agent", context=set_span_in_context(root), attributes={
+    "gen_ai.operation.name": "invoke_agent"})
+# As the framework does, the agent is named once its span has started.
+leaf.set_attribute("gen_ai.agent.name", "leaf_agent")
+with trace.use_span(leaf, end_on_exit=True):
+    with span("execute_tool look_up_tide", **{"gen_ai.operation.name": "execute_tool",
+                                              "gen_ai.tool.name": "look_up_tide"}):
+        pass
+root.end()
+"""
+
+
+def test_a_framework_s_own_transfer_is_a_control_pass_and_holds_the_leaf_worker_s_calls(
+    tmp_path: Path,
+) -> None:
+    records = _run(tmp_path, _ROOT_TRANSFER.replace("TOOL_TYPE", "TransferToAgentTool"))
+    transfer = next(r for r in records if r["name"] == "transfer_to_agent")
+    assert (transfer["transfer"], transfer["delegated_to"], "ended_at" in transfer) == (
+        True,
+        "leaf_agent",
+        False,
+    )
+    assert _placed(_sealed(tmp_path)) == [
+        ("transfer_to_agent", "transferred", "root_agent", "observed", ""),
+        ("look_up_tide", "tool_call", "leaf_agent", "observed", transfer["event_id"]),
+    ]
+
+
+def test_a_tool_named_like_a_transfer_without_the_framework_s_evidence_is_a_tool_call_of_unknown_place(
+    tmp_path: Path,
+) -> None:
+    # The same spans, but the framework does not mark the tool as its transfer: nothing records the control pass, so
+    # the leaf's call is not placed under it, nor presented as the root's.
+    _run(tmp_path, _ROOT_TRANSFER.replace("TOOL_TYPE", "FunctionTool"))
+    assert _placed(_sealed(tmp_path)) == [
+        ("transfer_to_agent", "tool_call", "root_agent", "observed", ""),
+        ("look_up_tide", "tool_call", "leaf_agent", "unknown", ""),
+    ]
+
+
+def test_a_call_with_no_agent_above_it_has_an_unknown_place(tmp_path: Path) -> None:
+    _run(
+        tmp_path,
+        """
+        with span("execute_tool search_notes", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "search_notes",
+                                              "gen_ai.agent.name": "research_worker"}):
+            pass
+    """,
+    )
+    assert _placed(_sealed(tmp_path)) == [
+        ("search_notes", "tool_call", "research_worker", "unknown", "")
+    ]
+
+
+def test_an_agent_the_framework_records_as_handed_control_holds_its_calls(
+    tmp_path: Path,
+) -> None:
+    # The OpenAI Agents SDK runs each agent at the top of the trace and names, on the agent handed control, the agent
+    # that handed it, only when that agent's span ends.
+    records = _run(
+        tmp_path,
+        """
+        with span("Triage", **{"fi.span.kind": "AGENT", "graph.node.id": "Triage"}):
+            with span("lookup", **{"fi.span.kind": "TOOL", "gen_ai.tool.name": "lookup"}):
+                pass
+        with span("Refunds", **{"fi.span.kind": "AGENT", "graph.node.id": "Refunds"}) as refunds:
+            with span("issue_refund", **{"fi.span.kind": "TOOL", "gen_ai.tool.name": "issue_refund"}):
+                pass
+            refunds.set_attribute("graph.node.parent_id", "Triage")
+    """,
+    )
+    passed = next(r for r in records if r.get("transfer"))
+    rows = sorted(_sealed(tmp_path), key=lambda row: row["name"])
+    assert _placed(rows) == [
+        ("Refunds", "transferred", "Triage", "unknown", ""),
+        ("issue_refund", "tool_call", "Refunds", "observed", passed["event_id"]),
+        ("lookup", "tool_call", "Triage", "observed", ""),
+    ]
+    assert "ended_at" not in rows[0]
+
+
+def test_each_payload_says_whether_part_of_it_was_left_out(tmp_path: Path) -> None:
+    records = _run(
+        tmp_path,
+        """
+        with span("Worker", **{"gen_ai.span.kind": "AGENT", "gen_ai.agent.name": "Worker"}):
+            with span("long_in", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "long_in",
+                                    "input.value": "a" * 5000, "output.value": "ok"}):
+                pass
+            with span("long_out", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "long_out",
+                                     "input.value": "{}", "output.value": "b" * 5000}):
+                pass
+            with span("fits", **{"gen_ai.span.kind": "TOOL", "gen_ai.tool.name": "fits",
+                                 "input.value": "{}", "output.value": "ok"}):
+                pass
+    """,
+    )
+    assert {
+        r["name"]: (r.get("input_omitted", False), r.get("output_omitted", False))
+        for r in records
+    } == {
+        "long_in": (True, False),
+        "long_out": (False, True),
+        "fits": (False, False),
+    }
+    assert {
+        row["name"]: (row.get("input_omitted", False), row.get("output_omitted", False))
+        for row in _sealed(tmp_path)
+    } == {"long_in": (True, False), "long_out": (False, True), "fits": (False, False)}
+
+
+def test_a_parent_no_recorded_hand_off_carries_is_unknown_not_kept() -> None:
+    # The hand-off a call ran in had not ended when the call did, so no line records it.
+    leaf = Call(
+        name="search_notes",
+        arguments={},
+        worker_id="Research",
+        runtime_ids={"event_id": "b"},
+        parent_span_id="a",
+        relationship="observed",
+        at=1.0,
+    )
+    (merged,) = call_runner._merge_span_calls([], [leaf])
+    assert {
+        key: trace_row(merged)[key] for key in ("parent_span_id", "relationship")
+    } == {"parent_span_id": "", "relationship": "unknown"}

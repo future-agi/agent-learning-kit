@@ -55,6 +55,13 @@ _TOOL_ARGUMENT_KEYS = ("gen_ai.tool.call.arguments", "tool.parameters", "input.v
 _TOOL_RESULT_KEYS = ("gen_ai.tool.call.result", "output.value")
 _LIVE_SPANS_MAX = 4096
 _TRACE_LINE_MAX = 65536
+_PAYLOAD_MAX = 4096
+# A control pass the framework records as one. Google ADK marks its agent-transfer tool by the tool's own class and
+# names the agent in its ``agent_name`` argument; the OpenAI Agents SDK's instrumentation names, on the agent that was
+# handed control, the agent that handed it.
+_TRANSFER_TOOL_TYPES = ("TransferToAgentTool",)
+_TRANSFER_ARGUMENT_KEYS = ("gcp.vertex.agent.tool_call_args",) + _TOOL_ARGUMENT_KEYS
+_HANDED_FROM_KEYS = ("graph.node.parent_id",)
 
 
 def _names(text: str, value: str) -> bool:
@@ -107,6 +114,30 @@ def _graph_worker(attributes):
     return _first(attributes, ("lc_agent_name",)) or names[-1] or None
 
 
+def _hex(span_id) -> str:
+    return format(span_id, "016x")
+
+
+def _bounded(record, key, value, flag) -> None:
+    """Keep at most the payload limit of ``value``, and say when some of it was left out."""
+    record[key] = value[:_PAYLOAD_MAX]
+    if len(value) > _PAYLOAD_MAX:
+        record[flag] = True
+
+
+def _transfer_target(attributes):
+    """The agent a framework's own transfer tool handed control to, when the span records the call."""
+    if attributes.get("gen_ai.tool.type") not in _TRANSFER_TOOL_TYPES:
+        return None
+    try:
+        target = json.loads(_first(attributes, _TRANSFER_ARGUMENT_KEYS) or "").get(
+            "agent_name"
+        )
+    except (ValueError, AttributeError):
+        return None
+    return target if isinstance(target, str) and target else None
+
+
 def _same_tool(one, other):
     """Whether two spans name the same tool, as two instrumentations of one call spell it."""
 
@@ -132,6 +163,12 @@ class _ToolSpans:
         self._waiting = {}
         # What a model last said in each open run, read as a job's answer when the run ends.
         self._said = {}
+        # Job runs whose hand-off was written: the calls inside one ran in that hand-off.
+        self._jobs = set()
+        # Transfers a framework recorded, by the agent run they were made in, until the agent they name starts in it;
+        # then each agent run handed control, with the event id of the transfer that handed it.
+        self._transfers = {}
+        self._transferred = {}
         self._appended = False
         # Spans start and end on the process's own threads.
         self._lock = threading.RLock()
@@ -220,6 +257,50 @@ class _ToolSpans:
             span_id = entry[1]
         return None
 
+    def _delegation(self, span_id):
+        """The hand-off ``span_id`` ran in, read from the span tree only: ``(event id, "observed")``, ``("",
+        "observed")`` under an agent that nothing handed work to, and ``("", "unknown")`` when the tree does not say."""
+        agent = None
+        entry = self._live.get(span_id)
+        parent = entry[1] if entry else None
+        while parent is not None:
+            above = self._live.get(parent)
+            if above is None:
+                return "", "unknown"
+            if parent in self._jobs:
+                return _hex(parent), "observed"
+            kind = _kind(above[0])
+            if kind == "AGENT":
+                if agent is not None:
+                    handed = self._transfer_into(parent, agent)
+                    return (handed, "observed") if handed else ("", "unknown")
+                agent = parent
+            elif kind == "TOOL" and agent is not None:
+                return _hex(parent), "observed"
+            elif kind != "TOOL" and above[1] in self._live:
+                name = _first(above[0].attributes or {}, ("lc_agent_name",))
+                handing = self._live[above[1]][0]
+                if (
+                    name
+                    and name != self._named_above(above[1])
+                    and _kind(handing) in ("TOOL", None)
+                ):
+                    return _hex(above[1]), "observed"
+            parent = above[1]
+        return "", "observed" if agent is not None else "unknown"
+
+    def _transfer_into(self, scope, agent):
+        """The transfer made in the run ``scope`` that names the agent run ``agent`` started under it."""
+        if agent not in self._transferred:
+            name = self._agent_name(self._live[agent][0])
+            pending = self._transfers.get(scope) or []
+            match = next((one for one in pending if one[1] == name), None)
+            if match is None:
+                return None
+            pending.remove(match)
+            self._transferred[agent] = match[0]
+        return self._transferred[agent]
+
     def _agent_name(self, agent):
         """An agent span's own name, else the tool that handed it the work; never a method-like span name."""
         name = _first(agent.attributes or {}, _AGENT_NAME_KEYS)
@@ -259,6 +340,9 @@ class _ToolSpans:
                 name = self._agent_name(span)
                 if handing is not None and name:
                     self._handed[handing.get_span_context().span_id] = name
+                handed_from = _first(span.attributes or {}, _HANDED_FROM_KEYS)
+                if handed_from and name and handed_from != name:
+                    self._transfer_record(span, span_id, handed_from, name)
             elif kind != "TOOL" and entry is not None and entry[1] in self._live:
                 # A run opened right under a span by an agent other than the one running that span is the span
                 # handing it the work, as a sub-agent started through a tool is. A tool's kind is often set only
@@ -279,6 +363,9 @@ class _ToolSpans:
         finally:
             if kind != "TOOL":
                 self._handed.pop(span_id, None)
+            for one in (self._transfers, self._transferred):
+                one.pop(span_id, None)
+            self._jobs.discard(span_id)
             self._live.pop(span_id, None)
 
     def _forget_cleared_call(self) -> None:
@@ -286,6 +373,7 @@ class _ToolSpans:
         if self._appended and not os.path.exists(self._path):
             self._launches.clear()
             self._waiting.clear()
+            self._jobs.clear()
             self._appended = False
 
     def _job_record(self, span, span_id, *, ended: bool, attributes=None) -> bool:
@@ -317,25 +405,52 @@ class _ToolSpans:
         record = {
             "name": launch["name"],
             "arguments": launch["arguments"],
-            "output": (
-                self._said.get(span_id) or _first(attributes, _TOOL_RESULT_KEYS) or ""
-            )[:4096]
-            if ended
-            else "",
             "is_error": ended and getattr(status, "name", "") == "ERROR",
             "at": (span.start_time or 0) / 1e9,
             **({"ended_at": (span.end_time or 0) / 1e9} if ended else {}),
             "source": "otel",
-            "event_id": format(span_id, "016x"),
+            "event_id": _hex(span_id),
             "parent_event_id": launch["event_id"],
+            # The job's hand-off sits where the call that launched it did.
+            "parent_span_id": launch["parent_span_id"],
+            "relationship": launch["relationship"],
             "delegated_to": worker[:256],
         }
+        if launch.get("input_omitted"):
+            record["input_omitted"] = True
+        said = self._said.get(span_id) or _first(attributes, _TOOL_RESULT_KEYS) or ""
+        _bounded(record, "output", said if ended else "", "output_omitted")
         if launch["agent"]:
             record.update(agent_key=launch["agent"], agent_role=launch["agent"])
+        self._jobs.add(span_id)
         with self._lock:
             _append(self._path, record)
             self._appended = True
         return True
+
+    def _transfer_record(self, span, span_id, handed_from, name) -> None:
+        """Write an agent run the framework records as handed control by another agent, as that control pass. The
+        tree does not say where the agent that passed control ran, so the pass's own place is unknown."""
+        record = {
+            "name": name[:256],
+            "arguments": "",
+            "output": "",
+            "is_error": False,
+            "at": (span.start_time or 0) / 1e9,
+            "source": "otel",
+            "event_id": _hex(span_id),
+            "parent_span_id": "",
+            "relationship": "unknown",
+            "agent_key": handed_from[:256],
+            "agent_role": handed_from[:256],
+            "delegated_to": name[:256],
+            "transfer": True,
+            # A worker's run, not a tool call: kept, never graded.
+            "kind": "handoff",
+        }
+        self._forget_cleared_call()
+        _append(self._path, record)
+        self._appended = True
 
     def _write(self, span, span_id) -> None:
         attributes = span.attributes or {}
@@ -344,16 +459,29 @@ class _ToolSpans:
             return
         agent = self._above(span_id, ("AGENT",))
         status = getattr(getattr(span, "status", None), "status_code", None)
+        parent_span_id, relationship = self._delegation(span_id)
         record = {
             "name": name[:256],
-            "arguments": (_first(attributes, _TOOL_ARGUMENT_KEYS) or "")[:4096],
-            "output": (_first(attributes, _TOOL_RESULT_KEYS) or "")[:4096],
             "is_error": getattr(status, "name", "") == "ERROR",
             "at": (span.start_time or 0) / 1e9,
             "ended_at": (span.end_time or 0) / 1e9,
             "source": "otel",
-            "event_id": format(span_id, "016x"),
+            "event_id": _hex(span_id),
+            "parent_span_id": parent_span_id,
+            "relationship": relationship,
         }
+        _bounded(
+            record,
+            "arguments",
+            _first(attributes, _TOOL_ARGUMENT_KEYS) or "",
+            "input_omitted",
+        )
+        _bounded(
+            record,
+            "output",
+            _first(attributes, _TOOL_RESULT_KEYS) or "",
+            "output_omitted",
+        )
         worker = (
             _graph_worker(attributes)
             or _first(attributes, ("gen_ai.agent.name",))
@@ -364,10 +492,22 @@ class _ToolSpans:
         if worker:
             record.update(agent_key=worker[:256], agent_role=worker[:256])
         if agent is not None:
-            record["parent_event_id"] = format(agent.get_span_context().span_id, "016x")
+            record["parent_event_id"] = _hex(agent.get_span_context().span_id)
         delegated = self._handed.pop(span_id, None)
         if delegated:
             record["delegated_to"] = delegated[:256]
+        target = _transfer_target(attributes)
+        if target:
+            # Control passed to the agent the framework named; nothing returns from a control pass.
+            record.update(transfer=True, delegated_to=target[:256])
+            record.pop("ended_at")
+            scope = agent.get_span_context().span_id if agent is not None else None
+            pending = self._transfers.get(scope, [])
+            if (
+                scope is not None
+                and len(self._transfers) + len(pending) < _LAUNCHES_MAX
+            ):
+                self._transfers[scope] = pending + [(record["event_id"], target)]
         self._forget_cleared_call()
         if record["output"]:
             self._launches.append(
@@ -376,6 +516,9 @@ class _ToolSpans:
                     "name": record["name"],
                     "arguments": record["arguments"],
                     "event_id": record["event_id"],
+                    "parent_span_id": parent_span_id,
+                    "relationship": relationship,
+                    "input_omitted": record.get("input_omitted", False),
                     # No agent names the launching call: the run it sits in, which a graph server names by the graph.
                     "agent": record.get("agent_key") or self._run_name(span_id),
                     "conversation": _first(attributes, _CONVERSATION_KEYS),
@@ -391,7 +534,12 @@ class _ToolSpans:
 def _append(path, record) -> None:
     line = json.dumps(record, sort_keys=True, default=str)
     if len(line) > _TRACE_LINE_MAX:
-        record.update(arguments="<truncated>", output="<truncated>")
+        record.update(
+            arguments="<truncated>",
+            output="<truncated>",
+            input_omitted=True,
+            output_omitted=True,
+        )
         line = json.dumps(record, sort_keys=True, default=str)
     with open(path, "a", encoding="utf-8") as trace:
         trace.write(line + "\n")
@@ -427,6 +575,8 @@ def _patch_autogen_tools(module, path) -> None:
 
 def _record_tool(path, record, output, is_error) -> None:
     try:
-        _append(path, {**record, "output": output[:4096], "is_error": is_error})
+        line = {**record, "is_error": is_error}
+        _bounded(line, "output", output, "output_omitted")
+        _append(path, line)
     except Exception:
         pass

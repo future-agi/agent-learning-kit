@@ -912,6 +912,31 @@ def _tool_key(name: str) -> str:
     return "".join(ch for ch in name.lower() if ch.isalnum())
 
 
+def _keep_recorded_parents(from_spans: list[Call]) -> None:
+    """A span's parent stands only when it is a hand-off the spans recorded; a call of an agent run the framework
+    records as handed control sits in that control pass."""
+    handed = {
+        span.runtime_ids.get("event_id")
+        for span in from_spans
+        if span.delegated_to or span.transferred
+    } - {None}
+    passed = {
+        span.runtime_ids.get("event_id")
+        for span in from_spans
+        if span.transferred and span.handoff
+    } - {None}
+    for span in from_spans:
+        agent_run = span.runtime_ids.get("parent_event_id")
+        if (
+            span.relationship == "observed"
+            and not span.parent_span_id
+            and agent_run in passed
+        ):
+            span.parent_span_id = agent_run
+        elif span.parent_span_id and span.parent_span_id not in handed:
+            span.parent_span_id, span.relationship = "", ""
+
+
 def _merge_span_calls(calls: list[Call], from_spans: list[Call]) -> tuple[Call, ...]:
     """Count a call a framework span and another tracer both report once, with the span's agent, hand-off and times."""
     # A background job is written when it starts and again when it ends; the later line carries its return.
@@ -929,6 +954,7 @@ def _merge_span_calls(calls: list[Call], from_spans: list[Call]) -> tuple[Call, 
             and span.runtime_ids.get("event_id") in ended
         )
     ]
+    _keep_recorded_parents(from_spans)
     if not calls:
         # A span is written when it ends, so a hand-off lands after the calls it led to.
         return tuple(sorted(from_spans, key=lambda call: call.at))
@@ -956,8 +982,15 @@ def _merge_span_calls(calls: list[Call], from_spans: list[Call]) -> tuple[Call, 
         if not (other.worker_id or other.worker_label):
             other.worker_id, other.worker_label = span.worker_id, span.worker_label
         other.delegated_to = other.delegated_to or span.delegated_to
+        other.transferred = other.transferred or span.transferred
         other.ended_at = other.ended_at or span.ended_at
-        other.runtime_ids = other.runtime_ids or span.runtime_ids
+        if not other.runtime_ids:
+            # The span's place among the agents goes with its ids: a parent is an id in the same record.
+            other.runtime_ids = span.runtime_ids
+            other.parent_span_id, other.relationship = (
+                span.parent_span_id,
+                span.relationship,
+            )
         # A span starts when the call does; another tracer may stamp a call only once it reads its result.
         other.at = span.at or other.at
     return tuple(sorted(merged, key=lambda call: call.at))
