@@ -36,11 +36,14 @@ describe('Round 6 evaluator contracts', () => {
             jest.spyOn(console, level as 'error').mockImplementation(() => undefined));
         const stderr = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
         let thrown: unknown;
+        let observed = '';
         try {
             evaluator.evaluate(metric, [{ response: 'text' }]);
         } catch (error) {
             thrown = error;
         } finally {
+            // Read the call histories before mockRestore clears them.
+            observed = JSON.stringify([...spies, stderr].map(spy => spy.mock.calls));
             spies.forEach(spy => spy.mockRestore());
             stderr.mockRestore();
         }
@@ -52,9 +55,7 @@ describe('Round 6 evaluator contracts', () => {
             expect(String((error as unknown as Record<string, unknown>)[key])).not.toContain('SYNTHETIC_HOSTILE_METRIC_NAME');
         }
         expect(String(error)).not.toContain('SYNTHETIC_HOSTILE_METRIC_NAME');
-        for (const spy of [...spies, stderr]) {
-            expect(JSON.stringify(spy.mock.calls)).not.toContain('SYNTHETIC_HOSTILE_METRIC_NAME');
-        }
+        expect(observed).not.toContain('SYNTHETIC_HOSTILE_METRIC_NAME');
     });
 
     it('R6-EC02 sends a primitive response and an ordinary record-valued additional field to cloud', async () => {
