@@ -2545,3 +2545,21 @@ def test_an_actor_on_the_agent_s_tool_waits_for_the_route_the_log_records_for_it
     log = [{"name": "request_approval", "actor_id": "agent", "action_id": "a1"}]
     [(_actor, action)] = [(one[0], one[2]) for one in dispatcher.pending]
     assert dispatcher._cause(_actor, action, 0.0, log) == "a1"
+
+
+def test_a_trial_token_that_cannot_be_given_to_the_proxy_user_is_never_widened(tmp_path, monkeypatch):
+    import fi.alk.harness.call_runner as cr
+
+    token_path = tmp_path / "proxy" / "actor-token"
+    real_uid = os.geteuid()
+
+    def chown(*args, **kwargs):
+        raise PermissionError("not permitted")
+
+    # The proxy's directory belongs to another user, and this process may not give the file away.
+    monkeypatch.setattr(cr.os, "geteuid", lambda: real_uid + 1)
+    monkeypatch.setattr(cr.os, "chown", chown)
+
+    with pytest.raises(cr.PrivateTokenUnavailable):
+        cr._write_trial_token(token_path, "secret")
+    assert not token_path.exists()

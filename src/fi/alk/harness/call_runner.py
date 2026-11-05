@@ -993,8 +993,16 @@ def _agent_marks(
     return marks
 
 
+class PrivateTokenUnavailable(RuntimeError):
+    """The trial token could not be made readable by the tool proxy's user alone."""
+
+
 def _write_trial_token(path: Path, token: str) -> None:
-    """The token, readable only by whoever owns the tool proxy's directory; a stale file or link is replaced."""
+    """The token, readable only by whoever owns the tool proxy's directory; a stale file or link is replaced.
+
+    Raises `PrivateTokenUnavailable`, and leaves no token behind, when it cannot be given to that user: widening it
+    would let the agent in the same sandbox read it and act as any actor.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     path.unlink(missing_ok=True)
     fd = os.open(
@@ -1008,9 +1016,9 @@ def _write_trial_token(path: Path, token: str) -> None:
     if owner.st_uid != os.geteuid():
         try:
             os.chown(path, owner.st_uid, owner.st_gid)
-        except PermissionError:
-            # Without the right to give it away, the proxy's own user can read it only if others can.
-            path.chmod(0o644)
+        except PermissionError as error:
+            path.unlink(missing_ok=True)
+            raise PrivateTokenUnavailable(str(error)) from error
 
 
 def _actor_dispatcher(
@@ -1032,7 +1040,14 @@ def _actor_dispatcher(
         )
         return None
     token = secrets.token_hex(32)
-    _write_trial_token(Path(token_path), token)
+    try:
+        _write_trial_token(Path(token_path), token)
+    except PrivateTokenUnavailable as error:
+        logger.error(
+            "world actors cannot act: no_private_token, the trial token cannot be kept from the agent",
+            extra={"reason": "no_private_token", "detail": str(error)},
+        )
+        return None
     cast = [ScenarioActor.model_validate(entry) for entry in doc.get("actors") or []]
     contract_path = bundle_dir / "contract.json"
     contract = (
