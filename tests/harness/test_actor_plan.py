@@ -209,10 +209,9 @@ def test_an_open_wait_and_an_actor_that_never_came_in_are_in_the_record():
         "outcome": "unresolved_at_end",
         "parent": "a1",
     } in record
-    assert any(
-        one["actor"] == "auditor" and one.get("problem") == "not_activated"
-        for one in record
-    )
+    # A trigger that never came is recorded as not triggered, never as the scenario's problem.
+    assert any(one["actor"] == "auditor" and one.get("play") == "not_triggered" for one in record)
+    assert not any(one.get("play") == "problem" for one in record)
 
 
 def test_pre_run_sessions_replay_in_order_and_a_reply_takes_the_id_the_world_gave_its_message():

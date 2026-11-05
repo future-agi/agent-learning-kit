@@ -411,12 +411,13 @@ class ActorDispatcher:
             if actor_id not in self.settled
         ]
 
-    def not_activated(self) -> list[dict[str, Any]]:
-        """Each actor whose activation never came this trial, as a problem of the scenario, never the agent's."""
+    def not_triggered(self) -> list[dict[str, Any]]:
+        """Each actor whose trigger never came this trial: recorded as not triggered, the same word speaking actors
+        use. A trigger that never comes can be the right run (the agent never escalated); a trigger that cannot
+        happen is refused when the scenario is written."""
         acted = {one["actor"] for one in self.fired if one.get("play") in ("mocked", "live")}
         return [
-            {"actor": actor_id, "play": "problem", "problem": "not_activated",
-             "why": f"its trigger ({trigger.kind}) never came in this trial"}
+            {"actor": actor_id, "play": "not_triggered", "why": f"its trigger ({trigger.kind}) never came in this trial"}
             for actor_id, trigger in self.triggers.items()
             if actor_id not in self.waiting and actor_id not in self.woken and actor_id not in acted
             and trigger.kind not in ("always", "probability")
@@ -527,7 +528,7 @@ class ActorDispatcher:
     def record(self) -> list[dict[str, Any]]:
         """Everything this dispatcher did and found, in order, with the waits still open and the actors that never
         came in: the decisions half of the trial's actor record."""
-        return [*self.fired, *self.unresolved(), *self.not_activated()]
+        return [*self.fired, *self.unresolved(), *self.not_triggered()]
 
 
 def build_dispatcher(
