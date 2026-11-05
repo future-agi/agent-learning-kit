@@ -866,6 +866,10 @@ class HostedChatCallRunner:
             messages=tuple(transcript.canonical_messages()),
             call_actors=_chat_actor_summary(cast, world_record, listing),
             world_actions=tuple((world_record or {}).get("actions") or ()),
+            actor_briefs={
+                **{str(one["id"]): str(one.get("brief") or "") for one in chat_actors if one.get("brief")},
+                **(dispatcher.briefs if dispatcher is not None else {}),
+            },
         )
         if failure is not None:
             failure.partial = outcome

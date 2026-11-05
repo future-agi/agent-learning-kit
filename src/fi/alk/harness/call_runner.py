@@ -2051,6 +2051,7 @@ class CallRunnerImpl:
                 actor_decisions=(actors.record() if actors is not None else []) + no_door,
                 actor_usage=meter.rows(),
                 limits=actor_limits(doc, self._context.bundle_dir, "voice"),
+                actor_briefs=actors.briefs if actors is not None else None,
             )
         except (CallAborted, WorldUnavailable):
             # `_translate_report`'s own typed control-flow (non-completed status, no test case,
@@ -2094,6 +2095,7 @@ class CallRunnerImpl:
         actor_decisions: Sequence[dict[str, Any]] = (),
         actor_usage: Sequence[dict[str, Any]] = (),
         limits: Mapping[str, Any] | None = None,
+        actor_briefs: Mapping[str, str] | None = None,
     ) -> CallOutcome:
         case = report.test_cases[0] if report.test_cases else None
         took_part = (
@@ -2259,6 +2261,10 @@ class CallRunnerImpl:
             ),
             target_metrics=_target_metrics(case),
             world_actions=tuple(acted),
+            actor_briefs={
+                **{str(one["id"]): str(one.get("brief") or "") for one in call_actors if one.get("brief")},
+                **(actor_briefs or {}),
+            },
             call_actors=_with_world_actors(
                 tuple(took_part.get("call_actors") or ())
                 + tuple(

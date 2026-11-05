@@ -257,6 +257,8 @@ class CallOutcome:
     call_actors: tuple[dict[str, Any], ...] = ()
     # Every action an actor took in the world this trial, with when and its outcome.
     world_actions: tuple[dict[str, Any], ...] = ()
+    # What each actor was told to play from, so a judge can tell an actor that strayed from it.
+    actor_briefs: dict[str, str] = field(default_factory=dict)
 
 
 class CallAborted(RuntimeError):
@@ -2442,6 +2444,7 @@ class HostedScheduler:
                     offered["actors"] = {
                         "summary": list(call_outcome.call_actors),
                         "actions": list(call_outcome.world_actions),
+                        "briefs": dict(call_outcome.actor_briefs),
                     }
                 joint_verdicts, off_script = await self._judge_jointly(
                     [goal for _, goal in judged_pending], check_handle, calls, call_outcome, offered

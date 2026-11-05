@@ -4201,7 +4201,26 @@ def test_a_judge_whose_signature_does_not_match_is_not_a_pass(
     asyncio.run(scenario())
 
 
-def _two_judged(monkeypatch, joint_judge, *, mode="", silent=False, goals=None, recording=None):
+def test_the_judge_is_given_who_else_took_part_what_each_did_and_each_actor_s_brief(monkeypatch) -> None:
+    seen: dict[str, Any] = {}
+
+    async def _all(goals, world, calls, *, messages=(), actors=None):
+        seen["actors"] = actors
+        return {goal.name: (True, "held") for goal in goals}
+
+    with_actors = replace(
+        _call_outcome(),
+        call_actors=({"actor": "mia", "name": "Mia", "triggered": True, "delivered": 1},),
+        world_actions=({"actor_id": "mia", "name": "approve", "outcome": "committed"},),
+        actor_briefs={"mia": "You are Mia, the manager."},
+    )
+    receipt, _ = _two_judged(monkeypatch, _all, outcome=with_actors)
+    assert receipt.status == "passed"
+    assert seen["actors"]["briefs"] == {"mia": "You are Mia, the manager."}
+    assert seen["actors"]["actions"][0]["actor_id"] == "mia"
+
+
+def _two_judged(monkeypatch, joint_judge, *, mode="", silent=False, goals=None, recording=None, outcome=None):
     """Run one scenario with two judged sub-goals; return (receipt, sub-goals the per-goal judge saw)."""
     alone: list[str] = []
 
@@ -4219,7 +4238,7 @@ def _two_judged(monkeypatch, joint_judge, *, mode="", silent=False, goals=None, 
         await pool.start()
         class Runner:
             async def run(self, scenario, runtime):
-                return replace(_call_outcome(turns=0 if silent else 4), recording=recording)
+                return outcome or replace(_call_outcome(turns=0 if silent else 4), recording=recording)
 
         scheduler = hs.HostedScheduler(
             pool=pool,
