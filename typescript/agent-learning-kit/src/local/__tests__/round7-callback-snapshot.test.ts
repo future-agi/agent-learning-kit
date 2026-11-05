@@ -1,4 +1,3 @@
-import { describe, expect, it } from '@jest/globals';
 import { snapshotBoundary } from '../autoeval/types.js';
 
 // SEC-W07-R7-02 / COR-R7-01: a snapshot taken with scanner callbacks allowed
