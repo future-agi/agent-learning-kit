@@ -2082,7 +2082,8 @@ def test_a_call_keeps_who_its_sub_actors_were_and_what_happened_to_each(
             "id": "near",
             "instruction": "You want them to hurry.",
             "trigger": {"kind": "always"},
-        }
+        },
+        {"id": "other", "instruction": "x", "trigger": {"kind": "always"}},
     ]
     document.write_text(json.dumps(body))
     save_sub_actors(
@@ -2094,7 +2095,10 @@ def test_a_call_keeps_who_its_sub_actors_were_and_what_happened_to_each(
                     name="Rowan",
                     role="someone with the person",
                     channel="audio_mix",
-                )
+                ),
+                SubActor(
+                    id="other", name="Kai", role="a neighbour", channel="audio_mix"
+                ),
             ]
         ),
     )
@@ -2109,7 +2113,19 @@ def test_a_call_keeps_who_its_sub_actors_were_and_what_happened_to_each(
     ]
     events = [{"sub_actor": "near", "kind": "delivered", "text": "Hurry up"}]
 
+    placed = []
+    # The provider has no voice left for Kai that no one else on the call has.
+    chosen = cr.persona_voice
+    monkeypatch.setattr(
+        cr,
+        "persona_voice",
+        lambda persona, *args, **kwargs: (
+            "" if persona.get("name") == "Kai" else chosen(persona, *args, **kwargs)
+        ),
+    )
+
     async def place_call(spec):
+        placed.append(spec.model_dump_json())
         return _report(
             result_metadata={"sub_actors": summary, "sub_actor_events": events}
         )
@@ -2128,10 +2144,17 @@ def test_a_call_keeps_who_its_sub_actors_were_and_what_happened_to_each(
     ]
     record = transcript["sub_actors"]
     assert record["summary"] == summary and record["events"] == events
-    [resolved] = record["resolved"]
+    resolved, other = record["resolved"]
     assert (resolved["id"], resolved["instruction"]) == (
         "near",
         "You want them to hurry.",
     )
+    # Kept on the record with why it never entered, and never put on the call.
+    assert (other["id"], other["entered"], other["reason"]) == (
+        "other",
+        False,
+        "no_distinct_voice",
+    )
+    assert "Rowan" in placed[0] and "Kai" not in placed[0]
     low, high = LOUDNESS_RANGE
     assert low <= resolved["loudness_ratio"] <= high

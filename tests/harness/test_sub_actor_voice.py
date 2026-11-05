@@ -673,7 +673,7 @@ def test_delivered_lines_land_in_the_transcript_where_they_were_heard():
 def test_a_scenario_s_sub_actors_reach_the_call_resolved_in_voices_no_one_else_has(
     tmp_path, monkeypatch, caplog
 ):
-    from fi.alk.harness.call_runner import _voiced_sub_actors
+    from fi.alk.harness.call_runner import _resolved_sub_actors
     from fi.alk.harness.sub_actor import SubActor, SubActorList, save_sub_actors
 
     save_sub_actors(
@@ -710,10 +710,15 @@ def test_a_scenario_s_sub_actors_reach_the_call_resolved_in_voices_no_one_else_h
         ],
     }
     monkeypatch.delenv("HARNESS_SUB_ACTORS", raising=False)
-    assert _voiced_sub_actors(doc, tmp_path, "deepgram", "", "run") == []
+    assert _resolved_sub_actors(doc, tmp_path, "deepgram", "", "run") == []
     monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
-    voiced = _voiced_sub_actors(doc, tmp_path, "deepgram", "", "run")
-    assert [one["id"] for one in voiced] == ["near"]
+    voiced = _resolved_sub_actors(doc, tmp_path, "deepgram", "", "run")
+    # Every included sub-actor stays on the record; one that cannot speak says why.
+    assert [(one["id"], one.get("entered"), one.get("reason")) for one in voiced] == [
+        ("near", None, None),
+        ("writer", False, "not_a_voice_channel"),
+        ("gone", False, "not_in_list"),
+    ]
     assert "sub-actor writer does not enter: not a voice channel" in caplog.text
     assert "sub-actor gone does not enter: not in the environment's list" in caplog.text
     near = voiced[0]
@@ -757,7 +762,7 @@ def _one_sub_actor(tmp_path, trigger):
 def test_a_sub_actor_on_a_tool_waits_for_the_name_the_trace_logs_that_tool_under(
     tmp_path, monkeypatch
 ):
-    from fi.alk.harness.call_runner import _voiced_sub_actors
+    from fi.alk.harness.call_runner import _resolved_sub_actors
 
     monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
     (tmp_path / "contract.json").write_text(
@@ -770,7 +775,7 @@ def test_a_sub_actor_on_a_tool_waits_for_the_name_the_trace_logs_that_tool_under
         )
     )
     doc = _one_sub_actor(tmp_path, {"kind": "on_tool", "tool": "check_status"})
-    [near] = _voiced_sub_actors(doc, tmp_path, "deepgram", "", "run")
+    [near] = _resolved_sub_actors(doc, tmp_path, "deepgram", "", "run")
     assert near["trigger"]["tool"] == "get_status"
     assert registry.due(
         near["trigger"],
@@ -784,11 +789,17 @@ def test_a_sub_actor_on_a_tool_waits_for_the_name_the_trace_logs_that_tool_under
 def test_a_sub_actor_with_no_voice_of_its_own_does_not_enter(
     tmp_path, monkeypatch, caplog, provider
 ):
-    from fi.alk.harness.call_runner import _voiced_sub_actors
+    from fi.alk.harness.call_runner import _resolved_sub_actors
 
     monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
     doc = _one_sub_actor(tmp_path, {"kind": "always"})
-    assert _voiced_sub_actors(doc, tmp_path, provider, "", "run") == []
+    [near] = _resolved_sub_actors(doc, tmp_path, provider, "", "run")
+    assert (near["id"], near["entered"], near["reason"]) == (
+        "near",
+        False,
+        "no_distinct_voice",
+    )
+    assert "voice" not in near
     assert (
         "sub-actor near does not enter: no voice of its own on this call" in caplog.text
     )

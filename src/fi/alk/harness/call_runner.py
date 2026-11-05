@@ -698,15 +698,16 @@ def _build_spec(
     )
 
 
-def _voiced_sub_actors(
+def _resolved_sub_actors(
     doc: Mapping[str, Any],
     bundle_dir: Any,
     tts_provider: str,
     cartesia_key: str,
     seed: str,
 ) -> list[dict[str, Any]]:
-    """The scenario's speaking sub-actors, each resolved from the environment's list with what it does
-    here, in a voice no one else on the call has, at a level of its own."""
+    """Every sub-actor the scenario includes, resolved from the environment's list with what it does
+    here. One that can speak has a voice no one else on the call has and a level of its own; one that
+    cannot is kept with `entered: false` and the reason, so the call's record still names it."""
     if not sub_actors_enabled() or not doc.get("sub_actors"):
         return []
     listing = load_sub_actors(bundle_dir)
@@ -724,10 +725,20 @@ def _voiced_sub_actors(
             or persona_voice(caller, tts_provider, cartesia_key=cartesia_key)
         )
     }
-    voiced = []
+    resolved = []
     for entry in doc.get("sub_actors") or []:
         included = ScenarioSubActor.model_validate(entry)
         actor = listing.get(included.id)
+        trigger = included.trigger.model_dump()
+        here = {
+            **(
+                actor.model_dump(exclude_none=True)
+                if actor is not None
+                else {"id": included.id}
+            ),
+            "instruction": included.instruction,
+            "trigger": trigger,
+        }
         if actor is None or "voice" not in CHANNELS.get(actor.channel, {}).get(
             "modalities", ()
         ):
@@ -738,6 +749,8 @@ def _voiced_sub_actors(
                 if actor is None
                 else "not a voice channel",
             )
+            reason = "not_in_list" if actor is None else "not_a_voice_channel"
+            resolved.append({**here, "entered": False, "reason": reason})
             continue
         persona = {**actor.persona, "name": actor.name}
         voice = persona_voice(persona, tts_provider, frozenset(taken), cartesia_key)
@@ -747,17 +760,15 @@ def _voiced_sub_actors(
                 "sub-actor %s does not enter: no voice of its own on this call",
                 included.id,
             )
+            resolved.append({**here, "entered": False, "reason": "no_distinct_voice"})
             continue
         taken.add(voice)
-        trigger = included.trigger.model_dump()
         if trigger.get("kind") == "on_tool":
             # The engine counts the calls the trace logs, which name the route a tool calls.
             trigger["tool"] = logged_tool_name(contract, str(trigger.get("tool") or ""))
-        voiced.append(
+        resolved.append(
             {
-                **actor.model_dump(exclude_none=True),
-                "instruction": included.instruction,
-                "trigger": trigger,
+                **here,
                 "loudness_ratio": loudness_ratio(seed, actor.id, actor.loudness_ratio),
                 "voice": voice,
                 "speed": persona_speech_rate(persona),
@@ -766,7 +777,7 @@ def _voiced_sub_actors(
                 "language": ", ".join(caller.get("languages") or []),
             }
         )
-    return voiced
+    return resolved
 
 
 # --- evidence collection -----------------------------------------------------------------------
@@ -1398,13 +1409,15 @@ class CallRunnerImpl:
             call_environ.pop("HARNESS_BACKGROUND_PLACE", None)
 
         setting = _setting(self._context.job.agent.config, call_environ)
-        voices = _voiced_sub_actors(
+        resolved = _resolved_sub_actors(
             doc,
             self._context.bundle_dir,
             voice_providers(setting)[1],
             setting("CARTESIA_API_KEY"),
             run_id,
         )
+        # Only a sub-actor that can speak reaches the call; the record keeps every one.
+        voices = [one for one in resolved if one.get("entered", True)]
         call_environ.pop(SUB_ACTOR_WORLD_ALIAS, None)
         if voices:
             call_environ[SUB_ACTOR_VOICES_ALIAS] = json.dumps(voices)
@@ -1572,7 +1585,7 @@ class CallRunnerImpl:
                 runtime=runtime,
                 scenario_key=scenario.scenario_key,
                 started_at=started_at,
-                sub_actors=voices,
+                sub_actors=resolved,
             )
         except (CallAborted, WorldUnavailable):
             # `_translate_report`'s own typed control-flow (non-completed status, no test case,
