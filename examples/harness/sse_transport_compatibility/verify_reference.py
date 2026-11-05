@@ -21,6 +21,15 @@ def verify(source_root: Path | None = None) -> dict[str, object]:
     assert re.fullmatch(r"[0-9a-f]{40}", source["commit"])
     assert source["repository"].startswith("https://github.com/")
     assert reference["runtime"]["endpoint"].startswith("/conversational_flows/")
+    assert reference["runtime"]["environment"] == {
+        "MODEL": "vertex_ai/gemini-3.7-flash",
+        "VERTEXAI_LOCATION": "global",
+    }
+    assert reference["runtime"]["environment_names"] == ["VERTEXAI_PROJECT"]
+    assert (
+        reference["runtime"]["authentication"]
+        == "google_application_default_credentials"
+    )
     assert reference["request"]["runId"] == "{{execution_id}}-{{turn_index}}"
     assert reference["request"]["messages"] == [
         {
@@ -34,6 +43,7 @@ def verify(source_root: Path | None = None) -> dict[str, object]:
     assert qualification["requires_credentials"] is True
     assert qualification["tool_event_status"] == "pending"
     assert len(qualification["turns"]) == 2
+    assert (ROOT / "qualify_reference.py").is_file()
     if source_root is not None:
         assert source_root.is_dir(), source_root
         for check in reference["source_checks"]:

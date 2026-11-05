@@ -25,6 +25,10 @@
       "contains": "@tool(\"get_weather\")"
     },
     {
+      "path": "examples/agents/_crewai_llm.py",
+      "contains": "_MODEL_ENV_VARS = (\"MODEL\", \"MODEL_NAME\", \"OPENAI_MODEL_NAME\")"
+    },
+    {
       "path": "ag_ui_crewai/_frames.py",
       "contains": "type=EventType.RUN_FINISHED"
     }
@@ -32,7 +36,12 @@
   "runtime": {
     "working_directory": "examples",
     "command": ["uv", "run", "dev"],
-    "environment_names": ["OPENAI_API_KEY"],
+    "environment": {
+      "MODEL": "vertex_ai/gemini-3.7-flash",
+      "VERTEXAI_LOCATION": "global"
+    },
+    "environment_names": ["VERTEXAI_PROJECT"],
+    "authentication": "google_application_default_credentials",
     "endpoint": "/conversational_flows/backend_tool_rendering"
   },
   "request": {

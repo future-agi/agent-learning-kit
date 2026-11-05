@@ -5,8 +5,8 @@ upstream repository and uses the conversational route because CrewAI keys its na
 state by AG-UI `threadId`.
 
 The credential-free ALK tests use a local SSE server for framing, limits, explicit completion,
-disconnects, cancellation, and completed-tool safety. The upstream qualification is separate: the
-pinned example calls `openai/gpt-5.4` and requires `OPENAI_API_KEY`.
+disconnects, cancellation, and completed-tool safety. The upstream qualification is separate. Its
+supported `MODEL` override selects `vertex_ai/gemini-3.7-flash` in Vertex AI's `global` location.
 
 ## Verify and materialize the reference
 
@@ -20,9 +20,27 @@ python examples/harness/sse_transport_compatibility/verify_reference.py \
 Start the unmodified upstream dojo from the materialized `examples` directory:
 
 ```bash
-OPENAI_API_KEY=... uv sync
-OPENAI_API_KEY=... uv run dev
+gcloud auth application-default login
+export VERTEXAI_PROJECT="$(gcloud config get-value project)"
+export VERTEXAI_LOCATION=global
+export MODEL=vertex_ai/gemini-3.7-flash
+uv sync
+uv run dev
 ```
+
+The normal `gcloud auth login` session is not ADC. LiteLLM's Vertex provider needs the separate
+Application Default Credentials created by `gcloud auth application-default login`. Never copy the
+credential file or an access token into this reference.
+
+With the dojo running on port 8000, exercise two turns through ALK's SSE wrapper:
+
+```bash
+# Run from the ALK checkout, not the materialized upstream directory.
+uv run python examples/harness/sse_transport_compatibility/qualify_reference.py
+```
+
+The qualifier prints only success flags, response lengths, and stream counts. It does not print
+credentials, raw provider data, or response content.
 
 POST AG-UI `RunAgentInput` bodies to
 `/conversational_flows/backend_tool_rendering` using the request and SSE mappings in

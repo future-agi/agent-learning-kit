@@ -1,9 +1,11 @@
 import asyncio
 import json
+import runpy
 import socket
 import threading
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -520,3 +522,16 @@ def test_sse_authoring_schema_is_self_contained(tmp_path):
     assert "$defs" not in schema
     assert "$ref" not in json.dumps(schema)
     assert schema["required"] == ["completion", "text"]
+
+
+def test_open_source_qualifier_runs_two_turns_without_credentials():
+    script = (
+        Path(__file__).parents[2]
+        / "examples/harness/sse_transport_compatibility/qualify_reference.py"
+    )
+    qualify = runpy.run_path(str(script))["qualify"]
+    with sse_server() as (endpoint, _state):
+        base_url = endpoint.removesuffix("/chat")
+        summaries = asyncio.run(qualify(base_url, 2))
+    assert [summary["success"] for summary in summaries] == [True, True]
+    assert all(summary["response_characters"] == 5 for summary in summaries)

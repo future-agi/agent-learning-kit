@@ -11,7 +11,7 @@
 
 Live qualification still required outside this implementation unit:
 
-- [ ] Run the pinned AG-UI CrewAI example with `OPENAI_API_KEY` and retain the two-turn wire trace.
+- [ ] Run the pinned AG-UI CrewAI example with Vertex AI Gemini 3.7 Flash and retain the two-turn qualification summary.
 - [ ] Qualify split `TOOL_CALL_*` / `TOOL_CALL_RESULT` pairing before claiming upstream tool-evidence support.
 
 Skipped for this unit unless a failing acceptance test requires them:
