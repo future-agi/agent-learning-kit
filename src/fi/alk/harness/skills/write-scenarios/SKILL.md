@@ -639,6 +639,58 @@ What is being tested is the recovery, and that is what the checks have to say:
 A check that only asserts the tool was called proves nothing here: the tool was always going to be
 called. Assert on what the world looks like afterwards and on what the caller was told.
 
+### When someone else is in the scene
+
+Only when the environment lists sub-actors. Write the scenario first as if no one else were there: the
+person's situation, request, details, sub-goals and answer key complete on their own. The person's
+instruction never names a sub-actor or plans a hand-off; the run tells the person who is with them. Then add the
+sub-actor on top; nothing written before changes, and the scenario still stands if they never come in.
+A coordinate whose level is named for a sub-actor includes that sub-actor in `sub_actors`, with two
+things written for this scenario:
+
+- `instruction`: who they are here and what they say, written to them in the second person: who they
+  are with, and what they want that the person did not ask for, never when they say it. What they do
+  is what their channel does, as the kind file describes it, and what the scenario's level for them
+  names. Give them a part, never the person's goal: the person still pursues it and gives every value
+  the agent asks for. What they say is their own: something they want, know or worry about. They never
+  make, confirm, choose, change or cancel the person's request, and never give a detail the agent must
+  get from the person. Holding the phone does not change this: someone who takes it says only their
+  own part, and the request is still the person's when the phone comes back.
+- `trigger`: when they enter. `always`, `mid_journey` after the agent's turn N, `on_tool` on the Nth call
+  of one of the agent's tools that runs in the world, `on_keyword` when one of its words is in the
+  agent's latest turn, or `probability` with chance `p`. Pick a moment the conversation reaches before the person could be done: an early
+  turn, 2 to 4, or the tool or word the moment depends on. Apart from a `probability` draw that leaves
+  them out, a sub-actor always joins: one waiting on a tool call or a word that never comes enters after
+  the agent's turn 4. Use `probability` only where the scenario means the same thing either way; when what the scenario tests is how the agent handles this sub-actor, they
+  must come in, so give them a trigger that always fires. The trigger alone decides when they speak; the
+  instruction says who they are and what they say, never when. Choose the trigger from what they react
+  to: an action the agent takes in the world is `on_tool` with that tool's name from the contract;
+  something the agent says is `on_keyword` with words the agent must use at that point, taken from the
+  contract's own terms for the record or step rather than phrasing you expect; nothing in particular is
+  `mid_journey` at turn 2 to 4.
+
+A sub-actor makes the person's task harder; no sub-goal is about the sub-actor. Sub-goals grade what the
+agent controls: that it did what the person asked, and nothing anyone else asked for. The scenario's name
+says what the agent is tested on, never that a sub-actor is in it or how they come in.
+
+The scenario is correct on its own. Read it with the sub-actor removed: the person's instruction and
+details still say everything they want and hold only the final values, the answer key reaches the right
+end with no help, and every sub-goal still tests the right thing. A person never starts from one value
+and is moved to another by the sub-actor; if the person changes their mind, that is in their own
+instruction, with the value they end on in their details and the answer key.
+
+The answer key is the correct behaviour with the sub-actor present, and nothing in it depends on what
+the sub-actor says: a request from someone who is not the person being served is not that person's
+request, so the solution never acts on it. Where the world can show it, a sub-goal's check finds that
+only what the person asked for was done.
+
+What a sub-actor tests is how the agent copes with someone it did not plan for, so the person cannot
+know them in advance either. The run tells the person who else is there, and what each one said once
+they have said it. A person's instruction that names the sub-actor, says what they will say, or says how
+to react lets the person answer before anything is said, and the test is gone; so it never does. For the
+same reason a sub-actor never voices the person's own request or details: the agent would no longer have
+to tell the person it serves from someone else. Most scenarios include none.
+
 ## File prerequisites must exist in the target workspace
 
 Read the workspace bindings in the world summary before writing file tasks. A repository used
@@ -745,6 +797,9 @@ yourself first. If an honest answer is the wrong one, fix the scenario before `s
 23. Would an agent that follows its rules to the letter pass every named sub-goal? If a rule says to
     act at once on what this caller says, does the solution start with that act, with no
     verification or lookup before it?
+24. With a sub-actor: does their instruction name a moment, event or turn? The trigger alone decides when.
+25. With a sub-actor: does their instruction ask for, set a condition on, confirm or decide the person's
+    request? They may only voice a concern of their own.
 
 ## The three gates
 

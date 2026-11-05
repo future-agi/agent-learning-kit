@@ -74,6 +74,7 @@ from .process_runtime import (
 )
 from .judge import judge_sub_goal as _judge_sub_goal
 from .joint_judge import judge_sub_goals_jointly as _judge_sub_goals_jointly
+from .sub_actor import SWITCH as SUB_ACTORS_SWITCH
 from .scenario_source import (
     BundleScenarioSource,
     ScenarioDocumentInvalid,
@@ -195,6 +196,7 @@ _SIMULATOR_SECRET_ALIASES = frozenset(
         "ALK_HARNESS",
         GOOGLE_ADK_APPROVAL_ENV,
         "ALK_VOICEMAIL_SCENARIOS",
+        SUB_ACTORS_SWITCH,
         "ALK_HARNESS_MODEL",
         "ALK_HARNESS_THINKING",
         "ALK_JUDGE_MODE",
@@ -1595,13 +1597,20 @@ class OutboundAdapter:
             world_index=receipt.world_index,
             status=receipt.status,
             sub_goals=[
-                {"name": g.name, "held": g.held, "reason": g.reason, "judged": g.judged}
+                {
+                    "name": g.name,
+                    "held": g.held,
+                    "reason": g.reason,
+                    "judged": g.judged,
+                    **({"verdict": g.verdict} if g.verdict else {}),
+                }
                 for g in receipt.sub_goals
             ],
             evaluations=[_evaluation_wire(e) for e in receipt.evaluations],
             call=call,
             failure=failure,
             extra_secret_values=self._extra_secret_values,
+            reason=receipt.reason,
         )
         self._persist_offline_json(Path("receipts") / f"{wire['digest']}.json", wire)
         push_result = await asyncio.to_thread(

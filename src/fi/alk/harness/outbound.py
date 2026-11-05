@@ -2462,6 +2462,7 @@ class SubGoalResult(BaseModel):
     held: bool | None
     reason: str | None
     judged: bool
+    verdict: Literal["pass", "fail", "not_applicable", "inconclusive"] | None = None
 
 
 class MetricEvaluation(BaseModel):
@@ -2576,6 +2577,19 @@ def _unset_default_fields(model: BaseModel, prefix: str = "") -> list[str]:
 _LATER_CALL_FIELDS = frozenset({"stop_reason", "target_metrics"})
 
 
+def _without_unsent_fields(body: dict[str, Any], draft: "ResultReceiptDraft") -> None:
+    """Drop fields added after the first receipt protocol that the caller did not send, so a receipt
+    without them stays byte-for-byte what it always was."""
+    if draft.call is not None:
+        for name in _LATER_CALL_FIELDS - draft.call.model_fields_set:
+            body["call"].pop(name, None)
+    for goal, model in zip(body["sub_goals"], draft.sub_goals):
+        if "verdict" not in model.model_fields_set:
+            goal.pop("verdict", None)
+    if "reason" not in draft.model_fields_set:
+        body.pop("reason", None)
+
+
 class ResultReceiptDraft(BaseModel):
     """Channel 2's wire shape. Mirrors `HostedEventDraft`'s pattern: the caller supplies `digest`
     (via `build_result_receipt`, computed with `whole_object_digest`), the model re-derives and
@@ -2598,6 +2612,7 @@ class ResultReceiptDraft(BaseModel):
     evaluations: list[EvaluationResult]
     call: CallSummary | None
     failure: TerminalFailure | None
+    reason: str | None = None
     digest: str
 
     @model_validator(mode="after")
@@ -2610,9 +2625,7 @@ class ResultReceiptDraft(BaseModel):
         # ``stop_reason`` and ``target_metrics`` were added after the initial receipt
         # protocol. Preserve byte-for-byte compatibility for callers that omit them,
         # while including each in both the digest and wire body whenever supplied.
-        if self.call is not None:
-            for name in _LATER_CALL_FIELDS - self.call.model_fields_set:
-                expected_body["call"].pop(name, None)
+        _without_unsent_fields(expected_body, self)
         expected = whole_object_digest(expected_body)
         if self.digest != expected:
             unset = _unset_default_fields(self)
@@ -2653,6 +2666,7 @@ def build_result_receipt(
     call: dict[str, Any] | None,
     failure: dict[str, Any] | None,
     extra_secret_values: tuple[str, ...] = (),
+    reason: str | None = None,
 ) -> dict[str, Any]:
     """Validate one receipt's shape and compute its digest, returning a plain wire-ready dict.
     Mirrors `build_event_record`'s contract exactly: callers must pass already wire-typed values
@@ -2707,13 +2721,12 @@ def build_result_receipt(
         "evaluations": evaluations,
         "call": call,
         "failure": failure,
+        **({"reason": _redact(reason)} if reason is not None else {}),
     }
     digest = whole_object_digest(core)
     draft = ResultReceiptDraft.model_validate({**core, "digest": digest})
     wire = draft.model_dump(mode="json")
-    if call is not None:
-        for name in _LATER_CALL_FIELDS - call.keys():
-            wire["call"].pop(name, None)
+    _without_unsent_fields(wire, draft)
     return wire
 
 

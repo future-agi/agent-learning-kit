@@ -41,7 +41,7 @@ import tempfile
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Mapping, Protocol
+from typing import Any, Awaitable, Callable, Mapping, Protocol, Sequence
 
 from fi import agentcc, simulate
 from fi.simulate.runtime import (
@@ -52,9 +52,23 @@ from fi.simulate.results.futureagi import target_provider_usage
 from fi.simulate.runtime.report import SimulationReport
 from fi.simulate.runtime.run import TestCaseStatus
 from fi.simulate.runtime.runner import SimulationRunner
+from fi.simulate.simulation.sub_actors import (
+    CHANNELS,
+    SUB_ACTOR_VOICES_ALIAS,
+    SUB_ACTOR_WORLD_ALIAS,
+    known_to_others,
+    loudness_ratio,
+    with_others,
+)
 
 from .background_noise import place_of, scenario_source
 from .bundle_v2 import EvidenceSeam
+from .sub_actor import (
+    ScenarioSubActor,
+    load_sub_actors,
+    logged_tool_name,
+    sub_actors_enabled,
+)
 from .hosted_scheduler import CallAborted, CallOutcome
 from .hosted_scheduler import Scenario as HostedScenario
 from .job import ExecutionMode, FailureDomain, HarnessJob, ProviderExecutionMode
@@ -77,8 +91,12 @@ from .simulator_voice import (
     READINESS_TIMEOUT_SECONDS,
     SIMULATOR_MODEL_ENV,
     caller_scenario,
+    persona_emotion,
+    persona_speech_rate,
+    persona_voice,
     simulation_spec,
     simulator_definition,
+    voice_providers,
 )
 from .world.errors import WorldUnavailable
 from .world.runtime import Call, tool_call_attribution
@@ -533,6 +551,17 @@ def _target_speaks_first(
     return not _dials_the_person(doc, environ)
 
 
+def _setting(
+    simulator_config: Mapping[str, Any], environ: Mapping[str, str]
+) -> Callable[[str], str]:
+    """One simulator setting for this call: lowercase job config wins, then the provider environment alias."""
+
+    def setting(name: str) -> str:
+        return str(simulator_config.get(name.lower()) or environ.get(name) or "")
+
+    return setting
+
+
 def _build_spec(
     *,
     run_id: str,
@@ -547,15 +576,14 @@ def _build_spec(
     environ: Mapping[str, str],
     connector: str = "livekit",
     provider_target_id: str | None = None,
+    sub_actors: list[dict[str, Any]] | None = None,
 ) -> SimulationSpec:
     """The hosted lane: values come from job config and the bundle's scenario document.
 
     Lowercase job config wins; provider environment aliases are accepted for compatibility.
     """
 
-    def setting(name: str) -> str:
-        return str(simulator_config.get(name.lower()) or environ.get(name) or "")
-
+    setting = _setting(simulator_config, environ)
     simulator = simulator_definition(setting, doc.get("persona"))
     connector = connector.strip().lower()
     # Match the platform agent-definition inbound-phone path. Provider IDs still
@@ -647,7 +675,7 @@ def _build_spec(
         scenario=caller_scenario(
             name=str(doc.get("scenario_key") or doc.get("name") or "harness-voice"),
             persona=doc.get("persona"),
-            situation=doc["instruction"],
+            situation=with_others(doc["instruction"], sub_actors or []),
             fixture=doc.get("fixture"),
             tts_provider=simulator.tts.provider,
             variation=run_id,
@@ -668,6 +696,77 @@ def _build_spec(
         run_seconds=run_seconds,
         agent_definition=provider_agent,
     )
+
+
+def _voiced_sub_actors(
+    doc: Mapping[str, Any],
+    bundle_dir: Any,
+    tts_provider: str,
+    cartesia_key: str,
+    seed: str,
+) -> list[dict[str, Any]]:
+    """The scenario's speaking sub-actors, each resolved from the environment's list with what it does
+    here, in a voice no one else on the call has, at a level of its own."""
+    if not sub_actors_enabled() or not doc.get("sub_actors"):
+        return []
+    listing = load_sub_actors(bundle_dir)
+    contract_path = Path(bundle_dir) / "contract.json"
+    contract = (
+        json.loads(contract_path.read_text(encoding="utf-8"))
+        if contract_path.is_file()
+        else {}
+    )
+    caller = dict(doc.get("persona") or {})
+    taken = {
+        str(
+            caller.get("voice")
+            or caller.get("voice_id")
+            or persona_voice(caller, tts_provider, cartesia_key=cartesia_key)
+        )
+    }
+    voiced = []
+    for entry in doc.get("sub_actors") or []:
+        included = ScenarioSubActor.model_validate(entry)
+        actor = listing.get(included.id)
+        if actor is None or "voice" not in CHANNELS.get(actor.channel, {}).get(
+            "modalities", ()
+        ):
+            logger.warning(
+                "sub-actor %s does not enter: %s",
+                included.id,
+                "not in the environment's list"
+                if actor is None
+                else "not a voice channel",
+            )
+            continue
+        persona = {**actor.persona, "name": actor.name}
+        voice = persona_voice(persona, tts_provider, frozenset(taken), cartesia_key)
+        if not voice:
+            # The person's voice or none at all: the agent could not tell them apart.
+            logger.warning(
+                "sub-actor %s does not enter: no voice of its own on this call",
+                included.id,
+            )
+            continue
+        taken.add(voice)
+        trigger = included.trigger.model_dump()
+        if trigger.get("kind") == "on_tool":
+            # The engine counts the calls the trace logs, which name the route a tool calls.
+            trigger["tool"] = logged_tool_name(contract, str(trigger.get("tool") or ""))
+        voiced.append(
+            {
+                **actor.model_dump(exclude_none=True),
+                "instruction": included.instruction,
+                "trigger": trigger,
+                "loudness_ratio": loudness_ratio(seed, actor.id, actor.loudness_ratio),
+                "voice": voice,
+                "speed": persona_speech_rate(persona),
+                "emotion": persona_emotion(persona),
+                "situation": known_to_others(str(doc.get("instruction") or "")),
+                "language": ", ".join(caller.get("languages") or []),
+            }
+        )
+    return voiced
 
 
 # --- evidence collection -----------------------------------------------------------------------
@@ -723,6 +822,24 @@ def _clear_tool_trace_calls(dsn: str) -> None:
         )
 
 
+def read_tool_trace(dsn: str, *, timeout_ms: int | None = None) -> list[dict[str, Any]]:
+    """The world's tool trace so far, in call order, read without writing."""
+    import psycopg
+
+    options = "-c default_transaction_read_only=on"
+    if timeout_ms is not None:
+        options += f" -c statement_timeout={timeout_ms}"
+    with psycopg.connect(
+        dsn, autocommit=True, connect_timeout=5, options=options
+    ) as connection:
+        cursor = connection.execute(
+            f'SELECT name, arguments, result, ok, error, at FROM "{_TOOL_TRACE_TABLE}" '  # noqa: S608
+            "ORDER BY at ASC"
+        )
+        columns = [description[0] for description in cursor.description or []]
+        return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
+
+
 def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
     """`_alk_tool_trace`'s name and column shape are an isolated local
     convention -- unpinned by any contract (the only harness-reserved table anywhere in this
@@ -735,20 +852,7 @@ def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
     if endpoint is None:
         return ()
     try:
-        import psycopg
-
-        with psycopg.connect(
-            endpoint.address,
-            autocommit=True,
-            connect_timeout=5,
-            options="-c default_transaction_read_only=on",
-        ) as connection:
-            cursor = connection.execute(
-                f'SELECT name, arguments, result, ok, error, at FROM "{_TOOL_TRACE_TABLE}" '  # noqa: S608
-                "ORDER BY at ASC"
-            )
-            rows = cursor.fetchall()
-            columns = [description[0] for description in cursor.description or []]
+        records = read_tool_trace(endpoint.address)
     except Exception as exc:  # noqa: BLE001 - missing table / connection failure -> no evidence, not a crash
         # WHY: same DSN-in-exception-message risk as `_clear_tool_trace_calls` above -- log only
         # the exception TYPE, never exc_info/str(exc), which can carry the world DB password.
@@ -758,8 +862,7 @@ def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
         return ()
 
     calls: list[Call] = []
-    for row in rows:
-        record = dict(zip(columns, row, strict=True))
+    for record in records:
         name = record.get("name")
         if not isinstance(name, str) or not name:
             continue
@@ -1294,6 +1397,20 @@ class CallRunnerImpl:
             call_environ.pop("HARNESS_BACKGROUND_NOISE", None)
             call_environ.pop("HARNESS_BACKGROUND_PLACE", None)
 
+        setting = _setting(self._context.job.agent.config, call_environ)
+        voices = _voiced_sub_actors(
+            doc,
+            self._context.bundle_dir,
+            voice_providers(setting)[1],
+            setting("CARTESIA_API_KEY"),
+            run_id,
+        )
+        call_environ.pop(SUB_ACTOR_WORLD_ALIAS, None)
+        if voices:
+            call_environ[SUB_ACTOR_VOICES_ALIAS] = json.dumps(voices)
+        else:
+            call_environ.pop(SUB_ACTOR_VOICES_ALIAS, None)
+
         # Read the same way and for the same reason as the noise source above: the simulator's
         # instructions are built deep inside simulator_definition, which sees the environment and
         # not this scenario. Set per scenario and cleared otherwise so one outbound scenario cannot
@@ -1398,6 +1515,7 @@ class CallRunnerImpl:
             doc=doc,
             simulator_config=self._context.job.agent.config,
             environ=call_environ,
+            sub_actors=voices,
             livekit_url=self._livekit_url,
             call_timeout_seconds=call_timeout_seconds,
             run_seconds=run_seconds,
@@ -1409,6 +1527,9 @@ class CallRunnerImpl:
             endpoint = _find_postgres_endpoint(runtime)
             if endpoint is not None:
                 _clear_tool_trace_calls(endpoint.address)
+                if voices:
+                    # The engine reads the live trace for on_tool triggers.
+                    call_environ[SUB_ACTOR_WORLD_ALIAS] = endpoint.address
 
         started_at = datetime.now(timezone.utc)
         outer_timeout = run_seconds + _OUTER_WAIT_FOR_PAD_SECONDS
@@ -1451,6 +1572,7 @@ class CallRunnerImpl:
                 runtime=runtime,
                 scenario_key=scenario.scenario_key,
                 started_at=started_at,
+                sub_actors=voices,
             )
         except (CallAborted, WorldUnavailable):
             # `_translate_report`'s own typed control-flow (non-completed status, no test case,
@@ -1481,8 +1603,12 @@ class CallRunnerImpl:
         runtime: EnvironmentRuntime,
         scenario_key: str,
         started_at: datetime,
+        sub_actors: Sequence[dict[str, Any]] = (),
     ) -> CallOutcome:
         case = report.test_cases[0] if report.test_cases else None
+        took_part = (
+            case.result.metadata if case is not None and case.result is not None else {}
+        )
         case_started_at = (
             case.started_at
             if case is not None and case.started_at is not None
@@ -1493,8 +1619,15 @@ class CallRunnerImpl:
             if case is not None and case.ended_at is not None
             else datetime.now(timezone.utc)
         )
+        # The person's and the agent's turns; a sub-actor's lines are not turns of the conversation.
         turns = (
-            len(case.result.messages)
+            sum(
+                1
+                for message in case.result.messages
+                if not (
+                    isinstance(message, Mapping) and message.get("role") == "sub_actor"
+                )
+            )
             if case is not None and case.result is not None
             else 0
         )
@@ -1548,6 +1681,12 @@ class CallRunnerImpl:
                     "transcript": result.transcript,
                     "messages": result.messages,
                 }
+                if sub_actors:
+                    transcript_document["sub_actors"] = {
+                        "resolved": sub_actors,
+                        "summary": took_part.get("sub_actors") or [],
+                        "events": took_part.get("sub_actor_events") or [],
+                    }
                 recording_offset_ms = result.metadata.get("recording_offset_ms")
                 if isinstance(recording_offset_ms, (int, float)):
                     transcript_document["recording_offset_ms"] = int(

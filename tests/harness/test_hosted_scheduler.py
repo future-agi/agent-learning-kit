@@ -4367,10 +4367,34 @@ def test_a_sub_goal_settled_by_both_fails_when_either_fails(monkeypatch) -> None
         FakeSubGoal("confirmed", lambda w, c: "ignored for a judged-only sub-goal", judged="judge"),
     ]
     receipt, _ = _two_judged(monkeypatch, _all, goals=goals)
-    held = {g.name: (g.held, g.reason) for g in receipt.sub_goals}
-    assert held["saved_feedback"] == (False, "no feedback row saved_feedback said right")
-    assert held["confirmed"] == (True, "confirmed said right")
+    held = {g.name: (g.held, g.reason, g.verdict) for g in receipt.sub_goals}
+    assert held["saved_feedback"] == (
+        False,
+        "no feedback row saved_feedback said right",
+        "fail",
+    )
+    assert held["confirmed"] == (True, "confirmed said right", "pass")
     assert receipt.status == "failed"
+
+
+def test_a_failed_check_is_not_explained_by_a_not_applicable_judge(monkeypatch) -> None:
+    async def _all(goals, world, calls, *, messages=()):
+        return {
+            "saved_feedback": (True, "Not applicable: the caller never asked for it")
+        }
+
+    goals = [
+        FakeSubGoal(
+            "saved_feedback", lambda w, c: "no feedback row", judged="judge", both=True
+        )
+    ]
+    receipt, _ = _two_judged(monkeypatch, _all, goals=goals)
+    result = receipt.sub_goals[0]
+    assert (result.held, result.reason, result.verdict) == (
+        False,
+        "no feedback row",
+        "fail",
+    )
 
 
 def test_a_sub_goal_settled_by_both_takes_the_judge_when_the_check_holds(monkeypatch) -> None:
@@ -4610,3 +4634,44 @@ def test_job_tool_requirement_uses_observed_calls(required, with_calls, expected
         await pool.close()
 
     asyncio.run(scenario())
+
+
+def test_a_scenario_with_sub_actors_is_never_run_while_they_are_off_and_says_why(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("HARNESS_SUB_ACTORS", raising=False)
+
+    async def scenario() -> tuple[hs.RunResult, FakeCallRunner]:
+        outbound = FakeOutbound()
+        pool, _ = _pool(1, outbound=outbound)
+        await pool.start()
+        runner = FakeCallRunner({"plain": _call_outcome()})
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=runner,
+            outbound=outbound,
+            job_seed=1,
+        )
+        with_one = FakeScenario(
+            "with-one", "id-1", sub_goals=[FakeSubGoal("g", lambda w, c: None)]
+        )
+        with_one.sub_actors = ("friend",)
+        plain = FakeScenario(
+            "plain",
+            "id-2",
+            sub_goals=[FakeSubGoal("g", lambda w, c: None)],
+            requires_tool_evidence=False,
+        )
+        result = await asyncio.wait_for(scheduler.run([with_one, plain]), timeout=5.0)
+        await pool.close()
+        return result, runner
+
+    result, runner = asyncio.run(scenario())
+    assert [call[0] for call in runner.calls] == ["plain"]
+    skipped, ran = result.receipts
+    assert (skipped.status, skipped.reason) == (
+        "skipped",
+        "sub-actors are switched off",
+    )
+    assert ran.status == "passed" and ran.reason is None
