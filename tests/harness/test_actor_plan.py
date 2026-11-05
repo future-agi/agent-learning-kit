@@ -659,3 +659,22 @@ def test_a_voice_actor_with_permitted_actions_reaches_the_engine_able_to_act(tmp
         language="",
         report_action=lambda one: None,
     ).acts
+
+
+def test_a_speaking_live_actor_is_decided_by_its_channel_only_never_also_by_the_dispatcher(tmp_path):
+    from fi.alk.harness.actor_dispatch import build_dispatcher
+    from fi.alk.harness.actors import save_actors
+
+    decided: list = []
+    manager = Actor(id="manager", name="Mia", channel="audio_handoff", role="manager", play="live",
+                    permitted_actions=["crm.approve"], identities={"crm": "mia"})
+    save_actors(tmp_path, ActorList(actors=[manager]))
+    log = [{"actor_id": "agent", "name": "request", "action_id": "a1", "arguments": {"to": "mia"}}]
+    sent: list = []
+    dispatcher = build_dispatcher(
+        {"actors": [{"id": "manager"}]}, tmp_path, act=HttpActs("http://p", "t", 5, _sent_to(sent)),
+        read_log=lambda: log, records=None, trial_id="t",
+    )
+    dispatcher.decide = lambda situation, actor: decided.append(actor.id) or '{"action": "crm.approve"}'
+    asyncio.run(dispatcher.tick())
+    assert dispatcher.live == [] and decided == [] and sent == []

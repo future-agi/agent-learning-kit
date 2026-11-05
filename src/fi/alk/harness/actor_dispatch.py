@@ -179,8 +179,12 @@ class ActorDispatcher:
         self.decide = decide
         self.briefs = briefs or {}
         self.world_actions = world_actions or {}
+        # Only an actor with no channel is decided here; one that speaks is decided by its channel, once per turn,
+        # its line and its action together, so no actor is ever asked twice about the same moment.
         self.live = [
-            actors[entry.id] for entry in cast if entry.id in actors and actors[entry.id].play in ("live", "both")
+            actors[entry.id]
+            for entry in cast
+            if entry.id in actors and actors[entry.id].play in ("live", "both") and not actors[entry.id].channel
         ]
         self.live_turns: dict[str, int] = {one.id: 0 for one in self.live}
         self.answered: dict[str, set[str]] = {one.id: set() for one in self.live}
@@ -557,7 +561,7 @@ def build_dispatcher(
             )
         )
         for entry in cast
-        if entry.id in listed and listed[entry.id].play != "mocked"
+        if entry.id in listed and listed[entry.id].play != "mocked" and not listed[entry.id].channel
     }
     about = {
         str(one.get("name")): str(one.get("description") or "")
