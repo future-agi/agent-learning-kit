@@ -8,6 +8,7 @@ import { Evaluator } from '../evaluator.js';
 import { ExecutionMode, canRunLocally, requiresLLM, selectExecutionMode } from './execution-mode.js';
 import { runMetric, hasMetric, MetricResult } from './metrics/index.js';
 import { OllamaLLM, JudgeResult } from './llm.js';
+import { snapshotBoundary } from './autoeval/types.js';
 
 /**
  * Configuration for LocalEvaluator
@@ -33,6 +34,57 @@ export interface EvaluationRequest {
     metricName: string;
     inputs: Array<Record<string, any>>;
     config?: Record<string, any>;
+}
+
+// These guards only inspect values already owned by snapshotBoundary.
+function isCapturedRecord(value: unknown): value is Record<string, any> {
+    return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function validateCapturedEvaluation(inputs: unknown, config: unknown): void {
+    if (!Array.isArray(inputs) || !isCapturedRecord(config)) {
+        throw new Error('METRIC_CONFIG_INVALID');
+    }
+    for (const input of inputs) {
+        if (!isCapturedRecord(input)) throw new Error('METRIC_CONFIG_INVALID');
+    }
+}
+
+function captureEvaluation(
+    inputs: Array<Record<string, any>>,
+    config: Record<string, any>
+): { inputs: Array<Record<string, any>>; config: Record<string, any> } {
+    const captured = snapshotBoundary({ inputs, config }, 'METRIC_CONFIG_INVALID');
+    validateCapturedEvaluation(captured.inputs, captured.config);
+    return captured;
+}
+
+function captureRequests(evaluations: EvaluationRequest[]): EvaluationRequest[] {
+    try {
+        const captured = snapshotBoundary(evaluations, 'METRIC_CONFIG_INVALID');
+        if (!Array.isArray(captured)) throw new Error('METRIC_CONFIG_INVALID');
+        for (const evaluation of captured) {
+            if (!isCapturedRecord(evaluation) || typeof evaluation.metricName !== 'string' ||
+                !evaluation.metricName.trim()) throw new Error('METRIC_CONFIG_INVALID');
+            validateCapturedEvaluation(
+                evaluation.inputs,
+                evaluation.config === undefined ? {} : evaluation.config
+            );
+        }
+        return captured;
+    } catch {
+        // Never classify or inspect a caller-thrown value.
+        throw new Error('METRIC_CONFIG_INVALID');
+    }
+}
+
+function evaluationFailure(metricName: string, code: string): LocalEvaluationResult {
+    return {
+        results: { eval_results: [] },
+        executedLocally: [],
+        executedCloud: [],
+        errors: [{ metric: typeof metricName === 'string' ? metricName : '', error: code }]
+    };
 }
 
 /**
@@ -63,23 +115,21 @@ export class LocalEvaluator {
         inputs: Array<Record<string, any>>,
         config: Record<string, any> = {}
     ): LocalEvaluationResult {
+        if (typeof metricName !== 'string' || !metricName.trim()) {
+            return evaluationFailure(metricName, 'METRIC_NAME_INVALID');
+        }
+        try {
+            ({ inputs, config } = captureEvaluation(inputs, config));
+        } catch {
+            return evaluationFailure(metricName, 'METRIC_CONFIG_INVALID');
+        }
+
         const evalResults: EvalResult[] = [];
         const errors: Array<{ metric: string; error: string }> = [];
 
         if (!this.canRunLocally(metricName)) {
-            if (this.config.strictMode) {
-                throw new Error(`Metric '${metricName}' cannot run locally`);
-            }
-            errors.push({
-                metric: metricName,
-                error: `Metric '${metricName}' cannot run locally`
-            });
-            return {
-                results: { eval_results: [] },
-                executedLocally: [],
-                executedCloud: [],
-                errors
-            };
+            if (this.config.strictMode) throw new Error(`Metric '${metricName}' cannot run locally`);
+            return evaluationFailure(metricName, 'METRIC_NOT_LOCAL');
         }
 
         for (const input of inputs) {
@@ -94,15 +144,12 @@ export class LocalEvaluator {
                     runtime: 0,
                     output_type: 'score'
                 });
-            } catch (error) {
-                errors.push({
-                    metric: metricName,
-                    error: (error as Error).message
-                });
+            } catch {
+                errors.push({ metric: metricName, error: 'METRIC_EXECUTION_FAILED' });
                 evalResults.push({
                     name: metricName,
                     output: null,
-                    reason: `Error: ${(error as Error).message}`,
+                    reason: 'METRIC_EXECUTION_FAILED',
                     runtime: 0
                 });
             }
@@ -120,6 +167,11 @@ export class LocalEvaluator {
      * Evaluate multiple metrics in batch
      */
     evaluateBatch(evaluations: EvaluationRequest[]): LocalEvaluationResult {
+        try {
+            evaluations = captureRequests(evaluations);
+        } catch {
+            return evaluationFailure('', 'METRIC_CONFIG_INVALID');
+        }
         const allResults: (EvalResult | null)[] = [];
         const executedLocally: string[] = [];
         const errors: Array<{ metric: string; error: string }> = [];
@@ -128,7 +180,7 @@ export class LocalEvaluator {
             const result = this.evaluate(
                 evaluation.metricName,
                 evaluation.inputs,
-                evaluation.config || {}
+                evaluation.config
             );
 
             allResults.push(...result.results.eval_results);
@@ -216,6 +268,16 @@ export class HybridEvaluator {
         inputs: Array<Record<string, any>>,
         config: Record<string, any> = {}
     ): Promise<LocalEvaluationResult> {
+        if (typeof template !== 'string' || !template.trim()) {
+            return evaluationFailure(template, 'METRIC_NAME_INVALID');
+        }
+        try {
+            ({ inputs, config } = captureEvaluation(inputs, config));
+        } catch {
+            return evaluationFailure(template, 'METRIC_CONFIG_INVALID');
+        }
+        // Downstream captures recognize these owned values; caller getters are
+        // not re-read on the heuristic, local-LLM or cloud route.
         const mode = this.routeEvaluation(template);
 
         if (mode === ExecutionMode.LOCAL) {
@@ -234,12 +296,12 @@ export class HybridEvaluator {
                 results: { eval_results: inputs.map(() => ({
                     name: template,
                     output: null,
-                    reason: 'Cannot run locally and no cloud available',
+                    reason: 'METRIC_NOT_LOCAL',
                     runtime: 0
                 }))},
                 executedLocally: [],
                 executedCloud: [],
-                errors: [{ metric: template, error: 'Cannot run locally' }]
+                errors: [{ metric: template, error: 'METRIC_NOT_LOCAL' }]
             };
         }
 
@@ -283,15 +345,12 @@ export class HybridEvaluator {
                     runtime: 0,
                     output_type: 'score'
                 });
-            } catch (error) {
-                errors.push({
-                    metric: template,
-                    error: (error as Error).message
-                });
+            } catch {
+                errors.push({ metric: template, error: 'METRIC_EXECUTION_FAILED' });
                 evalResults.push({
                     name: template,
                     output: null,
-                    reason: `Error: ${(error as Error).message}`,
+                    reason: 'METRIC_EXECUTION_FAILED',
                     runtime: 0
                 });
             }
@@ -317,19 +376,19 @@ export class HybridEvaluator {
             throw new Error('No cloud evaluator configured');
         }
 
-        // Transform inputs to the format expected by cloud API
-        const transformedInputs: Record<string, string[]> = {};
-
-        for (const input of inputs) {
-            for (const [key, value] of Object.entries(input)) {
-                if (!transformedInputs[key]) {
-                    transformedInputs[key] = [];
-                }
-                transformedInputs[key].push(String(value));
-            }
-        }
-
         try {
+            // Only captured inputs reach this transformation. A null-prototype
+            // accumulator also keeps field names from resolving inherited keys.
+            const transformedInputs: Record<string, string[]> = Object.create(null);
+            for (const input of inputs) {
+                for (const [key, value] of Object.entries(input)) {
+                    if (!transformedInputs[key]) {
+                        transformedInputs[key] = [];
+                    }
+                    transformedInputs[key].push(String(value));
+                }
+            }
+
             const result = await this.cloudEvaluator.evaluate(
                 template,
                 transformedInputs,
@@ -342,13 +401,8 @@ export class HybridEvaluator {
                 executedCloud: [template],
                 errors: []
             };
-        } catch (error) {
-            return {
-                results: { eval_results: [] },
-                executedLocally: [],
-                executedCloud: [],
-                errors: [{ metric: template, error: (error as Error).message }]
-            };
+        } catch {
+            return evaluationFailure(template, 'METRIC_EXECUTION_FAILED');
         }
     }
 
@@ -358,6 +412,7 @@ export class HybridEvaluator {
     partitionEvaluations(
         evaluations: EvaluationRequest[]
     ): Record<ExecutionMode, EvaluationRequest[]> {
+        evaluations = captureRequests(evaluations);
         const partitions: Record<ExecutionMode, EvaluationRequest[]> = {
             [ExecutionMode.LOCAL]: [],
             [ExecutionMode.CLOUD]: [],

@@ -9,7 +9,14 @@ import { MetricResult } from '../metrics/types.js';
 // only records produced here may bypass capture. Own non-enumerable fields are
 // included, so a supplied false verdict cannot disappear during a spread.
 const boundaryRecords = new WeakSet<object>();
-class BoundaryError extends Error {}
+// Identity checks never inspect a rejected value's prototype or properties.
+const boundaryErrors = new WeakSet<object>();
+class BoundaryError extends Error {
+    constructor(code: string) {
+        super(code);
+        boundaryErrors.add(this);
+    }
+}
 export function snapshotBoundary<T>(value: T, code: string, allowCallbacks = false): T {
     const active = new Set<object>();
     const copies = new Map<object, unknown>();
@@ -24,23 +31,38 @@ export function snapshotBoundary<T>(value: T, code: string, allowCallbacks = fal
             if (boundaryRecords.has(source)) return source;
             if (copies.has(source)) return copies.get(source);
             active.add(source);
-            const iterator = source[Symbol.iterator];
             let owned: any;
-            if (iterator !== undefined) {
-                if (typeof iterator !== 'function') throw new BoundaryError(reason);
-                // Array.from reads this SDK-owned iterator method, not the caller's
-                // property a second time. Each yielded member is captured once.
-                owned = Array.from({ [Symbol.iterator]: () => iterator.call(source) },
-                    item => capture(item, depth + 1, reason));
+            if (Array.isArray(source)) {
+                // Array slots, not a caller-supplied iterator, define the evidence.
+                // Read length once, including for array proxies, without coercion.
+                const length = source.length;
+                if (typeof length !== 'number' || !Number.isSafeInteger(length) ||
+                    length < 0 || length > 0xffffffff) throw new BoundaryError(reason);
+                owned = new Array(length);
+                for (let index = 0; index < length; index++) {
+                    // Densify holes to undefined so downstream every/map/some
+                    // cannot skip missing evidence or use an inherited slot.
+                    const member = Object.prototype.hasOwnProperty.call(source, index) ? source[index] : undefined;
+                    owned[index] = capture(member, depth + 1, reason);
+                }
             } else {
-                const proto = Object.getPrototypeOf(source);
-                if (proto !== Object.prototype && proto !== null) throw new BoundaryError(reason);
-                owned = Object.create(null);
-                for (const key of Object.getOwnPropertyNames(source)) {
-                    const fieldReason = key === 'customPatterns' ? 'INVALID_SECURITY_PATTERN' : reason;
-                    let member;
-                    try { member = source[key]; } catch { throw new BoundaryError(fieldReason); }
-                    owned[key] = capture(member, depth + 1, fieldReason);
+                const iterator = source[Symbol.iterator];
+                if (iterator !== undefined) {
+                    if (typeof iterator !== 'function') throw new BoundaryError(reason);
+                    // Deliberately supported non-array iterables keep their contract.
+                    // Read their iterator property once and capture each yield once.
+                    owned = Array.from({ [Symbol.iterator]: () => iterator.call(source) },
+                        item => capture(item, depth + 1, reason));
+                } else {
+                    const proto = Object.getPrototypeOf(source);
+                    if (proto !== Object.prototype && proto !== null) throw new BoundaryError(reason);
+                    owned = Object.create(null);
+                    for (const key of Object.getOwnPropertyNames(source)) {
+                        const fieldReason = key === 'customPatterns' ? 'INVALID_SECURITY_PATTERN' : reason;
+                        let member;
+                        try { member = source[key]; } catch { throw new BoundaryError(fieldReason); }
+                        owned[key] = capture(member, depth + 1, fieldReason);
+                    }
                 }
             }
             active.delete(source);
@@ -49,7 +71,7 @@ export function snapshotBoundary<T>(value: T, code: string, allowCallbacks = fal
             boundaryRecords.add(owned);
             return owned;
         } catch (error) {
-            if (error instanceof BoundaryError) throw error;
+            if (typeof error === 'object' && error !== null && boundaryErrors.has(error)) throw error;
             throw new BoundaryError(reason);
         }
     };
