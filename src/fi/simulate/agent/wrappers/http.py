@@ -6,13 +6,23 @@ import http.cookiejar
 import http.cookies
 import os
 import re
+import sys
 import time
 import urllib.error
 import urllib.request
 from typing import Any, Mapping, Optional, Sequence
 from urllib.parse import quote, urlparse, urlsplit, urlunsplit, urlencode
 
+import httpx
+
 from .http_events import CompletedToolEvents, CompletedToolRows
+from .http_stream import (
+    HTTPStreamSpec,
+    SSEComplete,
+    SSEDecoder,
+    SSEProtocolError,
+    SSEReducer,
+)
 
 from fi._diagnostics import safe_endpoint, sanitize_diagnostic
 
@@ -164,6 +174,7 @@ class HTTPAgentWrapper(AgentWrapper):
         completed_tool_events: Optional[Mapping[str, Any]] = None,
         completed_tools: Optional[Mapping[str, Any]] = None,
         setup_secrets: Optional[Mapping[str, str]] = None,
+        sse: Optional[Mapping[str, Any]] = None,
     ) -> None:
         if not endpoint:
             raise ValueError("endpoint is required")
@@ -182,6 +193,9 @@ class HTTPAgentWrapper(AgentWrapper):
         self.metadata = dict(metadata or {})
         self.request_template = request_template
         self.response_path = str(response_path or "").strip()
+        self.sse = HTTPStreamSpec.model_validate(sse) if sse is not None else None
+        if self.sse is not None and self.protocol != "json_template":
+            raise ValueError("SSE transport requires a JSON template interface")
         self.setup_requests = [dict(item) for item in (setup_requests or [])]
         self.failure_rule = dict(failure_rule) if failure_rule else None
         self.secret_values = dict(secret_values) if secret_values is not None else None
@@ -241,6 +255,7 @@ class HTTPAgentWrapper(AgentWrapper):
         self._setup_complete = False
         self._setup_values: dict[str, Any] = {}
         self._response_headers = {}
+        self._stream_trace: dict[str, Any] = {}
         self._auth_values: set[str] = set()
         self._cookies = http.cookiejar.CookieJar()
         self._opener = urllib.request.build_opener(
@@ -255,7 +270,7 @@ class HTTPAgentWrapper(AgentWrapper):
             time.monotonic() + self.total_timeout
             if self.total_timeout is not None
             else time.monotonic() + self.timeout
-            if self.completed_tool_events
+            if self.completed_tool_events or self.sse
             else None
         )
         headers: dict[str, str] = {}
@@ -268,6 +283,7 @@ class HTTPAgentWrapper(AgentWrapper):
         response = AgentResponse(content="")
         self._response_text = ""
         self._response_status = 0
+        self._stream_trace = {}
         secrets = None
         try:
             headers = self._request_headers()
@@ -286,9 +302,26 @@ class HTTPAgentWrapper(AgentWrapper):
             endpoint = _render_endpoint_path(
                 self.endpoint, _template_context(input, extra=self._setup_values)
             )
-            status_code, response_payload = await self._run_request(
-                self._post_json, request_payload, headers, endpoint=endpoint
-            )
+            stream_result = None
+            if self.sse:
+                try:
+                    status_code, response_payload, stream_result = await asyncio.wait_for(
+                        self._post_sse(request_payload, headers, endpoint=endpoint),
+                        timeout=self._remaining_timeout(),
+                    )
+                except TimeoutError as exc:
+                    self._stream_trace = {
+                        **self._stream_trace,
+                        "stream_state": "incomplete",
+                        "stream_reason": "sse_deadline",
+                    }
+                    raise _ResponseFailure(
+                        "stream", self._response_status, "SSE call deadline exceeded"
+                    ) from exc
+            else:
+                status_code, response_payload = await self._run_request(
+                    self._post_json, request_payload, headers, endpoint=endpoint
+                )
             if not 200 <= status_code < 300:
                 raise _ResponseFailure(
                     "http",
@@ -302,7 +335,10 @@ class HTTPAgentWrapper(AgentWrapper):
                     response_payload, self.failure_rule, status_code
                 )
             stage = "extract"
-            response = self._agent_response_from_payload(response_payload)
+            response = self._agent_response_from_payload(
+                response_payload,
+                content_override=stream_result.text if stream_result else None,
+            )
             if self.completed_tool_events or self.completed_tools:
                 stage = "tool_events"
                 if response.tool_calls:
@@ -324,9 +360,10 @@ class HTTPAgentWrapper(AgentWrapper):
                 }
         except Exception as exc:
             network_error = isinstance(
-                exc, (urllib.error.URLError, TimeoutError, ConnectionError)
+                exc,
+                (urllib.error.URLError, httpx.HTTPError, TimeoutError, ConnectionError),
             )
-            timeout_error = isinstance(exc, TimeoutError) or (
+            timeout_error = isinstance(exc, (TimeoutError, httpx.TimeoutException)) or (
                 isinstance(exc, urllib.error.URLError)
                 and isinstance(exc.reason, TimeoutError)
             )
@@ -409,6 +446,7 @@ class HTTPAgentWrapper(AgentWrapper):
             "response_excerpt": sanitize_diagnostic(self._response_text, secrets)
             if error and stage != "tool_events"
             else "",
+            **self._stream_trace,
         }
         response.events.append(
             SimulationEvent(
@@ -591,6 +629,179 @@ class HTTPAgentWrapper(AgentWrapper):
             payload=payload,
             headers=headers,
         )
+
+    async def _post_sse(
+        self,
+        payload: Mapping[str, Any],
+        headers: Mapping[str, str],
+        *,
+        endpoint: str,
+    ) -> tuple[int, list[Any], SSEComplete]:
+        headers = validate_http_headers(
+            {
+                **{
+                    name: value
+                    for name, value in headers.items()
+                    if name.lower() not in {"accept", "accept-encoding"}
+                },
+                "Accept": "text/event-stream",
+                "Accept-Encoding": "identity",
+            }
+        )
+        self._auth_values.update(
+            value
+            for name, value in headers.items()
+            if name.lower() != "content-type" and value
+        )
+        for name, value in headers.items():
+            if name.lower() == "cookie" and value:
+                cookies = http.cookies.SimpleCookie()
+                try:
+                    cookies.load(value)
+                except http.cookies.CookieError:
+                    raise ValueError("HTTP Cookie header invalid") from None
+                if not cookies:
+                    raise ValueError("HTTP Cookie header invalid")
+                self._auth_values.update(item.value for item in cookies.values())
+        decoder = SSEDecoder()
+        reducer = SSEReducer(self.sse)
+        try:
+            async with httpx.AsyncClient(
+                cookies=self._cookies,
+                follow_redirects=False,
+                trust_env=False,
+                timeout=httpx.Timeout(self._remaining_timeout()),
+            ) as client:
+                async with client.stream(
+                    "POST", endpoint, json=dict(payload), headers=dict(headers)
+                ) as response:
+                    status = response.status_code
+                    self._response_status = status
+                    self._response_headers = {
+                        name.lower(): value for name, value in response.headers.items()
+                    }
+                    if (
+                        self.completed_tool_events
+                        and self.completed_tool_events.source == "endpoint"
+                    ):
+                        self._correlation_id = response.headers.get(
+                            self.completed_tool_events.correlation_header
+                        )
+                    if not 200 <= status < 300:
+                        raw = b""
+                        async for chunk in response.aiter_raw():
+                            raw += chunk
+                            if len(raw) > 1024 * 1024:
+                                self._response_text = ""
+                                raise _ResponseFailure(
+                                    "size", status, "HTTP response exceeds 1048576 bytes"
+                                )
+                        self._response_text = raw.decode("utf-8", errors="replace")
+                        try:
+                            value = json.loads(self._response_text) if raw else {}
+                        except json.JSONDecodeError:
+                            value = self._response_text
+                        raise _ResponseFailure(
+                            "http",
+                            status,
+                            _response_error_text(value)
+                            or f"HTTP target returned status {status}",
+                        )
+                    content_type = response.headers.get("content-type", "").lower()
+                    if not content_type.startswith("text/event-stream"):
+                        raise _ResponseFailure(
+                            "stream", status, "SSE endpoint did not return text/event-stream"
+                        )
+                    if response.headers.get("content-encoding", "identity").lower() not in {
+                        "",
+                        "identity",
+                    }:
+                        raise _ResponseFailure(
+                            "stream", status, "Compressed SSE responses are not supported"
+                        )
+                    async for chunk in response.aiter_raw():
+                        for frame in decoder.feed(chunk):
+                            complete = reducer.accept(
+                                frame, bytes_received=decoder.bytes_received
+                            )
+                            if complete:
+                                self._record_stream_trace(complete, state="complete")
+                                self._response_text = ""
+                                return status, list(complete.payloads), complete
+                    for frame in decoder.finish():
+                        complete = reducer.accept(
+                            frame, bytes_received=decoder.bytes_received
+                        )
+                        if complete:
+                            self._record_stream_trace(complete, state="complete")
+                            self._response_text = ""
+                            return status, list(complete.payloads), complete
+                    raise reducer.incomplete(bytes_received=decoder.bytes_received)
+        except asyncio.CancelledError:
+            raise
+        except httpx.TimeoutException as exc:
+            self._response_text = reducer.text[:4096]
+            self._stream_trace = {
+                "stream_state": "incomplete",
+                "stream_reason": "sse_deadline",
+                "stream_bytes_received": decoder.bytes_received,
+                "stream_events_received": reducer.events_received,
+                "stream_duplicate_events": reducer.duplicate_events,
+                "stream_last_event_id": reducer.last_event_id,
+            }
+            raise _ResponseFailure(
+                "stream", self._response_status, "SSE call deadline exceeded"
+            ) from exc
+        except httpx.HTTPError as exc:
+            if not self._response_status:
+                raise
+            self._response_text = reducer.text[:4096]
+            self._stream_trace = {
+                "stream_state": "incomplete",
+                "stream_reason": "sse_disconnect",
+                "stream_bytes_received": decoder.bytes_received,
+                "stream_events_received": reducer.events_received,
+                "stream_duplicate_events": reducer.duplicate_events,
+                "stream_last_event_id": reducer.last_event_id,
+            }
+            raise _ResponseFailure(
+                "stream", self._response_status, "SSE connection ended unexpectedly"
+            ) from exc
+        except SSEProtocolError as exc:
+            self._response_text = (exc.partial_text or reducer.text)[:4096]
+            self._stream_trace = {
+                "stream_state": "incomplete",
+                "stream_reason": exc.code,
+                "stream_bytes_received": exc.bytes_received or decoder.bytes_received,
+                "stream_events_received": exc.events_received or reducer.events_received,
+                "stream_duplicate_events": exc.duplicate_events or reducer.duplicate_events,
+                "stream_last_event_id": exc.last_event_id or reducer.last_event_id,
+            }
+            raise _ResponseFailure("stream", self._response_status, str(exc)) from exc
+        finally:
+            if "client" in locals():
+                for cookie in client.cookies.jar:
+                    self._cookies.set_cookie(cookie)
+                self._auth_values.update(
+                    cookie.value for cookie in self._cookies if cookie.value
+                )
+                if (
+                    len(self._cookies) > 64
+                    or sum(len(cookie.value) for cookie in self._cookies) > 65536
+                ):
+                    self._cookies.clear()
+                    if sys.exc_info()[0] is None:
+                        raise ValueError("HTTP session cookies exceed safe limits")
+
+    def _record_stream_trace(self, complete: SSEComplete, *, state: str) -> None:
+        self._stream_trace = {
+            "stream_state": state,
+            "stream_reason": None,
+            "stream_bytes_received": complete.bytes_received,
+            "stream_events_received": complete.events_received,
+            "stream_duplicate_events": complete.duplicate_events,
+            "stream_last_event_id": complete.last_event_id,
+        }
 
     def _request_json(
         self,
@@ -965,9 +1176,15 @@ class HTTPAgentWrapper(AgentWrapper):
         self._remaining_timeout()
         return b"".join(chunks)
 
-    def _agent_response_from_payload(self, payload: Any) -> AgentResponse:
+    def _agent_response_from_payload(
+        self, payload: Any, *, content_override: str | None = None
+    ) -> AgentResponse:
         if self.protocol == "json_template":
-            selected = _select_response_value(payload, self.response_path)
+            selected = (
+                content_override
+                if content_override is not None
+                else _select_response_value(payload, self.response_path)
+            )
             if isinstance(selected, Mapping):
                 raise ValueError(
                     "response_path must select chat content, not a JSON object"
