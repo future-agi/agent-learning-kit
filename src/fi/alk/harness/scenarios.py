@@ -40,7 +40,6 @@ from .config import (
 from .contract import AgentContract
 from .job import HarnessJob
 from .poc_guest_booking import guest_booking_pin_guidance, guest_booking_pin_scenario_problem
-from .call_actor import actors_enabled
 from .scenario import Scenario, used_keys, voicemail_enabled, with_unique_keys
 from .scenario_tools import (
     SCENARIO_SERVER,
@@ -125,7 +124,6 @@ def writer_worker(
                 + discovered_skills(
                     modality=contract.modality,
                     voicemail="on" if voicemail_enabled() else "off",
-                    actors="on" if actors_enabled() else "off",
                     conversational="yes" if contract.conversational else "no",
                 )
                 + (
@@ -295,7 +293,6 @@ def open_stage(
             + discovered_skills(
                 modality=contract.modality,
                 voicemail="on" if voicemail_enabled() else "off",
-                actors="on" if actors_enabled() else "off",
                 conversational="yes" if contract.conversational else "no",
             )
             + (
@@ -862,7 +859,6 @@ async def _write_slice(
             + discovered_skills(
                 modality=contract.modality,
                 voicemail="on" if voicemail_enabled() else "off",
-                actors="on" if actors_enabled() else "off",
             )
             + f"\n\n## Your slice\n\nYou are writing only: {mine.named()}"
         ),

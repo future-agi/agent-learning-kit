@@ -17,7 +17,6 @@ from . import observability
 from .authoring_entrypoint import main as authoring_main
 from .backends import GOOGLE_ADK_APPROVAL_ENV
 from .poc_guest_booking import PIN_ENV, TARGET_PHONE_ENV
-from .call_actor import SWITCH as ACTORS_SWITCH
 
 _SECRETS_PATH = Path("/run/futureagi/secrets.json")
 _ADC_PATH = Path("/work/.authoring-credentials/google.json")
@@ -32,7 +31,6 @@ _PASSTHROUGH = {
     "ALK_VOICEMAIL_SCENARIOS",
     "ALK_BACKGROUND_NOISE",
     "ALK_BACKGROUND_NOISE_CATALOG",
-    ACTORS_SWITCH,
     # Temporary, private guest-booking scenario policy. The exact
     # target comes from platform deployment configuration, never from customer environment input.
     TARGET_PHONE_ENV,
@@ -172,8 +170,7 @@ def main(argv: list[str] | None = None) -> int:
                 GOOGLE_ADK_APPROVAL_ENV,
                 "ALK_BACKGROUND_NOISE",
                 "ALK_BACKGROUND_NOISE_CATALOG",
-                ACTORS_SWITCH,
-                TARGET_PHONE_ENV,
+                            TARGET_PHONE_ENV,
                 PIN_ENV,
             )
             if gateway_values.get(name)

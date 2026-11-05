@@ -9494,7 +9494,6 @@ def test_the_list_keeps_one_entry_per_call_actor_and_refuses_what_no_run_can_del
     from fi.alk.harness.call_actor import load_call_actors
     from fi.alk.harness.world.tools import world_actor_tools
 
-    monkeypatch.setenv("HARNESS_ACTORS", "1")
     add, drop = world_actor_tools(tmp_path, _contract(modality="voice"))
 
     def said(tool, args):
@@ -9563,14 +9562,6 @@ def test_a_scenario_keeps_its_call_actors_and_one_without_is_written_as_before(
             tools={"add", "lst"},
         )
 
-    monkeypatch.delenv("HARNESS_ACTORS", raising=False)
-    off = submit(_delta(actors=included))
-    assert (
-        off.get("is_error")
-        and "actors are switched off" in off["content"][0]["text"]
-    )
-
-    monkeypatch.setenv("HARNESS_ACTORS", "1")
     kept = submit(_delta(actors=included))
     assert not kept.get("is_error"), kept
     written = json.loads(
@@ -9614,10 +9605,7 @@ def test_call_actor_tools_and_fields_are_offered_only_when_switched_on(
             ),
         )
 
-    monkeypatch.delenv("HARNESS_ACTORS", raising=False)
-    assert offered() == (False, False, False, False)
-    monkeypatch.setenv("HARNESS_ACTORS", "1")
-    # A sub-goal may name the actor it is about (plan #76 s8), offered only while actors are on.
+    # A sub-goal may name the actor it depends on; always offered (there is no switch).
     assert offered() == (True, True, True, True)
 
 
@@ -9642,7 +9630,6 @@ def test_a_call_actor_scenarios_include_keeps_its_channel(tmp_path, monkeypatch)
     _root, contract, _catalogue = _built_environment(tmp_path)
     contract.modality = "voice"
     destination = tmp_path / "w"
-    monkeypatch.setenv("HARNESS_ACTORS", "1")
     save_call_actors(destination, _listed(_SECOND))
     server, _world = world_tools(contract, destination, external_runtime=True)
     add = {one.name: one.handler for one in server.tools}["add_actor"]
@@ -9678,9 +9665,6 @@ def test_check_world_says_when_the_list_of_call_actors_is_empty(tmp_path, monkey
         tools = {one.name: one.handler for one in server.tools}
         return asyncio.run(tools["check_world"]({}))["content"][0]["text"]
 
-    monkeypatch.delenv("HARNESS_ACTORS", raising=False)
-    assert "No actor speaks on calls yet" not in said()
-    monkeypatch.setenv("HARNESS_ACTORS", "1")
     assert "No actor speaks on calls yet" in said()
     save_call_actors(destination, _listed(_SECOND))
     assert "No actor speaks on calls yet" not in said()
@@ -9707,10 +9691,6 @@ def test_the_coverage_plan_and_the_world_view_name_the_environment_s_call_actors
         seen = asyncio.run(tools["inspect_world"]({}))["content"][0]["text"]
         return aimed, seen
 
-    monkeypatch.delenv("HARNESS_ACTORS", raising=False)
-    aimed, seen = replies(["quiet_line"])
-    assert "second: Rowan" not in aimed and "second: Rowan" not in seen
-    monkeypatch.setenv("HARNESS_ACTORS", "1")
     aimed, seen = replies(["quiet_line"])
     assert (
         "no level is named for them yet" in aimed
@@ -9732,7 +9712,6 @@ def test_editing_a_scenario_written_before_call_actors_existed_is_never_refused_
 
     root, contract, _catalogue = _built_environment(tmp_path)
     voice = contract.model_copy(update={"modality": "voice"})
-    monkeypatch.delenv("HARNESS_ACTORS", raising=False)
     server, kept = scenario_tools(voice, root, root, wanted=4)
     submit = next(one for one in server.tools if one.name == "submit_scenario")
     persona = {
@@ -9756,7 +9735,6 @@ def test_editing_a_scenario_written_before_call_actors_existed_is_never_refused_
         )
         assert not said.get("is_error"), said
 
-    monkeypatch.setenv("HARNESS_ACTORS", "1")
     save_call_actors(root, _listed(_SECOND))
     server, kept = scenario_tools(voice, root, root, wanted=4)
     edit = next(one for one in server.tools if one.name == "edit_scenario")
@@ -9774,7 +9752,6 @@ def test_the_person_s_instruction_never_names_a_call_actor(monkeypatch):
 
     from fi.alk.harness import scenario_tools
 
-    monkeypatch.setenv("HARNESS_ACTORS", "1")
     monkeypatch.setattr(scenario_tools, "scenario_problems", lambda *args, **kwargs: [])
     listing = _listed(_SECOND)
 
@@ -9821,7 +9798,6 @@ def test_a_call_actor_s_name_is_found_only_as_a_name(
 
     from fi.alk.harness import scenario_tools
 
-    monkeypatch.setenv("HARNESS_ACTORS", "1")
     monkeypatch.setattr(scenario_tools, "scenario_problems", lambda *args, **kwargs: [])
     scenario = SimpleNamespace(
         actors=[SimpleNamespace(id="second", instruction="x", trigger=None)],
@@ -9880,7 +9856,6 @@ def test_aim_for_reports_the_default_share_and_takes_the_person_s_own(
     root, contract, _catalogue = _built_environment(tmp_path)
     contract.modality = "voice"
     save_call_actors(root, _listed(_SECOND))
-    monkeypatch.setenv("HARNESS_ACTORS", "1")
     server, _kept = scenario_tools(contract, root, root, wanted=40)
     aim = next(one.handler for one in server.tools if one.name == "aim_for")
     axes = {axis: ["plain", "with_second"] for axis in CANONICAL_AXES}
@@ -9922,10 +9897,6 @@ def test_world_actors_are_offered_only_when_switched_on_and_kept_in_the_environm
     from fi.alk.harness.world import tools as world_tools
 
     _root, contract = _saved_world(tmp_path)
-    monkeypatch.delenv("HARNESS_ACTORS", raising=False)
-    server, _world = world_tools.world_tools(contract, tmp_path)
-    assert "add_actor" not in _published(server)
-    monkeypatch.setenv("HARNESS_ACTORS", "1")
     server, _world = world_tools.world_tools(contract, tmp_path)
     assert {"add_actor", "drop_actor"} <= set(_published(server))
 
@@ -10056,9 +10027,6 @@ def test_a_built_environment_s_chat_can_still_change_its_cast_and_nothing_else_o
 
     _root, contract = _saved_world(tmp_path)
     voice = contract.model_copy(update={"modality": "voice"})
-    monkeypatch.delenv("HARNESS_ACTORS", raising=False)
-    assert world_tools.actor_tools_server(voice, tmp_path) is None
-    monkeypatch.setenv("HARNESS_ACTORS", "1")
     server = world_tools.actor_tools_server(voice, tmp_path)
     assert set(_published(server)) == {
         "add_actor",
@@ -10074,9 +10042,6 @@ def test_a_scenario_naming_an_actor_the_world_does_not_list_is_not_kept(
     from fi.alk.harness.actors import Actor, ActorList, save_actors
     from fi.alk.harness.scenario_tools import _actor_fields, _unlisted_actors
 
-    monkeypatch.delenv("HARNESS_ACTORS", raising=False)
-    assert _actor_fields() == {}
-    monkeypatch.setenv("HARNESS_ACTORS", "1")
     assert "actors" in _actor_fields()
     save_actors(tmp_path, ActorList(actors=[Actor(id="reviewer", name="Robin")]))
     scenario = Scenario(
@@ -10097,11 +10062,12 @@ def test_a_scenario_naming_an_actor_the_world_does_not_list_is_not_kept(
     )
 
 
-def test_the_switch_stops_the_writer_being_told_world_actors_exist():
+def test_the_writer_is_always_told_how_to_write_actors():
     from fi.alk.harness.config import discovered_skills
 
-    assert "add_actor" in discovered_skills(modality="voice", actors="on")
-    assert "add_actor" not in discovered_skills(modality="voice", actors="off")
+    # There is no switch: every build's writer reads the actors module.
+    assert "add_actor" in discovered_skills(modality="voice")
+    assert "add_actor" in discovered_skills(modality="chat")
 
 
 def test_a_proof_plays_permitted_actor_actions_at_their_triggers_and_keeps_them_out_of_the_agent_s_calls(
@@ -10288,7 +10254,4 @@ def test_the_writer_is_told_which_world_actors_there_are_only_when_switched_on(
             ]
         ),
     )
-    monkeypatch.delenv("HARNESS_ACTORS", raising=False)
-    assert "WORLD ACTORS" not in world_summary(tmp_path)
-    monkeypatch.setenv("HARNESS_ACTORS", "1")
     assert "  reviewer: Robin, reviewer; may records.approve" in world_summary(tmp_path)

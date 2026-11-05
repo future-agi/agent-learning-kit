@@ -9,7 +9,6 @@ scenario and when they enter.
 from __future__ import annotations
 
 import json
-import os
 import re
 from pathlib import Path
 from collections.abc import Mapping
@@ -19,17 +18,11 @@ from pydantic import BaseModel, Field, model_serializer, model_validator
 
 from fi.simulate.simulation.call_actors import CHANNELS, TRIGGERS
 
-SWITCH = "HARNESS_ACTORS"
 # A name and a role are one-line labels.
 NAME_MAX_LENGTH = 80
 ROLE_MAX_LENGTH = 160
 # An id every part of the platform can address.
 ID_PATTERN = r"[a-z0-9_]{1,64}"
-
-
-def actors_enabled() -> bool:
-    """Whether this sandbox may build or run actors. Off unless the platform turns it on."""
-    return os.environ.get(SWITCH, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 class CallActor(BaseModel):

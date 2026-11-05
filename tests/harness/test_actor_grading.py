@@ -32,15 +32,9 @@ def test_each_sub_goal_result_says_which_of_the_four_it_is(held, reason, verdict
     assert SubGoalResult("goal", held, reason, True).verdict == verdict
 
 
-def test_a_scenario_with_actors_is_skipped_with_the_reason_while_they_are_off(
-    monkeypatch,
-):
+def test_a_scenario_with_actors_is_never_skipped_for_them():
+    # There is no switch: an environment's actors run whenever a scenario includes them.
     with_one = SimpleNamespace(scenario_key="s", scenario_id="", actors=("friend",))
-    alone = SimpleNamespace(scenario_key="t", scenario_id="", actors=())
-    monkeypatch.delenv("HARNESS_ACTORS", raising=False)
-    assert _skipped_receipt(with_one).reason == "actors are switched off"
-    assert _skipped_receipt(alone).reason is None
-    monkeypatch.setenv("HARNESS_ACTORS", "1")
     assert _skipped_receipt(with_one).reason is None
 
 
@@ -71,11 +65,11 @@ def test_a_receipt_carries_the_verdict_and_reason_only_when_sent_and_its_digest_
     before = _receipt()
     assert "verdict" not in before["sub_goals"][0] and "reason" not in before
     after = _receipt(
-        goal={"verdict": "not_applicable"}, reason="actors are switched off"
+        goal={"verdict": "not_applicable"}, reason="the call never started"
     )
     assert (
         after["sub_goals"][0]["verdict"] == "not_applicable"
-        and after["reason"] == "actors are switched off"
+        and after["reason"] == "the call never started"
     )
     for wire in (before, after):
         assert (

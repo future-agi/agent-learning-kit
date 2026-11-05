@@ -59,7 +59,6 @@ from ..call_actor import (
     entry_problems,
     load_call_actors,
     scenarios_using,
-    actors_enabled,
 )
 from ..checks import reference_of, run_check, run_world_check
 from ..contract import AgentContract, is_data_free_conversation
@@ -735,8 +734,8 @@ ACTOR_SERVER = "actors"
 
 def actor_tools_server(contract: AgentContract, destination: Path) -> Any | None:
     """The cast alone, for a builder chat on a built environment: who is in the world and who is with the caller can
-    still change after the world's tools and data are fixed. None when no actor tools are switched on."""
-    tools = world_actor_tools(destination, contract) if actors_enabled() else []
+    still change after the world's tools and data are fixed. None when there are no actor tools."""
+    tools = world_actor_tools(destination, contract)
     if not tools:
         return None
     return tool_server(name=ACTOR_SERVER, version="0.1.0", tools=tools)
@@ -1832,8 +1831,7 @@ def world_tools(
             )
         listed = ""
         if (
-            actors_enabled()
-            and available_channels(str(contract.modality or ""))
+            available_channels(str(contract.modality or ""))
             and not load_call_actors(destination).call_actors
         ):
             listed = (
@@ -2055,7 +2053,7 @@ def world_tools(
             run_env_command,
             check_world,
             save_world,
-            *(world_actor_tools(destination, contract) if actors_enabled() else []),
+            *world_actor_tools(destination, contract),
         ],
     )
     return server, world
