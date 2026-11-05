@@ -199,7 +199,7 @@ class SubActorsOnCall:
         clock: Callable[[], float] = time.time,
     ) -> None:
         self.voices = {str(voice.actor["id"]): voice for voice in voices}
-        self.cast = Cast([voice.actor for voice in voices], seed)
+        self.cast = Cast([voice.actor for voice in voices], seed, clock)
         self.play = play
         self.say = say
         # Read only for a sub-actor that enters on a tool call: the person's turn waits on it.
@@ -349,7 +349,7 @@ class SubActorsOnCall:
         try:
             await asyncio.wait_for(
                 self.say(frames, text, str(voice.actor.get("name") or "someone")),
-                self._left(asked),
+                self.cast.remaining(),
             )
         except asyncio.TimeoutError:
             self.cast.late(voice.actor, cut_by_call_time=True)
@@ -362,10 +362,6 @@ class SubActorsOnCall:
         if done:
             self.cast.finish(voice.actor)
         return not done
-
-    def _left(self, asked: float) -> float:
-        """The call's sub-actor time still left for a line asked for at ``asked``, its writing counted."""
-        return max(0.0, self.cast.remaining() - (self.clock() - asked))
 
     async def _written(
         self, voice: SubActorVoice, heard: list[str]
@@ -402,7 +398,7 @@ class SubActorsOnCall:
                         text,
                         str(voice.actor.get("name") or "someone"),
                     ),
-                    self._left(asked),
+                    self.cast.remaining(),
                 )
             except asyncio.TimeoutError:
                 self.cast.late(voice.actor, cut_by_call_time=True)

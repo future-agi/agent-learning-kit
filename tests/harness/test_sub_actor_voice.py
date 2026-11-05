@@ -358,7 +358,8 @@ def test_a_line_that_plays_past_the_sub_actor_time_is_cut_and_frees_the_phone(
         call = voice_engine.SubActorsOnCall(
             [voice], seed="run", play=never_done, say=never_done, clock=lambda: 1.0
         )
-        call.cast._spent = registry.SUB_ACTOR_SECONDS - 0.05
+        # The first trigger was all but 50 ms of the call's sub-actor time ago.
+        call.cast._started = 1.0 - (registry.SUB_ACTOR_SECONDS - 0.05)
         holding = await asyncio.wait_for(call.agent_turn("Which date?"), 1.0)
         await asyncio.wait_for(asyncio.gather(*call._pending.values()), 1.0)
         return holding, call.cast.holder, call.events()
@@ -877,6 +878,7 @@ def test_the_menu_s_greeting_is_ready_by_the_time_the_call_is_answered():
 
 
 def test_the_call_s_sub_actor_time_runs_out_and_every_sub_actor_stops_with_the_reason():
+    now = [0.0]
     cast = Cast(
         [
             _actor("one"),
@@ -884,14 +886,19 @@ def test_the_call_s_sub_actor_time_runs_out_and_every_sub_actor_stops_with_the_r
             _actor("three", kind="mid_journey", turn=2),
         ],
         "run",
+        clock=lambda: now[0],
     )
+    # Nothing counts before the first trigger.
+    now[0] = 500.0
+    assert cast.remaining() == registry.SUB_ACTOR_SECONDS
     assert len(cast.entering(Moment(2))) == 2
     assert cast.remaining() == registry.SUB_ACTOR_SECONDS
-    # Only the sub-actors' own lines do: asked for at 500, ready and spoken by 530.
-    cast.delivered(cast.actors[0], "a line", 2, 510.0, 530.0, 500.0)
+    # From the first trigger the wall clock counts, whoever is speaking: one 5 s line in 30 s.
+    cast.delivered(cast.actors[0], "a line", 2, 520.0, 525.0, 515.0)
+    now[0] = 530.0
     assert cast.remaining() == 30.0 and cast.line_limit(45.0) == 30.0
     assert cast.entering(Moment(2)) == []  # the third waits for room
-    cast.delivered(cast.actors[1], "another", 3, 540.0, 560.0, 530.0)
+    now[0] = 560.0
     assert cast.out_of_time()
     assert cast.entering(Moment(3)) == []
     assert not cast.may_speak(cast.actors[0], 3)
@@ -949,10 +956,8 @@ def test_lines_cut_off_by_the_call_s_sub_actor_time_say_so():
             [phone], clock=lambda: time.monotonic() + offset[0]
         )
         call.cast.entering(Moment(2))
-        # Earlier lines used all but 50 ms of the call's sub-actor time.
-        call.cast.delivered(
-            call.cast.actors[0], "earlier", 1, 0.0, registry.SUB_ACTOR_SECONDS - 0.05
-        )
+        # The first trigger was all but 50 ms of the call's sub-actor time ago.
+        offset[0] = registry.SUB_ACTOR_SECONDS - 0.05
         holding = await call.agent_turn("Hello")
         await call.close()
         return holding, said, call.summary()
@@ -1079,10 +1084,11 @@ def test_only_the_per_turn_read_is_bounded_and_evidence_reads_are_not(monkeypatc
 
 
 def test_a_line_late_on_its_own_limit_never_ends_the_call_s_sub_actor_time():
-    cast = Cast([_actor("one"), _actor("two")], "run")
+    now = [0.0]
+    cast = Cast([_actor("one"), _actor("two")], "run", clock=lambda: now[0])
     cast.entering(Moment(2))
     first = cast.line_limit(registry.HANDOFF_LINE_SECONDS)
-    cast.delivered(cast.actors[1], "a line", 2, 0.0, 50.0, 0.0)
+    now[0] = 50.0
     second = cast.line_limit(registry.HANDOFF_LINE_SECONDS)
     assert first == registry.HANDOFF_LINE_SECONDS and second < first
     cast.late(cast.actors[0], cut_by_call_time=first < registry.HANDOFF_LINE_SECONDS)
