@@ -46,8 +46,8 @@ TRIGGER_ABOUT: dict[str, str] = {
     "always": "after the agent's first turn (a phone menu answers the call itself)",
     "mid_journey": "after the agent's turn `turn`",
     "on_tool": "on call `on_call` of the agent's tool `tool`, a tool that runs in the simulated world "
-    "(one that runs only inside the agent cannot be seen), or after the agent's turn 4 if that call never comes",
-    "on_keyword": "when one of `words` is in the agent's latest turn, or after the agent's turn 4 if none is said",
+    "(one that runs only inside the agent cannot be seen); never if that call never comes",
+    "on_keyword": "when one of `words` is in the agent's latest turn; never if none is said",
     "probability": "with chance `p`, drawn once per call from the run's seed",
 }
 TRIGGERS = tuple(TRIGGER_ABOUT)
@@ -110,8 +110,6 @@ TOOLS_READ_SECONDS = 1.0
 CONVERSATION_LINES = 12
 MAX_ACTIVE = 2
 TAKEOVER_AFTER_TURNS = 4
-# A sub-actor in a scenario always joins: one waiting on a tool call or a word enters at this turn if it never comes.
-LATEST_ENTRY_TURN = 4
 # Someone can only take the phone from a person who already has it: not before the agent's second turn, by
 # which point the person has spoken at least once. A trigger that fires earlier waits for that turn.
 TAKES_PHONE_FROM_TURN = 2
@@ -221,9 +219,8 @@ def due(
         return moment.agent_turns >= int(trigger.get("turn") or 0) >= 1
     if kind == "on_tool":
         tool = str(trigger.get("tool") or "")
-        return moment.agent_turns >= LATEST_ENTRY_TURN or (
-            bool(tool)
-            and moment.tools_called.count(tool) >= int(trigger.get("on_call") or 1)
+        return bool(tool) and moment.tools_called.count(tool) >= int(
+            trigger.get("on_call") or 1
         )
     if kind == "on_keyword":
         words = [
@@ -232,9 +229,7 @@ def due(
             if str(one).strip()
         ]
         said = moment.last_text.casefold()
-        return moment.agent_turns >= LATEST_ENTRY_TURN or any(
-            re.search(_whole(word), said) for word in words
-        )
+        return any(re.search(_whole(word), said) for word in words)
     if kind == "probability":
         return moment.agent_turns >= 1 and drawn(
             trigger, seed=seed, sub_actor_id=sub_actor_id

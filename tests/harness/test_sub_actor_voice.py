@@ -51,7 +51,12 @@ def _actor(key: str, channel: str = "audio_handoff", **trigger) -> dict:
             Moment(3, tools_called=["lookup", "lookup"]),
             True,
         ),
-        ({"kind": "on_tool", "tool": "lookup"}, Moment(4), True),
+        ({"kind": "on_tool", "tool": "lookup"}, Moment(4), False),
+        (
+            {"kind": "on_tool", "tool": "lookup"},
+            Moment(9, tools_called=["other"]),
+            False,
+        ),
         (
             {"kind": "on_keyword", "words": ["refund"]},
             Moment(3, last_text="Your total is ready."),
@@ -60,7 +65,12 @@ def _actor(key: str, channel: str = "audio_handoff", **trigger) -> dict:
         (
             {"kind": "on_keyword", "words": ["refund"]},
             Moment(4, last_text="Your total is ready."),
-            True,
+            False,
+        ),
+        (
+            {"kind": "on_keyword", "words": ["refund"]},
+            Moment(9, last_text="Your total is ready."),
+            False,
         ),
         ({"kind": "probability", "p": 0.0001}, Moment(9), False),
         (
@@ -98,6 +108,20 @@ def _actor(key: str, channel: str = "audio_handoff", **trigger) -> dict:
 )
 def test_each_trigger_enters_at_its_moment(trigger, moment, expected):
     assert due(trigger, moment, seed="run", sub_actor_id="one") is expected
+
+
+def test_a_tool_or_word_that_never_comes_leaves_the_sub_actor_not_triggered():
+    cast = Cast(
+        [
+            _actor("tool", kind="on_tool", tool="lookup"),
+            _actor("word", "audio_mix", kind="on_keyword", words=["refund"]),
+        ],
+        "run",
+    )
+    for turn in range(1, 10):
+        assert cast.entering(Moment(turn, last_text="Your total is ready.")) == []
+    cast.hang_up()
+    assert [one["triggered"] for one in cast.summary()] == [False, False]
 
 
 def test_a_probability_draw_is_fixed_by_the_run_seed():
