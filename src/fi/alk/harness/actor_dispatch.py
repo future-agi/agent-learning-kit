@@ -23,9 +23,22 @@ from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 from urllib import error, request
 
-from fi.simulate.simulation.call_actors import Moment, decision_brief, due, read_decision, seeded
+from fi.simulate.simulation.call_actors import (
+    Moment,
+    decision_brief,
+    due,
+    read_decision,
+    seeded,
+)
 
-from .actors import AGENT, Actor, PreRunSession, ScenarioActor, ScheduledAction, is_pre_run
+from .actors import (
+    AGENT,
+    Actor,
+    PreRunSession,
+    ScenarioActor,
+    ScheduledAction,
+    is_pre_run,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +51,14 @@ class Acts(Protocol):
     """Sends one actor action through the world's door and says what came of it: `{status, outcome, result}`."""
 
     def __call__(
-        self, actor: str, action: str, arguments: dict[str, Any], *, key: str, parent: str | None, form: str = "tool"
+        self,
+        actor: str,
+        action: str,
+        arguments: dict[str, Any],
+        *,
+        key: str,
+        parent: str | None,
+        form: str = "tool",
     ) -> Awaitable[dict[str, Any]]: ...
 
 
@@ -57,7 +77,9 @@ class HttpActs:
         self.timeout = timeout
         self.send = send or self._send
 
-    def _send(self, url: str, headers: dict[str, str], arguments: dict[str, Any]) -> dict[str, Any]:
+    def _send(
+        self, url: str, headers: dict[str, str], arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         outgoing = request.Request(
             url,
             data=json.dumps(arguments).encode(),
@@ -76,18 +98,41 @@ class HttpActs:
         return {"status": status, "result": result}
 
     async def __call__(
-        self, actor: str, action: str, arguments: dict[str, Any], *, key: str, parent: str | None, form: str = "tool"
+        self,
+        actor: str,
+        action: str,
+        arguments: dict[str, Any],
+        *,
+        key: str,
+        parent: str | None,
+        form: str = "tool",
     ) -> dict[str, Any]:
-        headers = {"X-ALK-Actor": actor, "X-ALK-Actor-Token": self.token, "Idempotency-Key": key}
+        headers = {
+            "X-ALK-Actor": actor,
+            "X-ALK-Actor-Token": self.token,
+            "Idempotency-Key": key,
+        }
         if parent:
             headers["X-ALK-Parent-Event"] = parent
         if form == "record":
             headers["X-ALK-Record"] = "1"
-        sent = await asyncio.to_thread(self.send, f"{self.proxy_url}/{action.replace('.', '/')}", headers, arguments)
+        sent = await asyncio.to_thread(
+            self.send,
+            f"{self.proxy_url}/{action.replace('.', '/')}",
+            headers,
+            arguments,
+        )
         if isinstance(sent, int):
             sent = {"status": sent, "result": None}
         status = int(sent.get("status") or 0)
-        return {**sent, "outcome": "committed" if 0 < status < 400 else "refused" if status < 500 else "faulted"}
+        return {
+            **sent,
+            "outcome": "committed"
+            if 0 < status < 400
+            else "refused"
+            if status < 500
+            else "faulted",
+        }
 
 
 class DoorActs:
@@ -97,7 +142,14 @@ class DoorActs:
         self.door = door
 
     async def __call__(
-        self, actor: str, action: str, arguments: dict[str, Any], *, key: str, parent: str | None, form: str = "tool"
+        self,
+        actor: str,
+        action: str,
+        arguments: dict[str, Any],
+        *,
+        key: str,
+        parent: str | None,
+        form: str = "tool",
     ) -> dict[str, Any]:
         from .world_door import ToolCall
 
@@ -111,21 +163,32 @@ class DoorActs:
             form=form,
         )
         outcome = await asyncio.to_thread(self.door.enter, call)
-        return {"status": outcome.status, "outcome": outcome.outcome, "result": outcome.result}
+        return {
+            "status": outcome.status,
+            "outcome": outcome.outcome,
+            "result": outcome.result,
+        }
 
 
 def contacts(arguments: Any, actor: Actor) -> bool:
     """Whether an action is addressed to one of this actor's identities: an argument value equal to one, compared
     in the same encoding so any character matches."""
     said = json.dumps(arguments or {}, default=str)
-    return any(identity and json.dumps(identity) in said for identity in actor.identities.values())
+    return any(
+        identity and json.dumps(identity) in said
+        for identity in actor.identities.values()
+    )
 
 
 def form_of(action: str, actor: Actor) -> str:
     """`record` for a record change the actor is permitted (`approvals.change`), else `tool`."""
     from .world_door import record_action
 
-    return "record" if record_action(action) is not None and action in actor.permitted_actions else "tool"
+    return (
+        "record"
+        if record_action(action) is not None and action in actor.permitted_actions
+        else "tool"
+    )
 
 
 class ActorDispatcher:
@@ -176,7 +239,10 @@ class ActorDispatcher:
             for actor, index, action in listed
             # A live-only actor takes no scheduled actions.
             if actor.play != "live"
-            and (action.trigger.kind != "probability" or seeded(seed, actor.id, index).random() < action.trigger.p)
+            and (
+                action.trigger.kind != "probability"
+                or seeded(seed, actor.id, index).random() < action.trigger.p
+            )
         ]
         self.started: float | None = None
         self.fired: list[dict[str, Any]] = []
@@ -189,7 +255,9 @@ class ActorDispatcher:
         self.live = [
             actors[entry.id]
             for entry in cast
-            if entry.id in actors and actors[entry.id].play in ("live", "both") and not actors[entry.id].channel
+            if entry.id in actors
+            and actors[entry.id].play in ("live", "both")
+            and not actors[entry.id].channel
         ]
         self.live_turns: dict[str, int] = {one.id: 0 for one in self.live}
         self.answered: dict[str, set[str]] = {one.id: set() for one in self.live}
@@ -224,9 +292,16 @@ class ActorDispatcher:
     @staticmethod
     def _agent_rows(log: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """The agent's own actions in the log, without anything written before the run."""
-        return [row for row in log if (row.get("actor_id") or AGENT) == AGENT and not is_pre_run(row.get("idempotency_key"))]
+        return [
+            row
+            for row in log
+            if (row.get("actor_id") or AGENT) == AGENT
+            and not is_pre_run(row.get("idempotency_key"))
+        ]
 
-    def _moment(self, actor: Actor, elapsed: float, agent_rows: list[dict[str, Any]]) -> Moment:
+    def _moment(
+        self, actor: Actor, elapsed: float, agent_rows: list[dict[str, Any]]
+    ) -> Moment:
         return Moment(
             agent_turns=None,
             tools_called=[str(row.get("name") or "") for row in agent_rows],
@@ -235,55 +310,112 @@ class ActorDispatcher:
             records=self.records,
         )
 
-    def _cause(self, actor: Actor, trigger: Any, elapsed: float, log: list[dict[str, Any]], index: int = -1) -> str | None:
+    def _cause(
+        self,
+        actor: Actor,
+        trigger: Any,
+        elapsed: float,
+        log: list[dict[str, Any]],
+        index: int = -1,
+    ) -> str | None:
         """Whether this trigger is met now (the one `due()`): None when not, else the id of the agent action that met
         it ("" when no single action did)."""
         if trigger.kind == "probability" and index >= 0:
             # A scheduled action's chance was drawn once, when the trial began; one still pending was drawn in.
             return ""
         agent_rows = self._agent_rows(log)
-        if not due(trigger.model_dump(), self._moment(actor, elapsed, agent_rows), seed=self.seed, actor_id=actor.id):
+        if not due(
+            trigger.model_dump(),
+            self._moment(actor, elapsed, agent_rows),
+            seed=self.seed,
+            actor_id=actor.id,
+        ):
             return None
         if trigger.kind == "on_tool":
             calls = [row for row in agent_rows if row.get("name") == trigger.tool]
-            return str(calls[trigger.on_call - 1].get("action_id") or "") if len(calls) >= trigger.on_call else ""
+            return (
+                str(calls[trigger.on_call - 1].get("action_id") or "")
+                if len(calls) >= trigger.on_call
+                else ""
+            )
         if trigger.kind == "contacted":
-            reached = next((row for row in agent_rows if contacts(row.get("arguments"), actor)), None)
+            reached = next(
+                (row for row in agent_rows if contacts(row.get("arguments"), actor)),
+                None,
+            )
             return str((reached or {}).get("action_id") or "")
         return ""
 
     def _sees(self, actor: Actor, row: dict[str, Any]) -> bool:
         """Whether an action in the log is one this actor can see: never its own or a pre-run row; one addressed to it;
         or one taken where it can act itself (the same action, by the agent or another actor)."""
-        if (row.get("actor_id") or AGENT) == actor.id or is_pre_run(row.get("idempotency_key")):
+        if (row.get("actor_id") or AGENT) == actor.id or is_pre_run(
+            row.get("idempotency_key")
+        ):
             return False
         name = str(row.get("name") or "")
         return contacts(row.get("arguments"), actor) or any(
-            name in (one, one.rsplit(".", 1)[-1], one.replace(".", "/")) for one in actor.permitted_actions
+            name in (one, one.rsplit(".", 1)[-1], one.replace(".", "/"))
+            for one in actor.permitted_actions
         )
 
     # -- acting ------------------------------------------------------------------------------------------------
 
-    async def _send(self, actor: Actor, action: str, arguments: dict[str, Any], key: str, cause: str) -> dict[str, Any]:
+    async def _send(
+        self, actor: Actor, action: str, arguments: dict[str, Any], key: str, cause: str
+    ) -> dict[str, Any]:
         service = action.split(".", 1)[0]
-        if action in self.names_actor and "actor_id" not in arguments and actor.identities.get(service):
+        if (
+            action in self.names_actor
+            and "actor_id" not in arguments
+            and actor.identities.get(service)
+        ):
             # A world that checks who acts takes the actor's id in the call: it is the actor's identity there.
             arguments = {**arguments, "actor_id": actor.identities[service]}
         try:
-            return await self.act(actor.id, action, arguments, key=key, parent=cause or None, form=form_of(action, actor))
+            return await self.act(
+                actor.id,
+                action,
+                arguments,
+                key=key,
+                parent=cause or None,
+                form=form_of(action, actor),
+            )
         except Exception as exc:  # noqa: BLE001 - one action that cannot be sent never stops the rest
-            logger.warning("actor action %s by %s could not be sent: %s", action, actor.id, type(exc).__name__)
+            logger.warning(
+                "actor action %s by %s could not be sent: %s",
+                action,
+                actor.id,
+                type(exc).__name__,
+            )
             return {"status": None, "outcome": "faulted", "error": type(exc).__name__}
 
-    async def _fire(self, actor: Actor, index: int, action: ScheduledAction, cause: str) -> None:
-        sent = await self._send(actor, action.action, action.arguments, f"{self.trial_id}:{actor.id}:{index}", cause)
+    async def _fire(
+        self, actor: Actor, index: int, action: ScheduledAction, cause: str
+    ) -> None:
+        sent = await self._send(
+            actor,
+            action.action,
+            action.arguments,
+            f"{self.trial_id}:{actor.id}:{index}",
+            cause,
+        )
         self._answered(actor)
         self.fired.append(
-            {"actor": actor.id, "play": "mocked", "action": action.action, "arguments": action.arguments,
-             "status": sent.get("status"), "outcome": sent.get("outcome"), "parent": cause or None}
+            {
+                "actor": actor.id,
+                "play": "mocked",
+                "action": action.action,
+                "arguments": action.arguments,
+                "status": sent.get("status"),
+                "outcome": sent.get("outcome"),
+                "parent": cause or None,
+            }
         )
 
-    def _live_due(self, actor: Actor, elapsed: float, log: list[dict[str, Any]]) -> str | None:
+    def _live_due(
+        self, actor: Actor, elapsed: float, log: list[dict[str, Any]]
+    ) -> str | None:
         """The cause of a live actor's next turn: a new event it can see, else its activation the first time it is
         met; None when nothing calls for it."""
         if actor.id in self.fell_back:
@@ -308,44 +440,94 @@ class ActorDispatcher:
     def _situation(self, actor: Actor, log: list[dict[str, Any]]) -> str:
         """What a live actor decides from: its brief, what it may do, and what it can see happened."""
         seen = [
-            json.dumps({"by": r.get("actor_id") or AGENT, "action": r.get("name"), "arguments": r.get("arguments"),
-                        "outcome": r.get("outcome")}, default=str)
+            json.dumps(
+                {
+                    "by": r.get("actor_id") or AGENT,
+                    "action": r.get("name"),
+                    "arguments": r.get("arguments"),
+                    "outcome": r.get("outcome"),
+                },
+                default=str,
+            )
             for r in log
             if self._sees(actor, r) or r.get("actor_id") == actor.id
         ]
         return decision_brief(
-            {"name": actor.name, "brief": self.briefs.get(actor.id, f"You are {actor.name}.")},
+            {
+                "name": actor.name,
+                "brief": self.briefs.get(actor.id, f"You are {actor.name}."),
+            },
             situation="",
             said=[],
             conversation=[],
             language="",
             seen=seen,
-            actions={name: self.world_actions.get(name, "") for name in actor.permitted_actions},
+            actions={
+                name: self.world_actions.get(name, "")
+                for name in actor.permitted_actions
+            },
             speaks=False,
         )
 
-    async def _live_turn(self, actor: Actor, cause: str, log: list[dict[str, Any]]) -> None:
+    async def _live_turn(
+        self, actor: Actor, cause: str, log: list[dict[str, Any]]
+    ) -> None:
         self.live_turns[actor.id] += 1
         turn = self.live_turns[actor.id]
         try:
-            raw = self.decide(self._situation(actor, log), actor) if self.decide else None
+            raw = (
+                self.decide(self._situation(actor, log), actor) if self.decide else None
+            )
             if inspect.isawaitable(raw):
                 raw = await raw
             decision = read_decision(raw)
         except Exception as exc:  # noqa: BLE001 - a failed decision is recorded, never a failed trial
-            self.fired.append({"actor": actor.id, "play": "live", "turn": turn, "decided": None, "why": None,
-                               "error": type(exc).__name__, "parent": cause or None})
+            self.fired.append(
+                {
+                    "actor": actor.id,
+                    "play": "live",
+                    "turn": turn,
+                    "decided": None,
+                    "why": None,
+                    "error": type(exc).__name__,
+                    "parent": cause or None,
+                }
+            )
             return
         if not decision.action:
-            self.fired.append({"actor": actor.id, "play": "live", "turn": turn, "decided": None,
-                               "why": decision.why or None, "parent": cause or None})
+            self.fired.append(
+                {
+                    "actor": actor.id,
+                    "play": "live",
+                    "turn": turn,
+                    "decided": None,
+                    "why": decision.why or None,
+                    "parent": cause or None,
+                }
+            )
             return
         # Sent whatever it chose: the world, not the decision, decides whether it may.
-        sent = await self._send(actor, decision.action, decision.arguments, f"{self.trial_id}:{actor.id}:l{turn}", cause)
+        sent = await self._send(
+            actor,
+            decision.action,
+            decision.arguments,
+            f"{self.trial_id}:{actor.id}:l{turn}",
+            cause,
+        )
         self._answered(actor)
-        self.fired.append({"actor": actor.id, "play": "live", "turn": turn, "action": decision.action,
-                           "arguments": decision.arguments, "status": sent.get("status"),
-                           "outcome": sent.get("outcome"), "why": decision.why or None, "parent": cause or None})
+        self.fired.append(
+            {
+                "actor": actor.id,
+                "play": "live",
+                "turn": turn,
+                "action": decision.action,
+                "arguments": decision.arguments,
+                "status": sent.get("status"),
+                "outcome": sent.get("outcome"),
+                "why": decision.why or None,
+                "parent": cause or None,
+            }
+        )
 
     # -- waits and fallbacks -------------------------------------------------------------------------------------
 
@@ -366,8 +548,15 @@ class ActorDispatcher:
                 cause = self._cause(actor, self.triggers[actor.id], elapsed, log)
                 if cause is not None:
                     self.waiting[actor.id] = (self.clock(), cause)
-                    self.fired.append({"actor": actor.id, "play": "waiting", "timeout_seconds": activation.timeout_seconds,
-                                       "fallback": activation.fallback, "parent": cause or None})
+                    self.fired.append(
+                        {
+                            "actor": actor.id,
+                            "play": "waiting",
+                            "timeout_seconds": activation.timeout_seconds,
+                            "fallback": activation.fallback,
+                            "parent": cause or None,
+                        }
+                    )
             elif self.clock() - self.waiting[actor.id][0] >= activation.timeout_seconds:
                 due_now.append(actor)
         return due_now
@@ -387,10 +576,18 @@ class ActorDispatcher:
             outcome = "fallback_action"
         else:
             outcome = "answered_by"
-        record = {"actor": actor.id, "play": "timeout", "fallback": fallback, "outcome": outcome,
-                  "timeout_seconds": actor.activation.timeout_seconds, "parent": cause or None}
+        record = {
+            "actor": actor.id,
+            "play": "timeout",
+            "fallback": fallback,
+            "outcome": outcome,
+            "timeout_seconds": actor.activation.timeout_seconds,
+            "parent": cause or None,
+        }
         if outcome == "fallback_action":
-            sent = await self._send(actor, fallback, {}, f"{self.trial_id}:{actor.id}:fallback", cause)
+            sent = await self._send(
+                actor, fallback, {}, f"{self.trial_id}:{actor.id}:fallback", cause
+            )
             record["status"] = sent.get("status")
             record["action_outcome"] = sent.get("outcome")
         self.fired.append(record)
@@ -404,14 +601,21 @@ class ActorDispatcher:
                 self.answered[instead.id] = set()
             await self._live_turn(instead, cause, log)
             return
-        for one, index, action in [one for one in self.pending if one[0].id == instead.id]:
+        for one, index, action in [
+            one for one in self.pending if one[0].id == instead.id
+        ]:
             self.pending.remove((one, index, action))
             await self._fire(one, index, action, cause)
 
     def unresolved(self) -> list[dict[str, Any]]:
         """Waits still open when the trial ended, recorded as such."""
         return [
-            {"actor": actor_id, "play": "timeout", "outcome": "unresolved_at_end", "parent": cause or None}
+            {
+                "actor": actor_id,
+                "play": "timeout",
+                "outcome": "unresolved_at_end",
+                "parent": cause or None,
+            }
             for actor_id, (_, cause) in self.waiting.items()
             if actor_id not in self.settled
         ]
@@ -420,11 +624,19 @@ class ActorDispatcher:
         """Each actor whose trigger never came this trial: recorded as not triggered, the same word speaking actors
         use. A trigger that never comes can be the right run (the agent never escalated); a trigger that cannot
         happen is refused when the scenario is written."""
-        acted = {one["actor"] for one in self.fired if one.get("play") in ("mocked", "live")}
+        acted = {
+            one["actor"] for one in self.fired if one.get("play") in ("mocked", "live")
+        }
         return [
-            {"actor": actor_id, "play": "not_triggered", "why": f"its trigger ({trigger.kind}) never came in this trial"}
+            {
+                "actor": actor_id,
+                "play": "not_triggered",
+                "why": f"its trigger ({trigger.kind}) never came in this trial",
+            }
             for actor_id, trigger in self.triggers.items()
-            if actor_id not in self.waiting and actor_id not in self.woken and actor_id not in acted
+            if actor_id not in self.waiting
+            and actor_id not in self.woken
+            and actor_id not in acted
             and trigger.kind not in ("always", "probability")
         ]
 
@@ -440,14 +652,23 @@ class ActorDispatcher:
         for session in self.pre_run:
             if session.per_trial and self.write_session is not None:
                 # A fresh conversation for this trial, written by its actors now; the record keeps it.
-                session = await generate(session, self.actors, self.session_briefs, self.write_session)
+                session = await generate(
+                    session, self.actors, self.session_briefs, self.write_session
+                )
             answered: dict[int, Any] = {}
             for position, message in enumerate(session.thread, start=1):
                 number += 1
                 actor = self.actors.get(message.actor)
                 if actor is None:
-                    self.fired.append({"actor": message.actor, "play": "history", "action": message.action,
-                                       "status": None, "error": "not_listed"})
+                    self.fired.append(
+                        {
+                            "actor": message.actor,
+                            "play": "history",
+                            "action": message.action,
+                            "status": None,
+                            "error": "not_listed",
+                        }
+                    )
                     continue
                 arguments = dict(message.arguments)
                 missing = []
@@ -457,11 +678,25 @@ class ActorDispatcher:
                         missing.append(name)
                     else:
                         arguments[name] = value
-                sent = await self._send(actor, message.action, arguments, f"{self.trial_id}:{actor.id}:h{number}", "")
+                sent = await self._send(
+                    actor,
+                    message.action,
+                    arguments,
+                    f"{self.trial_id}:{actor.id}:h{number}",
+                    "",
+                )
                 answered[position] = sent.get("result")
-                self.fired.append({"actor": actor.id, "play": "history", "action": message.action,
-                                   "arguments": arguments, "status": sent.get("status"), "outcome": sent.get("outcome"),
-                                   **({"unresolved_refers": missing} if missing else {})})
+                self.fired.append(
+                    {
+                        "actor": actor.id,
+                        "play": "history",
+                        "action": message.action,
+                        "arguments": arguments,
+                        "status": sent.get("status"),
+                        "outcome": sent.get("outcome"),
+                        **({"unresolved_refers": missing} if missing else {}),
+                    }
+                )
 
     # -- the loop ------------------------------------------------------------------------------------------------
 
@@ -471,8 +706,13 @@ class ActorDispatcher:
         if self.started is None:
             self.started = self.clock()
         log: list[dict[str, Any]] = []
-        if self.live or self.timed or any(
-            action.trigger.kind in ("on_tool", "contacted") for _, _, action in self.pending
+        if (
+            self.live
+            or self.timed
+            or any(
+                action.trigger.kind in ("on_tool", "contacted")
+                for _, _, action in self.pending
+            )
         ):
             try:
                 log = await asyncio.to_thread(self.read_log)
@@ -510,14 +750,30 @@ class ActorDispatcher:
             actor = self.actors.get(str(one.get("actor") or ""))
             if actor is None or not one.get("action"):
                 continue
-            arguments = one.get("arguments") if isinstance(one.get("arguments"), dict) else {}
+            arguments = (
+                one.get("arguments") if isinstance(one.get("arguments"), dict) else {}
+            )
             sent = await self._send(
-                actor, str(one["action"]), arguments, f"{self.trial_id}:{actor.id}:v{self.reported_sent}", ""
+                actor,
+                str(one["action"]),
+                arguments,
+                f"{self.trial_id}:{actor.id}:v{self.reported_sent}",
+                "",
             )
             self._answered(actor)
-            self.fired.append({"actor": actor.id, "play": "live", "channel": "voice", "action": one["action"],
-                               "arguments": arguments, "status": sent.get("status"), "outcome": sent.get("outcome"),
-                               "why": one.get("why"), "parent": None})
+            self.fired.append(
+                {
+                    "actor": actor.id,
+                    "play": "live",
+                    "channel": "voice",
+                    "action": one["action"],
+                    "arguments": arguments,
+                    "status": sent.get("status"),
+                    "outcome": sent.get("outcome"),
+                    "why": one.get("why"),
+                    "parent": None,
+                }
+            )
 
     async def run(self) -> None:
         """Plays every actor until the trial is over and it is cancelled."""
@@ -561,7 +817,11 @@ def build_dispatcher(
     bundle_dir = Path(bundle_dir)
     cast = [ScenarioActor.model_validate(entry) for entry in doc.get("actors") or []]
     contract_path = bundle_dir / "contract.json"
-    contract = json.loads(contract_path.read_text(encoding="utf-8")) if contract_path.is_file() else {}
+    contract = (
+        json.loads(contract_path.read_text(encoding="utf-8"))
+        if contract_path.is_file()
+        else {}
+    )
     for action in (one for entry in cast for one in entry.actions):
         if action.trigger.kind == "on_tool":
             # The log records the route the agent's tool calls, which can differ from the tool's name.
@@ -572,21 +832,36 @@ def build_dispatcher(
     listing = load_actors(bundle_dir)
     listed = listing.by_id()
     sessions = [PreRunSession.model_validate(one) for one in doc.get("pre_run") or []]
-    in_sessions = {one for session in sessions if session.per_trial for one in session.actors if one in listed}
+    in_sessions = {
+        one
+        for session in sessions
+        if session.per_trial
+        for one in session.actors
+        if one in listed
+    }
     session_briefs = {
-        actor_id: brief_text(actor_brief(listed[actor_id].model_dump(exclude_none=True), scenario=dict(doc)))
+        actor_id: brief_text(
+            actor_brief(
+                listed[actor_id].model_dump(exclude_none=True), scenario=dict(doc)
+            )
+        )
         for actor_id in in_sessions
     }
     briefs = {
         entry.id: brief_text(
             actor_brief(
-                with_knowledge_read(listed[entry.id].model_dump(exclude_none=True), bundle_dir, records) or {},
+                with_knowledge_read(
+                    listed[entry.id].model_dump(exclude_none=True), bundle_dir, records
+                )
+                or {},
                 entry=with_knowledge_read(entry.model_dump(), bundle_dir, records),
                 scenario=dict(doc),
             )
         )
         for entry in cast
-        if entry.id in listed and listed[entry.id].play != "mocked" and not listed[entry.id].channel
+        if entry.id in listed
+        and listed[entry.id].play != "mocked"
+        and not listed[entry.id].channel
     }
     about = {
         str(one.get("name")): str(one.get("description") or "")
@@ -596,10 +871,13 @@ def build_dispatcher(
     world_actions = {
         route.replace("/", "."): about.get(str(entry.get("tool") or ""), "")
         for entry in contract.get("tool_entrypoints") or []
-        if isinstance(entry, dict) and (route := str(entry.get("endpoint") or "").strip("/"))
+        if isinstance(entry, dict)
+        and (route := str(entry.get("endpoint") or "").strip("/"))
     }
     takes_actor = {
-        str(one.get("name")) for one in contract.get("tools") or [] if isinstance(one, dict) and "actor_id" in (one.get("args") or [])
+        str(one.get("name"))
+        for one in contract.get("tools") or []
+        if isinstance(one, dict) and "actor_id" in (one.get("args") or [])
     }
     names_actor = {
         route.replace("/", ".")
@@ -615,7 +893,9 @@ def build_dispatcher(
         decide=live_decider(meter, listing.limits.model) if briefs else None,
         briefs=briefs,
         pre_run=sessions,
-        write_session=live_decider(meter, listing.limits.model) if in_sessions else None,
+        write_session=live_decider(meter, listing.limits.model)
+        if in_sessions
+        else None,
         session_briefs=session_briefs,
         world_actions=world_actions,
         trial_id=trial_id,
@@ -627,7 +907,9 @@ def build_dispatcher(
     )
 
 
-def world_summary(decisions: list[dict[str, Any]], listed: dict[str, Actor], speaking: set[str]) -> list[dict[str, Any]]:
+def world_summary(
+    decisions: list[dict[str, Any]], listed: dict[str, Actor], speaking: set[str]
+) -> list[dict[str, Any]]:
     """The call's actor summary rows for actors that act through the world (one per actor, in the words the
     speaking actors' rows use): triggered when it took any part or a wait began, delivered when it acted, and the
     problem when it could not. Actors already in the speaking summary are left to it."""
@@ -639,13 +921,23 @@ def world_summary(decisions: list[dict[str, Any]], listed: dict[str, Actor], spe
         actor = listed.get(actor_id)
         row = rows.setdefault(
             actor_id,
-            {"actor": actor_id, "name": actor.name if actor else actor_id, "triggered": False, "delivered": 0,
-             "dropped": [], "acts_in_world": True},
+            {
+                "actor": actor_id,
+                "name": actor.name if actor else actor_id,
+                "triggered": False,
+                "delivered": 0,
+                "dropped": [],
+                "acts_in_world": True,
+            },
         )
         play = one.get("play")
         if play in ("mocked", "live", "history", "waiting", "timeout"):
             row["triggered"] = True
-        if play in ("mocked", "live") and one.get("action") and one.get("outcome") in ("committed", "duplicate"):
+        if (
+            play in ("mocked", "live")
+            and one.get("action")
+            and one.get("outcome") in ("committed", "duplicate")
+        ):
             row["delivered"] += 1
         if play == "problem":
             row["dropped"].append(one.get("why") or one.get("problem"))
