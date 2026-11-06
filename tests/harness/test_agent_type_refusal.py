@@ -1,0 +1,2192 @@
+"""An agent whose main job isn't a conversation stops its build with a failure that says so."""
+
+from __future__ import annotations
+
+import asyncio
+import errno
+import json
+import os
+import stat
+import tempfile
+import threading
+import time
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from fi.alk.harness import (
+    agent_type_check,
+    amend,
+    authoring_entrypoint,
+    chat,
+    cli,
+    failure_file,
+    tools,
+)
+from fi.alk.harness import hosted_authoring_entrypoint as hosted_authoring
+from fi.alk.harness.agent_type_check import (
+    agent_type_failure,
+    browser_tools_found,
+    decide,
+    failure_message,
+    is_browser,
+    modality_text,
+)
+from fi.alk.harness.contract import AgentContract, known_modalities
+from fi.alk.harness.failure_file import FAILURE_FILE, write_failure_file
+from fi.alk.harness.hosted_chat_entrypoint import HostedChatRuntime
+from fi.alk.harness.job import FailureDomain, HarnessFailure, HarnessJob, HarnessStage
+from fi.alk.harness.sources import GitHubSource, RepoSource
+from fi.alk.harness.tools import CONTRACT_SERVER, contract_tools
+from fi.alk.harness.understand import load, open_stage
+
+_FOUND_MESSAGE = (
+    "This agent's main job is driving a browser, operating a computer or crawling sites "
+    "(found: playwright). Only voice and chat agents are supported for now."
+)
+_READ_MESSAGE = (
+    "This agent's main job was read as driving a browser, operating a computer or crawling "
+    "sites. Only voice and chat agents are supported for now."
+)
+_FINISHED = ".futureagi-build-finished.json"
+_STOP = "Don't submit again or do more work; tell the person."
+_READ = "read-it"
+_REAL_RECEIPT = tools._new_receipt
+
+
+@pytest.fixture(autouse=True)
+def _nothing_reaches_a_network(monkeypatch):
+    for name in ("FI_BASE_URL", "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"):
+        monkeypatch.setenv(name, "http://127.0.0.1:9")
+    monkeypatch.delenv("FI_API_KEY", raising=False)
+    monkeypatch.delenv("FI_SECRET_KEY", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _a_known_receipt(monkeypatch):
+    monkeypatch.setattr(tools, "_new_receipt", lambda: _READ)
+
+
+def _tree(root: Path, files: dict[str, str]) -> Path:
+    for name, body in files.items():
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+    return root
+
+
+@pytest.fixture
+def browser_repo(tmp_path) -> Path:
+    return _tree(tmp_path / "source", {"agent.py": "from playwright.sync_api import sync_playwright\n"})
+
+
+@pytest.fixture
+def plain_repo(tmp_path) -> Path:
+    return _tree(tmp_path / "source", {"agent.py": "import openai\n"})
+
+
+# Complete enough that no nudge fires, so the first answer is about the modality alone.
+def _reading(modality="chat", **fields):
+    payload = {
+        "agent": "fixture",
+        "one_liner": "Answers questions.",
+        "real_use_cases": ["Answer a question"],
+        "tools": [{"name": "lookup", "args": ["query"]}],
+        "hard_constraints": ["Stay polite"],
+        "system_prompt_excerpt": "You answer questions.",
+        **fields,
+    }
+    if modality is not None:
+        payload["modality"] = modality
+    return payload
+
+
+def _submit_tool(server):
+    return next(one for one in server.tools if one.name == "submit_contract")
+
+
+def _submitter(destination: Path, scan_root: Path | None = None):
+    tool = _submit_tool(contract_tools(destination, scan_root=scan_root))
+    return lambda payload: asyncio.run(tool.handler(payload))
+
+
+def _text(answer) -> str:
+    return answer["content"][0]["text"]
+
+
+def _failure(destination: Path) -> dict:
+    return json.loads((destination / FAILURE_FILE).read_text(encoding="utf-8"))
+
+
+def _a_failure() -> HarnessFailure:
+    return HarnessFailure(
+        domain=FailureDomain.AGENT,
+        stage=HarnessStage.UNDERSTANDING_AGENT,
+        code="first",
+        message="the first failure",
+        retryable=False,
+        details={"key": "value"},
+    )
+
+
+# The writer
+
+
+def test_writer_creates_folder(tmp_path):
+    output = tmp_path / "gone" / "authoring"
+    assert write_failure_file(_a_failure(), output) == output / FAILURE_FILE
+    assert (output / FAILURE_FILE).is_file()
+
+
+def test_writer_writes_full_shape(tmp_path):
+    write_failure_file(_a_failure(), tmp_path)
+    assert _failure(tmp_path) == {
+        "domain": "agent",
+        "stage": "understanding_agent",
+        "code": "first",
+        "message": "the first failure",
+        "retryable": False,
+        "details": {"key": "value"},
+    }
+
+
+def test_first_failure_stands(tmp_path):
+    write_failure_file(_a_failure(), tmp_path)
+    later = _a_failure().model_copy(update={"code": "later"})
+    write_failure_file(later, tmp_path)
+    assert _failure(tmp_path)["code"] == "first"
+
+
+@pytest.mark.parametrize("umask", [0o022, 0o077])
+def test_file_is_world_readable(tmp_path, umask):
+    before = os.umask(umask)
+    try:
+        path = write_failure_file(_a_failure(), tmp_path)
+    finally:
+        os.umask(before)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o644
+
+
+def test_writer_leaves_no_temp_file(tmp_path):
+    write_failure_file(_a_failure(), tmp_path)
+    write_failure_file(_a_failure(), tmp_path)
+    assert [path.name for path in tmp_path.iterdir()] == [FAILURE_FILE]
+
+
+def _no_hard_links(monkeypatch, number=errno.EXDEV):
+    def refuse(*_args, **_kwargs):
+        raise OSError(number, "no hard links here")
+
+    monkeypatch.setattr(failure_file.os, "link", refuse)
+
+
+@pytest.mark.parametrize("number", [errno.EXDEV, errno.EPERM, errno.ENOTSUP, errno.EMLINK])
+def test_a_disk_with_no_hard_links_still_gets_the_whole_file(tmp_path, monkeypatch, number):
+    _no_hard_links(monkeypatch, number)
+    path = write_failure_file(_a_failure(), tmp_path)
+    assert HarnessFailure.model_validate_json(path.read_text()) == _a_failure()
+    assert stat.S_IMODE(path.stat().st_mode) == 0o644
+    assert [item.name for item in tmp_path.iterdir()] == [FAILURE_FILE]
+
+
+def test_the_file_is_readable_under_a_strict_umask_with_no_hard_links(tmp_path, monkeypatch):
+    _no_hard_links(monkeypatch)
+    before = os.umask(0o077)
+    try:
+        path = write_failure_file(_a_failure(), tmp_path)
+    finally:
+        os.umask(before)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o644
+
+
+def test_a_disk_with_no_permissions_still_gets_the_whole_file(tmp_path, monkeypatch):
+    def refuse(*_args, **_kwargs):
+        raise OSError(errno.EPERM, "no permissions here")
+
+    monkeypatch.setattr(failure_file.os, "chmod", refuse)
+    path = write_failure_file(_a_failure(), tmp_path)
+    assert HarnessFailure.model_validate_json(path.read_text()) == _a_failure()
+    assert [item.name for item in tmp_path.iterdir()] == [FAILURE_FILE]
+
+
+def test_first_failure_stands_with_no_hard_links(tmp_path, monkeypatch):
+    _no_hard_links(monkeypatch)
+    write_failure_file(_a_failure(), tmp_path)
+    write_failure_file(agent_type_failure([]), tmp_path)
+    assert HarnessFailure.model_validate_json((tmp_path / FAILURE_FILE).read_text()) == _a_failure()
+
+
+def test_a_write_that_fails_on_a_disk_with_no_hard_links_leaves_nothing(tmp_path, monkeypatch):
+    _no_hard_links(monkeypatch)
+
+    def disk_full(*_args, **_kwargs):
+        raise OSError(errno.ENOSPC, "no space")
+
+    monkeypatch.setattr(failure_file.os, "fdopen", disk_full)
+    with pytest.raises(OSError):
+        write_failure_file(_a_failure(), tmp_path)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_full_disk_leaves_no_temporary_file(tmp_path, monkeypatch):
+    real = tempfile.NamedTemporaryFile
+
+    def filling(*args, **kwargs):
+        opened = real(*args, **kwargs)
+
+        def disk_full(_text):
+            raise OSError(errno.ENOSPC, "no space")
+
+        opened.write = disk_full
+        return opened
+
+    monkeypatch.setattr(failure_file.tempfile, "NamedTemporaryFile", filling)
+    with pytest.raises(OSError):
+        write_failure_file(_a_failure(), tmp_path)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_failure_message_is_empty_when_the_file_cannot_be_read(tmp_path):
+    assert failure_message(tmp_path) == ""
+    for body in ("{", "[1]", '{"message": 3}'):
+        (tmp_path / FAILURE_FILE).write_text(body, encoding="utf-8")
+        assert failure_message(tmp_path) == ""
+
+
+# The code check
+
+
+@pytest.mark.parametrize(
+    "files, expected",
+    [
+        ({"agent.py": "from playwright.sync_api import sync_playwright\n"}, ["playwright"]),
+        ({"agent.py": "import browser_use\n"}, ["browser-use"]),
+        (
+            {"package.json": json.dumps({"dependencies": {"@playwright/mcp": "1"}})},
+            ["@playwright/mcp"],
+        ),
+        ({"agent.py": 'TOOL = {"type": "computer_20241022"}\n'}, ["computer-use tool"]),
+        ({"agent.ts": 'const tool = {type: "computer_use_preview"};\n'}, ["computer-use tool"]),
+        ({"agent.py": 'BETA = "computer-use-2025-01-24"\n'}, ["computer-use tool"]),
+        ({"agent.py": 'TOOLS = [{"computer_use": {"environment": "browser"}}]\n'}, ["computer-use tool"]),
+        ({"agent.py": 'TOOL = dict(computer_use={"environment": "browser"})\n'}, ["computer-use tool"]),
+        ({"agent.js": "const u = 'https://x/computer_20241022';\n"}, ["computer-use tool"]),
+        ({"agent.ts": "const tools = [{computerUse: {environment}}];\n"}, ["computer-use tool"]),
+        ({"agent.js": "const t = 'computer_20241022'; // x\n"}, ["computer-use tool"]),
+        ({"agent.jsx": "export const A = () => <p>Don't use computer_20241022</p>\n"}, ["computer-use tool"]),
+        ({"agent.py": 'MODEL = "gemini-2.5-computer-use-preview-10-2025"\n'}, ["computer-use tool"]),
+        (
+            {"agent.py": 'from google.genai import types\nTOOL = types.ComputerUse(environment="x")\n'},
+            ["computer-use tool"],
+        ),
+        ({"agent.py": 'ARGS = ["@playwright/mcp@latest"]\n'}, ["Playwright MCP"]),
+        (
+            {"agent.py": "from langchain_community.agent_toolkits import PlayWrightBrowserToolkit\n"},
+            ["PlayWrightBrowserToolkit"],
+        ),
+        # A string holding "//" isn't a comment, so the code after it still counts.
+        (
+            {"agent.js": 'const home = "https://example.test"; const t = "computer_20241022";\n'},
+            ["computer-use tool"],
+        ),
+    ],
+)
+def test_browser_tools_found_finds_what_the_agent_uses(tmp_path, files, expected):
+    assert browser_tools_found(_tree(tmp_path, files)) == expected
+
+
+def test_browser_tools_found_is_sorted_and_names_each_tool_once(tmp_path):
+    _tree(
+        tmp_path,
+        {
+            "agent.py": "import browser_use\nimport selenium\n",
+            "web/package.json": json.dumps({"dependencies": {"browser-use": "1", "crawlee": "1"}}),
+        },
+    )
+    assert browser_tools_found(tmp_path) == ["browser-use", "crawlee", "selenium"]
+
+
+@pytest.mark.parametrize(
+    "folder",
+    [
+        "e2e",
+        "e2eTests",
+        "e2e_tests",
+        "testdata",
+        "unittests",
+        "integration_tests",
+        "Test",
+        "__tests__",
+        "functional_tests",
+        "ui-tests",
+        "api_tests",
+        "playwright-tests",
+        "web_test",
+        "qa-testing",
+        "agent-e2e",
+        "test_utils",
+        "test_helpers",
+        "tests_integration",
+        "tests_ui",
+        "tests.old",
+        "test_selenium",
+        "tests_selenium",
+        "test_browser",
+        "tests_functional",
+        "tests_acceptance",
+        "test_scripts",
+        "testutils",
+        "testing_utils",
+        "test_fixtures",
+    ],
+)
+def test_tools_found_skips_these_test_folders(tmp_path, folder):
+    (tmp_path / folder).mkdir()
+    (tmp_path / folder / "a.py").write_text("import playwright\n", encoding="utf-8")
+    assert browser_tools_found(tmp_path) == []
+
+
+def test_tools_found_skips_an_upper_case_test_file(tmp_path):
+    (tmp_path / "Test_A.py").write_text("import playwright\n", encoding="utf-8")
+    assert browser_tools_found(tmp_path) == []
+
+
+def test_tools_found_skips_a_vendored_package_json(tmp_path):
+    folder = tmp_path / "node_modules" / "lib"
+    folder.mkdir(parents=True)
+    (folder / "package.json").write_text(
+        json.dumps({"dependencies": {"playwright": "1"}}), encoding="utf-8"
+    )
+    assert browser_tools_found(tmp_path) == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "`" + "a\\`" * 40_000,
+        "'" + "a\\'" * 40_000,
+        "`" + "a\\`" * 40_000 + "\\",
+        '"' + 'a\\"' * 40_000,
+        "'" + "a\\'" * 40_000 + "\\",
+        "'" + "a\\'" * 40_000 + "\n",
+    ],
+    ids=["template", "string", "ends-in-a-backslash", "double", "single-backslash", "single-newline"],
+)
+def test_an_odd_script_file_stays_quick(tmp_path, body):
+    (tmp_path / "a.js").write_text(body, encoding="utf-8")
+    started = time.monotonic()
+    browser_tools_found(tmp_path)
+    assert time.monotonic() - started < 5
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        'const base = url.replace(/\\/*$/, "");',
+        'const base = url.replace(/\\/*$/g, "");',
+        "const ok = 1;\n/src\\/*/.test(f);",
+        "if (/src\\/*/.test(f)) {}",
+        "const kept = files.filter((f) => /src\\/*/.test(f));",
+        'const ratio = a / b; const label = "1 / 2 /*";',
+        'const r = a\n  / b; const p = "src/**/*.ts";',
+        'x = a\n/ b; s = "http://h/*"; const t = { type: "computer_20250124" };',
+        'x = a\n/ b + "/" + "/*";',
+        "const C = () => <code>/src/**/*.ts</code>;",
+        "const ok = !/[(`.[+\\-/*%<>=,?^&]/.test(next);\nconst g = `${dir}/*.js`;",
+        "const r = /a]`/;\nconst g = `${dir}/*.js`;",
+    ],
+    ids=[
+        "replace",
+        "replace-with-a-flag",
+        "line-start",
+        "condition",
+        "arrow",
+        "division",
+        "division-at-a-line-start",
+        "division-at-a-line-start-before-a-url",
+        "division-at-a-line-start-before-a-string",
+        "jsx-text",
+        "a-class-holding-a-bracket-then-a-template",
+        "a-bracket-outside-a-class-then-a-template",
+    ],
+)
+def test_a_slash_in_script_code_hides_nothing_after_it(tmp_path, line):
+    _tree(tmp_path, {"agent.js": f'{line}\nconst tool = {{ type: "computer_20250124" }};\n'})
+    assert browser_tools_found(tmp_path) == ["computer-use tool"]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        '/* const tool = { type: "computer_20250124" }; */\n',
+        'const a = 1; /* { type: "computer_20250124" } */\n',
+        'const ratio = a / b; // { type: "computer_20250124" }\n',
+        'const r = a\n  / 2; // { type: "computer_20250124" }\n',
+        'const r = a\n  / x[0]; // { type: "computer_20250124" }\n',
+    ],
+    ids=[
+        "line-start",
+        "after-code",
+        "after-division",
+        "after-a-division-at-a-line-start",
+        "after-a-division-at-a-line-start-by-an-index",
+    ],
+)
+def test_a_script_comment_still_hides_what_it_holds(tmp_path, body):
+    _tree(tmp_path, {"agent.js": body})
+    assert browser_tools_found(tmp_path) == []
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "const r = /[/*]/;",
+        "const r = " + "(/[" * 20_000,
+        "const r = /[" + "[" * 20_000,
+        "const r = /[" + "[" * 20_000 + "\\",
+        "const r = /[/*",
+        "x = /" + "[=/]" * 20_000 + "/b",
+        "x = /" + "[=/" * 20_000 + "]/b",
+        "x = /" + "[=/]\\\n" * 8_000 + "/b",
+    ],
+    ids=[
+        "slash-in-a-class",
+        "unclosed-classes",
+        "repeated-brackets",
+        "repeated-then-escape",
+        "class-open-at-the-line-end",
+        "classes-of-slashes",
+        "nested-classes-of-slashes",
+        "classes-across-escaped-line-ends",
+    ],
+)
+def test_an_odd_regex_literal_stays_quick_and_hides_nothing(tmp_path, line):
+    _tree(tmp_path, {"agent.js": f'{line}\nconst tool = {{ type: "computer_20250124" }};\n'})
+    started = time.monotonic()
+    assert browser_tools_found(tmp_path) == ["computer-use tool"]
+    assert time.monotonic() - started < 5
+
+
+def test_a_file_the_tokenizer_breaks_on_costs_only_that_file(tmp_path):
+    # Read first by name, so a scan that stopped at it would miss the agent. 3.11's tokenizer
+    # doesn't raise on a NUL byte, so there the file is just read.
+    (tmp_path / "a_blob.py").write_bytes(b" x = 1\n\x00")
+    (tmp_path / "agent.py").write_text(
+        "from playwright.sync_api import sync_playwright\n", encoding="utf-8"
+    )
+    assert browser_tools_found(tmp_path) == ["playwright"]
+
+
+def test_a_file_that_raises_something_unexpected_costs_only_that_file(tmp_path, monkeypatch):
+    _tree(tmp_path, {"a_odd.py": "x = 1\n", "agent.py": "import playwright\n"})
+    real = agent_type_check._markers_in
+
+    def odd(path):
+        if path.name == "a_odd.py":
+            raise LookupError("an error no reader expects")
+        return real(path)
+
+    monkeypatch.setattr(agent_type_check, "_markers_in", odd)
+    assert browser_tools_found(tmp_path) == ["playwright"]
+
+
+def test_a_python_file_with_a_coding_line_keeps_its_marker(tmp_path):
+    (tmp_path / "agent.py").write_bytes(
+        b"# -*- coding: latin-1 -*-\nimport playwright\nNAME = '\xe9'\n"
+        b"TOOL = {'type': 'computer_20250124'}\n"
+    )
+    assert browser_tools_found(tmp_path) == ["computer-use tool", "playwright"]
+
+
+def test_a_python_file_saved_with_a_bom_is_read(tmp_path):
+    (tmp_path / "agent.py").write_bytes(
+        b"\xef\xbb\xbffrom playwright.sync_api import sync_playwright\n"
+    )
+    assert browser_tools_found(tmp_path) == ["playwright"]
+
+
+def test_a_package_json_saved_with_a_bom_is_read(tmp_path):
+    (tmp_path / "package.json").write_bytes(
+        b"\xef\xbb\xbf" + json.dumps({"dependencies": {"puppeteer": "22.0.0"}}).encode()
+    )
+    assert browser_tools_found(tmp_path) == ["puppeteer"]
+
+
+@pytest.mark.parametrize(
+    "manifest, expected",
+    [
+        ({"devDependencies": {"puppeteer": "22.0.0"}}, ["puppeteer"]),
+        (
+            {"dependencies": {"puppeteer-extra": "1", "webdriverio": "8"}},
+            ["puppeteer-extra", "webdriverio"],
+        ),
+        ({"dependencies": {"playwright-extra": "4"}}, ["playwright-extra"]),
+        ({"dependencies": {"@crawlee/playwright": "3"}}, ["@crawlee/playwright"]),
+    ],
+    ids=["dev", "extra-and-webdriverio", "playwright-extra", "crawlee-scope"],
+)
+def test_package_json_names_these_browser_packages(tmp_path, manifest, expected):
+    _tree(tmp_path, {"package.json": json.dumps(manifest)})
+    assert browser_tools_found(tmp_path) == expected
+
+
+@pytest.mark.parametrize(
+    "folder", ["latest", "contest", "e2e_agent", "testing_agent", "src/testing_agent", "test_runner"]
+)
+def test_tools_found_reads_a_folder_with_test_inside_a_word(tmp_path, folder):
+    (tmp_path / folder).mkdir(parents=True)
+    (tmp_path / folder / "a.py").write_text("import playwright\n", encoding="utf-8")
+    assert browser_tools_found(tmp_path) == ["playwright"]
+
+
+@pytest.mark.parametrize(
+    "name, body",
+    [
+        ("node_modules/lib/a.py", "import playwright\n"),
+        ("venv/lib/a.py", "import playwright\n"),
+        ("tests/a.py", "import playwright\n"),
+        ("e2e_tests/a.py", "import playwright\n"),
+        ("Tests/a.py", "import playwright\n"),
+        ("docs/a.py", "import playwright\n"),
+        ("examples/a.py", "import playwright\n"),
+        ("vendor/a.py", "import playwright\n"),
+        ("evals/a.ts", 'const tool = "computer_20241022";\n'),
+        (".cursor/a.py", 'ARGS = ["@playwright/mcp"]\n'),
+        (".cursor/mcp.json", '{"args": ["@playwright/mcp"]}\n'),
+        (".mcp.json", '{"args": ["@playwright/mcp"]}\n'),
+        ("conftest.py", "import playwright\n"),
+        ("test_e2e.py", "import playwright\n"),
+        ("app_test.py", "import playwright\n"),
+        ("app.spec.ts", 'const tool = "computer_20241022";\n'),
+        ("app.test.js", 'const tool = "computer_20241022";\n'),
+        ("pnpm-lock.yaml", "playwright: 1\n@playwright/mcp: 1\n"),
+        ("requirements.txt", "playwright\n"),
+        ("tests/package.json", json.dumps({"dependencies": {"playwright": "1"}})),
+        ("a.py", "# unlike computer_20241022, this only talks\n"),
+        ("a.ts", '// see @playwright/mcp\n/* computer_use\n and ComputerUse */\nconst a = 1;\n'),
+        ("a.py", 'PROMPT = "never do computer-use"\n'),
+        ("a.py", 'SPAN = "gen_ai.computer_use.action"\n'),
+        ("a.jsx", "export const A = () => <p>Don't</p> // ComputerUse\n"),
+        ("a.js", "const t = 'x'; // computer_20241022\n"),
+        ("a.py", "computer_use = False\n"),
+        ("a.ts", "const a = {computer_use: true};\n"),
+        ("a.py", 'LABEL = f"computer_use: {x}"\n'),
+        ("a.tsx", "export const A = () => <Model computerUse={false} />;\n"),
+        ("a.py", "computer_use = {}\n"),
+        ("a.py", 'FLAGS = {"computer_use": {"on": True}}\n'),
+    ],
+)
+def test_browser_tools_found_ignores_what_is_not_the_agent(tmp_path, name, body):
+    _tree(tmp_path, {"agent.py": "import openai\n", name: body})
+    assert browser_tools_found(tmp_path) == []
+
+
+def test_unpacked_distributions_are_not_the_agent(tmp_path):
+    _tree(
+        tmp_path,
+        {
+            "lib/anthropic-1.0.dist-info/METADATA": "x\n",
+            "lib/anthropic-1.0.dist-info/RECORD": "anthropic/types.py,sha256=a,1\n",
+            "lib/anthropic/types.py": 'NAME = "computer_20241022"\n',
+        },
+    )
+    assert browser_tools_found(tmp_path) == []
+
+
+def test_the_agents_code_beside_packages_in_a_subfolder_is_read(tmp_path):
+    _tree(
+        tmp_path,
+        {
+            "lambda/handler.py": "from playwright.sync_api import sync_playwright\n",
+            "lambda/requests-2.31.0.dist-info/RECORD": "requests/__init__.py,sha256=a,1\n",
+            "lambda/requests/__init__.py": 'NAME = "computer_20241022"\n',
+        },
+    )
+    assert browser_tools_found(tmp_path) == ["playwright"]
+
+
+def _unpacked_at_the_top(root: Path) -> None:
+    _tree(
+        root,
+        {
+            "openai-1.0.dist-info/RECORD": (
+                "openai/__init__.py,sha256=a,0\nopenai/x.py,sha256=a,1\nsix.py,sha256=b,2\n"
+            ),
+            "openai/__init__.py": "",
+            "openai/x.py": 'NAME = "computer_use_preview"\n',
+            "six.py": 'NAME = "computer_20241022"\n',
+        },
+    )
+
+
+def test_packages_unpacked_beside_the_agent_are_not_the_agent(tmp_path):
+    _unpacked_at_the_top(tmp_path)
+    _tree(tmp_path, {"handler.py": "import openai\n"})
+    assert browser_tools_found(tmp_path) == []
+
+
+def test_the_agents_own_folder_is_read_beside_unpacked_packages(tmp_path):
+    _unpacked_at_the_top(tmp_path)
+    _tree(tmp_path, {"app/run.py": "import playwright\n"})
+    assert browser_tools_found(tmp_path) == ["playwright"]
+
+
+def test_a_distribution_shipping_a_folder_name_does_not_hide_the_customers_folder(tmp_path):
+    _tree(
+        tmp_path,
+        {
+            "cron_descriptor-2.0.dist-info/RECORD": "tools/compilepos.py,sha256=a,1\n",
+            "tools/compilepos.py": 'NAME = "computer_20241022"\n',
+            "tools/browser.py": "import playwright\n",
+        },
+    )
+    assert browser_tools_found(tmp_path) == ["playwright"]
+
+
+def _vendored_marker_with_record(root: Path, record: bytes) -> None:
+    _tree(root, {"vendored.py": 'NAME = "computer_20241022"\n', "x-1.dist-info/METADATA": ""})
+    (root / "x-1.dist-info/RECORD").write_bytes(record)
+
+
+def test_a_record_past_its_limit_is_not_believed(tmp_path, monkeypatch):
+    _vendored_marker_with_record(tmp_path, b"vendored.py,sha256=a,1\n")
+    monkeypatch.setattr(agent_type_check, "_LARGEST_RECORD", 5)
+    assert browser_tools_found(tmp_path) == ["computer-use tool"]
+
+
+@pytest.mark.parametrize("record", [b"\xff\xfe\x00binary", b"a\x00b,c\n", b"x" * 200_000 + b",y\n"])
+def test_a_record_that_cannot_be_read_costs_only_itself(tmp_path, record):
+    _vendored_marker_with_record(tmp_path, record)
+    assert browser_tools_found(tmp_path) == ["computer-use tool"]
+
+
+def test_a_blank_record_row_is_harmless(tmp_path):
+    _vendored_marker_with_record(tmp_path, b"\nvendored.py,sha256=a,1\n\n")
+    assert browser_tools_found(tmp_path) == []
+
+
+def test_records_past_their_total_limit_are_not_believed(tmp_path, monkeypatch):
+    _tree(
+        tmp_path,
+        {
+            "a-1.dist-info/RECORD": "a.py,sha256=a,1\n",
+            "b-1.dist-info/RECORD": "b.py,sha256=a,1\n",
+            "a.py": "x = 1\n",
+            "b.py": 'NAME = "computer_20241022"\n',
+        },
+    )
+    assert browser_tools_found(tmp_path) == []
+    monkeypatch.setattr(agent_type_check, "_LARGEST_RECORDS", 20)
+    agent_type_check._scan.cache_clear()
+    assert browser_tools_found(tmp_path) == ["computer-use tool"]
+
+
+def _record_text_read(monkeypatch) -> list[int]:
+    read: list[int] = []
+    real = Path.read_text
+
+    def counted(self, *args, **kwargs):
+        text = real(self, *args, **kwargs)
+        if self.name == "RECORD":
+            read.append(len(text))
+        return text
+
+    monkeypatch.setattr(Path, "read_text", counted)
+    return read
+
+
+def test_every_folder_shares_one_record_budget(tmp_path, monkeypatch):
+    record = "vendored.py,sha256=a,1\n"
+    for folder in ("a", "b", "c"):
+        _tree(
+            tmp_path,
+            {
+                f"{folder}/x-1.dist-info/RECORD": record,
+                f"{folder}/vendored.py": 'NAME = "computer_20241022"\n',
+            },
+        )
+    # Packages unpacked in more than one folder are all skipped while the budget lasts.
+    assert browser_tools_found(tmp_path) == []
+    monkeypatch.setattr(agent_type_check, "_LARGEST_RECORDS", 2 * len(record))
+    read = _record_text_read(monkeypatch)
+    files = list(agent_type_check._agent_files(tmp_path))
+    assert sum(read) <= 2 * len(record)
+    assert [path.name for path in files].count("vendored.py") == 1
+
+
+def test_a_deep_folders_records_cost_what_their_rows_do(tmp_path, monkeypatch):
+    import tracemalloc
+
+    count = 4_000
+    rows = "".join(f"r{n:04}\n" for n in range(count))
+    shallow = tmp_path / "shallow" / "d"
+    deep = tmp_path.joinpath("deep", *["d" * 100] * 5)
+    for folder in (shallow, deep):
+        _tree(folder, {"x-1.dist-info/RECORD": rows, "main.py": "import openai\n"})
+    monkeypatch.setattr(agent_type_check, "_LARGEST_RECORDS", len(rows))
+
+    def peak(top):
+        tracemalloc.start()
+        try:
+            assert "main.py" in [path.name for path in agent_type_check._agent_files(top)]
+            return tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+
+    # A row as written is a few bytes, and the folder it sits in can be as deep as the disk allows:
+    # kept with its folder's path, each row here would cost 500 more characters.
+    assert peak(tmp_path / "deep") < peak(tmp_path / "shallow") + 500 * count // 4
+
+
+def test_a_file_is_skipped_by_the_records_of_the_nearest_folders_that_hold_them(tmp_path):
+    chain = [f"c{n}" for n in range(6)]
+    bottom = "/".join(chain)
+    tree = {f"{bottom}/v{n}.py": 'NAME = "computer_20241022"\n' for n in range(6)}
+    for n in range(6):
+        folder = "/".join(chain[: n + 1])
+        below = "/".join(chain[n + 1 :])
+        tree[f"{folder}/x-1.dist-info/RECORD"] = f"{below + '/' if below else ''}v{n}.py,,\n"
+    _tree(tmp_path, tree)
+    read = sorted(
+        path.name
+        for path in agent_type_check._agent_files(tmp_path)
+        if path.name.startswith("v")
+    )
+    # Each of the nearest four names its own file, so all four are skipped; the two above them
+    # are too far up to be asked, so their files are read.
+    assert read == ["v0.py", "v1.py"]
+
+
+def test_which_folders_packages_count_once_the_budget_is_spent_is_the_same_on_every_disk(
+    tmp_path, monkeypatch
+):
+    record = "vendored.py,sha256=a,1\n"
+    for folder in ("a", "b"):
+        _tree(
+            tmp_path,
+            {
+                f"{folder}/x-1.dist-info/RECORD": record,
+                f"{folder}/vendored.py": 'NAME = "computer_20241022"\n',
+            },
+        )
+    real_walk = os.walk
+
+    def listed_backwards(top, *args, **kwargs):
+        for directory, subdirectories, files in real_walk(top, *args, **kwargs):
+            if directory == os.fspath(top):
+                subdirectories.sort(reverse=True)
+            yield directory, subdirectories, files
+
+    monkeypatch.setattr(os, "walk", listed_backwards)
+    monkeypatch.setattr(agent_type_check, "_LARGEST_RECORDS", len(record))
+    files = list(agent_type_check._agent_files(tmp_path))
+    assert [path.parent.name for path in files if path.name == "vendored.py"] == ["b"]
+
+
+def test_linked_records_are_never_read(tmp_path, monkeypatch):
+    _tree(
+        tmp_path,
+        {
+            "agent.py": "import openai\n",
+            ".shared/x-1.dist-info/RECORD": "vendored.py,sha256=a,1\n",
+            "y-1.dist-info/METADATA": "",
+        },
+    )
+    (tmp_path / "y-1.dist-info/RECORD").symlink_to(tmp_path / ".shared/x-1.dist-info/RECORD")
+    for folder in range(4):
+        _tree(tmp_path, {f"pkg{folder}/vendored.py": 'NAME = "computer_20241022"\n'})
+        for link in range(8):
+            (tmp_path / f"pkg{folder}/p{link}-1.dist-info").symlink_to(
+                tmp_path / ".shared/x-1.dist-info"
+            )
+    read = _record_text_read(monkeypatch)
+    # pip writes neither as a link, so a linked one says nothing about the files beside it.
+    assert browser_tools_found(tmp_path) == ["computer-use tool"]
+    assert read == []
+
+
+def test_a_record_linked_to_a_device_is_not_read(tmp_path, monkeypatch):
+    _tree(tmp_path, {"x-1.dist-info/METADATA": "", "a.py": "import playwright\n"})
+    (tmp_path / "x-1.dist-info/RECORD").symlink_to("/dev/zero")
+    real = Path.read_text
+
+    def careful(self, *args, **kwargs):
+        assert self.name != "RECORD", "read a device to the end of memory"
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", careful)
+    assert browser_tools_found(tmp_path) == ["playwright"]
+
+
+def test_a_record_that_is_a_named_pipe_does_not_hang_the_scan(tmp_path):
+    _tree(tmp_path, {"x-1.dist-info/METADATA": "", "a.py": "import playwright\n"})
+    os.mkfifo(tmp_path / "x-1.dist-info/RECORD")
+    answers = []
+    scan = threading.Thread(
+        target=lambda: answers.append(browser_tools_found(tmp_path)), daemon=True
+    )
+    scan.start()
+    scan.join(10)
+    assert answers == [["playwright"]]
+
+
+def test_a_browser_package_unpacked_at_the_top_still_counts_when_imported(tmp_path):
+    _tree(
+        tmp_path,
+        {
+            "playwright-1.0.dist-info/RECORD": "playwright/__init__.py,sha256=a,1\n",
+            "playwright/__init__.py": "",
+            "handler.py": "import playwright\n",
+        },
+    )
+    assert browser_tools_found(tmp_path) == ["playwright"]
+
+
+def test_the_scan_stops_at_its_limit_with_what_it_found(tmp_path, monkeypatch):
+    _tree(tmp_path, {f"m{n}.py": f"import {name}\n" for n, name in enumerate(["playwright", "selenium", "scrapy"])})
+    monkeypatch.setattr(agent_type_check, "_LARGEST_SCAN", 20)
+    assert len(browser_tools_found(tmp_path)) == 1
+
+
+def test_files_too_big_to_read_do_not_use_up_the_limit(tmp_path, monkeypatch):
+    # Read first by name, so it's the one that would use up the limit.
+    _tree(tmp_path, {"a_big.py": "x" * 80, "agent/run.py": "import playwright\n"})
+    monkeypatch.setattr(agent_type_check, "_LARGEST_CODE_FILE", 50)
+    monkeypatch.setattr(agent_type_check, "_LARGEST_SCAN", 60)
+    assert browser_tools_found(tmp_path) == ["playwright"]
+
+
+def test_python_is_read_before_script_bundles_use_up_the_limit(tmp_path, monkeypatch):
+    _tree(tmp_path, {"a.js": "x" * 40, "b.js": "x" * 40, "z/run.py": "import playwright\n"})
+    monkeypatch.setattr(agent_type_check, "_LARGEST_SCAN", 60)
+    assert browser_tools_found(tmp_path) == ["playwright"]
+
+
+def test_package_json_is_read_before_script_bundles(tmp_path, monkeypatch):
+    _tree(
+        tmp_path,
+        {"a.js": "x" * 40, "package.json": json.dumps({"dependencies": {"playwright": "1"}})},
+    )
+    monkeypatch.setattr(agent_type_check, "_LARGEST_SCAN", 60)
+    assert browser_tools_found(tmp_path) == ["playwright"]
+
+
+def test_files_are_read_by_path_whatever_order_the_disk_lists_them(tmp_path, monkeypatch):
+    _tree(tmp_path, {"a.py": "import selenium\n", "b.py": "import playwright\n"})
+    listed = [tmp_path.resolve() / "b.py", tmp_path.resolve() / "a.py"]
+    monkeypatch.setattr(agent_type_check, "_agent_files", lambda _root: iter(listed))
+    monkeypatch.setattr(agent_type_check, "_LARGEST_SCAN", 20)
+    assert browser_tools_found(tmp_path) == ["selenium"]
+
+
+def test_a_second_scan_of_unchanged_files_reuses_the_first(tmp_path, monkeypatch):
+    _tree(tmp_path, {"a.py": "import playwright\n"})
+    assert browser_tools_found(tmp_path) == ["playwright"]
+
+    def read_again(_path):
+        pytest.fail("scanned again")
+
+    monkeypatch.setattr(agent_type_check, "_markers_in", read_again)
+    assert browser_tools_found(tmp_path) == ["playwright"]
+
+
+@pytest.mark.parametrize("edited", ["src/a.py", "src/b.py"])
+def test_a_nested_edit_is_scanned_again(tmp_path, edited):
+    # The same size, so only the time says it changed; either file, whichever the walk ends on.
+    _tree(tmp_path, {"src/a.py": "import openai\n", "src/b.py": "import openai\n"})
+    assert browser_tools_found(tmp_path) == []
+    (tmp_path / edited).write_text("import scrapy\n", encoding="utf-8")
+    os.utime(tmp_path / edited, ns=(2**62, 2**62))
+    assert browser_tools_found(tmp_path) == ["scrapy"]
+
+
+@pytest.mark.parametrize(
+    "name, before, after",
+    [
+        ("agent.ts", "const a = 1;\n", 'const t = "computer_20241022";\n'),
+        (
+            "package.json",
+            json.dumps({"dependencies": {"zod": "1"}}),
+            json.dumps({"dependencies": {"playwright": "1"}}),
+        ),
+    ],
+)
+def test_an_edit_outside_python_is_scanned_again(tmp_path, name, before, after):
+    _tree(tmp_path, {name: before})
+    assert browser_tools_found(tmp_path) == []
+    (tmp_path / name).write_text(after, encoding="utf-8")
+    assert browser_tools_found(tmp_path) != []
+
+
+def test_one_file_fewer_is_scanned_again(tmp_path):
+    # The same total size and latest time, so only the count says it changed.
+    _tree(tmp_path, {"a.py": "import openai\n", "b.py": "import scrapy\n"})
+    for name in ("a.py", "b.py"):
+        os.utime(tmp_path / name, ns=(1, 1))
+    assert browser_tools_found(tmp_path) == ["scrapy"]
+    (tmp_path / "b.py").unlink()
+    (tmp_path / "a.py").write_text("import openai\n" * 2, encoding="utf-8")
+    os.utime(tmp_path / "a.py", ns=(1, 1))
+    assert browser_tools_found(tmp_path) == []
+
+
+def test_removing_a_nested_helper_is_scanned_again(tmp_path):
+    _tree(tmp_path, {"src/agent.py": "import openai\n", "src/helper.py": "import playwright\n"})
+    assert browser_tools_found(tmp_path) == ["playwright"]
+    (tmp_path / "src/helper.py").unlink()
+    assert browser_tools_found(tmp_path) == []
+
+
+def test_a_customers_other_package_names_never_appear(tmp_path):
+    _tree(
+        tmp_path,
+        {"package.json": json.dumps({"dependencies": {"acme-private-sdk": "1", "playwright": "1"}})},
+    )
+    assert browser_tools_found(tmp_path) == ["playwright"]
+
+
+@pytest.mark.parametrize(
+    "name, body",
+    [
+        ("package.json", "{"),
+        ("package.json", '["playwright"]'),
+        ("package.json", json.dumps({"dependencies": ["playwright"]})),
+        ("broken.py", 'TOOL = ("computer_20241022"\n'),
+    ],
+)
+def test_malformed_files_are_skipped(tmp_path, name, body):
+    _tree(tmp_path, {name: body})
+    assert browser_tools_found(tmp_path) == []
+
+
+def test_undecodable_and_oversized_files_are_skipped(tmp_path):
+    (tmp_path / "binary.py").write_bytes(b'NAME = "computer_20241022"\xff\n')
+    (tmp_path / "huge.js").write_text(
+        'const tool = "computer_20241022";\n' + "x" * (1024 * 1024), encoding="utf-8"
+    )
+    assert browser_tools_found(tmp_path) == []
+
+
+def test_no_source_finds_nothing():
+    assert browser_tools_found(None) == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "x = " + "-" * 200_000 + "1\n",
+        "x = " + "not " * 100_000 + "1\n",
+        "x = " + "lambda: " * 50_000 + "1\n",
+        "x = 1" + "+1" * 100_000 + "\n",
+    ],
+    ids=["unary", "not", "lambda", "sum"],
+)
+def test_a_file_the_parser_cannot_hold_costs_only_that_file(tmp_path, body):
+    (tmp_path / "odd.py").write_text(body, encoding="utf-8")
+    (tmp_path / "agent.py").write_text("import playwright\n", encoding="utf-8")
+    assert browser_tools_found(tmp_path) == ["playwright"]
+
+
+def test_a_package_of_the_same_name_at_the_top_is_the_agents_own(tmp_path):
+    (tmp_path / "steel").mkdir()
+    (tmp_path / "steel" / "__init__.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "agent.py").write_text("import steel\n", encoding="utf-8")
+    assert browser_tools_found(tmp_path) == []
+
+
+def test_a_pipe_named_like_code_is_left_alone(tmp_path):
+    os.mkfifo(tmp_path / "x.py")
+    (tmp_path / "agent.py").write_text("import playwright\n", encoding="utf-8")
+    assert browser_tools_found(tmp_path) == ["playwright"]
+
+
+def test_a_module_of_the_same_name_at_the_top_is_the_agents_own(tmp_path):
+    (tmp_path / "scrapy.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "agent.py").write_text("import scrapy\n", encoding="utf-8")
+    assert browser_tools_found(tmp_path) == []
+
+
+def test_an_oversized_python_file_is_left_out(tmp_path):
+    (tmp_path / "big.py").write_text("import playwright\n" + "x = 1\n" * 200_000, encoding="utf-8")
+    assert browser_tools_found(tmp_path) == []
+
+
+# The decision
+
+
+@pytest.mark.parametrize(
+    "claimed, found, looked_again, expected",
+    [
+        ("browser", ["playwright"], False, "refuse"),
+        ("browser", ["playwright"], True, "refuse"),
+        ("browser", [], False, "second_look"),
+        ("browser", [], True, "refuse"),
+        ("chat", ["playwright"], False, "second_look"),
+        ("chat", ["playwright"], True, "keep"),
+        ("chat", [], False, "keep"),
+        ("chat", [], True, "keep"),
+        ("voice", ["playwright"], False, "second_look"),
+        ("voice", ["playwright"], True, "keep"),
+        (None, ["playwright"], False, "second_look"),
+        (None, [], False, "keep"),
+    ],
+)
+def test_decide_rows(claimed, found, looked_again, expected):
+    assert decide(claimed, found, looked_again=looked_again) == expected
+
+
+@pytest.mark.parametrize(
+    "claimed",
+    [" Browser ", ["browser"], ["browser", "chat"], "computer_use", "cua", "COMPUTER_USE"],
+)
+def test_decide_normalises_every_form_of_browser(claimed):
+    assert decide(claimed, ["playwright"], looked_again=False) == "refuse"
+    assert decide(claimed, [], looked_again=False) == "second_look"
+
+
+def test_modality_text_and_is_browser():
+    assert modality_text(None) == ""
+    assert modality_text(["Browser", "chat"]) == "browser\nchat"
+    assert is_browser("browser\nchat")
+    assert not is_browser("chat")
+    assert not is_browser("browsers")
+
+
+def test_unknown_modality_gets_a_problem_not_a_save(tmp_path, plain_repo):
+    submit = _submitter(tmp_path / "out", plain_repo)
+    answer = submit(_reading("web"))
+    assert answer["is_error"]
+    assert "'web' is not a modality" in _text(answer)
+    assert load(tmp_path / "out") is None
+    assert not (tmp_path / "out" / FAILURE_FILE).exists()
+
+
+# Browser reading, tool found
+
+
+def test_the_scan_runs_off_the_event_loop(tmp_path, monkeypatch):
+    threads = []
+
+    def scan(_root):
+        threads.append(threading.current_thread())
+        return []
+
+    monkeypatch.setattr(tools, "browser_tools_found", scan)
+    _submitter(tmp_path / "out", tmp_path)(_reading("chat"))
+    assert threads and threads[0] is not threading.main_thread()
+
+
+def test_a_refusal_during_the_scan_stops_this_call_too(tmp_path, monkeypatch):
+    output = tmp_path / "out"
+
+    def scan(_root):
+        write_failure_file(agent_type_failure(["playwright"]), output)
+        return []
+
+    monkeypatch.setattr(tools, "browser_tools_found", scan)
+    _submitter(output, tmp_path)(_reading("chat"))
+    assert not (output / "contract.json").exists()
+
+
+def test_a_build_that_times_out_is_still_a_crash(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALK_HOSTED_AUTHORING_MAX_DURATION_SECONDS", "0")
+    # `or 3300` keeps a zero from meaning "no time", so step the clock past the deadline instead.
+    clock = iter([0.0, 10_000.0])
+    monkeypatch.setattr(authoring_entrypoint.time, "monotonic", lambda: next(clock))
+    assert authoring_entrypoint._await_harness(tmp_path) == 1
+
+
+def test_ci_runs_these_tests():
+    workflows = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "sdk-smoke.yml"
+    text = workflows.read_text(encoding="utf-8")
+    assert "tests/harness/test_agent_type_refusal.py" in text
+    assert "tests/harness/test_executor_completed_counts.py" in text
+
+
+def test_the_file_is_what_the_platform_reads():
+    assert FAILURE_FILE == "failure.json"
+
+
+@pytest.mark.parametrize("modality", ["browser", ["browser"]])
+def test_a_wrapped_browser_reading_is_refused(tmp_path, browser_repo, modality):
+    output = tmp_path / "out"
+    _submitter(output, browser_repo)({"contract": _reading(modality)})
+    assert _failure(output)["code"] == "agent_type_unsupported"
+    assert not (output / "contract.json").exists()
+
+
+def test_free_text_mentioning_browser_gets_a_problem_not_a_block(tmp_path, browser_repo):
+    output = tmp_path / "out"
+    answer = _submitter(output, browser_repo)({"contract": _reading("chat via browser")})
+    assert answer.get("is_error")
+    assert "is not a modality" in _text(answer)
+    assert not (output / FAILURE_FILE).exists()
+
+
+def test_browser_with_tool_is_refused_on_the_first_submission(tmp_path, browser_repo):
+    output = tmp_path / "out"
+    answer = _submitter(output, browser_repo)(_reading("browser"))
+    assert not answer.get("is_error")
+    assert _FOUND_MESSAGE in _text(answer)
+    assert "Don't submit again or do more work; tell the person." in _text(answer)
+    assert _failure(output) == {
+        "domain": "agent",
+        "stage": "understanding_agent",
+        "code": "agent_type_unsupported",
+        "message": _FOUND_MESSAGE,
+        "retryable": False,
+        "details": {"agent_type": "browser", "tools": ["playwright"]},
+    }
+    assert not (output / "contract.json").exists()
+
+
+def _in_one_model_message(tool, modality: str, *, together: bool):
+    """How the two loops run parallel calls: Gemini's together, Claude Code's one after another."""
+
+    async def calls():
+        if together:
+            return await asyncio.gather(*(tool.handler(_reading(modality)) for _ in range(2)))
+        return [await tool.handler(_reading(modality)) for _ in range(2)]
+
+    return asyncio.run(calls())
+
+
+# Calls waiting on the first scan together are the only siblings the handler can tell apart from a
+# later message's call; one after another, the second is taken as the model's answer.
+def test_two_browser_readings_waiting_on_the_scan_both_get_the_second_look(tmp_path, plain_repo):
+    output = tmp_path / "out"
+    tool = _submit_tool(contract_tools(output, scan_root=plain_repo))
+    for answer in _in_one_model_message(tool, "browser", together=True):
+        assert answer.get("is_error")
+        assert "second-look" in _text(answer)
+    assert not (output / FAILURE_FILE).exists()
+    assert _STOP in _text(asyncio.run(tool.handler(_reading("browser", second_look_read=_READ))))
+    assert (output / FAILURE_FILE).exists()
+
+
+def test_two_chat_readings_of_a_browser_repo_waiting_on_the_scan_save_nothing(
+    tmp_path, browser_repo
+):
+    output = tmp_path / "out"
+    tool = _submit_tool(contract_tools(output, scan_root=browser_repo))
+    for answer in _in_one_model_message(tool, "chat", together=True):
+        assert answer.get("is_error")
+        assert "second-look" in _text(answer)
+    assert not (output / "contract.json").exists()
+
+
+def _looks(answers) -> list[bool]:
+    return ["second-look" in _text(answer) for answer in answers]
+
+
+def test_a_chat_answer_without_the_value_stands_after_one_look(tmp_path, browser_repo):
+    output = tmp_path / "out"
+    tool = _submit_tool(contract_tools(output, scan_root=browser_repo))
+    answers = [asyncio.run(tool.handler(_reading("chat"))) for _ in range(5)]
+    assert _looks(answers) == [True, False, False, False, False]
+    assert not answers[1].get("is_error")
+    assert load(output).modality == "chat"
+    assert not (output / FAILURE_FILE).exists()
+
+
+def test_a_browser_answer_without_the_value_stands_after_one_look(tmp_path, plain_repo):
+    output = tmp_path / "out"
+    tool = _submit_tool(contract_tools(output, scan_root=plain_repo))
+    answers = [asyncio.run(tool.handler(_reading("browser"))) for _ in range(5)]
+    assert _looks(answers) == [True, False, False, False, False]
+    assert _STOP in _text(answers[1])
+    assert _failure(output)["code"] == "agent_type_unsupported"
+    assert not (output / "contract.json").exists()
+
+
+@pytest.mark.parametrize(
+    "repo, modality, written",
+    [("plain_repo", "browser", FAILURE_FILE), ("browser_repo", "chat", "contract.json")],
+)
+def test_a_wrong_value_every_time_still_ends_after_one_look(
+    tmp_path, request, repo, modality, written
+):
+    output = tmp_path / "out"
+    tool = _submit_tool(contract_tools(output, scan_root=request.getfixturevalue(repo)))
+    answers = [
+        asyncio.run(tool.handler(_reading(modality, second_look_read="yes"))) for _ in range(3)
+    ]
+    assert _looks(answers) == [True, False, False]
+    assert (output / written).exists()
+
+
+def _next_message(tool, *payloads):
+    """One model message's calls once the scan is done, when together runs as one after another."""
+
+    async def calls():
+        return [await tool.handler(payload) for payload in payloads]
+
+    return asyncio.run(calls())
+
+
+def test_a_call_without_the_value_beside_an_answer_does_not_undo_it(tmp_path, plain_repo):
+    output = tmp_path / "out"
+    tool = _submit_tool(contract_tools(output, scan_root=plain_repo))
+    assert "second-look" in _text(asyncio.run(tool.handler(_reading("browser"))))
+    chat_answer, browser_answer = _next_message(
+        tool, _reading("chat", second_look_read=_READ), _reading("browser")
+    )
+    assert not chat_answer.get("is_error")
+    assert "second-look" in _text(browser_answer)
+    assert load(output).modality == "chat"
+    assert not (output / FAILURE_FILE).exists()
+
+
+def test_a_browser_call_before_a_chat_answer_with_the_value_stops_the_build(tmp_path, plain_repo):
+    # The browser call is in the state of an answer to an unanswered look, so it stands.
+    output = tmp_path / "out"
+    tool = _submit_tool(contract_tools(output, scan_root=plain_repo))
+    assert "second-look" in _text(asyncio.run(tool.handler(_reading("browser"))))
+    browser_answer, chat_answer = _next_message(
+        tool, _reading("browser"), _reading("chat", second_look_read=_READ)
+    )
+    assert _STOP in _text(browser_answer)
+    assert _STOP in _text(chat_answer)
+    assert load(output) is None
+    assert _failure(output)["code"] == "agent_type_unsupported"
+
+
+def test_a_browser_call_after_a_chat_answer_neither_with_the_value_stops_the_build(
+    tmp_path, plain_repo
+):
+    # Each is taken as the answer in turn: the handler can't tell that a later call in the same
+    # message will undo what it saves.
+    output = tmp_path / "out"
+    tool = _submit_tool(contract_tools(output, scan_root=plain_repo))
+    assert "second-look" in _text(asyncio.run(tool.handler(_reading("browser"))))
+    chat_answer, browser_answer = _next_message(tool, _reading("chat"), _reading("browser"))
+    assert not chat_answer.get("is_error")
+    assert _STOP in _text(browser_answer)
+    assert load(output) is None
+    assert _failure(output)["code"] == "agent_type_unsupported"
+
+
+def _looked_at(tmp_path, repo):
+    """A handler that has given one second look, and that look's answer."""
+    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=repo))
+    return tool, asyncio.run(tool.handler(_reading("browser")))
+
+
+def test_a_second_look_says_what_to_send_back(tmp_path, plain_repo):
+    _tool, answer = _looked_at(tmp_path, plain_repo)
+    assert f'second_look_read to "{_READ}"' in _text(answer)
+
+
+def test_each_second_look_gets_its_own_value(tmp_path, plain_repo, monkeypatch):
+    monkeypatch.setattr(tools, "_new_receipt", _REAL_RECEIPT)
+    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo))
+    answers = [_text(one) for one in _in_one_model_message(tool, "browser", together=True)]
+    first, second = [answer.split('second_look_read to "')[1].split('"')[0] for answer in answers]
+    assert first != second
+
+
+def test_an_earlier_value_still_counts_once_a_value_came_back(tmp_path, plain_repo, monkeypatch):
+    # Two calls in one message each got a value; the model may send back either.
+    values = iter(["first", "second"])
+    monkeypatch.setattr(tools, "_new_receipt", lambda: next(values))
+    output = tmp_path / "out"
+    tool = _submit_tool(contract_tools(output, scan_root=plain_repo))
+    assert all(_looks(_in_one_model_message(tool, "browser", together=True)))
+    assert not asyncio.run(tool.handler(_reading("chat", second_look_read="second"))).get("is_error")
+    assert _STOP in _text(asyncio.run(tool.handler(_reading("browser", second_look_read="first"))))
+    assert _failure(output)["code"] == "agent_type_unsupported"
+
+
+def test_a_second_look_answered_with_its_value_stands(tmp_path, browser_repo):
+    output = tmp_path / "out"
+    tool = _submit_tool(contract_tools(output, scan_root=browser_repo))
+    assert asyncio.run(tool.handler(_reading("chat"))).get("is_error")
+    assert not asyncio.run(tool.handler(_reading("chat", second_look_read=_READ))).get("is_error")
+    assert (output / "contract.json").exists()
+    assert "second_look_read" not in (output / "contract.json").read_text(encoding="utf-8")
+
+
+def _answered(tmp_path, repo):
+    """A handler whose second look came back with its value, as a chat answer that was saved."""
+    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=repo))
+    assert "second-look" in _text(asyncio.run(tool.handler(_reading("browser"))))
+    assert not asyncio.run(tool.handler(_reading("chat", second_look_read=_READ))).get("is_error")
+    return tool
+
+
+@pytest.mark.parametrize("made_up", ["guess", "", 7, ["read-it"], {"a": 1}, None])
+def test_a_value_it_never_gave_is_not_a_second_look(tmp_path, plain_repo, made_up):
+    output = tmp_path / "out"
+    tool = _answered(tmp_path, plain_repo)
+    answer = asyncio.run(tool.handler(_reading("browser", second_look_read=made_up)))
+    assert "second-look" in _text(answer)
+    assert not (output / FAILURE_FILE).exists()
+    assert load(output).modality == "chat"
+
+
+def test_a_value_before_any_second_look_is_not_a_second_look(tmp_path, plain_repo):
+    output = tmp_path / "out"
+    tool = _submit_tool(contract_tools(output, scan_root=plain_repo))
+    answer = asyncio.run(tool.handler(_reading("browser", second_look_read=_READ)))
+    assert "second-look" in _text(answer)
+    assert not (output / FAILURE_FILE).exists()
+
+
+@pytest.mark.parametrize(
+    "packed",
+    [
+        {"contract": _reading("browser"), "second_look_read": _READ},
+        {"contract": _reading("browser", second_look_read=_READ)},
+        {"contract": json.dumps(_reading("browser", second_look_read=_READ))},
+    ],
+)
+def test_the_value_counts_however_the_contract_was_packaged(tmp_path, plain_repo, packed):
+    tool = _answered(tmp_path, plain_repo)
+    assert _STOP in _text(asyncio.run(tool.handler(packed)))
+
+
+def test_the_tool_declares_the_value_for_every_model(tmp_path):
+    # Required, or of another type, it would be refused before the handler on every build.
+    declared = _submit_tool(contract_tools(tmp_path)).input_schema
+    assert "string" in declared["properties"]["second_look_read"]["type"]
+    assert "integer" not in declared["properties"]["second_look_read"]["type"]
+    assert "second_look_read" not in declared.get("required", [])
+
+
+def test_a_failed_removal_still_writes_the_failure(tmp_path, browser_repo, monkeypatch):
+    output = tmp_path / "out"
+    output.mkdir()
+    (output / "contract.json").write_text("{}", encoding="utf-8")
+    real = Path.unlink
+
+    def refuse(self, *args, **kwargs):
+        if self.name == "contract.json":
+            raise PermissionError("read-only")
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", refuse)
+    with pytest.raises(PermissionError):
+        _submitter(output, browser_repo)(_reading("browser"))
+    assert (output / FAILURE_FILE).exists()
+
+
+def test_a_failed_write_still_removes_the_earlier_reading(tmp_path, browser_repo, monkeypatch):
+    output = tmp_path / "out"
+    output.mkdir()
+    (output / "contract.json").write_text("{}", encoding="utf-8")
+    _failing_write(monkeypatch)
+    with pytest.raises(OSError, match="disk full"):
+        _submitter(output, browser_repo)(_reading("browser"))
+    assert load(output) is None
+
+
+def test_a_refused_new_reading_removes_the_earlier_one(tmp_path, browser_repo):
+    output = tmp_path / "out"
+    output.mkdir()
+    (output / "contract.json").write_text("{}", encoding="utf-8")
+    _submitter(output, browser_repo)(_reading("browser"))
+    assert (output / FAILURE_FILE).exists()
+    assert not (output / "contract.json").exists()
+    assert load(output) is None
+
+
+# After a refusal
+
+
+def test_chat_resubmission_after_a_refusal_saves_nothing(tmp_path, browser_repo):
+    output = tmp_path / "out"
+    submit = _submitter(output, browser_repo)
+    submit(_reading("browser"))
+    answer = submit(_reading("chat"))
+    assert not answer.get("is_error")
+    assert _FOUND_MESSAGE in _text(answer)
+    assert not (output / "contract.json").exists()
+
+
+def test_stop_from_a_fresh_conversation_with_the_file(tmp_path, plain_repo):
+    output = tmp_path / "out"
+    write_failure_file(_a_failure(), output)
+    answer = _submitter(output, plain_repo)(_reading("chat"))
+    assert not answer.get("is_error")
+    assert "the first failure" in _text(answer)
+    assert "Don't submit again" in _text(answer)
+    assert not (output / "contract.json").exists()
+    assert _failure(output)["code"] == "first"
+
+
+def test_stop_message_copes_with_an_unreadable_file(tmp_path, plain_repo):
+    output = tmp_path / "out"
+    output.mkdir()
+    (output / FAILURE_FILE).write_text("{", encoding="utf-8")
+    answer = _submitter(output, plain_repo)(_reading("chat"))
+    assert _text(answer).startswith("This build can't go on.")
+
+
+# The write fails
+
+
+def _failing_write(monkeypatch):
+    def refuse_to_write(failure, output):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(tools, "write_failure_file", refuse_to_write)
+
+
+def test_writer_failure_blocks_resubmission(tmp_path, browser_repo, monkeypatch):
+    output = tmp_path / "out"
+    submit = _submitter(output, browser_repo)
+    _failing_write(monkeypatch)
+    with pytest.raises(OSError, match="disk full"):
+        submit(_reading("browser"))
+    assert not (output / FAILURE_FILE).exists()
+    answer = submit(_reading("chat"))
+    assert not answer.get("is_error")
+    assert "This build can't go on." in _text(answer)
+    assert not (output / "contract.json").exists()
+
+
+def test_writer_failure_leaves_the_handler(tmp_path, browser_repo, monkeypatch):
+    # Swallowed here, nothing would say the refusal was lost: the model would be told nothing, and
+    # with no file the build would end as a crash.
+    output = tmp_path / "out"
+    submit = _submitter(output, browser_repo)
+    _failing_write(monkeypatch)
+    with pytest.raises(OSError, match="disk full"):
+        submit(_reading("browser"))
+    assert not (output / FAILURE_FILE).exists()
+
+
+# Browser reading, no tool found
+
+
+def test_browser_with_no_tool_gets_a_second_look(tmp_path, plain_repo):
+    output = tmp_path / "out"
+    answer = _submitter(output, plain_repo)(_reading("browser"))
+    assert answer["is_error"]
+    assert "second-look: you recorded modality browser" in _text(answer)
+    assert "Does a person come to this agent for a conversation" in _text(answer)
+    assert "don't ask anyone" in _text(answer)
+    assert not (output / FAILURE_FILE).exists()
+    assert not (output / "contract.json").exists()
+
+
+def test_second_look_then_chat_saves_as_chat(tmp_path, plain_repo):
+    output = tmp_path / "out"
+    submit = _submitter(output, plain_repo)
+    submit(_reading("browser"))
+    answer = submit(_reading("chat"))
+    assert not answer.get("is_error")
+    assert load(output).modality == "chat"
+    assert not (output / FAILURE_FILE).exists()
+
+
+def test_second_look_then_browser_is_refused_with_no_tools(tmp_path, plain_repo):
+    output = tmp_path / "out"
+    submit = _submitter(output, plain_repo)
+    submit(_reading("browser"))
+    answer = submit(_reading("browser", second_look_read=_READ))
+    assert not answer.get("is_error")
+    assert _READ_MESSAGE in _text(answer)
+    assert _failure(output)["details"] == {"agent_type": "browser", "tools": []}
+    assert not (output / "contract.json").exists()
+
+
+def test_no_scan_root_behaves_as_no_tool(tmp_path):
+    output = tmp_path / "out"
+    submit = _submitter(output, None)
+    assert "second-look" in _text(submit(_reading("browser")))
+    assert not (output / FAILURE_FILE).exists()
+    submit(_reading("browser", second_look_read=_READ))
+    assert _failure(output)["details"]["tools"] == []
+
+
+# Chat or voice reading, tool found
+
+
+@pytest.mark.parametrize("modality", ["chat", "voice"])
+def test_conversation_with_tool_gets_a_second_look_naming_it(tmp_path, browser_repo, modality):
+    output = tmp_path / "out"
+    answer = _submitter(output, browser_repo)(_reading(modality))
+    assert answer["is_error"]
+    assert f"second-look: you recorded modality {modality}, and the source uses playwright." in _text(answer)
+    assert not (output / "contract.json").exists()
+    assert not (output / FAILURE_FILE).exists()
+
+
+def test_empty_modality_reads_as_chat_in_the_second_look(tmp_path, browser_repo):
+    answer = _submitter(tmp_path / "out", browser_repo)(_reading(None))
+    assert "you recorded modality chat, and the source uses playwright" in _text(answer)
+
+
+@pytest.mark.parametrize("modality", ["chat", "voice"])
+def test_conversation_with_tool_then_same_answer_saves(tmp_path, browser_repo, modality):
+    output = tmp_path / "out"
+    submit = _submitter(output, browser_repo)
+    submit(_reading(modality))
+    assert not submit(_reading(modality, second_look_read=_READ)).get("is_error")
+    assert load(output).modality == modality
+    assert not (output / FAILURE_FILE).exists()
+
+
+@pytest.mark.parametrize("modality", ["chat", "voice"])
+def test_conversation_with_tool_then_browser_is_refused_naming_it(tmp_path, browser_repo, modality):
+    output = tmp_path / "out"
+    submit = _submitter(output, browser_repo)
+    submit(_reading(modality))
+    submit(_reading("browser"))
+    assert _failure(output)["message"] == _FOUND_MESSAGE
+    assert _failure(output)["details"]["tools"] == ["playwright"]
+    assert not (output / "contract.json").exists()
+
+
+# Everything else
+
+
+@pytest.mark.parametrize("modality", ["chat", "voice"])
+def test_conversation_with_no_tool_saves_with_no_second_look(tmp_path, plain_repo, modality):
+    output = tmp_path / "out"
+    assert not _submitter(output, plain_repo)(_reading(modality)).get("is_error")
+    assert load(output).modality == modality
+
+
+def _counted_scans(monkeypatch) -> list[Path]:
+    scans: list[Path] = []
+    real_scan = tools.browser_tools_found
+
+    def counted(root):
+        scans.append(root)
+        return real_scan(root)
+
+    monkeypatch.setattr(tools, "browser_tools_found", counted)
+    return scans
+
+
+def test_one_scan_and_one_look_when_an_answer_comes_back_without_its_value(
+    tmp_path, browser_repo, monkeypatch
+):
+    output = tmp_path / "out"
+    scans = _counted_scans(monkeypatch)
+    submit = _submitter(output, browser_repo)
+    assert "second-look" in _text(submit(_reading("chat")))
+    # An answer with the value stands, even when the contract is then sent back for another fix.
+    rejected = submit(_reading("chat", real_use_cases=[], second_look_read=_READ))
+    assert rejected["is_error"] and "second-look" not in _text(rejected)
+    # The fix, sent without the value, is still that answer.
+    assert not submit(_reading("chat")).get("is_error")
+    assert load(output).modality == "chat"
+    assert scans == [browser_repo]
+
+
+def test_a_different_answer_without_the_value_after_an_answer_gets_a_look(tmp_path, plain_repo):
+    # It could have run beside that answer, unread.
+    output = tmp_path / "out"
+    submit = _submitter(output, plain_repo)
+    assert "second-look" in _text(submit(_reading("browser")))
+    rejected = submit(_reading("chat", real_use_cases=[], second_look_read=_READ))
+    assert rejected["is_error"] and "second-look" not in _text(rejected)
+    assert "second-look" in _text(submit(_reading("browser")))
+    assert not (output / FAILURE_FILE).exists()
+
+
+def test_calls_waiting_on_the_first_scan_share_it(tmp_path, plain_repo, monkeypatch):
+    scans = _counted_scans(monkeypatch)
+    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo))
+
+    async def first_message():
+        return await asyncio.gather(*(tool.handler(_reading("browser")) for _ in range(3)))
+
+    assert all(_looks(asyncio.run(first_message())))
+    assert scans == [plain_repo]
+
+
+def test_a_call_cancelled_while_waiting_on_the_scan_leaves_it_to_the_others(
+    tmp_path, plain_repo, monkeypatch
+):
+    started, release = threading.Event(), threading.Event()
+
+    def slow(_root):
+        started.set()
+        release.wait(10)
+        return []
+
+    monkeypatch.setattr(tools, "browser_tools_found", slow)
+    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo))
+
+    async def first_message():
+        cancelled = asyncio.ensure_future(tool.handler(_reading("browser")))
+        waiting = asyncio.ensure_future(tool.handler(_reading("browser")))
+        await asyncio.to_thread(started.wait, 10)
+        cancelled.cancel()
+        await asyncio.sleep(0)
+        release.set()
+        return await waiting
+
+    assert "second-look" in _text(asyncio.run(first_message()))
+
+
+def test_a_scan_that_fails_is_run_again_by_the_next_call(tmp_path, plain_repo, monkeypatch):
+    outcomes = iter([OSError("gone"), []])
+
+    def scan(_root):
+        outcome = next(outcomes)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(tools, "browser_tools_found", scan)
+    submit = _submitter(tmp_path / "out", plain_repo)
+    with pytest.raises(OSError, match="gone"):
+        submit(_reading("chat"))
+    assert not submit(_reading("chat")).get("is_error")
+
+
+def test_a_scan_that_fails_is_run_again_by_the_next_call_in_the_same_message(
+    tmp_path, plain_repo, monkeypatch
+):
+    outcomes = iter([OSError("gone"), []])
+
+    def scan(_root):
+        outcome = next(outcomes)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(tools, "browser_tools_found", scan)
+    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo))
+
+    async def one_message():
+        with pytest.raises(OSError, match="gone"):
+            await tool.handler(_reading("chat"))
+        return await tool.handler(_reading("chat"))
+
+    assert not asyncio.run(one_message()).get("is_error")
+
+
+def test_a_scan_that_finished_after_its_only_caller_was_cancelled_is_not_run_again(
+    tmp_path, plain_repo, monkeypatch
+):
+    started, release = threading.Event(), threading.Event()
+    scans: list[Path] = []
+
+    def slow(root):
+        scans.append(root)
+        started.set()
+        release.wait(10)
+        return []
+
+    monkeypatch.setattr(tools, "browser_tools_found", slow)
+    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo))
+
+    async def cancelled_then_next():
+        cancelled = asyncio.ensure_future(tool.handler(_reading("browser")))
+        await asyncio.to_thread(started.wait, 10)
+        (scan,) = asyncio.all_tasks() - {asyncio.current_task(), cancelled}
+        cancelled.cancel()
+        release.set()
+        await asyncio.wait({scan})
+        return await tool.handler(_reading("browser"))
+
+    assert "second-look" in _text(asyncio.run(cancelled_then_next()))
+    assert scans == [plain_repo]
+
+
+def test_a_scan_left_running_on_a_closed_loop_is_started_again(tmp_path, plain_repo, monkeypatch):
+    started, release = threading.Event(), threading.Event()
+    scans: list[Path] = []
+
+    def scan(root):
+        scans.append(root)
+        if len(scans) == 1:
+            started.set()
+            release.wait(10)
+        return []
+
+    monkeypatch.setattr(tools, "browser_tools_found", scan)
+    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo))
+    closed = asyncio.new_event_loop()
+    try:
+        closed.create_task(tool.handler(_reading("browser")))
+        closed.run_until_complete(asyncio.to_thread(started.wait, 10))
+    finally:
+        closed.close()
+    try:
+        assert "second-look" in _text(asyncio.run(tool.handler(_reading("browser"))))
+    finally:
+        release.set()
+    assert len(scans) == 2
+
+
+# Every way into the stage reaches the scan
+
+
+def _server_of(stage):
+    return stage.spec.servers[CONTRACT_SERVER]
+
+
+def test_both_build_modes_reach_the_scan(tmp_path, browser_repo):
+    from fi.alk.harness.builder import open_for_building
+
+    source = RepoSource(name="fixture", root=browser_repo)
+    staged, _ = open_stage(source, out=tmp_path / "staged")
+    conversational = open_for_building(None, out=tmp_path / "conversational", source=source)
+    for stage, output in ((staged, "staged"), (conversational, "conversational")):
+        tool = _submit_tool(_server_of(stage))
+        asyncio.run(tool.handler(_reading("browser")))
+        assert _failure(tmp_path / output)["details"]["tools"] == ["playwright"]
+
+
+def test_github_source_reaches_the_scan(tmp_path, browser_repo):
+    source = GitHubSource(name="fixture", root=browser_repo, url="https://github.test/a/b")
+    stage, _ = open_stage(source, out=tmp_path / "out")
+    asyncio.run(_submit_tool(_server_of(stage)).handler(_reading("browser")))
+    assert _failure(tmp_path / "out")["details"]["tools"] == ["playwright"]
+
+
+# The process waiting on the conversation's build
+
+
+@pytest.fixture
+def no_waiting(monkeypatch):
+    def fail(_):
+        raise AssertionError("the wait should have ended already")
+
+    monkeypatch.setattr(authoring_entrypoint.time, "sleep", fail)
+
+
+def test_await_harness_stops_on_the_file(tmp_path, no_waiting, capsys):
+    write_failure_file(agent_type_failure(["playwright"]), tmp_path)
+    assert authoring_entrypoint._await_harness(tmp_path) == 78
+    assert _FOUND_MESSAGE in capsys.readouterr().err
+
+
+def test_await_harness_failure_wins_over_finished(tmp_path, no_waiting):
+    write_failure_file(agent_type_failure(["playwright"]), tmp_path)
+    (tmp_path / _FINISHED).write_text("{}", encoding="utf-8")
+    assert authoring_entrypoint._await_harness(tmp_path) == 78
+
+
+def test_await_harness_finished_alone_returns_0(tmp_path, no_waiting):
+    (tmp_path / _FINISHED).write_text("{}", encoding="utf-8")
+    assert authoring_entrypoint._await_harness(tmp_path) == 0
+
+
+def test_main_await_harness_with_the_file_never_validates(tmp_path, no_waiting, monkeypatch):
+    source = tmp_path / "source"
+    source.mkdir()
+    output = tmp_path / "output"
+    write_failure_file(agent_type_failure(["playwright"]), output)
+    job = HarnessJob(
+        job_id="refused",
+        run_id="refused",
+        execution="local",
+        source={"kind": "local_repository", "local_path": str(source)},
+        agent={"connector": "auto"},
+        scenario_count=2,
+        metadata={"generic_harness_v1": True},
+    )
+    job_path = tmp_path / "job.json"
+    job_path.write_text(job.model_dump_json(), encoding="utf-8")
+    validated = []
+
+    async def validate(*args, **kwargs):
+        validated.append(args)
+
+    monkeypatch.setattr(authoring_entrypoint, "_review_while_writing", lambda *args: None)
+    monkeypatch.setattr(
+        "fi.alk.harness.authoring_runtime_validation.validate_and_repair", validate
+    )
+    status = authoring_entrypoint.main(
+        [str(job_path), "--source", str(source), "--output", str(output), "--await-harness"],
+        validate_runtime=True,
+    )
+    assert status == 78
+    assert validated == []
+
+
+# The unattended and local reading
+
+
+class _Stage:
+    def __init__(self, on_say=None):
+        self.said: list[str] = []
+        self.on_say = on_say
+        self.spent_usd = 0.0
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_):
+        return None
+
+    async def say(self, message, on_event=None):
+        self.said.append(message)
+        if self.on_say:
+            self.on_say()
+
+
+def _understand_args(output: Path, **fields) -> SimpleNamespace:
+    return SimpleNamespace(
+        kind="repo", name="fixture", path=output, out=output, interactive=False, **fields
+    )
+
+
+def _patch_understand(monkeypatch, output: Path, stage) -> None:
+    monkeypatch.setattr(
+        cli, "resolve", lambda *args, **kwargs: SimpleNamespace(name="fixture", kind="repo")
+    )
+    monkeypatch.setattr(cli, "open_stage", lambda source, **kwargs: (stage, output))
+    monkeypatch.setattr(cli, "opening", lambda _: "")
+    monkeypatch.setattr(cli, "_guidance", lambda _: "")
+
+
+def test_understand_returns_1_with_the_file_and_no_nudge(tmp_path, monkeypatch, capsys):
+    stage = _Stage(lambda: write_failure_file(agent_type_failure(["playwright"]), tmp_path))
+    _patch_understand(monkeypatch, tmp_path, stage)
+    args = _understand_args(tmp_path, job=SimpleNamespace(metadata={}))
+    assert asyncio.run(cli._understand(args)) == 78
+    assert len(stage.said) == 1, "a refused reading must not be told nothing was saved"
+    err = capsys.readouterr().err
+    assert _FOUND_MESSAGE in err
+    assert str(tmp_path / FAILURE_FILE) in err
+    assert "No contract was submitted" not in err
+
+
+def test_understand_still_nudges_when_nothing_happened(tmp_path, monkeypatch, capsys):
+    stage = _Stage()
+    _patch_understand(monkeypatch, tmp_path, stage)
+    args = _understand_args(tmp_path, job=SimpleNamespace(metadata={}))
+    assert asyncio.run(cli._understand(args)) == 1
+    assert len(stage.said) == 2
+    assert "No contract was submitted" in capsys.readouterr().err
+
+
+def test_understand_with_no_job_clears_an_old_file_before_reading(tmp_path, monkeypatch):
+    write_failure_file(_a_failure(), tmp_path)
+    seen = []
+    stage = _Stage(lambda: seen.append((tmp_path / FAILURE_FILE).exists()))
+    _patch_understand(monkeypatch, tmp_path, stage)
+    asyncio.run(cli._understand(_understand_args(tmp_path)))
+    assert seen and seen[0] is False
+
+
+def test_understand_with_a_job_keeps_an_earlier_failure(tmp_path, monkeypatch, capsys):
+    write_failure_file(_a_failure(), tmp_path)
+    stage = _Stage()
+    _patch_understand(monkeypatch, tmp_path, stage)
+    args = _understand_args(tmp_path, job=SimpleNamespace(metadata={}))
+    assert asyncio.run(cli._understand(args)) == 78
+    assert _failure(tmp_path)["code"] == "first"
+    assert "the first failure" in capsys.readouterr().err
+
+
+# A person's own chat
+
+
+class _Chat:
+    def __init__(self, out):
+        self.out = out
+        self.stage_name = "understand"
+        self.spent_usd = 0.0
+
+    async def start(self, on_event=None):
+        return None
+
+    async def close(self):
+        return None
+
+
+def _patch_chat(monkeypatch, output: Path) -> None:
+    async def nobody_there(_):
+        raise EOFError
+
+    monkeypatch.setattr(cli, "open_conversation", lambda **kwargs: _Chat(output))
+    monkeypatch.setattr(cli, "_prompt", nobody_there)
+
+
+def test_chat_returns_1_and_prints_with_the_file(tmp_path, monkeypatch, capsys):
+    write_failure_file(agent_type_failure(["playwright"]), tmp_path)
+    _patch_chat(monkeypatch, tmp_path)
+    args = SimpleNamespace(name="", path="", kind="repo", out=str(tmp_path))
+    assert asyncio.run(cli._chat(args)) == 78
+    err = capsys.readouterr().err
+    assert _FOUND_MESSAGE in err
+    assert str(tmp_path / FAILURE_FILE) in err
+
+
+def test_chat_returns_0_without_the_file(tmp_path, monkeypatch):
+    _patch_chat(monkeypatch, tmp_path)
+    args = SimpleNamespace(name="", path="", kind="repo", out=str(tmp_path))
+    assert asyncio.run(cli._chat(args)) == 0
+
+
+def test_chat_understand_clears_an_old_file(tmp_path, monkeypatch):
+    write_failure_file(_a_failure(), tmp_path)
+    seen = []
+
+    class Opened(Exception):
+        pass
+
+    def opening_stage(source, **kwargs):
+        seen.append((tmp_path / FAILURE_FILE).exists())
+        raise Opened
+
+    monkeypatch.setattr(chat.understand_stage, "open_stage", opening_stage)
+    conversation = chat.Conversation(
+        source=SimpleNamespace(name="fixture"), out=tmp_path, stage_name=chat.UNDERSTAND
+    )
+    with pytest.raises(Opened):
+        asyncio.run(conversation._open(chat.UNDERSTAND))
+    assert seen == [False]
+
+
+# The exit code passes straight up
+
+
+def test_auto_returns_1_when_understand_does_and_later_stages_do_not_run(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    source.mkdir()
+    output = tmp_path / "output"
+    later = []
+
+    async def refused(args):
+        return 78
+
+    async def stage_after(args):
+        later.append("ran")
+        return 0
+
+    monkeypatch.setattr(cli, "_understand", refused)
+    monkeypatch.setattr(cli, "_build", stage_after)
+    monkeypatch.setattr(cli, "_scenarios", stage_after)
+    monkeypatch.setattr("fi.alk.harness.provision.stop", lambda _: None)
+    args = SimpleNamespace(
+        path=str(source),
+        out=str(output),
+        name="fixture",
+        kind="repo",
+        count=2,
+        model=None,
+        authoring_only=True,
+        job=HarnessJob(
+            job_id="refused",
+            run_id="refused",
+            execution="local",
+            source={"kind": "local_repository", "local_path": str(source)},
+            agent={"connector": "auto"},
+            scenario_count=2,
+            metadata={"generic_harness_v1": True},
+        ),
+        runtime_readiness=None,
+    )
+    assert asyncio.run(cli._auto(args)) == 78
+    assert later == []
+
+
+def test_hosted_authoring_main_passes_the_refusal_through(tmp_path, monkeypatch):
+    secrets = tmp_path / "secrets.json"
+    gateway = tmp_path / "simulator-secrets.json"
+    secrets.write_text("{}", encoding="utf-8")
+    gateway.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(hosted_authoring, "_SECRETS_PATH", secrets)
+    monkeypatch.setattr(hosted_authoring, "_SIMULATOR_SECRETS_PATH", gateway)
+    monkeypatch.setattr(hosted_authoring, "_ADC_PATH", tmp_path / "adc.json")
+    monkeypatch.setattr(hosted_authoring, "authoring_main", lambda argv, *, validate_runtime: 78)
+    assert hosted_authoring.main([]) == 78
+
+
+# The conversational builder
+
+
+def _runtime(workspace: Path, *, state=None, control_only=True) -> HostedChatRuntime:
+    runtime = object.__new__(HostedChatRuntime)
+    runtime.workspace = workspace
+    runtime.job = {"scenario_count": 2}
+    emitted: list[tuple[str, dict]] = []
+
+    async def emit(kind, **fields):
+        emitted.append((kind, fields))
+
+    context = {"capabilities": {"control_only": control_only}}
+    if state is not None:
+        context["status"] = {"state": state}
+    runtime.client = SimpleNamespace(turn_context=context, command_watermark=3, emit=emit)
+    runtime.emitted = emitted
+    runtime.conversation = SimpleNamespace(stage_name="understand", stage=None)
+    runtime._nudge = None
+    runtime._from_platform = False
+    runtime._last_progress, runtime._idle_turns, runtime._opened_with = None, 0, None
+    runtime._what_exists = lambda: (False, False)
+    runtime._after_saved = lambda: None
+    runtime.handled = []
+
+    async def handle(command):
+        runtime.handled.append(command)
+
+    runtime._handle = handle
+    return runtime
+
+
+@pytest.mark.parametrize("state", ["failed", "canceled"])
+def test_carry_on_stops_when_the_job_ended(tmp_path, state):
+    runtime = _runtime(tmp_path, state=state)
+    assert asyncio.run(runtime._carry_on()) is False
+    assert runtime.handled == []
+
+
+def test_carry_on_stops_with_the_file(tmp_path):
+    write_failure_file(agent_type_failure(["playwright"]), tmp_path)
+    runtime = _runtime(tmp_path, state="running")
+    assert asyncio.run(runtime._carry_on()) is False
+    assert runtime.handled == []
+
+
+@pytest.mark.parametrize("state", [None, "running", "completed"])
+def test_carry_on_keeps_going_otherwise(tmp_path, state):
+    runtime = _runtime(tmp_path, state=state)
+    assert asyncio.run(runtime._carry_on()) is True
+    assert len(runtime.handled) == 1
+
+
+class _TurnRan(Exception):
+    """Reached the point where a turn starts, which is as far as a test without a model goes."""
+
+
+def _command(*, from_platform=True) -> dict:
+    return {
+        "sequence": 7,
+        "message_id": "command-7",
+        "kind": "message",
+        "payload": {"content": "Build it.", "from_platform": from_platform},
+    }
+
+
+def _handle_command(runtime, command) -> None:
+    async def checkpoint():
+        raise _TurnRan
+
+    runtime._checkpoint = checkpoint
+    asyncio.run(runtime._handle_command(command))
+
+
+def _assert_answered_with_no_turn(runtime) -> None:
+    assert [kind for kind, _ in runtime.emitted] == ["turn_completed"]
+    fields = runtime.emitted[0][1]
+    assert fields["acknowledge_through"] == 7
+    assert fields["payload"] == {"command_message_id": "command-7", "ignored": "the build is over"}
+    assert runtime._read_journal() == {"command-7": "completed"}
+
+
+@pytest.mark.parametrize("state", ["failed", "canceled"])
+def test_platform_command_on_a_finished_job_runs_no_turn(tmp_path, state):
+    runtime = _runtime(tmp_path, state=state)
+    _handle_command(runtime, _command())
+    _assert_answered_with_no_turn(runtime)
+
+
+def test_platform_command_with_the_file_runs_no_turn(tmp_path):
+    write_failure_file(agent_type_failure(["playwright"]), tmp_path)
+    runtime = _runtime(tmp_path, state="running")
+    _handle_command(runtime, _command())
+    _assert_answered_with_no_turn(runtime)
+
+
+def test_a_finished_command_replays_on_a_finished_job(tmp_path):
+    runtime = _runtime(tmp_path, state="failed")
+    runtime._write_journal({"command-7": "completed"})
+    _handle_command(runtime, _command())
+    assert runtime.emitted[0][1]["payload"] == {"command_message_id": "command-7", "replayed": True}
+
+
+def test_a_redelivered_command_already_started_runs_no_turn(tmp_path):
+    runtime = _runtime(tmp_path, state="failed")
+    runtime._write_journal({"command-7": "started"})
+    _handle_command(runtime, _command())
+    _assert_answered_with_no_turn(runtime)
+
+
+def test_a_failed_turn_still_fails_again_on_a_finished_job(tmp_path):
+    runtime = _runtime(tmp_path, state="failed")
+    runtime._write_journal({"command-7": "ended"})
+    _handle_command(runtime, _command())
+    assert runtime.emitted[0][1]["payload"] == {"command_message_id": "command-7", "outcome": "failed"}
+
+
+def test_a_persons_message_on_a_failed_job_still_runs_a_turn(tmp_path):
+    runtime = _runtime(tmp_path, state="failed")
+    with pytest.raises(_TurnRan):
+        _handle_command(runtime, _command(from_platform=False))
+    assert runtime.emitted == []
+
+
+def test_post_build_check_still_runs_on_a_completed_job(tmp_path):
+    runtime = _runtime(tmp_path, state="completed")
+    with pytest.raises(_TurnRan):
+        _handle_command(runtime, _command())
+    assert runtime.emitted == []
+
+
+def test_failed_job_outside_control_only_still_runs(tmp_path):
+    runtime = _runtime(tmp_path, state="failed", control_only=False)
+    with pytest.raises(_TurnRan):
+        _handle_command(runtime, _command())
+    assert runtime.emitted == []
+
+
+# Correcting the type mid-build
+
+
+@pytest.mark.parametrize("why", ["the operator said so", ""])
+def test_set_modality_to_browser_changes_nothing(tmp_path, why):
+    contract = AgentContract.model_validate(_reading("chat"))
+    saved = json.dumps(contract.model_dump())
+    path = tmp_path / amend.CONTRACT
+    path.write_text(saved, encoding="utf-8")
+    done, said = amend.set_modality(contract, tmp_path, modality=" Browser ", why=why)
+    assert done is False
+    assert said == "browser agents aren't supported, so the type stays chat."
+    assert contract.modality == "chat"
+    assert contract.amendments == []
+    assert path.read_text(encoding="utf-8") == saved
+    assert not (tmp_path / FAILURE_FILE).exists()
+
+
+def test_set_modality_to_voice_still_works(tmp_path):
+    contract = AgentContract.model_validate(_reading("chat"))
+    done, said = amend.set_modality(contract, tmp_path, modality="voice", why="it takes calls")
+    assert done is True
+    assert "a call placed to the agent" in said
+    assert load(tmp_path).modality == "voice"
+
+
+# What the model is told
+
+
+def test_skill_text_asks_the_new_question():
+    from fi.alk.harness.config import load_skill
+
+    text = " ".join(load_skill("understand-agent").split())
+    assert "does a person come to this agent for a conversation, or to have it carry out that work?" in text
+    assert "A coding agent is chat." in text
+    assert "a browser it drives" not in text
+    assert "through a browser" not in text
+
+
+def test_schema_description_carries_the_new_question(tmp_path):
+    schema = _submit_tool(contract_tools(tmp_path)).input_schema
+    description = schema["properties"]["modality"]["description"]
+    assert "an agent a person uses to carry out work on websites or a computer is browser" in description
+    assert "browser-driving" not in description
+
+
+def test_set_modality_tool_no_longer_offers_browser():
+    from fi.alk.harness.world import tools as world_tools
+
+    source = Path(world_tools.__file__).read_text(encoding="utf-8")
+    assert "actually reaches this agent: voice or chat." in source
+    assert "voice, chat or browser" not in source
+
+
+def test_browser_stays_a_known_modality():
+    assert "browser" in known_modalities()
+    assert "browser" in _submit_tool(contract_tools(Path("unused"))).input_schema["properties"]["modality"]["enum"]

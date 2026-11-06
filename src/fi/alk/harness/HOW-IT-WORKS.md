@@ -78,6 +78,12 @@ not exist, or — the one that mattered most in practice — *every* tool having
 means the arguments were read and then not recorded. Problems are returned **into the
 conversation**, so the model corrects and resubmits rather than a bad contract landing.
 
+A browser reading with a browser, crawling or computer-use tool found in the source is refused to
+`failure.json`, and the build exits 78. Where the model and that code check disagree, the model gets
+one second look, and its answer stands. That answer has to send back a value the second look gave,
+because calls in one model message run before the model reads any result. A model that never
+sends it back keeps getting second looks until its turn limit, and the build ends as a crash.
+
 **How it is changed later** (`amend.py`). The contract is not frozen, but every change is
 recorded with a reason in `amendments[]`, so months later you can still tell what came from the
 agent and what came from us:
