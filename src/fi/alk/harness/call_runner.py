@@ -482,9 +482,7 @@ def _with_scenario_edits(
     persona = edit.get("persona")
     if isinstance(persona, Mapping):
         merged["persona"] = {
-            **(
-                merged.get("persona") if isinstance(merged.get("persona"), dict) else {}
-            ),
+            **(merged.get("persona") if isinstance(merged.get("persona"), dict) else {}),
             **{key: persona[key] for key in _EDITABLE_PERSONA_FIELDS if key in persona},
         }
     return merged
@@ -1537,9 +1535,7 @@ class CallRunnerImpl:
                 f"not set for world {runtime.world_index}"
             )
 
-        source_key = (
-            getattr(scenario, "source_scenario_key", None) or scenario.scenario_key
-        )
+        source_key = getattr(scenario, "source_scenario_key", None) or scenario.scenario_key
         try:
             doc = _read_scenario_document(self._context.bundle_dir, source_key)
         except _ScenarioDocumentUnavailable as exc:
@@ -1584,16 +1580,10 @@ class CallRunnerImpl:
             call_environ["HARNESS_BACKGROUND_PLACE"] = place_of(noise)
             base = self._environ.get(BACKGROUND_NOISE_VOLUME_ALIAS) or "7.0"
             # A scenario about the noise itself is heard loud enough to test it.
-            about_noise = any(
-                "nois" in str(level) for level in (doc.get("coverage") or {}).values()
-            )
-            spread = (
-                random.uniform(1.3, 1.8) if about_noise else random.uniform(0.7, 1.4)
-            )
+            about_noise = any("nois" in str(level) for level in (doc.get("coverage") or {}).values())
+            spread = random.uniform(1.3, 1.8) if about_noise else random.uniform(0.7, 1.4)
             try:
-                call_environ[BACKGROUND_NOISE_VOLUME_ALIAS] = (
-                    f"{float(base) * spread:.2f}"
-                )
+                call_environ[BACKGROUND_NOISE_VOLUME_ALIAS] = f"{float(base) * spread:.2f}"
             except ValueError:
                 pass
         else:
@@ -1970,25 +1960,15 @@ class CallRunnerImpl:
                 safe_details = {
                     key: value
                     for key, value in (case.failure.details or {}).items()
-                    if key
-                    in {
-                        "operation",
-                        "exception_type",
-                        "provider_code",
-                        "http_status",
-                        "sip_status_code",
-                        "stop_reason",
-                        "turn_count",
-                        "minimum_turn_count",
+                    if key in {
+                        "operation", "exception_type", "provider_code", "http_status",
+                        "sip_status_code", "stop_reason", "turn_count", "minimum_turn_count",
                     }
                 }
                 logger.warning(
                     "voice_call_failed run=%s case=%s code=%s stage=%s details=%s",
-                    report.run_id,
-                    case.test_case_id,
-                    case.failure.code,
-                    case.failure.stage.value,
-                    json.dumps(safe_details, sort_keys=True),
+                    report.run_id, case.test_case_id, case.failure.code,
+                    case.failure.stage.value, json.dumps(safe_details, sort_keys=True),
                 )
             # C3 §4.5 step 2 (the one narrow call_runner change): the engine's dispatch-ack ladder
             # surfaces +60s exhaustion via a STRUCTURED marker (`failure.code`), never a substring

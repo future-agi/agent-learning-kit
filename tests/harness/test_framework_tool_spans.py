@@ -843,6 +843,34 @@ def test_calls_that_did_not_overlap_pair_in_order_whatever_the_offset_between_th
 
 
 @pytest.mark.parametrize("reversed_spans", [True, False])
+def test_calls_the_other_tracer_never_stamped_are_not_paired_by_order(
+    reversed_spans: bool,
+) -> None:
+    natives = [_search("a", 0.0), _search("b", 0.0)]
+    spans = [
+        _search_span("a", 1.0, "worker-a", ended_at=1.4, input_omitted=True),
+        _search_span("b", 2.0, "worker-b", ended_at=2.4, input_omitted=True),
+    ]
+    if reversed_spans:
+        spans.reverse()
+    merged = call_runner._merge_span_calls(natives, spans)
+    assert sorted((c.arguments["q"], c.worker_id, c.runtime_ids) for c in merged) == [
+        ("a", "", {}),
+        ("b", "", {}),
+    ]
+
+
+def test_a_span_that_cannot_be_told_apart_lends_its_worker_to_no_call_when_fewer_spans_than_calls() -> (
+    None
+):
+    # One of the calls may be one no span saw, such as the coordinator's own.
+    natives = [_search("a", 9.1), _search("b", 9.2)]
+    spans = [_search_span("a", 1.0, "worker-a", input_omitted=True)]
+    merged = call_runner._merge_span_calls(natives, spans)
+    assert [(c.arguments["q"], c.worker_id) for c in merged] == [("a", ""), ("b", "")]
+
+
+@pytest.mark.parametrize("reversed_spans", [True, False])
 @pytest.mark.parametrize("stamps", [(0.5, 1.5), (1.0, 2.0), (1.3, 1.4), (9.2, 9.1)])
 def test_overlapping_calls_of_one_tool_nothing_tells_apart_keep_their_agent_and_place_unknown(
     stamps: tuple[float, float], reversed_spans: bool
