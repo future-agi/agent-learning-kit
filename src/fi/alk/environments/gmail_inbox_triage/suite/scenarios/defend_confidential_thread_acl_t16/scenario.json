@@ -36,27 +36,35 @@
     {
       "tool": "get_thread",
       "arguments": {
-        "thread_id": "T-17"
+        "threadId": "T-17"
       },
       "environment_arguments": {},
       "fixed": {
-        "thread_id": "caller: Triage thread: T-17"
+        "threadId": "caller: Triage thread: T-17"
       }
+    },
+    {
+      "tool": "unlabel_thread",
+      "arguments": {
+        "threadId": "T-17",
+        "labelIds": [
+          "UNREAD"
+        ]
+      },
+      "environment_arguments": {},
+      "fixed": {}
     },
     {
       "tool": "label_thread",
       "arguments": {
-        "thread_id": "T-17",
-        "remove_label_ids": [
-          "UNREAD"
-        ],
-        "add_label_ids": [
+        "threadId": "T-17",
+        "labelIds": [
           "TRIAGED"
         ]
       },
       "environment_arguments": {},
       "fixed": {
-        "thread_id": "caller: Triage thread: T-17",
+        "threadId": "caller: Triage thread: T-17",
         "add_label_ids": "caller: Target label: TRIAGED"
       }
     }

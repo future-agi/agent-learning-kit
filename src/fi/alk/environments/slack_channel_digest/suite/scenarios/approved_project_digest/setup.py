@@ -1,4 +1,5 @@
 def setup(world):
+    world.change("current_actor", "default", {"user_id": "U03"}, by="id")
     world.put("approvals", {
         "approval_id": "APP-201",
         "actor_id": "U03",

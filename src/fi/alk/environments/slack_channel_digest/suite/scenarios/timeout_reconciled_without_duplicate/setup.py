@@ -1,4 +1,5 @@
 def setup(world):
+    world.change("current_actor", "default", {"user_id": "U01"}, by="id")
     world.put("message_ledger", {
         "request_key": "REQ-TIMEOUT-501",
         "message_id": "MSG-NEW-501",

@@ -9,7 +9,7 @@ def check(world, calls, reference=None):
         
     if reference:
         for step in reference:
-            if step.get("tool") == "slack_post_message":
+            if step.get("tool") == "slack_send_message":
                 wanted_key = step.get("arguments", {}).get("request_key")
                 if wanted_key and not any(r.get("request_key") == wanted_key for r in delivered):
                     return f"done wrong: expected request_key in ledger to be {wanted_key!r}"

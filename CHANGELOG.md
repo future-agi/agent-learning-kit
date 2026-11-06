@@ -209,6 +209,57 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
   `notion_action_tracker` (M05). Each builds with
   `python -m fi.alk.environments.<name>.build --out DIR`, through the shared
   `fi.alk.environments.designed`.
+- Wave A regroup (TH-8750, stage 2): the environment is the vertical. `hr_leave_desk`,
+  `retail_returns_desk`, `subscription_billing_desk` and `it_access_desk` become
+  `hr`, `retail`, `saas_subscriptions` and `internal_it`, beside `banking`; the
+  V16 acceptance cases carry their workbook IDs like V01, V13, V15 and V20; each
+  vertical package holds a `README.md` (tools, scenarios, coverage map, known
+  gaps) and `sample_agent.md`; `fi/alk/environments/README.md` is the inventory.
+  `notion_action_tracker` (M05, outside Wave A) is removed. Banking's simulated
+  customer is told they are contacting the bank's support, not the old package
+  name. Content is otherwise unchanged; every package seals on PostgreSQL and
+  rebuilds to the same digests.
+- Wave A stage 1 (TH-8750): Banking's support mailbox, designed by the
+  environment builder (Gemini 3.7 Flash on Vertex, 19 minutes, $2.51) from
+  `internal-docs` `e2e-harness/live/design/banking/requirements-3.md` and
+  exported to `fi/alk/environments/banking`. 8 threads and 13 messages from the
+  bank's customers, linked to their records (a complaint thread ending in the
+  customer's correction, the thread that opened dispute D01, which now lives
+  in the world, a same-subject thread from another customer, an email with
+  instructions aimed at the assistant, a restricted fraud-team thread),
+  support labels, and `check_email_banking_consistency`, which fails the seal
+  when an email names a customer, card, transaction or dispute that does not
+  exist or does not match. 8 new scenarios for the two mailbox use cases
+  (26 in all); the 18 existing ones are unchanged. The outcome checks
+  `dispute_filed_and_reported`, `card_locked_upon_confirmation` and
+  `draft_created_for_review` are reference-aware: a dispute for the
+  transaction the customer first named, a lock of another card or a draft on
+  another thread fails (`tests/harness/test_banking_mailbox.py`). Hand
+  corrections on export: the builder's checks credited the call rather than
+  the target, seven personas carried invented surnames, and the existing
+  dispute lived only in one scenario's setup.
+- Wave A stage 3 (TH-8750): the four MCP capabilities match the official
+  servers. Each of `slack_channel_digest`, `gmail_inbox_triage`,
+  `calendar_scheduling_desk` and `drive_policy_search` pins the official
+  server's `tools/list` in `mcp_reference.json` (endpoint, sources, input
+  schemas, result fields, tools not attached, local extensions), and its tools,
+  handlers, reference solutions and checks now use the official tool names,
+  argument names and result shapes: Gmail's `threadId`/`labelIds`/
+  `replyToMessageId` with `unlabel_thread` as its own tool; Calendar's
+  `startTime`/`endTime`/`attendeeEmails` and `Event` objects with
+  `search_events`; Drive's `fileId` and query syntax with `File` objects;
+  Slack's `slack_read_channel`, `slack_read_thread`,
+  `slack_search_public_and_private`, `slack_search_channels` and
+  `slack_send_message`, with the acting user held in the world
+  (`current_actor`) as the OAuth user is on the official server. Approval,
+  idempotency and version arguments stay as documented local extensions.
+  Banking carries the realigned Gmail tool set.
+  `tests/harness/test_mcp_capability_reference.py` holds each package to its
+  reference. Review fixes: a start-only `update_event` keeps the start's UTC
+  offset on the derived end time, attendee ids never reuse a surviving row's
+  id, `list_drafts` applies `to:`/`cc:`/`bcc:`/`subject:` and refuses other
+  operators, and the Slack timeout criteria accept the channel read-back route
+  (`tests/harness/test_mcp_capability_handlers.py`).
 
 ## v1.0.0-rc.1 — 2026-06-10
 

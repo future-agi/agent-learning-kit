@@ -36,25 +36,27 @@
     {
       "tool": "get_thread",
       "arguments": {
-        "thread_id": "T-17"
+        "threadId": "T-17"
       },
       "environment_arguments": {},
       "fixed": {
-        "thread_id": "caller: Thread: T-17"
+        "threadId": "caller: Thread: T-17"
       }
     },
     {
       "tool": "create_draft",
       "arguments": {
+        "replyToMessageId": "M-17",
+        "to": [
+          "kevin@lead.com"
+        ],
         "subject": "Re: Product Demo Request",
-        "recipient": "kevin@lead.com",
-        "body": "Hi Kevin, we would be pleased to schedule a 30-minute product demo next Tuesday for your team.",
-        "thread_id": "T-17"
+        "body": "Hi Kevin, we would be pleased to schedule a 30-minute product demo next Tuesday for your team."
       },
       "environment_arguments": {},
       "fixed": {
-        "thread_id": "caller: Thread: T-17",
-        "recipient": "caller: Recipient: kevin@lead.com"
+        "replyToMessageId": "caller: Thread: T-17",
+        "to": "caller: Recipient: kevin@lead.com"
       }
     }
   ],

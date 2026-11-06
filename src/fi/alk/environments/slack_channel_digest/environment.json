@@ -1,19 +1,18 @@
 {
   "derived_from": "phase1_sheet:M01",
   "name": "slack_channel_digest",
-  "notes": "Slack digest world initialized in baseline state with users, channels, ACLs, clock, tools, sub-goals, and simulator prompt.",
+  "notes": "Slack digest world initialized in baseline state with users, channels, ACLs, clock, tools, sub-goals, and simulator prompt; the acting user is the current_actor row, as the OAuth user is on the official server.",
   "sequences": [
     {
       "calls": [
         {
           "arguments": {
-            "actor_id": "U03",
-            "approval_id": "APP-101",
             "channel_id": "C01",
-            "request_key": "REQ-SEQ-001",
-            "text": "Status digest for proj-launch: PostgreSQL chosen, OAuth2 standardized, Launch on Monday Nov 02."
+            "message": "Status digest for proj-launch: PostgreSQL chosen, OAuth2 standardized, Launch on Monday Nov 02.",
+            "approval_id": "APP-101",
+            "request_key": "REQ-SEQ-001"
           },
-          "tool": "slack_post_message"
+          "tool": "slack_send_message"
         },
         {
           "arguments": {
@@ -23,13 +22,12 @@
         },
         {
           "arguments": {
-            "actor_id": "U03",
-            "approval_id": "APP-101",
             "channel_id": "C01",
-            "request_key": "REQ-SEQ-001",
-            "text": "Status digest for proj-launch: PostgreSQL chosen, OAuth2 standardized, Launch on Monday Nov 02."
+            "message": "Status digest for proj-launch: PostgreSQL chosen, OAuth2 standardized, Launch on Monday Nov 02.",
+            "approval_id": "APP-101",
+            "request_key": "REQ-SEQ-001"
           },
-          "tool": "slack_post_message"
+          "tool": "slack_send_message"
         }
       ],
       "expect_state": {

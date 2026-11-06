@@ -3,17 +3,20 @@ def check(world, calls, reference):
         return "not done: no successful actions taken by agent"
     drafts = world.state().get("drafts", [])
     human_drafts = [d for d in drafts if d.get("is_human_edited")]
-    
+
     for hd in human_drafts:
         t_id = hd["thread_id"]
         thread_drafts = [d for d in drafts if d["thread_id"] == t_id]
         if len(thread_drafts) > 1:
             return f"done wrong: duplicate draft created for thread {t_id!r} with human draft"
-            
+
+    thread_of = {m["id"]: m["thread_id"] for m in world.state().get("messages", [])}
     for c in calls:
-        if c.name == "create_draft" and c.ok and any(hd["thread_id"] == c.arguments.get("thread_id") for hd in human_drafts):
+        if c.name == "create_draft" and c.ok and any(
+            hd["thread_id"] == thread_of.get(c.arguments.get("replyToMessageId")) for hd in human_drafts
+        ):
             return "done wrong: automated draft was created over an existing human draft"
-            
+
     return None
 
 

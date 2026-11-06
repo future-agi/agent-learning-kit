@@ -14,15 +14,10 @@
                 "email": "bob@company.com"
               }
             ],
-            "calendar_id": "CAL-PRIMARY",
-            "end": {
-              "dateTime": "2026-10-26T20:30:00Z",
-              "timeZone": "America/New_York"
-            },
-            "start": {
-              "dateTime": "2026-10-26T20:00:00Z",
-              "timeZone": "America/New_York"
-            },
+            "calendarId": "CAL-PRIMARY",
+            "endTime": "2026-10-26T20:30:00Z",
+            "startTime": "2026-10-26T20:00:00Z",
+            "timeZone": "America/New_York",
             "summary": "New Project Kickoff"
           },
           "tool": "create_event"
@@ -30,16 +25,11 @@
         {
           "arguments": {
             "approval_id": "APP-RESCHEDULE-01",
-            "calendar_id": "CAL-PRIMARY",
-            "end": {
-              "dateTime": "2026-10-26T21:30:00Z",
-              "timeZone": "America/New_York"
-            },
-            "event_id": "EVT-CR-101",
-            "start": {
-              "dateTime": "2026-10-26T21:00:00Z",
-              "timeZone": "America/New_York"
-            },
+            "calendarId": "CAL-PRIMARY",
+            "endTime": "2026-10-26T21:30:00Z",
+            "eventId": "EVT-CR-101",
+            "startTime": "2026-10-26T21:00:00Z",
+            "timeZone": "America/New_York",
             "summary": "New Project Kickoff Rescheduled"
           },
           "tool": "update_event"
@@ -55,15 +45,10 @@
         {
           "arguments": {
             "approval_id": "APP-1001",
-            "calendar_id": "CAL-PRIMARY",
-            "end": {
-              "dateTime": "2026-10-26T18:30:00Z",
-              "timeZone": "America/New_York"
-            },
-            "start": {
-              "dateTime": "2026-10-26T18:00:00Z",
-              "timeZone": "America/New_York"
-            },
+            "calendarId": "CAL-PRIMARY",
+            "endTime": "2026-10-26T18:30:00Z",
+            "startTime": "2026-10-26T18:00:00Z",
+            "timeZone": "America/New_York",
             "summary": "Meeting to Cancel"
           },
           "tool": "create_event"
@@ -71,8 +56,8 @@
         {
           "arguments": {
             "approval_id": "APP-DELETE-01",
-            "calendar_id": "CAL-PRIMARY",
-            "event_id": "EVT-CR-101",
+            "calendarId": "CAL-PRIMARY",
+            "eventId": "EVT-CR-101",
             "recurring_action": "this_event"
           },
           "tool": "delete_event"

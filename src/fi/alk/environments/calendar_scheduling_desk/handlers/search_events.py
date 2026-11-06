@@ -1,65 +1,57 @@
 def handle(args, db):
-    import re
-    iso_pattern = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?$"
-    
-    q = args.get("query")
-    cal_id = args.get("calendar_id")
-    attendee = args.get("attendee_email")
-    time_min = args.get("time_min")
-    time_max = args.get("time_max")
-    max_results = args.get("max_results", 20)
-    
-    if time_min and not re.match(iso_pattern, time_min):
-        raise ToolError(f"Invalid ISO format for time_min: {time_min}")
-    if time_max and not re.match(iso_pattern, time_max):
-        raise ToolError(f"Invalid ISO format for time_max: {time_max}")
-        
-    sql = "SELECT DISTINCT e.* FROM events e LEFT JOIN event_attendees a ON e.event_id = a.event_id WHERE e.status != 'cancelled'"
-    params = []
-    
-    if cal_id:
-        sql += " AND e.calendar_id = ?"
-        params.append(cal_id)
-    if attendee:
-        sql += " AND (a.email = ? OR a.email LIKE ?)"
-        params.extend([attendee, f"%{attendee}%"])
-    if q:
-        sql += " AND (e.summary LIKE ? OR e.description LIKE ? OR e.location LIKE ?)"
-        params.extend([f"%{q}%", f"%{q}%", f"%{q}%"])
-    if time_min:
-        sql += " AND e.end_time >= ?"
-        params.append(time_min)
-    if time_max:
-        sql += " AND e.start_time <= ?"
-        params.append(time_max)
-        
-    sql += " ORDER BY e.start_time ASC LIMIT ?"
-    params.append(max_results)
-    
-    rows = db.query(sql, params)
-    res = []
-    for r in rows:
+    query = args.get("query")
+    if not query or not isinstance(query, str):
+        raise ToolError("Missing required parameter: query", category="invalid_input")
+    page_size = args.get("pageSize")
+    if page_size is None:
+        page_size = 20
+    if not isinstance(page_size, int) or page_size < 1 or page_size > 250:
+        raise ToolError("pageSize must be an integer from 1 to 250", category="invalid_input")
+    offset = 0
+    if args.get("pageToken"):
+        try:
+            offset = int(args["pageToken"])
+        except ValueError:
+            raise ToolError(f"Invalid pageToken: {args['pageToken']}", category="invalid_input")
+
+    # The user's primary calendar only, as the official tool searches.
+    primary = db.one("SELECT calendar_id FROM calendars WHERE primary_calendar = TRUE")
+    cal_id = primary["calendar_id"] if primary else "CAL-PRIMARY"
+    terms = query.lower().split()
+    events = []
+    for r in db.query("SELECT * FROM events WHERE calendar_id = ? AND status != 'cancelled' ORDER BY start_time ASC", (cal_id,)):
         att_rows = db.query("SELECT email, display_name, response_status, is_organizer, is_optional FROM event_attendees WHERE event_id = ?", (r["event_id"],))
-        attendees = [
-            {
-                "email": a["email"],
-                "displayName": a["display_name"],
-                "responseStatus": a["response_status"],
-                "organizer": bool(a["is_organizer"]),
-                "optional": bool(a["is_optional"])
-            }
-            for a in att_rows
-        ]
-        res.append({
+        text = f"{r['summary']} {r['description'] or ''} {r['location'] or ''} {' '.join(a['email'] + ' ' + (a['display_name'] or '') for a in att_rows)}".lower()
+        if not all(term in text for term in terms):
+            continue
+        events.append({
             "id": r["event_id"],
-            "calendarId": r["calendar_id"],
+            "status": r["status"],
+            "htmlLink": f"https://calendar.example.com/event?eid={r['event_id']}",
+            "created": r["created_at"],
+            "updated": r["updated_at"],
             "summary": r["summary"],
             "description": r["description"],
             "location": r["location"],
             "start": {"dateTime": r["start_time"], "timeZone": r["time_zone"]},
             "end": {"dateTime": r["end_time"], "timeZone": r["time_zone"]},
-            "status": r["status"],
-            "attendees": attendees,
-            "version": r["version"]
+            "recurrence": [r["recurrence_rule"]] if r["recurrence_rule"] else [],
+            "recurringEventId": r["recurring_event_id"],
+            "attendees": [
+                {
+                    "email": a["email"],
+                    "displayName": a["display_name"],
+                    "responseStatus": a["response_status"],
+                    "organizer": bool(a["is_organizer"]),
+                    "optionalAttendee": bool(a["is_optional"]),
+                }
+                for a in att_rows
+            ],
+            "eventType": "DEFAULT",
+            "version": r["version"],
         })
-    return {"items": res}
+    page = events[offset : offset + page_size]
+    result = {"events": page}
+    if offset + page_size < len(events):
+        result["nextPageToken"] = str(offset + page_size)
+    return result

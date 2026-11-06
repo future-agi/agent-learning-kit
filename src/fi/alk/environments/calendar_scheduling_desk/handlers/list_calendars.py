@@ -1,24 +1,29 @@
 def handle(args, db):
-    min_role = args.get("min_access_role")
-    if not min_role:
-        raise ToolError("Missing required parameter: min_access_role")
-        
-    role_weights = {"reader": 1, "writer": 2, "owner": 3}
-    if min_role not in role_weights:
-        raise ToolError(f"Invalid min_access_role: {min_role}")
-    
+    page_size = args.get("pageSize")
+    if page_size is None:
+        page_size = 100
+    if not isinstance(page_size, int) or page_size < 1 or page_size > 250:
+        raise ToolError("pageSize must be an integer from 1 to 250", category="invalid_input")
+    offset = 0
+    if args.get("pageToken"):
+        try:
+            offset = int(args["pageToken"])
+        except ValueError:
+            raise ToolError(f"Invalid pageToken: {args['pageToken']!r}", category="invalid_input")
+
     rows = db.query("SELECT * FROM calendars ORDER BY primary_calendar DESC, calendar_id ASC")
-    res = []
-    min_val = role_weights.get(min_role, 0)
-    for r in rows:
-        r_weight = role_weights.get(r["access_role"], 1)
-        if r_weight >= min_val:
-            res.append({
-                "calendar_id": r["calendar_id"],
-                "summary": r["summary"],
-                "description": r["description"],
-                "time_zone": r["time_zone"],
-                "access_role": r["access_role"],
-                "primary": bool(r["primary_calendar"])
-            })
-    return {"calendars": res}
+    calendars = [
+        {
+            "id": r["calendar_id"],
+            "summary": r["summary"],
+            "description": r["description"],
+            "timeZone": r["time_zone"],
+            "accessRole": r["access_role"],
+        }
+        for r in rows
+    ]
+    page = calendars[offset : offset + page_size]
+    result = {"calendars": page}
+    if offset + page_size < len(calendars):
+        result["nextPageToken"] = str(offset + page_size)
+    return result

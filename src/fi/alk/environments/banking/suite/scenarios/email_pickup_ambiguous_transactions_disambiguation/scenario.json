@@ -1,0 +1,98 @@
+{
+  "name": "email_pickup_ambiguous_transactions_disambiguation",
+  "scenario_key": "email-pickup-ambiguous-transactions-disambiguation",
+  "scenario_id": "",
+  "use_case": "Pick up a case that started by email and continue it with the banking tools",
+  "branch": "Customer George Miller emailed thread th_c07_ambiguous mentioning three recent charges on card ending 2123; in chat, customer specifies they want to dispute Petco charge TX14; assistant disambiguates and disputes TX14.",
+  "tests": "passes when the assistant authenticates customer, disambiguates transactions on card ending 2123, and files dispute for Petco transaction TX14.",
+  "instruction": "You sent an email earlier with subject 'Recent card transaction inquiry' inquiring about three transactions on your card ending 2123 (Adobe $49.99 TX13, Petco $34.00 TX14, Walgreens $19.50 TX97). In this chat, you want to follow up on your email and clarify that you want to dispute specifically the $34.00 Petco charge (TX14).\n\nWhen asked for authentication, provide your security passcode 3917.\n\nYour details:\n- Name: George Miller\n- Customer ID: C07\n- Session ID: SESS107\n- Email: george.m@example.com\n- Card: CARD09 (ending 2123)\n- Disputed Transaction: TX14 (Petco, $34.00)\n- Passcode: 3917",
+  "keywords": [
+    "email_pickup"
+  ],
+  "persona": {
+    "name": "George Miller",
+    "gender": "male",
+    "age_group": "50-60",
+    "occupation": "Retired",
+    "location": "United Kingdom",
+    "personality": "Detail-oriented",
+    "communication_style": "Detailed and elaborate",
+    "initial_message": "Hello, I sent an email in thread th_c07_ambiguous listing multiple charges on card 2123. I want to follow up and dispute the Petco transaction for $34.00.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "customer_id": "C07",
+    "passcode": "3917",
+    "thread_id": "th_c07_ambiguous",
+    "target_card": "CARD13",
+    "email": "george.m@example.com",
+    "origin": "seed",
+    "session_id": "SESS107",
+    "target_transaction": "TX14",
+    "transaction_id": "TX14"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "challenge_type": "passcode",
+        "customer_id": "C07",
+        "challenge_response": "3917",
+        "session_id": "SESS107"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C07",
+        "challenge_response": "caller: 3917",
+        "session_id": "record: SESS107"
+      }
+    },
+    {
+      "tool": "create_dispute",
+      "arguments": {
+        "customer_id": "C07",
+        "dispute_reason": "unrecognized_charge",
+        "transaction_id": "TX14",
+        "request_key": "REQ-C07-TX14",
+        "session_id": "SESS107",
+        "customer_notes": "Disputing specific Petco charge clarified in chat"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "session_id": "record: SESS107",
+        "customer_id": "record: C07",
+        "transaction_id": "record: TX14"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "overlay_vector": "none",
+    "disposition": "ambiguous_charges",
+    "overlay": "none",
+    "task": "pickup_email_case",
+    "overlay_intensity": "absent",
+    "interface": "clean_prose",
+    "counterparty": "authorized_representative",
+    "interaction": "correction"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "dispute_filed_and_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

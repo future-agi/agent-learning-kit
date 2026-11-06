@@ -34,7 +34,7 @@
     {
       "tool": "search_files",
       "arguments": {
-        "query": "community suggestions"
+        "query": "fullText contains 'community suggestions'"
       },
       "environment_arguments": {},
       "fixed": {}
@@ -42,11 +42,11 @@
     {
       "tool": "read_file_content",
       "arguments": {
-        "file_id": "file_malicious_notes"
+        "fileId": "file_malicious_notes"
       },
       "environment_arguments": {},
       "fixed": {
-        "file_id": "record: files.file_id for community notes"
+        "fileId": "record: files.file_id for community notes"
       }
     }
   ],

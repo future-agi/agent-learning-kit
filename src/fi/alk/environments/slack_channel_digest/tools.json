@@ -1,132 +1,156 @@
 [
   {
-    "name": "slack_get_channel_info",
-    "description": "Resolve channel metadata, topic, privacy status, and member access for a given actor.",
+    "name": "slack_search_channels",
+    "description": "Search for Slack channels by name or topic. Returns channel IDs, names, topics, privacy and membership. Private channels appear only to their members.",
     "parameters": {
       "type": "object",
       "properties": {
-        "actor_id": {
-          "description": "The user ID requesting channel metadata.",
+        "keywords": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Lexical terms that must appear in the channel's name or topic; single words or quoted phrases, all AND'd."
+        },
+        "natural_language_query": {
+          "type": "string",
+          "description": "The user's question in conversational tone."
+        },
+        "channel_types": {
+          "type": "string",
+          "description": "Comma-separated: public_channel, private_channel. Default public_channel."
+        },
+        "cursor": {
           "type": "string"
         },
-        "channel_id": {
-          "type": "string",
-          "description": "The channel ID to resolve."
+        "include_archived": {
+          "type": "boolean"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Up to 20; default 20."
+        },
+        "response_format": {
+          "type": "string"
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "channels": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "channel_id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "topic": {
+                "type": "string"
+              },
+              "purpose": {
+                "type": "string"
+              },
+              "is_private": {
+                "type": "boolean"
+              },
+              "is_member": {
+                "type": "boolean"
+              },
+              "member_count": {
+                "type": "integer"
+              },
+              "is_archived": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "channel_id",
+              "name",
+              "is_private",
+              "is_member"
+            ]
+          }
+        },
+        "next_cursor": {
+          "type": "string"
         }
       },
       "required": [
-        "actor_id",
+        "channels"
+      ]
+    }
+  },
+  {
+    "name": "slack_read_channel",
+    "description": "Reads messages from a channel, newest first. Read-only. Use slack_read_thread with a message's ts to read its replies; use slack_search_channels to find a channel ID.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "channel_id": {
+          "type": "string",
+          "description": "ID of the channel to fetch history for."
+        },
+        "cursor": {
+          "type": "string",
+          "description": "next_cursor from a previous response."
+        },
+        "latest": {
+          "type": "string",
+          "description": "End of the time range (ts)."
+        },
+        "limit": {
+          "type": "integer",
+          "description": "1 to 100; default 100."
+        },
+        "oldest": {
+          "type": "string",
+          "description": "Start of the time range (ts)."
+        },
+        "response_format": {
+          "type": "string"
+        }
+      },
+      "required": [
         "channel_id"
       ]
     },
     "mutates_state": false,
     "returns": {
-      "properties": {
-        "is_member": {
-          "type": "boolean"
-        },
-        "name": {
-          "type": "string"
-        },
-        "topic": {
-          "type": "string"
-        },
-        "is_private": {
-          "type": "boolean"
-        },
-        "member_count": {
-          "type": "integer"
-        },
-        "channel_id": {
-          "type": "string"
-        }
-      },
       "type": "object",
-      "required": [
-        "channel_id",
-        "name",
-        "topic",
-        "is_private",
-        "is_member",
-        "member_count"
-      ]
-    }
-  },
-  {
-    "name": "slack_search_messages",
-    "description": "Search messages within an accessible channel with optional text filter and cursor pagination.",
-    "parameters": {
       "properties": {
-        "cursor": {
-          "type": "string",
-          "description": "Pagination offset cursor string (e.g. '0', '10')."
-        },
-        "actor_id": {
-          "type": "string",
-          "description": "The user ID initiating the search."
-        },
-        "limit": {
-          "type": "integer",
-          "description": "Maximum number of messages to return."
-        },
-        "query": {
-          "description": "Optional search query substring to filter messages.",
-          "type": "string"
-        },
-        "channel_id": {
-          "description": "The channel ID to search within.",
-          "type": "string"
-        }
-      },
-      "type": "object",
-      "required": [
-        "actor_id",
-        "channel_id",
-        "limit",
-        "cursor"
-      ]
-    },
-    "mutates_state": false,
-    "returns": {
-      "required": [
-        "channel_id",
-        "messages",
-        "has_more",
-        "total_returned"
-      ],
-      "properties": {
-        "next_cursor": {
-          "type": "string"
-        },
-        "has_more": {
-          "type": "boolean"
-        },
-        "total_returned": {
-          "type": "integer"
-        },
         "channel_id": {
           "type": "string"
         },
         "messages": {
+          "type": "array",
           "items": {
             "type": "object",
             "properties": {
-              "thread_ts": {
-                "type": "string"
-              },
-              "permalink": {
-                "type": "string"
-              },
-              "ts": {
+              "message_id": {
                 "type": "string"
               },
               "user_id": {
                 "type": "string"
               },
-              "message_id": {
+              "text": {
                 "type": "string"
               },
-              "text": {
+              "ts": {
+                "type": "string"
+              },
+              "thread_ts": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "permalink": {
                 "type": "string"
               }
             },
@@ -137,78 +161,92 @@
               "ts",
               "permalink"
             ]
-          },
-          "type": "array"
+          }
+        },
+        "has_more": {
+          "type": "boolean"
+        },
+        "next_cursor": {
+          "type": "string"
         }
       },
-      "type": "object"
+      "required": [
+        "channel_id",
+        "messages",
+        "has_more"
+      ]
     }
   },
   {
-    "name": "slack_get_thread",
-    "description": "Retrieve complete message history and permalinks for a specific thread in a channel.",
+    "name": "slack_read_thread",
+    "description": "Reads a thread: the parent message and its replies, oldest first. Read-only. message_ts is the parent message's ts.",
     "parameters": {
-      "required": [
-        "actor_id",
-        "channel_id",
-        "thread_ts",
-        "limit",
-        "cursor"
-      ],
       "type": "object",
       "properties": {
         "channel_id": {
           "type": "string",
-          "description": "The channel ID where the thread exists."
+          "description": "Channel the thread is in."
+        },
+        "message_ts": {
+          "type": "string",
+          "description": "Timestamp of the parent message, e.g. \"1234567890.123456\"."
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "latest": {
+          "type": "string"
         },
         "limit": {
           "type": "integer",
-          "description": "Maximum number of thread replies to return."
+          "description": "1 to 1000; default 100."
         },
-        "actor_id": {
-          "description": "The user ID requesting thread history.",
+        "oldest": {
           "type": "string"
         },
-        "cursor": {
-          "type": "string",
-          "description": "Pagination offset cursor string (e.g. '0', '5')."
-        },
-        "thread_ts": {
-          "description": "Timestamp ID of the root message of the thread.",
+        "response_format": {
           "type": "string"
         }
-      }
+      },
+      "required": [
+        "channel_id",
+        "message_ts"
+      ]
     },
     "mutates_state": false,
     "returns": {
       "type": "object",
-      "required": [
-        "channel_id",
-        "thread_ts",
-        "messages",
-        "has_more",
-        "total_returned"
-      ],
       "properties": {
+        "channel_id": {
+          "type": "string"
+        },
+        "message_ts": {
+          "type": "string"
+        },
         "messages": {
+          "type": "array",
           "items": {
+            "type": "object",
             "properties": {
-              "text": {
-                "type": "string"
-              },
-              "permalink": {
-                "type": "string"
-              },
-              "thread_ts": {
-                "type": "string"
-              },
-              "ts": {
+              "message_id": {
                 "type": "string"
               },
               "user_id": {
                 "type": "string"
               },
-              "message_id": {
+              "text": {
+                "type": "string"
+              },
+              "ts": {
+                "type": "string"
+              },
+              "thread_ts": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "permalink": {
                 "type": "string"
               }
             },
@@ -218,98 +256,228 @@
               "text",
               "ts",
               "permalink"
-            ],
-            "type": "object"
-          },
-          "type": "array"
-        },
-        "thread_ts": {
-          "type": "string"
+            ]
+          }
         },
         "has_more": {
           "type": "boolean"
         },
         "next_cursor": {
           "type": "string"
-        },
-        "total_returned": {
-          "type": "integer"
-        },
-        "channel_id": {
-          "type": "string"
         }
-      }
+      },
+      "required": [
+        "channel_id",
+        "message_ts",
+        "messages",
+        "has_more"
+      ]
     }
   },
   {
-    "name": "slack_post_message",
-    "description": "Post an approved message or digest to a channel or thread with idempotency tracking.",
+    "name": "slack_search_public_and_private",
+    "description": "Searches messages in all channels the acting user can access. keywords are lexical terms (all AND'd); filters are Slack search modifiers: in:<#C123>, from:<@U123>, after:YYYY-MM-DD, before:YYYY-MM-DD. Give at least one of keywords or filters.",
     "parameters": {
-      "required": [
-        "actor_id",
-        "approval_id",
-        "channel_id",
-        "request_key",
-        "text"
-      ],
+      "type": "object",
       "properties": {
-        "text": {
-          "description": "The text of the message or digest to post.",
+        "keywords": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "filters": {
+          "type": "string"
+        },
+        "natural_language_query": {
+          "type": "string"
+        },
+        "after": {
+          "type": "string",
+          "description": "Only messages after this Unix timestamp."
+        },
+        "before": {
+          "type": "string",
+          "description": "Only messages before this Unix timestamp."
+        },
+        "channel_types": {
+          "type": "string"
+        },
+        "content_types": {
+          "type": "string"
+        },
+        "context_channel_id": {
+          "type": "string"
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "include_bots": {
+          "type": "boolean"
+        },
+        "include_context": {
+          "type": "boolean"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Up to 20; default 20."
+        },
+        "max_context_length": {
+          "type": "integer"
+        },
+        "only_my_channels": {
+          "type": "boolean"
+        },
+        "response_format": {
+          "type": "string"
+        },
+        "sort": {
+          "type": "string",
+          "description": "score (default) or timestamp."
+        },
+        "sort_dir": {
+          "type": "string",
+          "description": "asc or desc (default)."
+        }
+      }
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "messages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "message_id": {
+                "type": "string"
+              },
+              "user_id": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "ts": {
+                "type": "string"
+              },
+              "thread_ts": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "permalink": {
+                "type": "string"
+              },
+              "channel_id": {
+                "type": "string"
+              },
+              "channel_name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "message_id",
+              "channel_id",
+              "user_id",
+              "text",
+              "ts",
+              "permalink"
+            ]
+          }
+        },
+        "has_more": {
+          "type": "boolean"
+        },
+        "next_cursor": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "messages",
+        "has_more"
+      ]
+    }
+  },
+  {
+    "name": "slack_send_message",
+    "description": "Sends a message to a channel, or a thread reply with thread_ts. Posting is approval-gated: approval_id must name an approval of this exact destination and text for the acting user. request_key makes a retry return the message already posted instead of a duplicate. No @channel, @here or @everyone.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "channel_id": {
+          "type": "string",
+          "description": "Destination channel ID."
+        },
+        "message": {
+          "type": "string",
+          "description": "The message text (markdown)."
+        },
+        "thread_ts": {
+          "type": "string",
+          "description": "Parent message ts to reply in its thread."
+        },
+        "reply_broadcast": {
+          "type": "boolean"
+        },
+        "unfurl_app_links": {
+          "type": "boolean"
+        },
+        "draft_id": {
           "type": "string"
         },
         "approval_id": {
           "type": "string",
-          "description": "The approval ID authorizing the post."
-        },
-        "actor_id": {
-          "description": "The user ID posting the message.",
-          "type": "string"
+          "description": "The approval authorizing this post."
         },
         "request_key": {
           "type": "string",
-          "description": "Idempotency request key."
-        },
-        "channel_id": {
-          "type": "string",
-          "description": "The destination channel ID."
-        },
-        "thread_ts": {
-          "description": "Optional thread timestamp to post as a reply.",
-          "type": "string"
+          "description": "Idempotency key for this request."
         }
       },
-      "type": "object"
+      "required": [
+        "channel_id",
+        "message"
+      ]
     },
     "mutates_state": true,
     "returns": {
-      "required": [
-        "channel_id",
-        "message_id",
-        "permalink",
-        "request_key",
-        "status"
-      ],
+      "type": "object",
       "properties": {
-        "request_key": {
-          "type": "string"
-        },
-        "thread_ts": {
-          "type": "string"
-        },
         "channel_id": {
           "type": "string"
         },
-        "status": {
+        "ts": {
+          "type": "string"
+        },
+        "message_id": {
           "type": "string"
         },
         "permalink": {
           "type": "string"
         },
-        "message_id": {
+        "status": {
           "type": "string"
+        },
+        "request_key": {
+          "type": "string"
+        },
+        "thread_ts": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
-      "type": "object"
+      "required": [
+        "channel_id",
+        "ts",
+        "message_id",
+        "permalink",
+        "status"
+      ]
     }
   },
   {
