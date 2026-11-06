@@ -957,6 +957,7 @@ def _merge_span_calls(calls: list[Call], from_spans: list[Call]) -> tuple[Call, 
     launched = {span.runtime_ids.get("event_id"): span.name for span in from_spans}
     merged = list(calls)
     unpaired = list(calls)
+    waiting: list[Call] = []
     for span in from_spans:
         if (
             span.delegated_to
@@ -964,32 +965,94 @@ def _merge_span_calls(calls: list[Call], from_spans: list[Call]) -> tuple[Call, 
         ):
             # A job's hand-off sits under the call that launched it and is not that call again.
             merged.append(span)
-            continue
-        same_tool = [c for c in unpaired if _tool_key(c.name) == _tool_key(span.name)]
-        # Same outcome first: a refusal can read as a failure to one tracer and a returned value to the other.
-        other = next(
-            (c for c in same_tool if c.ok == span.ok),
-            same_tool[0] if same_tool else None,
-        )
-        if other is None:
+        else:
+            waiting.append(span)
+    span_ids = set(launched) - {None}
+    # Spans end, and are written, in their own order: pair the span only one call fits first, so each takes its own.
+    while _pair_spans(waiting, unpaired, span_ids):
+        pass
+    unknown = set()
+    for span in waiting:
+        if any(_tool_key(c.name) == _tool_key(span.name) for c in unpaired):
+            # More than one call fits it, or none does: its agent and ids stay unknown rather than land on another call.
+            unknown.add(span.runtime_ids.get("event_id"))
+        else:
             merged.append(span)
-            continue
-        unpaired.remove(other)
-        if not (other.worker_id or other.worker_label):
-            other.worker_id, other.worker_label = span.worker_id, span.worker_label
-        other.delegated_to = other.delegated_to or span.delegated_to
-        other.transferred = other.transferred or span.transferred
-        other.ended_at = other.ended_at or span.ended_at
-        if not other.runtime_ids:
-            # The span's place among the agents goes with its ids: a parent is an id in the same record.
-            other.runtime_ids = span.runtime_ids
-            other.parent_span_id, other.relationship = (
-                span.parent_span_id,
-                span.relationship,
-            )
-        # A span starts when the call does; another tracer may stamp a call only once it reads its result.
-        other.at = span.at or other.at
+    for call in merged:
+        if call.parent_span_id and call.parent_span_id in unknown:
+            call.parent_span_id, call.relationship = "", ""
     return tuple(sorted(merged, key=lambda call: call.at))
+
+
+def _pair_spans(waiting: list[Call], unpaired: list[Call], span_ids: set[str]) -> bool:
+    """Pair every span only one call fits; failing that, the first whose fitting calls are interchangeable."""
+    fitting = [(span, _span_options(span, unpaired, span_ids)) for span in waiting]
+    chosen = [(span, options[0]) for span, options in fitting if len(options) == 1] or [
+        (span, options[0]) for span, options in fitting if _interchangeable(options)
+    ][:1]
+    for span, call in chosen:
+        # Two spans only one call fits: the first takes it, the other is weighed again.
+        if any(c is call for c in unpaired):
+            waiting.remove(span)
+            unpaired[:] = [c for c in unpaired if c is not call]
+            _lend_span(span, call)
+    return bool(chosen)
+
+
+# How long before its span starts another tracer may stamp the same call: when the model issued it.
+_STAMP_LEAD_S = 0.25
+
+
+def _span_options(span: Call, unpaired: list[Call], span_ids: set[str]) -> list[Call]:
+    """The calls another tracer saw that can be this span's: its own event id, else one of the same tool, outcome,
+    arguments and time. A call holding another span's event id is that span's."""
+    same_tool = [c for c in unpaired if _tool_key(c.name) == _tool_key(span.name)]
+    event_id = span.runtime_ids.get("event_id")
+    own = [c for c in same_tool if event_id and c.runtime_ids.get("event_id") == event_id]
+    if own:
+        return own[:1]
+    options = [c for c in same_tool if c.runtime_ids.get("event_id") not in span_ids]
+    # Same outcome first: a refusal can read as a failure to one tracer and a returned value to the other.
+    options = [c for c in options if c.ok == span.ok] or options
+    options = [c for c in options if _same_arguments(span, c)]
+    # Another tracer may stamp a call once it reads the result, so only a stamp before the span started rules one out.
+    return [
+        c for c in options if not (span.at and c.at) or c.at >= span.at - _STAMP_LEAD_S
+    ] or options
+
+
+def _same_arguments(span: Call, call: Call) -> bool:
+    """One tracer's arguments are all among the other's (an agent may add its own), when the span kept them whole."""
+    if span.input_omitted or set(span.arguments) == {"raw"}:
+        return True
+    fewer, more = sorted((span.arguments, call.arguments), key=len)
+    return all(key in more and more[key] == value for key, value in fewer.items())
+
+
+def _interchangeable(options: list[Call]) -> bool:
+    """Calls that differ in nothing the merge keeps: whichever the span lends to, the trace reads the same."""
+    return bool(options) and all(
+        replace(c, at=0.0, ended_at=0.0) == replace(options[0], at=0.0, ended_at=0.0)
+        for c in options
+    )
+
+
+def _lend_span(span: Call, other: Call) -> None:
+    """Give another tracer's call the span's agent, hand-off and times, keeping what it recorded itself."""
+    if not (other.worker_id or other.worker_label):
+        other.worker_id, other.worker_label = span.worker_id, span.worker_label
+    other.delegated_to = other.delegated_to or span.delegated_to
+    other.transferred = other.transferred or span.transferred
+    other.ended_at = other.ended_at or span.ended_at
+    if not other.runtime_ids:
+        # The span's place among the agents goes with its ids: a parent is an id in the same record.
+        other.runtime_ids = span.runtime_ids
+        other.parent_span_id, other.relationship = (
+            span.parent_span_id,
+            span.relationship,
+        )
+    # A span starts when the call does; another tracer may stamp a call only once it reads its result.
+    other.at = span.at or other.at
 
 
 def _target_metrics(case: Any) -> dict[str, Any] | None:

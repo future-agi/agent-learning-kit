@@ -690,6 +690,107 @@ def test_a_job_hand_off_stays_its_own_event_and_is_kept_once() -> None:
     ]
 
 
+def _search(query: str, at: float, **fields) -> Call:
+    return Call(name="search", arguments={"q": query}, result=query, ok=True, at=at, **fields)
+
+
+def _search_span(query: str, at: float, worker: str, **fields) -> Call:
+    return _search(
+        query,
+        at,
+        worker_id=worker,
+        runtime_ids={"event_id": f"event-{query}"},
+        parent_span_id=f"hand-off-{worker}",
+        relationship="observed",
+        **fields,
+    )
+
+
+@pytest.mark.parametrize(
+    ("stamps", "span_fields"),
+    [
+        # Stamped when issued; the spans name their arguments.
+        ((1.0, 2.0), {}),
+        # Stamped once each result was read, the later call first: the arguments tell them apart.
+        ((9.2, 9.1), {}),
+        # Stamped when issued, the spans' arguments left out: the times tell them apart.
+        ((1.0, 2.0), {"input_omitted": True}),
+    ],
+)
+def test_two_overlapping_calls_of_one_tool_keep_their_own_spans_when_the_spans_end_in_the_other_order(
+    stamps: tuple[float, float], span_fields: dict
+) -> None:
+    natives = [_search("a", stamps[0]), _search("b", stamps[1])]
+    hand_offs = [
+        Call(
+            name="ask_worker",
+            arguments={},
+            ok=True,
+            at=0.5,
+            delegated_to=worker,
+            runtime_ids={"event_id": f"hand-off-{worker}"},
+        )
+        for worker in ("worker-a", "worker-b")
+    ]
+    spans = [
+        _search_span("b", 2.0, "worker-b", ended_at=3.0, **span_fields),
+        _search_span("a", 1.0, "worker-a", ended_at=4.0, **span_fields),
+    ]
+    merged = call_runner._merge_span_calls(natives, [*hand_offs, *spans])
+    assert [
+        (c.arguments, c.runtime_ids, c.worker_id, c.parent_span_id)
+        for c in merged
+        if c.name == "search"
+    ] == [
+        ({"q": "a"}, {"event_id": "event-a"}, "worker-a", "hand-off-worker-a"),
+        ({"q": "b"}, {"event_id": "event-b"}, "worker-b", "hand-off-worker-b"),
+    ]
+
+
+def test_a_span_and_another_tracer_s_call_sharing_an_event_id_pair_whatever_else_they_say() -> None:
+    natives = [
+        _search("a", 9.2, runtime_ids={"event_id": "event-b"}),
+        _search("b", 9.1, runtime_ids={"event_id": "event-a"}),
+    ]
+    spans = [_search_span("b", 2.0, "worker-b"), _search_span("a", 1.0, "worker-a")]
+    merged = call_runner._merge_span_calls(natives, spans)
+    assert [(c.runtime_ids["event_id"], c.worker_id) for c in merged] == [
+        ("event-a", "worker-a"),
+        ("event-b", "worker-b"),
+    ]
+
+
+def test_overlapping_calls_of_one_tool_nothing_tells_apart_keep_their_agent_and_place_unknown() -> None:
+    # The spans left out their arguments and the other tracer stamped both calls after both started. A call made in
+    # either hand-off then has no place either.
+    from fi.alk.harness.world.runtime import trace_row
+
+    natives = [_search("a", 9.2), _search("b", 9.1)]
+    spans = [
+        _search_span("b", 2.0, "worker-b", input_omitted=True, delegated_to="reader"),
+        _search_span("a", 1.0, "worker-a", input_omitted=True, delegated_to="reader"),
+    ]
+    child = Call(
+        name="summarise",
+        arguments={},
+        ok=True,
+        at=2.5,
+        worker_id="worker-b",
+        runtime_ids={"event_id": "event-c"},
+        parent_span_id="event-b",
+        relationship="observed",
+    )
+    merged = call_runner._merge_span_calls(natives, [*spans, child])
+    assert [
+        (c.arguments, c.worker_id, c.runtime_ids, c.parent_span_id) for c in merged
+    ] == [
+        ({}, "worker-b", {"event_id": "event-c"}, ""),
+        ({"q": "b"}, "", {}, ""),
+        ({"q": "a"}, "", {}, ""),
+    ]
+    assert trace_row(merged[0])["relationship"] == "unknown"
+
+
 _AGENTS_SDK = {
     "agents/__init__.py": "from agents.tracing import get_trace_provider\n\n"
     "def set_trace_processors(processors):\n    get_trace_provider().set_processors(processors)\n",
