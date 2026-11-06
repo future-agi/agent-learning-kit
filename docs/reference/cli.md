@@ -19,13 +19,17 @@ opt_in_lane: false
 
 ## 1. What you are testing
 
-`agent-learn` is one console script over the three vendored engines
-(`simulate`, `evals`, `optimize`). Every evidence-producing command takes a
-manifest (JSON or YAML) and an `--output` path, and writes a single JSON
-artifact whose `kind` identifies it — see
-[reference/artifacts.md](artifacts.md). Running `agent-learn` with no
-arguments prints help; an unknown command prints help plus
-`unknown command: <name>` and exits non-zero.
+`agent-learn` and `alk` are aliases over the included engines and reference
+harness. Manifest commands such as `run` and `eval` accept JSON/YAML and output
+flags; other families have their own contracts. Harness stages use `--out`
+for a session directory, not `--output` for one result file. See the
+[artifact catalog](artifacts.md). Running `agent-learn` with no arguments prints
+help; an unknown command exits non-zero. Bare `agent-learn harness`, however,
+opens interactive chat. Use `agent-learn harness --help` for help.
+
+There is no declared `agent-harness` console script; it is a harness parser
+label. `alk-harness-worker` and `alk-harness-sandbox` are separate hosted entry
+points, not the beginner CLI.
 
 The regression-lifecycle subcommands (`baseline`, `compare`, `replay`,
 `report`, `promote-to-regression`, `shrink`) are also reachable through the
@@ -53,7 +57,8 @@ The command surface, one row per command (aliases from the `main()` dispatch):
 
 | Command | Aliases | Does | Artifact kind |
 | --- | --- | --- | --- |
-| `doctor` | — | environment + module diagnostics, config status | `agent-learning.doctor.v1` |
+| `doctor` | — | import/consolidation and config status, not live provider/runtime readiness | `agent-learning.doctor.v1` |
+| `harness` | — | reference harness: `auto`, `author`, `understand`, `build`, `scenarios`, `run`, `simulate`, `live`, `environment`, `chat`; [authoring guide](../simulate/environment-authoring.md) | lane-specific session/bundle/results |
 | `release-check` | `v1-check`, `release` | run the full local gate matrix | `agent-learning.release-check.v1` |
 | `release-proof` | `v1-proof` | cut the seven-check release proof | `agent-learning.release-proof.v1` |
 | `init` | — | scaffold manifests for a preset: `ci` (default), `run`, `redteam`, `optimize`, `all` | `agent-learning.init.v1` |
@@ -86,6 +91,24 @@ The command surface, one row per command (aliases from the `main()` dispatch):
 | `runs` | `ledger` (hidden) | local run ledger: `list` / `show` / `verify` / `sync` / `forget` — see [run-ledger](../prove/run-ledger.md) | `agent-learning.ledger-row.v1` |
 | `simulate` | — | namespace passthrough to the regression-lifecycle subcommands | per subcommand |
 | `eval-cli` | `fi` | passthrough to the vendored evaluation CLI | per subcommand |
+
+### First-mile options
+
+| Command | Relevant options / boundary |
+| --- | --- |
+| `doctor` | `--output`, `--quiet`; import/consolidation checks only. |
+| `init DIRECTORY` | `--preset run\|ci\|redteam\|optimize\|all`, `--name`, repeatable `--required-env`, `--force`, `--quiet`; no required env by default. |
+| `eval SUITE` | `--dry-run`, `--threshold`, `--output`, `--junit`, `--sarif`, `--markdown`; dry run does not execute providers. |
+| `run MANIFEST` | `--dry-run`, `--no-eval`, output/report flags; skipping evaluation does not skip target execution. |
+| `harness auto` / `author` | `--path`, `--name`, `--out`, `--count` (default 10); authoring calls models even without the final run. |
+| `harness understand/build/scenarios` | `--once` makes a stage non-interactive. Use the same `--out` to continue staged work. |
+| `harness run` | `--target`, `--only`, `--model`, `--quiet`; target and runtime must be compatible. |
+| `harness environment up/status/reset/down` | `--out`; start from `--path` or a compatible V1 `--bundle`. Reset/down change runtime state. |
+
+Implementation: [`fi.alk.cli`](../../src/fi/alk/cli.py),
+[`harness/cli.py`](../../src/fi/alk/harness/cli.py). See
+[environment authoring](../simulate/environment-authoring.md) for prerequisites
+and exact staged commands, not proposed roadmap commands.
 
 ## 4. When it fails
 
