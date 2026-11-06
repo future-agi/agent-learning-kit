@@ -7,7 +7,6 @@ external packages and non-Python implementations still require runtime proof.
 from __future__ import annotations
 
 import ast
-import io
 import re
 import tokenize
 from pathlib import Path
@@ -105,13 +104,12 @@ def _comments(text: str, tokens: TokenBudget) -> list[str] | None:
     if not tokens.spend(text):
         return None
     try:
-        return [
-            token.string
-            for token in tokenize.generate_tokens(io.StringIO(text).readline)
-            if token.type == tokenize.COMMENT
-        ]
+        found = tokens.tokens(text)
     except (SyntaxError, tokenize.TokenError):
         return None
+    if found is None:
+        return None
+    return [token.string for token in found if token.type == tokenize.COMMENT]
 
 
 def defined_tool_names(source: Path) -> set[str]:

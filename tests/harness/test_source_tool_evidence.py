@@ -901,6 +901,57 @@ def test_the_named_modules_are_tokenized_only_up_to_a_total(tmp_path, monkeypatc
     assert len(tool_evidence_problems(AgentContract.model_validate(payload()), source)) == problems
 
 
+@pytest.mark.parametrize("short_of, problems", [(0, 1), (1, 0)])
+def test_the_named_modules_are_tokenized_only_up_to_the_work(tmp_path, monkeypatch, short_of, problems):
+    import io
+    import tokenize
+
+    from fi.alk.harness import python_source
+
+    # Each token is charged the line it's read from, which 3.12.3 decodes again for each token.
+    work = sum(
+        len(token.line) for token in tokenize.generate_tokens(io.StringIO(_COMMENTED_METHOD).readline)
+    )
+    source = _commented_source(tmp_path, _COMMENTED_METHOD)
+    monkeypatch.setattr(python_source, "LARGEST_TOKENIZED_WORK", work - short_of)
+
+    assert len(tool_evidence_problems(AgentContract.model_validate(payload()), source)) == problems
+
+
+@pytest.mark.parametrize("limit", ["LARGEST_TOKENIZED_WORK", "LARGEST_TOKENIZED_TOTAL"])
+def test_the_tokenize_limits_are_shared_by_the_named_modules(tmp_path, monkeypatch, limit):
+    import io
+    import tokenize
+
+    from fi.alk.harness import python_source
+
+    # Two modules, each under the limit alone and not together: one budget for the check.
+    source = _commented_source(tmp_path, _COMMENTED_METHOD)
+    other = _COMMENTED_METHOD.replace("lookup_weather", "lookup_time")
+    (source / "other.py").write_text(other)
+    entry = payload()["tool_entrypoints"][0]
+    contract = AgentContract.model_validate(
+        payload()
+        | {
+            "tools": [{"name": "lookup_weather", "args": []}, {"name": "lookup_time", "args": []}],
+            "tool_entrypoints": [
+                entry,
+                entry | {"tool": "lookup_time", "module": "other", "callable": "Assistant.lookup_time"},
+            ],
+        }
+    )
+    if limit == "LARGEST_TOKENIZED_WORK":
+        def cost(text):
+            return sum(len(token.line) for token in tokenize.generate_tokens(io.StringIO(text).readline))
+    else:
+        def cost(text):
+            return len(text.encode())
+    assert len(tool_evidence_problems(contract, source)) == 2
+    monkeypatch.setattr(python_source, limit, max(cost(_COMMENTED_METHOD), cost(other)) * 3 // 2)
+
+    assert len(tool_evidence_problems(contract, source)) == 1
+
+
 def test_a_module_without_the_line_in_a_comment_is_not_tokenized(tmp_path, monkeypatch):
     import tokenize
 
