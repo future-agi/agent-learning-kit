@@ -280,6 +280,7 @@ INSERT INTO labels VALUES('disputes','disputes','user');
 INSERT INTO labels VALUES('card_services','card services','user');
 INSERT INTO labels VALUES('needs_reply','needs reply','user');
 INSERT INTO labels VALUES('fraud','fraud','user');
+INSERT INTO labels VALUES('claims_unverified','claims unverified','user');
 CREATE TABLE threads (
     id TEXT PRIMARY KEY NOT NULL,
     subject TEXT NOT NULL,

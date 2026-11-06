@@ -85,7 +85,11 @@ draft on another thread. `tests/harness/test_banking_mailbox.py` proves the wron
 
 - The mailbox is small: 8 threads and 13 messages, one of them a three-message complaint with the
   bank's reply and the customer's correction. The world check `check_email_banking_consistency` fails
-  the seal when an email names a customer, card, transaction or dispute that does not exist or does
-  not match. Drafts start empty.
+  the seal when any message names a customer, card, transaction or dispute that does not exist or
+  does not match (at `36bc0bb2` its dispute loop ran only on the last message; fixed, and
+  `tests/harness/test_banking_mailbox.py` proves a nonexistent D99 and another customer's dispute
+  fail in any message). A customer's message in a thread labelled `claims_unverified` is a
+  deliberately false claim the scenario tests and is not checked; the bank's messages always are.
+  No thread carries the label yet. Drafts start empty.
 - Checks other than the three outcome checks above are still one file per sub-goal, shared by the
   scenarios that use it (plan §7, decision 8).
