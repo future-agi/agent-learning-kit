@@ -108,6 +108,8 @@ _LARGEST_CODE_FILE = 1024 * 1024
 # Past this a repository holds the conversation up for longer than the rest of the scan is worth.
 _LARGEST_SCAN = 128 * 1024 * 1024
 _LARGEST_RECORD = 1024 * 1024
+# Per walk. A first scan reads up to three times this: its signature, its files and the packages
+# at the top each walk the records. Every reopen reads it once more, for the signature.
 _LARGEST_RECORDS = 64 * 1024 * 1024
 # Strings are matched first and kept, so "https://..." or "src/**/*.ts" isn't read as a comment.
 # An unclosed one ends at its line or the file: a start that could fail makes a customer's odd file
@@ -117,12 +119,14 @@ _LARGEST_RECORDS = 64 * 1024 * 1024
 # name or a number, where it divides. Its closing slash must be followed as a regex's is, by flags
 # and then no name, quote, "/" or "*": a division that starts a line, or a "/" in JSX text, then
 # reads as division, not as a literal that eats a string's opening quote.
-# Such a start can fail, so a class holds no "[" and the rest no "]": a failed literal then can't
-# run over the classes of the slashes after it, which would make the line cost its square.
+# Such a start can fail, so a class holds no "[" and the rest no "]", and a literal that meets one
+# is kept to its line's end: a failed literal then can't run over the classes of the slashes after
+# it, which would make the line cost its square, and the quotes and backticks it holds can't open a
+# string or a template that swaps code and strings for the rest of the file.
 _SCRIPT_COMMENT_OR_STRING = re.compile(
     r"""("(?:\\.|[^"\\\n])*(?:"|(?=\n)|\\?\Z)|'(?:\\.|[^'\\\n])*(?:'|(?=\n)|\\?\Z)|`(?:\\.|[^`\\])*(?:`|\\?\Z)"""
     r"""|(?<![^\n(,=:\[!&|?{};>])[ \t]*/(?![/*])(?:\\.|\[(?:\\.|[^\]\[\\\n])*(?:\]|(?=\n)|\\?\Z)|[^/\\\n\[\]])*"""
-    r"""(?:/(?=[dgimsuvy]*(?![\w$/*"'`]))|(?=\n)|\\?\Z))"""
+    r"""(?:/(?=[dgimsuvy]*(?![\w$/*"'`]))|(?=\n)|\\?\Z|(?:\[(?=(?:\\.|[^\]\[\\\n])*\[)|\])[^\n]*))"""
     r"""|//[^\n]*|/\*.*?(?:\*/|\Z)""",
     re.DOTALL,
 )
@@ -191,21 +195,33 @@ def _agent_files(root: Path) -> Iterator[Path]:
     # Unpacked distributions hold other people's code, whose SDKs name these tools whether or not
     # this agent uses them. Their records name those files wherever they were unpacked, so the
     # agent's own code beside them, as in a Lambda folder, is still read. One budget for the whole
-    # walk: a repository can hold any number of folders. Rows stay text, a fraction of a Path's size.
-    unpacked: set[str] = set()
+    # walk: a repository can hold any number of folders. Rows stay relative to the folder whose
+    # records hold them, as pip wrote them, so what is kept is the rows the budget lets in and that
+    # folder's path once: how deep the folder sits doesn't multiply what each row costs.
+    unpacked: dict[str, set[str]] = {}
+    tops: dict[str, tuple[str, ...]] = {}
     left = [_LARGEST_RECORDS]
     for directory, subdirectories, files in os.walk(root):
-        here = Path(directory)
+        inherited = tops.pop(directory, ())
         if any(name.endswith(".dist-info") for name in subdirectories):
-            unpacked.update(
-                os.path.join(directory, name) for name in _unpacked_at_top(here, left)
-            )
+            rows = _unpacked_at_top(Path(directory), left)
+            if rows:
+                unpacked[directory] = rows
+                inherited += (directory,)
         subdirectories[:] = [
             name for name in subdirectories if not _not_the_agent_dir(name)
         ]
+        # Once the budget is spent, which folders' packages count mustn't depend on the order the
+        # disk lists folders in.
+        subdirectories.sort()
+        for name in subdirectories:
+            tops[os.path.join(directory, name)] = inherited
         for name in files:
-            if not _not_the_agent_file(name) and os.path.join(directory, name) not in unpacked:
-                yield here / name
+            path = os.path.join(directory, name)
+            if not _not_the_agent_file(name) and not any(
+                path[len(top) + 1 :] in unpacked[top] for top in inherited
+            ):
+                yield Path(path)
 
 
 def _packages_used(path: Path) -> set[str]:

@@ -384,23 +384,31 @@ def test_an_odd_script_file_stays_quick(tmp_path, body):
     "line",
     [
         'const base = url.replace(/\\/*$/, "");',
+        'const base = url.replace(/\\/*$/g, "");',
         "const ok = 1;\n/src\\/*/.test(f);",
         "if (/src\\/*/.test(f)) {}",
         "const kept = files.filter((f) => /src\\/*/.test(f));",
         'const ratio = a / b; const label = "1 / 2 /*";',
         'const r = a\n  / b; const p = "src/**/*.ts";',
         'x = a\n/ b; s = "http://h/*"; const t = { type: "computer_20250124" };',
+        'x = a\n/ b + "/" + "/*";',
         "const C = () => <code>/src/**/*.ts</code>;",
+        "const ok = !/[(`.[+\\-/*%<>=,?^&]/.test(next);\nconst g = `${dir}/*.js`;",
+        "const r = /a]`/;\nconst g = `${dir}/*.js`;",
     ],
     ids=[
         "replace",
+        "replace-with-a-flag",
         "line-start",
         "condition",
         "arrow",
         "division",
         "division-at-a-line-start",
         "division-at-a-line-start-before-a-url",
+        "division-at-a-line-start-before-a-string",
         "jsx-text",
+        "a-class-holding-a-bracket-then-a-template",
+        "a-bracket-outside-a-class-then-a-template",
     ],
 )
 def test_a_slash_in_script_code_hides_nothing_after_it(tmp_path, line):
@@ -415,8 +423,15 @@ def test_a_slash_in_script_code_hides_nothing_after_it(tmp_path, line):
         'const a = 1; /* { type: "computer_20250124" } */\n',
         'const ratio = a / b; // { type: "computer_20250124" }\n',
         'const r = a\n  / 2; // { type: "computer_20250124" }\n',
+        'const r = a\n  / x[0]; // { type: "computer_20250124" }\n',
     ],
-    ids=["line-start", "after-code", "after-division", "after-a-division-at-a-line-start"],
+    ids=[
+        "line-start",
+        "after-code",
+        "after-division",
+        "after-a-division-at-a-line-start",
+        "after-a-division-at-a-line-start-by-an-index",
+    ],
 )
 def test_a_script_comment_still_hides_what_it_holds(tmp_path, body):
     _tree(tmp_path, {"agent.js": body})
@@ -696,6 +711,52 @@ def test_every_folder_shares_one_record_budget(tmp_path, monkeypatch):
     files = list(agent_type_check._agent_files(tmp_path))
     assert sum(read) <= 2 * len(record)
     assert [path.name for path in files].count("vendored.py") == 1
+
+
+def _characters(kept) -> int:
+    if isinstance(kept, str):
+        return len(kept)
+    if isinstance(kept, dict):
+        return sum(_characters(key) + _characters(value) for key, value in kept.items())
+    return sum(_characters(one) for one in kept)
+
+
+def test_a_deep_folders_records_cost_what_their_rows_do(tmp_path, monkeypatch):
+    deep = tmp_path.joinpath(*["d" * 100] * 5)
+    rows = "".join(f"r{n:04}\n" for n in range(400))
+    _tree(deep, {"x-1.dist-info/RECORD": rows, "main.py": "import openai\n"})
+    monkeypatch.setattr(agent_type_check, "_LARGEST_RECORDS", len(rows))
+    walk = agent_type_check._agent_files(tmp_path)
+    assert next(walk).name == "main.py"
+    # A row as written is a few bytes, and the folder it sits in can be as deep as the disk allows.
+    kept = _characters(walk.gi_frame.f_locals["unpacked"])
+    assert kept <= len(rows) + len(str(deep))
+
+
+def test_which_folders_packages_count_once_the_budget_is_spent_is_the_same_on_every_disk(
+    tmp_path, monkeypatch
+):
+    record = "vendored.py,sha256=a,1\n"
+    for folder in ("a", "b"):
+        _tree(
+            tmp_path,
+            {
+                f"{folder}/x-1.dist-info/RECORD": record,
+                f"{folder}/vendored.py": 'NAME = "computer_20241022"\n',
+            },
+        )
+    real_walk = os.walk
+
+    def listed_backwards(top, *args, **kwargs):
+        for directory, subdirectories, files in real_walk(top, *args, **kwargs):
+            if directory == os.fspath(top):
+                subdirectories.reverse()
+            yield directory, subdirectories, files
+
+    monkeypatch.setattr(os, "walk", listed_backwards)
+    monkeypatch.setattr(agent_type_check, "_LARGEST_RECORDS", len(record))
+    files = list(agent_type_check._agent_files(tmp_path))
+    assert [path.parent.name for path in files if path.name == "vendored.py"] == ["b"]
 
 
 def test_linked_records_are_never_read(tmp_path, monkeypatch):
@@ -1553,6 +1614,82 @@ def test_a_scan_that_fails_is_run_again_by_the_next_call(tmp_path, plain_repo, m
     with pytest.raises(OSError, match="gone"):
         submit(_reading("chat"))
     assert not submit(_reading("chat")).get("is_error")
+
+
+def test_a_scan_that_fails_is_run_again_by_the_next_call_in_the_same_message(
+    tmp_path, plain_repo, monkeypatch
+):
+    outcomes = iter([OSError("gone"), []])
+
+    def scan(_root):
+        outcome = next(outcomes)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(tools, "browser_tools_found", scan)
+    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo))
+
+    async def one_message():
+        with pytest.raises(OSError, match="gone"):
+            await tool.handler(_reading("chat"))
+        return await tool.handler(_reading("chat"))
+
+    assert not asyncio.run(one_message()).get("is_error")
+
+
+def test_a_scan_that_finished_after_its_only_caller_was_cancelled_is_not_run_again(
+    tmp_path, plain_repo, monkeypatch
+):
+    started, release = threading.Event(), threading.Event()
+    scans: list[Path] = []
+
+    def slow(root):
+        scans.append(root)
+        started.set()
+        release.wait(10)
+        return []
+
+    monkeypatch.setattr(tools, "browser_tools_found", slow)
+    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo))
+
+    async def cancelled_then_next():
+        cancelled = asyncio.ensure_future(tool.handler(_reading("browser")))
+        await asyncio.to_thread(started.wait, 10)
+        (scan,) = asyncio.all_tasks() - {asyncio.current_task(), cancelled}
+        cancelled.cancel()
+        release.set()
+        await asyncio.wait({scan})
+        return await tool.handler(_reading("browser"))
+
+    assert "second-look" in _text(asyncio.run(cancelled_then_next()))
+    assert scans == [plain_repo]
+
+
+def test_a_scan_left_running_on_a_closed_loop_is_started_again(tmp_path, plain_repo, monkeypatch):
+    started, release = threading.Event(), threading.Event()
+    scans: list[Path] = []
+
+    def scan(root):
+        scans.append(root)
+        if len(scans) == 1:
+            started.set()
+            release.wait(10)
+        return []
+
+    monkeypatch.setattr(tools, "browser_tools_found", scan)
+    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo))
+    closed = asyncio.new_event_loop()
+    try:
+        closed.create_task(tool.handler(_reading("browser")))
+        closed.run_until_complete(asyncio.to_thread(started.wait, 10))
+    finally:
+        closed.close()
+    try:
+        assert "second-look" in _text(asyncio.run(tool.handler(_reading("browser"))))
+    finally:
+        release.set()
+    assert len(scans) == 2
 
 
 # Every way into the stage reaches the scan

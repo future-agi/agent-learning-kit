@@ -321,9 +321,10 @@ def contract_tools(
     # Whether the latest second look has had no value back yet. A model that never sends one back
     # must still be able to answer, or every submission earns another look until the turns run out.
     look_unanswered = False
-    # Whether the last answer that carried a value read browser. The same answer again, without the
-    # value, is still that answer: a fix after the contract was sent back mustn't earn a new look.
-    answered_browser: bool | None = None
+    # Whether an answer that carried a value didn't read browser: one that did was refused. The same
+    # answer again, without the value, is still that answer: a fix after the contract was sent back
+    # mustn't earn a new look.
+    answered = False
     found: list[str] | None = None
     # Calls in one message share one scan: each running its own takes that many times longer.
     scan: asyncio.Future[list[str]] | None = None
@@ -1113,14 +1114,20 @@ def contract_tools(
         receipt = payload.pop(SECOND_LOOK_READ, None) or (
             args.get(SECOND_LOOK_READ) if isinstance(args, dict) else None
         )
-        nonlocal refused, found, look_unanswered, answered_browser, scan
+        nonlocal refused, found, look_unanswered, answered, scan
         # Taken before the scan's wait: a call already running when a look went out hasn't read it.
         looked_before = bool(second_look_receipts)
         if refused or (destination / FAILURE_FILE).is_file():
             return _ok(_stop_message(destination))
         if found is None:
-            # A scan that ended while nothing is set raised, so this call runs it again.
-            if scan is None or scan.done():
+            # Run again only a scan that can't give its answer here: one that raised or was
+            # cancelled, or one on another loop, which this one can't wait on. One that finished
+            # after every call waiting on it was cancelled still holds its answer.
+            if (
+                scan is None
+                or scan.get_loop() is not asyncio.get_running_loop()
+                or (scan.done() and (scan.cancelled() or scan.exception() is not None))
+            ):
                 scan = asyncio.ensure_future(asyncio.to_thread(browser_tools_found, scan_root))
             # Shielded: one call cancelled mustn't cancel the scan the others wait on.
             found = await asyncio.shield(scan)
@@ -1142,8 +1149,8 @@ def contract_tools(
         read_it = isinstance(receipt, str) and receipt in second_look_receipts
         if read_it:
             look_unanswered = False
-            answered_browser = is_browser(claimed)
-        same_answer = answered_browser is not None and answered_browser == is_browser(claimed)
+            answered = answered or not is_browser(claimed)
+        same_answer = answered and not is_browser(claimed)
         verdict = decide(
             claimed,
             found,
