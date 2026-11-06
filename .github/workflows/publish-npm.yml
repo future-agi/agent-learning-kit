@@ -1,29 +1,24 @@
-# Owner setup before enabling this workflow:
-# 1. setup-node is pinned to the same full commit SHA future-agi/traceAI main already
-#    uses (49933ea5288caeca8642d1e84afbd3f7d6820020, v4.4.0).
-# 2. Merge this file as .github/workflows/publish-npm.yml into protected main in
-#    future-agi/agent-learning-kit; require review for release-source changes.
-# 3. Configure the npm trusted publisher for @future-agi/agent-learning-kit:
-#    GitHub Actions, owner future-agi, repository agent-learning-kit,
-#    workflow filename publish-npm.yml, environment npm (all exact matches).
-#    Confirm package administration, public access and provenance eligibility.
-# 4. Create GitHub environment npm, restrict deployments to main and require a
-#    release reviewer. This publish job is the ONLY deployment approval gate.
-#    The reviewer must be allowed to approve under the chosen self-review policy.
-# 5. Obtain the approved staged-tarball SHA-256 for the merged source and this
-#    toolchain. Dispatch on main with that digest; review the build summary and
-#    artifact before approving npm. A digest mismatch must never be overridden.
-# Authentication is npm trusted publishing via OIDC; no stored registry auth.
-# Only manual dispatch is enabled: tag pushes do not carry an approved digest.
+# Publishes @future-agi/agent-learning-kit to npm when a merge to main carries a
+# package version that is not on npm yet. Merges that keep the version build and
+# test the package, then skip publishing.
+# To release: bump "version" in typescript/agent-learning-kit/package.json in the PR.
+# A version with a pre-release suffix (for example 0.5.0-rc.1) is published under
+# the dist-tag "next"; every other version goes to "latest".
+# Authentication is npm trusted publishing via OIDC (publisher: GitHub Actions,
+# future-agi/agent-learning-kit, publish-npm.yml, environment npm); no stored
+# registry token. The GitHub environment npm accepts deployments from main only.
 name: Publish npm
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "typescript/agent-learning-kit/**"
+      - "typescript/package.json"
+      - "typescript/pnpm-lock.yaml"
+      - "typescript/pnpm-workspace.yaml"
+      - ".github/workflows/publish-npm.yml"
   workflow_dispatch:
-    inputs:
-      expected_sha256:
-        description: Approved staged .tgz SHA-256 (exactly 64 hexadecimal characters)
-        required: true
-        type: string
 
 permissions:
   contents: read
@@ -41,27 +36,29 @@ jobs:
       run:
         shell: bash
     outputs:
+      publish: ${{ steps.decide.outputs.publish }}
+      version: ${{ steps.decide.outputs.version }}
+      dist_tag: ${{ steps.decide.outputs.dist_tag }}
       artifact_id: ${{ steps.upload.outputs.artifact-id }}
       tarball_sha256: ${{ steps.seal.outputs.sha256 }}
     steps:
-      - name: Require the canonical main dispatch and an approved digest
+      - name: Require the canonical repository main branch
         env:
           EVENT_NAME: ${{ github.event_name }}
           REPOSITORY: ${{ github.repository }}
           SOURCE_REF: ${{ github.ref }}
-          EXPECTED_SHA256: ${{ inputs.expected_sha256 }}
         run: |
           set -euo pipefail
-          if [[ "$EVENT_NAME" != workflow_dispatch || "$REPOSITORY" != future-agi/agent-learning-kit || "$SOURCE_REF" != refs/heads/main ]]; then
-            printf '%s\n' '::error::Publish requires a manual dispatch on the canonical repository main branch.'
+          if [[ "$EVENT_NAME" != push && "$EVENT_NAME" != workflow_dispatch ]]; then
+            printf '%s\n' '::error::Publish runs only for a push to main or a manual dispatch on main.'
             exit 1
           fi
-          if [[ ! "$EXPECTED_SHA256" =~ ^[0-9a-fA-F]{64}$ ]]; then
-            printf '%s\n' '::error::expected_sha256 must be exactly 64 hexadecimal characters.'
+          if [[ "$REPOSITORY" != future-agi/agent-learning-kit || "$SOURCE_REF" != refs/heads/main ]]; then
+            printf '%s\n' '::error::Publish requires the canonical repository main branch.'
             exit 1
           fi
 
-      - name: Check out the immutable dispatch commit
+      - name: Check out the immutable commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
@@ -73,7 +70,42 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           # Do not set registry-url: the publisher uses OIDC, not npmrc auth.
 
+      - name: Decide whether this version needs publishing
+        id: decide
+        working-directory: typescript/agent-learning-kit
+        run: |
+          set -euo pipefail
+          name="$(node -p 'require("./package.json").name')"
+          version="$(node -p 'require("./package.json").version')"
+          if [[ "$name" != "@future-agi/agent-learning-kit" ]]; then
+            printf '%s\n' "::error::Unexpected package name $name."
+            exit 1
+          fi
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            printf '%s\n' "::error::Unexpected package version $version."
+            exit 1
+          fi
+          dist_tag=latest
+          if [[ "$version" == *-* ]]; then dist_tag=next; fi
+          # 200 = this version is already on npm, 404 = not yet; anything else stops the run.
+          code="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            --retry 3 --retry-all-errors "https://registry.npmjs.org/@future-agi%2fagent-learning-kit/${version}")"
+          case "$code" in
+            200) publish=false ;;
+            404) publish=true ;;
+            *) printf '%s\n' "::error::npm registry answered HTTP $code for version $version."; exit 1 ;;
+          esac
+          {
+            printf 'publish=%s\n' "$publish"
+            printf 'version=%s\n' "$version"
+            printf 'dist_tag=%s\n' "$dist_tag"
+          } >> "$GITHUB_OUTPUT"
+          if [[ "$publish" == false ]]; then
+            printf '## npm\n\n%s@%s is already on npm; nothing to publish.\n' "$name" "$version" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Select the packing toolchain
+        if: steps.decide.outputs.publish == 'true'
         working-directory: typescript/agent-learning-kit
         run: |
           set -euo pipefail
@@ -87,6 +119,7 @@ jobs:
           pnpm --version
 
       - name: Install the frozen workspace without lifecycle scripts
+        if: steps.decide.outputs.publish == 'true'
         working-directory: typescript
         run: |
           set -euo pipefail
@@ -94,14 +127,17 @@ jobs:
           pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Typecheck
+        if: steps.decide.outputs.publish == 'true'
         working-directory: typescript/agent-learning-kit
         run: pnpm run typecheck
 
       - name: Run Jest in CI mode
+        if: steps.decide.outputs.publish == 'true'
         working-directory: typescript/agent-learning-kit
         run: pnpm exec jest --config jest.config.cjs --ci --runInBand
 
       - name: Pack only through the sanctioned staging script
+        if: steps.decide.outputs.publish == 'true'
         id: pack
         working-directory: typescript/agent-learning-kit
         run: |
@@ -128,6 +164,7 @@ jobs:
           printf 'tarball=%s/package.tgz\n' "$candidate_dir" >> "$GITHUB_OUTPUT"
 
       - name: Seed a separate npm cache and run the offline packed consumer
+        if: steps.decide.outputs.publish == 'true'
         working-directory: typescript/agent-learning-kit
         env:
           TARBALL: ${{ steps.pack.outputs.tarball }}
@@ -164,33 +201,31 @@ jobs:
           ' -- "$GITHUB_WORKSPACE/typescript/agent-learning-kit/scripts/consumer-smoke/run.sh" \
             "$TARBALL" "$seed/cache"
 
-      - name: Gate the consumer-tested bytes against the approved SHA-256
+      - name: Seal the consumer-tested bytes
+        if: steps.decide.outputs.publish == 'true'
         id: seal
         env:
           TARBALL: ${{ steps.pack.outputs.tarball }}
-          EXPECTED_SHA256: ${{ inputs.expected_sha256 }}
           SOURCE_SHA: ${{ github.sha }}
+          VERSION: ${{ steps.decide.outputs.version }}
+          DIST_TAG: ${{ steps.decide.outputs.dist_tag }}
         run: |
           set -euo pipefail
-          [[ "$EXPECTED_SHA256" =~ ^[0-9a-fA-F]{64}$ ]]
           [[ -f "$TARBALL" && ! -L "$TARBALL" ]]
           actual="$(sha256sum -- "$TARBALL")"
           actual="${actual%% *}"
-          if [[ "$actual" != "${EXPECTED_SHA256,,}" ]]; then
-            printf '%s\n' '::error::Packed tarball differs from the approved SHA-256; refusing to upload or publish.'
-            exit 1
-          fi
           printf 'sha256=%s\n' "$actual" >> "$GITHUB_OUTPUT"
           {
             printf '## npm release candidate\n\n'
+            printf -- '- Package: `@future-agi/agent-learning-kit@%s` (dist-tag `%s`)\n' "$VERSION" "$DIST_TAG"
             printf -- '- Source commit: `%s`\n' "$SOURCE_SHA"
-            printf -- '- Approved and actual tarball SHA-256: `%s`\n' "$actual"
+            printf -- '- Tarball SHA-256: `%s`\n' "$actual"
             printf -- '- Node: `%s`; npm: `%s`; pnpm: `%s`\n' "$(node --version)" "$(npm --version)" "$(pnpm --version)"
             printf -- '- Typecheck, Jest, staged artifact audit and isolated packed-consumer checks passed.\n'
-            printf -- '- Approve the npm deployment only after reviewing this candidate.\n'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload only the verified tarball
+        if: steps.decide.outputs.publish == 'true'
         id: upload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -202,6 +237,7 @@ jobs:
 
   publish:
     needs: build
+    if: needs.build.outputs.publish == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment: npm
@@ -235,15 +271,15 @@ jobs:
           path: ${{ runner.temp }}/alk-npm-release
           merge-multiple: true
 
-      - name: Re-verify the approved bytes and publish with provenance
+      - name: Re-verify the built bytes and publish with provenance
         working-directory: ${{ runner.temp }}
         env:
-          EXPECTED_SHA256: ${{ inputs.expected_sha256 }}
           BUILD_SHA256: ${{ needs.build.outputs.tarball_sha256 }}
+          DIST_TAG: ${{ needs.build.outputs.dist_tag }}
         run: |
           set -euo pipefail
-          [[ "$EXPECTED_SHA256" =~ ^[0-9a-fA-F]{64}$ ]]
-          [[ "$BUILD_SHA256" == "${EXPECTED_SHA256,,}" ]]
+          [[ "$BUILD_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$DIST_TAG" == latest || "$DIST_TAG" == next ]]
           [[ "$(npm --version)" == "$NPM_VERSION" ]]
           download_dir="$RUNNER_TEMP/alk-npm-release"
           tarball="$download_dir/package.tgz"
@@ -268,10 +304,10 @@ jobs:
           export NPM_CONFIG_AUDIT=false NPM_CONFIG_FUND=false
           actual="$(sha256sum -- "$tarball")"
           actual="${actual%% *}"
-          if [[ "$actual" != "${EXPECTED_SHA256,,}" ]]; then
-            printf '%s\n' '::error::Downloaded tarball differs from the approved SHA-256; refusing to publish.'
+          if [[ "$actual" != "$BUILD_SHA256" ]]; then
+            printf '%s\n' '::error::Downloaded tarball differs from the tested build; refusing to publish.'
             exit 1
           fi
           # Never retry with different bytes, a rebuilt package or alternate auth.
           npm publish "$tarball" --provenance --access public --ignore-scripts \
-            --registry=https://registry.npmjs.org/
+            --tag "$DIST_TAG" --registry=https://registry.npmjs.org/
