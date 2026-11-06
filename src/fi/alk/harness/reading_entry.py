@@ -16,13 +16,14 @@ import logging
 import math
 import os
 import threading
-from collections.abc import Awaitable, Callable
+import typing
+from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from . import spend
 from .agent_type_check import EXIT_REFUSED
@@ -92,10 +93,34 @@ def _read_secret_values(paths: tuple[Path, ...]) -> tuple[str, ...]:
     try:
         from .hosted_entrypoint import peek_secret_values
 
-        return tuple(value for path in paths for value in peek_secret_values(path))
+        values = {form for path in paths for value in peek_secret_values(path) for form in _forms(value)}
     except Exception:
         _secrets_logger.warning("secret values not read; only URL userinfo is masked", exc_info=True)
         return ()
+    # Longest first, so a whole value is masked before any of its parts.
+    return tuple(sorted(values, key=len, reverse=True))
+
+
+def _forms(value: str) -> Iterator[str]:
+    """The value, and the shapes a trace can show it in: each line, each string inside it when it
+    is JSON (a service account's key), and its escaped text as ``repr`` and JSON print it."""
+    yield value
+    yield from value.splitlines()
+    yield repr(value)[1:-1]
+    yield json.dumps(value)[1:-1]
+    try:
+        parsed = json.loads(value)
+    except ValueError:
+        return
+    pending = [parsed]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, str):
+            yield from _forms(item)
+        elif isinstance(item, dict):
+            pending.extend(item.values())
+        elif isinstance(item, list):
+            pending.extend(item)
 
 
 def _masked(text: str) -> str:
@@ -162,12 +187,38 @@ def reading_failure(
     )
 
 
+def _models_in(annotation: Any) -> Iterator[type[BaseModel]]:
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        yield annotation
+    for inner in typing.get_args(annotation):
+        yield from _models_in(inner)
+
+
+@functools.cache
+def _job_field_names() -> frozenset[str]:
+    names: set[str] = set()
+    seen: set[type[BaseModel]] = set()
+    pending: list[type[BaseModel]] = [HarnessJob]
+    while pending:
+        model = pending.pop()
+        if model in seen:
+            continue
+        seen.add(model)
+        for name, field in model.model_fields.items():
+            names.update(filter(None, (name, field.alias)))
+            pending.extend(_models_in(field.annotation))
+    return frozenset(names)
+
+
 def _unreadable_job(exc: Exception) -> str:
     # Only where and how it failed: pydantic's own text repeats the job, and a job may hold a token.
     if not isinstance(exc, ValidationError):
         return type(exc).__name__
+    fields = _job_field_names()
     found = "; ".join(
-        f"{'.'.join(str(part) for part in error['loc']) or 'job'}: {error['type']}"
+        # A dict's keys are the job's own data, and may be a token, so only field names and
+        # indexes are shown.
+        f"{'.'.join(str(part) if isinstance(part, int) or part in fields else '*' for part in error['loc']) or 'job'}: {error['type']}"
         for error in exc.errors(include_input=False)
     )
     return f"ValidationError: {found}"
@@ -183,14 +234,35 @@ def _output_in_use(output: Path) -> bool:
         return True
 
 
-def _start_hard_limit(
-    mode: ReadingMode, output: Path, limit: float | None
-) -> threading.Timer | None:
-    if limit is None:
-        return None
-    exit_code = EXIT_RETRYABLE if mode.timed_out_retryable else EXIT_REFUSED
+class _HardLimit:
+    """Ends the process at the limit. Before the work returns, a timeout is written first; after
+    it, the work's files stand and the process ends with the work's own code."""
 
-    def end_the_process() -> None:
+    def __init__(self, mode: ReadingMode, output: Path, limit: float) -> None:
+        self._mode = mode
+        self._output = output
+        self._limit = limit
+        self._returned: int | None = None
+        self._timer = threading.Timer(limit, self._end_the_process)
+        self._timer.daemon = True
+        self._timer.start()
+
+    def returned(self, code: int) -> None:
+        self._returned = code
+
+    def cancel(self) -> None:
+        self._timer.cancel()
+
+    def _end_the_process(self) -> None:
+        returned = self._returned
+        if returned is not None:
+            # Only a thread the work left behind keeps the process alive now. Its files are on
+            # disk, so nothing is written over them.
+            os._exit(returned)
+        mode, output, limit = self._mode, self._output, self._limit
+        exit_code = EXIT_RETRYABLE if mode.timed_out_retryable else EXIT_REFUSED
+        # Nothing logs on the way out: a blocked stderr must not hold off the exit.
+        logging.disable(logging.CRITICAL)
         try:
             write_reading_failure(
                 reading_failure(
@@ -207,26 +279,22 @@ def _start_hard_limit(
             # Work running in a thread can't be cancelled, and a normal exit would wait for it.
             os._exit(exit_code)
 
-    timer = threading.Timer(limit, end_the_process)
-    timer.daemon = True
-    timer.start()
-    return timer
-
 
 async def _work_then_stop_the_clock(
-    mode: ReadingMode, job: HarnessJob, source: Path, output: Path, timer: threading.Timer | None
+    mode: ReadingMode, job: HarnessJob, source: Path, output: Path, limit: _HardLimit | None
 ) -> int:
-    try:
-        return await mode.work(job, source, output)
-    finally:
-        # Inside the loop: asyncio.run waits for leftover worker threads before it returns, and
-        # the limit must not fire during that wait over a reading that has already ended.
-        if timer is not None:
-            timer.cancel()
+    code = await mode.work(job, source, output)
+    # Told inside the loop: asyncio.run waits for leftover worker threads before it returns, and
+    # the limit must not write a timeout over a reading that has already ended.
+    if limit is not None:
+        limit.returned(code)
+    return code
 
 
 def run_reading_mode(mode: ReadingMode, *, job_path: Path, source: Path, output: Path) -> int:
     """Refuse what can't be read, start the cost at zero, then run the mode's work."""
+    # Read afresh for each reading, so one job's secrets never stand in for another's.
+    _read_secret_values.cache_clear()
     _read_secret_values(_SECRET_FILES)
     output = Path(output)
 
@@ -291,18 +359,19 @@ def run_reading_mode(mode: ReadingMode, *, job_path: Path, source: Path, output:
         return EXIT_RETRYABLE
 
     # Read now, not when the mode was made, so it is the same limit the work reads as it starts.
-    timer = _start_hard_limit(mode, output, _hard_limit(mode))
+    seconds = _hard_limit(mode)
+    limit = None if seconds is None else _HardLimit(mode, output, seconds)
     crash: Exception | None = None
     try:
         logger.info("reading started at %s", datetime.now(timezone.utc).isoformat())
-        code = asyncio.run(_work_then_stop_the_clock(mode, job, source, output, timer))
+        code = asyncio.run(_work_then_stop_the_clock(mode, job, source, output, limit))
     except Exception as exc:
         logger.error("the %s reading crashed", mode.name, exc_info=True)
         crash = exc
     finally:
         # Cancelled first, so the limit can't fire during a crash's writes or the caller's cleanup.
-        if timer is not None:
-            timer.cancel()
+        if limit is not None:
+            limit.cancel()
 
     if crash is not None:
         write_reading_failure(

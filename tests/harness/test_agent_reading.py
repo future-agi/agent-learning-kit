@@ -103,7 +103,7 @@ class _Live:
     async def interrupt(self) -> bool:
         self.backend.interrupts.append(time.monotonic())
         if self.backend.interrupt_raises:
-            raise RuntimeError("the interrupt control request timed out")
+            raise RuntimeError(self.backend.interrupt_says)
         self.interrupted.set()
         return True
 
@@ -125,6 +125,7 @@ class _Backend:
         self.stopped: list[dict] = []
         self.seen: list = []
         self.interrupt_raises = False
+        self.interrupt_says = "the interrupt control request timed out"
         self.start_raises = False
         self.saves_on_start: dict | None = None
         self.submissions = 0
@@ -1033,6 +1034,29 @@ def test_an_interrupt_that_raises_is_still_a_timeout(tmp_path, model, monkeypatc
     assert "RuntimeError: the interrupt control request timed out" in logged.exc_text
 
 
+def test_the_readings_own_log_is_masked(tmp_path, model, monkeypatch, caplog):
+    secret = "sk-provider-0123456789"
+    secrets = tmp_path / "secrets.json"
+    secrets.write_text(json.dumps({"TARGET_KEY": secret}), encoding="utf-8")
+    monkeypatch.setattr(reading_entry, "_SECRET_FILES", (secrets,))
+    _repo(tmp_path)
+    _short_limit(monkeypatch)
+    fake = model(_quiet)
+    fake.interrupt_raises = True
+    fake.interrupt_says = f"the provider refused key {secret}"
+
+    with caplog.at_level("WARNING", logger=agent_reading.__name__):
+        assert _run(tmp_path, wait=0.3) == 78
+
+    [logged] = [
+        record
+        for record in caplog.records
+        if record.name == agent_reading.__name__ and "not delivered" in record.getMessage()
+    ]
+    assert "RuntimeError: the provider refused key ***" in logged.exc_text
+    assert secret not in caplog.text
+
+
 def test_a_session_that_breaks_after_the_stop_is_logged_and_still_a_timeout(
     tmp_path, model, monkeypatch, caplog
 ):
@@ -1393,8 +1417,14 @@ class _Opened(Exception):
             True,
             {"available_evals": None, "require_setup_contract": False, "max_turns": 70},
         ),
+        (
+            # Only the flag itself, not a value that merely reads as true.
+            {"generic_harness_v1": "true"},
+            False,
+            {"available_evals": None, "require_setup_contract": False, "max_turns": 70},
+        ),
     ],
-    ids=["generic", "not_generic", "generic_with_an_operator"],
+    ids=["generic", "not_generic", "generic_with_an_operator", "flag_as_text"],
 )
 def test_the_build_opens_its_reading_as_it_always_has(
     tmp_path, monkeypatch, metadata, interactive, expected
@@ -1439,6 +1469,25 @@ def test_the_reading_opens_as_the_build_does(tmp_path, model, generic, turns):
     assert spec.thinking is True
     assert "tone_check" in spec.system_prompt
     assert CONTRACT_SERVER in spec.servers
+
+
+def test_the_reading_opens_with_the_builds_words_and_the_jobs_guidance(tmp_path, model):
+    from fi.alk.harness import cli
+    from fi.alk.harness.sources import resolve
+    from fi.alk.harness.understand import opening
+
+    source = _repo(tmp_path)
+    fake = model()
+    raw = _job(metadata={"generic_harness_v1": True})
+
+    _run(tmp_path, raw)
+
+    job = HarnessJob.model_validate(raw)
+    built = opening(resolve("repo", name=source.name, root=source)) + cli._guidance(
+        argparse.Namespace(guidance=job.authoring_guidance())
+    )
+    assert fake.sent[0] == built
+    assert "standalone Dockerfile cannot be built" in fake.sent[0]
 
 
 def test_a_generic_jobs_reading_refuses_what_the_builds_gate_refuses(tmp_path, model):
@@ -1607,6 +1656,11 @@ def test_a_good_time_limit_is_read(monkeypatch):
     # The helper's limit is the reading's own plus its margin, and a timeout repeats if retried.
     assert reading_entry._hard_limit(mode) == 120.0 + 180.0
     assert mode.timed_out_retryable is False
+    # The contract's codes, as the platform reads them.
+    assert (mode.timed_out_code, mode.crashed_code) == (
+        "agent_reading_timed_out",
+        "agent_reading_crashed",
+    )
 
 
 def test_a_fault_after_a_saved_contract_still_leaves_the_document(tmp_path, model, caplog):
@@ -1623,10 +1677,15 @@ def test_a_fault_after_a_saved_contract_still_leaves_the_document(tmp_path, mode
     assert _names(output) == {"contract.json", "agent.json", "cost.json"}
     assert fake.sent == []
     _assert_cost(output, 0.0, False)
-    # The fault is named by its class only: its text may carry what the customer's code said.
-    logged = [record.getMessage() for record in caplog.records if record.name == agent_reading.__name__]
-    assert any("FileNotFoundError" in line for line in logged)
-    assert not any("was not found" in line for line in logged)
+    # The line names the class; the trace, masked like every line here, keeps the rest.
+    [logged] = [
+        record
+        for record in caplog.records
+        if record.name == agent_reading.__name__ and "saved contract" in record.getMessage()
+    ]
+    assert "FileNotFoundError" in logged.getMessage()
+    assert "was not found" not in logged.getMessage()
+    assert "FileNotFoundError: the Claude CLI was not found" in logged.exc_text
 
 
 def test_a_session_that_cannot_open_is_a_crash(tmp_path, model):

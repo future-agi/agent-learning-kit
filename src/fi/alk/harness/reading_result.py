@@ -49,7 +49,7 @@ _CALL_LIMIT = re.compile(r"Max number of llm calls limit of `\d+` exceeded")
 _PASSING_STATUSES = frozenset({408, 409, 429})
 
 
-def _saved(output: Path) -> str:
+def saved_file(output: Path) -> str:
     if (output / FAILURE_FILE).is_file():
         return FAILURE_FILE
     if (output / CONTRACT_FILE).is_file():
@@ -57,7 +57,7 @@ def _saved(output: Path) -> str:
     return ""
 
 
-def _out_of_turns(done: StageDone) -> bool:
+def out_of_turns(done: StageDone) -> bool:
     # ADK enforces its call budget by raising, which the Gemini backend reports as a failure with
     # no status, so ADK's own words are the signal. Matched whole, since the phrase inside other
     # text may be the model's own. The count is no signal: it catches no real limit, and it would
@@ -78,7 +78,7 @@ def _refusing(status: Any) -> bool:
     )
 
 
-def _model_error(output: Path, message: str, status: Any = None, *, retryable: bool) -> int:
+def model_error(output: Path, message: str, status: Any = None, *, retryable: bool) -> int:
     write_reading_failure(
         reading_failure(
             FailureDomain.INFRASTRUCTURE,
@@ -93,23 +93,23 @@ def _model_error(output: Path, message: str, status: Any = None, *, retryable: b
     return EXIT_RETRYABLE if retryable else EXIT_REFUSED
 
 
-def _classify(
+def classify(
     job: HarnessJob,
     source: Path,
     output: Path,
     stage: _ReadingStage,
     error: BaseException | None,
 ) -> int:
-    saved = _saved(output)
+    saved = saved_file(output)
     if saved == FAILURE_FILE:
         return EXIT_REFUSED
     # Before any error: the gate accepted the reading, and refusing it now would pay for it twice.
     if saved == CONTRACT_FILE:
-        return _document(job, source, output)
+        return document(job, source, output)
     forbidden = stage.forbidden_models()
     if forbidden:
         # A retry would bill the same model again.
-        return _model_error(
+        return model_error(
             output,
             "The provider billed a model this harness may not spend on ("
             + ", ".join(sorted(forbidden))
@@ -118,12 +118,12 @@ def _classify(
         )
     # A last turn out of turns spent a whole budget, so a retry would likely spend another and
     # stop the same way, whatever failed before it.
-    ran_out = bool(stage.done) and _out_of_turns(stage.done[-1])
+    ran_out = bool(stage.done) and out_of_turns(stage.done[-1])
     failed = [
         done
         for done in stage.done
         if done.api_error_status is not None
-        or (done.is_error and not _out_of_turns(done))
+        or (done.is_error and not out_of_turns(done))
     ]
     if not ran_out and (failed or error is not None):
         status = next(
@@ -134,7 +134,7 @@ def _classify(
         if error is not None:
             said.append(f"{type(error).__name__}: {error}")
         shown = f" (status {status})" if isinstance(status, int) else ""
-        return _model_error(
+        return model_error(
             output,
             f"The model provider failed while the agent was being read{shown}: "
             + ("; ".join(said) or "no detail was given."),
@@ -182,7 +182,7 @@ def _write_whole(path: Path, body: bytes) -> None:
         raise
 
 
-def _document(job: HarnessJob, source: Path, output: Path) -> int:
+def document(job: HarnessJob, source: Path, output: Path) -> int:
     """The agent's description from the saved contract, as a build makes it."""
     # One catch over every step: a saved contract is paid for, so nothing after it is retryable.
     try:

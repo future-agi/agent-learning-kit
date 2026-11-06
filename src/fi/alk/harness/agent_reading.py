@@ -20,6 +20,7 @@ from typing import Any
 from . import session
 from .agent_type_check import EXIT_REFUSED
 from .backends import StageDone
+from .cli import guidance_text
 from .failure_file import FAILURE_FILE
 from .job import FailureDomain, HarnessFailure, HarnessJob, SourceKind
 from .reading_entry import (
@@ -34,11 +35,11 @@ from .reading_entry import (
 )
 from .reading_result import (
     CONTRACT_FILE,
-    _classify,
-    _document,
-    _model_error,
-    _out_of_turns,
-    _saved,
+    classify,
+    document,
+    model_error,
+    out_of_turns,
+    saved_file,
 )
 from .session import Stage, StageIdleTimeout
 from .source_folder import refuse_unusable_folder
@@ -89,14 +90,12 @@ class _ReadingStage(Stage):
         *,
         name: str,
         backend: Any,
-        output: Path,
         running_totals: bool,
     ) -> None:
         # Never replayed after a quiet stream: a replayed turn is paid for again, and a new
         # session would restart Claude's running totals under the baseline the difference is
         # taken from.
         super().__init__(spec, name=name, backend=backend, idle_retries=0)
-        self.output = output
         self.running_totals = running_totals
         self.done: list[StageDone] = []
         self.in_flight = False
@@ -147,21 +146,21 @@ def _source_has_files(source: Path) -> bool:
 
 
 def _reminder_due(stage: _ReadingStage, output: Path, stopping: asyncio.Event) -> bool:
-    if _saved(output) or stopping.is_set():
+    if saved_file(output) or stopping.is_set():
         return False
     opened = stage.done[-1] if stage.done else None
     # An error flag with no status may have passed; one nudge costs less than a whole retry.
     return opened is None or (
-        opened.api_error_status is None and not _out_of_turns(opened)
+        opened.api_error_status is None and not out_of_turns(opened)
     )
 
 
 async def _converse(
-    stage: _ReadingStage, agent_source: Any, output: Path, stopping: asyncio.Event
+    stage: _ReadingStage, message: str, output: Path, stopping: asyncio.Event
 ) -> None:
     # The session lives inside this task, so cancelling the task closes it.
     async with stage:
-        await stage.say(opening(agent_source))
+        await stage.say(message)
         if _reminder_due(stage, output, stopping):
             await stage.say(SUBMIT_REMINDER)
 
@@ -235,11 +234,13 @@ async def _reading(
         opened.spec,
         name=opened.name,
         backend=backend,
-        output=output,
         running_totals=getattr(backend, "name", "") == "claude",
     )
     stopping = asyncio.Event()
-    task = asyncio.create_task(_converse(stage, agent_source, output, stopping))
+    # The build's opening, the job's guidance included: a generic job's runtime advice changes
+    # what the contract records.
+    message = opening(agent_source) + guidance_text(job.authoring_guidance())
+    task = asyncio.create_task(_converse(stage, message, output, stopping))
     finished, _ = await asyncio.wait(
         {task}, timeout=max(0.0, started + soft_limit - time.monotonic())
     )
@@ -247,11 +248,11 @@ async def _reading(
     if not finished:
         await _stop(stage, task, stopping, wait)
         # A request cut off by the stop may be billed without being in the last total.
-        saved = _saved(output)
+        saved = saved_file(output)
         if saved == FAILURE_FILE:
             return EXIT_REFUSED, False
         if saved == CONTRACT_FILE:
-            return _document(job, source, output), False
+            return document(job, source, output), False
         return _timed_out(output, soft_limit), False
 
     error = task.exception()
@@ -260,13 +261,13 @@ async def _reading(
         raise error
     if isinstance(error, StageIdleTimeout):
         # The quiet turn's spend never arrived; what was saved before it still stands.
-        saved = _saved(output)
+        saved = saved_file(output)
         if saved == FAILURE_FILE:
             return EXIT_REFUSED, False
         if saved == CONTRACT_FILE:
-            return _document(job, source, output), False
+            return document(job, source, output), False
         return (
-            _model_error(
+            model_error(
                 output,
                 "The model stopped responding before the agent's description was saved "
                 f"({error}).",
@@ -279,11 +280,11 @@ async def _reading(
         error is None
         and not stage.in_flight
         and not any(
-            done.is_error and done.api_error_status is None and not _out_of_turns(done)
+            done.is_error and done.api_error_status is None and not out_of_turns(done)
             for done in stage.done
         )
     )
-    return _classify(job, source, output, stage, error), complete
+    return classify(job, source, output, stage, error), complete
 
 
 async def _read(job: HarnessJob, source: Path, output: Path, *, interrupt_wait: float) -> int:
@@ -298,10 +299,12 @@ async def _read(job: HarnessJob, source: Path, output: Path, *, interrupt_wait: 
             )
         except Exception as exc:
             # A contract the gate saved is paid for; a crash would have the platform pay again.
-            if _saved(output) != CONTRACT_FILE:
+            if saved_file(output) != CONTRACT_FILE:
                 raise
-            logger.warning("reading fault after a saved contract: class=%s", type(exc).__name__)
-            code, complete = _document(job, Path(source), output), False
+            logger.warning(
+                "reading fault after a saved contract: class=%s", type(exc).__name__, exc_info=True
+            )
+            code, complete = document(job, Path(source), output), False
     finally:
         # The work owns the final cost file, on every way out.
         write_reading_cost(output, complete=complete)

@@ -15,6 +15,7 @@ import os
 import sys
 import time
 import uuid
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -168,11 +169,12 @@ async def _ask_operator(_tool_name: str, payload: dict[str, Any], _context: Any)
 
 
 def _guidance(args: argparse.Namespace) -> str:
-    instructions = [
-        str(item).strip()
-        for item in (getattr(args, "guidance", None) or [])
-        if str(item).strip()
-    ]
+    return guidance_text(getattr(args, "guidance", None) or [])
+
+
+def guidance_text(guidance: Iterable[Any]) -> str:
+    """A job's guidance as every stage that reads it is told it; empty when there is none."""
+    instructions = [str(item).strip() for item in guidance if str(item).strip()]
     if not instructions:
         return ""
     return (
