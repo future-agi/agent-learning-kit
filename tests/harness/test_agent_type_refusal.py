@@ -2216,6 +2216,23 @@ def test_past_the_tokenize_work_python_markers_are_not_read(tmp_path, monkeypatc
     assert browser_tools_found(repo) == ([] if short_of else ["computer-use tool"])
 
 
+_OTHER_IN_CODE = 'SERVER = "@playwright/mcp"\n'
+
+
+@pytest.mark.parametrize("limit", ["LARGEST_TOKENIZED_WORK", "LARGEST_TOKENIZED_TOTAL"])
+def test_the_tokenize_limits_are_shared_by_the_scans_files(tmp_path, monkeypatch, limit):
+    from fi.alk.harness import python_source
+
+    # Each file alone is under the limit, and both together aren't: one budget for the scan.
+    repo = _tree(tmp_path, {"a.py": _IN_CODE, "b.py": _OTHER_IN_CODE})
+    cost = _line_work if limit == "LARGEST_TOKENIZED_WORK" else (lambda text: len(text.encode()))
+    monkeypatch.setattr(
+        python_source, limit, max(cost(_IN_CODE), cost(_OTHER_IN_CODE)) * 3 // 2
+    )
+
+    assert len(browser_tools_found(repo)) == 1
+
+
 @pytest.mark.parametrize("one_line", [True, False])
 def test_one_long_line_of_short_tokens_is_not_read_again_for_each(tmp_path, one_line):
     # On 3.12.3 the tokenizer decodes a token's whole line again for each token: about 4 s for

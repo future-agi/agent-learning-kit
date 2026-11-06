@@ -1559,3 +1559,40 @@ def test_an_include_is_resolved_with_its_lookups_charged(repo, monkeypatch):
     _select_compose(repo, {})
 
     assert {"compose.yaml", "more.yaml"} <= set(resolved)
+
+
+def test_the_parts_a_link_steps_over_are_charged(tmp_path):
+    real = tmp_path.resolve()
+    # Empty, `.` and `..` parts need no lookup, but each is walked, on every resolve.
+    (real / "E").symlink_to("." + "/" * 1000)
+    (real / "D").symlink_to("./" * 500)
+    (real / "U").symlink_to("x/../" * 200)
+
+    assert _charged(real / "E" / "s") > 1000
+    assert _charged(real / "D" / "s") > 500
+    assert _charged(real / "U" / "s") > 400
+
+
+@pytest.mark.parametrize("padded, refused", [(False, False), (True, True)])
+def test_helpers_building_through_padded_links_are_charged(repo, padded, refused):
+    from fi.alk.harness.runtime_selection import RuntimeSelectionError
+
+    folder = repo / "agents" / "a"
+    # A chain of links, each to the next through a thousand empty parts: short as written and
+    # resolved, inside the folder.
+    pad = "/" * 1000 if padded else "/"
+    for n in range(1, 5):
+        (folder / f"L{n}").symlink_to(f".{pad}L{n + 1}")
+    (folder / "L5").symlink_to(f".{pad}.")
+    names = [f"h{n}" for n in range(30)]
+    (folder / "compose.yaml").write_text(
+        "services:\n  agent:\n    build: .\n"
+        f"    depends_on: [{', '.join(names)}]\n"
+        + "".join(f"  {name}:\n    build: L1/{name}\n" for name in names)
+    )
+
+    if refused:
+        with pytest.raises(RuntimeSelectionError, match="^compose_structural_interpolation_limit$"):
+            _select_compose(repo, {})
+    else:
+        _select_compose(repo, {})

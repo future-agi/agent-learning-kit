@@ -264,8 +264,12 @@ def _charged_resolve(path: Path) -> Path:
     Resolving looks up each part on disk, and follows a link to every part of its target, fresh
     on each call; a link can make a short path written in the Compose file cost hundreds of
     lookups. So this resolves as ``os.path.realpath`` does, and charges each lookup as it makes
-    it. Each lookup walks the path up to its part, so a deep part costs more: about 2 us at 100
-    parts and 5 us at 400 on 3.12.3. Linux allows 2,000.
+    it, and each empty, ``.`` or ``..`` part it steps over without one. Each lookup walks the path
+    up to its part, so a deep part costs more: about 2 us at 100 parts and 5 us at 400 on 3.12.3.
+    Linux allows 2,000.
+
+    It answers as ``Path.resolve()`` does on 3.11 and 3.12, which the sandbox runs. On 3.13 and
+    later ``Path.resolve()`` no longer raises on a link loop, and this still does.
     """
     budget = _SELECTION_BUDGET.get()
 
@@ -291,12 +295,16 @@ def _charged_resolve(path: Path) -> Path:
 def _join_resolved(
     path: str, rest: str, seen: dict[str, str | None], charge: Any
 ) -> tuple[str, bool]:
-    # posixpath._joinrealpath on 3.11 and 3.12, not strict, with each lstat charged first.
+    # posixpath._joinrealpath as on 3.11 and 3.12, not strict, with each lstat charged first.
     if os.path.isabs(rest):
         rest = rest[1:]
         path = "/"
     while rest:
         name, _, rest = rest.partition("/")
+        if not name or name in (".", ".."):
+            # Walked without a lookup, but walked: a link's target can hold a thousand of these,
+            # read again on every resolve.
+            charge("")
         if not name or name == ".":
             continue
         if name == "..":
