@@ -159,6 +159,11 @@ _REFUSAL_WORDS = (
 )
 
 
+def is_refusal(name: str) -> bool:
+    """Whether a sub-goal, by its name, holds when the agent did NOT do the thing."""
+    return any(word in name.lower() for word in _REFUSAL_WORDS)
+
+
 def _tests_emptiness(test: "ast.expr") -> bool:
     """Whether this branch fires because a collection is empty rather than because it holds."""
     import ast
@@ -366,7 +371,7 @@ def validate_sub_goal(sub_goal: SubGoal) -> list[str]:
         )
     if (
         sub_goal.check.strip()
-        and any(word in sub_goal.name.lower() for word in _REFUSAL_WORDS)
+        and is_refusal(sub_goal.name)
         and not _detects_obedience(sub_goal.check)
     ):
         problems.append(
