@@ -6,6 +6,7 @@ stage, the contract server and the browser-agent gate all run; only the provider
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import logging
@@ -28,14 +29,13 @@ from fi.alk.harness import (
     spend,
 )
 from fi.alk.harness.backends import StageDone
-from fi.alk.harness.builder import BUILDER_TURNS
 from fi.alk.harness.config import chosen_model
 from fi.alk.harness.contract import AgentContract
 from fi.alk.harness.framework_detection import detect_framework
 from fi.alk.harness.job import HarnessJob, SourceKind
 from fi.alk.harness.reading_entry import READING_JOB_INVALID, run_reading_mode
-from fi.alk.harness.tools import CONTRACT_SERVER
-from fi.alk.harness.understand import SUBMIT_REMINDER
+from fi.alk.harness.tools import CONTRACT_SERVER, _checked_contract
+from fi.alk.harness.understand import SUBMIT_REMINDER, reading_settings
 from fi.alk.providers.agent import build_authored_agent
 
 EXAMPLES = Path(__file__).resolve().parents[2] / "examples" / "frameworks"
@@ -279,6 +279,17 @@ def _short_idle(monkeypatch, seconds: float = 0.2) -> None:
     def opened(*args, **kwargs):
         stage, destination = real(*args, **kwargs)
         stage.spec.idle_timeout_seconds = seconds
+        return stage, destination
+
+    monkeypatch.setattr(agent_reading, "open_stage", opened)
+
+
+def _few_turns(monkeypatch, turns: int) -> None:
+    real = agent_reading.open_stage
+
+    def opened(*args, **kwargs):
+        stage, destination = real(*args, **kwargs)
+        stage.spec.max_turns = turns
         return stage, destination
 
     monkeypatch.setattr(agent_reading, "open_stage", opened)
@@ -779,7 +790,7 @@ def test_a_gemini_call_limit_is_incomplete_with_no_reminder(tmp_path, model, mon
     sent, calls = _real_gemini(
         monkeypatch, lambda who, calls: _gemini_calls("Glob", {"pattern": "*.py"}, len(calls))
     )
-    monkeypatch.setattr(agent_reading, "BUILDER_TURNS", 3)
+    _few_turns(monkeypatch, 3)
     _repo(tmp_path)
     output = tmp_path / "reading"
 
@@ -814,7 +825,7 @@ def test_a_gemini_call_limit_after_a_malformed_worker_reply_gets_no_reminder(
         return _gemini_calls("Glob", {"pattern": "*.py"}, len(calls))
 
     sent, calls = _real_gemini(monkeypatch, reply)
-    monkeypatch.setattr(agent_reading, "BUILDER_TURNS", 6)
+    _few_turns(monkeypatch, 6)
     _repo(tmp_path)
     output = tmp_path / "reading"
 
@@ -844,7 +855,7 @@ def test_an_earlier_failed_turn_is_still_a_model_error(tmp_path, model):
 def test_a_cut_on_the_last_allowed_call_is_not_a_turn_limit(tmp_path, model):
     _repo(tmp_path)
     fake = model(
-        _ends(outcome="failed", is_error=True, turns=BUILDER_TURNS, errors=["connection reset"]),
+        _ends(outcome="failed", is_error=True, turns=70, errors=["connection reset"]),
         _ends(),
         name="vertex-gemini",
     )
@@ -1360,18 +1371,92 @@ def test_a_forbidden_model_is_not_retried(tmp_path, model):
 _EVALS = [{"name": "tone_check", "description": "Checks the tone.", "modality": "chat"}]
 
 
-def test_the_reading_uses_the_builders_settings(tmp_path, model):
+class _Opened(Exception):
+    pass
+
+
+@pytest.mark.parametrize(
+    ("metadata", "interactive", "expected"),
+    [
+        (
+            {"generic_harness_v1": True, "available_evals": _EVALS},
+            False,
+            {"available_evals": _EVALS, "require_setup_contract": True, "max_turns": 140},
+        ),
+        (
+            {"available_evals": _EVALS},
+            False,
+            {"available_evals": _EVALS, "require_setup_contract": False, "max_turns": 70},
+        ),
+        (
+            {"generic_harness_v1": True},
+            True,
+            {"available_evals": None, "require_setup_contract": False, "max_turns": 70},
+        ),
+    ],
+    ids=["generic", "not_generic", "generic_with_an_operator"],
+)
+def test_the_build_opens_its_reading_as_it_always_has(
+    tmp_path, monkeypatch, metadata, interactive, expected
+):
+    from fi.alk.harness import cli
+
+    job = HarnessJob.model_validate(_job(metadata=metadata))
+    assert reading_settings(job, interactive=interactive) == expected
+    seen: dict = {}
+
+    def opened(_source, **kwargs):
+        seen.update(kwargs)
+        raise _Opened
+
+    monkeypatch.setattr(cli, "open_stage", opened)
+    args = argparse.Namespace(
+        job=job,
+        kind="repo",
+        name="agent",
+        path=str(_repo(tmp_path)),
+        out=str(tmp_path / "out"),
+        interactive=interactive,
+    )
+
+    with pytest.raises(_Opened):
+        asyncio.run(cli._understand(args))
+
+    assert {key: seen[key] for key in expected} == expected
+
+
+@pytest.mark.parametrize(("generic", "turns"), [(False, 70), (True, 140)])
+def test_the_reading_opens_as_the_build_does(tmp_path, model, generic, turns):
     _repo(tmp_path)
     fake = model()
+    metadata = {"available_evals": _EVALS, **({"generic_harness_v1": True} if generic else {})}
 
-    _run(tmp_path, _job(metadata={"available_evals": _EVALS}))
+    _run(tmp_path, _job(metadata=metadata))
 
     [spec] = fake.created
-    assert spec.max_turns == BUILDER_TURNS == 200
+    assert spec.max_turns == turns
     assert spec.model == chosen_model()
-    assert spec.thinking is False
+    assert spec.thinking is True
     assert "tone_check" in spec.system_prompt
     assert CONTRACT_SERVER in spec.servers
+
+
+def test_a_generic_jobs_reading_refuses_what_the_builds_gate_refuses(tmp_path, model):
+    # The build's gate for a generic job: a chat agent must declare where it keeps its state.
+    refused = _checked_contract(
+        dict(CHAT), source_root=None, require_setup_contract=True, subfolder=None
+    )
+    assert isinstance(refused, dict)
+    assert "data_store" in refused["content"][0]["text"]
+    _repo(tmp_path)
+    fake = model(_submits(CHAT))
+    output = tmp_path / "reading"
+
+    assert _run(tmp_path, _job(metadata={"generic_harness_v1": True})) == 78
+
+    assert fake.submissions == 3
+    assert not (output / "contract.json").exists()
+    assert _failure_in(output)["code"] == "agent_reading_incomplete"
 
 
 def test_the_claude_backend_accepts_the_reading_spec(tmp_path, model, monkeypatch):
@@ -1386,8 +1471,8 @@ def test_the_claude_backend_accepts_the_reading_spec(tmp_path, model, monkeypatc
 
     options = ClaudeBackend().create(spec)._options
     try:
-        assert options.max_turns == 200
-        assert getattr(options, "thinking", None) is None
+        assert options.max_turns == 70
+        assert getattr(options, "thinking", None) is not None
         assert any(name.endswith("submit_contract") for name in options.allowed_tools)
     finally:
         prompt = options.system_prompt

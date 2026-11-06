@@ -39,7 +39,7 @@ from .scenarios import opening as scenario_opening
 from .session import TEXT, Event
 from .sessions import Session, new_id, save as save_session
 from .sources import resolve, supported
-from .understand import SUBMIT_REMINDER, load, open_stage, opening
+from .understand import SUBMIT_REMINDER, load, open_stage, opening, reading_settings
 from .world.snapshot import saved as world_saved
 
 
@@ -287,23 +287,13 @@ async def _understand(args: argparse.Namespace) -> int:
         )
     else:
         source = resolve(args.kind, name=args.name, root=args.path, subfolder=subfolder)
-    offered = (
-        (getattr(job, "metadata", None) or {}).get("available_evals") if job else None
-    )
-    generic = bool(
-        job is not None
-        and isinstance(getattr(job, "metadata", None), dict)
-        and job.metadata.get("generic_harness_v1") is True
-    )
     stage, destination = open_stage(
         source,
         out=Path(args.out) if args.out else None,
         # Unattended, there is nobody to answer, so the model records what it could not
         # resolve in open_questions rather than blocking on a prompt nobody will see.
         ask=permission_gate(_ask_operator) if args.interactive else None,
-        available_evals=offered if isinstance(offered, list) else None,
-        require_setup_contract=generic and not args.interactive,
-        max_turns=140 if generic and not args.interactive else 70,
+        **reading_settings(job, interactive=args.interactive),
     )
 
     print(f"agent: {source.name}  ({source.kind})")

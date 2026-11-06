@@ -20,8 +20,6 @@ from typing import Any
 from . import session
 from .agent_type_check import EXIT_REFUSED
 from .backends import StageDone
-from .builder import BUILDER_TURNS
-from .config import chosen_model
 from .failure_file import FAILURE_FILE
 from .job import FailureDomain, HarnessFailure, HarnessJob, SourceKind
 from .reading_entry import (
@@ -45,7 +43,7 @@ from .reading_result import (
 from .session import Stage, StageIdleTimeout
 from .source_folder import refuse_unusable_folder
 from .sources import resolve as resolve_source
-from .understand import SUBMIT_REMINDER, open_stage, opening
+from .understand import SUBMIT_REMINDER, open_stage, opening, reading_settings
 
 logger = logging.getLogger(__name__)
 logger.addFilter(MaskSecrets())
@@ -230,15 +228,11 @@ async def _reading(
         root=source,
         subfolder=job.source.subfolder,
     )
-    offered = job.metadata.get("available_evals")
-    opened, _ = open_stage(
-        agent_source,
-        out=output,
-        available_evals=offered if isinstance(offered, list) else None,
-    )
-    # The build's settings, not the stage's own: the reading is meant to seed a build later.
+    # Opened as the build opens its own reading, turns, thinking and setup rule included, so a
+    # contract saved here is one the build's gate would have kept.
+    opened, _ = open_stage(agent_source, out=output, **reading_settings(job))
     stage = _ReadingStage(
-        replace(opened.spec, max_turns=BUILDER_TURNS, model=chosen_model(), thinking=False),
+        opened.spec,
         name=opened.name,
         backend=backend,
         output=output,
