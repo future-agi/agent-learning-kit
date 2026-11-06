@@ -1370,3 +1370,192 @@ def test_the_prompt_reads_at_most_4_mib_of_files_in_all(tmp_path, repo, files, r
     assert bool(result.get("is_error")) is refused, result
     if refused:
         assert "more than 4 MiB" in result["content"][0]["text"]
+
+
+def test_a_prompt_file_named_again_is_not_read_again(tmp_path, repo):
+    # Read again for each entry, these five would come to more than 4 MiB.
+    (repo / "agents" / "a" / "p.txt").write_text("Be brief.\n" + "#" * 1_000_000)
+
+    result = accept_contract(
+        payload(
+            runtime={"language": "python"},
+            system_prompt_from=[{"path": "agents/a/p.txt", "start_line": 1, "end_line": 1}] * 5,
+        ),
+        tmp_path / "out",
+        source_root=repo,
+        subfolder="agents/a",
+    )
+
+    assert not result.get("is_error"), result
+
+
+def test_a_prompt_file_past_the_limit_is_read_once(tmp_path, repo, monkeypatch):
+    large = repo / "agents" / "a" / "p.txt"
+    large.write_text("Be brief.\n" + "#" * (1024 * 1024))
+    opened: list[Path] = []
+    real = Path.open
+    monkeypatch.setattr(
+        Path, "open", lambda path, *args, **kwargs: opened.append(path) or real(path, *args, **kwargs)
+    )
+
+    result = accept_contract(
+        payload(
+            runtime={"language": "python"},
+            system_prompt_from=[{"path": "agents/a/p.txt", "start_line": 1, "end_line": 1}] * 5,
+        ),
+        tmp_path / "out",
+        source_root=repo,
+        subfolder="agents/a",
+    )
+
+    assert result.get("is_error"), result
+    assert result["content"][0]["text"].count("larger than 1 MiB") == 5
+    assert opened.count(large.resolve()) == 1
+
+
+def _charged(path: Path) -> int:
+    from fi.alk.harness import runtime_selection
+
+    budget = [10**9]
+    token = runtime_selection._SELECTION_BUDGET.set(budget)
+    try:
+        resolved = runtime_selection._charged_resolve(path)
+    finally:
+        runtime_selection._SELECTION_BUDGET.reset(token)
+    assert resolved == path.resolve()
+    return 10**9 - budget[0]
+
+
+def test_each_lookup_is_charged_more_the_deeper_it_is(tmp_path):
+    real = tmp_path.resolve()
+    shallow, deep = real / "x", real.joinpath(*["x"] * 600)
+
+    # A lookup for each part, and the stat that names a link loop; past 256 parts, two each.
+    def cost(path: Path) -> int:
+        prefixes = ["/".join(path.parts[: n + 1])[1:] for n in range(1, len(path.parts))]
+        return sum(1 + prefix.count("/") // 256 for prefix in prefixes) + 1 + str(path).count("/") // 256
+
+    assert _charged(shallow) == cost(shallow)
+    assert _charged(deep) == cost(deep)
+    assert _charged(deep) > len(deep.parts) + 300
+
+
+def test_a_link_is_charged_for_the_parts_it_leads_to(tmp_path):
+    real = tmp_path.resolve()
+    deep = real.joinpath(*["d"] * 300)
+    deep.mkdir(parents=True)
+    (real / "L").symlink_to(deep)
+    # Down and back up again: as short resolved as written, but each part of the way is looked
+    # up. A link's target is at most 1,024 bytes on macOS.
+    (real / "C").symlink_to("d/" * 150 + "../" * 150)
+
+    assert _charged(real / "L" / "s") > 300
+    assert _charged(real / "C" / "s") > 150
+    assert _charged(real / "x" / "s") < len(real.parts) + 4
+
+
+def test_a_link_loop_is_refused_as_resolve_refuses_it(tmp_path):
+    from fi.alk.harness import runtime_selection
+
+    (tmp_path / "one").symlink_to("two")
+    (tmp_path / "two").symlink_to("one")
+
+    with pytest.raises(RuntimeError, match="Symlink loop"):
+        (tmp_path / "one" / "x").resolve()
+    with pytest.raises(RuntimeError, match="Symlink loop"):
+        runtime_selection._charged_resolve(tmp_path / "one" / "x")
+
+
+@pytest.mark.parametrize("linked, refused", [(False, False), (True, True)])
+def test_helpers_building_through_a_link_to_a_deep_folder_are_charged(repo, linked, refused):
+    from fi.alk.harness.runtime_selection import RuntimeSelectionError
+
+    folder = repo / "agents" / "a"
+    deep = folder.joinpath("d", *["x"] * 400)
+    deep.mkdir(parents=True)
+    if linked:
+        (folder / "L").symlink_to(deep)
+    else:
+        (folder / "L").mkdir()
+    names = [f"h{n}" for n in range(300)]
+    (folder / "compose.yaml").write_text(
+        "services:\n  agent:\n    build: .\n"
+        f"    depends_on: [{', '.join(names)}]\n"
+        + "".join(f"  {name}:\n    build: L/{name}\n" for name in names)
+    )
+
+    if refused:
+        with pytest.raises(RuntimeSelectionError, match="^compose_structural_interpolation_limit$"):
+            _select_compose(repo, {})
+    else:
+        _select_compose(repo, {})
+
+
+def test_a_shared_context_with_a_siblings_dockerfile_is_checked_apart(repo):
+    from fi.alk.harness.runtime_selection import COMPOSE_SERVICE_OUTSIDE_FOLDER, RuntimeSelectionError
+
+    (repo / "agents" / "a" / "Dockerfile").write_text("FROM python\n")
+    (repo / "agents" / "b" / "Dockerfile").write_text("FROM python\n")
+    # `inner` is checked first; the same context with another Dockerfile is a new check.
+    (repo / "agents" / "a" / "compose.yaml").write_text(
+        "services:\n"
+        "  agent:\n    build: {context: ., dockerfile: ../b/Dockerfile}\n    depends_on: [inner]\n"
+        "  inner:\n    build: {context: ., dockerfile: Dockerfile}\n"
+    )
+
+    with pytest.raises(RuntimeSelectionError, match=f"^{COMPOSE_SERVICE_OUTSIDE_FOLDER}: agent$"):
+        _select_compose(repo, {})
+
+
+def test_with_a_control_service_a_helper_behind_a_profile_is_checked(repo):
+    from fi.alk.harness.runtime_selection import COMPOSE_SERVICE_OUTSIDE_FOLDER, RuntimeSelectionError
+
+    (repo / "agents" / "b" / "Dockerfile").write_text("FROM python\n")
+    # The control service depends on it, so it runs whatever its profile.
+    (repo / "agents" / "a" / "compose.yaml").write_text(
+        "services:\n  agent:\n    build: .\n    depends_on: [helper]\n"
+        "  helper:\n    build: ../b\n    profiles: [debug]\n"
+    )
+
+    with pytest.raises(RuntimeSelectionError, match=f"^{COMPOSE_SERVICE_OUTSIDE_FOLDER}: helper$"):
+        _select_compose(repo, {})
+
+
+@pytest.mark.parametrize("asked, refused", [("debug", True), ("*", True), ("other,debug", True), ("other", False)])
+def test_with_no_control_service_a_profile_asked_for_is_checked(repo, asked, refused):
+    from fi.alk.harness.runtime_selection import COMPOSE_SERVICE_OUTSIDE_FOLDER, RuntimeSelectionError, select_runtime
+
+    (repo / "agents" / "b" / "Dockerfile").write_text("FROM python\n")
+    (repo / "agents" / "a" / "compose.yaml").write_text(
+        "services:\n  agent:\n    build: .\n  helper:\n    build: ../b\n    profiles: [debug]\n"
+    )
+    runtime = {
+        "language": "python",
+        "execution": "auto",
+        "source_subfolder": "agents/a",
+        "workdir": "agents/a",
+    }
+    environment = {"COMPOSE_PROFILES": asked}
+    if refused:
+        with pytest.raises(RuntimeSelectionError, match=f"^{COMPOSE_SERVICE_OUTSIDE_FOLDER}: helper$"):
+            select_runtime(repo, runtime, public_environment=environment, validate_environment_dependencies=False)
+    else:
+        select_runtime(repo, runtime, public_environment=environment, validate_environment_dependencies=False)
+
+
+def test_an_include_is_resolved_with_its_lookups_charged(repo, monkeypatch):
+    from fi.alk.harness import runtime_selection
+
+    (repo / "agents" / "a" / "more.yaml").write_text("services:\n  helper:\n    image: redis\n")
+    (repo / "agents" / "a" / "compose.yaml").write_text(
+        "include: [more.yaml]\nservices:\n  agent:\n    build: .\n    depends_on: [helper]\n"
+    )
+    resolved: list[str] = []
+    real = runtime_selection._charged_resolve
+    monkeypatch.setattr(
+        runtime_selection, "_charged_resolve", lambda path: resolved.append(path.name) or real(path)
+    )
+
+    _select_compose(repo, {})
+
+    assert {"compose.yaml", "more.yaml"} <= set(resolved)

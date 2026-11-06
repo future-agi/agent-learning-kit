@@ -300,21 +300,17 @@ def _copy_prompt(contract: AgentContract, source_root: Path) -> list[str]:
     parts: list[str] = []
     problems: list[str] = []
     lines_of: dict[Path, list[str]] = {}
+    # A file past the limit is read once too, and what was read of it counts.
+    too_large: set[Path] = set()
     read = copied = 0
     for index, where in enumerate(contract.system_prompt_from):
         path = (root / where.path).resolve()
         if not is_within(path, root) or not path.is_file():
             problems.append(f"system_prompt_from[{index}]: {where.path} is not a file in the source")
             continue
-        if path not in lines_of:
+        if path not in lines_of and path not in too_large:
             with path.open("rb") as handle:
                 raw = handle.read(_LARGEST_PROMPT_FILE + 1)
-            if len(raw) > _LARGEST_PROMPT_FILE:
-                problems.append(
-                    f"system_prompt_from[{index}]: {where.path} is larger than 1 MiB; name the "
-                    "file the prompt is written in"
-                )
-                continue
             read += len(raw)
             if read > _LARGEST_PROMPT_READ:
                 problems.append(
@@ -322,7 +318,16 @@ def _copy_prompt(contract: AgentContract, source_root: Path) -> list[str]:
                     "4 MiB; name only the files the prompt is written in"
                 )
                 break
-            lines_of[path] = raw.decode("utf-8", errors="replace").splitlines()
+            if len(raw) > _LARGEST_PROMPT_FILE:
+                too_large.add(path)
+            else:
+                lines_of[path] = raw.decode("utf-8", errors="replace").splitlines()
+        if path in too_large:
+            problems.append(
+                f"system_prompt_from[{index}]: {where.path} is larger than 1 MiB; name the "
+                "file the prompt is written in"
+            )
+            continue
         lines = lines_of[path]
         if not 1 <= where.start_line <= where.end_line <= len(lines):
             problems.append(

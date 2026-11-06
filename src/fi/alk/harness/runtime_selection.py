@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import errno
 import re
 import os
+import stat
 from contextvars import ContextVar
 from dataclasses import dataclass
 from graphlib import CycleError, TopologicalSorter
@@ -166,10 +168,17 @@ def _select_runtime(
         folder = (root / runtime.source_subfolder).resolve()
         # Services that share a build (a YAML alias costs nothing to repeat) are checked once.
         checked: dict[tuple[Path, str, str], bool] = {}
+        asked = set(filter(None, (public_environment or {}).get("COMPOSE_PROFILES", "").split(",")))
         for name, service in services.items():
             # With no control service the whole file runs, but `docker compose up` starts a
-            # service behind a profile only when that profile is asked for, which no one does.
-            if not control and service.get("profiles"):
+            # service behind a profile only when COMPOSE_PROFILES asks for one of its profiles.
+            profiles = service.get("profiles")
+            if (
+                not control
+                and profiles
+                and "*" not in asked
+                and not (isinstance(profiles, list) and asked & {str(value) for value in profiles})
+            ):
                 continue
             if _builds_outside_folder(
                 service,
@@ -240,22 +249,86 @@ def _builds_outside_folder(
 
 
 def _resolved(base: Path, value: str) -> Path:
-    """``base / value`` resolved, each of its parts charged to the selection's budget.
+    """``base / value`` resolved, each lookup on disk charged to the selection's budget.
 
-    Resolving costs a lookup on disk for each part, in one call, so a long path or many of
-    them could hold the save for seconds; a path past the system's limit can't be opened anyway.
+    A path past the system's limit can't be opened anyway, so it's refused.
     """
     if len(value) > _LONGEST_PATH:
         raise RuntimeSelectionError("compose_source_path_invalid")
+    return _charged_resolve(base / value)
+
+
+def _charged_resolve(path: Path) -> Path:
+    """``path.resolve()``, each lookup on disk charged to the selection's budget.
+
+    Resolving looks up each part on disk, and follows a link to every part of its target, fresh
+    on each call; a link can make a short path written in the Compose file cost hundreds of
+    lookups. So this resolves as ``os.path.realpath`` does, and charges each lookup as it makes
+    it. Each lookup walks the path up to its part, so a deep part costs more: about 2 us at 100
+    parts and 5 us at 400 on 3.12.3. Linux allows 2,000.
+    """
     budget = _SELECTION_BUDGET.get()
-    if budget is not None:
-        parts = len(base.parts) + value.count("/") + 1
-        # Each lookup walks the path up to its part, so a deep path costs more a part: about
-        # 2 us at 100 parts and 5 us at 400 on 3.12.3. Linux allows 2,000.
-        budget[0] -= parts * (1 + parts // 256)
+
+    def charge(looked_up: str) -> None:
+        if budget is None:
+            return
+        budget[0] -= 1 + looked_up.count("/") // 256
         if budget[0] < 0:
             raise RuntimeSelectionError("compose_structural_interpolation_limit")
-    return (base / value).resolve()
+
+    resolved, _ = _join_resolved("", os.fspath(path), {}, charge)
+    resolved = os.path.abspath(resolved)
+    # As Path.resolve does: realpath leaves a link loop in place, and the stat names it.
+    charge(resolved)
+    try:
+        os.stat(resolved)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise RuntimeError(f"Symlink loop from {exc.filename!r}") from exc
+    return Path(resolved)
+
+
+def _join_resolved(
+    path: str, rest: str, seen: dict[str, str | None], charge: Any
+) -> tuple[str, bool]:
+    # posixpath._joinrealpath on 3.11 and 3.12, not strict, with each lstat charged first.
+    if os.path.isabs(rest):
+        rest = rest[1:]
+        path = "/"
+    while rest:
+        name, _, rest = rest.partition("/")
+        if not name or name == ".":
+            continue
+        if name == "..":
+            if path:
+                path, name = os.path.split(path)
+                if name == "..":
+                    path = os.path.join(path, "..", "..")
+            else:
+                path = ".."
+            continue
+        newpath = os.path.join(path, name)
+        charge(newpath)
+        try:
+            is_link = stat.S_ISLNK(os.lstat(newpath).st_mode)
+        except OSError:
+            is_link = False
+        if not is_link:
+            path = newpath
+            continue
+        if newpath in seen:
+            cached = seen[newpath]
+            if cached is not None:
+                path = cached
+                continue
+            # A link loop: what's resolved, and the rest as written.
+            return os.path.join(newpath, rest), False
+        seen[newpath] = None
+        path, ok = _join_resolved(path, os.readlink(newpath), seen, charge)
+        if not ok:
+            return os.path.join(path, rest), False
+        seen[newpath] = path
+    return path, True
 
 
 def _runtime_compose_services(
@@ -659,7 +732,7 @@ def _load_compose(
 
     def load(path):
         nonlocal total_bytes
-        path = path.resolve()
+        path = _charged_resolve(path)
         if not is_within(path, root) or not path.is_file():
             raise RuntimeSelectionError("compose_include_path_invalid")
         if path in active:

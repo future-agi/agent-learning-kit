@@ -2187,6 +2187,55 @@ def test_past_the_tokenize_total_python_markers_are_not_read(
     assert browser_tools_found(repo) == expected
 
 
+def _line_work(text):
+    import io
+    import tokenize
+
+    return sum(len(token.line) for token in tokenize.generate_tokens(io.StringIO(text).readline))
+
+
+def test_each_token_is_charged_the_line_it_is_read_from():
+    from fi.alk.harness.python_source import TokenBudget
+
+    text = _IN_CODE + "x = (1, 2, 3)\n# done\n"
+    work = _line_work(text)
+
+    found = TokenBudget(work=work).tokens(text)
+
+    assert [token.string for token in found][:3] == ["TOOL", "=", '"computer_20241022"']
+    assert TokenBudget(work=work - 1).tokens(text) is None
+
+
+@pytest.mark.parametrize("short_of", [0, 1])
+def test_past_the_tokenize_work_python_markers_are_not_read(tmp_path, monkeypatch, short_of):
+    from fi.alk.harness import python_source
+
+    repo = _tree(tmp_path, {"agent.py": _IN_CODE})
+    monkeypatch.setattr(python_source, "LARGEST_TOKENIZED_WORK", _line_work(_IN_CODE) - short_of)
+
+    assert browser_tools_found(repo) == ([] if short_of else ["computer-use tool"])
+
+
+@pytest.mark.parametrize("one_line", [True, False])
+def test_one_long_line_of_short_tokens_is_not_read_again_for_each(tmp_path, one_line):
+    # On 3.12.3 the tokenizer decodes a token's whole line again for each token: about 4 s for
+    # the long line, though it's under the total. Counted, not timed, so it holds on every Python.
+    from fi.alk.harness.python_source import LARGEST_TOKENIZED_TOTAL, LARGEST_TOKENIZED_WORK
+
+    names = ["\u00e9"] * 20_000
+    text = _IN_CODE + ("x = " + ",".join(names) if one_line else "\n".join(names)) + "\n"
+    assert len(text.encode()) <= LARGEST_TOKENIZED_TOTAL
+    repo = _tree(tmp_path, {"agent.py": text})
+
+    if one_line:
+        assert _line_work(text) > 100 * LARGEST_TOKENIZED_WORK
+        assert browser_tools_found(repo) == []
+    else:
+        # The same names, one a line: read in full.
+        assert _line_work(text) < LARGEST_TOKENIZED_WORK // 10
+        assert browser_tools_found(repo) == ["computer-use tool"]
+
+
 def test_a_comment_past_the_tokenize_total_does_not_refuse_a_browser_reading(tmp_path):
     from fi.alk.harness.python_source import LARGEST_TOKENIZED_TOTAL
     from fi.alk.harness.tools import contract_tools
@@ -2491,6 +2540,90 @@ def test_the_walk_looks_up_each_package_once(tmp_path, monkeypatch):
 
     packages = [path for path in looked if path.name == "__init__.py"]
     assert packages and len(packages) == len(set(packages))
+
+
+def _counted_lookups(monkeypatch) -> list[Path]:
+    from fi.alk.harness import credentials
+
+    looked: list[Path] = []
+    look_up = credentials._file_inside
+
+    def counted(candidate, *args):
+        looked.append(candidate)
+        return look_up(candidate, *args)
+
+    monkeypatch.setattr(credentials, "_file_inside", counted)
+    return looked
+
+
+def test_a_folder_without_a_package_file_is_looked_up_once(tmp_path, monkeypatch):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    # Folders with no __init__.py, a module in each: every import looks for the packages above
+    # its module, so a miss there is kept, or the chain costs the square of its depth again.
+    repo = tmp_path / "repo"
+    (repo / "agents" / "a").mkdir(parents=True)
+    directory = repo
+    for _ in range(20):
+        directory = directory / "p"
+        directory.mkdir()
+        (directory / "m.py").write_text("")
+    (repo / "agents" / "a" / "agent.py").write_text(
+        "".join("import " + ".".join(["p"] * n + ["m"]) + "\n" for n in range(1, 21))
+    )
+    looked = _counted_lookups(monkeypatch)
+
+    assert (directory / "m.py").resolve() in imported_by_agent(repo, "agents/a")
+    packages = [path for path in looked if path.name == "__init__.py"]
+    assert packages and len(packages) == len(set(packages))
+
+
+def test_the_walk_keeps_what_it_finds_but_not_what_it_misses(tmp_path, monkeypatch):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    folder = tmp_path / "repo" / "agents" / "a"
+    folder.mkdir(parents=True)
+    (folder / "util.ts").write_text("export const x = 1;\n")
+    # Kept, a miss would cost memory for each place a script name could be, 20,000 names over.
+    for name in ("one.ts", "two.ts"):
+        (folder / name).write_text("import './util';\nimport 'missing';\n")
+    looked = _counted_lookups(monkeypatch)
+
+    assert (folder / "util.ts").resolve() in imported_by_agent(tmp_path / "repo", "agents/a")
+    assert looked.count(folder / "util.ts") == 1
+    assert looked.count(folder / "missing.ts") == 2
+
+
+@pytest.mark.parametrize("line_end", ["\r", "\r\n", "\n"])
+def test_the_walk_reads_every_kind_of_line_end(tmp_path, line_end):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    folder = tmp_path / "repo" / "agents" / "a"
+    folder.mkdir(parents=True)
+    (folder / "keys.ts").write_text("export const k = 1;\n")
+    # Read with lone CRs left in, the comment would run to the end of the file.
+    (folder / "agent.ts").write_bytes(
+        f'// shared helpers{line_end}import {{ k }} from "./keys";{line_end}'.encode()
+    )
+
+    assert (folder / "keys.ts").resolve() in imported_by_agent(tmp_path / "repo", "agents/a")
+
+
+def test_an_import_name_past_the_path_limit_is_not_looked_up(tmp_path, monkeypatch):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    folder = tmp_path / "repo" / "agents" / "a"
+    folder.mkdir(parents=True)
+    # 4,097 characters each; the last one, 4,096.
+    (folder / "agent.ts").write_text(
+        f"import '{'x' * 4097}';\nimport './{'y' * 4095}';\nimport './{'z' * 4094}';\n"
+    )
+    (folder / "agent.py").write_text(f"import {'w' * 4097}\n")
+    looked = _counted_lookups(monkeypatch)
+
+    imported_by_agent(tmp_path / "repo", "agents/a")
+
+    assert {path.name[0] for path in looked if len(path.name) > 4000} == {"z"}
 
 
 @pytest.mark.parametrize("depth, followed", [(64, True), (65, False)])

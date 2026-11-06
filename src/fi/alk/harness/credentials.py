@@ -146,6 +146,8 @@ _MAX_WALK_IMPORTS = 20_000
 # How many folders below the repository the import walk follows. Honest repositories nest a
 # dozen or so; resolving a path costs a lookup for each of its folders, and Linux allows 2,000.
 _DEEPEST_FOLLOWED = 64
+# Linux's PATH_MAX: an import name longer than this can't name a file.
+_LONGEST_NAME = 4096
 _SCRIPT_SUFFIXES = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
 _SCRIPT_IMPORT = re.compile(
     r"""(?:\bfrom\s*|\bimport\s*(?:\(\s*)?|\brequire\s*\(\s*)["']([^"'\n]+)["']"""
@@ -776,21 +778,28 @@ def imported_by_agent(
         return frozenset()
     python_bases = (folder, folder / "src", root, root / "src")
     deepest = len(root.parts) + _DEEPEST_FOLLOWED
-    # Each candidate is looked up once in the whole walk: resolving one costs a lookup for each
-    # folder in it, and a chain of packages names the same ones from every file.
+    # Each package and each file found is looked up once in the whole walk: resolving one costs a
+    # lookup for each folder in it, and a chain of packages names the same ones from every file.
+    # Other misses aren't kept: a script name tries a few dozen places, which 20,000 names would
+    # fill gigabytes with. A package is looked up only above a file found, so they stay few.
     looked_up: dict[Path, Path | None] = {}
 
     def found_at(candidates: Iterable[Path]) -> Path | None:
         for candidate in candidates:
-            if candidate not in looked_up:
-                looked_up[candidate] = _file_inside(candidate, root, deepest)
-            if (hit := looked_up[candidate]) is not None:
+            if candidate in looked_up:
+                hit = looked_up[candidate]
+            else:
+                hit = _file_inside(candidate, root, deepest)
+                if hit is not None or candidate.name == "__init__.py":
+                    looked_up[candidate] = hit
+            if hit is not None:
                 return hit
         return None
 
     def python_modules(path: Path, level: int, name: str) -> list[Path]:
         module = name.split(".")
-        if len(module) > _DEEPEST_FOLLOWED:
+        # A path past the system's limit can't be opened, so it isn't built.
+        if len(module) > _DEEPEST_FOLLOWED or len(name) > _LONGEST_NAME:
             return []
         for start in (path.parents[level - 1],) if level else python_bases:
             target = start.joinpath(*module)
@@ -806,6 +815,8 @@ def imported_by_agent(
         return []
 
     def script_module(path: Path, name: str) -> Path | None:
+        if len(name) > _LONGEST_NAME:
+            return None
         for start in (path.parent,) if name.startswith(".") else (folder, root):
             target = start / name
             written = [target.with_suffix(suffix) for suffix in (".ts", ".tsx")]

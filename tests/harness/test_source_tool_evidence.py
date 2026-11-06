@@ -901,6 +901,23 @@ def test_the_named_modules_are_tokenized_only_up_to_a_total(tmp_path, monkeypatc
     assert len(tool_evidence_problems(AgentContract.model_validate(payload()), source)) == problems
 
 
+@pytest.mark.parametrize("short_of, problems", [(0, 1), (1, 0)])
+def test_the_named_modules_are_tokenized_only_up_to_the_work(tmp_path, monkeypatch, short_of, problems):
+    import io
+    import tokenize
+
+    from fi.alk.harness import python_source
+
+    # Each token is charged the line it's read from, which 3.12.3 decodes again for each token.
+    work = sum(
+        len(token.line) for token in tokenize.generate_tokens(io.StringIO(_COMMENTED_METHOD).readline)
+    )
+    source = _commented_source(tmp_path, _COMMENTED_METHOD)
+    monkeypatch.setattr(python_source, "LARGEST_TOKENIZED_WORK", work - short_of)
+
+    assert len(tool_evidence_problems(AgentContract.model_validate(payload()), source)) == problems
+
+
 def test_a_module_without_the_line_in_a_comment_is_not_tokenized(tmp_path, monkeypatch):
     import tokenize
 

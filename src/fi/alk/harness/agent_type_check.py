@@ -268,12 +268,8 @@ def _modules_at_top(root: Path) -> set[str]:
         return set()
 
 
-def _python_code(text: str) -> str:
-    return " ".join(
-        token.string
-        for token in tokenize.generate_tokens(io.StringIO(text).readline)
-        if token.type != tokenize.COMMENT
-    )
+def _python_code(tokens: list[tokenize.TokenInfo]) -> str:
+    return " ".join(token.string for token in tokens if token.type != tokenize.COMMENT)
 
 
 def _script_kept(hit: re.Match[str]) -> str:
@@ -293,9 +289,11 @@ def _python_markers(text: str, tokens: TokenBudget) -> set[str]:
         # model's reading stands.
         return set()
     try:
-        return _markers(_python_code(text))
+        found = tokens.tokens(text)
     except (ValueError, SyntaxError, tokenize.TokenError):
         return set()
+    # Past the work, too, the file's markers aren't read.
+    return set() if found is None else _markers(_python_code(found))
 
 
 def _markers(code: str) -> set[str]:
