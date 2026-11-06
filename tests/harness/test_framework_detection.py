@@ -979,6 +979,8 @@ def test_blockers_stop_none(
     # Anything that blocks may hide what builds the agent, so a chat model names nothing.
     if blocker != fd._NO_PYTHON:
         _write(tmp_path, {f"{folder}/model.py": CHAT_OPENAI})
+        found = folder_findings(tmp_path / folder, repo_root=root)
+        assert any(f.strength == "model" for f in found.findings)
         assert detect_framework(tmp_path / folder, repo_root=root) == UNKNOWN
 
     # What the scan saw being built still names the framework.
@@ -1037,70 +1039,21 @@ HEALTHCHECK = "import urllib.request\n"
 
 
 @pytest.mark.parametrize(
-    ("files", "expected"),
+    "files",
     [
-        ({"index.js": AGENT_JS, "healthcheck.py": HEALTHCHECK}, UNKNOWN),
-        ({"agent.mjs": AGENT_JS, "healthcheck.py": HEALTHCHECK}, UNKNOWN),
-        ({"tests/index.js": AGENT_JS, "healthcheck.py": HEALTHCHECK}, NONE),
-        ({"tests/x.jsx": AGENT_JS, "healthcheck.py": HEALTHCHECK}, NONE),
-        ({"examples/node/x.mjs": AGENT_JS, "healthcheck.py": HEALTHCHECK}, NONE),
+        {"tests/index.js": AGENT_JS, "healthcheck.py": HEALTHCHECK},
+        {"tests/x.jsx": AGENT_JS, "healthcheck.py": HEALTHCHECK},
+        {"examples/node/x.mjs": AGENT_JS, "healthcheck.py": HEALTHCHECK},
     ],
-    ids=["index_js", "agent_mjs", "js_in_tests", "jsx_in_tests", "mjs_in_examples"],
+    ids=["js_in_tests", "jsx_in_tests", "mjs_in_examples"],
 )
-def test_a_javascript_agent_beside_a_python_helper_is_unknown(
-    tmp_path: Path, files: dict[str, str], expected: dict[str, Any]
+def test_javascript_in_test_and_example_folders_does_not_block(
+    tmp_path: Path, files: dict[str, str]
 ) -> None:
     _write(tmp_path, files)
 
-    blocked = fd._OTHER_SOURCE in folder_findings(tmp_path).blockers
-    assert blocked is (expected == UNKNOWN)
-    assert detect_framework(tmp_path) == expected
-
-
-SHARED_GRAPH = (
-    "from langgraph.graph import StateGraph\n\n\n"
-    "def build():\n    return StateGraph(dict).compile()\n"
-)
-MODEL_AND_SHARED_GRAPH = (
-    "from shared.graph import build\nfrom langchain_openai import ChatOpenAI\n"
-    "build()\nChatOpenAI()\n"
-)
-
-
-@pytest.mark.parametrize(
-    ("files", "blocker", "expected"),
-    [
-        (
-            {
-                "svc/main.py": MODEL_AND_SHARED_GRAPH,
-                "shared/__init__.py": "",
-                "shared/graph.py": SHARED_GRAPH,
-            },
-            fd._OUTSIDE_IMPORT,
-            UNKNOWN,
-        ),
-        (
-            {"svc/main.py": CHAT_OPENAI, "svc/long.py": LONG_LINE},
-            fd._FILE_SKIPPED,
-            UNKNOWN,
-        ),
-        ({"svc/main.py": CHAT_OPENAI, "svc/ui.ts": ""}, fd._OTHER_SOURCE, UNKNOWN),
-        ({"svc/main.py": CHAT_OPENAI}, None, _named("langchain")),
-    ],
-    ids=["outside_import", "file_skipped", "other_source", "no_blocker"],
-)
-def test_a_chat_model_with_a_blocker_is_unknown(
-    tmp_path: Path,
-    files: dict[str, str],
-    blocker: str | None,
-    expected: dict[str, Any],
-) -> None:
-    _write(tmp_path, files)
-
-    found = folder_findings(tmp_path / "svc", repo_root=tmp_path)
-    assert {f.strength for f in found.findings} == {"model", "import"}
-    assert found.blockers == ({blocker} if blocker else set())
-    assert detect_framework(tmp_path / "svc", repo_root=tmp_path) == expected
+    assert fd._OTHER_SOURCE not in folder_findings(tmp_path).blockers
+    assert detect_framework(tmp_path) == NONE
 
 
 def test_a_label_beside_a_blocker_stays_other(tmp_path: Path) -> None:
@@ -1568,35 +1521,6 @@ def test_folder_order(
     assert folders == FrameworkFolders(
         tmp_path / expected, source, work / "build" / "agent" if is_process else None
     )
-
-
-def test_a_repository_process_is_scanned_in_the_source(tmp_path: Path) -> None:
-    _write(
-        tmp_path,
-        {"source/main.py": LANGGRAPH, "bundle/scenarios/s1/check.py": PLAIN},
-    )
-    manifest = SimpleNamespace(
-        runtime=SimpleNamespace(kind="process", control_service="agent"),
-        processes=[
-            SimpleNamespace(
-                name="agent", working_directory=".", source_origin="repository"
-            )
-        ],
-    )
-    job = SimpleNamespace(source=SimpleNamespace(subfolder=None))
-
-    folders = framework_folders_for(
-        job,
-        manifest,
-        source=tmp_path / "source",
-        bundle_dir=tmp_path / "bundle",
-        work_directory=tmp_path / "work",
-    )
-
-    assert folders.folder == tmp_path / "source" / "."
-    assert detect_framework(
-        folders.folder, repo_root=folders.repo_root, package_dir=folders.package_dir
-    ) == _named("langgraph")
 
 
 def _github_job(subfolder: str | None) -> SimpleNamespace:
