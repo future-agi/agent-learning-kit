@@ -76,7 +76,17 @@ _SIDE_FOLDERS = frozenset(
         "archive",
     }
 )
-_OTHER_SOURCE_SUFFIXES = (".ts", ".tsx", ".ipynb")
+_OTHER_SOURCE_SUFFIXES = (
+    ".ts",
+    ".tsx",
+    ".mts",
+    ".cts",
+    ".js",
+    ".jsx",
+    ".mjs",
+    ".cjs",
+    ".ipynb",
+)
 _OTHER_SOURCE_NAME = "root_agent.yaml"
 
 _VERSION_PATTERN = re.compile(
@@ -911,9 +921,12 @@ def _decide(found: FolderFindings) -> tuple[str, str | None]:
         return "other", next(iter(labels))
     if labels:
         return "unknown", None
+    # A chat model names LangChain only when nothing unseen could be building the agent.
+    if found.blockers:
+        return "unknown", None
     if any(f.strength == "model" for f in found.findings):
         return "langchain", "langchain"
-    if any(f.strength == "import" for f in found.findings) or found.blockers:
+    if any(f.strength == "import" for f in found.findings):
         return "unknown", None
     return "none", None
 
@@ -1004,7 +1017,9 @@ def framework_folders_for(
         elif control_service:
             for process in manifest.processes:
                 if process.name == control_service:
-                    folder = bundle_dir / process.working_directory
+                    # The same base the runtime builds the process from.
+                    base = bundle_dir if process.source_origin == "bundle" else source
+                    folder = base / process.working_directory
                     break
     package_dir = (
         work_directory / "build" / control_service if control_service else None

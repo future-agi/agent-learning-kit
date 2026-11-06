@@ -927,6 +927,12 @@ BLOCKER_CASES: list[tuple[str, dict[str, str], str, str]] = [
     ),
     (fd._OTHER_SOURCE, {"agent/main.py": PLAIN, "agent/ui.ts": ""}, "agent", ""),
     (fd._OTHER_SOURCE, {"agent/main.py": PLAIN, "agent/ui.tsx": ""}, "agent", ""),
+    (fd._OTHER_SOURCE, {"agent/main.py": PLAIN, "agent/x.mts": ""}, "agent", ""),
+    (fd._OTHER_SOURCE, {"agent/main.py": PLAIN, "agent/x.cts": ""}, "agent", ""),
+    (fd._OTHER_SOURCE, {"agent/main.py": PLAIN, "agent/x.js": ""}, "agent", ""),
+    (fd._OTHER_SOURCE, {"agent/main.py": PLAIN, "agent/x.jsx": ""}, "agent", ""),
+    (fd._OTHER_SOURCE, {"agent/main.py": PLAIN, "agent/x.mjs": ""}, "agent", ""),
+    (fd._OTHER_SOURCE, {"agent/main.py": PLAIN, "agent/x.cjs": ""}, "agent", ""),
     (fd._OTHER_SOURCE, {"agent/main.py": PLAIN, "agent/n.ipynb": ""}, "agent", ""),
     (
         fd._OTHER_SOURCE,
@@ -950,6 +956,12 @@ BLOCKER_CASES: list[tuple[str, dict[str, str], str, str]] = [
         "outside_import_from_and_comma",
         "other_source_ts",
         "other_source_tsx",
+        "other_source_mts",
+        "other_source_cts",
+        "other_source_js",
+        "other_source_jsx",
+        "other_source_mjs",
+        "other_source_cjs",
         "other_source_ipynb",
         "other_source_root_agent",
         "no_python",
@@ -964,7 +976,12 @@ def test_blockers_stop_none(
     assert blocker in folder_findings(tmp_path / folder, repo_root=root).blockers
     assert detect_framework(tmp_path / folder, repo_root=root) == UNKNOWN
 
-    # A blocker stops `none` and nothing else.
+    # Anything that blocks may hide what builds the agent, so a chat model names nothing.
+    if blocker != fd._NO_PYTHON:
+        _write(tmp_path, {f"{folder}/model.py": CHAT_OPENAI})
+        assert detect_framework(tmp_path / folder, repo_root=root) == UNKNOWN
+
+    # What the scan saw being built still names the framework.
     _write(tmp_path, {f"{folder}/crew.py": CREW})
     assert detect_framework(tmp_path / folder, repo_root=root) == _named("crewai")
 
@@ -1009,6 +1026,88 @@ def test_blockers_stop_none_no_outside_import_when_folder_is_the_root(
     _write(tmp_path, {"main.py": "import shared\n", "shared.py": PLAIN})
 
     assert detect_framework(tmp_path, repo_root=tmp_path) == NONE
+
+
+AGENT_JS = (
+    "import { Agent, run } from '@openai/agents';\n"
+    "const agent = new Agent({ name: 'x' });\n"
+    "await run(agent, 'hi');\n"
+)
+HEALTHCHECK = "import urllib.request\n"
+
+
+@pytest.mark.parametrize(
+    ("files", "expected"),
+    [
+        ({"index.js": AGENT_JS, "healthcheck.py": HEALTHCHECK}, UNKNOWN),
+        ({"agent.mjs": AGENT_JS, "healthcheck.py": HEALTHCHECK}, UNKNOWN),
+        ({"tests/index.js": AGENT_JS, "healthcheck.py": HEALTHCHECK}, NONE),
+        ({"tests/x.jsx": AGENT_JS, "healthcheck.py": HEALTHCHECK}, NONE),
+        ({"examples/node/x.mjs": AGENT_JS, "healthcheck.py": HEALTHCHECK}, NONE),
+    ],
+    ids=["index_js", "agent_mjs", "js_in_tests", "jsx_in_tests", "mjs_in_examples"],
+)
+def test_a_javascript_agent_beside_a_python_helper_is_unknown(
+    tmp_path: Path, files: dict[str, str], expected: dict[str, Any]
+) -> None:
+    _write(tmp_path, files)
+
+    blocked = fd._OTHER_SOURCE in folder_findings(tmp_path).blockers
+    assert blocked is (expected == UNKNOWN)
+    assert detect_framework(tmp_path) == expected
+
+
+SHARED_GRAPH = (
+    "from langgraph.graph import StateGraph\n\n\n"
+    "def build():\n    return StateGraph(dict).compile()\n"
+)
+MODEL_AND_SHARED_GRAPH = (
+    "from shared.graph import build\nfrom langchain_openai import ChatOpenAI\n"
+    "build()\nChatOpenAI()\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("files", "blocker", "expected"),
+    [
+        (
+            {
+                "svc/main.py": MODEL_AND_SHARED_GRAPH,
+                "shared/__init__.py": "",
+                "shared/graph.py": SHARED_GRAPH,
+            },
+            fd._OUTSIDE_IMPORT,
+            UNKNOWN,
+        ),
+        (
+            {"svc/main.py": CHAT_OPENAI, "svc/long.py": LONG_LINE},
+            fd._FILE_SKIPPED,
+            UNKNOWN,
+        ),
+        ({"svc/main.py": CHAT_OPENAI, "svc/ui.ts": ""}, fd._OTHER_SOURCE, UNKNOWN),
+        ({"svc/main.py": CHAT_OPENAI}, None, _named("langchain")),
+    ],
+    ids=["outside_import", "file_skipped", "other_source", "no_blocker"],
+)
+def test_a_chat_model_with_a_blocker_is_unknown(
+    tmp_path: Path,
+    files: dict[str, str],
+    blocker: str | None,
+    expected: dict[str, Any],
+) -> None:
+    _write(tmp_path, files)
+
+    found = folder_findings(tmp_path / "svc", repo_root=tmp_path)
+    assert {f.strength for f in found.findings} == {"model", "import"}
+    assert found.blockers == ({blocker} if blocker else set())
+    assert detect_framework(tmp_path / "svc", repo_root=tmp_path) == expected
+
+
+def test_a_label_beside_a_blocker_stays_other(tmp_path: Path) -> None:
+    _write(tmp_path, {"main.py": AUTOGEN, "ui.js": ""})
+
+    assert fd._OTHER_SOURCE in folder_findings(tmp_path).blockers
+    assert detect_framework(tmp_path) == _named("other", "autogen")
 
 
 SIDE_WORDS = [
@@ -1350,12 +1449,16 @@ def test_metadata_read_stops_at_64_kib(tmp_path: Path) -> None:
     assert detect_framework(folder, package_dir=package_dir) == _named("crewai")
 
 
-def _process_manifest() -> SimpleNamespace:
+def _process_manifest(source_origin: str = "bundle") -> SimpleNamespace:
     return SimpleNamespace(
         runtime=SimpleNamespace(kind="process", control_service="agent"),
         processes=[
             SimpleNamespace(name="postgres", working_directory=None),
-            SimpleNamespace(name="agent", working_directory="generated/source/agent"),
+            SimpleNamespace(
+                name="agent",
+                working_directory="generated/source/agent",
+                source_origin=source_origin,
+            ),
         ],
     )
 
@@ -1405,6 +1508,12 @@ def _compose_manifest() -> SimpleNamespace:
         (None, None, _process_manifest(), "bundle/generated/source/agent"),
         (None, "{not json", _process_manifest(), "bundle/generated/source/agent"),
         (None, ["a", "list"], _process_manifest(), "bundle/generated/source/agent"),
+        (
+            None,
+            None,
+            _process_manifest("repository"),
+            "source/generated/source/agent",
+        ),
         (None, None, _compose_manifest(), "source"),
     ],
     ids=[
@@ -1419,6 +1528,7 @@ def _compose_manifest() -> SimpleNamespace:
         "missing_contract",
         "corrupt_contract",
         "contract_not_an_object",
+        "repository_origin_process",
         "compose_falls_to_source",
     ],
 )
@@ -1458,6 +1568,35 @@ def test_folder_order(
     assert folders == FrameworkFolders(
         tmp_path / expected, source, work / "build" / "agent" if is_process else None
     )
+
+
+def test_a_repository_process_is_scanned_in_the_source(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        {"source/main.py": LANGGRAPH, "bundle/scenarios/s1/check.py": PLAIN},
+    )
+    manifest = SimpleNamespace(
+        runtime=SimpleNamespace(kind="process", control_service="agent"),
+        processes=[
+            SimpleNamespace(
+                name="agent", working_directory=".", source_origin="repository"
+            )
+        ],
+    )
+    job = SimpleNamespace(source=SimpleNamespace(subfolder=None))
+
+    folders = framework_folders_for(
+        job,
+        manifest,
+        source=tmp_path / "source",
+        bundle_dir=tmp_path / "bundle",
+        work_directory=tmp_path / "work",
+    )
+
+    assert folders.folder == tmp_path / "source" / "."
+    assert detect_framework(
+        folders.folder, repo_root=folders.repo_root, package_dir=folders.package_dir
+    ) == _named("langgraph")
 
 
 def _github_job(subfolder: str | None) -> SimpleNamespace:
