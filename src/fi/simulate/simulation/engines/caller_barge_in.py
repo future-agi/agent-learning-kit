@@ -14,7 +14,7 @@ import numpy as np
 from livekit import rtc
 from livekit.agents import llm as livekit_llm
 
-from fi.simulate.simulation.sub_actors import seeded
+from fi.simulate.simulation.call_actors import seeded
 
 logger = logging.getLogger(__name__)
 

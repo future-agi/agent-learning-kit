@@ -70,8 +70,6 @@ _NEEDS_CONFIRMATION = frozenset(
         "add_rule",
         "drop_rule",
         "add_sub_goal",
-        "add_sub_actor",
-        "drop_sub_actor",
         "add_actor",
         "drop_actor",
     }
@@ -81,8 +79,6 @@ _ASKS_ALONE = frozenset(
     {
         "add_actor",
         "drop_actor",
-        "add_sub_actor",
-        "drop_sub_actor",
         "drop_scenario",
         "drop_scenarios",
         "change_world",
@@ -115,7 +111,6 @@ _PUBLISHED_PARTS = (
     "scenarios",
     "scenarios.json",
     "sub_goals.json",
-    "sub_actors.json",
     "actors.json",
     "contract.json",
     "simulator_prompt.md",
@@ -140,8 +135,6 @@ _WRITING_TOOLS = frozenset(
         "remember",
         "add_actor",
         "drop_actor",
-        "add_sub_actor",
-        "drop_sub_actor",
     }
 )
 
@@ -593,13 +586,13 @@ class HostedChatRuntime:
 
         async def guarded(args: dict[str, Any]) -> Any:
             if self._from_platform:
-                if spec.name == "drop_sub_actor":
+                if spec.name == "drop_actor":
                     return {
                         "content": [
                             {
                                 "type": "text",
                                 "text": "Not done: during the build and its check the environment keeps "
-                                "the sub-actors it lists. Give each a level in aim_for so some scenarios "
+                                "the actors it lists. Give each a level in aim_for so some scenarios "
                                 "include it; removing one is for the person to ask for in the chat.",
                             }
                         ],
@@ -669,7 +662,6 @@ class HostedChatRuntime:
                 "tests",
                 "coverage",
                 "fixture",
-                "sub_actors",
                 "actors",
             ),
             whole_persona=True,
@@ -690,7 +682,6 @@ class HostedChatRuntime:
                 "branch",
                 "sub_goals",
                 "solution",
-                "sub_actors",
                 "actors",
             ),
         )
@@ -1027,8 +1018,11 @@ class HostedChatRuntime:
         if fingerprint == self._published_fingerprint() and not force:
             return {"applied": True, "unchanged": True, "message": "nothing is waiting to be saved"}
         from .bundle_author_v2 import reseal_scenarios
+        from .pre_run import refresh_stale
 
         try:
+            # A pre-run session written from an actor record that has since changed is written again before sealing.
+            await refresh_stale(self.workspace)
             await asyncio.to_thread(reseal_scenarios, self.workspace)
         except Exception as exc:  # noqa: BLE001 - reported to the model, never swallowed
             traceback.print_exc()

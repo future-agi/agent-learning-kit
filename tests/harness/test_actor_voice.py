@@ -1,4 +1,4 @@
-"""Sub-actors on a call: when each enters, the call's budget, and what happens to every line."""
+"""Actors on a call: when each enters, the call's budget, and what happens to every line."""
 
 from __future__ import annotations
 
@@ -9,9 +9,9 @@ import json
 
 import pytest
 
-from fi.simulate.simulation import sub_actors as registry
-from fi.simulate.simulation.engines import sub_actor_voice as voice_engine
-from fi.simulate.simulation.sub_actors import (
+from fi.simulate.simulation import call_actors as registry
+from fi.simulate.simulation.engines import call_actor_voice as voice_engine
+from fi.simulate.simulation.call_actors import (
     Cast,
     Moment,
     due,
@@ -51,7 +51,12 @@ def _actor(key: str, channel: str = "audio_handoff", **trigger) -> dict:
             Moment(3, tools_called=["lookup", "lookup"]),
             True,
         ),
-        ({"kind": "on_tool", "tool": "lookup"}, Moment(4), True),
+        ({"kind": "on_tool", "tool": "lookup"}, Moment(4), False),
+        (
+            {"kind": "on_tool", "tool": "lookup"},
+            Moment(9, tools_called=["other"]),
+            False,
+        ),
         (
             {"kind": "on_keyword", "words": ["refund"]},
             Moment(3, last_text="Your total is ready."),
@@ -60,7 +65,12 @@ def _actor(key: str, channel: str = "audio_handoff", **trigger) -> dict:
         (
             {"kind": "on_keyword", "words": ["refund"]},
             Moment(4, last_text="Your total is ready."),
-            True,
+            False,
+        ),
+        (
+            {"kind": "on_keyword", "words": ["refund"]},
+            Moment(9, last_text="Your total is ready."),
+            False,
         ),
         ({"kind": "probability", "p": 0.0001}, Moment(9), False),
         (
@@ -97,20 +107,34 @@ def _actor(key: str, channel: str = "audio_handoff", **trigger) -> dict:
     ],
 )
 def test_each_trigger_enters_at_its_moment(trigger, moment, expected):
-    assert due(trigger, moment, seed="run", sub_actor_id="one") is expected
+    assert due(trigger, moment, seed="run", actor_id="one") is expected
+
+
+def test_a_tool_or_word_that_never_comes_leaves_the_call_actor_not_triggered():
+    cast = Cast(
+        [
+            _actor("tool", kind="on_tool", tool="lookup"),
+            _actor("word", "audio_mix", kind="on_keyword", words=["refund"]),
+        ],
+        "run",
+    )
+    for turn in range(1, 10):
+        assert cast.entering(Moment(turn, last_text="Your total is ready.")) == []
+    cast.hang_up()
+    assert [one["triggered"] for one in cast.summary()] == [False, False]
 
 
 def test_a_probability_draw_is_fixed_by_the_run_seed():
     draws = {
         seed: due(
-            {"kind": "probability", "p": 0.5}, Moment(1), seed=seed, sub_actor_id="one"
+            {"kind": "probability", "p": 0.5}, Moment(1), seed=seed, actor_id="one"
         )
         for seed in "abcdefgh"
     }
     assert set(draws.values()) == {True, False}
     assert draws == {
         seed: due(
-            {"kind": "probability", "p": 0.5}, Moment(1), seed=seed, sub_actor_id="one"
+            {"kind": "probability", "p": 0.5}, Moment(1), seed=seed, actor_id="one"
         )
         for seed in "abcdefgh"
     }
@@ -166,30 +190,27 @@ def test_the_leveller_scales_each_frame_and_holds_its_peaks_under_the_limit():
     assert peaks[5] == 3750 and peaks[5] <= registry.PEAK_LIMIT * 32767
 
 
-def test_a_third_sub_actor_waits_for_room_and_enters_in_the_scenario_s_order():
+def test_a_third_call_actor_waits_for_room_and_enters_in_the_scenario_s_order():
     cast = Cast([_actor("one"), _actor("two"), _actor("three")], "run")
     assert [one["id"] for one in cast.entering(Moment(2))] == ["one", "two"]
     assert cast.entering(Moment(2)) == []
     cast.finish(cast.actors[0], "done")
     assert [one["id"] for one in cast.entering(Moment(3))] == ["three"]
     assert [
-        event["kind"] for event in cast.events if event["sub_actor"] == "three"
+        event["kind"] for event in cast.events if event["actor"] == "three"
     ] == ["triggered"]
 
 
-def test_limits_and_the_call_wide_budget_hand_the_call_back_to_the_person():
+def test_an_actor_has_no_line_limit_of_its_own_and_the_call_wide_budget_hands_the_call_back_to_the_person():
     cast = Cast([_actor("one"), _actor("two")], "run")
     cast.entering(Moment(2))
-    for turn in range(1, registry.LIMITS["audio_handoff"] + 1):
+    for turn in range(1, 8):
         assert cast.may_speak(cast.actors[0], turn)
         cast.delivered(cast.actors[0], f"line {turn}", turn, 0.0, 0.0)
-    assert not cast.may_speak(cast.actors[0], 9)
-    assert {"kind": "finished", "reason": "limit reached"}.items() <= cast.events[
-        -1
-    ].items()
-    for _ in range(registry.TAKEOVER_AFTER_TURNS):
+    for _ in range(registry.LIMIT_DEFAULTS["caller_takes_back_after_turns"]):
         cast.took_turn()
     assert not cast.may_speak(cast.actors[1], 10)
+    assert {"kind": "finished", "reason": "limit reached"}.items() <= cast.events[-1].items()
 
 
 def test_a_background_voice_never_speaks_on_two_turns_in_a_row(monkeypatch):
@@ -217,7 +238,7 @@ def test_the_summary_tells_triggered_delivered_and_dropped_apart():
     cast.hang_up()
     assert cast.summary() == [
         {
-            "sub_actor": "one",
+            "actor": "one",
             "name": "One",
             "triggered": True,
             "delivered": 1,
@@ -225,7 +246,7 @@ def test_the_summary_tells_triggered_delivered_and_dropped_apart():
             "dropped": [],
         },
         {
-            "sub_actor": "two",
+            "actor": "two",
             "name": "Two",
             "triggered": True,
             "delivered": 0,
@@ -233,7 +254,7 @@ def test_the_summary_tells_triggered_delivered_and_dropped_apart():
             "dropped": ["not ready in time"],
         },
         {
-            "sub_actor": "three",
+            "actor": "three",
             "name": "Three",
             "triggered": False,
             "delivered": 0,
@@ -243,7 +264,7 @@ def test_the_summary_tells_triggered_delivered_and_dropped_apart():
     ]
 
 
-def test_a_sub_actor_s_brief_carries_the_situation_its_part_and_the_conversation_so_far():
+def test_a_call_actor_s_brief_carries_the_situation_its_part_and_the_conversation_so_far():
     brief = line_brief(
         _actor("one"),
         situation="The person wants a refund.",
@@ -281,7 +302,7 @@ def test_a_sub_actor_s_brief_carries_the_situation_its_part_and_the_conversation
     )
 
 
-class _Voice(voice_engine.SubActorVoice):
+class _Voice(voice_engine.CallActorVoice):
     def __init__(self, actor, lines, delay=0.0, tts="voice"):
         super().__init__(actor=actor, model=None, tts=tts, situation="s", language="")
         self.lines = list(lines)
@@ -316,14 +337,14 @@ def _on_call(voices, playing=0.0, **kwargs):
         played.append(volume)
 
     kwargs.setdefault("clock", lambda: 1.0)
-    call = voice_engine.SubActorsOnCall(
+    call = voice_engine.CallActorsOnCall(
         voices, seed="run", play=play, say=say, **kwargs
     )
     return call, said, played
 
 
 @pytest.mark.parametrize("channel", ["audio_handoff", "audio_mix"])
-def test_a_line_that_plays_past_the_sub_actor_time_is_cut_and_frees_the_phone(
+def test_a_line_that_plays_past_the_call_actor_time_is_cut_and_frees_the_phone(
     phone_from_first_turn, channel
 ):
     async def never_done(*_args):
@@ -331,10 +352,11 @@ def test_a_line_that_plays_past_the_sub_actor_time_is_cut_and_frees_the_phone(
 
     async def scenario():
         voice = _Voice(_actor("one", channel), ["a long line"])
-        call = voice_engine.SubActorsOnCall(
+        call = voice_engine.CallActorsOnCall(
             [voice], seed="run", play=never_done, say=never_done, clock=lambda: 1.0
         )
-        call.cast._spent = registry.SUB_ACTOR_SECONDS - 0.05
+        # The first trigger was all but 50 ms of the call's actor time ago.
+        call.cast._started = 1.0 - (registry.LIMIT_DEFAULTS["actor_seconds_per_call"] - 0.05)
         holding = await asyncio.wait_for(call.agent_turn("Which date?"), 1.0)
         await asyncio.wait_for(asyncio.gather(*call._pending.values()), 1.0)
         return holding, call.cast.holder, call.events()
@@ -442,7 +464,7 @@ def test_the_hand_back_marker_ends_the_part_wherever_it_is_and_is_never_spoken(
 
     monkeypatch.setattr(voice_engine, "complete_text", complete)
     monkeypatch.setattr(voice_engine, "voiced", voice)
-    speaker = voice_engine.SubActorVoice(
+    speaker = voice_engine.CallActorVoice(
         actor=_actor("one"), model=None, tts="voice", situation="s", language=""
     )
     line, _frames, finished = asyncio.run(speaker.line([]))
@@ -494,7 +516,7 @@ def test_someone_who_just_took_the_phone_is_never_offered_to_say_nothing(monkeyp
 
     monkeypatch.setattr(voice_engine, "complete_text", complete)
     monkeypatch.setattr(voice_engine, "voiced", voice)
-    speaker = voice_engine.SubActorVoice(
+    speaker = voice_engine.CallActorVoice(
         actor=_actor("one"), model=None, tts="voice", situation="s", language=""
     )
     asyncio.run(speaker.line([]))
@@ -534,7 +556,7 @@ def test_a_line_that_cannot_be_heard_hands_the_phone_back_with_the_reason(
     assert summary[0]["triggered"] and summary[0]["dropped"] == [reason]
 
 
-def test_a_sub_actor_without_a_voice_of_its_own_is_dropped_with_the_reason_never_left_out(
+def test_a_call_actor_without_a_voice_of_its_own_is_dropped_with_the_reason_never_left_out(
     phone_from_first_turn,
 ):
     async def scenario():
@@ -609,7 +631,7 @@ def test_the_person_s_menu_answers_first_or_never_enters_when_the_agent_spoke_fi
     call.menu_cannot_answer("the agent spoke first")
     assert asyncio.run(call.agent_turn("Hello")) is False
     assert call.summary()[0] == {
-        "sub_actor": "menu",
+        "actor": "menu",
         "name": "Menu",
         "triggered": False,
         "delivered": 0,
@@ -626,7 +648,7 @@ def test_delivered_lines_land_in_the_transcript_where_they_were_heard():
     ]
     events = [
         {
-            "sub_actor": "one",
+            "actor": "one",
             "name": "One",
             "kind": "delivered",
             "text": "c",
@@ -634,39 +656,33 @@ def test_delivered_lines_land_in_the_transcript_where_they_were_heard():
             "ended_at": 2.5,
         },
         {
-            "sub_actor": "two",
+            "actor": "two",
             "name": "Two",
             "kind": "dropped",
             "reason": "voice failed",
         },
     ]
-    merged = voice_engine.with_sub_actor_turns(messages, events)
+    merged = voice_engine.with_call_actor_turns(messages, events)
     assert [one["content"] for one in merged] == ["a", "c", "b"]
-    assert merged[1]["role"] == "sub_actor" and merged[1]["sub_actor"] == "one"
+    assert merged[1]["role"] == "actor" and merged[1]["actor"] == "one"
 
 
-def test_a_scenario_s_sub_actors_reach_the_call_resolved_in_voices_no_one_else_has(
+def test_a_scenario_s_call_actors_reach_the_call_resolved_in_voices_no_one_else_has(
     tmp_path, monkeypatch, caplog
 ):
-    from fi.alk.harness.call_runner import _voiced_sub_actors
-    from fi.alk.harness.sub_actor import SubActor, SubActorList, save_sub_actors
+    from fi.alk.harness.call_runner import _resolved_call_actors
+    from fi.alk.harness.call_actor import CallActor, CallActorList, save_call_actors
 
-    save_sub_actors(
+    save_call_actors(
         tmp_path,
-        SubActorList(
-            sub_actors=[
-                SubActor(
+        CallActorList(
+            call_actors=[
+                CallActor(
                     id="near",
                     name="Rowan",
                     role="someone with the person",
                     channel="audio_mix",
                     persona={"gender": "female"},
-                ),
-                SubActor(
-                    id="writer",
-                    name="Kai",
-                    role="something on the page",
-                    channel="page_content",
                 ),
             ]
         ),
@@ -674,23 +690,22 @@ def test_a_scenario_s_sub_actors_reach_the_call_resolved_in_voices_no_one_else_h
     doc = {
         "instruction": "You want a refund.\n\nYour details:\n- Name: Sam\n- Verification code: 638204",
         "persona": {"name": "Sam", "gender": "female", "languages": ["English"]},
-        "sub_actors": [
+        "actors": [
             {
                 "id": "near",
                 "instruction": "You want them to hurry.",
                 "trigger": {"kind": "mid_journey", "turn": 2},
             },
-            {"id": "writer", "instruction": "x"},
             {"id": "gone", "instruction": "x"},
         ],
     }
-    monkeypatch.delenv("HARNESS_SUB_ACTORS", raising=False)
-    assert _voiced_sub_actors(doc, tmp_path, "deepgram", "", "run") == []
-    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
-    voiced = _voiced_sub_actors(doc, tmp_path, "deepgram", "", "run")
-    assert [one["id"] for one in voiced] == ["near"]
-    assert "sub-actor writer does not enter: not a voice channel" in caplog.text
-    assert "sub-actor gone does not enter: not in the environment's list" in caplog.text
+    voiced = _resolved_call_actors(doc, tmp_path, "deepgram", "", "run")
+    # Every included actor stays on the record; one that cannot speak says why.
+    assert [(one["id"], one.get("entered"), one.get("reason")) for one in voiced] == [
+        ("near", None, None),
+        ("gone", False, "not_in_list"),
+    ]
+    assert "actor gone does not enter: not in the environment's list" in caplog.text
     near = voiced[0]
     from fi.alk.harness.simulator_voice import persona_voice
 
@@ -704,14 +719,14 @@ def test_a_scenario_s_sub_actors_reach_the_call_resolved_in_voices_no_one_else_h
     json.dumps(voiced)
 
 
-def _one_sub_actor(tmp_path, trigger):
-    from fi.alk.harness.sub_actor import SubActor, SubActorList, save_sub_actors
+def _one_call_actor(tmp_path, trigger):
+    from fi.alk.harness.call_actor import CallActor, CallActorList, save_call_actors
 
-    save_sub_actors(
+    save_call_actors(
         tmp_path,
-        SubActorList(
-            sub_actors=[
-                SubActor(
+        CallActorList(
+            call_actors=[
+                CallActor(
                     id="near",
                     name="Rowan",
                     role="someone with the person",
@@ -723,18 +738,17 @@ def _one_sub_actor(tmp_path, trigger):
     return {
         "instruction": "Book a table.",
         "persona": {"name": "Sam", "gender": "female"},
-        "sub_actors": [
+        "actors": [
             {"id": "near", "instruction": "You want to leave.", "trigger": trigger}
         ],
     }
 
 
-def test_a_sub_actor_on_a_tool_waits_for_the_name_the_trace_logs_that_tool_under(
+def test_a_call_actor_on_a_tool_waits_for_the_name_the_trace_logs_that_tool_under(
     tmp_path, monkeypatch
 ):
-    from fi.alk.harness.call_runner import _voiced_sub_actors
+    from fi.alk.harness.call_runner import _resolved_call_actors
 
-    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
     (tmp_path / "contract.json").write_text(
         json.dumps(
             {
@@ -744,28 +758,33 @@ def test_a_sub_actor_on_a_tool_waits_for_the_name_the_trace_logs_that_tool_under
             }
         )
     )
-    doc = _one_sub_actor(tmp_path, {"kind": "on_tool", "tool": "check_status"})
-    [near] = _voiced_sub_actors(doc, tmp_path, "deepgram", "", "run")
+    doc = _one_call_actor(tmp_path, {"kind": "on_tool", "tool": "check_status"})
+    [near] = _resolved_call_actors(doc, tmp_path, "deepgram", "", "run")
     assert near["trigger"]["tool"] == "get_status"
     assert registry.due(
         near["trigger"],
         Moment(1, tools_called=["get_status"]),
         seed="run",
-        sub_actor_id="near",
+        actor_id="near",
     )
 
 
 @pytest.mark.parametrize("provider", ["google", "elevenlabs"])
-def test_a_sub_actor_with_no_voice_of_its_own_does_not_enter(
+def test_a_call_actor_with_no_voice_of_its_own_does_not_enter(
     tmp_path, monkeypatch, caplog, provider
 ):
-    from fi.alk.harness.call_runner import _voiced_sub_actors
+    from fi.alk.harness.call_runner import _resolved_call_actors
 
-    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
-    doc = _one_sub_actor(tmp_path, {"kind": "always"})
-    assert _voiced_sub_actors(doc, tmp_path, provider, "", "run") == []
+    doc = _one_call_actor(tmp_path, {"kind": "always"})
+    [near] = _resolved_call_actors(doc, tmp_path, provider, "", "run")
+    assert (near["id"], near["entered"], near["reason"]) == (
+        "near",
+        False,
+        "no_distinct_voice",
+    )
+    assert "voice" not in near
     assert (
-        "sub-actor near does not enter: no voice of its own on this call" in caplog.text
+        "actor near does not enter: no voice of its own on this call" in caplog.text
     )
 
 
@@ -802,7 +821,7 @@ def test_a_failed_line_logs_its_kind_never_the_provider_s_message(caplog):
     assert "sk-live-123" not in caplog.text
 
 
-def test_the_tool_trace_is_read_only_for_a_sub_actor_that_enters_on_a_tool_call():
+def test_the_tool_trace_is_read_only_for_a_call_actor_that_enters_on_a_tool_call():
     reads = []
 
     def tools_called():
@@ -852,7 +871,8 @@ def test_the_menu_s_greeting_is_ready_by_the_time_the_call_is_answered():
     assert waited < 0.1 and len(heard) == 1
 
 
-def test_the_call_s_sub_actor_time_runs_out_and_every_sub_actor_stops_with_the_reason():
+def test_the_call_s_call_actor_time_runs_out_and_every_call_actor_stops_with_the_reason():
+    now = [0.0]
     cast = Cast(
         [
             _actor("one"),
@@ -860,19 +880,24 @@ def test_the_call_s_sub_actor_time_runs_out_and_every_sub_actor_stops_with_the_r
             _actor("three", kind="mid_journey", turn=2),
         ],
         "run",
+        clock=lambda: now[0],
     )
+    # Nothing counts before the first trigger.
+    now[0] = 500.0
+    assert cast.remaining() == registry.LIMIT_DEFAULTS["actor_seconds_per_call"]
     assert len(cast.entering(Moment(2))) == 2
-    assert cast.remaining() == registry.SUB_ACTOR_SECONDS
-    # Only the sub-actors' own lines do: asked for at 500, ready and spoken by 530.
-    cast.delivered(cast.actors[0], "a line", 2, 510.0, 530.0, 500.0)
+    assert cast.remaining() == registry.LIMIT_DEFAULTS["actor_seconds_per_call"]
+    # From the first trigger the wall clock counts, whoever is speaking: one 5 s line in 30 s.
+    cast.delivered(cast.actors[0], "a line", 2, 520.0, 525.0, 515.0)
+    now[0] = 530.0
     assert cast.remaining() == 30.0 and cast.line_limit(45.0) == 30.0
     assert cast.entering(Moment(2)) == []  # the third waits for room
-    cast.delivered(cast.actors[1], "another", 3, 540.0, 560.0, 530.0)
+    now[0] = 560.0
     assert cast.out_of_time()
     assert cast.entering(Moment(3)) == []
     assert not cast.may_speak(cast.actors[0], 3)
     stopped = {
-        (one["sub_actor"], one["kind"], one["reason"])
+        (one["actor"], one["kind"], one["reason"])
         for one in cast.events
         if one["kind"] in ("finished", "dropped")
     }
@@ -914,7 +939,7 @@ def test_a_stalled_line_is_dropped_and_the_person_takes_the_phone_back(
     assert dropped == [["not ready in time"], ["not ready in time"]]
 
 
-def test_lines_cut_off_by_the_call_s_sub_actor_time_say_so():
+def test_lines_cut_off_by_the_call_s_call_actor_time_say_so():
     import time
 
     offset = [0.0]
@@ -925,10 +950,8 @@ def test_lines_cut_off_by_the_call_s_sub_actor_time_say_so():
             [phone], clock=lambda: time.monotonic() + offset[0]
         )
         call.cast.entering(Moment(2))
-        # Earlier lines used all but 50 ms of the call's sub-actor time.
-        call.cast.delivered(
-            call.cast.actors[0], "earlier", 1, 0.0, registry.SUB_ACTOR_SECONDS - 0.05
-        )
+        # The first trigger was all but 50 ms of the call's actor time ago.
+        offset[0] = registry.LIMIT_DEFAULTS["actor_seconds_per_call"] - 0.05
         holding = await call.agent_turn("Hello")
         await call.close()
         return holding, said, call.summary()
@@ -1008,11 +1031,11 @@ def test_someone_who_takes_the_phone_waits_until_the_person_has_spoken():
         "phone"
     ]
     assert {"kind": "triggered", "turn": 2}.items() <= next(
-        one for one in cast.events if one["sub_actor"] == "phone"
+        one for one in cast.events if one["actor"] == "phone"
     ).items()
 
 
-def test_a_sub_actor_is_never_told_it_may_answer_for_the_person():
+def test_a_call_actor_is_never_told_it_may_answer_for_the_person():
     brief = line_brief(
         _actor("phone"),
         situation="Book a table.",
@@ -1054,11 +1077,12 @@ def test_only_the_per_turn_read_is_bounded_and_evidence_reads_are_not(monkeypatc
     assert "statement_timeout=2000" in seen[1]
 
 
-def test_a_line_late_on_its_own_limit_never_ends_the_call_s_sub_actor_time():
-    cast = Cast([_actor("one"), _actor("two")], "run")
+def test_a_line_late_on_its_own_limit_never_ends_the_call_s_call_actor_time():
+    now = [0.0]
+    cast = Cast([_actor("one"), _actor("two")], "run", clock=lambda: now[0])
     cast.entering(Moment(2))
     first = cast.line_limit(registry.HANDOFF_LINE_SECONDS)
-    cast.delivered(cast.actors[1], "a line", 2, 0.0, 50.0, 0.0)
+    now[0] = 50.0
     second = cast.line_limit(registry.HANDOFF_LINE_SECONDS)
     assert first == registry.HANDOFF_LINE_SECONDS and second < first
     cast.late(cast.actors[0], cut_by_call_time=first < registry.HANDOFF_LINE_SECONDS)

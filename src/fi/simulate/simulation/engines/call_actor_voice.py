@@ -1,4 +1,4 @@
-"""Sub-actors on a voice call: a voice near the person, someone who takes the phone from them, or the
+"""Actors on a voice call: a voice near the person, someone who takes the phone from them, or the
 person's own phone menu, which answers a call the agent places."""
 
 from __future__ import annotations
@@ -13,14 +13,16 @@ from typing import Any, AsyncIterator, Awaitable, Callable
 
 from fi.simulate._logging import redacted_exc_info
 from fi.simulate.simulation.engines.caller_barge_in import complete_text
-from fi.simulate.simulation.sub_actors import (
+from fi.simulate.simulation.call_actors import (
     HANDOFF_LINE_SECONDS,
     TOOLS_READ_SECONDS,
     Cast,
     Moment,
+    decision_brief,
     limited,
     line_brief,
     line_gain,
+    read_decision,
 )
 
 logger = logging.getLogger(__name__)
@@ -129,8 +131,8 @@ async def at_level(
         yield scaled(frame)
 
 
-class SubActorVoice:
-    """One sub-actor's lines on a call: written from what the agent just said, then voiced."""
+class CallActorVoice:
+    """One actor's lines on a call: written from what the agent just said, then voiced."""
 
     def __init__(
         self,
@@ -140,6 +142,7 @@ class SubActorVoice:
         tts: Any,
         situation: str,
         language: str,
+        report_action: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self.actor = actor
         self.model = model
@@ -147,6 +150,13 @@ class SubActorVoice:
         self.situation = situation
         self.language = language
         self.said: list[str] = []
+        # Hands an action this actor decides to the run, which sends it through the world's door under its id.
+        self.report_action = report_action
+
+    @property
+    def acts(self) -> bool:
+        """Whether this actor can also act in the world from the same decision as its line."""
+        return bool(self.report_action is not None and self.actor.get("permitted_actions"))
 
     @property
     def channel(self) -> str:
@@ -155,22 +165,41 @@ class SubActorVoice:
     async def line(
         self, conversation: list[str]
     ) -> tuple[str, AsyncIterator[Any] | None, bool]:
-        """The next line, its audio as it is made, and whether this sub-actor is done after it."""
+        """The next line, its audio as it is made, and whether this actor is done after it."""
         from livekit.agents import llm as livekit_llm
 
         context = livekit_llm.ChatContext.empty()
-        brief = line_brief(
-            self.actor,
-            situation=self.situation,
-            said=self.said,
-            conversation=conversation,
-            language=self.language,
-        )
         how = _HOW[self.channel]
         if self.channel == "audio_handoff" and not self.said:
             how += " " + _FIRST_HANDOFF
-        context.add_message(role="user", content=brief + "\n\n" + how)
-        written = await complete_text(self.model, context)
+        if self.acts:
+            # One decision: what it says, and what it does in the world, from the same turn.
+            brief = decision_brief(
+                self.actor,
+                situation=self.situation,
+                said=self.said,
+                conversation=conversation,
+                language=self.language,
+                actions={str(one): "" for one in self.actor.get("permitted_actions") or []},
+            )
+            context.add_message(role="user", content=brief + "\n\nFor `line`: " + how)
+            decision = read_decision(await complete_text(self.model, context))
+            if decision.action:
+                self.report_action(
+                    {"actor": str(self.actor.get("id")), "action": decision.action,
+                     "arguments": decision.arguments, "why": decision.why, "at": time.time()}
+                )
+            written = decision.line
+        else:
+            brief = line_brief(
+                self.actor,
+                situation=self.situation,
+                said=self.said,
+                conversation=conversation,
+                language=self.language,
+            )
+            context.add_message(role="user", content=brief + "\n\n" + how)
+            written = await complete_text(self.model, context)
         # Wherever the model put the marker, it is never spoken.
         done = _DONE in written
         text = re.sub(r"\s*\[DONE\][.!?,]*", "", written).strip().strip('"“”').strip()
@@ -179,17 +208,17 @@ class SubActorVoice:
 
 def _failed(exc: Exception) -> str:
     """Why a line failed, with the provider's status when it gave one."""
-    logger.warning("sub-actor line failed", exc_info=redacted_exc_info(exc))
+    logger.warning("actor line failed", exc_info=redacted_exc_info(exc))
     status = getattr(exc, "status_code", None)
     return f"line failed: {type(exc).__name__}" + (f" {status}" if status else "")
 
 
-class SubActorsOnCall:
-    """Every sub-actor on one voice call, told about each agent turn once, within the call's budget."""
+class CallActorsOnCall:
+    """Every actor on one voice call, told about each agent turn once, within the call's budget."""
 
     def __init__(
         self,
-        voices: list[SubActorVoice],
+        voices: list[CallActorVoice],
         *,
         seed: str,
         play: Callable[[list[Any], float, str, str], Awaitable[None]] | None,
@@ -197,12 +226,16 @@ class SubActorsOnCall:
         tools_called: Callable[[], list[str]] | None = None,
         conversation: Callable[[], list[str]] = list,
         clock: Callable[[], float] = time.time,
+        records: Callable[[str], list[dict[str, Any]]] | None = None,
+        limits: dict[str, Any] | None = None,
     ) -> None:
         self.voices = {str(voice.actor["id"]): voice for voice in voices}
-        self.cast = Cast([voice.actor for voice in voices], seed)
+        self.cast = Cast([voice.actor for voice in voices], seed, clock, limits)
+        # Read only for an actor that comes in once a record exists (`conditional`).
+        self.records = records
         self.play = play
         self.say = say
-        # Read only for a sub-actor that enters on a tool call: the person's turn waits on it.
+        # Read only for an actor that enters on a tool call: the person's turn waits on it.
         self.tools_called = (
             tools_called
             if any(
@@ -224,7 +257,7 @@ class SubActorsOnCall:
     def __bool__(self) -> bool:
         return bool(self.voices)
 
-    def menu(self) -> SubActorVoice | None:
+    def menu(self) -> CallActorVoice | None:
         return next(
             (voice for voice in self.voices.values() if voice.channel == "ivr"), None
         )
@@ -248,7 +281,7 @@ class SubActorsOnCall:
         said = next(
             one
             for one in self.cast.summary()
-            if one["sub_actor"] == str(menu.actor["id"])
+            if one["actor"] == str(menu.actor["id"])
         )
         return said["delivered"] > 0
 
@@ -261,7 +294,7 @@ class SubActorsOnCall:
             self.cast.not_entered(menu.actor, reason)
 
     async def agent_turn(self, text: str) -> bool:
-        """One agent turn. True while a sub-actor holds the phone, so the person stays silent."""
+        """One agent turn. True while an actor holds the phone, so the person stays silent."""
         self.agent_turns += 1
         tools = []
         if self.tools_called and self.cast.waits_on_tools():
@@ -272,11 +305,17 @@ class SubActorsOnCall:
                     )
                 )
             except asyncio.TimeoutError:
-                logger.warning("sub-actors: the tool trace took too long to read")
+                logger.warning("actors: the tool trace took too long to read")
         moment = Moment(
-            agent_turns=self.agent_turns, last_text=text, tools_called=tools
+            agent_turns=self.agent_turns, last_text=text, tools_called=tools, records=self.records
         )
         self.cast.entering(moment)
+        for actor, fallback, outcome in self.cast.fallbacks():
+            voice = self.voices.get(str(actor["id"]))
+            if outcome == "fallback_action" and voice is not None and voice.report_action is not None:
+                # Its own action taken for it, through the run that holds the world's door.
+                voice.report_action({"actor": str(actor["id"]), "action": fallback, "arguments": {},
+                                     "why": "timeout fallback", "at": time.time()})
         heard = [*self.conversation(), f"The agent: {text}"]
         took_part = False
         holding = False
@@ -312,11 +351,11 @@ class SubActorsOnCall:
 
     async def _speak(
         self,
-        voice: SubActorVoice,
+        voice: CallActorVoice,
         heard: list[str],
         written: Awaitable[tuple[str, Any, bool]] | None = None,
     ) -> bool:
-        """One line on the phone, or the one already being written. True while this sub-actor still holds it."""
+        """One line on the phone, or the one already being written. True while this actor still holds it."""
         if self.say is None or voice.tts is None:
             self.cast.line_settled()
             self.cast.dropped(voice.actor, "no voice of its own on this call")
@@ -349,7 +388,7 @@ class SubActorsOnCall:
         try:
             await asyncio.wait_for(
                 self.say(frames, text, str(voice.actor.get("name") or "someone")),
-                self._left(asked),
+                self.cast.remaining(),
             )
         except asyncio.TimeoutError:
             self.cast.late(voice.actor, cut_by_call_time=True)
@@ -363,17 +402,13 @@ class SubActorsOnCall:
             self.cast.finish(voice.actor)
         return not done
 
-    def _left(self, asked: float) -> float:
-        """The call's sub-actor time still left for a line asked for at ``asked``, its writing counted."""
-        return max(0.0, self.cast.remaining() - (self.clock() - asked))
-
     async def _written(
-        self, voice: SubActorVoice, heard: list[str]
+        self, voice: CallActorVoice, heard: list[str]
     ) -> tuple[str, Any, bool]:
         async with self._writing:
             return await voice.line(heard)
 
-    async def _background(self, voice: SubActorVoice, heard: list[str]) -> None:
+    async def _background(self, voice: CallActorVoice, heard: list[str]) -> None:
         key = str(voice.actor["id"])
         if self.play is None or voice.tts is None:
             self.cast.line_settled()
@@ -402,7 +437,7 @@ class SubActorsOnCall:
                         text,
                         str(voice.actor.get("name") or "someone"),
                     ),
-                    self._left(asked),
+                    self.cast.remaining(),
                 )
             except asyncio.TimeoutError:
                 self.cast.late(voice.actor, cut_by_call_time=True)
@@ -436,14 +471,15 @@ class SubActorsOnCall:
         self.cast.hang_up()
 
 
-def with_sub_actor_turns(
+def with_call_actor_turns(
     messages: list[dict[str, Any]], events: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    """The call's messages with each delivered sub-actor line placed where it was heard."""
+    """The call's messages with each delivered actor line placed where it was heard, and each declined request as a
+    labelled row at the moment it was decided: never spoken, so never in the actor's voice."""
     spoken = [
         {
-            "role": "sub_actor",
-            "sub_actor": event["sub_actor"],
+            "role": "actor",
+            "actor": event["actor"],
             "name": event.get("name"),
             "content": event["text"],
             "created_at": event["at"],
@@ -451,9 +487,10 @@ def with_sub_actor_turns(
             "stopped_speaking_at": event.get("ended_at"),
             "interrupted": False,
             "e2e_latency": None,
+            **({"spoken": False} if event.get("kind") == "timeout" else {}),
         }
         for event in events
-        if event.get("kind") == "delivered" and event.get("text")
+        if event.get("kind") in ("delivered", "timeout") and event.get("text") and event.get("at") is not None
     ]
     if not spoken:
         return messages
@@ -471,6 +508,24 @@ def with_sub_actor_turns(
     return ordered
 
 
+def world_records(dsn: str) -> Callable[[str], list[dict[str, Any]]] | None:
+    """The world's records of one collection, read from the run's world database; None without one."""
+    if not dsn:
+        return None
+    from fi.alk.harness.world.stores.postgres import AttachedPostgresStore
+
+    store = AttachedPostgresStore(dsn)
+
+    def records(collection: str) -> list[dict[str, Any]]:
+        try:
+            return list(store.table(collection))
+        except Exception as exc:  # noqa: BLE001 - unreadable records are not there yet
+            logger.warning("actors could not read the world's records", exc_info=redacted_exc_info(exc))
+            return []
+
+    return records
+
+
 def world_access(dsn: str) -> Callable[[], list[str]] | None:
     """The names of the tools the agent has called so far, read from the run's live tool trace."""
     if not dsn:
@@ -485,7 +540,7 @@ def world_access(dsn: str) -> Callable[[], list[str]] | None:
             ]
         except Exception as exc:  # noqa: BLE001 - not knowing the tools so far never holds up the call
             logger.warning(
-                "sub-actors could not read the tool trace",
+                "actors could not read the tool trace",
                 exc_info=redacted_exc_info(exc),
             )
             return []

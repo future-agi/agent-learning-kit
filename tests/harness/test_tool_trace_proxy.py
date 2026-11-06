@@ -327,3 +327,39 @@ def test_an_actor_list_the_world_cannot_read_is_the_world_s_fault_and_never_reac
     }
     assert _World.seen == []
     assert [(r["actor_id"], r["outcome"]) for r in rows()] == [("reviewer", "faulted")]
+
+
+def _faults(tmp_path_factory_dir: Path, faults: list[dict]) -> None:
+    (tmp_path_factory_dir / "trial.json").write_text(json.dumps({"faults": faults}), encoding="utf-8")
+
+
+def test_a_timeout_before_commit_never_reaches_the_world_and_a_retry_commits_once(proxy, tmp_path):
+    url, rows = proxy
+    _faults(tmp_path, [{"action": "ok", "mode": "timeout_before_commit", "on_call": 1, "delay_seconds": 0}])
+    assert _post(url, "/ok", {"item": "1"})[0] == 504
+    assert _World.seen == []
+    assert _post(url, "/ok", {"item": "1"})[0] == 201
+    assert _World.seen == ["/ok"]
+    assert [(one["outcome"], one["error"] or None) for one in rows()] == [
+        ("faulted", "timeout_before_commit"),
+        ("committed", None),
+    ]
+
+
+def test_a_timeout_after_commit_commits_without_answering_so_a_retry_commits_twice(proxy, tmp_path):
+    url, rows = proxy
+    _faults(tmp_path, [{"action": "ok", "mode": "timeout_after_commit", "on_call": 1, "delay_seconds": 0}])
+    assert _post(url, "/ok", {"item": "1"})[0] == 504
+    assert _post(url, "/ok", {"item": "1"})[0] == 201
+    # The world saw both: a check reading the log can fail the duplicate the agent caused (WO-1).
+    assert _World.seen == ["/ok", "/ok"]
+    assert [(one["outcome"], one["error"] or None) for one in rows()] == [
+        ("committed", "response_lost"),
+        ("committed", None),
+    ]
+
+
+def test_a_fault_never_applies_to_an_actor_s_action(proxy, tmp_path):
+    url, rows = proxy
+    _faults(tmp_path, [{"action": "records.approve", "mode": "timeout_before_commit", "delay_seconds": 0}])
+    assert _post(url, "/records/approve", {"item": "1"}, key="k-1", **_as("reviewer"))[0] == 201

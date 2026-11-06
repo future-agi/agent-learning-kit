@@ -54,24 +54,34 @@ from fi.simulate.results.futureagi import target_provider_usage
 from fi.simulate.runtime.report import SimulationReport
 from fi.simulate.runtime.run import TestCaseStatus
 from fi.simulate.runtime.runner import SimulationRunner
-from fi.simulate.simulation.sub_actors import (
+from fi.simulate.simulation.call_actors import (
     CHANNELS,
-    SUB_ACTOR_VOICES_ALIAS,
-    SUB_ACTOR_WORLD_ALIAS,
+    ACTOR_VOICES_ALIAS,
+    ACTOR_WORLD_ALIAS,
     known_to_others,
     loudness_ratio,
     with_others,
 )
 
-from .actor_dispatch import ActorDispatcher
-from .actors import AGENT, ScenarioActor, load_actors
+from .actor_dispatch import ActorDispatcher, HttpActs, build_dispatcher, world_summary
+from .actor_meter import ActorMeter
+from .actors import (
+    AGENT,
+    ScenarioActor,
+    acting_fields,
+    is_pre_run,
+    actor_brief,
+    brief_text,
+    load_actors,
+    with_caller_actor,
+    with_knowledge_read,
+)
 from .background_noise import place_of, scenario_source
 from .bundle_v2 import EvidenceSeam
-from .sub_actor import (
-    ScenarioSubActor,
-    load_sub_actors,
+from .call_actor import (
+    load_call_actors,
+    speaking_entries,
     logged_tool_name,
-    sub_actors_enabled,
 )
 from .hosted_scheduler import CallAborted, CallOutcome
 from .hosted_scheduler import Scenario as HostedScenario
@@ -580,7 +590,7 @@ def _build_spec(
     environ: Mapping[str, str],
     connector: str = "livekit",
     provider_target_id: str | None = None,
-    sub_actors: list[dict[str, Any]] | None = None,
+    call_actors: list[dict[str, Any]] | None = None,
 ) -> SimulationSpec:
     """The hosted lane: values come from job config and the bundle's scenario document.
 
@@ -679,7 +689,7 @@ def _build_spec(
         scenario=caller_scenario(
             name=str(doc.get("scenario_key") or doc.get("name") or "harness-voice"),
             persona=doc.get("persona"),
-            situation=with_others(doc["instruction"], sub_actors or []),
+            situation=with_others(doc["instruction"], call_actors or []),
             fixture=doc.get("fixture"),
             tts_provider=simulator.tts.provider,
             variation=run_id,
@@ -702,18 +712,40 @@ def _build_spec(
     )
 
 
-def _voiced_sub_actors(
+def _world_records(runtime: Any) -> Callable[[str], list[dict[str, Any]]] | None:
+    """The trial's world records, one collection at a time, for an actor's knowledge; None where none can be read."""
+    endpoint = _find_postgres_endpoint(runtime) if runtime is not None else None
+    if endpoint is None:
+        return None
+    from .world.stores.postgres import AttachedPostgresStore
+
+    store = AttachedPostgresStore(endpoint.address)
+    return store.table
+
+
+def _resolved_call_actors(
     doc: Mapping[str, Any],
     bundle_dir: Any,
     tts_provider: str,
     cartesia_key: str,
     seed: str,
+    records: Callable[[str], list[dict[str, Any]]] | None = None,
 ) -> list[dict[str, Any]]:
-    """The scenario's speaking sub-actors, each resolved from the environment's list with what it does
-    here, in a voice no one else on the call has, at a level of its own."""
-    if not sub_actors_enabled() or not doc.get("sub_actors"):
+    """Every actor the scenario includes, resolved from the environment's list with what it does
+    here. One that can speak has a voice no one else on the call has and a level of its own; one that
+    cannot is kept with `entered: false` and the reason, so the call's record still names it."""
+    if not doc.get("actors"):
         return []
-    listing = load_sub_actors(bundle_dir)
+    listing = load_call_actors(bundle_dir)
+    full = load_actors(bundle_dir).by_id()
+    speaking = speaking_entries(
+        [ScenarioActor.model_validate(entry) for entry in doc.get("actors") or []],
+        listing,
+        set(full),
+        full,
+    )
+    if not speaking:
+        return []
     contract_path = Path(bundle_dir) / "contract.json"
     contract = (
         json.loads(contract_path.read_text(encoding="utf-8"))
@@ -728,49 +760,75 @@ def _voiced_sub_actors(
             or persona_voice(caller, tts_provider, cartesia_key=cartesia_key)
         )
     }
-    voiced = []
-    for entry in doc.get("sub_actors") or []:
-        included = ScenarioSubActor.model_validate(entry)
+    resolved = []
+    for included in speaking:
         actor = listing.get(included.id)
+        trigger = included.trigger.model_dump()
+        here = {
+            **(
+                actor.model_dump(exclude_none=True)
+                if actor is not None
+                else {"id": included.id}
+            ),
+            "instruction": included.instruction,
+            "trigger": trigger,
+        }
         if actor is None or "voice" not in CHANNELS.get(actor.channel, {}).get(
             "modalities", ()
         ):
             logger.warning(
-                "sub-actor %s does not enter: %s",
+                "actor %s does not enter: %s",
                 included.id,
                 "not in the environment's list"
                 if actor is None
                 else "not a voice channel",
             )
+            reason = "not_in_list" if actor is None else "not_a_voice_channel"
+            resolved.append({**here, "entered": False, "reason": reason})
             continue
         persona = {**actor.persona, "name": actor.name}
         voice = persona_voice(persona, tts_provider, frozenset(taken), cartesia_key)
         if not voice:
             # The person's voice or none at all: the agent could not tell them apart.
             logger.warning(
-                "sub-actor %s does not enter: no voice of its own on this call",
+                "actor %s does not enter: no voice of its own on this call",
                 included.id,
             )
+            resolved.append({**here, "entered": False, "reason": "no_distinct_voice"})
             continue
         taken.add(voice)
-        trigger = included.trigger.model_dump()
         if trigger.get("kind") == "on_tool":
             # The engine counts the calls the trace logs, which name the route a tool calls.
             trigger["tool"] = logged_tool_name(contract, str(trigger.get("tool") or ""))
-        voiced.append(
+        resolved.append(
             {
-                **actor.model_dump(exclude_none=True),
-                "instruction": included.instruction,
-                "trigger": trigger,
+                **here,
+                # What it may do in the world, its line limit and its model, so its line and its action are one turn.
+                **acting_fields(full.get(actor.id)),
                 "loudness_ratio": loudness_ratio(seed, actor.id, actor.loudness_ratio),
                 "voice": voice,
                 "speed": persona_speech_rate(persona),
                 "emotion": persona_emotion(persona),
                 "situation": known_to_others(str(doc.get("instruction") or "")),
                 "language": ", ".join(caller.get("languages") or []),
+                # The same view the platform shows as what this actor sees.
+                "brief": brief_text(
+                    actor_brief(
+                        with_knowledge_read(full[actor.id].model_dump(exclude_none=True), bundle_dir, records) or {},
+                        entry=with_knowledge_read(
+                            next(
+                                (one for one in doc.get("actors") or [] if (one or {}).get("id") == actor.id),
+                                None,
+                            ),
+                            bundle_dir,
+                            records,
+                        ),
+                        scenario=dict(doc),
+                    )
+                ),
             }
         )
-    return voiced
+    return resolved
 
 
 # --- evidence collection -----------------------------------------------------------------------
@@ -932,8 +990,100 @@ class _ActionLog:
             self.connection = None
 
 
+# The outcomes the world's door records for an attempt, beside committed.
+_OUTCOMES = ("committed", "refused", "faulted", "duplicate")
+
+
+def trial_state_changes(log: list[dict[str, Any]], listed: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """What each participant attempted in this trial and what the world made of it: one entry for the agent and one
+    per actor that acted, with attempted, committed, refused, faulted and duplicate counts and the actions it
+    committed, in order. Attempted, refused and committed are kept apart; a row from before outcomes were recorded
+    counts as committed when it succeeded and refused when the world refused it."""
+    entries: dict[str, dict[str, Any]] = {}
+    for row in log:
+        if is_pre_run(row.get("idempotency_key")):
+            # Written before the run: the trial's starting point, not a change made during it.
+            continue
+        who = str(row.get("actor_id") or AGENT)
+        actor = listed.get(who)
+        entry = entries.setdefault(
+            who,
+            {
+                "who": who,
+                "name": "the agent" if who == AGENT else (actor.name if actor is not None else who),
+                "attempted": 0,
+                **{outcome: 0 for outcome in _OUTCOMES},
+                "committed_actions": [],
+            },
+        )
+        entry["attempted"] += 1
+        outcome = row.get("outcome") or (
+            "refused" if row.get("refused") else "committed" if row.get("ok", True) else "faulted"
+        )
+        if outcome in _OUTCOMES:
+            entry[outcome] += 1
+        if outcome == "committed":
+            entry["committed_actions"].append(str(row.get("name") or ""))
+    # The agent always has a line: "no change" is a result, since doing nothing can be correct.
+    agent = entries.pop(AGENT, None) or {
+        "who": AGENT, "name": "the agent", "attempted": 0, **{outcome: 0 for outcome in _OUTCOMES},
+        "committed_actions": [],
+    }
+    agent["no_change"] = not agent["committed_actions"]
+    return [agent] + list(entries.values())
+
+
+def approvals(log: list[dict[str, Any]], decisions: Sequence[dict[str, Any]] = ()) -> list[dict[str, Any]]:
+    """One line per approval, read from the action log only: the agent's request (the agent row an actor's row or a
+    timeout points at through its parent), the decision (that actor row, or the timeout's fallback), and the agent's
+    writes before the decision and after it, in log order. No record matching, no inference."""
+    rows = [row for row in log if not is_pre_run(row.get("idempotency_key"))]
+    by_id = {str(row.get("action_id")): row for row in rows if row.get("action_id")}
+    agent_writes = [row for row in rows if (row.get("actor_id") or AGENT) == AGENT]
+    found = []
+    for row in rows:
+        parent = by_id.get(str(row.get("parent_event_id") or ""))
+        if (row.get("actor_id") or AGENT) == AGENT or parent is None or (parent.get("actor_id") or AGENT) != AGENT:
+            continue
+        found.append((parent, {"by": row.get("actor_id"), "action": row.get("name"), "outcome": row.get("outcome"),
+                               "at": row.get("at")}))
+    for one in decisions:
+        if one.get("play") == "timeout" and one.get("parent") in by_id:
+            found.append((by_id[one["parent"]], {"by": one.get("actor"), "action": f"timeout: {one.get('fallback')}",
+                                                 "outcome": one.get("outcome"), "at": None}))
+    out = []
+    for request, decision in found:
+        start = float(request.get("at") or 0)
+        decided = decision["at"]
+        between = [w for w in agent_writes if w is not request and start < float(w.get("at") or 0)
+                   and (decided is None or float(w.get("at") or 0) < float(decided))]
+        after = [w for w in agent_writes if decided is not None and float(w.get("at") or 0) > float(decided)]
+        out.append(
+            {
+                "request": {"action": request.get("name"), "at": request.get("at"), "action_id": request.get("action_id")},
+                "decision": decision,
+                "before_decision": [{"action": w.get("name"), "outcome": w.get("outcome")} for w in between],
+                "after_decision": [{"action": w.get("name"), "outcome": w.get("outcome")} for w in after],
+                "acted_before_decision": any(w.get("outcome") == "committed" for w in between),
+            }
+        )
+    return out
+
+
+def _state_changes(runtime: EnvironmentRuntime, bundle_dir: Path) -> list[dict[str, Any]]:
+    database = _find_postgres_endpoint(runtime)
+    if database is None:
+        return []
+    try:
+        log = _read_action_log(database.address)
+    except Exception as exc:  # noqa: BLE001 - no state changes, never a failed call
+        logger.debug("state changes unreadable: %s", type(exc).__name__)
+        return []
+    return trial_state_changes(log, load_actors(bundle_dir).by_id())
+
+
 def _actor_rows(runtime: EnvironmentRuntime, bundle_dir: Path) -> list[dict[str, Any]]:
-    """This trial's actions by world actors, named and with their outcome; none for a world without actors."""
+    """This trial's actions by actors, named and with their outcome; none for a world without actors."""
     listed = load_actors(bundle_dir).by_id()
     database = _find_postgres_endpoint(runtime)
     if not listed or database is None:
@@ -943,6 +1093,11 @@ def _actor_rows(runtime: EnvironmentRuntime, bundle_dir: Path) -> list[dict[str,
     except Exception as exc:  # noqa: BLE001 - no actor evidence, never a failed call
         logger.debug("actor rows unreadable: %s", type(exc).__name__)
         return []
+    return actor_rows(log, listed)
+
+
+def actor_rows(log: list[dict[str, Any]], listed: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """The actors' rows of an action log, named and with their outcome: the same for every runtime."""
     rows = []
     for row in log:
         actor = listed.get(str(row.get("actor_id") or AGENT))
@@ -993,8 +1148,16 @@ def _agent_marks(
     return marks
 
 
+class PrivateTokenUnavailable(RuntimeError):
+    """The trial token could not be made readable by the tool proxy's user alone."""
+
+
 def _write_trial_token(path: Path, token: str) -> None:
-    """The token, readable only by whoever owns the tool proxy's directory; a stale file or link is replaced."""
+    """The token, readable only by whoever owns the tool proxy's directory; a stale file or link is replaced.
+
+    Raises `PrivateTokenUnavailable`, and leaves no token behind, when it cannot be given to that user: widening it
+    would let the agent in the same sandbox read it and act as any actor.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     path.unlink(missing_ok=True)
     fd = os.open(
@@ -1008,9 +1171,31 @@ def _write_trial_token(path: Path, token: str) -> None:
     if owner.st_uid != os.geteuid():
         try:
             os.chown(path, owner.st_uid, owner.st_gid)
-        except PermissionError:
-            # Without the right to give it away, the proxy's own user can read it only if others can.
-            path.chmod(0o644)
+        except PermissionError as error:
+            path.unlink(missing_ok=True)
+            raise PrivateTokenUnavailable(str(error)) from error
+
+
+def _write_trial_state(runtime: EnvironmentRuntime, faults: list[Any]) -> None:
+    """This trial's faults, beside the actor token where the world's door reads them; written by the runner only."""
+    token_path = runtime.metadata.get("actor_proof_path")
+    if not isinstance(token_path, str):
+        if faults:
+            logger.warning("faults cannot be set: this world has no tool proxy reading trial state")
+        return
+    path = Path(token_path).with_name("trial.json")
+    path.write_text(json.dumps({"faults": list(faults)}), encoding="utf-8")
+
+
+def actor_limits(doc: Mapping[str, Any], bundle_dir: Path, modality: str) -> dict[str, Any]:
+    """The actor limits in force for this scenario on this channel: the environment's setting, the scenario's own on
+    top, and each unset value the channel's default. Stored with the trial."""
+    from .actors import Limits
+
+    own = doc.get("limits")
+    return load_actors(bundle_dir).limits.merged(
+        Limits.model_validate(own) if isinstance(own, dict) else None
+    ).resolved(modality)
 
 
 def _actor_dispatcher(
@@ -1019,41 +1204,102 @@ def _actor_dispatcher(
     runtime: EnvironmentRuntime,
     trial_id: str,
     budget: float,
+    meter: Any = None,
+    reported: Callable[[], list[dict[str, Any]]] | None = None,
+    why_not: list[tuple[str, str]] | None = None,
 ) -> ActorDispatcher | None:
-    """The scenario's world actors for this trial, with a fresh token only they and the proxy hold."""
-    if not doc.get("actors") or not sub_actors_enabled():
+    """The scenario's actors for this trial over the bundle's tool proxy, with a fresh token only they and the proxy
+    hold; None when the scenario has none. An actor that cannot act here is the scenario's problem, recorded by the
+    caller from `actor_problems`."""
+    if not (doc.get("actors") or doc.get("history") or doc.get("pre_run")):
         return None
     proxy = runtime.endpoints.get("tool_proxy")
     database = _find_postgres_endpoint(runtime)
     token_path = runtime.metadata.get("actor_proof_path")
     if proxy is None or database is None or not isinstance(token_path, str):
-        logger.warning(
-            "world actors cannot act: this world has no tool proxy taking actor requests"
-        )
+        logger.warning("actors cannot act: this world has no tool proxy taking actor requests")
+        if why_not is not None:
+            why_not.append(("no_world_door", "no world door: this agent's tools run where actors cannot act"))
         return None
     token = secrets.token_hex(32)
-    _write_trial_token(Path(token_path), token)
-    cast = [ScenarioActor.model_validate(entry) for entry in doc.get("actors") or []]
-    contract_path = bundle_dir / "contract.json"
-    contract = (
-        json.loads(contract_path.read_text(encoding="utf-8"))
-        if contract_path.is_file()
-        else {}
-    )
-    for action in (one for entry in cast for one in entry.actions):
-        if action.trigger.kind == "on_tool":
-            # The log records the route the agent's tool calls, which can differ from the tool's name.
-            action.trigger.tool = logged_tool_name(contract, action.trigger.tool)
-    return ActorDispatcher(
-        load_actors(bundle_dir).by_id(),
-        cast,
-        trial_id=trial_id,
-        proxy_url=proxy.address,
-        token=token,
+    try:
+        _write_trial_token(Path(token_path), token)
+    except PrivateTokenUnavailable as error:
+        logger.error(
+            "actors cannot act: no_private_token, the trial token cannot be kept from the agent",
+            extra={"reason": "no_private_token", "detail": str(error)},
+        )
+        if why_not is not None:
+            why_not.append(("no_private_token", "the trial token cannot be kept from the agent, so no actor may act"))
+        return None
+    return build_dispatcher(
+        dict(doc),
+        bundle_dir,
+        act=HttpActs(proxy.address, token, budget),
         read_log=_ActionLog(database.address),
-        seed=trial_id,
-        timeout=budget,
+        records=_world_records(runtime),
+        trial_id=trial_id,
+        meter=meter,
+        reported=reported,
     )
+
+
+def _private_actions_file(path: Path) -> Path:
+    """An empty file for this call's speaking actors' actions, readable and writable by this run's user alone, in a
+    directory only it can enter: what is written there is sent under an actor's id with the trial's token, so the
+    agent under test (another user in the same sandbox) must never be able to write to it."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    os.chmod(path.parent, 0o700)
+    path.unlink(missing_ok=True)
+    os.close(os.open(path, os.O_CREAT | os.O_WRONLY | os.O_EXCL, 0o600))
+    os.chmod(path, 0o600)
+    return path
+
+
+def _reported_actions(path: Path) -> Callable[[], list[dict[str, Any]]]:
+    """The actions speaking actors decided on the call so far, as the voice engine handed them over, oldest first."""
+
+    def read() -> list[dict[str, Any]]:
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return []
+        out = []
+        for line in lines:
+            try:
+                one = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(one, dict):
+                out.append(one)
+        return out
+
+    return read
+
+
+def _with_world_actors(
+    summary: tuple[dict[str, Any], ...], decisions: Sequence[dict[str, Any]], bundle_dir: Path
+) -> tuple[dict[str, Any], ...]:
+    """The call's actor summary with every actor that acts through the world in it too, so a check that depends on
+    any actor reads that actor's real record."""
+    speaking = {str(one.get("actor")) for one in summary}
+    return summary + tuple(world_summary(list(decisions), load_actors(bundle_dir).by_id(), speaking))
+
+
+def actor_problems(doc: Mapping[str, Any], bundle_dir: Path, why: str, problem: str = "no_world_door") -> list[dict[str, Any]]:
+    """Each actor of the scenario that acts in the world, recorded as the scenario's problem with the reason it could
+    not: never silently dropped, never the agent's failure."""
+    listed = load_actors(bundle_dir).by_id()
+    problems = []
+    for entry in doc.get("actors") or []:
+        actor = listed.get(str((entry or {}).get("id") or ""))
+        if actor is None:
+            problems.append({"actor": str((entry or {}).get("id") or ""), "play": "problem",
+                             "problem": "not_listed", "why": "the scenario names an actor the environment does not list"})
+            continue
+        if actor.permitted_actions or (entry or {}).get("actions"):
+            problems.append({"actor": actor.id, "play": "problem", "problem": problem, "why": why})
+    return problems
 
 
 def _tool_trace_file(runtime: EnvironmentRuntime) -> Path | None:
@@ -1518,6 +1764,7 @@ class CallRunnerImpl:
         doc = _with_scenario_edits(
             doc, getattr(self._context.job, "metadata", None), source_key
         )
+        doc = with_caller_actor(doc, self._context.bundle_dir)
 
         room_count = self._scenario_room_counts.get(scenario.scenario_key, 0) + 1
         self._scenario_room_counts[scenario.scenario_key] = room_count
@@ -1566,18 +1813,31 @@ class CallRunnerImpl:
             call_environ.pop("HARNESS_BACKGROUND_PLACE", None)
 
         setting = _setting(self._context.job.agent.config, call_environ)
-        voices = _voiced_sub_actors(
+        resolved = _resolved_call_actors(
             doc,
             self._context.bundle_dir,
             voice_providers(setting)[1],
             setting("CARTESIA_API_KEY"),
             run_id,
+            _world_records(runtime),
         )
-        call_environ.pop(SUB_ACTOR_WORLD_ALIAS, None)
+        # Only an actor that can speak reaches the call; the record keeps every one.
+        voices = [one for one in resolved if one.get("entered", True)]
+        call_environ.pop(ACTOR_WORLD_ALIAS, None)
+        # Where a speaking actor's decided actions are handed to this run, which sends them through the door.
+        actions_file = _private_actions_file(
+            self._context.work_directory / "call-workers" / f"actor-actions-{run_id}.jsonl"
+        )
         if voices:
-            call_environ[SUB_ACTOR_VOICES_ALIAS] = json.dumps(voices)
+            call_environ[ACTOR_VOICES_ALIAS] = json.dumps(
+                {
+                    "voices": voices,
+                    "limits": actor_limits(doc, self._context.bundle_dir, "voice"),
+                    "actions_file": str(actions_file),
+                }
+            )
         else:
-            call_environ.pop(SUB_ACTOR_VOICES_ALIAS, None)
+            call_environ.pop(ACTOR_VOICES_ALIAS, None)
 
         # Read the same way and for the same reason as the noise source above: the simulator's
         # instructions are built deep inside simulator_definition, which sees the environment and
@@ -1683,7 +1943,7 @@ class CallRunnerImpl:
             doc=doc,
             simulator_config=self._context.job.agent.config,
             environ=call_environ,
-            sub_actors=voices,
+            call_actors=voices,
             livekit_url=self._livekit_url,
             call_timeout_seconds=call_timeout_seconds,
             run_seconds=run_seconds,
@@ -1697,15 +1957,25 @@ class CallRunnerImpl:
                 _clear_tool_trace_calls(endpoint.address)
                 if voices:
                     # The engine reads the live trace for on_tool triggers.
-                    call_environ[SUB_ACTOR_WORLD_ALIAS] = endpoint.address
+                    call_environ[ACTOR_WORLD_ALIAS] = endpoint.address
 
+        meter = ActorMeter()
+        why_not: list[tuple[str, str]] = []
         actors = (
             _actor_dispatcher(
-                doc, self._context.bundle_dir, runtime, spec.run_id, run_seconds
+                doc, self._context.bundle_dir, runtime, spec.run_id, run_seconds, meter,
+                reported=_reported_actions(actions_file) if voices else None,
+                why_not=why_not,
             )
             if self._context.evidence_seam is EvidenceSeam.TOOL_TRACE
             else None
         )
+        # An actor that should act in the world and cannot here is the scenario's problem, in the record, with the
+        # reason it could not.
+        problem, why = why_not[0] if why_not else (
+            "no_world_door", "no world door: this agent's tools run where actors cannot act"
+        )
+        no_door = actor_problems(doc, self._context.bundle_dir, why, problem) if actors is None else []
         started_at = datetime.now(timezone.utc)
         outer_timeout = run_seconds + _OUTER_WAIT_FOR_PAD_SECONDS
 
@@ -1726,17 +1996,32 @@ class CallRunnerImpl:
             return SimulationReport.model_validate(result)
 
         async def place_with_actors() -> SimulationReport:
+            faults = list(doc.get("faults") or [])
+            if faults:
+                _write_trial_state(runtime, faults)
+            try:
+                return await place_with_world_actors()
+            finally:
+                if faults:
+                    _write_trial_state(runtime, [])
+
+        async def place_with_world_actors() -> SimulationReport:
             if actors is None:
                 return await place()
+            # What the actors wrote before T0 is in the world before the call starts.
+            await actors.replay()
             acting = asyncio.create_task(actors.run())
             try:
                 return await place()
             finally:
                 acting.cancel()
-                # The token proves an actor only during its own trial; the proxy refuses actors once it is empty.
-                _write_trial_token(Path(str(runtime.metadata["actor_proof_path"])), "")
                 with contextlib.suppress(asyncio.CancelledError):
                     await acting
+                # An action a speaking actor decided on its last line is still sent, inside its own trial.
+                with contextlib.suppress(Exception):
+                    await actors.send_reported()
+                # The token proves an actor only during its own trial; the proxy refuses actors once it is empty.
+                _write_trial_token(Path(str(runtime.metadata["actor_proof_path"])), "")
                 if isinstance(actors.read_log, _ActionLog):
                     await asyncio.to_thread(actors.read_log.close)
 
@@ -1762,7 +2047,11 @@ class CallRunnerImpl:
                 runtime=runtime,
                 scenario_key=scenario.scenario_key,
                 started_at=started_at,
-                sub_actors=voices,
+                call_actors=resolved,
+                actor_decisions=(actors.record() if actors is not None else []) + no_door,
+                actor_usage=meter.rows(),
+                limits=actor_limits(doc, self._context.bundle_dir, "voice"),
+                actor_briefs=actors.briefs if actors is not None else None,
             )
         except (CallAborted, WorldUnavailable):
             # `_translate_report`'s own typed control-flow (non-completed status, no test case,
@@ -1775,6 +2064,15 @@ class CallRunnerImpl:
                 f"voice_call_translate_crashed: {type(exc).__name__}: {exc}",
                 partial=self._timing_only_outcome(started_at),
             ) from exc
+
+    def _approvals(self, runtime: EnvironmentRuntime, decisions: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+        database = _find_postgres_endpoint(runtime)
+        if database is None:
+            return []
+        try:
+            return approvals(_read_action_log(database.address), decisions)
+        except Exception:  # noqa: BLE001 - no approval lines, never a failed call
+            return []
 
     def _timing_only_outcome(self, started_at: datetime) -> CallOutcome:
         ended_at = datetime.now(timezone.utc)
@@ -1793,7 +2091,11 @@ class CallRunnerImpl:
         runtime: EnvironmentRuntime,
         scenario_key: str,
         started_at: datetime,
-        sub_actors: Sequence[dict[str, Any]] = (),
+        call_actors: Sequence[dict[str, Any]] = (),
+        actor_decisions: Sequence[dict[str, Any]] = (),
+        actor_usage: Sequence[dict[str, Any]] = (),
+        limits: Mapping[str, Any] | None = None,
+        actor_briefs: Mapping[str, str] | None = None,
     ) -> CallOutcome:
         case = report.test_cases[0] if report.test_cases else None
         took_part = (
@@ -1809,13 +2111,13 @@ class CallRunnerImpl:
             if case is not None and case.ended_at is not None
             else datetime.now(timezone.utc)
         )
-        # The person's and the agent's turns; a sub-actor's lines are not turns of the conversation.
+        # The person's and the agent's turns; an actor's lines are not turns of the conversation.
         turns = (
             sum(
                 1
                 for message in case.result.messages
                 if not (
-                    isinstance(message, Mapping) and message.get("role") == "sub_actor"
+                    isinstance(message, Mapping) and message.get("role") == "actor"
                 )
             )
             if case is not None and case.result is not None
@@ -1843,6 +2145,11 @@ class CallRunnerImpl:
             _actor_rows(runtime, self._context.bundle_dir)
             if case is not None
             and self._context.evidence_seam is EvidenceSeam.TOOL_TRACE
+            else []
+        )
+        changes = (
+            _state_changes(runtime, self._context.bundle_dir)
+            if acted or actor_decisions
             else []
         )
         marks = _agent_marks(runtime, self._context.bundle_dir, calls) if acted else []
@@ -1879,15 +2186,24 @@ class CallRunnerImpl:
                     "transcript": result.transcript,
                     "messages": result.messages,
                 }
-                if sub_actors:
-                    transcript_document["sub_actors"] = {
-                        "resolved": sub_actors,
-                        "summary": took_part.get("sub_actors") or [],
-                        "events": took_part.get("sub_actor_events") or [],
+                if call_actors:
+                    transcript_document["call_actors"] = {
+                        "resolved": call_actors,
+                        "summary": took_part.get("call_actors") or [],
+                        "events": took_part.get("call_actor_events") or [],
                     }
-                if acted:
-                    # Kept out of the tool trace, whose every line is one of the agent's own calls.
-                    transcript_document["world_actors"] = {"actions": acted}
+                if acted or actor_decisions:
+                    # Kept out of the tool trace, whose every line is one of the agent's own calls. `decisions` is
+                    # what each actor chose and why (live) or was scheduled to do (mocked); `actions` what the world
+                    # made of it.
+                    transcript_document["world_actors"] = {
+                        "actions": acted,
+                        "decisions": list(actor_decisions),
+                        "state_changes": changes,
+                        "approvals": self._approvals(runtime, actor_decisions),
+                        "limits": dict(limits or {}),
+                        "usage": list(actor_usage),
+                    }
                 recording_offset_ms = result.metadata.get("recording_offset_ms")
                 if isinstance(recording_offset_ms, (int, float)):
                     transcript_document["recording_offset_ms"] = int(
@@ -1944,6 +2260,21 @@ class CallRunnerImpl:
                 else None
             ),
             target_metrics=_target_metrics(case),
+            world_actions=tuple(acted),
+            actor_briefs={
+                **{str(one["id"]): str(one.get("brief") or "") for one in call_actors if one.get("brief")},
+                **(actor_briefs or {}),
+            },
+            call_actors=_with_world_actors(
+                tuple(took_part.get("call_actors") or ())
+                + tuple(
+                    {"actor": one["id"], "name": one.get("name"), "triggered": False}
+                    for one in call_actors
+                    if one.get("entered") is False
+                ),
+                actor_decisions,
+                self._context.bundle_dir,
+            ),
         )
 
         if case is None:

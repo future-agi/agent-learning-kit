@@ -1730,8 +1730,8 @@ def test_tool_trace_parsed_json_result_is_not_truncated(monkeypatch) -> None:
 
 def test_tool_trace_holds_only_the_agents_calls(monkeypatch) -> None:
     """A world actor's action shares the trace table with the agent's calls; it is never graded as the agent's,
-    and never fires a sub-actor waiting on one of the agent's tools."""
-    from fi.simulate.simulation.engines.sub_actor_voice import world_access
+    and never fires an actor waiting on one of the agent's tools."""
+    from fi.simulate.simulation.engines.call_actor_voice import world_access
 
     columns = [
         "name",
@@ -2129,73 +2129,100 @@ def test_a_tool_result_sent_as_text_is_read_back_into_its_shape():
     assert len(_structured("x" * 5000)) == 2000
 
 
-def test_a_call_keeps_who_its_sub_actors_were_and_what_happened_to_each(
+def test_a_call_keeps_who_its_call_actors_were_and_what_happened_to_each(
     tmp_path: Path, monkeypatch
 ) -> None:
-    from fi.alk.harness.sub_actor import SubActor, SubActorList, save_sub_actors
-    from fi.simulate.simulation.sub_actors import LOUDNESS_RANGE
+    from fi.alk.harness.call_actor import CallActor, CallActorList, save_call_actors
+    from fi.simulate.simulation.call_actors import LOUDNESS_RANGE
 
-    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
     _job_obj, context = _context(tmp_path=tmp_path)
     _write_scenario_doc(context.bundle_dir, scenario_key="k1")
     document = context.bundle_dir / "scenarios" / "k1" / "scenario.json"
     body = json.loads(document.read_text())
-    body["sub_actors"] = [
+    body["actors"] = [
         {
             "id": "near",
             "instruction": "You want them to hurry.",
             "trigger": {"kind": "always"},
-        }
+        },
+        {"id": "other", "instruction": "x", "trigger": {"kind": "always"}},
     ]
     document.write_text(json.dumps(body))
-    save_sub_actors(
+    save_call_actors(
         context.bundle_dir,
-        SubActorList(
-            sub_actors=[
-                SubActor(
+        CallActorList(
+            call_actors=[
+                CallActor(
                     id="near",
                     name="Rowan",
                     role="someone with the person",
                     channel="audio_mix",
-                )
+                ),
+                CallActor(
+                    id="other", name="Kai", role="a neighbour", channel="audio_mix"
+                ),
             ]
         ),
     )
     summary = [
         {
-            "sub_actor": "near",
+            "actor": "near",
             "name": "Rowan",
             "triggered": True,
             "delivered": 1,
             "dropped": [],
         }
     ]
-    events = [{"sub_actor": "near", "kind": "delivered", "text": "Hurry up"}]
+    events = [{"actor": "near", "kind": "delivered", "text": "Hurry up"}]
+
+    placed = []
+    # The provider has no voice left for Kai that no one else on the call has.
+    chosen = cr.persona_voice
+    monkeypatch.setattr(
+        cr,
+        "persona_voice",
+        lambda persona, *args, **kwargs: (
+            "" if persona.get("name") == "Kai" else chosen(persona, *args, **kwargs)
+        ),
+    )
 
     async def place_call(spec):
+        placed.append(spec.model_dump_json())
         return _report(
-            result_metadata={"sub_actors": summary, "sub_actor_events": events}
+            result_metadata={"call_actors": summary, "call_actor_events": events}
         )
 
     adapter = FakeAdapter()
     runner = cr.CallRunnerImpl(adapter, context, place_call=place_call)
-    _run(
+    outcome = _run(
         runner,
         _FakeScenario("k1"),
         _runtime(metadata={"livekit_agent_name": "agent-w0"}),
+    )
+    # The grader reads every actor, the one that could not enter as never triggered.
+    assert outcome.call_actors == (
+        *summary,
+        {"actor": "other", "name": "Kai", "triggered": False},
     )
     [transcript] = [
         json.loads(data)
         for kind, _key, data in adapter.uploads
         if kind is cr.ArtifactKind.TRANSCRIPT
     ]
-    record = transcript["sub_actors"]
+    record = transcript["call_actors"]
     assert record["summary"] == summary and record["events"] == events
-    [resolved] = record["resolved"]
+    resolved, other = record["resolved"]
     assert (resolved["id"], resolved["instruction"]) == (
         "near",
         "You want them to hurry.",
     )
+    # Kept on the record with why it never entered, and never put on the call.
+    assert (other["id"], other["entered"], other["reason"]) == (
+        "other",
+        False,
+        "no_distinct_voice",
+    )
+    assert "Rowan" in placed[0] and "Kai" not in placed[0]
     low, high = LOUDNESS_RANGE
     assert low <= resolved["loudness_ratio"] <= high
 
@@ -2220,7 +2247,7 @@ def _with_actors(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def test_world_actors_act_only_when_switched_on_with_a_proxy_taking_actor_requests(
+def test_actors_act_only_with_a_proxy_taking_actor_requests(
     tmp_path, monkeypatch
 ) -> None:
     bundle = _with_actors(tmp_path / "bundle")
@@ -2233,9 +2260,6 @@ def test_world_actors_act_only_when_switched_on_with_a_proxy_taking_actor_reques
         endpoints={"tool_proxy": proxy, "database": _postgres_endpoint()},
         metadata={"actor_proof_path": str(token)},
     )
-    monkeypatch.delenv("HARNESS_SUB_ACTORS", raising=False)
-    assert cr._actor_dispatcher(doc, bundle, ready, "t1", 60.0) is None
-    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
     assert cr._actor_dispatcher({}, bundle, ready, "t1", 60.0) is None
     assert (
         cr._actor_dispatcher(
@@ -2248,15 +2272,15 @@ def test_world_actors_act_only_when_switched_on_with_a_proxy_taking_actor_reques
         is None
     )
     dispatcher = cr._actor_dispatcher(doc, bundle, ready, "t1", 60.0)
-    assert dispatcher is not None and dispatcher.proxy_url == "http://127.0.0.1:9"
-    assert token.read_text() == dispatcher.token and len(dispatcher.token) == 64
+    assert dispatcher is not None and dispatcher.act.proxy_url == "http://127.0.0.1:9"
+    assert token.read_text() == dispatcher.act.token and len(dispatcher.act.token) == 64
     assert token.stat().st_mode & 0o777 == 0o600
     elsewhere = tmp_path / "elsewhere"
     elsewhere.write_text("untouched")
     token.unlink()
     token.symlink_to(elsewhere)
     assert (
-        cr._actor_dispatcher(doc, bundle, ready, "t2", 60.0).token != dispatcher.token
+        cr._actor_dispatcher(doc, bundle, ready, "t2", 60.0).act.token != dispatcher.act.token
     )
     assert elsewhere.read_text() == "untouched" and not token.is_symlink()
 
@@ -2435,7 +2459,6 @@ def test_a_trial_s_actor_token_holds_only_while_its_call_runs(
     body["actors"] = [{"id": "reviewer", "actions": [{"action": "records.approve"}]}]
     document.write_text(json.dumps(body))
     _with_actors(context.bundle_dir)
-    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
     monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg([], ["name", "at"]))
     token = tmp_path / "w0" / "tool-proxy" / "actor-token"
     elsewhere = tmp_path / "elsewhere"
@@ -2540,8 +2563,60 @@ def test_an_actor_on_the_agent_s_tool_waits_for_the_route_the_log_records_for_it
             "actor_proof_path": str(tmp_path / "w0" / "tool-proxy" / "actor-token")
         },
     )
-    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
     dispatcher = cr._actor_dispatcher(doc, bundle, ready, "t1", 60.0)
     log = [{"name": "request_approval", "actor_id": "agent", "action_id": "a1"}]
     [(_actor, action)] = [(one[0], one[2]) for one in dispatcher.pending]
-    assert dispatcher._cause(_actor, action, 0.0, log) == "a1"
+    assert dispatcher._cause(_actor, action.trigger, 0.0, log, 0) == "a1"
+
+
+def test_a_trial_token_that_cannot_be_given_to_the_proxy_user_is_never_widened(tmp_path, monkeypatch):
+    import fi.alk.harness.call_runner as cr
+
+    token_path = tmp_path / "proxy" / "actor-token"
+    real_uid = os.geteuid()
+
+    def chown(*args, **kwargs):
+        raise PermissionError("not permitted")
+
+    # The proxy's directory belongs to another user, and this process may not give the file away.
+    monkeypatch.setattr(cr.os, "geteuid", lambda: real_uid + 1)
+    monkeypatch.setattr(cr.os, "chown", chown)
+
+    with pytest.raises(cr.PrivateTokenUnavailable):
+        cr._write_trial_token(token_path, "secret")
+    assert not token_path.exists()
+
+
+def test_an_actor_that_cannot_act_is_recorded_with_the_real_reason(tmp_path, monkeypatch):
+    import fi.alk.harness.call_runner as cr
+
+    bundle = _with_actors(tmp_path / "bundle")
+    doc = {"actors": [{"id": "reviewer", "actions": [{"action": "records.approve"}]}]}
+    proxy = RuntimeEndpoint(capability="tool_proxy", protocol="http", address="http://127.0.0.1:9")
+    ready = _runtime(
+        endpoints={"tool_proxy": proxy, "database": _postgres_endpoint()},
+        metadata={"actor_proof_path": str(tmp_path / "w0" / "tool-proxy" / "actor-token")},
+    )
+
+    def unavailable(path, token):
+        raise cr.PrivateTokenUnavailable("not ours to give")
+
+    monkeypatch.setattr(cr, "_write_trial_token", unavailable)
+    why: list = []
+    assert cr._actor_dispatcher(doc, bundle, ready, "t1", 60.0, why_not=why) is None
+    assert why[0][0] == "no_private_token"
+    why = []
+    assert cr._actor_dispatcher(doc, bundle, _runtime(endpoints={"database": _postgres_endpoint()}), "t1", 60.0,
+                                why_not=why) is None
+    assert why[0][0] == "no_world_door"
+
+
+def test_the_speaking_actors_actions_file_is_the_run_s_alone(tmp_path):
+    import stat
+
+    import fi.alk.harness.call_runner as cr
+
+    path = cr._private_actions_file(tmp_path / "call-workers" / "actor-actions-r1.jsonl")
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+    assert path.read_text() == ""

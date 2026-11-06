@@ -2462,7 +2462,9 @@ class SubGoalResult(BaseModel):
     held: bool | None
     reason: str | None
     judged: bool
-    verdict: Literal["pass", "fail", "not_applicable", "inconclusive"] | None = None
+    verdict: Literal["pass", "fail", "not_applicable", "inconclusive", "unmeasured"] | None = None
+    # What the sub-goal was decided from: `world_state`, `transcript`, `recording`, `tool_calls`.
+    evidence: list[str] | None = None
 
 
 class MetricEvaluation(BaseModel):
@@ -2584,8 +2586,9 @@ def _without_unsent_fields(body: dict[str, Any], draft: "ResultReceiptDraft") ->
         for name in _LATER_CALL_FIELDS - draft.call.model_fields_set:
             body["call"].pop(name, None)
     for goal, model in zip(body["sub_goals"], draft.sub_goals):
-        if "verdict" not in model.model_fields_set:
-            goal.pop("verdict", None)
+        for name in ("verdict", "evidence"):
+            if name not in model.model_fields_set:
+                goal.pop(name, None)
     if "reason" not in draft.model_fields_set:
         body.pop("reason", None)
 

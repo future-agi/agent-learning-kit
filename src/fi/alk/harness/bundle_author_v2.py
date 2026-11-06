@@ -39,7 +39,6 @@ from .actors import (
 )
 from .bundle import CapabilityProtocol
 from .catalogue import CATALOGUE
-from .sub_actor import SUB_ACTORS_FILE
 from .bundle_v2 import (
     BUNDLE_V2_MANIFEST,
     BUNDLE_V2_SCHEMA_VERSION,
@@ -153,14 +152,33 @@ _TOOL_TRACE_DDL = (
     "actor_id text NOT NULL DEFAULT 'agent', worker_id text, parent_event_id text, "
     "outcome text NOT NULL DEFAULT 'committed', refusal text, refusal_code text, "
     "on_behalf_of text, idempotency_key text);\n"
+    # The columns a prebuilt world's own tool server writes, so one row carries both sets.
+    "ALTER TABLE _alk_tool_trace ADD COLUMN IF NOT EXISTS agent_tool text, "
+    "ADD COLUMN IF NOT EXISTS provider_call_id text, ADD COLUMN IF NOT EXISTS tool_call_id text, "
+    "ADD COLUMN IF NOT EXISTS status text;\n"
 )
 
 
+def _sets_trial_state(authoring: Path) -> bool:
+    """Whether any scenario has a pre-run session or sets faults: both need the full action log."""
+    for document in Path(authoring).glob("scenarios/*/scenario.json"):
+        try:
+            body = json.loads(document.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(body, dict) and (body.get("faults") or body.get("pre_run") or body.get("history")):
+            return True
+    return False
+
+
 def _action_log_seed(authoring: Path) -> str:
-    """The action log and who may do what in the world; a world without actors is seeded exactly as before."""
+    """The action log and who may do what in the world; a world without actors, pre-run sessions or faults is seeded exactly
+    as before."""
     listing = load_actors(authoring)
     return (
-        _TOOL_TRACE_DDL + actors_seed(listing) if listing.actors else _AGENT_TRACE_DDL
+        _TOOL_TRACE_DDL + actors_seed(listing)
+        if listing.actors or _sets_trial_state(authoring)
+        else _AGENT_TRACE_DDL
     )
 
 
@@ -3306,15 +3324,6 @@ def _copy_chat_authoring(
     return adopted
 
 
-def _copy_sub_actor_list(authoring: Path, staging: Path) -> list[str]:
-    """Put the environment's sub-actors beside the scenarios that include them; none, nothing."""
-    listing = authoring / SUB_ACTORS_FILE
-    if not listing.is_file():
-        return []
-    shutil.copy2(listing, staging / SUB_ACTORS_FILE)
-    return [SUB_ACTORS_FILE]
-
-
 def _compile_source_tool_handlers(contract: dict[str, Any], staging: Path) -> list[str]:
     """Seal bindings for caller-executed tools that live in the submitted source.
 
@@ -3634,7 +3643,6 @@ def author_bundle_v2(
         if include_scenarios:
             _copy_scenarios(authoring_root, temporary, count=job.scenario_count)
             adopted_catalogue = _copy_sub_goal_catalogue(authoring_root, temporary)
-            adopted_catalogue += _copy_sub_actor_list(authoring_root, temporary)
             if (authoring_root / ACTORS_FILE).is_file():
                 shutil.copy2(authoring_root / ACTORS_FILE, temporary / ACTORS_FILE)
                 # Only with actors, so a bundle without them seals exactly as before.
@@ -3657,6 +3665,11 @@ def author_bundle_v2(
             shutil.copy2(
                 Path(__file__).with_name("tool_trace_proxy.py"),
                 generated / "proxy.py",
+            )
+            # The proxy is one surface of the world's door, which it imports from beside it.
+            shutil.copy2(
+                Path(__file__).with_name("world_door.py"),
+                generated / "world_door.py",
             )
         if any(process.name == "mcp-toolbox" for process in plan.processes):
             toolbox = _mcp_toolbox_definition(source_root)

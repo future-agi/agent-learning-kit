@@ -25,7 +25,7 @@ from typing import Any, Callable, Sequence
 
 import requests
 
-from fi.simulate.simulation.sub_actors import someone_else
+from fi.simulate.simulation.call_actors import someone_else
 
 from .backends import SessionSpec, tool, tool_server
 from .catalogue import criteria_text
@@ -125,6 +125,8 @@ recording, the transcript, the actions or the records.
 
 NOT_APPLICABLE = "Not applicable: "
 INCONCLUSIVE = "Inconclusive: "
+# Never decided: the evidence this sub-goal reads never arrived. Counted as evaluated-of-requested, never pass or fail.
+UNMEASURED = "Unmeasured: "
 
 
 def verdict_of(args: dict[str, Any]) -> tuple[bool | None, str]:
@@ -146,7 +148,9 @@ def verdict_named(held: bool | None, reason: str | None) -> str | None:
     if held is True and reason.startswith(NOT_APPLICABLE):
         return "not_applicable"
     if held is None:
-        return "inconclusive" if reason.startswith(INCONCLUSIVE) else None
+        if reason.startswith(INCONCLUSIVE):
+            return "inconclusive"
+        return "unmeasured" if reason.startswith(UNMEASURED) else None
     return "pass" if held else "fail"
 
 
@@ -190,11 +194,20 @@ class CallEvidence:
     rule that a judge has listened to the recording and read the transcript before it decides.
     """
 
-    def __init__(self, world: Any, messages: Sequence[Any], recording: str | None, label: str) -> None:
+    def __init__(
+        self,
+        world: Any,
+        messages: Sequence[Any],
+        recording: str | None,
+        label: str,
+        actors: dict[str, Any] | None = None,
+    ) -> None:
         self.world = world
         self.messages = messages
         self.recording = recording
         self.label = label
+        # Who else took part and what each did in the world, when: the same record the trial view shows.
+        self.actors = actors
         # Evidence a tool returned this turn: looked at only once the judge's next turn has read it.
         self.fetched: set[str] = set()
         # False where tool results reach the model inside one session, with no turns to count.
@@ -289,6 +302,21 @@ class CallEvidence:
         if not native:
             tools.append(query_world)
         tools.append(read_transcript)
+        if self.actors:
+
+            @tool(
+                "read_actors",
+                "Everyone else who took part: each actor's part in the call (came in, reached the agent, why not), "
+                "every action each took in the world, with when and what the world made of it, and the brief each "
+                "played from. Use it to see what the agent was dealing with; the sub-goal still grades the agent, never "
+                "an actor.",
+                schema({}, []),
+            )
+            async def read_actors(args: dict[str, Any]) -> dict[str, Any]:
+                self._fetched("actors")
+                return _say(_dump(self.actors))
+
+            tools.append(read_actors)
         return tools + ([listen] if self.recording else [])
 
     def verdict_problem(self, args: dict[str, Any]) -> str | None:
@@ -444,10 +472,11 @@ async def judge_sub_goal(
     scenario: Any = None,
     agent_instructions: str = "",
     recording: str | None = None,
+    actors: dict[str, Any] | None = None,
 ) -> tuple[bool | None, str]:
     """Decide one judged sub-goal in its own conversation: (passed, explanation). Never raises."""
     name = getattr(goal, "name", "")
-    evidence = CallEvidence(world, messages, recording, name)
+    evidence = CallEvidence(world, messages, recording, name, actors)
     verdict: dict[str, tuple[bool | None, str]] = {}
 
     @tool(
@@ -570,7 +599,7 @@ _SPEAKERS = {"user": "Customer", "assistant": "Agent"}
 
 def _speaker(message: dict[str, Any]) -> str:
     role = str(message.get("role") or "")
-    if role == "sub_actor":
+    if role == "actor":
         return someone_else(str(message.get("name") or ""))
     return _SPEAKERS.get(role, role or "unknown")
 
@@ -581,7 +610,7 @@ def _others_present(messages: Sequence[Any]) -> str:
         {
             str(m.get("name") or "someone else")
             for m in messages
-            if isinstance(m, dict) and m.get("role") == "sub_actor"
+            if isinstance(m, dict) and m.get("role") == "actor"
         }
     )
     if not names:

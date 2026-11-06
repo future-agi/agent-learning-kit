@@ -74,7 +74,6 @@ from .process_runtime import (
 )
 from .judge import judge_sub_goal as _judge_sub_goal
 from .joint_judge import judge_sub_goals_jointly as _judge_sub_goals_jointly
-from .sub_actor import SWITCH as SUB_ACTORS_SWITCH
 from .scenario_source import (
     BundleScenarioSource,
     ScenarioDocumentInvalid,
@@ -196,7 +195,6 @@ _SIMULATOR_SECRET_ALIASES = frozenset(
         "ALK_HARNESS",
         GOOGLE_ADK_APPROVAL_ENV,
         "ALK_VOICEMAIL_SCENARIOS",
-        SUB_ACTORS_SWITCH,
         "ALK_HARNESS_MODEL",
         "ALK_HARNESS_THINKING",
         "ALK_JUDGE_MODE",
@@ -1603,6 +1601,7 @@ class OutboundAdapter:
                     "reason": g.reason,
                     "judged": g.judged,
                     **({"verdict": g.verdict} if g.verdict else {}),
+                    **({"evidence": list(g.evidence)} if getattr(g, "evidence", ()) else {}),
                 }
                 for g in receipt.sub_goals
             ],

@@ -4671,7 +4671,7 @@ def test_caller_mood_rises_on_refusals_and_repeats_and_eases_on_progress() -> No
     assert mood.brief(_Ctx(turns)).messages()[-1].text_content == "Anything else?"
 
 
-def test_a_target_turn_a_sub_actor_answered_is_kept_and_never_answered_by_the_person() -> (
+def test_a_target_turn_a_call_actor_answered_is_kept_and_never_answered_by_the_person() -> (
     None
 ):
     async def answered(_text: str) -> bool:
@@ -4684,14 +4684,14 @@ def test_a_target_turn_a_sub_actor_answered_is_kept_and_never_answered_by_the_pe
             session,
             conversation_ended=asyncio.Event(),
             captured_target_turns=[],
-            sub_actor_turn=answered,
+            call_actor_turn=answered,
         )
     )
     assert session.reply_inputs == []
     assert session.history_adds == [("user", "Which date?")]
 
 
-def test_a_target_turn_after_the_call_ended_never_reaches_a_sub_actor() -> None:
+def test_a_target_turn_after_the_call_ended_never_reaches_a_call_actor() -> None:
     told: list[str] = []
 
     async def answered(text: str) -> bool:
@@ -4706,13 +4706,13 @@ def test_a_target_turn_after_the_call_ended_never_reaches_a_sub_actor() -> None:
             _FakeReplySession(),
             conversation_ended=ended,
             captured_target_turns=[],
-            sub_actor_turn=answered,
+            call_actor_turn=answered,
         )
     )
     assert told == []
 
 
-def test_the_person_stays_silent_on_a_turn_a_sub_actor_holds() -> None:
+def test_the_person_stays_silent_on_a_turn_a_call_actor_holds() -> None:
     async def exercise():
         agent = livekit._TestRunnerAgent(
             persona=_scenario().dataset[0], instructions="Be a customer."
@@ -4721,10 +4721,10 @@ def test_the_person_stays_silent_on_a_turn_a_sub_actor_holds() -> None:
         agent._session = SimpleNamespace(history=SimpleNamespace(insert=kept.append))
         holding = [True]
 
-        async def sub_actor_turn(_text: str) -> bool:
+        async def call_actor_turn(_text: str) -> bool:
             return holding[0]
 
-        agent._sub_actor_turn = sub_actor_turn
+        agent._call_actor_turn = call_actor_turn
         turn = ChatMessage(role="user", content=["Which date?"])
         with pytest.raises(livekit.StopResponse):
             await agent.on_user_turn_completed(None, turn)
@@ -4754,7 +4754,7 @@ def test_the_person_s_level_counts_speech_and_never_pauses() -> None:
     assert agent.voice_rms() == pytest.approx(3000.0)
 
 
-class _SubActorTTS:
+class _CallActorTTS:
     def __init__(self) -> None:
         self.listeners: dict[str, list] = {}
 
@@ -4783,11 +4783,11 @@ class _NeverDone:
         self.stopped = True
 
 
-def _sub_actors_on_a_call(monkeypatch):
-    voice = _SubActorTTS()
+def _call_actors_on_a_call(monkeypatch):
+    voice = _CallActorTTS()
     monkeypatch.setattr(
         livekit,
-        "_bound_sub_actor_voices",
+        "_bound_call_actor_voices",
         lambda: [{"id": "near", "name": "Near", "voice": "v", "channel": "audio_mix"}],
     )
     monkeypatch.setattr(livekit, "_with_voice", lambda *_args, **_kwargs: None)
@@ -4799,17 +4799,17 @@ def _sub_actors_on_a_call(monkeypatch):
     agent._background_player = SimpleNamespace(play=lambda _config: played)
     session = SimpleNamespace(say=lambda *_args, **_kwargs: spoken)
     models = SimpleNamespace(llm=None, http_session=None)
-    call = livekit.LiveKitEngine._sub_actors_on_call(
+    call = livekit.LiveKitEngine._call_actors_on_call(
         SimpleNamespace(), agent, models, session, seed="run"
     )
     return call, agent, voice, spoken, played
 
 
-def test_a_sub_actor_s_voice_counts_in_the_call_s_model_usage(monkeypatch) -> None:
+def test_a_call_actor_s_voice_counts_in_the_call_s_model_usage(monkeypatch) -> None:
     from livekit.agents.metrics import TTSMetrics
     from livekit.agents.metrics.base import Metadata
 
-    _call, agent, voice, _spoken, _played = _sub_actors_on_a_call(monkeypatch)
+    _call, agent, voice, _spoken, _played = _call_actors_on_a_call(monkeypatch)
     voice.emit(
         "metrics_collected",
         TTSMetrics(
@@ -4832,8 +4832,8 @@ def test_a_sub_actor_s_voice_counts_in_the_call_s_model_usage(monkeypatch) -> No
     ] == [("voice-co", "voice-model", 12)]
 
 
-def test_a_sub_actor_line_cut_short_stops_its_audio(monkeypatch) -> None:
-    call, agent, _voice, spoken, played = _sub_actors_on_a_call(monkeypatch)
+def test_a_call_actor_line_cut_short_stops_its_audio(monkeypatch) -> None:
+    call, agent, _voice, spoken, played = _call_actors_on_a_call(monkeypatch)
     monkeypatch.setattr(livekit, "at_level", lambda frames, *_args: frames)
     monkeypatch.setattr(agent, "voice_rms", lambda: None)
 

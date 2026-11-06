@@ -4836,12 +4836,21 @@ def test_a_changed_world_reaches_the_sealed_seed_on_reseal(
     assert reseal_scenarios(authoring) == digest
 
 
-def test_the_bundle_seals_the_environment_s_sub_actors(tmp_path: Path) -> None:
+def test_an_actor_who_speaks_on_calls_is_sealed_in_the_one_actor_list(tmp_path: Path) -> None:
     source = tmp_path / "source"
     source.mkdir()
     (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
     authoring = _authoring(tmp_path)
-    (authoring / "sub_actors.json").write_text('{"sub_actors": []}\n', encoding="utf-8")
+    (authoring / "actors.json").write_text(
+        json.dumps(
+            {
+                "actors": [
+                    {"id": "partner", "name": "Sam", "role": "the person's partner", "channel": "audio_mix"}
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
 
     output = tmp_path / "bundle"
     author_bundle_v2(
@@ -4851,10 +4860,10 @@ def test_the_bundle_seals_the_environment_s_sub_actors(tmp_path: Path) -> None:
         output=output,
     )
     manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
-    assert (output / "sub_actors.json").is_file()
-    assert "sub_actors.json" in {one["path"] for one in manifest["files"]}
-    # No world actors: the bundle seals exactly as before, with no actor rules.
-    assert not (output / "actor_rules.json").exists()
+    sealed = {one["path"] for one in manifest["files"]}
+    assert "actors.json" in sealed
+    assert sealed.isdisjoint({"sub_actors.json", "call_actors.json"})
+    assert json.loads((output / "actors.json").read_text())["actors"][0]["channel"] == "audio_mix"
 
 
 def test_a_bundle_with_actors_seals_the_rules_its_release_checks_them_by(
@@ -4880,7 +4889,7 @@ def test_a_bundle_with_actors_seals_the_rules_its_release_checks_them_by(
         one["path"] for one in manifest["files"]
     }
     rules = json.loads((output / "actor_rules.json").read_text(encoding="utf-8"))
-    assert set(rules["records"]) == {"actors.json", "sub_actors.json"}
+    assert set(rules["records"]) == {"actors.json"}
 
 
 def test_a_world_without_actors_is_seeded_with_the_tool_trace_it_always_had(
