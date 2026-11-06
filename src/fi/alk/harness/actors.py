@@ -71,6 +71,10 @@ class Activation(BaseModel):
     fallback: str = "silent"
 
 
+# The models an actor or the environment's actors may name, for now two flash models; unset is the caller's own.
+ACTOR_MODELS = ("gemini-3.8-flash", "gemini-3.7-flash")
+
+
 class Limits(BaseModel):
     """Every limit on actors, as a setting: on the environment's list, overridable per scenario. `None` is no limit.
     A value left unset takes the default for the channel the run uses (a phone line carries at most two voices)."""
@@ -735,6 +739,8 @@ def actor_rules() -> dict[str, Any]:
     from fi.simulate.simulation.call_actors import LIMIT_DEFAULTS
 
     return {
+        # The models an actor may be played on besides the caller simulator's own, which is what an unset model means.
+        "actor_models": list(ACTOR_MODELS),
         # Each actor limit's default where nothing is set: on a phone line, and in a chat (none for the call-wide
         # ones). The editor shows these; a run reads the same values.
         "limits": {

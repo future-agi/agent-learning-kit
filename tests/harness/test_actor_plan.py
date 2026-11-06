@@ -1097,3 +1097,9 @@ def test_a_speaking_actor_on_the_caller_s_model_is_counted_by_the_session_the_en
     assert 'self.llm.on("metrics_collected", self._on_metrics_collected)' in inspect.getsource(agent_activity)
     assert "lambda event: self._usage_collector.collect(event.metrics)" in inspect.getsource(engine)
     assert engine.actor_llm({"id": "mia"}, "shared", None, None) == "shared"
+
+
+def test_the_models_an_actor_may_name_are_sealed_with_the_actor_rules():
+    from fi.alk.harness.actors import ACTOR_MODELS, actor_rules
+
+    assert actor_rules()["actor_models"] == list(ACTOR_MODELS) and ACTOR_MODELS
