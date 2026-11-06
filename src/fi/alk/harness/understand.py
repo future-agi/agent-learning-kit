@@ -40,6 +40,11 @@ _READER_INSTRUCTIONS = (
     "the contract."
 )
 PROVIDER_IMPORT_PROFILE_PATH_ENV = "ALK_PROVIDER_IMPORT_PROFILE_PATH"
+# Said once when a model ends its turn without saving; every unattended reading uses these words.
+SUBMIT_REMINDER = (
+    "Nothing was saved: you finished without calling submit_contract. Call it now "
+    "with the contract you worked out."
+)
 
 
 def _provider_import_briefing() -> str:

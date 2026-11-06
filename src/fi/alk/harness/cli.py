@@ -39,7 +39,7 @@ from .scenarios import opening as scenario_opening
 from .session import TEXT, Event
 from .sessions import Session, new_id, save as save_session
 from .sources import resolve, supported
-from .understand import load, open_stage, opening
+from .understand import SUBMIT_REMINDER, load, open_stage, opening
 from .world.snapshot import saved as world_saved
 
 
@@ -320,10 +320,7 @@ async def _understand(args: argparse.Namespace) -> int:
         interactive=args.interactive,
         until=lambda: load(destination) is not None
         or (destination / FAILURE_FILE).is_file(),
-        nudge=(
-            "Nothing was saved: you finished without calling submit_contract. Call it now "
-            "with the contract you worked out."
-        ),
+        nudge=SUBMIT_REMINDER,
     )
 
     if (destination / FAILURE_FILE).is_file():
