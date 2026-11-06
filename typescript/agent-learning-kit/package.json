@@ -1,7 +1,7 @@
 {
   "name": "@future-agi/agent-learning-kit",
   "version": "0.4.0",
-  "description": "Unified Future AGI TypeScript SDK for agent evaluation, simulation, red teaming, and optimization.",
+  "description": "Future AGI TypeScript SDK for LLM and agent evaluation (cloud, local and hybrid)",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/esm/index.js",
@@ -56,9 +56,6 @@
     "ai-agents",
     "evaluation",
     "agent-evaluation",
-    "agent-simulation",
-    "agent-optimization",
-    "red-teaming",
     "genai",
     "machine-learning",
     "typescript",
@@ -107,13 +104,7 @@
   },
   "dependencies": {
     "@traceai/fi-core": "^0.1.16",
-    "axios": "^1.6.0",
-    "chalk": "^5.3.0",
-    "commander": "^12.0.0",
-    "ora": "^8.0.0",
-    "winston": "^3.11.0",
-    "yaml": "^2.3.0",
-    "zod": "^3.22.0"
+    "axios": "^1.6.0"
   },
   "publishConfig": {
     "access": "public"

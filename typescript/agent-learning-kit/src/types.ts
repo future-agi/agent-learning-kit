@@ -110,7 +110,7 @@ interface EvalResultMetric {
  * const result: EvalResult = {
  *   name: 'Factual Accuracy',
  *   output: 0.95,
- *   reason: 'Response is factually correct',
+ *   reason: 'EVALUATION_COMPLETED',
  *   runtime: 1.23,
  *   output_type: 'score'
  * };
@@ -121,7 +121,20 @@ interface EvalResult {
   name?: string;
   /** Evaluation output (typically a score 0-1, boolean, or structured data) */
   output?: any;
-  /** Human-readable explanation of the evaluation result */
+  /**
+   * Short, fixed reason for this row's outcome.
+   *
+   * Cloud results (`evaluate()`, `Evaluator.evaluate()` and `Execution.result`)
+   * carry one of these codes, never the backend's explanation text:
+   * - `'EVALUATION_COMPLETED'`: the row completed and was not marked failed.
+   * - `'EVALUATION_FAILED'`: the backend marked the row failed.
+   * - `'EVALUATION_RESULT_INVALID'`: the row was missing, malformed or not finished.
+   * - `'EVALUATION_REQUEST_FAILED'`: the evaluation request did not complete.
+   *
+   * Parsing a response with `EvalResponseHandler` directly can also yield
+   * `'EVALUATION_INCOMPLETE'` for a pending row. Local evaluator results carry
+   * the local metric's own reason string.
+   */
   reason?: string;
   /** Execution time in seconds */
   runtime: number;
@@ -139,7 +152,10 @@ interface EvalResult {
   data?: Record<string, any> | any[];
   /** @deprecated Legacy field returned by the v1 `/sdk/api/v1/eval/` path. */
   failure?: boolean;
-  /** Additional metadata (usage stats, cost, explanation) */
+  /**
+   * Usage and cost metadata when the backend sends it. On cloud results
+   * `explanation` is always an empty object; explanation text is not surfaced.
+   */
   metadata?: string | any[] | Record<string, any>;
   /** Detailed metrics breakdown */
   metrics?: EvalResultMetric[];
@@ -332,7 +348,14 @@ interface EvaluateOptions {
   traceEval?: boolean;
   /** Platform for logging results ('langfuse') */
   platform?: string;
-  /** Run asynchronously - returns immediately with eval_id, poll for results */
+  /**
+   * Sends `is_async` to the backend. `evaluate()` still resolves to a
+   * `BatchRunResult` and returns no pollable handle: a row without a usable
+   * output (for example, one still pending) comes back with
+   * `reason: 'EVALUATION_RESULT_INVALID'` and no `eval_id`, and the batch
+   * `status` is `'incomplete'`. For async runs use `Evaluator.submit()`, then
+   * `Execution.wait()` or `Evaluator.getExecution(id)`.
+   */
   isAsync?: boolean;
   /** Enable error localization to identify specific failure points */
   errorLocalizer?: boolean;

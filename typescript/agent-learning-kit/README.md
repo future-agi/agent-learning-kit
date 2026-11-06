@@ -61,9 +61,20 @@ const result = await evaluate(
   }
 );
 
-console.log(result.eval_results[0].output); // Score: 0-1
-console.log(result.eval_results[0].reason); // Explanation
+console.log(result.status);                  // 'completed' | 'failed' | 'incomplete'
+console.log(result.eval_results[0]?.output); // Score: 0-1
+// Fixed code, not explanation text: 'EVALUATION_COMPLETED' | 'EVALUATION_FAILED'
+// | 'EVALUATION_RESULT_INVALID' | 'EVALUATION_REQUEST_FAILED'
+console.log(result.eval_results[0]?.reason);
 ```
+
+On cloud results, `reason` is always one of those four codes.
+`EVALUATION_FAILED` means the backend marked the row failed,
+`EVALUATION_RESULT_INVALID` means the row was missing, malformed or not
+finished, and `EVALUATION_REQUEST_FAILED` means the request did not complete.
+The backend's explanation text is not returned (`metadata.explanation`, when
+present, is an empty object), so code migrated from `@future-agi/ai-evaluation`
+should not read explanations from `reason`.
 
 ## Features
 
@@ -97,16 +108,24 @@ const result = await evaluator.evaluate(
   { modelName: 'gpt-4o' }
 );
 
-// Async evaluation (returns immediately, poll for results)
-const asyncResult = await evaluator.evaluate(
+// Async evaluation: submit() returns an Execution handle immediately
+const execution = await evaluator.submit(
   'Factual Accuracy',
-  { response: ['...'], context: ['...'] },
-  { isAsync: true }
+  { response: ['...'], context: ['...'] }
 );
 
-// Get async result later
-const finalResult = await evaluator.getEvalResult(asyncResult.eval_id);
+// Poll until the run finishes (throws ExecutionError if it fails)
+const finished = await execution.wait({ timeout: 300, pollInterval: 2 });
+console.log(finished.status, finished.result);
+
+// Or look the run up later, from any process, by its id
+const later = await evaluator.getExecution(execution.id);
 ```
+
+`submit()` takes one template. `evaluate()` with `isAsync: true` still resolves
+to a `BatchRunResult`, never to a pollable handle: a row that is still pending
+comes back as `EVALUATION_RESULT_INVALID` with no `eval_id`, and the batch
+`status` is `'incomplete'`. Use `submit()` for async runs.
 
 ### Local Evaluation (Offline)
 
@@ -235,6 +254,8 @@ const judgment = await llm.judge(
 Evaluate entire ML pipelines:
 
 ```typescript
+import { Evaluator } from '@future-agi/agent-learning-kit';
+
 const evaluator = new Evaluator();
 
 // Submit pipeline evaluation
@@ -259,6 +280,8 @@ const results = await evaluator.getPipelineResults(
 Enable observability with Langfuse:
 
 ```typescript
+import { Evaluator } from '@future-agi/agent-learning-kit';
+
 const evaluator = new Evaluator({
   fiApiKey: process.env.FI_API_KEY,
   fiSecretKey: process.env.FI_SECRET_KEY,
