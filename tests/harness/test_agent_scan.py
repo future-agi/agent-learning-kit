@@ -101,7 +101,6 @@ def _fresh_state(monkeypatch, tmp_path):
     monkeypatch.setattr(spend, "_path", None)
     # The machine's own secrets files must not decide what a test sees masked.
     monkeypatch.setattr(reading_entry, "_SECRET_FILES", (tmp_path / "no-secrets.json",))
-    monkeypatch.setattr(reading_entry, "_secret_values", None)
     monkeypatch.setattr(agent_scan, "CLOCK", 1200.0)
     monkeypatch.setattr(agent_scan, "AI_SECONDS", 600.0)
     spend._stages.clear()
