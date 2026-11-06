@@ -221,9 +221,9 @@ class Scenario(Protocol):
         str  # platform id from pre-allocation (outbound-channels.md Channel 2 "Join").
     )
     sub_goals: Sequence[SubGoal]
-    # True only when the reference solution contains an environment/tool action. Pure
-    # conversation scenarios (for example, refusing an unsafe request) legitimately produce no
-    # world calls and must still reach their judged checks.
+    # True only when the reference solution contains an environment/tool action and a sub-goal
+    # needs one to hold. Pure conversation scenarios and refusals (for example, refusing an unsafe
+    # request) legitimately produce no world calls and must still reach their checks.
     requires_tool_evidence: bool
     call_execution_id: str | None
 
