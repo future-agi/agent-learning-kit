@@ -190,6 +190,14 @@ def test_local_sandbox_reports_live_stage_timestamp_and_detail_from_events(
     source = tmp_path / "sources" / "agent"
     source.mkdir(parents=True)
     monkeypatch.setenv("ALK_SANDBOX_SOURCE_ROOTS", str(tmp_path / "sources"))
+
+    # The stage comes from the event file, not the job. Left to run, the job reaches its
+    # worker's start, where the client's loop closing after the request cancels it and waits
+    # on a worker half started, or, past it, leaves a real worker running after the test.
+    async def idle(self, _job, _source):
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr(LocalSandbox, "_execute", idle)
     state_root = tmp_path / "state"
     client = TestClient(create_app(state_root))
     submitted = client.post("/v1/jobs", json={"source_path": str(source)}).json()

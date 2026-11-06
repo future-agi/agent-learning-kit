@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from fi.alk.harness import reading_entry, session, spend
+from fi.alk.harness import reading_entry, spend
 from fi.alk.harness.job import FailureDomain, HarnessFailure, HarnessJob, HarnessStage
 from fi.alk.harness.reading_entry import (
     MESSAGE_LIMIT,
@@ -43,11 +43,9 @@ FIND_AGENTS_VALUES = {
 
 @pytest.fixture(autouse=True)
 def _fresh_state(monkeypatch, tmp_path):
-    monkeypatch.setattr(session, "STAGE_IDLE_RETRIES", session.STAGE_IDLE_RETRIES)
     monkeypatch.delenv(spend.JOURNAL_ALIAS, raising=False)
     # The machine's own secrets files must not decide what a test sees masked.
     monkeypatch.setattr(reading_entry, "_SECRET_FILES", (tmp_path / "no-secrets.json",))
-    monkeypatch.setattr(reading_entry, "_secret_values", None)
     spend._stages.clear()
     spend.journal_to(None)
     yield
@@ -134,9 +132,10 @@ def _refusal(code: str = "scan_job_invalid") -> HarnessFailure:
 
 # The helper ends the process with os._exit at its limit, so those tests run it in a child.
 _CHILD = r"""
-import asyncio, json, sys, time
+import asyncio, json, logging, shutil, sys, time
 config = json.loads(sys.argv[1])
 sys.path[:0] = config["sys_path"]
+logging.basicConfig(level=logging.INFO)
 from pathlib import Path
 from fi.alk.harness import reading_entry, spend
 from fi.alk.harness.reading_entry import ReadingMode, run_reading_mode
@@ -152,6 +151,24 @@ def broken(*_args, **_kwargs):
 async def work(job, source, output):
     if config["work"] == "returns":
         return 0
+    if config["work"] == "leaves_a_thread":
+        (output / "agent.json").write_text('{"agent": "kept"}')
+        reading_entry.write_reading_cost(output, complete=True)
+        try:
+            # A scan given up on by its caller: the thread itself runs on past the limit.
+            await asyncio.wait_for(asyncio.to_thread(time.sleep, 30.0), 0.1)
+        except TimeoutError:
+            pass
+        return 0
+    if config["work"] in ("completes_then_blocks", "completes_then_raises"):
+        spend.record("read-agent", 0.3, turns=1, models={"m"})
+        reading_entry.write_reading_cost(output, complete=True)
+        if config["work"] == "completes_then_raises":
+            raise RuntimeError("the work broke after its last write")
+    if config["work"] == "spoils_the_output_then_blocks":
+        # Every write at the limit now fails, and each failure would log.
+        shutil.rmtree(output)
+        output.write_text("a file, not a folder")
     if config["work"] == "records_then_blocks":
         spend.record("read-agent", 0.21, turns=1, models={"m"})
     if config["work"] == "breaks_the_writers_then_blocks":
@@ -232,6 +249,52 @@ def test_an_unreadable_job_is_refused_before_any_work(tmp_path, values, case):
     }
     assert not (output / "cost.json").exists()
     assert checked == []
+    assert work.calls == []
+
+
+_TOKEN = "ghp_REVIEWSECRET1234567890abcdef"
+
+
+@pytest.mark.parametrize(
+    "refused",
+    [
+        {**_job(), "metadata": {"token": _TOKEN}},
+        # pydantic's own message for this one repeats the value whole.
+        {**_job(), "schema_version": _TOKEN},
+        # A dict's key is in the error's location.
+        {**_job(), "agent": {"connector": "auto", "secret_refs": {_TOKEN: "not-an-object"}}},
+    ],
+    ids=["secret_field", "schema_version", "secret_refs_key"],
+)
+def test_a_refused_job_leaves_none_of_its_values_anywhere(
+    tmp_path, values, capfd, caplog, refused
+):
+    token = _TOKEN
+    job_path = tmp_path / "job.json"
+    job_path.write_text(json.dumps(refused), encoding="utf-8")
+
+    with caplog.at_level("DEBUG"):
+        assert _run(_mode(values, _Work()), tmp_path, job_path) == 78
+
+    failure = (tmp_path / "reading" / "failure.json").read_text(encoding="utf-8")
+    assert json.loads(failure)["code"] == READING_JOB_INVALID
+    captured = capfd.readouterr()
+    kept = failure + captured.out + captured.err + caplog.text
+    assert not [token[at : at + 8] for at in range(len(token) - 7) if token[at : at + 8] in kept]
+
+
+def test_a_job_nested_past_the_parsers_depth_is_refused(tmp_path, values):
+    job_path = tmp_path / "job.json"
+    job_path.write_text("[" * 100_000 + "]" * 100_000, encoding="utf-8")
+    work = _Work()
+
+    assert _run(_mode(values, work), tmp_path, job_path) == 78
+
+    failure = _failure_in(tmp_path / "reading")
+    assert (failure["code"], failure["message"]) == (
+        READING_JOB_INVALID,
+        "The job file could not be read as a harness job (RecursionError).",
+    )
     assert work.calls == []
 
 
@@ -386,6 +449,78 @@ def test_the_time_limit_does_not_fire_after_the_work_returns(tmp_path):
     assert not (tmp_path / "reading" / "failure.json").exists()
 
 
+def test_a_limit_named_by_the_environment_is_read_when_the_reading_starts(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("ALK_TEST_READING_LIMIT", "0.5")
+    mode_values = {
+        **READ_AGENT_VALUES,
+        "time_limit_seconds": 30.0,
+        "limit_env": "ALK_TEST_READING_LIMIT",
+        "limit_margin_seconds": 0.5,
+    }
+
+    finished, elapsed = _run_in_a_child(tmp_path, mode_values, "blocks")
+
+    assert finished.returncode == 78, finished.stderr
+    assert 1.0 <= elapsed <= 1.0 + 5
+    failure = _failure_in(tmp_path / "reading")
+    assert failure["code"] == "agent_reading_timed_out"
+    assert "past its 1 s limit" in failure["message"]
+
+
+def test_a_thread_left_after_the_work_ends_the_process_quietly_at_the_limit(tmp_path):
+    mode_values = {**READ_AGENT_VALUES, "time_limit_seconds": 1.0}
+
+    finished, elapsed = _run_in_a_child(tmp_path, mode_values, "leaves_a_thread")
+
+    output = tmp_path / "reading"
+    # The work's own code, at the limit, not after the 30 s thread; and nothing written over the
+    # files the work left.
+    assert finished.returncode == 0, finished.stderr
+    assert 1.0 <= elapsed <= 1.0 + 5
+    assert not (output / "failure.json").exists()
+    assert (output / "agent.json").read_text() == '{"agent": "kept"}'
+    assert _cost_in(output) == {**_empty_spend(), "complete": True}
+
+
+def _empty_spend() -> dict:
+    return {"schema": "futureagi.harness-spend.v1", "total_usd": 0.0, "unpriced_turns": 0, "stages": []}
+
+
+def test_a_timeout_after_a_complete_cost_marks_it_incomplete(tmp_path):
+    mode_values = {**READ_AGENT_VALUES, "time_limit_seconds": 1.0}
+
+    finished, _ = _run_in_a_child(tmp_path, mode_values, "completes_then_blocks")
+
+    assert finished.returncode == 78, finished.stderr
+    cost = _cost_in(tmp_path / "reading")
+    assert (cost["total_usd"], cost["complete"]) == (0.3, False)
+    assert _failure_in(tmp_path / "reading")["code"] == "agent_reading_timed_out"
+
+
+def test_a_crash_after_a_complete_cost_marks_it_incomplete(tmp_path):
+    finished, _ = _run_in_a_child(tmp_path, READ_AGENT_VALUES, "completes_then_raises")
+
+    assert finished.returncode == 1, finished.stderr
+    cost = _cost_in(tmp_path / "reading")
+    assert (cost["total_usd"], cost["complete"]) == (0.3, False)
+    assert _failure_in(tmp_path / "reading")["code"] == "agent_reading_crashed"
+
+
+def test_the_way_out_at_the_limit_logs_nothing(tmp_path):
+    mode_values = {**READ_AGENT_VALUES, "time_limit_seconds": 1.0}
+
+    finished, elapsed = _run_in_a_child(tmp_path, mode_values, "spoils_the_output_then_blocks")
+
+    assert finished.returncode == 78, finished.stderr
+    assert elapsed <= 1.0 + 5
+    # The writes did fail, and a write that fails logs everywhere else.
+    assert (tmp_path / "reading").is_file()
+    assert "reading started at " in finished.stderr
+    assert "not written" not in finished.stderr
+
+
 def test_a_crash_writes_its_code_with_no_secret_and_a_capped_message(tmp_path, values):
     def crash(*_args):
         raise RuntimeError("could not fetch https://user:pw@host/repo.git " + "x" * 3000)
@@ -411,6 +546,42 @@ def test_a_crash_writes_its_code_with_no_secret_and_a_capped_message(tmp_path, v
     blocked = tmp_path / "blocked"
     blocked.write_text("a file, not a folder", encoding="utf-8")
     assert write_reading_failure(_refusal(), blocked) is None
+
+
+def test_a_secret_is_masked_in_the_shapes_a_trace_shows_it(tmp_path, monkeypatch, caplog):
+    pem = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEF\n-----END PRIVATE KEY-----\n"
+    credential = json.dumps({"type": "service_account", "private_key": pem})
+    secrets = tmp_path / "secrets.json"
+    secrets.write_text(json.dumps({"GOOGLE_CREDENTIALS_JSON": credential}), encoding="utf-8")
+    monkeypatch.setattr(reading_entry, "_SECRET_FILES", (secrets,))
+
+    def crash(*_args):
+        raise RuntimeError(f"bad key {pem!r}; line MIIEvQIBADANBgkqhkiG9w0BAQEF")
+
+    with caplog.at_level("INFO", logger=reading_entry.__name__):
+        assert _run(_mode(READ_AGENT_VALUES, _Work(action=crash)), tmp_path) == 1
+
+    kept = _failure_in(tmp_path / "reading")["message"] + caplog.text
+    assert "MIIEvQIBADANBgkqhkiG9w0BAQEF" not in kept
+    assert "BEGIN PRIVATE KEY" not in kept
+    # The whole value is still masked first; a value under 8 characters, or in neither file, is
+    # one the mask can't know.
+    assert reading_entry._read_secret_values((secrets,))[0] in (credential, json.dumps(credential)[1:-1])
+
+
+def test_each_reading_reads_the_secrets_again(tmp_path, monkeypatch):
+    secrets = tmp_path / "secrets.json"
+    monkeypatch.setattr(reading_entry, "_SECRET_FILES", (secrets,))
+    for run, value in enumerate(("first-secret-value", "second-secret-value")):
+        secrets.write_text(json.dumps({"KEY": value}), encoding="utf-8")
+        root = tmp_path / f"run{run}"
+        root.mkdir()
+
+        def crash(*_args, said=value):
+            raise RuntimeError(f"refused {said}")
+
+        assert _run(_mode(READ_AGENT_VALUES, _Work(action=crash)), root) == 1
+        assert _failure_in(root / "reading")["message"] == "RuntimeError: refused ***"
 
 
 def test_a_value_from_the_secrets_file_is_masked(tmp_path, monkeypatch, values):
@@ -444,17 +615,31 @@ def test_the_works_exit_code_is_returned(tmp_path, values, exit_code):
 
 
 def test_a_works_own_incomplete_cost_is_kept(tmp_path, values):
+    written: list[int] = []
+
     def account(_job, _source, output):
         spend.record("read-agent", 0.42, turns=1, models={"m"})
         assert write_reading_cost(output, complete=False)
-        # Spend the work's file leaves out: any rewrite after the work returns would add it.
-        spend.record("read-agent", 0.08, turns=1, models={"m"})
+        # Every write moves a new file into place, so a rewrite after the work would show.
+        written.append((output / "cost.json").stat().st_ino)
 
     assert _run(_mode(values, _Work(action=account)), tmp_path) == 0
 
-    cost = _cost_in(tmp_path / "reading")
+    output = tmp_path / "reading"
+    assert (output / "cost.json").stat().st_ino == written[0]
+    cost = _cost_in(output)
     assert cost["total_usd"] == 0.42
     assert cost["complete"] is False
+
+
+def test_each_turn_after_the_first_write_lands_in_the_cost_file(tmp_path):
+    output = tmp_path / "reading"
+    assert write_reading_cost(output, complete=False) is True
+
+    spend.record("read-agent", 0.25, turns=1, models={"m"})
+
+    assert _cost_in(output) == {**spend.snapshot(), "complete": False}
+    assert sorted(entry.name for entry in output.iterdir()) == ["cost.json"]
 
 
 def test_cost_is_left_after_a_timeout_and_a_crash(tmp_path):
@@ -501,6 +686,46 @@ def test_the_checks_run_in_order(tmp_path, values):
     assert work.calls == []
 
 
+def test_a_crash_keeps_its_trace_in_the_log_masked_and_out_of_the_file(
+    tmp_path, monkeypatch, caplog
+):
+    secret = "sk-0123456789abcdefg"
+    secrets = tmp_path / "secrets.json"
+    secrets.write_text(json.dumps({"TARGET_KEY": secret}), encoding="utf-8")
+    monkeypatch.setattr(reading_entry, "_SECRET_FILES", (secrets,))
+
+    def crash(*_args):
+        raise RuntimeError(f"the provider refused {secret}")
+
+    with caplog.at_level("INFO", logger=reading_entry.__name__):
+        assert _run(_mode(READ_AGENT_VALUES, _Work(action=crash)), tmp_path) == 1
+
+    assert "Traceback" not in _failure_in(tmp_path / "reading")["message"]
+    assert "reading started at " in caplog.text
+    assert "Traceback (most recent call last)" in caplog.text
+    assert "RuntimeError: the provider refused ***" in caplog.text
+    assert secret not in caplog.text
+
+
+def test_each_swallowed_error_is_logged_with_its_trace(tmp_path, monkeypatch, caplog):
+    blocked = tmp_path / "blocked"
+    blocked.write_text("a file, not a folder", encoding="utf-8")
+
+    with caplog.at_level("WARNING"):
+        assert write_reading_failure(_refusal(), blocked) is None
+        assert write_reading_cost(blocked, complete=False) is False
+        monkeypatch.setitem(sys.modules, "fi.alk.harness.hosted_entrypoint", None)
+        assert reading_entry._read_secret_values((tmp_path / "unread.json",)) == ()
+
+    traced = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelname == "WARNING" and (record.exc_info or record.exc_text)
+    ]
+    for said in ("failure file not written", "spend file not written", "secret values not read"):
+        assert any(said in line for line in traced), (said, traced)
+
+
 def test_cost_json_keeps_the_build_keys_and_adds_complete(tmp_path):
     spend.record(
         "read-agent",
@@ -534,3 +759,26 @@ def test_an_unpriced_turn_marks_the_cost_incomplete(tmp_path):
     assert cost["unpriced_turns"] == 1
     assert cost["total_usd"] == 0.1
     assert cost["complete"] is False
+
+
+def test_a_failed_cost_write_leaves_no_half_file(tmp_path, monkeypatch):
+    output = tmp_path / "reading"
+    output.mkdir()
+
+    def refuses(*_args, **_kwargs):
+        raise OSError("no space left on the device")
+
+    monkeypatch.setattr(os, "replace", refuses)
+
+    assert write_reading_cost(output, complete=False) is False
+    assert list(output.iterdir()) == []
+
+
+def test_a_builds_spend_file_gains_no_complete_key(tmp_path):
+    assert write_reading_cost(tmp_path / "reading", complete=True) is True
+    build = tmp_path / "authoring" / "cost.json"
+
+    spend.journal_to(build)
+    spend.record("understand-agent", 0.1, turns=1, models={"m"})
+
+    assert json.loads(build.read_text(encoding="utf-8")) == spend.snapshot()

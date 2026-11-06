@@ -988,20 +988,24 @@ def _contract_workdir(source: Path, bundle_dir: Path) -> Path | None:
     return None
 
 
+def named_framework_folder(
+    source: Path, bundle_dir: Path, subfolder: str | None
+) -> Path | None:
+    """The folder the job names, else the sealed contract's own; ``None`` when neither does."""
+    if subfolder:
+        return agent_folder(source, subfolder)
+    return _contract_workdir(source, bundle_dir)
+
+
 def framework_folders_for(
     job: Any, manifest: Any, *, source: Path, bundle_dir: Path, work_directory: Path
 ) -> FrameworkFolders:
     runtime = manifest.runtime
     control_service = runtime.control_service if runtime.kind == "process" else None
-    subfolder = job.source.subfolder
-    folder = source
-    if subfolder:
-        folder = agent_folder(source, subfolder)
-    else:
-        workdir = _contract_workdir(source, bundle_dir)
-        if workdir is not None:
-            folder = workdir
-        elif control_service:
+    folder = named_framework_folder(source, bundle_dir, job.source.subfolder)
+    if folder is None:
+        folder = source
+        if control_service:
             for process in manifest.processes:
                 if process.name == control_service:
                     folder = bundle_dir / process.working_directory

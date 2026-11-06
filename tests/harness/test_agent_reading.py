@@ -6,13 +6,12 @@ stage, the contract server and the browser-agent gate all run; only the provider
 
 from __future__ import annotations
 
-import ast
+import argparse
 import asyncio
-import inspect
 import json
+import logging
 import os
 import shutil
-import textwrap
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -21,15 +20,22 @@ from pathlib import Path
 import pytest
 
 import fi.alk
-from fi.alk.harness import agent_reading, authoring_entrypoint, reading_entry, session, spend
+from fi.alk.harness import (
+    agent_reading,
+    authoring_entrypoint,
+    reading_entry,
+    reading_result,
+    session,
+    spend,
+)
 from fi.alk.harness.backends import StageDone
-from fi.alk.harness.builder import BUILDER_TURNS
 from fi.alk.harness.config import chosen_model
 from fi.alk.harness.contract import AgentContract
 from fi.alk.harness.framework_detection import detect_framework
 from fi.alk.harness.job import HarnessJob, SourceKind
 from fi.alk.harness.reading_entry import READING_JOB_INVALID, run_reading_mode
-from fi.alk.harness.tools import CONTRACT_SERVER
+from fi.alk.harness.tools import CONTRACT_SERVER, _checked_contract
+from fi.alk.harness.understand import SUBMIT_REMINDER, reading_settings
 from fi.alk.providers.agent import build_authored_agent
 
 EXAMPLES = Path(__file__).resolve().parents[2] / "examples" / "frameworks"
@@ -47,22 +53,17 @@ IN_SUPPORT = {
     **CHAT,
     "runtime": {"language": "python", "workdir": SUPPORT, "source_subfolder": SUPPORT},
 }
-# The real one, kept before the fixture shortens the limit for every other test.
-_SOFT_LIMIT = agent_reading._soft_limit
+_LIMIT_ENV = "ALK_READING_MAX_DURATION_SECONDS"
 
 
 @pytest.fixture(autouse=True)
 def _fresh_state(monkeypatch, tmp_path):
-    monkeypatch.setattr(session, "STAGE_IDLE_RETRIES", session.STAGE_IDLE_RETRIES)
     monkeypatch.delenv(spend.JOURNAL_ALIAS, raising=False)
-    monkeypatch.delenv("ALK_READING_MAX_DURATION_SECONDS", raising=False)
     monkeypatch.setenv("ALK_HARNESS_MODEL", "gemini-2.5-flash")
     # The machine's own secrets files must not decide what a test sees masked.
     monkeypatch.setattr(reading_entry, "_SECRET_FILES", (tmp_path / "no-secrets.json",))
-    monkeypatch.setattr(reading_entry, "_secret_values", None)
     # A scripted model that never answers must end a test, not hang it.
-    monkeypatch.setattr(agent_reading, "_soft_limit", lambda: 20.0)
-    monkeypatch.setattr(agent_reading, "_INTERRUPT_WAIT_SECONDS", 1.0)
+    monkeypatch.setenv(_LIMIT_ENV, "20")
     spend._stages.clear()
     spend.journal_to(None)
     yield
@@ -82,6 +83,8 @@ class _Live:
         self.interrupted = asyncio.Event()
 
     async def start(self) -> None:
+        if self.backend.saves_on_start is not None:
+            _save(self.backend.output, self.backend.saves_on_start)
         if self.backend.start_raises:
             raise FileNotFoundError("the Claude CLI was not found")
 
@@ -100,7 +103,7 @@ class _Live:
     async def interrupt(self) -> bool:
         self.backend.interrupts.append(time.monotonic())
         if self.backend.interrupt_raises:
-            raise RuntimeError("the interrupt control request timed out")
+            raise RuntimeError(self.backend.interrupt_says)
         self.interrupted.set()
         return True
 
@@ -122,7 +125,9 @@ class _Backend:
         self.stopped: list[dict] = []
         self.seen: list = []
         self.interrupt_raises = False
+        self.interrupt_says = "the interrupt control request timed out"
         self.start_raises = False
+        self.saves_on_start: dict | None = None
         self.submissions = 0
 
     def create(self, spec) -> _Live:
@@ -233,11 +238,18 @@ def _repo(root: Path) -> Path:
     return source
 
 
-def _run(root: Path, job: dict | None = None, *, source: Path | None = None, output=None) -> int:
+def _run(
+    root: Path,
+    job: dict | None = None,
+    *,
+    source: Path | None = None,
+    output=None,
+    wait: float = 1.0,
+) -> int:
     job_path = root / "job.json"
     job_path.write_text(json.dumps(job or _job()), encoding="utf-8")
     return run_reading_mode(
-        agent_reading.READ_AGENT,
+        agent_reading._read_agent(interrupt_wait=wait),
         job_path=job_path,
         source=source if source is not None else root / "source",
         output=output if output is not None else root / "reading",
@@ -273,9 +285,19 @@ def _short_idle(monkeypatch, seconds: float = 0.2) -> None:
     monkeypatch.setattr(agent_reading, "open_stage", opened)
 
 
-def _short_limit(monkeypatch, soft: float = 0.3, wait: float = 0.3) -> None:
-    monkeypatch.setattr(agent_reading, "_soft_limit", lambda: soft)
-    monkeypatch.setattr(agent_reading, "_INTERRUPT_WAIT_SECONDS", wait)
+def _few_turns(monkeypatch, turns: int) -> None:
+    real = agent_reading.open_stage
+
+    def opened(*args, **kwargs):
+        stage, destination = real(*args, **kwargs)
+        stage.spec.max_turns = turns
+        return stage, destination
+
+    monkeypatch.setattr(agent_reading, "open_stage", opened)
+
+
+def _short_limit(monkeypatch, soft: float = 0.3) -> None:
+    monkeypatch.setenv(_LIMIT_ENV, str(soft))
 
 
 # -- R1 to R9: the files a reading leaves -------------------------------------------------------
@@ -511,7 +533,7 @@ def test_an_oversized_document_is_refused(tmp_path, model, monkeypatch, inner, p
     document = inner()
     if not passes and document["items"]:
         assert _body_size(document) <= MIB
-    monkeypatch.setattr(agent_reading, "build_authored_agent", lambda *a, **k: document)
+    monkeypatch.setattr(reading_result, "build_authored_agent", lambda *a, **k: document)
     model(_writes(CHAT, cost_usd=0.05))
     output = tmp_path / "reading"
 
@@ -562,7 +584,7 @@ def test_no_contract_after_the_reminder_is_incomplete(tmp_path, model):
     assert _run(tmp_path) == 78
 
     assert len(fake.sent) == 2
-    assert fake.sent[1] == agent_reading._REMINDER
+    assert fake.sent[1] == SUBMIT_REMINDER
     failure = _failure_in(output)
     assert (failure["code"], failure["retryable"]) == ("agent_reading_incomplete", False)
     assert failure["details"] == {"outcome": "success", "turns": 2}
@@ -690,7 +712,7 @@ def test_an_error_flag_without_a_status_still_gets_the_reminder(tmp_path, model)
 
     assert _run(tmp_path) == 0
 
-    assert fake.sent[1:] == [agent_reading._REMINDER]
+    assert fake.sent[1:] == [SUBMIT_REMINDER]
     assert (output / "agent.json").exists()
     # The first turn's error had no status, so its spend may not all be in the total.
     _assert_cost(output, 0.2, False)
@@ -769,7 +791,7 @@ def test_a_gemini_call_limit_is_incomplete_with_no_reminder(tmp_path, model, mon
     sent, calls = _real_gemini(
         monkeypatch, lambda who, calls: _gemini_calls("Glob", {"pattern": "*.py"}, len(calls))
     )
-    monkeypatch.setattr(agent_reading, "BUILDER_TURNS", 3)
+    _few_turns(monkeypatch, 3)
     _repo(tmp_path)
     output = tmp_path / "reading"
 
@@ -804,7 +826,7 @@ def test_a_gemini_call_limit_after_a_malformed_worker_reply_gets_no_reminder(
         return _gemini_calls("Glob", {"pattern": "*.py"}, len(calls))
 
     sent, calls = _real_gemini(monkeypatch, reply)
-    monkeypatch.setattr(agent_reading, "BUILDER_TURNS", 6)
+    _few_turns(monkeypatch, 6)
     _repo(tmp_path)
     output = tmp_path / "reading"
 
@@ -834,7 +856,7 @@ def test_an_earlier_failed_turn_is_still_a_model_error(tmp_path, model):
 def test_a_cut_on_the_last_allowed_call_is_not_a_turn_limit(tmp_path, model):
     _repo(tmp_path)
     fake = model(
-        _ends(outcome="failed", is_error=True, turns=BUILDER_TURNS, errors=["connection reset"]),
+        _ends(outcome="failed", is_error=True, turns=70, errors=["connection reset"]),
         _ends(),
         name="vertex-gemini",
     )
@@ -842,7 +864,7 @@ def test_a_cut_on_the_last_allowed_call_is_not_a_turn_limit(tmp_path, model):
 
     assert _run(tmp_path) == 1
 
-    assert fake.sent[1:] == [agent_reading._REMINDER]
+    assert fake.sent[1:] == [SUBMIT_REMINDER]
     failure = _failure_in(output)
     assert (failure["code"], failure["retryable"]) == ("agent_reading_model_error", True)
     # The cut request may be billed without its total reaching the stage.
@@ -934,6 +956,8 @@ def test_an_idle_stream_is_not_replayed(tmp_path, model, monkeypatch):
 
     assert len(fake.created) == 1
     assert fake.interrupts == []
+    # Only this stage skips the replay; the process's own setting is left as it was.
+    assert session.STAGE_IDLE_RETRIES == 1
     failure = _failure_in(output)
     assert (failure["code"], failure["retryable"]) == ("agent_reading_model_error", True)
     _assert_cost(output, 0.0, False)
@@ -960,7 +984,7 @@ def test_a_contract_saved_before_an_idle_stream_is_kept(tmp_path, model, monkeyp
 
 def test_the_soft_limit_interrupts_once_and_charges_what_arrives(tmp_path, model, monkeypatch):
     _repo(tmp_path)
-    _short_limit(monkeypatch, wait=2.0)
+    _short_limit(monkeypatch)
 
     async def answers_the_interrupt(live):
         await live.interrupted.wait()
@@ -969,7 +993,7 @@ def test_the_soft_limit_interrupts_once_and_charges_what_arrives(tmp_path, model
     fake = model(answers_the_interrupt)
     output = tmp_path / "reading"
 
-    assert _run(tmp_path) == 78
+    assert _run(tmp_path, wait=2.0) == 78
 
     assert len(fake.sent) == 1
     assert len(fake.interrupts) == 1
@@ -983,7 +1007,7 @@ def test_the_soft_limit_marks_cost_incomplete_when_nothing_arrives(tmp_path, mod
     fake = model(_quiet)
     output = tmp_path / "reading"
 
-    assert _run(tmp_path) == 78
+    assert _run(tmp_path, wait=0.3) == 78
 
     assert len(fake.interrupts) == 1
     failure = _failure_in(output)
@@ -991,21 +1015,77 @@ def test_the_soft_limit_marks_cost_incomplete_when_nothing_arrives(tmp_path, mod
     _assert_cost(output, 0.0, False)
 
 
-def test_an_interrupt_that_raises_is_still_a_timeout(tmp_path, model, monkeypatch):
+def test_an_interrupt_that_raises_is_still_a_timeout(tmp_path, model, monkeypatch, caplog):
     _repo(tmp_path)
     _short_limit(monkeypatch)
     fake = model(_quiet)
     fake.interrupt_raises = True
     output = tmp_path / "reading"
 
-    assert _run(tmp_path) == 78
+    with caplog.at_level("WARNING", logger=agent_reading.__name__):
+        assert _run(tmp_path, wait=0.3) == 78
 
     assert _failure_in(output)["code"] == "agent_reading_timed_out"
+    [logged] = [
+        record
+        for record in caplog.records
+        if record.name == agent_reading.__name__ and "not delivered" in record.getMessage()
+    ]
+    assert "RuntimeError: the interrupt control request timed out" in logged.exc_text
+
+
+def test_the_readings_own_log_is_masked(tmp_path, model, monkeypatch, caplog):
+    secret = "sk-provider-0123456789"
+    secrets = tmp_path / "secrets.json"
+    secrets.write_text(json.dumps({"TARGET_KEY": secret}), encoding="utf-8")
+    monkeypatch.setattr(reading_entry, "_SECRET_FILES", (secrets,))
+    _repo(tmp_path)
+    _short_limit(monkeypatch)
+    fake = model(_quiet)
+    fake.interrupt_raises = True
+    fake.interrupt_says = f"the provider refused key {secret}"
+
+    with caplog.at_level("WARNING", logger=agent_reading.__name__):
+        assert _run(tmp_path, wait=0.3) == 78
+
+    [logged] = [
+        record
+        for record in caplog.records
+        if record.name == agent_reading.__name__ and "not delivered" in record.getMessage()
+    ]
+    assert "RuntimeError: the provider refused key ***" in logged.exc_text
+    assert secret not in caplog.text
+
+
+def test_a_session_that_breaks_after_the_stop_is_logged_and_still_a_timeout(
+    tmp_path, model, monkeypatch, caplog
+):
+    _repo(tmp_path)
+    _short_limit(monkeypatch)
+
+    async def breaks_when_interrupted(live):
+        await live.interrupted.wait()
+        raise ConnectionResetError("the stream broke after the stop")
+        yield _done()
+
+    model(breaks_when_interrupted)
+    output = tmp_path / "reading"
+
+    with caplog.at_level("WARNING", logger=agent_reading.__name__):
+        assert _run(tmp_path, wait=1.0) == 78
+
+    assert _failure_in(output)["code"] == "agent_reading_timed_out"
+    [logged] = [
+        record
+        for record in caplog.records
+        if record.name == agent_reading.__name__ and "ended with an error" in record.getMessage()
+    ]
+    assert "ConnectionResetError: the stream broke after the stop" in logged.exc_text
 
 
 def test_a_contract_saved_at_the_soft_limit_is_kept(tmp_path, model, monkeypatch):
     _repo(tmp_path)
-    _short_limit(monkeypatch, wait=2.0)
+    _short_limit(monkeypatch)
 
     async def saves_when_interrupted(live):
         await live.interrupted.wait()
@@ -1015,7 +1095,7 @@ def test_a_contract_saved_at_the_soft_limit_is_kept(tmp_path, model, monkeypatch
     model(saves_when_interrupted)
     output = tmp_path / "reading"
 
-    assert _run(tmp_path) == 0
+    assert _run(tmp_path, wait=2.0) == 0
 
     assert (output / "agent.json").exists()
     assert not (output / "failure.json").exists()
@@ -1024,7 +1104,7 @@ def test_a_contract_saved_at_the_soft_limit_is_kept(tmp_path, model, monkeypatch
 
 def test_nothing_is_saved_after_the_soft_limit_decides(tmp_path, model, monkeypatch):
     _repo(tmp_path)
-    _short_limit(monkeypatch, soft=0.3, wait=0.3)
+    _short_limit(monkeypatch, soft=0.3)
 
     async def saves_too_late(live):
         # Ignores the interrupt, and would save only after the wait has run out.
@@ -1035,7 +1115,7 @@ def test_nothing_is_saved_after_the_soft_limit_decides(tmp_path, model, monkeypa
     fake = model(saves_too_late)
     output = tmp_path / "reading"
 
-    assert _run(tmp_path) == 78
+    assert _run(tmp_path, wait=0.3) == 78
 
     # The session was closed before either result file could be written.
     assert fake.stopped == [{"failure": False, "agent": False}]
@@ -1315,18 +1395,117 @@ def test_a_forbidden_model_is_not_retried(tmp_path, model):
 _EVALS = [{"name": "tone_check", "description": "Checks the tone.", "modality": "chat"}]
 
 
-def test_the_reading_uses_the_builders_settings(tmp_path, model):
+class _Opened(Exception):
+    pass
+
+
+@pytest.mark.parametrize(
+    ("metadata", "interactive", "expected"),
+    [
+        (
+            {"generic_harness_v1": True, "available_evals": _EVALS},
+            False,
+            {"available_evals": _EVALS, "require_setup_contract": True, "max_turns": 140},
+        ),
+        (
+            {"available_evals": _EVALS},
+            False,
+            {"available_evals": _EVALS, "require_setup_contract": False, "max_turns": 70},
+        ),
+        (
+            {"generic_harness_v1": True},
+            True,
+            {"available_evals": None, "require_setup_contract": False, "max_turns": 70},
+        ),
+        (
+            # Only the flag itself, not a value that merely reads as true.
+            {"generic_harness_v1": "true"},
+            False,
+            {"available_evals": None, "require_setup_contract": False, "max_turns": 70},
+        ),
+    ],
+    ids=["generic", "not_generic", "generic_with_an_operator", "flag_as_text"],
+)
+def test_the_build_opens_its_reading_as_it_always_has(
+    tmp_path, monkeypatch, metadata, interactive, expected
+):
+    from fi.alk.harness import cli
+
+    job = HarnessJob.model_validate(_job(metadata=metadata))
+    assert reading_settings(job, interactive=interactive) == expected
+    seen: dict = {}
+
+    def opened(_source, **kwargs):
+        seen.update(kwargs)
+        raise _Opened
+
+    monkeypatch.setattr(cli, "open_stage", opened)
+    args = argparse.Namespace(
+        job=job,
+        kind="repo",
+        name="agent",
+        path=str(_repo(tmp_path)),
+        out=str(tmp_path / "out"),
+        interactive=interactive,
+    )
+
+    with pytest.raises(_Opened):
+        asyncio.run(cli._understand(args))
+
+    assert {key: seen[key] for key in expected} == expected
+
+
+@pytest.mark.parametrize(("generic", "turns"), [(False, 70), (True, 140)])
+def test_the_reading_opens_as_the_build_does(tmp_path, model, generic, turns):
     _repo(tmp_path)
     fake = model()
+    metadata = {"available_evals": _EVALS, **({"generic_harness_v1": True} if generic else {})}
 
-    _run(tmp_path, _job(metadata={"available_evals": _EVALS}))
+    _run(tmp_path, _job(metadata=metadata))
 
     [spec] = fake.created
-    assert spec.max_turns == BUILDER_TURNS == 200
+    assert spec.max_turns == turns
     assert spec.model == chosen_model()
-    assert spec.thinking is False
+    assert spec.thinking is True
     assert "tone_check" in spec.system_prompt
     assert CONTRACT_SERVER in spec.servers
+
+
+def test_the_reading_opens_with_the_builds_words_and_the_jobs_guidance(tmp_path, model):
+    from fi.alk.harness import cli
+    from fi.alk.harness.sources import resolve
+    from fi.alk.harness.understand import opening
+
+    source = _repo(tmp_path)
+    fake = model()
+    raw = _job(metadata={"generic_harness_v1": True})
+
+    _run(tmp_path, raw)
+
+    job = HarnessJob.model_validate(raw)
+    built = opening(resolve("repo", name=source.name, root=source)) + cli._guidance(
+        argparse.Namespace(guidance=job.authoring_guidance())
+    )
+    assert fake.sent[0] == built
+    assert "standalone Dockerfile cannot be built" in fake.sent[0]
+
+
+def test_a_generic_jobs_reading_refuses_what_the_builds_gate_refuses(tmp_path, model):
+    # The build's gate for a generic job: a chat agent must declare where it keeps its state.
+    refused = _checked_contract(
+        dict(CHAT), source_root=None, require_setup_contract=True, subfolder=None
+    )
+    assert isinstance(refused, dict)
+    assert "data_store" in refused["content"][0]["text"]
+    _repo(tmp_path)
+    fake = model(_submits(CHAT))
+    output = tmp_path / "reading"
+
+    assert _run(tmp_path, _job(metadata={"generic_harness_v1": True})) == 78
+
+    assert fake.submissions == 3
+    assert not (output / "contract.json").exists()
+    assert _failure_in(output)["code"] == "agent_reading_incomplete"
 
 
 def test_the_claude_backend_accepts_the_reading_spec(tmp_path, model, monkeypatch):
@@ -1341,8 +1520,8 @@ def test_the_claude_backend_accepts_the_reading_spec(tmp_path, model, monkeypatc
 
     options = ClaudeBackend().create(spec)._options
     try:
-        assert options.max_turns == 200
-        assert getattr(options, "thinking", None) is None
+        assert options.max_turns == 70
+        assert getattr(options, "thinking", None) is not None
         assert any(name.endswith("submit_contract") for name in options.allowed_tools)
     finally:
         prompt = options.system_prompt
@@ -1350,24 +1529,9 @@ def test_the_claude_backend_accepts_the_reading_spec(tmp_path, model, monkeypatc
             Path(prompt["path"]).unlink(missing_ok=True)
 
 
-def test_the_reminder_is_the_clis_reminder():
-    from fi.alk.harness import cli
-
-    tree = ast.parse(textwrap.dedent(inspect.getsource(cli._understand)))
-    [nudge] = [
-        keyword.value
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        for keyword in node.keywords
-        if keyword.arg == "nudge"
-    ]
-    assert isinstance(nudge, ast.Constant)
-    assert nudge.value == agent_reading._REMINDER
-
-
 def test_the_soft_limit_counts_from_the_readings_start(tmp_path, model, monkeypatch):
     _repo(tmp_path)
-    _short_limit(monkeypatch, soft=3.0, wait=0.2)
+    _short_limit(monkeypatch, soft=3.0)
     real = agent_reading.open_stage
 
     def slow(*args, **kwargs):
@@ -1378,7 +1542,7 @@ def test_the_soft_limit_counts_from_the_readings_start(tmp_path, model, monkeypa
     fake = model(_quiet)
     started = time.monotonic()
 
-    assert _run(tmp_path) == 78
+    assert _run(tmp_path, wait=0.2) == 78
 
     [interrupted] = fake.interrupts
     assert 2.8 <= interrupted - started < 4.0
@@ -1406,6 +1570,25 @@ def test_the_switch_runs_only_the_reading(tmp_path, model, monkeypatch):
 
     assert code == 0
     assert (output / "agent.json").exists()
+
+
+def test_the_switch_sends_the_readings_start_to_stderr(tmp_path, model, monkeypatch, capfd):
+    _repo(tmp_path)
+    # As in the sandbox: nothing has set up logging before the switch runs.
+    monkeypatch.setattr(logging.getLogger(), "handlers", [])
+    monkeypatch.setattr(reading_entry.logger, "handlers", [])
+    monkeypatch.setattr(reading_entry.logger, "level", logging.NOTSET)
+    model(_writes(CHAT))
+    job_path = tmp_path / "job.json"
+    job_path.write_text(json.dumps(_job()), encoding="utf-8")
+    output = tmp_path / "reading"
+
+    code = authoring_entrypoint.main(
+        [str(job_path), "--source", str(tmp_path / "source"), "--output", str(output), "--read-agent-only"]
+    )
+
+    assert code == 0
+    assert "reading started at " in capfd.readouterr().err
 
 
 def test_a_bad_job_through_main_is_refused(tmp_path, model):
@@ -1459,47 +1642,50 @@ def test_nothing_is_written_outside_the_output(tmp_path, model, ends):
 
 @pytest.mark.parametrize("value", ["abc", "0", "-5", "", "nan", "inf"])
 def test_a_bad_time_limit_falls_back_to_the_default(monkeypatch, value):
-    monkeypatch.setenv("ALK_READING_MAX_DURATION_SECONDS", value)
+    monkeypatch.setenv(_LIMIT_ENV, value)
 
-    assert _SOFT_LIMIT() == 1800.0
-
-
-def test_the_hard_limit_is_a_timeout_that_is_not_retried():
-    mode = agent_reading.READ_AGENT
-
-    assert mode.timed_out_code == agent_reading.AGENT_READING_TIMED_OUT == "agent_reading_timed_out"
-    assert mode.timed_out_retryable is False
-    assert mode.crashed_code == agent_reading.AGENT_READING_CRASHED == "agent_reading_crashed"
+    assert agent_reading._soft_limit() == 1800.0
+    assert reading_entry._hard_limit(agent_reading.READ_AGENT) == 1800.0 + 180.0
 
 
 def test_a_good_time_limit_is_read(monkeypatch):
-    monkeypatch.setenv("ALK_READING_MAX_DURATION_SECONDS", "120")
+    monkeypatch.setenv(_LIMIT_ENV, "120")
 
-    assert _SOFT_LIMIT() == 120.0
-    assert agent_reading.READ_AGENT.time_limit_seconds == 1800.0 + 180.0
+    assert agent_reading._soft_limit() == 120.0
+    mode = agent_reading.READ_AGENT
+    # The helper's limit is the reading's own plus its margin, and a timeout repeats if retried.
+    assert reading_entry._hard_limit(mode) == 120.0 + 180.0
+    assert mode.timed_out_retryable is False
+    # The contract's codes, as the platform reads them.
+    assert (mode.timed_out_code, mode.crashed_code) == (
+        "agent_reading_timed_out",
+        "agent_reading_crashed",
+    )
 
 
-def test_a_fault_after_a_saved_contract_still_leaves_the_document(
-    tmp_path, model, monkeypatch, caplog
-):
+def test_a_fault_after_a_saved_contract_still_leaves_the_document(tmp_path, model, caplog):
     _repo(tmp_path)
-
-    def unreadable(*_args, **_kwargs):
-        raise PermissionError("the output folder could not be read")
-
-    monkeypatch.setattr(agent_reading, "_classify", unreadable)
-    model(_writes(CHAT, cost_usd=0.1))
+    fake = model()
+    # The contract lands, then the session fails to open: the fault the reading raises.
+    fake.saves_on_start = CHAT
+    fake.start_raises = True
     output = tmp_path / "reading"
 
     with caplog.at_level("WARNING", logger=agent_reading.__name__):
         assert _run(tmp_path) == 0
 
     assert _names(output) == {"contract.json", "agent.json", "cost.json"}
-    _assert_cost(output, 0.1, False)
-    # The fault is named by its class only: its text may carry what the customer's code said.
-    logged = [record.getMessage() for record in caplog.records if record.name == agent_reading.__name__]
-    assert any("PermissionError" in line for line in logged)
-    assert not any("could not be read" in line for line in logged)
+    assert fake.sent == []
+    _assert_cost(output, 0.0, False)
+    # The line names the class; the trace, masked like every line here, keeps the rest.
+    [logged] = [
+        record
+        for record in caplog.records
+        if record.name == agent_reading.__name__ and "saved contract" in record.getMessage()
+    ]
+    assert "FileNotFoundError" in logged.getMessage()
+    assert "was not found" not in logged.getMessage()
+    assert "FileNotFoundError: the Claude CLI was not found" in logged.exc_text
 
 
 def test_a_session_that_cannot_open_is_a_crash(tmp_path, model):

@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import ast
 import functools
+import io
 import re
+import tokenize
 import unicodedata
 from collections.abc import Iterable
 from pathlib import Path
@@ -23,6 +25,12 @@ LARGEST_PARSED_TOTAL = 256 * 1024
 # What one scan tokenizes in all. A crafted file costs the tokenizer the square of its size too,
 # about 2.2 s at 128 KB on 3.12.3, so a small total bounds it: about 0.55 s at most.
 LARGEST_TOKENIZED_TOTAL = 64 * 1024
+# What one scan's tokenizer may read again, in characters. On 3.12.3, the sandbox's Python, the
+# tokenizer decodes a token's whole line again for each token, so one long line of short tokens
+# costs the square of its length: about 4 s for 64 KB on one line, though the total holds. Each
+# token is charged its line. This much is at most about 0.03 s of that work on 3.12.3. Over 5,000
+# real files of 4 to 64 KB, 64 KB of code comes to about 0.5 M, and 1.9 M at the most.
+LARGEST_TOKENIZED_WORK = 8 * 1024 * 1024
 
 
 # The parser folds every non-ASCII name to its NFKC form, and on 3.11 and 3.12.3 that sorts a run
@@ -49,18 +57,35 @@ class ParseBudget:
 
 
 class TokenBudget(ParseBudget):
-    """What is left for one scan to tokenize, in UTF-8 bytes."""
+    """What is left for one scan to tokenize: its files in UTF-8 bytes, and the lines its tokens
+    are read from in characters."""
+
+    def __init__(self, total: int | None = None, work: int | None = None) -> None:
+        super().__init__(total)
+        self.work_left = LARGEST_TOKENIZED_WORK if work is None else work
 
     @staticmethod
     def _total() -> int:
         return LARGEST_TOKENIZED_TOTAL
 
+    def tokens(self, text: str) -> list[tokenize.TokenInfo] | None:
+        """The tokens of ``text``, or None once the scan's work runs out. Charge the text with
+        ``spend`` first. Raises what ``tokenize`` raises."""
+        found: list[tokenize.TokenInfo] = []
+        for token in tokenize.generate_tokens(io.StringIO(text).readline):
+            self.work_left -= len(token.line)
+            if self.work_left < 0:
+                return None
+            found.append(token)
+        return found
+
 
 def read_module(
     path: Path, limit: int = LARGEST_PARSED_MODULE, needles: Iterable[bytes] = ()
 ) -> str | None:
-    """The file as text, or None: not a regular file, larger than ``limit`` bytes, not UTF-8,
-    or, given ``needles``, naming none of them."""
+    """The file as text, or None: not a regular file, larger than ``limit`` bytes, not readable
+    in the encoding its coding line or byte-order mark names (UTF-8 without one), or, given
+    ``needles``, naming none of them."""
     try:
         # A link can name a device or a pipe, which reads without end.
         if not path.is_file():
@@ -76,9 +101,11 @@ def read_module(
     if needles and not any(needle in raw for needle in needles):
         return None
     try:
-        # As Python reads it: a byte-order mark is allowed, and isn't part of the code.
-        return raw.decode("utf-8-sig")
-    except UnicodeError:
+        # As Python reads it: a coding line or a byte-order mark names the encoding, and the mark
+        # isn't part of the code.
+        encoding, _ = tokenize.detect_encoding(io.BytesIO(raw).readline)
+        return raw.decode(encoding)
+    except (SyntaxError, UnicodeError, LookupError):
         return None
 
 

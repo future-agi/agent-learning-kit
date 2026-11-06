@@ -300,21 +300,17 @@ def _copy_prompt(contract: AgentContract, source_root: Path) -> list[str]:
     parts: list[str] = []
     problems: list[str] = []
     lines_of: dict[Path, list[str]] = {}
+    # A file past the limit is read once too, and what was read of it counts.
+    too_large: set[Path] = set()
     read = copied = 0
     for index, where in enumerate(contract.system_prompt_from):
         path = (root / where.path).resolve()
         if not is_within(path, root) or not path.is_file():
             problems.append(f"system_prompt_from[{index}]: {where.path} is not a file in the source")
             continue
-        if path not in lines_of:
+        if path not in lines_of and path not in too_large:
             with path.open("rb") as handle:
                 raw = handle.read(_LARGEST_PROMPT_FILE + 1)
-            if len(raw) > _LARGEST_PROMPT_FILE:
-                problems.append(
-                    f"system_prompt_from[{index}]: {where.path} is larger than 1 MiB; name the "
-                    "file the prompt is written in"
-                )
-                continue
             read += len(raw)
             if read > _LARGEST_PROMPT_READ:
                 problems.append(
@@ -322,7 +318,16 @@ def _copy_prompt(contract: AgentContract, source_root: Path) -> list[str]:
                     "4 MiB; name only the files the prompt is written in"
                 )
                 break
-            lines_of[path] = raw.decode("utf-8", errors="replace").splitlines()
+            if len(raw) > _LARGEST_PROMPT_FILE:
+                too_large.add(path)
+            else:
+                lines_of[path] = raw.decode("utf-8", errors="replace").splitlines()
+        if path in too_large:
+            problems.append(
+                f"system_prompt_from[{index}]: {where.path} is larger than 1 MiB; name the "
+                "file the prompt is written in"
+            )
+            continue
         lines = lines_of[path]
         if not 1 <= where.start_line <= where.end_line <= len(lines):
             problems.append(
@@ -494,6 +499,8 @@ def contract_tools(
     # Calls in one message check side by side, so the one sent last can finish first; it's the
     # model's last word, and an earlier call that finishes later mustn't write over it.
     sent = saved = 0
+    # Calls in one message share one scan: each running its own takes that many times longer.
+    scan: asyncio.Future[list[str]] | None = None
 
     @tool(
         "submit_contract",
@@ -1280,7 +1287,7 @@ def contract_tools(
         receipt = payload.pop(SECOND_LOOK_READ, None) or (
             args.get(SECOND_LOOK_READ) if isinstance(args, dict) else None
         )
-        nonlocal refused, found, look_unanswered, sent, saved
+        nonlocal refused, found, look_unanswered, sent, saved, scan
         # Taken before the scan's wait: a call already running when a look went out hasn't read it.
         looked_before = bool(second_look_receipts)
         sent += 1
@@ -1288,7 +1295,17 @@ def contract_tools(
         if refused or (destination / FAILURE_FILE).is_file():
             return _ok(_stop_message(destination))
         if found is None:
-            found = await asyncio.to_thread(_tools_in_agent_folder, scan_root, subfolder)
+            # Run again only a scan that can't give its answer here: one that raised or was
+            # cancelled, or one on another loop, which this one can't wait on. One that finished
+            # after every call waiting on it was cancelled still holds its answer.
+            if (
+                scan is None
+                or scan.get_loop() is not asyncio.get_running_loop()
+                or (scan.done() and (scan.cancelled() or scan.exception() is not None))
+            ):
+                scan = asyncio.ensure_future(asyncio.to_thread(_tools_in_agent_folder, scan_root, subfolder))
+            # Shielded: one call cancelled mustn't cancel the scan the others wait on.
+            found = await asyncio.shield(scan)
             # A call running alongside this one may have refused while this one waited.
             if refused or (destination / FAILURE_FILE).is_file():
                 return _ok(_stop_message(destination))
@@ -1302,12 +1319,17 @@ def contract_tools(
             )
         # A call holding a value read a look, so its answer stands. Without one, the call after a
         # look that no value came back for is taken as the answer. Once a value came back, a call
-        # without one may have run beside it unread, so it gets a look of its own.
+        # without one that reads the same stands too; one that reads otherwise may have run beside
+        # that answer unread, so it gets a look of its own. A value that came back on a browser
+        # answer was refused and stopped every later call, so the answer that came back read chat.
         read_it = isinstance(receipt, str) and receipt in second_look_receipts
         if read_it:
             look_unanswered = False
+        same_answer = not is_browser(claimed)
         verdict = decide(
-            claimed, found, looked_again=read_it or (looked_before and look_unanswered)
+            claimed,
+            found,
+            looked_again=read_it or (looked_before and (look_unanswered or same_answer)),
         )
         if verdict == "refuse":
             # Set first: if the write fails, the model must not get a resubmission through.

@@ -696,9 +696,17 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
             parser.error("--certify-only requires --bundle-output")
         return _certify_only(args)
     if args.read_agent_only:
+        import logging
+
         from .agent_reading import READ_AGENT
         from .reading_entry import run_reading_mode
 
+        # The reading's start line is how its start-up is timed, and nothing else in this process
+        # sets up logging, so its INFO lines would otherwise be dropped.
+        reading_log = logging.getLogger("fi.alk.harness.reading_entry")
+        reading_log.setLevel(logging.INFO)
+        if not logging.getLogger().handlers:
+            reading_log.addHandler(logging.StreamHandler())
         return run_reading_mode(
             READ_AGENT,
             job_path=args.job,
