@@ -83,8 +83,9 @@ class TokenBudget(ParseBudget):
 def read_module(
     path: Path, limit: int = LARGEST_PARSED_MODULE, needles: Iterable[bytes] = ()
 ) -> str | None:
-    """The file as text, or None: not a regular file, larger than ``limit`` bytes, not UTF-8,
-    or, given ``needles``, naming none of them."""
+    """The file as text, or None: not a regular file, larger than ``limit`` bytes, not readable
+    in the encoding its coding line or byte-order mark names (UTF-8 without one), or, given
+    ``needles``, naming none of them."""
     try:
         # A link can name a device or a pipe, which reads without end.
         if not path.is_file():
@@ -100,9 +101,11 @@ def read_module(
     if needles and not any(needle in raw for needle in needles):
         return None
     try:
-        # As Python reads it: a byte-order mark is allowed, and isn't part of the code.
-        return raw.decode("utf-8-sig")
-    except UnicodeError:
+        # As Python reads it: a coding line or a byte-order mark names the encoding, and the mark
+        # isn't part of the code.
+        encoding, _ = tokenize.detect_encoding(io.BytesIO(raw).readline)
+        return raw.decode(encoding)
+    except (SyntaxError, UnicodeError, LookupError):
         return None
 
 

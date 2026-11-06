@@ -128,16 +128,30 @@ _LARGEST_RECORD = 1024 * 1024
 _WALKED_SCRIPTS = 2 * 1024 * 1024
 # The import names it tries then, each a few lookups on disk: about 0.5 s at most.
 _WALKED_IMPORTS = 5_000
+# Per walk. A first scan reads up to three times this: its signature, its files and the packages
+# at the top each walk the records. Every reopen reads it once more, for the signature.
 _LARGEST_RECORDS = 64 * 1024 * 1024
+_NEAREST_RECORD_FOLDERS = 4
 # Strings are matched first and kept, so "https://..." or "src/**/*.ts" isn't read as a comment.
 # An unclosed one ends at its line or the file: a start that could fail makes a customer's odd file
 # cost the square of its size, which holds up the build's conversation until it's done.
 # A regex literal is kept the same way, so the "/*" in /\/*$/ doesn't hide the rest of the file. A
 # slash where a value is expected starts one: after punctuation or at a line's start, never after a
-# name or a number, where it divides.
+# name or a number, where it divides. Its closing slash must be followed as a regex's is, by flags
+# and then no name, quote, "/" or "*": a division that starts a line, or a "/" in JSX text, then
+# reads as division, not as a literal that eats a string's opening quote.
+# Such a start can fail, so a class holds no "[" and the rest no "]", and a literal that meets one
+# is kept to its line's end: a failed literal then can't run over the classes of the slashes after
+# it, which would make the line cost its square, and the quotes and backticks it holds can't open a
+# string or a template that swaps code and strings for the rest of the file. The "]" also stops a
+# literal that runs on through escaped line ends, which would cost the square of their number.
+# Kept to its line's end, such a literal can take in a template's opening backtick later on that
+# line too; a "/*" inside that template then reads as a comment. That trade is the price of a line
+# that can't run away.
 _SCRIPT_COMMENT_OR_STRING = re.compile(
     r"""("(?:\\.|[^"\\\n])*(?:"|(?=\n)|\\?\Z)|'(?:\\.|[^'\\\n])*(?:'|(?=\n)|\\?\Z)|`(?:\\.|[^`\\])*(?:`|\\?\Z)"""
-    r"""|(?<![^\n(,=:\[!&|?{};>])[ \t]*/(?![/*])(?:\\.|\[(?:\\.|[^\]\\\n])*(?:\]|(?=\n)|\\?\Z)|[^/\\\n\[])*(?:/|(?=\n)|\\?\Z))"""
+    r"""|(?<![^\n(,=:\[!&|?{};>])[ \t]*/(?![/*])(?:\\.|\[(?:\\.|[^\]\[\\\n])*(?:\]|(?=\n)|\\?\Z)|[^/\\\n\[\]])*"""
+    r"""(?:/(?=[dgimsuvy]*(?![\w$/*"'`]))|(?=\n)|\\?\Z|(?:\[(?=(?:\\.|[^\]\[\\\n])*\[)|\])[^\n]*))"""
     r"""|//[^\n]*|/\*.*?(?:\*/|\Z)""",
     re.DOTALL,
 )
@@ -169,26 +183,30 @@ def _not_the_agent_file(name: str) -> bool:
     return any(fnmatch.fnmatchcase(lowered, pattern) for pattern in _TEST_FILES)
 
 
-def _unpacked_at_top(root: Path) -> set[str]:
+def _unpacked_at_top(root: Path, left: list[int] | None = None) -> set[str]:
     """The files ``pip install -t .`` put beside the agent's code, by each distribution's record.
 
     Exact paths: one distribution shipping ``tools/x.py`` says nothing about the customer's own
-    ``tools/``.
+    ``tools/``. ``left`` is the record bytes still to read, shared across one walk's folders.
     """
     names: set[str] = set()
     try:
         records = sorted(entry for entry in root.iterdir() if entry.name.endswith(".dist-info"))
     except OSError:
         return names
-    read = 0
+    if left is None:
+        left = [_LARGEST_RECORDS]
     for entry in records:
         try:
             record = entry / "RECORD"
+            # pip writes neither as a link, and following them reads one record once per link.
+            if entry.is_symlink() or record.is_symlink():
+                continue
             # A link to a device or a named pipe reports no size, and reading it never ends.
             if not record.is_file() or record.stat().st_size > _LARGEST_RECORD:
                 continue
-            read += record.stat().st_size
-            if read > _LARGEST_RECORDS:
+            left[0] -= record.stat().st_size
+            if left[0] < 0:
                 break
             names.update(
                 row[0] for row in csv.reader(io.StringIO(record.read_text(encoding="utf-8"))) if row
@@ -201,19 +219,39 @@ def _unpacked_at_top(root: Path) -> set[str]:
 def _agent_files(root: Path) -> Iterator[Path]:
     # Unpacked distributions hold other people's code, whose SDKs name these tools whether or not
     # this agent uses them. Their records name those files wherever they were unpacked, so the
-    # agent's own code beside them, as in a Lambda folder, is still read.
-    unpacked: set[Path] = set()
+    # agent's own code beside them, as in a Lambda folder, is still read. One budget for the whole
+    # walk: a repository can hold any number of folders. Rows stay relative to the folder whose
+    # records hold them, as pip wrote them, so what is kept is the rows the budget lets in and that
+    # folder's path once: how deep the folder sits doesn't multiply what each row costs.
+    unpacked: dict[str, set[str]] = {}
+    # The folders above this one whose records gave rows, nearest last. The walk goes top down, so
+    # leaving a folder is seeing a directory that isn't under it.
+    holding: list[str] = []
+    left = [_LARGEST_RECORDS]
     for directory, subdirectories, files in os.walk(root):
-        here = Path(directory)
+        while holding and not directory.startswith(holding[-1] + os.sep):
+            del unpacked[holding.pop()]
         if any(name.endswith(".dist-info") for name in subdirectories):
-            unpacked.update(here / name for name in _unpacked_at_top(here))
+            rows = _unpacked_at_top(Path(directory), left)
+            if rows:
+                unpacked[directory] = rows
+                holding.append(directory)
         subdirectories[:] = [
             name for name in subdirectories if not _not_the_agent_dir(name)
         ]
+        # Once the budget is spent, which folders' packages count mustn't depend on the order the
+        # disk lists folders in.
+        subdirectories.sort()
+        # Real layouts nest one or two, as a vendored package's own vendored ones. Checking every
+        # file against a crafted chain of them would cost the chain's depth per file; a file the
+        # nearest few don't name is read, which only means reading more.
+        nearest = holding[-_NEAREST_RECORD_FOLDERS:]
         for name in files:
-            path = here / name
-            if not _not_the_agent_file(name) and path not in unpacked:
-                yield path
+            path = os.path.join(directory, name)
+            if not _not_the_agent_file(name) and not any(
+                path[len(top) + 1 :] in unpacked[top] for top in nearest
+            ):
+                yield Path(path)
 
 
 def _packages_used(path: Path) -> set[str]:
