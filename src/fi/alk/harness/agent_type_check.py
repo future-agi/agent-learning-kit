@@ -114,10 +114,15 @@ _LARGEST_RECORDS = 64 * 1024 * 1024
 # cost the square of its size, which holds up the build's conversation until it's done.
 # A regex literal is kept the same way, so the "/*" in /\/*$/ doesn't hide the rest of the file. A
 # slash where a value is expected starts one: after punctuation or at a line's start, never after a
-# name or a number, where it divides.
+# name or a number, where it divides. Its closing slash must be followed as a regex's is, by flags
+# and then no name, quote, "/" or "*": a division that starts a line, or a "/" in JSX text, then
+# reads as division, not as a literal that eats a string's opening quote.
+# Such a start can fail, so a class holds no "[" and the rest no "]": a failed literal then can't
+# run over the classes of the slashes after it, which would make the line cost its square.
 _SCRIPT_COMMENT_OR_STRING = re.compile(
     r"""("(?:\\.|[^"\\\n])*(?:"|(?=\n)|\\?\Z)|'(?:\\.|[^'\\\n])*(?:'|(?=\n)|\\?\Z)|`(?:\\.|[^`\\])*(?:`|\\?\Z)"""
-    r"""|(?<![^\n(,=:\[!&|?{};>])[ \t]*/(?![/*])(?:\\.|\[(?:\\.|[^\]\\\n])*(?:\]|(?=\n)|\\?\Z)|[^/\\\n\[])*(?:/|(?=\n)|\\?\Z))"""
+    r"""|(?<![^\n(,=:\[!&|?{};>])[ \t]*/(?![/*])(?:\\.|\[(?:\\.|[^\]\[\\\n])*(?:\]|(?=\n)|\\?\Z)|[^/\\\n\[\]])*"""
+    r"""(?:/(?=[dgimsuvy]*(?![\w$/*"'`]))|(?=\n)|\\?\Z))"""
     r"""|//[^\n]*|/\*.*?(?:\*/|\Z)""",
     re.DOTALL,
 )
@@ -149,26 +154,30 @@ def _not_the_agent_file(name: str) -> bool:
     return any(fnmatch.fnmatchcase(lowered, pattern) for pattern in _TEST_FILES)
 
 
-def _unpacked_at_top(root: Path) -> set[str]:
+def _unpacked_at_top(root: Path, left: list[int] | None = None) -> set[str]:
     """The files ``pip install -t .`` put beside the agent's code, by each distribution's record.
 
     Exact paths: one distribution shipping ``tools/x.py`` says nothing about the customer's own
-    ``tools/``.
+    ``tools/``. ``left`` is the record bytes still to read, shared across one walk's folders.
     """
     names: set[str] = set()
     try:
         records = sorted(entry for entry in root.iterdir() if entry.name.endswith(".dist-info"))
     except OSError:
         return names
-    read = 0
+    if left is None:
+        left = [_LARGEST_RECORDS]
     for entry in records:
         try:
             record = entry / "RECORD"
+            # pip writes neither as a link, and following them reads one record once per link.
+            if entry.is_symlink() or record.is_symlink():
+                continue
             # A link to a device or a named pipe reports no size, and reading it never ends.
             if not record.is_file() or record.stat().st_size > _LARGEST_RECORD:
                 continue
-            read += record.stat().st_size
-            if read > _LARGEST_RECORDS:
+            left[0] -= record.stat().st_size
+            if left[0] < 0:
                 break
             names.update(
                 row[0] for row in csv.reader(io.StringIO(record.read_text(encoding="utf-8"))) if row
@@ -181,19 +190,22 @@ def _unpacked_at_top(root: Path) -> set[str]:
 def _agent_files(root: Path) -> Iterator[Path]:
     # Unpacked distributions hold other people's code, whose SDKs name these tools whether or not
     # this agent uses them. Their records name those files wherever they were unpacked, so the
-    # agent's own code beside them, as in a Lambda folder, is still read.
-    unpacked: set[Path] = set()
+    # agent's own code beside them, as in a Lambda folder, is still read. One budget for the whole
+    # walk: a repository can hold any number of folders. Rows stay text, a fraction of a Path's size.
+    unpacked: set[str] = set()
+    left = [_LARGEST_RECORDS]
     for directory, subdirectories, files in os.walk(root):
         here = Path(directory)
         if any(name.endswith(".dist-info") for name in subdirectories):
-            unpacked.update(here / name for name in _unpacked_at_top(here))
+            unpacked.update(
+                os.path.join(directory, name) for name in _unpacked_at_top(here, left)
+            )
         subdirectories[:] = [
             name for name in subdirectories if not _not_the_agent_dir(name)
         ]
         for name in files:
-            path = here / name
-            if not _not_the_agent_file(name) and path not in unpacked:
-                yield path
+            if not _not_the_agent_file(name) and os.path.join(directory, name) not in unpacked:
+                yield here / name
 
 
 def _packages_used(path: Path) -> set[str]:
@@ -246,11 +258,12 @@ def _modules_at_top(root: Path) -> set[str]:
         return set()
 
 
-def _python_code(text: str) -> str:
+def _python_code(source: bytes) -> str:
+    # From bytes, as imports are read, so a coding line or a BOM is honoured as Python itself would.
     return " ".join(
         token.string
-        for token in tokenize.generate_tokens(io.StringIO(text).readline)
-        if token.type != tokenize.COMMENT
+        for token in tokenize.tokenize(io.BytesIO(source).readline)
+        if token.type not in (tokenize.COMMENT, tokenize.ENCODING)
     )
 
 
@@ -266,11 +279,10 @@ def _markers_in(path: Path) -> set[str]:
     try:
         if not path.is_file() or path.stat().st_size > _LARGEST_CODE_FILE:
             return set()
-        text = path.read_text(encoding="utf-8")
         code = (
-            _python_code(text)
+            _python_code(path.read_bytes())
             if path.suffix == ".py"
-            else _SCRIPT_COMMENT_OR_STRING.sub(_script_kept, text)
+            else _SCRIPT_COMMENT_OR_STRING.sub(_script_kept, path.read_text(encoding="utf-8"))
         )
     except (OSError, ValueError, SyntaxError, tokenize.TokenError):
         return set()

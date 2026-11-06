@@ -384,12 +384,24 @@ def test_an_odd_script_file_stays_quick(tmp_path, body):
     "line",
     [
         'const base = url.replace(/\\/*$/, "");',
-        "/src\\/*/.test(f);",
+        "const ok = 1;\n/src\\/*/.test(f);",
         "if (/src\\/*/.test(f)) {}",
         "const kept = files.filter((f) => /src\\/*/.test(f));",
-        "const ratio = a / b / c;",
+        'const ratio = a / b; const label = "1 / 2 /*";',
+        'const r = a\n  / b; const p = "src/**/*.ts";',
+        'x = a\n/ b; s = "http://h/*"; const t = { type: "computer_20250124" };',
+        "const C = () => <code>/src/**/*.ts</code>;",
     ],
-    ids=["replace", "line-start", "condition", "arrow", "division"],
+    ids=[
+        "replace",
+        "line-start",
+        "condition",
+        "arrow",
+        "division",
+        "division-at-a-line-start",
+        "division-at-a-line-start-before-a-url",
+        "jsx-text",
+    ],
 )
 def test_a_slash_in_script_code_hides_nothing_after_it(tmp_path, line):
     _tree(tmp_path, {"agent.js": f'{line}\nconst tool = {{ type: "computer_20250124" }};\n'})
@@ -402,8 +414,9 @@ def test_a_slash_in_script_code_hides_nothing_after_it(tmp_path, line):
         '/* const tool = { type: "computer_20250124" }; */\n',
         'const a = 1; /* { type: "computer_20250124" } */\n',
         'const ratio = a / b; // { type: "computer_20250124" }\n',
+        'const r = a\n  / 2; // { type: "computer_20250124" }\n',
     ],
-    ids=["line-start", "after-code", "after-division"],
+    ids=["line-start", "after-code", "after-division", "after-a-division-at-a-line-start"],
 )
 def test_a_script_comment_still_hides_what_it_holds(tmp_path, body):
     _tree(tmp_path, {"agent.js": body})
@@ -417,8 +430,19 @@ def test_a_script_comment_still_hides_what_it_holds(tmp_path, body):
         "const r = " + "(/[" * 20_000,
         "const r = /[" + "[" * 20_000,
         "const r = /[" + "[" * 20_000 + "\\",
+        "const r = /[/*",
+        "x = /" + "[=/]" * 20_000 + "/b",
+        "x = /" + "[=/" * 20_000 + "]/b",
     ],
-    ids=["slash-in-a-class", "unclosed-classes", "repeated-brackets", "repeated-then-escape"],
+    ids=[
+        "slash-in-a-class",
+        "unclosed-classes",
+        "repeated-brackets",
+        "repeated-then-escape",
+        "class-open-at-the-line-end",
+        "classes-of-slashes",
+        "nested-classes-of-slashes",
+    ],
 )
 def test_an_odd_regex_literal_stays_quick_and_hides_nothing(tmp_path, line):
     _tree(tmp_path, {"agent.js": f'{line}\nconst tool = {{ type: "computer_20250124" }};\n'})
@@ -428,11 +452,34 @@ def test_an_odd_regex_literal_stays_quick_and_hides_nothing(tmp_path, line):
 
 
 def test_a_file_the_tokenizer_breaks_on_costs_only_that_file(tmp_path):
-    (tmp_path / "blob.py").write_bytes(b" x = 1\n\x00")
+    # Read first by name, so a scan that stopped at it would miss the agent. 3.11's tokenizer
+    # doesn't raise on a NUL byte, so there the file is just read.
+    (tmp_path / "a_blob.py").write_bytes(b" x = 1\n\x00")
     (tmp_path / "agent.py").write_text(
         "from playwright.sync_api import sync_playwright\n", encoding="utf-8"
     )
     assert browser_tools_found(tmp_path) == ["playwright"]
+
+
+def test_a_file_that_raises_something_unexpected_costs_only_that_file(tmp_path, monkeypatch):
+    _tree(tmp_path, {"a_odd.py": "x = 1\n", "agent.py": "import playwright\n"})
+    real = agent_type_check._markers_in
+
+    def odd(path):
+        if path.name == "a_odd.py":
+            raise LookupError("an error no reader expects")
+        return real(path)
+
+    monkeypatch.setattr(agent_type_check, "_markers_in", odd)
+    assert browser_tools_found(tmp_path) == ["playwright"]
+
+
+def test_a_python_file_with_a_coding_line_keeps_its_marker(tmp_path):
+    (tmp_path / "agent.py").write_bytes(
+        b"# -*- coding: latin-1 -*-\nimport playwright\nNAME = '\xe9'\n"
+        b"TOOL = {'type': 'computer_20250124'}\n"
+    )
+    assert browser_tools_found(tmp_path) == ["computer-use tool", "playwright"]
 
 
 def test_a_python_file_saved_with_a_bom_is_read(tmp_path):
@@ -616,6 +663,61 @@ def test_records_past_their_total_limit_are_not_believed(tmp_path, monkeypatch):
     monkeypatch.setattr(agent_type_check, "_LARGEST_RECORDS", 20)
     agent_type_check._scan.cache_clear()
     assert browser_tools_found(tmp_path) == ["computer-use tool"]
+
+
+def _record_text_read(monkeypatch) -> list[int]:
+    read: list[int] = []
+    real = Path.read_text
+
+    def counted(self, *args, **kwargs):
+        text = real(self, *args, **kwargs)
+        if self.name == "RECORD":
+            read.append(len(text))
+        return text
+
+    monkeypatch.setattr(Path, "read_text", counted)
+    return read
+
+
+def test_every_folder_shares_one_record_budget(tmp_path, monkeypatch):
+    record = "vendored.py,sha256=a,1\n"
+    for folder in ("a", "b", "c"):
+        _tree(
+            tmp_path,
+            {
+                f"{folder}/x-1.dist-info/RECORD": record,
+                f"{folder}/vendored.py": 'NAME = "computer_20241022"\n',
+            },
+        )
+    # Packages unpacked in more than one folder are all skipped while the budget lasts.
+    assert browser_tools_found(tmp_path) == []
+    monkeypatch.setattr(agent_type_check, "_LARGEST_RECORDS", 2 * len(record))
+    read = _record_text_read(monkeypatch)
+    files = list(agent_type_check._agent_files(tmp_path))
+    assert sum(read) <= 2 * len(record)
+    assert [path.name for path in files].count("vendored.py") == 1
+
+
+def test_linked_records_are_never_read(tmp_path, monkeypatch):
+    _tree(
+        tmp_path,
+        {
+            "agent.py": "import openai\n",
+            ".shared/x-1.dist-info/RECORD": "vendored.py,sha256=a,1\n",
+            "y-1.dist-info/METADATA": "",
+        },
+    )
+    (tmp_path / "y-1.dist-info/RECORD").symlink_to(tmp_path / ".shared/x-1.dist-info/RECORD")
+    for folder in range(4):
+        _tree(tmp_path, {f"pkg{folder}/vendored.py": 'NAME = "computer_20241022"\n'})
+        for link in range(8):
+            (tmp_path / f"pkg{folder}/p{link}-1.dist-info").symlink_to(
+                tmp_path / ".shared/x-1.dist-info"
+            )
+    read = _record_text_read(monkeypatch)
+    # pip writes neither as a link, so a linked one says nothing about the files beside it.
+    assert browser_tools_found(tmp_path) == ["computer-use tool"]
+    assert read == []
 
 
 def test_a_record_linked_to_a_device_is_not_read(tmp_path, monkeypatch):
@@ -1012,28 +1114,71 @@ def test_a_browser_answer_without_the_value_stands_after_one_look(tmp_path, plai
     assert not (output / "contract.json").exists()
 
 
-@pytest.mark.parametrize("together", [True, False])
-def test_a_call_without_the_value_beside_an_answer_does_not_undo_it(
-    tmp_path, plain_repo, together
+@pytest.mark.parametrize(
+    "repo, modality, written",
+    [("plain_repo", "browser", FAILURE_FILE), ("browser_repo", "chat", "contract.json")],
+)
+def test_a_wrong_value_every_time_still_ends_after_one_look(
+    tmp_path, request, repo, modality, written
 ):
+    output = tmp_path / "out"
+    tool = _submit_tool(contract_tools(output, scan_root=request.getfixturevalue(repo)))
+    answers = [
+        asyncio.run(tool.handler(_reading(modality, second_look_read="yes"))) for _ in range(3)
+    ]
+    assert _looks(answers) == [True, False, False]
+    assert (output / written).exists()
+
+
+def _next_message(tool, *payloads):
+    """One model message's calls once the scan is done, when together runs as one after another."""
+
+    async def calls():
+        return [await tool.handler(payload) for payload in payloads]
+
+    return asyncio.run(calls())
+
+
+def test_a_call_without_the_value_beside_an_answer_does_not_undo_it(tmp_path, plain_repo):
     output = tmp_path / "out"
     tool = _submit_tool(contract_tools(output, scan_root=plain_repo))
     assert "second-look" in _text(asyncio.run(tool.handler(_reading("browser"))))
-
-    async def next_message():
-        calls = [
-            tool.handler(_reading("chat", second_look_read=_READ)),
-            tool.handler(_reading("browser")),
-        ]
-        if together:
-            return await asyncio.gather(*calls)
-        return [await one for one in calls]
-
-    chat_answer, browser_answer = asyncio.run(next_message())
+    chat_answer, browser_answer = _next_message(
+        tool, _reading("chat", second_look_read=_READ), _reading("browser")
+    )
     assert not chat_answer.get("is_error")
     assert "second-look" in _text(browser_answer)
     assert load(output).modality == "chat"
     assert not (output / FAILURE_FILE).exists()
+
+
+def test_a_browser_call_before_a_chat_answer_with_the_value_stops_the_build(tmp_path, plain_repo):
+    # The browser call is in the state of an answer to an unanswered look, so it stands.
+    output = tmp_path / "out"
+    tool = _submit_tool(contract_tools(output, scan_root=plain_repo))
+    assert "second-look" in _text(asyncio.run(tool.handler(_reading("browser"))))
+    browser_answer, chat_answer = _next_message(
+        tool, _reading("browser"), _reading("chat", second_look_read=_READ)
+    )
+    assert _STOP in _text(browser_answer)
+    assert _STOP in _text(chat_answer)
+    assert load(output) is None
+    assert _failure(output)["code"] == "agent_type_unsupported"
+
+
+def test_a_browser_call_after_a_chat_answer_neither_with_the_value_stops_the_build(
+    tmp_path, plain_repo
+):
+    # Each is taken as the answer in turn: the handler can't tell that a later call in the same
+    # message will undo what it saves.
+    output = tmp_path / "out"
+    tool = _submit_tool(contract_tools(output, scan_root=plain_repo))
+    assert "second-look" in _text(asyncio.run(tool.handler(_reading("browser"))))
+    chat_answer, browser_answer = _next_message(tool, _reading("chat"), _reading("browser"))
+    assert not chat_answer.get("is_error")
+    assert _STOP in _text(browser_answer)
+    assert load(output) is None
+    assert _failure(output)["code"] == "agent_type_unsupported"
 
 
 def _looked_at(tmp_path, repo):
@@ -1055,14 +1200,16 @@ def test_each_second_look_gets_its_own_value(tmp_path, plain_repo, monkeypatch):
     assert first != second
 
 
-def test_an_earlier_value_still_counts(tmp_path, plain_repo, monkeypatch):
+def test_an_earlier_value_still_counts_once_a_value_came_back(tmp_path, plain_repo, monkeypatch):
     # Two calls in one message each got a value; the model may send back either.
     values = iter(["first", "second"])
     monkeypatch.setattr(tools, "_new_receipt", lambda: next(values))
     output = tmp_path / "out"
     tool = _submit_tool(contract_tools(output, scan_root=plain_repo))
     assert all(_looks(_in_one_model_message(tool, "browser", together=True)))
+    assert not asyncio.run(tool.handler(_reading("chat", second_look_read="second"))).get("is_error")
     assert _STOP in _text(asyncio.run(tool.handler(_reading("browser", second_look_read="first"))))
+    assert _failure(output)["code"] == "agent_type_unsupported"
 
 
 def test_a_second_look_answered_with_its_value_stands(tmp_path, browser_repo):
@@ -1317,9 +1464,8 @@ def test_conversation_with_no_tool_saves_with_no_second_look(tmp_path, plain_rep
     assert load(output).modality == modality
 
 
-def test_one_scan_and_at_most_one_more_look_after_an_answer(tmp_path, browser_repo, monkeypatch):
-    output = tmp_path / "out"
-    scans = []
+def _counted_scans(monkeypatch) -> list[Path]:
+    scans: list[Path] = []
     real_scan = tools.browser_tools_found
 
     def counted(root):
@@ -1327,16 +1473,86 @@ def test_one_scan_and_at_most_one_more_look_after_an_answer(tmp_path, browser_re
         return real_scan(root)
 
     monkeypatch.setattr(tools, "browser_tools_found", counted)
+    return scans
+
+
+def test_one_scan_and_one_look_when_an_answer_comes_back_without_its_value(
+    tmp_path, browser_repo, monkeypatch
+):
+    output = tmp_path / "out"
+    scans = _counted_scans(monkeypatch)
     submit = _submitter(output, browser_repo)
     assert "second-look" in _text(submit(_reading("chat")))
     # An answer with the value stands, even when the contract is then sent back for another fix.
     rejected = submit(_reading("chat", real_use_cases=[], second_look_read=_READ))
     assert rejected["is_error"] and "second-look" not in _text(rejected)
-    # Without the value it could have run beside that answer, so it gets one look of its own.
-    assert "second-look" in _text(submit(_reading("chat")))
+    # The fix, sent without the value, is still that answer.
     assert not submit(_reading("chat")).get("is_error")
     assert load(output).modality == "chat"
     assert scans == [browser_repo]
+
+
+def test_a_different_answer_without_the_value_after_an_answer_gets_a_look(tmp_path, plain_repo):
+    # It could have run beside that answer, unread.
+    output = tmp_path / "out"
+    submit = _submitter(output, plain_repo)
+    assert "second-look" in _text(submit(_reading("browser")))
+    rejected = submit(_reading("chat", real_use_cases=[], second_look_read=_READ))
+    assert rejected["is_error"] and "second-look" not in _text(rejected)
+    assert "second-look" in _text(submit(_reading("browser")))
+    assert not (output / FAILURE_FILE).exists()
+
+
+def test_calls_waiting_on_the_first_scan_share_it(tmp_path, plain_repo, monkeypatch):
+    scans = _counted_scans(monkeypatch)
+    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo))
+
+    async def first_message():
+        return await asyncio.gather(*(tool.handler(_reading("browser")) for _ in range(3)))
+
+    assert all(_looks(asyncio.run(first_message())))
+    assert scans == [plain_repo]
+
+
+def test_a_call_cancelled_while_waiting_on_the_scan_leaves_it_to_the_others(
+    tmp_path, plain_repo, monkeypatch
+):
+    started, release = threading.Event(), threading.Event()
+
+    def slow(_root):
+        started.set()
+        release.wait(10)
+        return []
+
+    monkeypatch.setattr(tools, "browser_tools_found", slow)
+    tool = _submit_tool(contract_tools(tmp_path / "out", scan_root=plain_repo))
+
+    async def first_message():
+        cancelled = asyncio.ensure_future(tool.handler(_reading("browser")))
+        waiting = asyncio.ensure_future(tool.handler(_reading("browser")))
+        await asyncio.to_thread(started.wait, 10)
+        cancelled.cancel()
+        await asyncio.sleep(0)
+        release.set()
+        return await waiting
+
+    assert "second-look" in _text(asyncio.run(first_message()))
+
+
+def test_a_scan_that_fails_is_run_again_by_the_next_call(tmp_path, plain_repo, monkeypatch):
+    outcomes = iter([OSError("gone"), []])
+
+    def scan(_root):
+        outcome = next(outcomes)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(tools, "browser_tools_found", scan)
+    submit = _submitter(tmp_path / "out", plain_repo)
+    with pytest.raises(OSError, match="gone"):
+        submit(_reading("chat"))
+    assert not submit(_reading("chat")).get("is_error")
 
 
 # Every way into the stage reaches the scan

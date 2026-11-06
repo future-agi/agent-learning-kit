@@ -321,7 +321,12 @@ def contract_tools(
     # Whether the latest second look has had no value back yet. A model that never sends one back
     # must still be able to answer, or every submission earns another look until the turns run out.
     look_unanswered = False
+    # Whether the last answer that carried a value read browser. The same answer again, without the
+    # value, is still that answer: a fix after the contract was sent back mustn't earn a new look.
+    answered_browser: bool | None = None
     found: list[str] | None = None
+    # Calls in one message share one scan: each running its own takes that many times longer.
+    scan: asyncio.Future[list[str]] | None = None
 
     @tool(
         "submit_contract",
@@ -1108,13 +1113,17 @@ def contract_tools(
         receipt = payload.pop(SECOND_LOOK_READ, None) or (
             args.get(SECOND_LOOK_READ) if isinstance(args, dict) else None
         )
-        nonlocal refused, found, look_unanswered
+        nonlocal refused, found, look_unanswered, answered_browser, scan
         # Taken before the scan's wait: a call already running when a look went out hasn't read it.
         looked_before = bool(second_look_receipts)
         if refused or (destination / FAILURE_FILE).is_file():
             return _ok(_stop_message(destination))
         if found is None:
-            found = await asyncio.to_thread(browser_tools_found, scan_root)
+            # A scan that ended while nothing is set raised, so this call runs it again.
+            if scan is None or scan.done():
+                scan = asyncio.ensure_future(asyncio.to_thread(browser_tools_found, scan_root))
+            # Shielded: one call cancelled mustn't cancel the scan the others wait on.
+            found = await asyncio.shield(scan)
             # A call running alongside this one may have refused while this one waited.
             if refused or (destination / FAILURE_FILE).is_file():
                 return _ok(_stop_message(destination))
@@ -1128,12 +1137,17 @@ def contract_tools(
             )
         # A call holding a value read a look, so its answer stands. Without one, the call after a
         # look that no value came back for is taken as the answer. Once a value came back, a call
-        # without one may have run beside it unread, so it gets a look of its own.
+        # without one that reads the same stands too; one that reads otherwise may have run beside
+        # that answer unread, so it gets a look of its own.
         read_it = isinstance(receipt, str) and receipt in second_look_receipts
         if read_it:
             look_unanswered = False
+            answered_browser = is_browser(claimed)
+        same_answer = answered_browser is not None and answered_browser == is_browser(claimed)
         verdict = decide(
-            claimed, found, looked_again=read_it or (looked_before and look_unanswered)
+            claimed,
+            found,
+            looked_again=read_it or (looked_before and (look_unanswered or same_answer)),
         )
         if verdict == "refuse":
             # Set first: if the write fails, the model must not get a resubmission through.
