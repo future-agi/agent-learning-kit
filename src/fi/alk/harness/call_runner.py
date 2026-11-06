@@ -482,7 +482,9 @@ def _with_scenario_edits(
     persona = edit.get("persona")
     if isinstance(persona, Mapping):
         merged["persona"] = {
-            **(merged.get("persona") if isinstance(merged.get("persona"), dict) else {}),
+            **(
+                merged.get("persona") if isinstance(merged.get("persona"), dict) else {}
+            ),
             **{key: persona[key] for key in _EDITABLE_PERSONA_FIELDS if key in persona},
         }
     return merged
@@ -956,7 +958,6 @@ def _merge_span_calls(calls: list[Call], from_spans: list[Call]) -> tuple[Call, 
         return tuple(sorted(from_spans, key=lambda call: call.at))
     launched = {span.runtime_ids.get("event_id"): span.name for span in from_spans}
     merged = list(calls)
-    unpaired = list(calls)
     waiting: list[Call] = []
     for span in from_spans:
         if (
@@ -968,73 +969,198 @@ def _merge_span_calls(calls: list[Call], from_spans: list[Call]) -> tuple[Call, 
         else:
             waiting.append(span)
     span_ids = set(launched) - {None}
-    # Spans end, and are written, in their own order: pair the span only one call fits first, so each takes its own.
-    while _pair_spans(waiting, unpaired, span_ids):
-        pass
-    unknown = set()
+    tools: dict[str, tuple[list[Call], list[Call]]] = {}
     for span in waiting:
-        if any(_tool_key(c.name) == _tool_key(span.name) for c in unpaired):
-            # More than one call fits it, or none does: its agent and ids stay unknown rather than land on another call.
-            unknown.add(span.runtime_ids.get("event_id"))
-        else:
-            merged.append(span)
+        tools.setdefault(_tool_key(span.name), ([], []))[0].append(span)
+    for call in calls:
+        if _tool_key(call.name) in tools:
+            tools[_tool_key(call.name)][1].append(call)
+    unknown: set[str | None] = set()
+    for spans, natives in tools.values():
+        spans_left, calls_left = _pair_tool(spans, natives, span_ids)
+        if not calls_left:
+            # Calls only the spans saw.
+            merged.extend(spans_left)
+            continue
+        # Which of these calls each span is, nothing says: their ids and places stay unknown rather than be swapped.
+        unknown |= {span.runtime_ids.get("event_id") for span in spans_left}
+        if spans_left and len(spans_left) >= len(calls_left):
+            _lend_shared(spans_left, calls_left)
     for call in merged:
         if call.parent_span_id and call.parent_span_id in unknown:
             call.parent_span_id, call.relationship = "", ""
     return tuple(sorted(merged, key=lambda call: call.at))
 
 
-def _pair_spans(waiting: list[Call], unpaired: list[Call], span_ids: set[str]) -> bool:
-    """Pair every span only one call fits; failing that, the first whose fitting calls are interchangeable."""
-    fitting = [(span, _span_options(span, unpaired, span_ids)) for span in waiting]
-    chosen = [(span, options[0]) for span, options in fitting if len(options) == 1] or [
-        (span, options[0]) for span, options in fitting if _interchangeable(options)
-    ][:1]
-    for span, call in chosen:
-        # Two spans only one call fits: the first takes it, the other is weighed again.
-        if any(c is call for c in unpaired):
-            waiting.remove(span)
-            unpaired[:] = [c for c in unpaired if c is not call]
-            _lend_span(span, call)
-    return bool(chosen)
+def _pair_tool(
+    spans: list[Call], natives: list[Call], span_ids: set[str]
+) -> tuple[list[Call], list[Call]]:
+    """Pair one tool's spans with the calls another tracer saw of it, on evidence that holds across the two tracers'
+    clocks: an event id, then arguments and outcome between competing calls, then order when the spans did not
+    overlap, then calls that are the same in all but time. Returns the spans and calls left unpaired."""
+    by_id = {
+        call.runtime_ids["event_id"]: call
+        for call in natives
+        if call.runtime_ids.get("event_id")
+    }
+    rest: list[Call] = []
+    for span in spans:
+        own = by_id.pop(span.runtime_ids.get("event_id", ""), None)
+        if own is None:
+            rest.append(span)
+        else:
+            _lend_span(span, own)
+    # A call holding another span's event id is that span's, whatever else fits.
+    free = [
+        call for call in natives if call.runtime_ids.get("event_id") not in span_ids
+    ]
+    if len(rest) == 1 and len(free) == 1:
+        # Nothing competes: one span and one call are the same call however each tracer spelled it.
+        _lend_span(rest[0], free[0])
+        return [], []
+    values = {id(call): _argument_values(call) for call in [*rest, *free]}
+
+    def fit(span: Call, call: Call) -> tuple[bool, bool] | None:
+        """How strongly a span claims a call: matching arguments, then outcome; None when an argument differs."""
+        mine, theirs = values[id(span)], values[id(call)]
+        shared = (
+            mine.keys() & theirs.keys()
+            if mine is not None and theirs is not None
+            else set()
+        )
+        if any(mine[key] != theirs[key] for key in shared):
+            return None
+        return bool(shared), call.ok == span.ok
+
+    contested_spans: list[Call] = []
+    contested_calls: list[Call] = []
+    while True:
+        claims: dict[int, tuple[Call, list[tuple[tuple[bool, bool], Call]]]] = {}
+        for span in rest:
+            fits = [
+                (strength, call)
+                for call in free
+                if (strength := fit(span, call)) is not None
+            ]
+            if not fits:
+                continue
+            best = max(strength for strength, _ in fits)
+            top = [call for strength, call in fits if strength == best]
+            if len(top) == 1:
+                claims.setdefault(id(top[0]), (top[0], []))[1].append((best, span))
+        if not claims:
+            break
+        for call, claimants in claims.values():
+            claimants.sort(key=lambda claim: claim[0], reverse=True)
+            free = [c for c in free if c is not call]
+            if len(claimants) > 1 and claimants[0][0] == claimants[1][0]:
+                # Two spans claim one call equally: neither takes it.
+                contested_calls.append(call)
+                contested_spans.extend(span for _, span in claimants)
+                rest = [s for s in rest if not any(s is span for _, span in claimants)]
+            else:
+                _lend_span(claimants[0][1], call)
+                rest = [s for s in rest if s is not claimants[0][1]]
+    if rest and len(rest) == len(free) and _pair_in_order(rest, free, fit):
+        rest, free = [], []
+    rest, free = _pair_interchangeable(rest, free, fit)
+    return [*rest, *contested_spans], [*free, *contested_calls]
 
 
-# How long before its span starts another tracer may stamp the same call: when the model issued it.
-_STAMP_LEAD_S = 0.25
-
-
-def _span_options(span: Call, unpaired: list[Call], span_ids: set[str]) -> list[Call]:
-    """The calls another tracer saw that can be this span's: its own event id, else one of the same tool, outcome,
-    arguments and time. A call holding another span's event id is that span's."""
-    same_tool = [c for c in unpaired if _tool_key(c.name) == _tool_key(span.name)]
-    event_id = span.runtime_ids.get("event_id")
-    own = [c for c in same_tool if event_id and c.runtime_ids.get("event_id") == event_id]
-    if own:
-        return own[:1]
-    options = [c for c in same_tool if c.runtime_ids.get("event_id") not in span_ids]
-    # Same outcome first: a refusal can read as a failure to one tracer and a returned value to the other.
-    options = [c for c in options if c.ok == span.ok] or options
-    options = [c for c in options if _same_arguments(span, c)]
-    # Another tracer may stamp a call once it reads the result, so only a stamp before the span started rules one out.
-    return [
-        c for c in options if not (span.at and c.at) or c.at >= span.at - _STAMP_LEAD_S
-    ] or options
-
-
-def _same_arguments(span: Call, call: Call) -> bool:
-    """One tracer's arguments are all among the other's (an agent may add its own), when the span kept them whole."""
-    if span.input_omitted or set(span.arguments) == {"raw"}:
-        return True
-    fewer, more = sorted((span.arguments, call.arguments), key=len)
-    return all(key in more and more[key] == value for key, value in fewer.items())
-
-
-def _interchangeable(options: list[Call]) -> bool:
-    """Calls that differ in nothing the merge keeps: whichever the span lends to, the trace reads the same."""
-    return bool(options) and all(
-        replace(c, at=0.0, ended_at=0.0) == replace(options[0], at=0.0, ended_at=0.0)
-        for c in options
+def _pair_in_order(
+    spans: list[Call], calls: list[Call], fit: Callable[[Call, Call], Any]
+) -> bool:
+    """Pair spans that did not overlap with the calls in the order each tracer stamped them. Each side is read on its
+    own clock, so an offset between the clocks cannot change the pairing; overlapping spans are never paired by time."""
+    spans = sorted(spans, key=lambda span: span.at)
+    calls = sorted(calls, key=lambda call: call.at)
+    # A span with no end may still be running when the next starts.
+    apart = all(a.ended_at and a.ended_at < b.at for a, b in zip(spans, spans[1:]))
+    stamped = len(calls) == 1 or all(
+        a.at and a.at < b.at for a, b in zip(calls, calls[1:])
     )
+    if not (
+        apart
+        and stamped
+        and all(fit(span, call) is not None for span, call in zip(spans, calls))
+    ):
+        return False
+    for span, call in zip(spans, calls):
+        _lend_span(span, call)
+    return True
+
+
+def _pair_interchangeable(
+    spans: list[Call], calls: list[Call], fit: Callable[[Call, Call], Any]
+) -> tuple[list[Call], list[Call]]:
+    """Pair spans whose only fitting calls are the same in all but time: whichever each takes, the trace reads the
+    same. Returns the spans and calls left."""
+    if not (spans and calls):
+        return spans, calls
+    alike: dict[str, list[Call]] = {}
+    for call in calls:
+        alike.setdefault(_digest(call), []).append(call)
+    wanting: dict[str, list[Call]] = {}
+    for span in spans:
+        fitting = [
+            digest for digest, group in alike.items() if fit(span, group[0]) is not None
+        ]
+        if len(fitting) == 1:
+            wanting.setdefault(fitting[0], []).append(span)
+    taken: set[int] = set()
+    for digest, claimants in wanting.items():
+        if len(claimants) <= len(alike[digest]):
+            for span, call in zip(claimants, alike[digest]):
+                _lend_span(span, call)
+                taken.update((id(span), id(call)))
+    return (
+        [span for span in spans if id(span) not in taken],
+        [call for call in calls if id(call) not in taken],
+    )
+
+
+def _argument_values(call: Call) -> dict[str, Any] | None:
+    """A call's arguments as both tracers would agree on them ("5" and 5 alike), or None when it kept none whole."""
+    if call.input_omitted or not call.arguments or set(call.arguments) == {"raw"}:
+        return None
+    return {key: _loose(value) for key, value in call.arguments.items()}
+
+
+def _loose(value: Any) -> Any:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    return value
+
+
+def _digest(call: Call) -> str:
+    """Everything a call carries but its times."""
+    fields = {
+        key: value for key, value in vars(call).items() if key not in ("at", "ended_at")
+    }
+    return json.dumps(fields, sort_keys=True, default=repr)
+
+
+def _lend_shared(spans: list[Call], calls: list[Call]) -> None:
+    """Give calls no span can be told apart from what every one of their spans agrees on: a hand-off or worker that
+    certainly happened, whichever call is whose."""
+
+    def agreed(read: Callable[[Call], Any]) -> Any:
+        values = {read(span) for span in spans}
+        return values.pop() if len(values) == 1 else None
+
+    worker = agreed(lambda span: (span.worker_id, span.worker_label))
+    delegated_to = agreed(lambda span: span.delegated_to)
+    transferred = agreed(lambda span: span.transferred)
+    for call in calls:
+        if worker and not (call.worker_id or call.worker_label):
+            call.worker_id, call.worker_label = worker
+        call.delegated_to = call.delegated_to or delegated_to or ""
+        call.transferred = call.transferred or bool(transferred)
 
 
 def _lend_span(span: Call, other: Call) -> None:
@@ -1411,7 +1537,9 @@ class CallRunnerImpl:
                 f"not set for world {runtime.world_index}"
             )
 
-        source_key = getattr(scenario, "source_scenario_key", None) or scenario.scenario_key
+        source_key = (
+            getattr(scenario, "source_scenario_key", None) or scenario.scenario_key
+        )
         try:
             doc = _read_scenario_document(self._context.bundle_dir, source_key)
         except _ScenarioDocumentUnavailable as exc:
@@ -1456,10 +1584,16 @@ class CallRunnerImpl:
             call_environ["HARNESS_BACKGROUND_PLACE"] = place_of(noise)
             base = self._environ.get(BACKGROUND_NOISE_VOLUME_ALIAS) or "7.0"
             # A scenario about the noise itself is heard loud enough to test it.
-            about_noise = any("nois" in str(level) for level in (doc.get("coverage") or {}).values())
-            spread = random.uniform(1.3, 1.8) if about_noise else random.uniform(0.7, 1.4)
+            about_noise = any(
+                "nois" in str(level) for level in (doc.get("coverage") or {}).values()
+            )
+            spread = (
+                random.uniform(1.3, 1.8) if about_noise else random.uniform(0.7, 1.4)
+            )
             try:
-                call_environ[BACKGROUND_NOISE_VOLUME_ALIAS] = f"{float(base) * spread:.2f}"
+                call_environ[BACKGROUND_NOISE_VOLUME_ALIAS] = (
+                    f"{float(base) * spread:.2f}"
+                )
             except ValueError:
                 pass
         else:
@@ -1836,15 +1970,25 @@ class CallRunnerImpl:
                 safe_details = {
                     key: value
                     for key, value in (case.failure.details or {}).items()
-                    if key in {
-                        "operation", "exception_type", "provider_code", "http_status",
-                        "sip_status_code", "stop_reason", "turn_count", "minimum_turn_count",
+                    if key
+                    in {
+                        "operation",
+                        "exception_type",
+                        "provider_code",
+                        "http_status",
+                        "sip_status_code",
+                        "stop_reason",
+                        "turn_count",
+                        "minimum_turn_count",
                     }
                 }
                 logger.warning(
                     "voice_call_failed run=%s case=%s code=%s stage=%s details=%s",
-                    report.run_id, case.test_case_id, case.failure.code,
-                    case.failure.stage.value, json.dumps(safe_details, sort_keys=True),
+                    report.run_id,
+                    case.test_case_id,
+                    case.failure.code,
+                    case.failure.stage.value,
+                    json.dumps(safe_details, sort_keys=True),
                 )
             # C3 §4.5 step 2 (the one narrow call_runner change): the engine's dispatch-ack ladder
             # surfaces +60s exhaustion via a STRUCTURED marker (`failure.code`), never a substring

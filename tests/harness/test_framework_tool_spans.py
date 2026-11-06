@@ -614,6 +614,7 @@ def test_a_call_another_tracer_saw_takes_the_span_s_event_ids_and_keeps_its_own(
             result=None,
             ok=True,
             at=1.0,
+            ended_at=1.5,
             runtime_ids={"event_id": "s1", "parent_event_id": "a1"},
         ),
         Call(
@@ -690,38 +691,35 @@ def test_a_job_hand_off_stays_its_own_event_and_is_kept_once() -> None:
     ]
 
 
-def _search(query: str, at: float, **fields) -> Call:
-    return Call(name="search", arguments={"q": query}, result=query, ok=True, at=at, **fields)
-
-
-def _search_span(query: str, at: float, worker: str, **fields) -> Call:
-    return _search(
-        query,
-        at,
-        worker_id=worker,
-        runtime_ids={"event_id": f"event-{query}"},
-        parent_span_id=f"hand-off-{worker}",
-        relationship="observed",
-        **fields,
+def _search(query, at: float, **fields) -> Call:
+    return Call(
+        **{
+            "name": "search",
+            "arguments": {"q": query},
+            "result": query,
+            "ok": True,
+            "at": at,
+            **fields,
+        }
     )
 
 
-@pytest.mark.parametrize(
-    ("stamps", "span_fields"),
-    [
-        # Stamped when issued; the spans name their arguments.
-        ((1.0, 2.0), {}),
-        # Stamped once each result was read, the later call first: the arguments tell them apart.
-        ((9.2, 9.1), {}),
-        # Stamped when issued, the spans' arguments left out: the times tell them apart.
-        ((1.0, 2.0), {"input_omitted": True}),
-    ],
-)
-def test_two_overlapping_calls_of_one_tool_keep_their_own_spans_when_the_spans_end_in_the_other_order(
-    stamps: tuple[float, float], span_fields: dict
-) -> None:
-    natives = [_search("a", stamps[0]), _search("b", stamps[1])]
-    hand_offs = [
+def _search_span(query, at: float, worker: str, **fields) -> Call:
+    return _search(
+        query,
+        at,
+        **{
+            "worker_id": worker,
+            "runtime_ids": {"event_id": f"event-{query}"},
+            "parent_span_id": f"hand-off-{worker}",
+            "relationship": "observed",
+            **fields,
+        },
+    )
+
+
+def _hand_offs(*workers: str) -> list[Call]:
+    return [
         Call(
             name="ask_worker",
             arguments={},
@@ -730,24 +728,69 @@ def test_two_overlapping_calls_of_one_tool_keep_their_own_spans_when_the_spans_e
             delegated_to=worker,
             runtime_ids={"event_id": f"hand-off-{worker}"},
         )
-        for worker in ("worker-a", "worker-b")
+        for worker in workers
     ]
-    spans = [
-        _search_span("b", 2.0, "worker-b", ended_at=3.0, **span_fields),
-        _search_span("a", 1.0, "worker-a", ended_at=4.0, **span_fields),
-    ]
-    merged = call_runner._merge_span_calls(natives, [*hand_offs, *spans])
-    assert [
-        (c.arguments, c.runtime_ids, c.worker_id, c.parent_span_id)
+
+
+def _searches(merged) -> list[tuple]:
+    return [
+        (c.arguments, c.runtime_ids.get("event_id"), c.worker_id, c.parent_span_id)
         for c in merged
         if c.name == "search"
-    ] == [
-        ({"q": "a"}, {"event_id": "event-a"}, "worker-a", "hand-off-worker-a"),
-        ({"q": "b"}, {"event_id": "event-b"}, "worker-b", "hand-off-worker-b"),
     ]
 
 
-def test_a_span_and_another_tracer_s_call_sharing_an_event_id_pair_whatever_else_they_say() -> None:
+_EACH_OWN = [
+    ({"q": "a"}, "event-a", "worker-a", "hand-off-worker-a"),
+    ({"q": "b"}, "event-b", "worker-b", "hand-off-worker-b"),
+]
+
+
+@pytest.mark.parametrize("reversed_spans", [True, False])
+@pytest.mark.parametrize(
+    "stamps",
+    [
+        (1.0, 2.0),  # Stamped when issued.
+        (9.2, 9.1),  # Stamped once each result was read, the later call first.
+    ],
+)
+def test_two_overlapping_calls_of_one_tool_keep_their_own_spans_when_the_spans_end_in_the_other_order(
+    stamps: tuple[float, float], reversed_spans: bool
+) -> None:
+    natives = [_search("a", stamps[0]), _search("b", stamps[1])]
+    spans = [
+        _search_span("a", 1.0, "worker-a", ended_at=4.0),
+        _search_span("b", 2.0, "worker-b", ended_at=3.0),
+    ]
+    if reversed_spans:
+        spans.reverse()
+    merged = call_runner._merge_span_calls(
+        natives, [*_hand_offs("worker-a", "worker-b"), *spans]
+    )
+    assert sorted(_searches(merged), key=str) == _EACH_OWN
+
+
+@pytest.mark.parametrize("reversed_spans", [True, False])
+def test_arguments_two_tracers_spell_differently_still_tell_overlapping_calls_apart(
+    reversed_spans: bool,
+) -> None:
+    natives = [_search(5, 9.2), _search(6, 9.1)]
+    spans = [
+        _search_span("5", 1.0, "worker-a", ended_at=4.0),
+        _search_span("6", 2.0, "worker-b", ended_at=3.0),
+    ]
+    if reversed_spans:
+        spans.reverse()
+    merged = call_runner._merge_span_calls(natives, spans)
+    assert sorted((c.arguments["q"], c.worker_id) for c in merged) == [
+        (5, "worker-a"),
+        (6, "worker-b"),
+    ]
+
+
+def test_a_span_and_another_tracer_s_call_sharing_an_event_id_pair_whatever_else_they_say() -> (
+    None
+):
     natives = [
         _search("a", 9.2, runtime_ids={"event_id": "event-b"}),
         _search("b", 9.1, runtime_ids={"event_id": "event-a"}),
@@ -760,16 +803,75 @@ def test_a_span_and_another_tracer_s_call_sharing_an_event_id_pair_whatever_else
     ]
 
 
-def test_overlapping_calls_of_one_tool_nothing_tells_apart_keep_their_agent_and_place_unknown() -> None:
-    # The spans left out their arguments and the other tracer stamped both calls after both started. A call made in
-    # either hand-off then has no place either.
+def test_a_call_holding_another_span_s_event_id_is_left_to_that_span() -> None:
+    # The span with that id is no search span, so only the other call is this span's to take.
+    held = _search("a", 1.0, runtime_ids={"event_id": "event-x"})
+    natives = [held, _search("b", 2.0)]
+    spans = [
+        Call(
+            name="lookup",
+            arguments={},
+            ok=True,
+            at=0.5,
+            runtime_ids={"event_id": "event-x"},
+        ),
+        _search_span("b", 2.0, "worker-b", input_omitted=True),
+    ]
+    merged = call_runner._merge_span_calls(natives, spans)
+    assert sorted(_searches(merged), key=str) == [
+        ({"q": "a"}, "event-x", "", ""),
+        ({"q": "b"}, "event-b", "worker-b", ""),
+    ]
+
+
+@pytest.mark.parametrize("reversed_spans", [True, False])
+@pytest.mark.parametrize("offset", [-0.5, 0.0, 0.5, 7.0])
+def test_calls_that_did_not_overlap_pair_in_order_whatever_the_offset_between_the_two_clocks(
+    offset: float, reversed_spans: bool
+) -> None:
+    natives = [_search("a", 1.0 + offset), _search("b", 2.0 + offset)]
+    spans = [
+        _search_span("a", 1.0, "worker-a", ended_at=1.4, input_omitted=True),
+        _search_span("b", 2.0, "worker-b", ended_at=2.4, input_omitted=True),
+    ]
+    if reversed_spans:
+        spans.reverse()
+    merged = call_runner._merge_span_calls(
+        natives, [*_hand_offs("worker-a", "worker-b"), *spans]
+    )
+    assert sorted(_searches(merged), key=str) == _EACH_OWN
+
+
+@pytest.mark.parametrize("reversed_spans", [True, False])
+@pytest.mark.parametrize("stamps", [(0.5, 1.5), (1.0, 2.0), (1.3, 1.4), (9.2, 9.1)])
+def test_overlapping_calls_of_one_tool_nothing_tells_apart_keep_their_agent_and_place_unknown(
+    stamps: tuple[float, float], reversed_spans: bool
+) -> None:
+    # The spans left out their arguments, and no stamp of the other tracer's clock is read against a span's. A call
+    # made in either hand-off then has no place either, while the hand-off both spans record is kept.
     from fi.alk.harness.world.runtime import trace_row
 
-    natives = [_search("a", 9.2), _search("b", 9.1)]
+    natives = [_search("a", stamps[0]), _search("b", stamps[1])]
     spans = [
-        _search_span("b", 2.0, "worker-b", input_omitted=True, delegated_to="reader"),
-        _search_span("a", 1.0, "worker-a", input_omitted=True, delegated_to="reader"),
+        _search_span(
+            "a",
+            1.0,
+            "worker-a",
+            ended_at=4.0,
+            input_omitted=True,
+            delegated_to="reader",
+        ),
+        _search_span(
+            "b",
+            2.0,
+            "worker-b",
+            ended_at=3.0,
+            input_omitted=True,
+            delegated_to="reader",
+        ),
     ]
+    if reversed_spans:
+        spans.reverse()
     child = Call(
         name="summarise",
         arguments={},
@@ -781,14 +883,121 @@ def test_overlapping_calls_of_one_tool_nothing_tells_apart_keep_their_agent_and_
         relationship="observed",
     )
     merged = call_runner._merge_span_calls(natives, [*spans, child])
-    assert [
-        (c.arguments, c.worker_id, c.runtime_ids, c.parent_span_id) for c in merged
-    ] == [
-        ({}, "worker-b", {"event_id": "event-c"}, ""),
-        ({"q": "b"}, "", {}, ""),
-        ({"q": "a"}, "", {}, ""),
+    assert sorted(
+        (
+            (
+                c.name,
+                c.arguments,
+                c.worker_id,
+                c.delegated_to,
+                c.runtime_ids,
+                c.parent_span_id,
+            )
+            for c in merged
+        ),
+        key=str,
+    ) == [
+        ("search", {"q": "a"}, "", "reader", {}, ""),
+        ("search", {"q": "b"}, "", "reader", {}, ""),
+        ("summarise", {}, "worker-b", "", {"event_id": "event-c"}, ""),
     ]
-    assert trace_row(merged[0])["relationship"] == "unknown"
+    (row,) = (trace_row(c) for c in merged if c.name == "summarise")
+    assert row["relationship"] == "unknown"
+
+
+@pytest.mark.parametrize(
+    "native",
+    [
+        _search(5, 9.0),
+        Call(name="search", arguments={"raw": '{"q": "a'}, ok=True, at=9.0),
+        Call(
+            name="search", arguments={"q": "a-cut"}, ok=True, at=9.0, input_omitted=True
+        ),
+        _search("other", 9.0),
+    ],
+)
+def test_one_span_and_one_call_of_a_tool_pair_however_each_tracer_spelled_the_arguments(
+    native: Call,
+) -> None:
+    (merged,) = call_runner._merge_span_calls(
+        [native], [_search_span("5", 1.0, "worker-a")]
+    )
+    assert (merged.worker_id, merged.runtime_ids) == (
+        "worker-a",
+        {"event_id": "event-5"},
+    )
+
+
+@pytest.mark.parametrize("reversed_spans", [True, False])
+def test_two_spans_claiming_one_call_go_to_the_stronger_claim_and_a_tie_leaves_it_unknown(
+    reversed_spans: bool,
+) -> None:
+    # The other tracer saw one call; the failed one never reached it.
+    failed = _search_span(
+        "a", 1.0, "worker-a", ok=False, result=None, input_omitted=True
+    )
+    spans = [failed, _search_span("b", 2.0, "worker-b")]
+    if reversed_spans:
+        spans.reverse()
+    merged = call_runner._merge_span_calls([_search("b", 9.0)], spans)
+    assert sorted(
+        (
+            (c.arguments, c.ok, c.worker_id, c.runtime_ids.get("event_id"))
+            for c in merged
+        ),
+        key=str,
+    ) == [
+        ({"q": "a"}, False, "worker-a", "event-a"),
+        ({"q": "b"}, True, "worker-b", "event-b"),
+    ]
+    tied = [
+        _search_span("a", 1.0, "worker-a", input_omitted=True),
+        _search_span("b", 2.0, "worker-b", input_omitted=True),
+    ]
+    if reversed_spans:
+        tied.reverse()
+    (merged,) = call_runner._merge_span_calls([_search("b", 9.0)], tied)
+    assert (merged.worker_id, merged.runtime_ids) == ("", {})
+
+
+@pytest.mark.parametrize("reversed_spans", [True, False])
+def test_calls_the_same_in_all_but_time_pair_with_their_overlapping_spans_one_each(
+    reversed_spans: bool,
+) -> None:
+    spans = [
+        _search_span(
+            "a", 1.0, "worker-a", ended_at=4.0, runtime_ids={"event_id": "e1"}
+        ),
+        _search_span(
+            "a", 2.0, "worker-b", ended_at=3.0, runtime_ids={"event_id": "e2"}
+        ),
+    ]
+    if reversed_spans:
+        spans.reverse()
+    merged = call_runner._merge_span_calls(
+        [_search("a", 9.2), _search("a", 9.1)], spans
+    )
+    assert sorted((c.worker_id, c.runtime_ids["event_id"]) for c in merged) == [
+        ("worker-a", "e1"),
+        ("worker-b", "e2"),
+    ]
+
+
+def test_two_hundred_identical_calls_pair_in_well_under_a_second() -> None:
+    import time
+
+    natives = [_search("a", 9.0) for _ in range(200)]
+    spans = [
+        _search_span(
+            "a", 1.0, f"worker-{i}", ended_at=2.0, runtime_ids={"event_id": f"e{i}"}
+        )
+        for i in range(200)
+    ]
+    started = time.perf_counter()
+    merged = call_runner._merge_span_calls(natives, spans)
+    assert time.perf_counter() - started < 0.5
+    assert len(merged) == 200
+    assert {c.runtime_ids["event_id"] for c in merged} == {f"e{i}" for i in range(200)}
 
 
 _AGENTS_SDK = {
