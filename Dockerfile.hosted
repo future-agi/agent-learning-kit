@@ -108,6 +108,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     export UV_LINK_MODE=copy \
     && uv export --frozen --no-dev --no-emit-project \
       --extra livekit --extra harness-ui --extra harness-stores --extra hosted-tracing \
+      --extra documents \
       --output-file /tmp/alk-requirements.txt \
     && uv pip install --python /opt/alk-venv/bin/python -r /tmp/alk-requirements.txt \
     && uv pip install --python /opt/alk-venv/bin/python --no-deps 'traceai-google-adk==0.1.5' \
@@ -137,9 +138,12 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     && chmod -R a-w /opt/alk \
     && rm /tmp/alk-install-start
 
+# ALK_HANDLER_ISOLATION: a designed or released environment's handlers run in a user namespace as
+# a uid from svc-control's subordinate range, with no network and none of its files (handler_host).
 ENV PATH="/opt/alk-venv/bin:/usr/lib/postgresql/16/bin:/opt/erlang/bin:/opt/rabbitmq/sbin:/opt/node22/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \
-    XDG_RUNTIME_DIR=/run/user/2000
+    XDG_RUNTIME_DIR=/run/user/2000 \
+    ALK_HANDLER_ISOLATION=namespace
 
 USER svc-control
 WORKDIR /work

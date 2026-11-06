@@ -116,6 +116,89 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
 - Hosted adaptation keeps the scratch PostgreSQL's superuser DSN in
   `.authoring-credentials/` beside the workspace, which the model's file tools
   refuse, instead of in `adaptation/inputs.json`.
+- Suite proofs gain a fourth gate on both engines: the untouched world is graded
+  against the solution's calls with every successful state-changing call still
+  `ok` but without its result (`mutates_state` in `tools.json`). A check that
+  holds credits the call rather than its effect, and the scenario is refused.
+  The clinic's suite passes unchanged.
+- Design workspace (`fi.alk.harness.design`), the first part of the environment
+  builder: `open_design` unpacks a root template (environment and suite) into a
+  flat workspace, `release_view` materializes the release roots through an
+  allow-list, and `seal_design` derives the policy rows, re-saves the world as an
+  environment's, refuses schema PostgreSQL seeds would drop or rewrite (foreign
+  keys, CHECK, partial and plain indexes, views, triggers, generated columns,
+  expression defaults, other types; a template's are listed as inherited), and
+  refuses check files that differ from the catalogue, before sealing both
+  releases on PostgreSQL.
+- Design mode (`python -m fi.alk.harness.design run|hosted`): the builder
+  interviews the person one question at a time, and nothing is built until they
+  approve `propose_design`. It then builds the world with the world server and
+  its own tools (`define_tool`, `change_tool`, `drop_tool`, `add_policy_rule`,
+  `change_policy_rule`, `drop_policy_rule`, `detach_server`), writes the suite
+  with the scenario tools, and seals with `finish_design`. Each handler is checked
+  before it is kept: only allow-listed imports, no builtins that reach outside
+  the world, a sample call whose effect matches `mutates_state`, missing required
+  arguments refused, and every argument used. A designed suite must grade every
+  agent rule and cover exactly the approved use cases. An unanswered question
+  parks the design (hosted: the job ends `design_waiting` with the question
+  checkpointed), and continuing asks it again and resumes.
+- Designs attach MCP servers: `attach_server` validates a `sql` or `filesystem`
+  server against the registry, the world's tables and the folder, starts it
+  against the design's world and keeps only read-only tools; `write_attached_file`
+  writes the documents a filesystem server reads. Every environment's attached
+  tools must be read-only (each registered server lists its attachable tools).
+  Attached tool names reach the scenario writers (the world summary lists them
+  with what they take), the health check and the readiness gates, and a
+  scenario whose solution calls one is proved on PostgreSQL when it is
+  submitted, off the event loop, against a template database kept per design
+  view (`design/proof.py`, sharing the seal's `postgres_verdict`).
+- Design documents (`--documents`; hosted under `/work/documents`): each upload
+  is parsed in a child process with an allow-listed environment and CPU, memory
+  and output limits (PDF with pypdf, XLSX with openpyxl, DOCX with the standard
+  library, CSV, TSV, JSON, JSONL, text; oversized zips refused), into text and
+  tables the builder reads with `list_documents` and `read_document`.
+  `import_rows` inserts a table into the world with each value coerced to its
+  column's declared type, and `attach_document` writes a document as markdown
+  under `attached/`. Both require a decision about real people's details in the
+  document (`personal_details`: none, replaced with made-up ones, or kept at
+  the person's word), and both are recorded with it and their source's sha256
+  in the sealed environment's `metadata.provenance`. New `documents` extra,
+  installed in the hosted image.
+- The Gemini backend names its ADK agent with a valid identifier for any
+  session id: a hosted chat whose conversation id began with a digit failed
+  every turn with a ValidationError.
+- Designed tools must be valid JSON Schema (`parameters` and `returns`), checked
+  at `define_tool` and when a release loads: a sealed Gmail design had shipped
+  `'str'` and `'int'` types that MCP clients reject. Tool names may contain `-`
+  and run to 64 characters, as MCP and model function calling allow, and the
+  release name and digest patterns are anchored. `ToolError` takes an optional
+  stable `category` (`invalid_input`, `not_found`, `permission_denied`,
+  `conflict`, `policy_blocked`, `rate_limited`, `unavailable`,
+  `timeout_unknown_outcome`) that leads the message the agent reads; both
+  engines raise the one class.
+- A finished design refuses a second `finish_design` or `stop_design`: a builder
+  that carried on after sealing resealed over the registered output and the job
+  failed with `design_result_missing`.
+- The hosted chat emits `question_answered` when the builder takes a reply, so
+  the platform settles the question while the turn carries on rather than at
+  `turn_completed`; needs the platform that accepts the event kind.
+- Environment-authored handlers (designs and releases) run in an isolated child
+  process when `ALK_HANDLER_ISOLATION` is set (`fi.alk.harness.world.handler_host`).
+  The hosted image sets `namespace`: a user namespace as a uid from svc-control's
+  subordinate range, an empty environment, no network, and empty mounts over
+  `/work`, `/run`, `/home` and `/tmp`; the call fails rather than fall back when
+  the namespace cannot be made. The handler reaches the world only through its
+  `db`, whose operations the calling process answers; messages are JSON lines,
+  values keep their types, refusals keep their category, and a hung handler times
+  out. Run processes inherit the setting. A model-written handler could otherwise
+  read the builder's model and platform credentials (or a run's secrets).
+- Finishing and stopping a design are serialized: two concurrent `finish_design`
+  calls no longer both seal into one output.
+- Personal-details replacement in `import_rows` and `attach_document` matches
+  numbers as written (a phone number in a numeric cell), and the tool names each
+  requested replacement the document never held.
+- XLSX sheets whose titles read the same as file names (`A B`, `A-B`) each get a
+  part of their own; a part keeps its sheet's `title` as written.
 
 ## v1.0.0-rc.1 — 2026-06-10
 
