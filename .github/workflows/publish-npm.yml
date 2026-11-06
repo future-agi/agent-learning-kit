@@ -1,0 +1,277 @@
+# Owner setup before enabling this workflow:
+# 1. setup-node is pinned to the same full commit SHA future-agi/traceAI main already
+#    uses (49933ea5288caeca8642d1e84afbd3f7d6820020, v4.4.0).
+# 2. Merge this file as .github/workflows/publish-npm.yml into protected main in
+#    future-agi/agent-learning-kit; require review for release-source changes.
+# 3. Configure the npm trusted publisher for @future-agi/agent-learning-kit:
+#    GitHub Actions, owner future-agi, repository agent-learning-kit,
+#    workflow filename publish-npm.yml, environment npm (all exact matches).
+#    Confirm package administration, public access and provenance eligibility.
+# 4. Create GitHub environment npm, restrict deployments to main and require a
+#    release reviewer. This publish job is the ONLY deployment approval gate.
+#    The reviewer must be allowed to approve under the chosen self-review policy.
+# 5. Obtain the approved staged-tarball SHA-256 for the merged source and this
+#    toolchain. Dispatch on main with that digest; review the build summary and
+#    artifact before approving npm. A digest mismatch must never be overridden.
+# Authentication is npm trusted publishing via OIDC; no stored registry auth.
+# Only manual dispatch is enabled: tag pushes do not carry an approved digest.
+name: Publish npm
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha256:
+        description: Approved staged .tgz SHA-256 (exactly 64 hexadecimal characters)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "22"
+  NPM_VERSION: "11.5.1"
+  PNPM_VERSION: "8.15.0"
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      tarball_sha256: ${{ steps.seal.outputs.sha256 }}
+    steps:
+      - name: Require the canonical main dispatch and an approved digest
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          SOURCE_REF: ${{ github.ref }}
+          EXPECTED_SHA256: ${{ inputs.expected_sha256 }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" != workflow_dispatch || "$REPOSITORY" != future-agi/agent-learning-kit || "$SOURCE_REF" != refs/heads/main ]]; then
+            printf '%s\n' '::error::Publish requires a manual dispatch on the canonical repository main branch.'
+            exit 1
+          fi
+          if [[ ! "$EXPECTED_SHA256" =~ ^[0-9a-fA-F]{64}$ ]]; then
+            printf '%s\n' '::error::expected_sha256 must be exactly 64 hexadecimal characters.'
+            exit 1
+          fi
+
+      - name: Check out the immutable dispatch commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          # Do not set registry-url: the publisher uses OIDC, not npmrc auth.
+
+      - name: Select the packing toolchain
+        working-directory: typescript/agent-learning-kit
+        run: |
+          set -euo pipefail
+          npm install --global "npm@${NPM_VERSION}" --ignore-scripts --no-audit --no-fund
+          [[ "$(npm --version)" == "$NPM_VERSION" ]]
+          corepack enable
+          corepack prepare "pnpm@${PNPM_VERSION}" --activate
+          [[ "$(pnpm --version)" == "$PNPM_VERSION" ]]
+          node --version
+          npm --version
+          pnpm --version
+
+      - name: Install the frozen workspace without lifecycle scripts
+        working-directory: typescript
+        run: |
+          set -euo pipefail
+          [[ "$(pnpm --version)" == "$PNPM_VERSION" ]]
+          pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Typecheck
+        working-directory: typescript/agent-learning-kit
+        run: pnpm run typecheck
+
+      - name: Run Jest in CI mode
+        working-directory: typescript/agent-learning-kit
+        run: pnpm exec jest --config jest.config.cjs --ci --runInBand
+
+      - name: Pack only through the sanctioned staging script
+        id: pack
+        working-directory: typescript/agent-learning-kit
+        run: |
+          set -euo pipefail
+          candidate_dir="$(mktemp -d "$RUNNER_TEMP/alk-npm-candidate.XXXXXX")"
+          # mktemp creates an empty directory outside the source package.
+          pnpm run pack:candidate "$candidate_dir"
+          shopt -s nullglob dotglob
+          candidates=("$candidate_dir"/*)
+          if [[ ${#candidates[@]} -ne 1 ]]; then
+            printf '%s\n' '::error::Expected exactly one staged tarball and no other output.'
+            exit 1
+          fi
+          tarball="${candidates[0]}"
+          if [[ "$tarball" != *.tgz || ! -f "$tarball" || -L "$tarball" ]]; then
+            printf '%s\n' '::error::The staged tarball must be a regular .tgz file.'
+            exit 1
+          fi
+          # Rename only; do not unpack, repack or publish the source directory.
+          if [[ "$tarball" != "$candidate_dir/package.tgz" ]]; then
+            mv -- "$tarball" "$candidate_dir/package.tgz"
+          fi
+          chmod 0444 "$candidate_dir/package.tgz"
+          printf 'tarball=%s/package.tgz\n' "$candidate_dir" >> "$GITHUB_OUTPUT"
+
+      - name: Seed a separate npm cache and run the offline packed consumer
+        working-directory: typescript/agent-learning-kit
+        env:
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+        run: |
+          set -euo pipefail
+          seed="$(mktemp -d "$RUNNER_TEMP/alk-consumer-seed.XXXXXX")"
+          mkdir -p "$seed/project" "$seed/cache" "$seed/home"
+          printf '%s\n' '{"name":"alk-consumer-cache-seed","private":true,"type":"module"}' > "$seed/project/package.json"
+          : > "$seed/user.npmrc"
+          : > "$seed/global.npmrc"
+          # This separate seeding step is ONLINE. The pnpm store is not an npm
+          # cache; seed the exact tarball dependency closure and compiler first.
+          (
+            cd "$seed/project"
+            env -i \
+              PATH="$PATH" HOME="$seed/home" TMPDIR="$RUNNER_TEMP" \
+              NPM_CONFIG_USERCONFIG="$seed/user.npmrc" \
+              NPM_CONFIG_GLOBALCONFIG="$seed/global.npmrc" \
+              NPM_CONFIG_CACHE="$seed/cache" \
+              NPM_CONFIG_REGISTRY=https://registry.npmjs.org/ \
+              NPM_CONFIG_IGNORE_SCRIPTS=true NPM_CONFIG_AUDIT=false \
+              NPM_CONFIG_FUND=false NPM_CONFIG_UPDATE_NOTIFIER=false \
+              npm install --prefix "$seed/project" --cache "$seed/cache" \
+                --ignore-scripts --no-audit --no-fund --no-package-lock \
+                --save-exact "$TARBALL" typescript@5.9.3
+          )
+          # --offline alone is not a firewall. A fresh Linux network namespace
+          # has only loopback: allow local sockets but no external egress.
+          # If the runner cannot enforce this, fail rather than run unisolated.
+          sudo --non-interactive unshare --net -- env PATH="$PATH" bash -c '
+            set -euo pipefail
+            ip link set lo up
+            exec bash "$@"
+          ' -- "$GITHUB_WORKSPACE/typescript/agent-learning-kit/scripts/consumer-smoke/run.sh" \
+            "$TARBALL" "$seed/cache"
+
+      - name: Gate the consumer-tested bytes against the approved SHA-256
+        id: seal
+        env:
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+          EXPECTED_SHA256: ${{ inputs.expected_sha256 }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA256" =~ ^[0-9a-fA-F]{64}$ ]]
+          [[ -f "$TARBALL" && ! -L "$TARBALL" ]]
+          actual="$(sha256sum -- "$TARBALL")"
+          actual="${actual%% *}"
+          if [[ "$actual" != "${EXPECTED_SHA256,,}" ]]; then
+            printf '%s\n' '::error::Packed tarball differs from the approved SHA-256; refusing to upload or publish.'
+            exit 1
+          fi
+          printf 'sha256=%s\n' "$actual" >> "$GITHUB_OUTPUT"
+          {
+            printf '## npm release candidate\n\n'
+            printf -- '- Source commit: `%s`\n' "$SOURCE_SHA"
+            printf -- '- Approved and actual tarball SHA-256: `%s`\n' "$actual"
+            printf -- '- Node: `%s`; npm: `%s`; pnpm: `%s`\n' "$(node --version)" "$(npm --version)" "$(pnpm --version)"
+            printf -- '- Typecheck, Jest, staged artifact audit and isolated packed-consumer checks passed.\n'
+            printf -- '- Approve the npm deployment only after reviewing this candidate.\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload only the verified tarball
+        id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: alk-npm-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.pack.outputs.tarball }}
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: npm
+    permissions:
+      id-token: write
+      contents: read
+    concurrency:
+      group: publish-npm-agent-learning-kit
+      cancel-in-progress: false
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # There is deliberately no checkout, dependency install or repack here.
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install the OIDC-capable npm client
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          npm install --global "npm@${NPM_VERSION}" --ignore-scripts --no-audit --no-fund
+          [[ "$(npm --version)" == "$NPM_VERSION" ]]
+
+      - name: Download the exact artifact produced by this build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact_id }}
+          path: ${{ runner.temp }}/alk-npm-release
+          merge-multiple: true
+
+      - name: Re-verify the approved bytes and publish with provenance
+        working-directory: ${{ runner.temp }}
+        env:
+          EXPECTED_SHA256: ${{ inputs.expected_sha256 }}
+          BUILD_SHA256: ${{ needs.build.outputs.tarball_sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA256" =~ ^[0-9a-fA-F]{64}$ ]]
+          [[ "$BUILD_SHA256" == "${EXPECTED_SHA256,,}" ]]
+          [[ "$(npm --version)" == "$NPM_VERSION" ]]
+          download_dir="$RUNNER_TEMP/alk-npm-release"
+          tarball="$download_dir/package.tgz"
+          shopt -s nullglob dotglob
+          files=("$download_dir"/*)
+          if [[ ${#files[@]} -ne 1 ]]; then
+            printf '%s\n' '::error::Expected exactly the verified package.tgz artifact.'
+            exit 1
+          fi
+          [[ "${files[0]}" == "$tarball" && -f "$tarball" && ! -L "$tarball" ]]
+          # Use empty registry configuration outside any checkout. Preserve the
+          # runner-provided OIDC environment so npm can obtain short-lived auth.
+          config="$(mktemp -d "$RUNNER_TEMP/alk-npm-publish.XXXXXX")"
+          mkdir -p "$config/home" "$config/cache"
+          : > "$config/user.npmrc"
+          : > "$config/global.npmrc"
+          export HOME="$config/home"
+          export NPM_CONFIG_USERCONFIG="$config/user.npmrc"
+          export NPM_CONFIG_GLOBALCONFIG="$config/global.npmrc"
+          export NPM_CONFIG_CACHE="$config/cache"
+          export NPM_CONFIG_IGNORE_SCRIPTS=true NPM_CONFIG_UPDATE_NOTIFIER=false
+          export NPM_CONFIG_AUDIT=false NPM_CONFIG_FUND=false
+          actual="$(sha256sum -- "$tarball")"
+          actual="${actual%% *}"
+          if [[ "$actual" != "${EXPECTED_SHA256,,}" ]]; then
+            printf '%s\n' '::error::Downloaded tarball differs from the approved SHA-256; refusing to publish.'
+            exit 1
+          fi
+          # Never retry with different bytes, a rebuilt package or alternate auth.
+          npm publish "$tarball" --provenance --access public --ignore-scripts \
+            --registry=https://registry.npmjs.org/
