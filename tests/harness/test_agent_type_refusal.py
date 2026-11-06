@@ -448,6 +448,7 @@ def test_a_script_comment_still_hides_what_it_holds(tmp_path, body):
         "const r = /[/*",
         "x = /" + "[=/]" * 20_000 + "/b",
         "x = /" + "[=/" * 20_000 + "]/b",
+        "x = /" + "[=/]\\\n" * 8_000 + "/b",
     ],
     ids=[
         "slash-in-a-class",
@@ -457,6 +458,7 @@ def test_a_script_comment_still_hides_what_it_holds(tmp_path, body):
         "class-open-at-the-line-end",
         "classes-of-slashes",
         "nested-classes-of-slashes",
+        "classes-across-escaped-line-ends",
     ],
 )
 def test_an_odd_regex_literal_stays_quick_and_hides_nothing(tmp_path, line):
@@ -713,24 +715,47 @@ def test_every_folder_shares_one_record_budget(tmp_path, monkeypatch):
     assert [path.name for path in files].count("vendored.py") == 1
 
 
-def _characters(kept) -> int:
-    if isinstance(kept, str):
-        return len(kept)
-    if isinstance(kept, dict):
-        return sum(_characters(key) + _characters(value) for key, value in kept.items())
-    return sum(_characters(one) for one in kept)
-
-
 def test_a_deep_folders_records_cost_what_their_rows_do(tmp_path, monkeypatch):
-    deep = tmp_path.joinpath(*["d" * 100] * 5)
-    rows = "".join(f"r{n:04}\n" for n in range(400))
-    _tree(deep, {"x-1.dist-info/RECORD": rows, "main.py": "import openai\n"})
+    import tracemalloc
+
+    count = 4_000
+    rows = "".join(f"r{n:04}\n" for n in range(count))
+    shallow = tmp_path / "shallow" / "d"
+    deep = tmp_path.joinpath("deep", *["d" * 100] * 5)
+    for folder in (shallow, deep):
+        _tree(folder, {"x-1.dist-info/RECORD": rows, "main.py": "import openai\n"})
     monkeypatch.setattr(agent_type_check, "_LARGEST_RECORDS", len(rows))
-    walk = agent_type_check._agent_files(tmp_path)
-    assert next(walk).name == "main.py"
-    # A row as written is a few bytes, and the folder it sits in can be as deep as the disk allows.
-    kept = _characters(walk.gi_frame.f_locals["unpacked"])
-    assert kept <= len(rows) + len(str(deep))
+
+    def peak(top):
+        tracemalloc.start()
+        try:
+            assert "main.py" in [path.name for path in agent_type_check._agent_files(top)]
+            return tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+
+    # A row as written is a few bytes, and the folder it sits in can be as deep as the disk allows:
+    # kept with its folder's path, each row here would cost 500 more characters.
+    assert peak(tmp_path / "deep") < peak(tmp_path / "shallow") + 500 * count // 4
+
+
+def test_a_file_is_skipped_by_the_records_of_the_nearest_folders_that_hold_them(tmp_path):
+    chain = [f"c{n}" for n in range(6)]
+    bottom = "/".join(chain)
+    tree = {f"{bottom}/v{n}.py": 'NAME = "computer_20241022"\n' for n in range(6)}
+    for n in range(6):
+        folder = "/".join(chain[: n + 1])
+        below = "/".join(chain[n + 1 :])
+        tree[f"{folder}/x-1.dist-info/RECORD"] = f"{below + '/' if below else ''}v{n}.py,,\n"
+    _tree(tmp_path, tree)
+    read = sorted(
+        path.name
+        for path in agent_type_check._agent_files(tmp_path)
+        if path.name.startswith("v")
+    )
+    # Each of the nearest four names its own file, so all four are skipped; the two above them
+    # are too far up to be asked, so their files are read.
+    assert read == ["v0.py", "v1.py"]
 
 
 def test_which_folders_packages_count_once_the_budget_is_spent_is_the_same_on_every_disk(
@@ -750,7 +775,7 @@ def test_which_folders_packages_count_once_the_budget_is_spent_is_the_same_on_ev
     def listed_backwards(top, *args, **kwargs):
         for directory, subdirectories, files in real_walk(top, *args, **kwargs):
             if directory == os.fspath(top):
-                subdirectories.reverse()
+                subdirectories.sort(reverse=True)
             yield directory, subdirectories, files
 
     monkeypatch.setattr(os, "walk", listed_backwards)

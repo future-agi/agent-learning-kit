@@ -321,10 +321,6 @@ def contract_tools(
     # Whether the latest second look has had no value back yet. A model that never sends one back
     # must still be able to answer, or every submission earns another look until the turns run out.
     look_unanswered = False
-    # Whether an answer that carried a value didn't read browser: one that did was refused. The same
-    # answer again, without the value, is still that answer: a fix after the contract was sent back
-    # mustn't earn a new look.
-    answered = False
     found: list[str] | None = None
     # Calls in one message share one scan: each running its own takes that many times longer.
     scan: asyncio.Future[list[str]] | None = None
@@ -1114,7 +1110,7 @@ def contract_tools(
         receipt = payload.pop(SECOND_LOOK_READ, None) or (
             args.get(SECOND_LOOK_READ) if isinstance(args, dict) else None
         )
-        nonlocal refused, found, look_unanswered, answered, scan
+        nonlocal refused, found, look_unanswered, scan
         # Taken before the scan's wait: a call already running when a look went out hasn't read it.
         looked_before = bool(second_look_receipts)
         if refused or (destination / FAILURE_FILE).is_file():
@@ -1145,12 +1141,12 @@ def contract_tools(
         # A call holding a value read a look, so its answer stands. Without one, the call after a
         # look that no value came back for is taken as the answer. Once a value came back, a call
         # without one that reads the same stands too; one that reads otherwise may have run beside
-        # that answer unread, so it gets a look of its own.
+        # that answer unread, so it gets a look of its own. A value that came back on a browser
+        # answer was refused and stopped every later call, so the answer that came back read chat.
         read_it = isinstance(receipt, str) and receipt in second_look_receipts
         if read_it:
             look_unanswered = False
-            answered = answered or not is_browser(claimed)
-        same_answer = answered and not is_browser(claimed)
+        same_answer = not is_browser(claimed)
         verdict = decide(
             claimed,
             found,

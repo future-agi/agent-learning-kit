@@ -111,6 +111,7 @@ _LARGEST_RECORD = 1024 * 1024
 # Per walk. A first scan reads up to three times this: its signature, its files and the packages
 # at the top each walk the records. Every reopen reads it once more, for the signature.
 _LARGEST_RECORDS = 64 * 1024 * 1024
+_NEAREST_RECORD_FOLDERS = 4
 # Strings are matched first and kept, so "https://..." or "src/**/*.ts" isn't read as a comment.
 # An unclosed one ends at its line or the file: a start that could fail makes a customer's odd file
 # cost the square of its size, which holds up the build's conversation until it's done.
@@ -122,7 +123,11 @@ _LARGEST_RECORDS = 64 * 1024 * 1024
 # Such a start can fail, so a class holds no "[" and the rest no "]", and a literal that meets one
 # is kept to its line's end: a failed literal then can't run over the classes of the slashes after
 # it, which would make the line cost its square, and the quotes and backticks it holds can't open a
-# string or a template that swaps code and strings for the rest of the file.
+# string or a template that swaps code and strings for the rest of the file. The "]" also stops a
+# literal that runs on through escaped line ends, which would cost the square of their number.
+# Kept to its line's end, such a literal can take in a template's opening backtick later on that
+# line too; a "/*" inside that template then reads as a comment. That trade is the price of a line
+# that can't run away.
 _SCRIPT_COMMENT_OR_STRING = re.compile(
     r"""("(?:\\.|[^"\\\n])*(?:"|(?=\n)|\\?\Z)|'(?:\\.|[^'\\\n])*(?:'|(?=\n)|\\?\Z)|`(?:\\.|[^`\\])*(?:`|\\?\Z)"""
     r"""|(?<![^\n(,=:\[!&|?{};>])[ \t]*/(?![/*])(?:\\.|\[(?:\\.|[^\]\[\\\n])*(?:\]|(?=\n)|\\?\Z)|[^/\\\n\[\]])*"""
@@ -199,27 +204,32 @@ def _agent_files(root: Path) -> Iterator[Path]:
     # records hold them, as pip wrote them, so what is kept is the rows the budget lets in and that
     # folder's path once: how deep the folder sits doesn't multiply what each row costs.
     unpacked: dict[str, set[str]] = {}
-    tops: dict[str, tuple[str, ...]] = {}
+    # The folders above this one whose records gave rows, nearest last. The walk goes top down, so
+    # leaving a folder is seeing a directory that isn't under it.
+    holding: list[str] = []
     left = [_LARGEST_RECORDS]
     for directory, subdirectories, files in os.walk(root):
-        inherited = tops.pop(directory, ())
+        while holding and not directory.startswith(holding[-1] + os.sep):
+            del unpacked[holding.pop()]
         if any(name.endswith(".dist-info") for name in subdirectories):
             rows = _unpacked_at_top(Path(directory), left)
             if rows:
                 unpacked[directory] = rows
-                inherited += (directory,)
+                holding.append(directory)
         subdirectories[:] = [
             name for name in subdirectories if not _not_the_agent_dir(name)
         ]
         # Once the budget is spent, which folders' packages count mustn't depend on the order the
         # disk lists folders in.
         subdirectories.sort()
-        for name in subdirectories:
-            tops[os.path.join(directory, name)] = inherited
+        # Real layouts nest one or two, as a vendored package's own vendored ones. Checking every
+        # file against a crafted chain of them would cost the chain's depth per file; a file the
+        # nearest few don't name is read, which only means reading more.
+        nearest = holding[-_NEAREST_RECORD_FOLDERS:]
         for name in files:
             path = os.path.join(directory, name)
             if not _not_the_agent_file(name) and not any(
-                path[len(top) + 1 :] in unpacked[top] for top in inherited
+                path[len(top) + 1 :] in unpacked[top] for top in nearest
             ):
                 yield Path(path)
 
