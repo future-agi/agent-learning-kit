@@ -1085,7 +1085,8 @@ def test_the_scan_runs_off_the_event_loop(tmp_path, monkeypatch):
     assert threads and threads[0] is not threading.main_thread()
 
 
-def test_a_refusal_during_the_scan_stops_this_call_too(tmp_path, monkeypatch):
+@pytest.mark.parametrize("modality", ["chat", "browser"])
+def test_a_refusal_during_the_scan_stops_this_call_too(tmp_path, monkeypatch, modality):
     output = tmp_path / "out"
 
     def scan(_root):
@@ -1093,8 +1094,11 @@ def test_a_refusal_during_the_scan_stops_this_call_too(tmp_path, monkeypatch):
         return []
 
     monkeypatch.setattr(tools, "browser_tools_found", scan)
-    _submitter(output, tmp_path)(_reading("chat"))
+    answer = _submitter(output, tmp_path)(_reading(modality))
     assert not (output / "contract.json").exists()
+    # The stop itself, not a second look: the reading was refused while the scan ran. A browser
+    # reading would otherwise be asked for a second look before the write's own check.
+    assert _text(answer) == tools._stop_message(output)
 
 
 def test_a_build_that_times_out_is_still_a_crash(tmp_path, monkeypatch):
@@ -3067,3 +3071,96 @@ def test_test_folders_are_judged_below_what_the_agent_shares(tmp_path, folder, s
     )
 
     assert browser_tools_in_agent(repo, folder) == found
+
+
+def _vendored_above(tmp_path, folder_rows: int) -> Path:
+    # The agent imports `vend.web`, which a record at the repository's root names as unpacked;
+    # a record in the agent's folder holds `folder_rows` rows, read first.
+    return _tree(
+        tmp_path / "repo",
+        {
+            "vend/__init__.py": "",
+            "vend/web.py": "import playwright\n",
+            "x-1.dist-info/METADATA": "",
+            "x-1.dist-info/RECORD": "vend/__init__.py,,\nvend/web.py,,\n",
+            "agents/a/agent.py": "import vend.web\n",
+            "agents/a/y-1.dist-info/METADATA": "",
+            "agents/a/y-1.dist-info/RECORD": "".join(f"r{n:06d}.py,,\n" for n in range(folder_rows)),
+        },
+    )
+
+
+@pytest.mark.parametrize("short_of, expected", [(0, []), (1, ["playwright"])])
+def test_the_folders_at_and_above_the_agent_share_one_record_budget(
+    tmp_path, monkeypatch, short_of, expected
+):
+    repo = _vendored_above(tmp_path, 100)
+    sizes = sum(
+        (repo / name).stat().st_size for name in ("x-1.dist-info/RECORD", "agents/a/y-1.dist-info/RECORD")
+    )
+    monkeypatch.setattr(agent_type_check, "_RECORDS_AT_AND_ABOVE", sizes - short_of)
+
+    # Past the budget, the root's record isn't read, so its package counts as the agent's code.
+    assert browser_tools_in_agent(repo, "agents/a") == expected
+
+
+def test_each_folder_above_the_agent_has_its_records_read_once(tmp_path, monkeypatch):
+    repo = _vendored_above(tmp_path, 1)
+    read: list[Path] = []
+    real = agent_type_check._unpacked_at_top
+    monkeypatch.setattr(
+        agent_type_check,
+        "_unpacked_at_top",
+        lambda root, left=None: read.append(Path(root)) or real(root, left),
+    )
+
+    assert browser_tools_in_agent(repo, "agents/a") == []
+    assert read.count(repo.resolve()) == 1
+
+
+@pytest.mark.parametrize("coding", ["rot13", "nosuch"])
+def test_a_coding_line_python_cant_read_is_skipped_by_the_browser_scan(tmp_path, coding):
+    (tmp_path / "agent.py").write_bytes(f"# coding: {coding}\nimport playwright\n".encode())
+    (tmp_path / "other.py").write_text("import selenium\n", encoding="utf-8")
+
+    assert browser_tools_found(tmp_path) == ["selenium"]
+
+
+def test_a_coding_line_is_found_with_lone_cr_line_ends(tmp_path):
+    # Python reads a lone CR as a line end, so it finds the coding line on the first line.
+    (tmp_path / "agent.py").write_bytes(
+        b"# -*- coding: latin-1 -*-\rimport playwright\rNAME = '\xe9'\r"
+    )
+
+    assert browser_tools_found(tmp_path) == ["playwright"]
+
+
+def test_the_walk_reads_a_helper_in_the_encoding_its_coding_line_names(tmp_path):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    repo = tmp_path / "repo"
+    _tree(
+        repo,
+        {
+            "agents/a/agent.py": "import common.web\n",
+            "common/__init__.py": "",
+            "common/deep.py": "",
+        },
+    )
+    # In latin-1, \xe9 is a letter; read as UTF-8 it's a replacement character, which no name may
+    # hold, so the file wouldn't parse and its imports wouldn't be followed.
+    (repo / "common" / "web.py").write_bytes(
+        b"# -*- coding: latin-1 -*-\ncaf\xe9 = 1\nimport common.deep\n"
+    )
+
+    assert (repo / "common" / "deep.py").resolve() in imported_by_agent(repo, "agents/a")
+
+
+@pytest.mark.parametrize("coding", ["rot13", "base64", "nosuch"])
+def test_the_walk_reads_a_file_whose_coding_line_python_cant_read_as_utf8(tmp_path, coding):
+    from fi.alk.harness.credentials import imported_by_agent
+
+    repo = _tree(tmp_path / "repo", {"agents/a/agent.py": "import common\n", "common/__init__.py": ""})
+    (repo / "agents" / "a" / "odd.py").write_bytes(f"# coding: {coding}\nimport common\n".encode())
+
+    assert (repo / "common" / "__init__.py").resolve() in imported_by_agent(repo, "agents/a")

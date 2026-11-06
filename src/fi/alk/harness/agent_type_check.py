@@ -16,7 +16,7 @@ import re
 import tokenize
 from collections.abc import Iterable, Iterator, Sequence
 from functools import lru_cache
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any, Literal
 
 from .credentials import imported_by_agent
@@ -132,6 +132,11 @@ _WALKED_IMPORTS = 5_000
 # at the top each walk the records. Every reopen reads it once more, for the signature.
 _LARGEST_RECORDS = 64 * 1024 * 1024
 _NEAREST_RECORD_FOLDERS = 4
+# What the folders at and above an agent's folder may read of records in all, at the save. Each
+# row is parsed and kept, so short rows cost the most: 64 MiB of 7-byte rows took 2.0 s on 3.12.3,
+# and this is about 0.5 s of them. A whole 411-package environment unpacked in one folder came
+# to 6.4 MiB.
+_RECORDS_AT_AND_ABOVE = 16 * 1024 * 1024
 # Strings are matched first and kept, so "https://..." or "src/**/*.ts" isn't read as a comment.
 # An unclosed one ends at its line or the file: a start that could fail makes a customer's odd file
 # cost the square of its size, which holds up the build's conversation until it's done.
@@ -291,9 +296,13 @@ def _largest_read(path: Path) -> int:
     return _LARGEST_CODE_FILE
 
 
-def _modules_at_top(root: Path) -> set[str]:
-    """What sits ahead of an installed package on the import path, so isn't that package."""
-    unpacked = _unpacked_at_top(root)
+def _modules_at_top(root: Path, unpacked: set[str] | None = None) -> set[str]:
+    """What sits ahead of an installed package on the import path, so isn't that package.
+
+    ``unpacked`` is the folder's record rows, when the caller has read them already.
+    """
+    if unpacked is None:
+        unpacked = _unpacked_at_top(root)
     try:
         return {
             entry.stem if entry.is_file() else entry.name
@@ -479,14 +488,26 @@ def browser_tools_in_agent(source_root: Path, subfolder: str) -> list[str]:
         if not _not_the_agent_file(path.name)
     ]
     # An import the agent wrote says this code is its own, whatever the folder is called, unless
-    # it's a test helper or someone else's package, unpacked beside the agent or above it.
-    unpacked = {
-        parent / name
+    # it's a test helper or someone else's package, unpacked beside the agent or above it. One
+    # record budget for every folder, each folder's records read once, and rows kept as pip
+    # wrote them, relative to that folder: a Path for each row cost ten times as much, and a
+    # budget for each folder let a deep folder read many times the limit.
+    left = [_RECORDS_AT_AND_ABOVE]
+    rows_of = {
+        parent: _unpacked_at_top(parent, left)
         for parent in (folder, *folder.parents)
         if is_within(parent, root)
-        for name in _unpacked_at_top(parent)
-        if PurePosixPath(name).parts and not PurePosixPath(name).is_absolute()
     }
+    holding = [(parent, rows) for parent, rows in rows_of.items() if rows]
+
+    def unpacked(path: Path) -> bool:
+        for parent, rows in holding:
+            if is_within(path, parent):
+                below = path.parts[len(parent.parts) :]
+                if any("/".join(below[:end]) in rows for end in range(1, len(below) + 1)):
+                    return True
+        return False
+
     shared = [
         path
         for path in sorted(
@@ -500,7 +521,7 @@ def browser_tools_in_agent(source_root: Path, subfolder: str) -> list[str]:
             )
         )
         if not _not_the_agent_file(path.name)
-        and not unpacked.intersection((path, *path.parents))
+        and not unpacked(path)
         # Only the folders the agent reaches it through: a whole repository under `e2e/` is
         # still the agent's own code.
         and not any(_TEST_FOLDER.fullmatch(part.lower()) for part in _below_shared(path, folder))
@@ -516,7 +537,7 @@ def browser_tools_in_agent(source_root: Path, subfolder: str) -> list[str]:
     return list(
         _tools_in(
             dict.fromkeys((*_agent_files(folder), *above, *shared, *manifests)),
-            _modules_at_top(folder) | _modules_at_top(root),
+            _modules_at_top(folder, rows_of[folder]) | _modules_at_top(root, rows_of[root]),
         )
     )
 

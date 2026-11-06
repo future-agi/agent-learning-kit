@@ -1596,3 +1596,23 @@ def test_helpers_building_through_padded_links_are_charged(repo, padded, refused
             _select_compose(repo, {})
     else:
         _select_compose(repo, {})
+
+
+@pytest.mark.parametrize("links, refused", [(3, False), (20, True)])
+def test_links_whose_leftovers_unwind_past_the_limit_are_refused(repo, links, refused):
+    from fi.alk.harness.runtime_selection import RuntimeSelectionError
+
+    folder = repo / "agents" / "a"
+    # Each link leaves 1,000 characters behind as it unwinds, so the path grows a level at a time.
+    for n in range(1, links + 1):
+        (folder / f"L{n}").symlink_to(f"L{n + 1}/" + "A" * 1000)
+    (folder / f"L{links + 1}").symlink_to(".")
+    (folder / "compose.yaml").write_text(
+        "services:\n  agent:\n    build: .\n    depends_on: [h0]\n  h0:\n    build: L1/h0\n"
+    )
+
+    if refused:
+        with pytest.raises(RuntimeSelectionError, match="^compose_source_path_invalid$"):
+            _select_compose(repo, {})
+    else:
+        _select_compose(repo, {})

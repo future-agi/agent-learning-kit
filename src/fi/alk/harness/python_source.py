@@ -9,6 +9,7 @@ case is a fraction of a second, and a scan parses only up to a total.
 from __future__ import annotations
 
 import ast
+import codecs
 import functools
 import io
 import re
@@ -100,13 +101,30 @@ def read_module(
     # such as a fullwidth `ｐlaywright`, isn't found.
     if needles and not any(needle in raw for needle in needles):
         return None
+    encoding = source_encoding(raw)
+    if encoding is None:
+        return None
     try:
-        # As Python reads it: a coding line or a byte-order mark names the encoding, and the mark
-        # isn't part of the code.
-        encoding, _ = tokenize.detect_encoding(io.BytesIO(raw).readline)
         return raw.decode(encoding)
+    except (UnicodeError, LookupError):
+        return None
+
+
+def source_encoding(raw: bytes) -> str | None:
+    """The encoding Python reads ``raw`` in: a coding line or a byte-order mark names it, and
+    it's UTF-8 without one. None for a coding line no codec reads text in."""
+    # Python reads a lone CR as a line end, and detect_encoding doesn't: a file with only CRs
+    # would be one line, and its coding line not found.
+    lines = io.BytesIO(raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n")).readline
+    try:
+        encoding, _ = tokenize.detect_encoding(lines)
+        # A codec such as rot13 or base64 isn't a text encoding, so decode refuses it: the same
+        # flag decode checks, which an empty input never reaches.
+        if not getattr(codecs.lookup(encoding), "_is_text_encoding", True):
+            return None
     except (SyntaxError, UnicodeError, LookupError):
         return None
+    return encoding
 
 
 def parsed(text: str) -> ast.Module | None:

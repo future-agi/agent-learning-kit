@@ -274,6 +274,11 @@ def _charged_resolve(path: Path) -> Path:
     budget = _SELECTION_BUDGET.get()
 
     def charge(looked_up: str) -> None:
+        # Links whose targets leave parts behind as they unwind grow the path a level at a time,
+        # and each step copies it. Nothing can open a path past the system's limit, so twice
+        # that is refused, whatever the budget.
+        if len(looked_up) > 2 * _LONGEST_PATH:
+            raise RuntimeSelectionError("compose_source_path_invalid")
         if budget is None:
             return
         budget[0] -= 1 + looked_up.count("/") // 256
@@ -302,8 +307,8 @@ def _join_resolved(
     while rest:
         name, _, rest = rest.partition("/")
         if not name or name in (".", ".."):
-            # Walked without a lookup, but walked: a link's target can hold a thousand of these,
-            # read again on every resolve.
+            # Walked without a lookup, but walked: a link's target can hold thousands of these
+            # (4,094 on Linux), read again on every resolve.
             charge("")
         if not name or name == ".":
             continue

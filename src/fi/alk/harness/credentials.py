@@ -22,7 +22,7 @@ import yaml
 
 from fi.simulate.runtime.spec import SecretRef
 
-from .python_source import ParseBudget, parsed, utf8_size
+from .python_source import ParseBudget, parsed, source_encoding, utf8_size
 from .secrets import process_secret_environment_names
 from .source_folder import SubfolderNotFound, agent_folder, agent_scope, in_agent_scope, is_within
 
@@ -860,8 +860,10 @@ def imported_by_agent(
         if len(raw) > _MAX_FILE_BYTES:
             continue  # Grew since it was looked at.
         bytes_read += len(raw)
-        # As read_text reads it, line ends included.
-        content = raw.decode("utf-8-sig", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
+        # As read_text reads it, line ends included; a .py in the encoding its coding line names,
+        # as Python reads it.
+        encoding = (source_encoding(raw) if path.suffix == ".py" else None) or "utf-8-sig"
+        content = raw.decode(encoding, errors="replace").replace("\r\n", "\n").replace("\r", "\n")
         hits: list[Path] = []
         if path.suffix == ".py":
             names = list(dict.fromkeys(_python_imports(content, parse_limit, parse_budget)))
