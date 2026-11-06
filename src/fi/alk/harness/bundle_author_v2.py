@@ -71,7 +71,17 @@ from .generated_runtime import (
 )
 from .credentials import assess_configuration, discover_credentials
 from .secrets import process_secret_environment_names
-from .runtime_selection import ComposeSelection, select_runtime
+from .runtime_selection import ComposeSelection, bounded_yaml_load, select_runtime
+from .agent_type_check import EXIT_REFUSED
+from .source_folder import (
+    SubfolderNotFound,
+    agent_folder,
+    bind_runtime,
+    recorded_folder,
+    recorded_root,
+    refuse_unusable_folder,
+    saved_runtime,
+)
 from .job import HarnessJob
 from .job import ProviderExecutionMode, SourceKind
 from .process_preflight import preflight_bundle
@@ -795,7 +805,9 @@ def _documented_ddl_statements(sql: str) -> list[str]:
     return statements
 
 
-def _documented_source_schemas(source: Path) -> list[_SourceSchemaArtifact]:
+def _documented_source_schemas(
+    source: Path, folder: str = ""
+) -> list[_SourceSchemaArtifact]:
     """Use the first README's SQL fences without adopting duplicate alternatives.
 
     This is source-owned executable evidence, not model-authored schema. The first declaration
@@ -803,7 +815,7 @@ def _documented_source_schemas(source: Path) -> list[_SourceSchemaArtifact]:
     alternative local and cloud recipes that redeclare the same table.
     """
 
-    for readme in sorted(source.glob("README*.md")):
+    for readme in sorted((source / folder if folder else source).glob("README*.md")):
         text = readme.read_text(encoding="utf-8", errors="replace")
         artifacts: list[_SourceSchemaArtifact] = []
         declared_tables: set[str] = set()
@@ -854,7 +866,9 @@ def _compose_source_schema_paths(
         selected = select_runtime(
             source,
             runtime or {},
-            public_environment=_declared_runtime_environment(source),
+            public_environment=_declared_runtime_environment(
+                recorded_root(source, runtime)
+            ),
         )
     except ValueError as exc:
         raise BundleAuthorError(str(exc)) from exc
@@ -904,8 +918,11 @@ def _source_schema_paths(
     """
 
     candidates = _compose_source_schema_paths(source, (contract or {}).get("runtime"))
+    folder = recorded_folder((contract or {}).get("runtime"))
     for conventional in ("db/schema.sql", "schema.sql"):
-        path = _contained_source_path(source, conventional)
+        path = _contained_source_path(
+            source, f"{folder}/{conventional}" if folder else conventional
+        )
         if path is not None and path.is_file():
             candidates.append(path)
 
@@ -946,7 +963,9 @@ def _source_schema_artifacts(
             )
             for path in paths
         ]
-    return _documented_source_schemas(source)
+    return _documented_source_schemas(
+        source, recorded_folder((contract or {}).get("runtime"))
+    )
 
 
 def _adopted_seed_sql(
@@ -1108,6 +1127,9 @@ _SECRET_ENVIRONMENT_NAME = re.compile(
 )
 
 
+_LARGEST_RUNTIME_MANIFEST = 1024 * 1024
+
+
 def _declared_runtime_environment(source: Path) -> dict[str, str]:
     """Load public, non-secret process defaults declared by the repository.
 
@@ -1121,7 +1143,12 @@ def _declared_runtime_environment(source: Path) -> dict[str, str]:
     if not path.is_file():
         return {}
     try:
-        body = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        # Read, not stat: a link to a file such as /proc/self/pagemap has size 0 and no end.
+        with path.open("rb") as manifest:
+            raw = manifest.read(_LARGEST_RUNTIME_MANIFEST + 1)
+        if len(raw) > _LARGEST_RUNTIME_MANIFEST:
+            raise BundleAuthorError("runtime_manifest_invalid: alk.yaml is larger than 1 MiB")
+        body = bounded_yaml_load(raw.decode("utf-8")) or {}
     except (OSError, yaml.YAMLError) as exc:
         raise BundleAuthorError(f"runtime_manifest_invalid: {exc}") from exc
     if not isinstance(body, dict):
@@ -1219,6 +1246,7 @@ def _plan_python(
     version: str = "",
     requirements_files: list[str] | None = None,
     context_excludes: tuple[str, ...] = (),
+    run_folder: Path | None = None,
 ) -> SourceProcess:
     if (
         run_override
@@ -1232,7 +1260,11 @@ def _plan_python(
         raise BundleAuthorError(
             f"runtime_language_unsupported: {name} requires a non-Python installer"
         )
-    if not run_override and entry is not None and not (root / entry).is_file():
+    if (
+        not run_override
+        and entry is not None
+        and not ((run_folder or root) / entry).is_file()
+    ):
         raise BundleAuthorError(f"runtime_entrypoint_missing: {name}:{entry}")
     source, component = source.resolve(), root.resolve()
     root = python_workspace_root(source, component)
@@ -1330,9 +1362,30 @@ def _plan_python(
             run = [".venv/bin/python", *([entry] if entry is not None else [])]
         commands.append(supplemental_requirements_command(".venv/bin/python", requirements))
         commands.append(["uv", "pip", "check", "--python", ".venv/bin/python"])
+    run = run_override or run
+    run_component = member
+    if run_folder is not None:
+        run_component = run_folder.resolve().relative_to(root)
+        # The run command starts in this folder, which has no environment of its own; the
+        # workspace root's is linked in unless that is where it already starts. Only a build
+        # command creates that environment.
+        if commands and run_component not in {Path("."), member}:
+            commands.append(
+                [
+                    "ln",
+                    "-s",
+                    "../" * len(run_component.parts) + ".venv",
+                    (run_component / ".venv").as_posix(),
+                ]
+            )
     return process.model_copy(
-        update={"build_commands": commands, "run_command": run_override or run, "source_component": member.as_posix()}
+        update={
+            "build_commands": commands,
+            "run_command": run,
+            "source_component": run_component.as_posix(),
+        }
     )
+
 
 def _python_component_command(
     *, source: Path, component: Path, process: SourceProcess
@@ -1539,7 +1592,10 @@ def _docker_python(root: Path) -> str:
     return f"python{candidate}"
 
 
-def _dockerfile_run(root: Path) -> list[str] | None:
+def _dockerfile_run(root: Path, project: Path | None = None) -> list[str] | None:
+    # ``project`` is where dependencies are installed when that isn't the folder holding the
+    # Dockerfile, because the launcher differs between a requirements file and a uv project.
+    project = project or root
     dockerfile = root / "Dockerfile"
     if not dockerfile.is_file():
         return None
@@ -1566,12 +1622,12 @@ def _dockerfile_run(root: Path) -> list[str] | None:
     ):
         raise BundleAuthorError(f"dockerfile_command_invalid: {dockerfile}")
     if argv[0] == "python":
-        argv[0] = ".venv/bin/python" if (root / "requirements.txt").is_file() else "uv"
+        argv[0] = ".venv/bin/python" if (project / "requirements.txt").is_file() else "uv"
         if argv[0] == "uv":
             argv[1:1] = ["run", "--no-sync", "python"]
     elif (
         argv[0] in {"uvicorn", "gunicorn", "flask"}
-        and (root / "requirements.txt").is_file()
+        and (project / "requirements.txt").is_file()
     ):
         argv[0] = f".venv/bin/{argv[0]}"
     return argv
@@ -1724,17 +1780,24 @@ def _subprocess_adapter_source() -> str:
     )
 
 
-def _discovered_python_component(root: Path) -> tuple[Path, str]:
+def _discovered_python_component(
+    root: Path, search: Path | None = None
+) -> tuple[Path, str]:
+    """The project holding the one ``agent.py`` under ``search`` (default ``root``) and the
+    entry. Under a folder named for the agent, the entry is relative to that folder."""
+    base = search or root
     candidates = sorted(
         path
-        for path in root.glob("**/agent.py")
+        for path in base.glob("**/agent.py")
         if not any(
             part in _IGNORED_ARTIFACT_PARTS
-            for part in path.relative_to(root).parts[:-1]
+            for part in path.relative_to(base).parts[:-1]
         )
     )
     if len(candidates) != 1:
         raise BundleAuthorError("component_ambiguous: expected exactly one agent.py")
+    if search is not None:
+        return _install_root_for(root, search, candidates[0])
     component = candidates[0].parent
     # An entrypoint directory is not necessarily its Python project root. Preserve
     # the nearest enclosing manifest and its sibling packages instead of flattening
@@ -1748,6 +1811,25 @@ def _discovered_python_component(root: Path) -> tuple[Path, str]:
             component = parent
             break
     return component, candidates[0].relative_to(component).as_posix()
+
+
+def _install_root_for(root: Path, run_folder: Path, found: Path) -> tuple[Path, str]:
+    """Where a file found under the run folder installs from, and the file relative to the folder.
+
+    A process can't start above its own project, so a project below the run folder is refused.
+    """
+    for parent in found.parents:
+        if not parent.is_relative_to(root):
+            break
+        if any((parent / name).is_file() for name in ("pyproject.toml", "requirements.txt")):
+            if parent != run_folder and parent.is_relative_to(run_folder):
+                where = parent.relative_to(root).as_posix()
+                raise BundleAuthorError(
+                    f"runtime_workdir_nested_project: {found.relative_to(root).as_posix()} has "
+                    f"its own project at {where}; set runtime.workdir to {where}"
+                )
+            return parent, found.relative_to(run_folder).as_posix()
+    return run_folder, found.relative_to(run_folder).as_posix()
 
 
 def _runtime_component(root: Path, configured_workdir: str) -> Path:
@@ -2134,6 +2216,22 @@ def _compose_environment(service: dict[str, Any]) -> dict[str, str]:
     return {}
 
 
+def _agent_scope(
+    root: Path, subfolder: str | None, runtime: dict[str, Any] | None
+) -> tuple[dict[str, Any] | None, Path, Path]:
+    """The runtime bound to the agent's folder, the folder, and where the process starts.
+
+    With no subfolder nothing is bound and both folders are the repository root.
+    """
+    if not subfolder:
+        return runtime, root, root
+    try:
+        bound = dict(bind_runtime(runtime, root, subfolder) or {})
+        return bound, agent_folder(root, subfolder), (root / bound["workdir"]).resolve()
+    except (ValueError, SubfolderNotFound) as exc:
+        raise BundleAuthorError(str(exc)) from exc
+
+
 def resolve_environment_plan(
     source: str | Path,
     job: HarnessJob,
@@ -2147,6 +2245,10 @@ def resolve_environment_plan(
     root = Path(source).resolve()
     if not root.is_dir():
         raise BundleAuthorError(f"source_unavailable: {root}")
+    subfolder = job.source.subfolder
+    contract_runtime, agent_root, run_folder = _agent_scope(
+        root, subfolder, contract_runtime
+    )
     connector = job.agent.connector.lower()
     if job.agent.mode is ProviderExecutionMode.ENVIRONMENT_BACKED:
         declaration = load_provider_manifest(
@@ -2170,7 +2272,7 @@ def resolve_environment_plan(
         reference.purpose == SecretPurpose.TARGET_PROVIDER.value
         for reference in job.agent.secret_refs.values()
     )
-    declared_runtime_environment = _declared_runtime_environment(root)
+    declared_runtime_environment = _declared_runtime_environment(agent_root)
     try:
         runtime_model = Runtime.model_validate(
             {
@@ -2302,7 +2404,13 @@ def resolve_environment_plan(
     # The repository's exec-form Dockerfile CMD is an explicit source-owned declaration; use it
     # before falling back to a guessed agent.py entrypoint. This works for any HTTP framework.
     if not runtime_command and interface.get("kind") == "http" and not compose:
-        runtime_command = _dockerfile_run(root) or []
+        runtime_command = (
+            _dockerfile_run(
+                run_folder,
+                project=_runtime_component(root, runtime_workdir) if subfolder else None,
+            )
+            or []
+        )
     interface_port = interface.get("port")
     interface_health_path = str(interface.get("health_path") or "/health")
 
@@ -2608,10 +2716,10 @@ def resolve_environment_plan(
         discovered_callback = (
             None
             if is_livekit or (runtime_model.execution == "native" and runtime_command)
-            else _discover_callback_entrypoint(root)
+            else _discover_callback_entrypoint(run_folder)
         )
         graph_entrypoint = (
-            _langgraph_entrypoint(root)
+            _langgraph_entrypoint(run_folder)
             if not is_livekit and contract_modality == "chat" and not runtime_command
             else None
         )
@@ -2647,7 +2755,8 @@ def resolve_environment_plan(
                 (
                     item
                     for item in runtime_command
-                    if item.endswith(".py") and (component / item).is_file()
+                    if item.endswith(".py")
+                    and ((run_folder if subfolder else component) / item).is_file()
                 ),
                 "agent.py",
             )
@@ -2657,16 +2766,20 @@ def resolve_environment_plan(
             and not runtime_command
             and contract_interface_kind == "http"
             and runtime_workdir.strip()
+            # The folder the agent is named for is the default workdir, not a chosen one.
+            and not (subfolder and run_folder == agent_root)
         ):
             raise BundleAuthorError(
                 "runtime_http_command_missing: set runtime.command to the source-declared "
                 "native HTTP server command and runtime.workdir to its working directory; "
                 "an internal agent.py is not evidence of an HTTP server"
             )
-        elif not is_callback and not (root / entry).is_file():
-            component, entry = _discovered_python_component(root)
+        elif not is_callback and not (run_folder / entry).is_file():
+            component, entry = _discovered_python_component(
+                root, search=run_folder if subfolder else None
+            )
         else:
-            component = root
+            component = _runtime_component(root, runtime_workdir) if subfolder else root
         control_name = "agent"
         port = None if is_livekit else int(interface_port or 8080)
         environment = (
@@ -2685,8 +2798,13 @@ def resolve_environment_plan(
         if port is not None and not is_livekit:
             environment["PORT"] = f"{{{{PORT_{control_name}}}}}"
         callback_entrypoint = (
-            discovered_callback or _callback_entrypoint(root) if is_callback else None
+            discovered_callback or _callback_entrypoint(run_folder)
+            if is_callback
+            else None
         )
+        if subfolder and callback_entrypoint:
+            module = callback_entrypoint.partition(":")[0].replace(".", "/")
+            _install_root_for(root, run_folder, run_folder / f"{module}.py")
         if is_graph:
             environment.update(
                 {
@@ -2707,7 +2825,12 @@ def resolve_environment_plan(
             root,
             language=runtime_model.language,
             name=control_name,
-            root=root if is_callback else component,
+            # Bun walks up to its own package root, so it starts from the run folder.
+            root=(
+                (run_folder if is_bun_runtime else component)
+                if subfolder
+                else root if is_callback else component
+            ),
             entry=None if is_callback or is_command_adapter or is_graph else entry,
             control=True,
             needs_secrets=needs_target_secrets,
@@ -2722,8 +2845,14 @@ def resolve_environment_plan(
             run_override=(
                 None
                 if is_callback or is_command_adapter or is_graph
-                else runtime_command or _dockerfile_run(component)
+                else runtime_command
+                or (
+                    _dockerfile_run(run_folder, project=component)
+                    if subfolder
+                    else _dockerfile_run(component)
+                )
             ),
+            run_folder=run_folder if subfolder and not is_bun_runtime else None,
         )
         if is_graph:
             python_command = process.run_command
@@ -2770,7 +2899,7 @@ def resolve_environment_plan(
             }
             # Only a Dockerfile CMD carries the subcommand today, so a repository without one
             # starts `agent.py` bare and never reaches the registration this check waits for.
-            if _hands_off_to_livekit_cli(component, entry) and not (
+            if _hands_off_to_livekit_cli(run_folder if subfolder else component, entry) and not (
                 set(process.run_command) & _LIVEKIT_WORKER_SUBCOMMANDS
             ):
                 update["run_command"] = [*process.run_command, "start"]
@@ -2782,7 +2911,9 @@ def resolve_environment_plan(
         if not is_bun_runtime:
             process = _python_component_command(
                 source=root,
-                component=root if is_callback else component,
+                component=(
+                    run_folder if subfolder else root if is_callback else component
+                ),
                 process=process,
             )
         resources = {}
@@ -2844,13 +2975,13 @@ def resolve_environment_plan(
             )
         packaging = (
             "dockerfile"
-            if (root / "Dockerfile").is_file()
+            if (run_folder / "Dockerfile").is_file()
             else "generated_bun"
             if is_bun_runtime
             else "generated_python"
         )
 
-    toolbox = _mcp_toolbox_definition(root)
+    toolbox = _mcp_toolbox_definition(agent_root)
     if toolbox is not None and control_name:
         processes.append(_mcp_toolbox_process())
         rewritten: list[ManagedProcess | SourceProcess] = []
@@ -3025,6 +3156,9 @@ def _package_process_sources(
         workspace_required = [
             (prefix / path).as_posix() for path in map(Path, required)
         ]
+        if exclusion_runtime.source_subfolder:
+            # The prefix is the run folder, not the folder the dependencies install from.
+            workspace_required.append("requirements.txt")
         exclusions = _context_excludes(
             component,
             workspace_runtime,
@@ -3242,6 +3376,8 @@ def author_bundle_v2(
     contract_interface_kind: str | None = None
     contract_body: dict[str, Any] = {}
     runtime: dict[str, Any] = {}
+    subfolder = job.source.subfolder
+    agent_root = run_folder = source_root
     contract_path = authoring_root / "contract.json"
     if contract_path.is_file():
         try:
@@ -3255,6 +3391,11 @@ def author_bundle_v2(
         contract_modality = str(contract_body.get("modality") or "").strip().lower()
         runtime = contract_body.get("runtime")
         runtime = runtime if isinstance(runtime, dict) else {}
+        if subfolder:
+            runtime, agent_root, run_folder = _agent_scope(
+                source_root, subfolder, runtime
+            )
+            contract_body = {**contract_body, "runtime": runtime}
         interface = runtime.get("interface") if isinstance(runtime, dict) else None
         if isinstance(interface, dict):
             contract_interface_kind = str(interface.get("kind") or "").strip().lower()
@@ -3272,7 +3413,7 @@ def author_bundle_v2(
                 contract_interface_kind = "http"
         elif (
             contract_modality == "chat"
-            and _discover_callback_entrypoint(source_root) is not None
+            and _discover_callback_entrypoint(run_folder) is not None
         ):
             # The callback is a deterministic source property.  Do not let a stochastic
             # authoring omission make the compiled adapter unreachable at call time: the
@@ -3292,7 +3433,7 @@ def author_bundle_v2(
             contract_modality == "chat"
             and not isinstance(interface, dict)
             and not runtime.get("command")
-            and _langgraph_entrypoint(source_root) is not None
+            and _langgraph_entrypoint(run_folder) is not None
         ):
             runtime = dict(runtime)
             runtime["interface"] = {
@@ -3329,7 +3470,7 @@ def author_bundle_v2(
             contract_modality == "chat"
             and contract_interface_kind == "callable"
             and runtime.get("command")
-            and _discover_callback_entrypoint(source_root) is None
+            and _discover_callback_entrypoint(run_folder) is None
         ):
             raise BundleAuthorError(
                 "generated_runtime_entrypoint_ambiguous: callable interface requires a "
@@ -3359,7 +3500,7 @@ def author_bundle_v2(
         str(name).upper()
         for name in (job.metadata.get("environment_value_names", []) or [])
     }
-    provided_environment.update(_declared_runtime_environment(source_root))
+    provided_environment.update(_declared_runtime_environment(agent_root))
     for process in plan.processes:
         provided_environment.update(
             str(name).upper() for name in (getattr(process, "environment", None) or {})
@@ -3368,14 +3509,21 @@ def author_bundle_v2(
         source_root,
         secret_refs=job.agent.secret_refs,
         provided_environment=provided_environment,
-        scan_paths={
-            str(getattr(process, "working_directory", ".") or ".")
-            for process in plan.processes
-            if isinstance(process, SourceProcess)
-        },
+        # What ships: the install root, which holds the shared code the folder imports.
+        scan_paths=(
+            {_runtime_component(source_root, subfolder).relative_to(source_root).as_posix()}
+            if subfolder
+            else {
+                str(getattr(process, "working_directory", ".") or ".")
+                for process in plan.processes
+                if isinstance(process, SourceProcess)
+            }
+        ),
         # Match preflight: a template documents possible integrations, not every
         # credential needed by the selected generic-runtime path.
         template_secrets_required=job.metadata.get("generic_harness_v1") is not True,
+        agent_subfolder=subfolder or None,
+        agent_compose_file=str(runtime.get("compose_file") or "") or None,
     )
     output_root.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(
@@ -3411,7 +3559,7 @@ def author_bundle_v2(
                 generated / "proxy.py",
             )
         if any(process.name == "mcp-toolbox" for process in plan.processes):
-            toolbox = _mcp_toolbox_definition(source_root)
+            toolbox = _mcp_toolbox_definition(agent_root)
             if toolbox is None:
                 raise BundleAuthorError("mcp_toolbox_definition_missing")
             _, definition = toolbox
@@ -4072,9 +4220,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--authoring", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
+    job = _load_job(args.job)
+    if refuse_unusable_folder(
+        args.source.resolve(),
+        job.source.subfolder,
+        args.authoring.resolve(),
+        saved_runtime(args.authoring),
+    ):
+        return EXIT_REFUSED
     author_bundle_v2(
         source=args.source,
-        job=_load_job(args.job),
+        job=job,
         authoring=args.authoring,
         output=args.output,
     )

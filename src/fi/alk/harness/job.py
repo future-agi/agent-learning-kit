@@ -56,9 +56,21 @@ class RepositorySource(BaseModel):
     archive_artifact_id: str | None = None
     image: str | None = None
     endpoint: str | None = None
+    subfolder: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _empty_subfolder_is_none(cls, data):
+        # The platform sends "" for "no folder"; the echo compares the value exactly,
+        # so anything else is kept as sent.
+        if isinstance(data, dict) and data.get("subfolder") == "":
+            return {**data, "subfolder": None}
+        return data
 
     @model_validator(mode="after")
     def _required_locator(self) -> "RepositorySource":
+        if self.subfolder and self.kind is not SourceKind.GITHUB:
+            raise ValueError("subfolder_requires_github_source")
         # A connected provider agent is itself the source of truth. Its ID lives
         # in AgentConnection.config and its definition is fetched with the
         # run-scoped provider credential during authoring, so no repository

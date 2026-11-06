@@ -29,6 +29,7 @@ from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime
 from .run.conversation import TargetConversationEnded, Transcript, converse
 from .scenario import Scenario as ConversationScenario
+from .source_folder import contract_folder
 from .usage import (
     UsageDenied,
     UsageUnavailable,
@@ -187,7 +188,10 @@ def _tool_world(
             world.handlers[tool.name] = path.read_text(encoding="utf-8")
     world.refusal_signature = contract.refusal_signature
     if source_directory is not None:
-        world.reach(str(source_directory))
+        world.reach(
+            str(source_directory),
+            contract_folder(contract),
+        )
     return world
 
 

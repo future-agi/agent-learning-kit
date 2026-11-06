@@ -716,3 +716,173 @@ def test_process_lane_rejects_selected_dependency_image(tmp_path):
                 "compose_image_services": ["cache"],
             },
         )
+
+
+def _stacks(tmp_path, *, root_builds="agents/a"):
+    from pathlib import Path
+
+    root = Path(tmp_path)
+    for name in ("a", "b"):
+        (root / "agents" / name).mkdir(parents=True)
+        (root / "agents" / name / "agent.py").write_text("print('agent')\n")
+    (root / "compose.yaml").write_text(
+        f"services:\n  agent:\n    build: {root_builds}\n    command: [python, agent.py]\n"
+    )
+    (root / "agents" / "a" / "compose.yaml").write_text(
+        "services:\n  agent:\n    build: .\n    command: [python, agent.py]\n"
+    )
+    return root
+
+
+def test_select_runtime_reads_source_subfolder(tmp_path):
+    from fi.alk.harness.runtime_selection import ComposeSelection, NativeSelection, select_runtime
+
+    root = _stacks(tmp_path)
+
+    own = select_runtime(
+        root, {"source_subfolder": "agents/a", "workdir": "agents/a"}
+    )
+    assert isinstance(own, ComposeSelection)
+    assert own.compose_file == (root / "agents" / "a" / "compose.yaml").resolve()
+
+    # The root's stack belongs to the whole repository; a folder with none of its own has none.
+    other = select_runtime(
+        root, {"source_subfolder": "agents/b", "workdir": "agents/b"}
+    )
+    assert isinstance(other, NativeSelection)
+
+
+def test_no_subfolder_lookup_unchanged(tmp_path):
+    from fi.alk.harness.runtime_selection import ComposeSelection, select_runtime
+
+    root = _stacks(tmp_path)
+
+    selected = select_runtime(root, {})
+
+    assert isinstance(selected, ComposeSelection)
+    assert selected.compose_file == (root / "compose.yaml").resolve()
+
+
+def _explicit_root_stack(root):
+    return {
+        "source_subfolder": "agents/a",
+        "workdir": "agents/a",
+        "execution": "compose",
+        "compose_file": "compose.yaml",
+        "service": "agent",
+    }
+
+
+def test_control_service_building_a_sibling_refused(tmp_path):
+    from fi.alk.harness.runtime_selection import RuntimeSelectionError, select_runtime
+
+    root = _stacks(tmp_path, root_builds="agents/b")
+
+    with pytest.raises(RuntimeSelectionError, match="runtime_compose_service_outside_subfolder"):
+        select_runtime(root, _explicit_root_stack(root))
+
+
+def test_root_compose_building_the_folder_allowed(tmp_path):
+    from fi.alk.harness.runtime_selection import ComposeSelection, select_runtime
+
+    root = _stacks(tmp_path, root_builds="agents/a")
+
+    selected = select_runtime(root, _explicit_root_stack(root))
+
+    assert isinstance(selected, ComposeSelection)
+    assert selected.control_service == "agent"
+    assert selected.compose_file == (root / "compose.yaml").resolve()
+
+
+def _compose_building(build: str) -> str:
+    return f"services:\n  agent:\n    build: {build}\n    command: [python, agent.py]\n"
+
+
+_ROOT_BUILDS = [
+    ("agents/b", False),
+    ("{context: agents/b}", False),
+    ("{context: ., dockerfile: agents/b/Dockerfile}", False),
+    ("{context: agents, dockerfile: b/Dockerfile}", False),
+    (".", True),
+    ("{context: ., dockerfile: agents/a/Dockerfile}", True),
+    ("{context: agents/a, dockerfile: Dockerfile}", True),
+]
+
+
+@pytest.mark.parametrize(("build", "allowed"), _ROOT_BUILDS)
+def test_root_compose_service_build_forms(tmp_path, build, allowed):
+    from fi.alk.harness.runtime_selection import (
+        ComposeSelection,
+        RuntimeSelectionError,
+        select_runtime,
+    )
+
+    root = _stacks(tmp_path)
+    (root / "compose.yaml").write_text(_compose_building(build))
+
+    if allowed:
+        assert isinstance(
+            select_runtime(root, _explicit_root_stack(root)), ComposeSelection
+        )
+    else:
+        with pytest.raises(
+            RuntimeSelectionError, match="runtime_compose_service_outside_subfolder"
+        ):
+            select_runtime(root, _explicit_root_stack(root))
+
+
+@pytest.mark.parametrize(
+    ("build", "allowed"),
+    [
+        ("../b", False),
+        ("{context: ../b}", False),
+        ("./app", True),
+        ("{context: ./app}", True),
+    ],
+)
+def test_folder_compose_service_build_forms(tmp_path, build, allowed):
+    from fi.alk.harness.runtime_selection import (
+        ComposeSelection,
+        RuntimeSelectionError,
+        select_runtime,
+    )
+
+    root = _stacks(tmp_path)
+    (root / "agents" / "a" / "app").mkdir()
+    (root / "agents" / "a" / "compose.yaml").write_text(_compose_building(build))
+    runtime = {
+        **_explicit_root_stack(root),
+        "compose_file": "agents/a/compose.yaml",
+    }
+
+    if allowed:
+        assert isinstance(select_runtime(root, runtime), ComposeSelection)
+    else:
+        with pytest.raises(
+            RuntimeSelectionError, match="runtime_compose_service_outside_subfolder"
+        ):
+            select_runtime(root, runtime)
+
+
+@pytest.mark.parametrize(("build", "allowed"), [("./app", True), ("../b", False)])
+def test_included_service_build_is_read_from_its_own_file(tmp_path, build, allowed):
+    from fi.alk.harness.runtime_selection import (
+        ComposeSelection,
+        RuntimeSelectionError,
+        select_runtime,
+    )
+
+    root = _stacks(tmp_path)
+    (root / "agents" / "a" / "app").mkdir()
+    (root / "compose.yaml").write_text("include:\n  - agents/a/compose.yaml\n")
+    (root / "agents" / "a" / "compose.yaml").write_text(_compose_building(build))
+
+    if allowed:
+        assert isinstance(
+            select_runtime(root, _explicit_root_stack(root)), ComposeSelection
+        )
+    else:
+        with pytest.raises(
+            RuntimeSelectionError, match="runtime_compose_service_outside_subfolder"
+        ):
+            select_runtime(root, _explicit_root_stack(root))

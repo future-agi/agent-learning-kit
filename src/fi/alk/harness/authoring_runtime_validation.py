@@ -938,15 +938,20 @@ async def validate_once(
             world_isolation = None
             if generic:
                 from .action_certification import certify_actions
+                from .bundle_author_v2 import _runtime_component
+                from .source_folder import contract_folder
 
                 contract = AgentContract.model_validate_json(
                     (bundle / "contract.json").read_text(encoding="utf-8")
                 )
+                folder = contract_folder(contract)
                 tool_report = certify_tool_inventory(
                     contract,
                     bundle,
                     external_provider=provider_owned_tools,
-                    source=source,
+                    # What the agent's install can import: its folder, or the project above
+                    # it, shared code included. A tool outside that is not this agent's.
+                    source=_runtime_component(source.resolve(), folder) if folder else source,
                 )
                 rejected = {
                     item.tool: item.reason

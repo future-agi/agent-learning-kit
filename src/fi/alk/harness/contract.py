@@ -17,7 +17,8 @@ import shlex
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_serializer, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 from fi.simulate.agent.wrappers.http_events import (
     CompletedToolEvents,
@@ -822,6 +823,18 @@ class Runtime(BaseModel):
     # prompt. Empty is valid for voice/browser agents and for contracts that are not backed by a
     # repository.
     interface: RuntimeInterface | None = None
+
+    # The folder of the repository this agent lives in. The harness records it when the
+    # contract is saved, so it is kept out of the schema the model writes against and out of
+    # the dump when empty.
+    source_subfolder: SkipJsonSchema[str] = ""
+
+    @model_serializer(mode="wrap")
+    def _omit_empty_subfolder(self, handler: Any) -> dict[str, Any]:
+        data = handler(self)
+        if not data.get("source_subfolder"):
+            data.pop("source_subfolder", None)
+        return data
 
     @model_validator(mode="after")
     def _validate_selection(self) -> "Runtime":

@@ -11,16 +11,20 @@ import ast
 import hashlib
 import json
 import re
+import stat
+from collections import deque
 from enum import Enum
-from pathlib import Path
-from typing import AbstractSet, Iterable, Mapping, TYPE_CHECKING, Literal
+from pathlib import Path, PurePosixPath
+from typing import AbstractSet, Callable, Iterable, Mapping, TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, Field
 import yaml
 
 from fi.simulate.runtime.spec import SecretRef
 
+from .python_source import ParseBudget, parsed, source_encoding, utf8_size
 from .secrets import process_secret_environment_names
+from .source_folder import SubfolderNotFound, agent_folder, agent_scope, in_agent_scope, is_within
 
 if TYPE_CHECKING:
     from .contract import Runtime
@@ -136,6 +140,30 @@ _CONFIG_NAMES = {
 }
 _MAX_FILES = 2_000
 _MAX_FILE_BYTES = 1_000_000
+# The import walk's whole budget: a file limit alone still allows minutes of reading.
+_MAX_WALK_BYTES = 32_000_000
+_MAX_WALK_IMPORTS = 20_000
+# How many folders below the repository the import walk follows. Honest repositories nest a
+# dozen or so; resolving a path costs a lookup for each of its folders, and Linux allows 2,000.
+_DEEPEST_FOLLOWED = 64
+# Linux's PATH_MAX: an import name longer than this can't name a file.
+_LONGEST_NAME = 4096
+_SCRIPT_SUFFIXES = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
+_SCRIPT_IMPORT = re.compile(
+    r"""(?:\bfrom\s*|\bimport\s*(?:\(\s*)?|\brequire\s*\(\s*)["']([^"'\n]+)["']"""
+)
+# An import, or a whole string: matched from the left, a string holding import text is taken
+# from its opening quote, before the words in it can be read as an import.
+_SCRIPT_IMPORT_OR_STRING = re.compile(
+    _SCRIPT_IMPORT.pattern
+    + r"""|"(?:\\.|[^"\\\n])*"?|'(?:\\.|[^'\\\n])*'?|`(?:\\.|[^`\\])*`?"""
+)
+# A type-only import runs nothing. The keyword is matched alone, and the quotes after it found
+# by `_without_type_imports`, so the text is scanned once, however many keywords it holds.
+_SCRIPT_TYPE_KEYWORD = re.compile(r"\b(?:import|export)\s+type\b")
+_SCRIPT_QUOTE_OR_LINE_END = re.compile(r"""["'\n]""")
+# How far after the keyword the module's quote may start.
+_SCRIPT_TYPE_REACH = 1000
 
 _ENV_DECLARATION = re.compile(
     r"(?m)^(?:export[ \t]+)?([A-Z][A-Z0-9_]{2,})[ \t]*=[ \t]*([^\r\n#]*)"
@@ -411,8 +439,16 @@ def discover_credentials(
     provided_environment: Iterable[str] = (),
     scan_paths: Iterable[str | Path] | None = None,
     template_secrets_required: bool = True,
+    agent_subfolder: str | None = None,
+    agent_compose_file: str | None = None,
 ) -> CredentialManifest:
-    """Inspect declarations and environment reads without executing submitted code."""
+    """Inspect declarations and environment reads without executing submitted code.
+
+    With ``agent_subfolder``, only that agent's own files can require a value: its folder, the
+    folders above it, and the code it imports. Anything else shipped alongside it is another
+    agent's, so what it reads is listed as optional. A Compose file above the folder belongs to
+    the whole repository, so it counts only when ``agent_compose_file`` names it.
+    """
     root = Path(root).expanduser().resolve()
     if not root.is_dir():
         raise ValueError(f"credential_source_missing: {root}")
@@ -428,8 +464,20 @@ def discover_credentials(
     scanned = 0
     truncated = False
     digest = hashlib.sha256()
+    imported = imported_by_agent(root, agent_subfolder) if agent_subfolder else frozenset()
+    scope = agent_scope(root, agent_subfolder) if agent_subfolder else None
+    named_compose = (root / agent_compose_file).resolve() if agent_compose_file else None
 
-    for path in _candidate_files(root, scan_paths=scan_paths):
+    candidates = _candidate_files(root, scan_paths=scan_paths)
+    if scope is not None:
+        # The file limit must not leave the agent's own files unread.
+        candidates.sort(
+            key=lambda path: not (
+                path in imported
+                or in_agent_scope(PurePosixPath(path.relative_to(root).as_posix()), scope)
+            )
+        )
+    for path in candidates:
         if scanned >= _MAX_FILES:
             truncated = True
             break
@@ -448,8 +496,15 @@ def discover_credentials(
         digest.update(relative.encode())
         digest.update(hashlib.sha256(content.encode()).digest())
         lowered = content.lower()
+        agents_own = (
+            scope is None
+            or path in imported
+            or in_agent_scope(PurePosixPath(relative), scope)
+        )
+        if scope is not None and path.name.lower() in _COMPOSE_NAMES:
+            agents_own = path == named_compose or PurePosixPath(relative).is_relative_to(scope)
         for connector, signals in _CONNECTOR_SIGNALS.items():
-            if any(signal in lowered for signal in signals):
+            if agents_own and any(signal in lowered for signal in signals):
                 connector_hits.add(connector)
 
         def record(
@@ -469,9 +524,9 @@ def discover_credentials(
                     "detected_from": set(),
                 },
             )
-            item["required"] = bool(item["required"]) or required
-            item["declared_default"] = (
-                bool(item["declared_default"]) or declared_default
+            item["required"] = bool(item["required"]) or (required and agents_own)
+            item["declared_default"] = bool(item["declared_default"]) or (
+                declared_default and agents_own
             )
             detected = item["detected_from"]
             assert isinstance(detected, set)
@@ -501,7 +556,8 @@ def discover_credentials(
                     declared_default=usable_default,
                 )
         if path.name.lower() in _COMPOSE_NAMES:
-            configured.update(_literal_compose_environment(content))
+            if agents_own:
+                configured.update(_literal_compose_environment(content))
             for match in _COMPOSE_VARIABLE.finditer(content):
                 operator, fallback = match.group(2), (match.group(3) or "").strip()
                 # Compose substitutes an unset plain ${NAME} with an empty string. Only its
@@ -598,6 +654,244 @@ def discover_credentials(
         scanned_files=scanned,
         truncated=truncated,
     )
+
+
+def _file_inside(candidate: Path, root: Path, deepest: int) -> Path | None:
+    """``candidate`` resolved, if it's a plain file in ``root`` at most ``deepest`` parts long."""
+    if len(candidate.parts) > deepest or not _plain_file(candidate):
+        return None
+    resolved = candidate.resolve()
+    return resolved if len(resolved.parts) <= deepest and is_within(resolved, root) else None
+
+
+def _plain_file(path: Path) -> bool:
+    """A regular file small enough to read: a committed link can point at anything."""
+    try:
+        details = path.lstat()
+    except (OSError, ValueError):
+        return False
+    return stat.S_ISREG(details.st_mode) and details.st_size <= _MAX_FILE_BYTES
+
+
+def _python_imports(
+    content: str, limit: int = _MAX_FILE_BYTES, budget: ParseBudget | None = None
+) -> list[tuple[int, str]]:
+    # In bytes, as the file's size is: the parser's cost follows them, not the characters.
+    if utf8_size(content) > limit or (budget is not None and not budget.spend(content)):
+        return []
+    tree = parsed(content)
+    if tree is None:
+        return []
+    names: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names.extend((0, alias.name) for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            names.append((node.level, module))
+            names.extend(
+                (node.level, f"{module}.{alias.name}".lstrip(".")) for alias in node.names
+            )
+    return [(level, name) for level, name in names if name]
+
+
+def _script_imports(content: str) -> list[str]:
+    # Here because agent_type_check imports this module.
+    from .agent_type_check import _SCRIPT_COMMENT_OR_STRING, _script_kept
+
+    code = _without_type_imports(_SCRIPT_COMMENT_OR_STRING.sub(_script_kept, content))
+    return [hit.group(1) for hit in _SCRIPT_IMPORT_OR_STRING.finditer(code) if hit.group(1)]
+
+
+def _without_type_imports(code: str) -> str:
+    """``code`` without its type-only imports: the keyword, then within 1,000 characters on its
+    line a quoted module name.
+
+    One regular expression doing this rescans the reach after every keyword, which a file of
+    nothing but keywords turns into seconds a megabyte, holding the interpreter throughout. Here
+    the searches for opening quotes and those for closing ones each start where the last of
+    their kind did or later, and each kind keeps its own answer, so the code is scanned at most
+    twice over.
+    """
+    kept: list[str] = []
+    done = 0
+    opening_after = _next_quote_or_line_end(code)
+    closing_after = _next_quote_or_line_end(code)
+    for keyword in _SCRIPT_TYPE_KEYWORD.finditer(code):
+        if keyword.start() < done:
+            continue
+        opening = opening_after(keyword.end())
+        if opening == len(code) or code[opening] == "\n":
+            continue
+        if opening - keyword.end() > _SCRIPT_TYPE_REACH:
+            continue
+        closing = closing_after(opening + 1)
+        if closing == len(code) or code[closing] == "\n":
+            continue
+        kept.append(code[done : keyword.start()])
+        done = closing + 1
+    kept.append(code[done:])
+    return "".join(kept)
+
+
+def _next_quote_or_line_end(code: str) -> Callable[[int], int]:
+    """Where the first quote or line end at or after a position is, or the code's end.
+
+    Asked from positions that only grow, it scans each stretch of ``code`` once.
+    """
+    searched_from = stop = -1
+
+    def after(position: int) -> int:
+        # No quote or line end lies between searched_from and stop, so the answer stands.
+        nonlocal searched_from, stop
+        if not searched_from <= position <= stop:
+            hit = _SCRIPT_QUOTE_OR_LINE_END.search(code, position)
+            searched_from, stop = position, hit.start() if hit else len(code)
+        return stop
+
+    return after
+
+
+def imported_by_agent(
+    root: Path,
+    subfolder: str,
+    *,
+    parse_limit: int = _MAX_FILE_BYTES,
+    parse_budget: ParseBudget | None = None,
+    script_budget: ParseBudget | None = None,
+    import_limit: int | None = None,
+) -> frozenset[Path]:
+    """The files the agent's folder imports, followed as far as they go.
+
+    Python imports, and JavaScript or TypeScript imports written as a path. A package name that
+    only a workspace or a path alias can resolve isn't followed. A conversation waiting on the
+    answer passes tighter parse limits than bundling's: a Python file is followed only if it's
+    at most ``parse_limit`` bytes and the walk has parsed under ``parse_budget``, and a script
+    only while the walk has matched under ``script_budget``. It tries at most ``import_limit``
+    import names in all (bundling's 20,000 when not given), each costing a few lookups on disk.
+    Nothing more than ``_DEEPEST_FOLLOWED`` folders below the repository is followed.
+    """
+    root = Path(root).resolve()
+    try:
+        folder = agent_folder(root, subfolder)
+    except SubfolderNotFound:
+        return frozenset()
+    python_bases = (folder, folder / "src", root, root / "src")
+    deepest = len(root.parts) + _DEEPEST_FOLLOWED
+    # Each package and each file found is looked up once in the whole walk: resolving one costs a
+    # lookup for each folder in it, and a chain of packages names the same ones from every file.
+    # Other misses aren't kept: a script name tries a few dozen places, which 20,000 names would
+    # fill gigabytes with. A package is looked up only above a file found, so they stay few.
+    looked_up: dict[Path, Path | None] = {}
+
+    def found_at(candidates: Iterable[Path]) -> Path | None:
+        for candidate in candidates:
+            if candidate in looked_up:
+                hit = looked_up[candidate]
+            else:
+                hit = _file_inside(candidate, root, deepest)
+                if hit is not None or candidate.name == "__init__.py":
+                    looked_up[candidate] = hit
+            if hit is not None:
+                return hit
+        return None
+
+    def python_modules(path: Path, level: int, name: str) -> list[Path]:
+        module = name.split(".")
+        # A path past the system's limit can't be opened, so it isn't built.
+        if len(module) > _DEEPEST_FOLLOWED or len(name) > _LONGEST_NAME:
+            return []
+        for start in (path.parents[level - 1],) if level else python_bases:
+            target = start.joinpath(*module)
+            if hit := found_at((target.with_suffix(".py"), target / "__init__.py")):
+                # Importing a module runs every package above it first.
+                packages: list[Path] = []
+                directory = start
+                for part in module[:-1]:
+                    directory = directory / part
+                    if package := found_at((directory / "__init__.py",)):
+                        packages.append(package)
+                return [hit, *packages]
+        return []
+
+    def script_module(path: Path, name: str) -> Path | None:
+        if len(name) > _LONGEST_NAME:
+            return None
+        for start in (path.parent,) if name.startswith(".") else (folder, root):
+            target = start / name
+            written = [target.with_suffix(suffix) for suffix in (".ts", ".tsx")]
+            if hit := found_at(
+                (
+                    target,
+                    *(written if target.suffix == ".js" else ()),
+                    *(Path(f"{target}{suffix}") for suffix in _SCRIPT_SUFFIXES),
+                    *(target / f"index{suffix}" for suffix in _SCRIPT_SUFFIXES),
+                )
+            ):
+                return hit
+        return None
+
+    seen: set[Path] = set()
+    pending = deque(
+        path
+        for path in sorted(folder.rglob("*"))
+        if path.suffix in {".py", *_SCRIPT_SUFFIXES}
+        and not any(part in _IGNORED_PARTS for part in path.relative_to(folder).parts)
+    )
+    own = set(pending)  # Read once already, so importing one doesn't queue it again.
+    read = bytes_read = imports_tried = 0
+    import_limit = _MAX_WALK_IMPORTS if import_limit is None else import_limit
+    while (
+        pending
+        and read < _MAX_FILES
+        and bytes_read < _MAX_WALK_BYTES
+        and imports_tried < import_limit
+    ):
+        # The folder's own files first, so the budgets can't spend themselves on a chain.
+        path = pending.popleft()
+        if len(path.parts) > deepest or not _plain_file(path):
+            continue
+        read += 1
+        try:
+            with path.open("rb") as handle:
+                raw = handle.read(_MAX_FILE_BYTES + 1)
+        except OSError:
+            continue
+        if len(raw) > _MAX_FILE_BYTES:
+            continue  # Grew since it was looked at.
+        bytes_read += len(raw)
+        # As read_text reads it, line ends included; a .py in the encoding its coding line names,
+        # as Python reads it.
+        encoding = (source_encoding(raw) if path.suffix == ".py" else None) or "utf-8-sig"
+        content = raw.decode(encoding, errors="replace").replace("\r\n", "\n").replace("\r", "\n")
+        hits: list[Path] = []
+        if path.suffix == ".py":
+            names = list(dict.fromkeys(_python_imports(content, parse_limit, parse_budget)))
+            # One file can hold more names than the walk may try; the rest aren't tried.
+            names = names[: import_limit - imports_tried]
+            imports_tried += len(names)
+            for level, name in names:
+                try:
+                    hits.extend(python_modules(path, level, name))
+                except (IndexError, ValueError, OSError):
+                    continue  # An import that can't be a path in this repository.
+        elif script_budget is not None and not script_budget.spend(content):
+            continue
+        else:
+            names = list(dict.fromkeys(_script_imports(content)))
+            names = names[: import_limit - imports_tried]
+            imports_tried += len(names)
+            for name in names:
+                try:
+                    hits.extend(filter(None, (script_module(path, name),)))
+                except (ValueError, OSError):
+                    continue
+        for hit in hits:
+            if hit not in seen:
+                seen.add(hit)
+                if hit not in own:
+                    pending.append(hit)
+    return frozenset(seen)
 
 
 def _candidate_files(

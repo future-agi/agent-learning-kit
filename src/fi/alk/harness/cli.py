@@ -272,6 +272,12 @@ def _report_failure_file(output: Path) -> None:
 
 
 async def _understand(args: argparse.Namespace) -> int:
+    job = getattr(args, "job", None)
+    subfolder = (
+        job.source.subfolder
+        if job is not None and getattr(job, "source", None) is not None
+        else None
+    )
     if args.kind == "provider":
         source = resolve(
             args.kind,
@@ -280,8 +286,7 @@ async def _understand(args: argparse.Namespace) -> int:
             scratch=args.path,
         )
     else:
-        source = resolve(args.kind, name=args.name, root=args.path)
-    job = getattr(args, "job", None)
+        source = resolve(args.kind, name=args.name, root=args.path, subfolder=subfolder)
     offered = (
         (getattr(job, "metadata", None) or {}).get("available_evals") if job else None
     )

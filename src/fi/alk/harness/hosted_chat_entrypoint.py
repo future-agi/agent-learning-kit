@@ -436,6 +436,7 @@ class HostedChatRuntime:
         """Only the rebuild stage's tools, with report_update; a suite turn never renames."""
         from . import nudge
         from .scenario_tools import SCENARIO_SERVER
+        from .source_folder import saved_folder
         from .world.tools import WORLD_SERVER
 
         command = self._nudge or {}
@@ -446,7 +447,10 @@ class HostedChatRuntime:
             if WORLD_SERVER in servers:
                 world = {}
                 servers[WORLD_SERVER] = nudge.track_world(
-                    servers[WORLD_SERVER], world, self.source
+                    servers[WORLD_SERVER],
+                    world,
+                    self.source,
+                    saved_folder(self.workspace),
                 )
         else:
             allowed = nudge.SUITE_TOOLS
@@ -482,7 +486,12 @@ class HostedChatRuntime:
         if job is not None and agent_source_kind(job, profile) == "provider":
             source = resolve("provider", name=name, profile=profile or {}, scratch=str(self.source))
         else:
-            source = resolve(kind if kind in {"repo", "spec"} else "repo", name=name, root=str(self.source))
+            source = resolve(
+                kind if kind in {"repo", "spec"} else "repo",
+                name=name,
+                root=str(self.source),
+                subfolder=(self.job.get("source") or {}).get("subfolder"),
+            )
         return open_for_building(
             contract,
             out=self.workspace,

@@ -1520,7 +1520,8 @@ def test_connect_only_validation_walks_only_scenarios_whose_setup_does_something
     assert calls == ["provision", "reset", "close"]
 
 
-def test_database_clone_checks_use_the_lane_count(tmp_path, monkeypatch):
+def _validate_with_stubs(tmp_path, monkeypatch, *, runtime=None, certified=None):
+    """validate_once over a generic voice contract with every collaborator stubbed; the clones made."""
     from fi.alk.harness import (
         action_certification,
         authoring_runtime_validation,
@@ -1626,14 +1627,17 @@ def test_database_clone_checks_use_the_lane_count(tmp_path, monkeypatch):
             "AgentContract",
             SimpleNamespace(
                 model_validate_json=lambda text: SimpleNamespace(
-                    modality="voice", runtime=None
+                    modality="voice", runtime=runtime
                 )
             ),
         ),
         (
             tool_certification,
             "certify_tool_inventory",
-            lambda *args, **kwargs: SimpleNamespace(tools=[]),
+            lambda *args, **kwargs: (
+                certified.append(kwargs) if certified is not None else None,
+                SimpleNamespace(tools=[]),
+            )[1],
         ),
         (
             action_certification,
@@ -1675,7 +1679,46 @@ def test_database_clone_checks_use_the_lane_count(tmp_path, monkeypatch):
         asyncio.run(validate_once(job, tmp_path, authoring, secrets_path=original))
         == 10
     )
+    return clones
+
+
+def test_database_clone_checks_use_the_lane_count(tmp_path, monkeypatch):
+    clones = _validate_with_stubs(tmp_path, monkeypatch)
+
     assert sorted(set(clones)) == ["lane0", "lane1", "lane2"]
+
+
+@pytest.mark.parametrize(
+    ("project", "reads"),
+    [
+        (None, "agents/a"),
+        ("agents/a/pyproject.toml", "agents/a"),
+        ("agents/pyproject.toml", "agents"),
+        ("pyproject.toml", "."),
+    ],
+)
+def test_voice_certification_reads_what_the_folder_can_import(
+    tmp_path, monkeypatch, project, reads
+):
+    (tmp_path / "agents" / "a").mkdir(parents=True)
+    if project:
+        (tmp_path / project).write_text("[project]\nname='x'\nversion='0'\n")
+    from fi.alk.harness.contract import Runtime
+
+    folder = Runtime(source_subfolder="agents/a", workdir="agents/a")
+    certified: list = []
+
+    _validate_with_stubs(tmp_path, monkeypatch, runtime=folder, certified=certified)
+
+    assert [call["source"] for call in certified] == [(tmp_path / reads).resolve()]
+
+
+def test_voice_certification_reads_the_whole_source_without_a_folder(tmp_path, monkeypatch):
+    certified: list = []
+
+    _validate_with_stubs(tmp_path, monkeypatch, certified=certified)
+
+    assert [call["source"] for call in certified] == [tmp_path]
 
 
 def _stub_local_validation(tmp_path, monkeypatch, check_invariants, fixed_user=False):

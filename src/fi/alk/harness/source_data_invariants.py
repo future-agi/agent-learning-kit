@@ -14,13 +14,14 @@ import json
 import os
 import re
 import threading
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
 from .backends import SessionSpec, tool, tool_server
 from .config import chosen_model
 from .contract import AgentContract, is_data_free_conversation
 from .session import Stage
+from .source_folder import agent_scope, in_agent_scope, saved_folder
 
 ARTIFACT = "source-data-invariants.json"
 BATCHES = "generic-harness/source-data-review-batches.json"
@@ -28,8 +29,10 @@ _SUFFIXES = {".py", ".sql", ".ts", ".js", ".go", ".rs", ".java"}
 _EXCLUDED = {".git", ".venv", "venv", "node_modules", "__pycache__"}
 
 
-def source_files(root: Path) -> dict[str, Path]:
+def source_files(root: Path, folder: str = "") -> dict[str, Path]:
+    """The source files a check may cite; with a folder, those a sibling folder doesn't own."""
     root = root.resolve()
+    scope = agent_scope(root, folder)
     return {
         path.relative_to(root).as_posix(): path
         for path in sorted(root.rglob("*"))
@@ -40,6 +43,10 @@ def source_files(root: Path) -> dict[str, Path]:
             for part in path.relative_to(root).parts
         )
         and path.resolve().is_relative_to(root)
+        and (
+            scope is None
+            or in_agent_scope(PurePosixPath(path.relative_to(root).as_posix()), scope)
+        )
     }
 
 
@@ -312,7 +319,7 @@ def prune_invariant_scopes(authoring: Path) -> list[str]:
 async def author_invariants(
     source: Path, authoring: Path, world, *, endpoints=None, reuse_only: bool = False
 ) -> list[dict]:
-    files = source_files(source)
+    files = source_files(source, saved_folder(authoring))
     scenarios = {}
     for path in sorted((authoring / "scenarios").glob("*/scenario.json")):
         body = json.loads(path.read_text())
@@ -570,7 +577,7 @@ async def review_while_writing(
     the world's checks. Records go to the batches file keyed by world and scenario content, and
     validation reviews only what they do not cover. Returns True as soon as the world itself
     changes, False once the build has finished and what was saved has been reviewed."""
-    files = source_files(source)
+    files = source_files(source, saved_folder(authoring))
     services = local_services(endpoints)
     size = _setting("ALK_INVARIANT_REVIEW_SHARE", 25)
     count = min(_setting("ALK_INVARIANT_REVIEW_CONCURRENCY", 16), max(1, -(-expected // size)))

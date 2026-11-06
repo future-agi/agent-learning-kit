@@ -60,10 +60,44 @@ jobs:
           tests/test_call_originator_factory.py
           tests/test_retell_evidence.py
           tests/harness/test_process_runtime.py
+          tests/harness/test_source_folder.py
+          tests/test_harness_sandbox_server.py
+          --deselect tests/test_harness_sandbox_server.py::test_private_github_submission_becomes_hosted_job
+          --deselect tests/test_harness_sandbox_server.py::test_public_github_branch_url_populates_job_ref
+          tests/test_harness_architecture.py
+          --deselect tests/test_harness_architecture.py::test_executor_freezes_the_resolved_github_commit_before_building
+          --deselect tests/test_harness_architecture.py::test_executor_understands_a_materialized_archive_as_a_repository
+          --deselect tests/test_harness_architecture.py::test_hosted_github_checkout_keeps_token_out_of_process_arguments
+          --deselect tests/test_harness_architecture.py::test_hosted_job_rejects_unsafe_security_policy
+          --deselect tests/test_harness_architecture.py::test_job_carries_references_but_rejects_resolved_secrets
+          --deselect tests/test_harness_architecture.py::test_public_github_branch_url_clones_the_branch
+          --deselect tests/test_harness_architecture.py::test_public_github_branch_url_is_normalized_into_repository_and_ref
+          --deselect tests/test_harness_architecture.py::test_public_github_checkout_does_not_request_or_inject_token
+          --deselect tests/test_harness_architecture.py::test_public_github_job_needs_no_installation_but_is_commit_pinnable
+          tests/test_harness_credentials.py
+          tests/harness/test_runtime_repair.py
+          tests/harness/test_runtime_selection_admission.py
+          tests/harness/test_nudge_turn.py
+          tests/harness/test_seed_rows.py
+          tests/harness/test_builder_chat.py
+          tests/harness/test_hosted_conversation.py
+          tests/harness/test_source_tool_evidence.py
+          tests/harness/test_source_directory_names.py
+          tests/harness/test_storage_decision_admission.py
+          tests/harness/test_authoring_runtime_validation.py
+          tests/harness/test_failure_file.py
+          tests/harness/test_contract_tools_subfolder.py
+          tests/harness/test_import_roots.py
+          tests/harness/test_source_data_invariants_folder.py
+          tests/harness/test_hosted_authoring_entrypoint.py
+          tests/harness/test_certify_only.py
+          tests/harness/test_bundle_author_v2.py
           tests/harness/test_simulation_mark_bootstrap.py
           tests/harness/test_process_preflight.py
           tests/providers
           tests/harness/test_scenario_source_provision_agent.py
+          tests/harness/test_framework_detection.py
+          tests/harness/test_hosted_entrypoint.py
           tests/harness/test_hosted_entrypoint_provision_retry.py
           tests/harness/test_instrumentation_evidence.py
           tests/harness/test_agent_type_refusal.py
