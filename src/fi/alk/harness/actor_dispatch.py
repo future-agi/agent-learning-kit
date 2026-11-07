@@ -696,7 +696,7 @@ class ActorDispatcher:
                 arguments = dict(message.arguments)
                 missing = []
                 for name, ref in message.refers.items():
-                    value = _field(answered.get(ref.message), ref.field)
+                    value = result_field(answered.get(ref.message), ref.field)
                     if value is None:
                         missing.append(name)
                     else:
@@ -988,7 +988,7 @@ def world_summary(
     return list(rows.values())
 
 
-def _field(result: Any, path: str) -> Any:
+def result_field(result: Any, path: str) -> Any:
     """A value in a result by a dotted path (`message.ts`), or None."""
     at = result
     for part in path.split("."):

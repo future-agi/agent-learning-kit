@@ -431,7 +431,7 @@ class _WorldActors:
     def replay_pre_run(self) -> None:
         """Play each stored pre-run thread into the world, message by message, as its actor; a reply takes the id
         the world gave the message it answers. A session not yet written has nothing to replay."""
-        from .actor_dispatch import _field
+        from .actor_dispatch import result_field
 
         for session in getattr(self.scenario, "pre_run", None) or ():
             results: list[Any] = []
@@ -439,7 +439,7 @@ class _WorldActors:
                 arguments = dict(message.arguments)
                 for name, ref in message.refers.items():
                     earlier = results[ref.message - 1] if ref.message <= len(results) else None
-                    value = _field(earlier, ref.field)
+                    value = result_field(earlier, ref.field)
                     if value is not None:
                         arguments[name] = value
                 before = len(self.world.calls)
