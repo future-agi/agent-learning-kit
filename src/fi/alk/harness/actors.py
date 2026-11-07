@@ -516,6 +516,18 @@ WORLD_ACTIONS = {
 }
 
 
+# The record changes an actor may be given beside the world's routes: one per verb on each of the world's own
+# collections, read from the sealed source model; never the harness's own tables.
+RECORD_CHANGES = {
+    "from": "generic-harness/source-model.json",
+    "tables": "tables",
+    "name": "name",
+    "verbs": ["put", "change"],
+    "never_prefix": "_alk_",
+    "never": ["harness_seed_sentinel"],
+}
+
+
 def world_action_names(contract: dict[str, Any]) -> list[str]:
     """The world's actions an actor may be given, named by `WORLD_ACTIONS` from a contract's tool entrypoints."""
     names = set()
@@ -542,7 +554,7 @@ def environment_actions(
 
 
 # Tables the harness keeps beside the world's own records; never a collection an actor changes.
-HARNESS_TABLES = ("harness_seed_sentinel",)
+HARNESS_TABLES = tuple(RECORD_CHANGES["never"])
 
 
 def record_changes(collections: list[str]) -> list[str]:
@@ -804,6 +816,7 @@ def actor_rules() -> dict[str, Any]:
         "references": REFERENCES,
         "acyclic": ACYCLIC,
         "world_actions": WORLD_ACTIONS,
+        "record_changes": RECORD_CHANGES,
         # A background voice's level as a share of the caller's: which channels have one, and the range a call draws
         # from when none is set.
         "loudness": {

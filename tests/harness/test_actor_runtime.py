@@ -542,6 +542,16 @@ def test_a_one_word_name_and_the_person_the_caller_speaks_for_are_never_read_as_
     assert _folded_actors(said, load_actors(tmp_path).by_id()) == []
 
 
+def test_the_sealed_rules_name_the_record_changes_the_platform_lists_beside_the_routes():
+    from fi.alk.harness.actors import actor_rules, record_changes
+
+    rules = actor_rules()["record_changes"]
+    assert rules["from"] == "generic-harness/source-model.json" and rules["verbs"] == ["put", "change"]
+    # The platform lists exactly what add_actor accepts.
+    tables = ["approvals", *rules["never"], rules["never_prefix"] + "tool_trace"]
+    assert sorted(record_changes(tables)) == sorted(f"approvals.{verb}" for verb in rules["verbs"])
+
+
 def test_an_actor_may_be_given_record_changes_on_the_world_s_own_collections(tmp_path):
     from fi.alk.harness.actors import load_actors
     from fi.alk.harness.world.tools import world_actor_tools
