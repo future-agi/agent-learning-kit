@@ -1009,7 +1009,9 @@ def test_a_pre_run_session_with_no_place_is_refused_with_its_fix_before_any_mode
         [{"actors": ["priya"], "about": "Acme", "where": {}}], tmp_path
     )
     assert said == [
-        "pre_run 1: `where.action` names the action that writes into this place"
+        'pre_run 1: `where` needs `action`, the world action that writes into this place, beside the arguments '
+        'naming the place, such as {"action": "chat.post_message", "arguments": {"channel": "#sales"}}; these '
+        "actors may write with slack.post"
     ]
     assert (
         session_problems(

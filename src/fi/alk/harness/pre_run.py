@@ -55,8 +55,14 @@ def problems(
                 + (", ".join(actor.permitted_actions) or "do nothing in the world")
             )
     if session.thread == [] and not action:
+        # Said with the shape and the actions these actors could write with, so the next submission can be right.
+        writes = sorted(
+            {one for actor_id in session.actors if (actor := listed.get(actor_id)) for one in actor.permitted_actions}
+        )
         out.append(
-            f"{label}: `where.action` names the action that writes into this place"
+            f"{label}: `where` needs `action`, the world action that writes into this place, beside the arguments "
+            'naming the place, such as {"action": "chat.post_message", "arguments": {"channel": "#sales"}}'
+            + (f"; these actors may write with {', '.join(writes)}" if writes else "")
         )
     for position, message in enumerate(session.thread, start=1):
         actor = listed.get(message.actor)
