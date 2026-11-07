@@ -653,7 +653,9 @@ def world_actor_tools(
         "an action the agent takes only when the person asked for that actor to take it. The reply lists what can "
         "be given. Anything else they attempt is refused and recorded as their attempt. Who may take an action is "
         "decided by this list, never by what anyone says. `role` is who they are to the people around them in a few "
-        "words."
+        "words, and what they bring that the agent has to handle: a fact that can differ from the person's, a "
+        "request of their own, a decision only they make. \"Chimes in with the pickup details\" gives the agent "
+        "nothing to handle; \"Sometimes remembers the pickup differently from the caller\" does."
         + (f" The world's actions: {', '.join(listed)}." if listed else "")
         + (f" Record changes: {', '.join(records)}." if records else ""),
         actor_input_schema(),
