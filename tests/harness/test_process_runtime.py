@@ -570,6 +570,24 @@ def test_job_id_placeholder_scopes_external_dispatch_identity() -> None:
     assert rendered == "agent-job-123-w2"
 
 
+def test_job_id_comes_from_the_platform_job_file(tmp_path: Path) -> None:
+    (tmp_path / "job.json").write_text('{"job_id": " job-123 "}', encoding="utf-8")
+    assert pr._read_job_id(tmp_path) == "job-123"
+
+
+@pytest.mark.parametrize(
+    "job_file", [None, '{"runtime": {"cpu_units": 1}}', "not json"]
+)
+def test_a_missing_job_id_never_falls_back_to_a_shared_dispatch_name(
+    tmp_path: Path, job_file: str | None
+) -> None:
+    if job_file is not None:
+        (tmp_path / "job.json").write_text(job_file, encoding="utf-8")
+    first, second = pr._read_job_id(tmp_path), pr._read_job_id(tmp_path)
+    assert first.startswith("local-") and second.startswith("local-")
+    assert first != second
+
+
 def test_an_unresolvable_token_is_an_internal_error_not_a_preflight_code() -> None:
     """`preflight_bundle` already validated every token against the closed vocabulary before this
     ever runs — a token this function cannot resolve is a bug, not a bundle defect, so it is NOT

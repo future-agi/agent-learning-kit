@@ -5711,23 +5711,20 @@ def run_conformance_gate(
 
 
 def _read_job_id(work_directory: Path) -> str:
-    """Return the stable job identifier used by explicitly declared ``{{JOB_ID}}`` templates.
+    """Return the job identifier used by explicitly declared ``{{JOB_ID}}`` templates.
 
-    Hosted execution guarantees ``/work/job.json``. Local tests and direct SDK process-runtime
-    use may omit it, so they receive a deterministic local-lane value rather than failing for a
-    field needed only to isolate shared external dispatch namespaces.
+    Hosted execution guarantees ``/work/job.json`` with the platform job id. Local tests and
+    direct SDK process-runtime use may omit it. They get a value unique to this call, never a
+    shared constant, because ``{{JOB_ID}}`` isolates external dispatch namespaces (a LiveKit
+    agent name) that other sandboxes on the same project also register in.
     """
     path = work_directory / "job.json"
-    if not path.is_file():
-        return "local"
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return "local"
-    if not isinstance(raw, dict):
-        return "local"
-    value = str(raw.get("job_id") or "").strip()
-    return value or "local"
+        raw = None
+    value = str(raw.get("job_id") or "").strip() if isinstance(raw, dict) else ""
+    return value or f"local-{secrets.token_hex(4)}"
 
 
 def _read_customer_code_environment(work_directory: Path) -> dict[str, str]:
