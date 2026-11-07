@@ -248,6 +248,12 @@ def test_a_setup_writing_records_an_in_process_agent_never_loads_is_refused(tmp_
     assert with_actor(in_process, approves)
     assert not with_actor(in_process, {"id": "partner", "instruction": "Ask whether it can go to my card."})
     assert not with_actor({"kind": "postgres", "configured_by": "env"}, approves)
+    # An agent that loads the world's records when it starts sees what was there at the start, never a later change.
+    loads = {**in_process, "loaded_by": "load_profile"}
+    assert not with_actor(loads, approves)
+    later = {"id": "manager", "actions": [{"action": "approvals.put", "trigger": {"kind": "on_tool", "tool": "ask"}}]}
+    assert with_actor(loads, later)
+    assert with_actor(in_process, later)
 
 
 def test_the_proof_varies_every_argument_nothing_fixes_and_keeps_chained_values():

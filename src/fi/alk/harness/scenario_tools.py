@@ -1191,10 +1191,24 @@ def _records_the_agent_cannot_see(scenario: Scenario, world_root: Path) -> list[
     store = contract.get("data_store") or {}
     if str(store.get("kind") or "").strip().lower() != "in_process":
         return []
-    if store.get("loader_module") or store.get("loaded_by"):
-        return []
     from .scenario import _CREATES_A_RECORD, _ONLY_TOUCHES_EXISTING
     from .world_door import record_action
+
+    if store.get("loader_module") or store.get("loaded_by"):
+        # It loads the world's records once, when it starts: a change made after that never reaches it.
+        late = [
+            f"{entry.id} ({one.action}, {one.trigger.kind})"
+            for entry in scenario.actors
+            for one in entry.actions
+            if record_action(one.action) and one.trigger.kind != "always"
+        ]
+        if not late:
+            return []
+        return [
+            f"actors: {', '.join(late)} change records after the run starts, but this agent loads its data once when "
+            "it starts and never reads it again, so it never sees the change. Make it starting state (`always`), "
+            "or give the actor a part on the conversation instead"
+        ]
 
     out = []
     setup = scenario.setup_code or ""
