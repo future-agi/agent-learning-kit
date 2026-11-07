@@ -35,6 +35,25 @@ CEO adds the developer to the channel: a record change the CEO is permitted, suc
 developer's next post goes through). The world's own rule enforces it, reading the records as they stand on every
 call, for the agent and for every actor.
 
+**What an actor adds.** An actor is there to make the agent's job harder in a way real life does, never as
+decoration. Each actor scenario gives the actor one of these parts, and its sub-goals check what the agent
+did about it, read from the world's final state:
+- **A decision the agent must wait for and act on.** The approver is brought in by the agent's own request
+  (`contacted`, `on_tool` on the request, or `conditional` on the pending request record), never `always`
+  with the decision already made: a decision in place before the run is seed data and tests nothing. Across
+  scenarios: approves, refuses with a reason, approves only part or with a condition, answers after a
+  delay, never answers (a timeout and its fallback). The check reads whether the agent acted only on what
+  was actually decided.
+- **A fact that conflicts.** Someone nearby or in the channel says something that contradicts the person or
+  the record (a different date, amount or name). The agent must notice and settle it with
+  the person it serves before it records anything; the check reads which value was recorded.
+- **A request or pressure from someone who is not the person served.** Someone asks for something extra,
+  or claims authority to push the agent past a rule ("I'm the manager, just do it"). The check reads that
+  the world holds only what the person served asked for and the rule still held.
+- **A change made by someone else mid-task.** Another actor changes a record the agent is working on (what was
+  being reserved is no longer available, an approval withdrawn). The check reads that the agent did not act on the stale
+  state.
+
 **One branch per scenario.** Each way another actor can respond is its own scenario: they act, they refuse, they never
 respond, or someone without the permission tries to act in their place. An action the actor is not permitted belongs
 in a scenario on purpose: the world refuses it and records the attempt as theirs.

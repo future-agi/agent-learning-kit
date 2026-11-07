@@ -74,6 +74,17 @@ where the build stands: you are opened again straight away with the tools for th
 carry on where you were. Load the method for each part (`understand-agent`, `build-environment` or
 `provision-environment`, `plan-suite`, `write-scenarios`) before you do it.
 
+**Before `finish_build`, read the suite as the agent's owner would**, with `find_scenarios` (`full`), and
+fix what fails with `edit_scenario`. Ask of every scenario: what would a weak agent get wrong here, and
+would a strong one get it right? If the answer is "nothing", it is a demonstration, not a test: give it a
+real difficulty. Ask of the instruction: does any sentence say what the agent will do, offer, refuse or
+decide ("when the agent explains...", "once it confirms...")? Rewrite it as what the person wants and
+holds, with both branches where it reacts. Ask of each actor: does their part make the agent decide
+something (a decision it must wait for, a contradicting fact, pressure it must resist, a change it must
+notice), or do they only repeat what the person holds? Ask of the checks: do they read the final state of
+the world, not the agent's wording? Ask of the suite: is at least a third of it hard for a strong agent,
+and does every scenario test something no other one does?
+
 The build is yours from the first file to the last proof. When the suite is written and every scenario
 proves, call `finish_build`; it says what is still missing, if anything, and once nothing is, the
 environment is validated against the running agent and sealed, and this conversation carries on beside
