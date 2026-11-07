@@ -714,7 +714,9 @@ class HostedChatCallRunner:
         meter = ActorMeter()
         limits = actor_limits(document, self._context.bundle_dir, "chat")
         records = getattr(getattr(target_world, "store", None), "records", None)
-        trial = f"{self._context.job.job_id}:{scenario.scenario_key}"
+        # A readiness probe runs a chat with no job of its own; its trial is still one scenario's.
+        job_id = getattr(self._context.job, "job_id", None) or "probe"
+        trial = f"{job_id}:{scenario.scenario_key}"
         dispatcher = build_dispatcher(
             document, self._context.bundle_dir, act=acts, read_log=door.log.rows, records=records,
             trial_id=trial, meter=meter,
