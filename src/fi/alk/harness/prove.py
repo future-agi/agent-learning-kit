@@ -677,6 +677,21 @@ def _said_another_way(scenario: Scenario) -> tuple[list[Any], set[str]]:
     return said, changed
 
 
+def _bare_ids(scenario: Scenario) -> list[tuple[str, list[Any]]]:
+    """For each fixed id written with a kind prefix (`saved_card:pm_1`), the solution with that id alone (`pm_1`)."""
+    steps = list(getattr(scenario, "solution", None) or ())
+    out = []
+    for at, step in enumerate(steps):
+        for name in step.fixed or ():
+            value = step.arguments.get(name)
+            if isinstance(value, str) and not value.startswith("$") and ":" in value:
+                bare = value.rsplit(":", 1)[1].strip()
+                changed = _with_value(step, name, bare) if bare else None
+                if changed is not None:
+                    out.append((f"{step.tool}.{name}", [*steps[:at], changed, *steps[at + 1 :]]))
+    return out
+
+
 def _with_one_wrong(scenario: Scenario) -> list[tuple[str, list[Any], bool]]:
     """For each fixed value, the solution with only that value changed, and whether a later step
     sets that argument again (a draft the solution itself corrects)."""
@@ -789,6 +804,18 @@ def prove(
             ]
         finally:
             other_world.close()
+    for label, steps in _bare_ids(scenario) if held else ():
+        bare_world, bare_calls, bare_refused, _ = _run(scenario, world_root, with_solution=True, steps=steps)
+        try:
+            # The world took the bare id and ended exactly where the reference does: the same choice.
+            if not bare_refused and right_state is not None and _end_state(bare_world) == right_state:
+                proof.too_strict += [
+                    f"{name} (the same record named without its prefix: {label})"
+                    for name, source in held
+                    if not run_check(source, bare_world, bare_calls, name=name, reference=reference).held
+                ]
+        finally:
+            bare_world.close()
     said, spoken = _said_another_way(scenario)
     if spoken and held:
         said_world, said_calls, said_refused, _ = _run(scenario, world_root, with_solution=True, steps=said)

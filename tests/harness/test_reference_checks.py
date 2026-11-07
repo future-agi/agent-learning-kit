@@ -415,3 +415,40 @@ def test_a_check_that_compares_a_date_as_text_fails_the_date_said_another_way(tm
     assert proof_of("made[-1] == want").too_strict == ["right (the same date said another way: book.time)"]
     # Compared in one form, the same date said "25 June 1984" holds.
     assert proof_of("day(made[-1]) == day(want)").too_strict == []
+
+
+def test_a_check_that_wants_the_prefixed_id_the_world_resolves_the_same_is_too_strict(tmp_path):
+    from fi.alk.harness.world import GeneratedWorld
+    from fi.alk.harness.world.snapshot import save
+    from fi.alk.harness.scenario import Step
+
+    class W(GeneratedWorld):
+        name = "rides"
+        tools = [{"name": "pay"}]
+        handlers = {
+            "pay": (
+                "def handle(args, db):\n"
+                "    method = str(args['method']).split(':')[-1]\n"
+                "    db.execute('INSERT INTO charges (method) VALUES (?)', [method])\n"
+                "    return {'ok': 1}\n"
+            )
+        }
+
+    world = W(":memory:")
+    world.connection.executescript("CREATE TABLE charges(method TEXT);")
+    world.connection.commit()
+    save(world, tmp_path, notes="test", sequences=[])
+
+    def proof_of(compare: str):
+        check = (
+            "def check(world, calls, reference):\n"
+            "    want = [s['arguments'].get('method') for s in reference if s['tool'] == 'pay'][-1]\n"
+            "    paid = [c.arguments.get('method') for c in calls if c.name == 'pay' and c.ok]\n"
+            "    made = [r['method'] for r in world.state()['charges']]\n"
+            f"    return None if paid and {compare} else 'done wrong: method expected ' + repr(want)\n"
+        )
+        solution = [Step(tool="pay", arguments={"method": "saved_card:pm_1"}, fixed={"method": "their record"})]
+        return _proof(tmp_path, solution, check)
+
+    assert proof_of("paid[-1] == want").too_strict == ["right (the same record named without its prefix: pay.method)"]
+    assert proof_of("made[-1] == want.split(':')[-1]").too_strict == []
