@@ -98,7 +98,7 @@ def test_external_service_outage_does_not_trigger_runtime_reauthoring() -> None:
 
 def test_repeated_compiler_failure_without_new_candidate_is_rejected() -> None:
     controller = RepairController()
-    observation = _observation("candidate-a", "array_shape_mismatch")
+    observation = _observation("candidate-a", "schema_type_mismatch")
 
     assert controller.decide(observation).action is RepairAction.RECOMPILE
     repeated = controller.decide(observation)
@@ -148,19 +148,19 @@ def test_environment_and_scenario_patch_budgets_are_independent() -> None:
 
 def test_history_contains_value_free_audit_data() -> None:
     controller = RepairController()
-    controller.decide(_observation("candidate-a", "array_shape_mismatch"))
+    controller.decide(_observation("candidate-a", "schema_type_mismatch"))
     controller.decide(_observation("candidate-b"))
 
     history = controller.history
     assert [decision.sequence for decision in history.decisions] == [1, 2]
     assert history.compiler_candidates_used == 1
     assert history.environment_patches_used == 0
-    assert "failure array_shape_mismatch" not in history.model_dump_json()
+    assert "failure schema_type_mismatch" not in history.model_dump_json()
 
 
 def test_repair_result_records_before_after_and_no_op() -> None:
     controller = RepairController()
-    decision = controller.decide(_observation("candidate-a", "array_shape_mismatch"))
+    decision = controller.decide(_observation("candidate-a", "schema_type_mismatch"))
 
     result = controller.record_result(
         decision.sequence,

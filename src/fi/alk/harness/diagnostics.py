@@ -95,8 +95,8 @@ _POLICIES = MappingProxyType(
         ),
         "value_shape_mismatch": DiagnosticPolicy(
             domain=FailureDomain.ENVIRONMENT,
-            owner=RepairOwner.COMPILER,
-            repair_strategy="normalize_value_to_discovered_type",
+            owner=RepairOwner.AUTHORING,
+            repair_strategy="author_value_in_declared_shape",
         ),
         "unknown_table": DiagnosticPolicy(
             domain=FailureDomain.ENVIRONMENT,
@@ -125,8 +125,8 @@ _POLICIES = MappingProxyType(
         ),
         "array_shape_mismatch": DiagnosticPolicy(
             domain=FailureDomain.ENVIRONMENT,
-            owner=RepairOwner.COMPILER,
-            repair_strategy="normalize_logical_array",
+            owner=RepairOwner.AUTHORING,
+            repair_strategy="author_value_in_declared_shape",
         ),
         "enum_value_invalid": DiagnosticPolicy(
             domain=FailureDomain.ENVIRONMENT,

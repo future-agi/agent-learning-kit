@@ -61,7 +61,7 @@ def test_array_failure_is_identified_from_datatype_not_message() -> None:
     )
 
     assert diagnostic.code == "array_shape_mismatch"
-    assert diagnostic.owner is RepairOwner.COMPILER
+    assert diagnostic.owner is RepairOwner.AUTHORING
 
 
 def test_constraint_codes_have_stable_ownership() -> None:
