@@ -125,7 +125,7 @@ class ActionLog(Protocol):
 
     def rows(self) -> list[dict[str, Any]]: ...
 
-    def committed(self, key: str) -> tuple[Any, Any] | None: ...
+    def committed(self, key: str, actor: str) -> tuple[Any, Any] | None: ...
 
     def agent_calls(self, name: str) -> int: ...
 
@@ -245,8 +245,9 @@ class WorldDoor:
         key = (call.key or "").strip() if acting else ""
         if not key:
             return self._run(call, None, on_behalf_of)
-        with self._key_lock(key):
-            earlier = self._committed(key)
+        # A key is one actor's own: another actor's identical key is a different action.
+        with self._key_lock(f"{call.actor}\x00{key}"):
+            earlier = self._committed(key, call.actor)
             if earlier is None:
                 return self._run(call, key, on_behalf_of)
             if earlier[0] != call.arguments:
@@ -333,12 +334,13 @@ class WorldDoor:
         self, call: ToolCall, key: str | None, on_behalf_of: str | None
     ) -> Outcome:
         outcome = self._execute(call)
-        self._write(call, outcome, key=key, on_behalf_of=on_behalf_of)
+        # A keyed action's row is written before the answer, so a retry always finds the first result.
+        self._write(call, outcome, key=key, on_behalf_of=on_behalf_of, wait=key is not None)
         return outcome
 
-    def _committed(self, key: str) -> tuple[Any, Any] | None:
+    def _committed(self, key: str, actor: str) -> tuple[Any, Any] | None:
         try:
-            return self.log.committed(key)
+            return self.log.committed(key, actor)
         except Exception:  # noqa: BLE001 - unknown is treated as not yet answered
             return None
 
@@ -353,8 +355,10 @@ class WorldDoor:
         *,
         key: str | None = None,
         on_behalf_of: str | None = None,
+        wait: bool = False,
     ) -> None:
-        """One row of the action log, given at most `write_seconds`; a failed or slow write loses the row only."""
+        """One row of the action log, given at most `write_seconds` (or, with `wait`, until it is written); a failed
+        or slow write loses the row only."""
         action_id = uuid.uuid4().hex
         outcome.action_id = action_id
         row = {
@@ -376,6 +380,9 @@ class WorldDoor:
             "parent_event_id": call.parent,
             "on_behalf_of": on_behalf_of,
         }
+        if wait:
+            self._write_row(row)
+            return
         writer = threading.Thread(target=self._write_row, args=(row,), daemon=True)
         writer.start()
         writer.join(self.write_seconds)
@@ -603,12 +610,12 @@ class PostgresLog:
             columns = [one[0] for one in cursor.description or []]
             return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
 
-    def committed(self, key: str) -> tuple[Any, Any] | None:
+    def committed(self, key: str, actor: str) -> tuple[Any, Any] | None:
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT arguments, result FROM _alk_tool_trace "
-                "WHERE idempotency_key = %s AND outcome = 'committed' ORDER BY at LIMIT 1",
-                (key,),
+                "WHERE idempotency_key = %s AND actor_id = %s AND outcome = 'committed' ORDER BY at LIMIT 1",
+                (key, actor),
             ).fetchone()
         return (row[0], row[1]) if row else None
 
@@ -674,12 +681,13 @@ class MemoryLog:
         with self._lock:
             return [dict(one) for one in self._rows]
 
-    def committed(self, key: str) -> tuple[Any, Any] | None:
+    def committed(self, key: str, actor: str) -> tuple[Any, Any] | None:
         found = next(
             (
                 one
                 for one in self.rows()
                 if one.get("idempotency_key") == key
+                and one.get("actor_id") == actor
                 and one.get("outcome") == "committed"
             ),
             None,
@@ -716,8 +724,8 @@ class TeeLog:
     def rows(self) -> list[dict[str, Any]]:
         return self.primary.rows()
 
-    def committed(self, key: str) -> tuple[Any, Any] | None:
-        return self.primary.committed(key)
+    def committed(self, key: str, actor: str) -> tuple[Any, Any] | None:
+        return self.primary.committed(key, actor)
 
     def agent_calls(self, name: str) -> int:
         return self.primary.agent_calls(name)

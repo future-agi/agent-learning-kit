@@ -322,3 +322,19 @@ def test_access_is_a_world_record_the_world_s_rule_reads_so_a_grant_by_an_actor_
     assert [(row["actor_id"], row["outcome"]) for row in door.events()] == [
         ("dev", "refused"), ("ceo", "committed"), ("dev", "committed")
     ]
+
+
+def test_one_actor_s_key_is_not_another_s_and_a_keyed_row_is_written_before_the_answer():
+    roster = {
+        "manager": {"permitted_actions": ["crm.approve"], "on_behalf_of": None},
+        "lead": {"permitted_actions": ["crm.approve"], "on_behalf_of": None},
+    }
+    executor = _Executor()
+    log = MemoryLog()
+    door = WorldDoor(executor, log, DictRoster(roster), write_seconds=0.0)
+    first = door.enter(ToolCall(action="crm.approve", name="approve", arguments={"deal": 7}, actor="manager", key="k"))
+    # The same key from another actor is its own action, not a duplicate of the manager's.
+    other = door.enter(ToolCall(action="crm.approve", name="approve", arguments={"deal": 7}, actor="lead", key="k"))
+    again = door.enter(ToolCall(action="crm.approve", name="approve", arguments={"deal": 7}, actor="manager", key="k"))
+    assert (first.outcome, other.outcome, again.outcome) == ("committed", "committed", "duplicate")
+    assert len(executor.ran) == 2
