@@ -3850,6 +3850,7 @@ def test_adk_web_command_without_interface_uses_source_http_api(tmp_path: Path) 
     [
         (["adk", "web"], "root_app"),
         (["adk", "api_server"], "root_app"),
+        (["adk", "api_server", "root_app"], "root_app"),
         (["adk", "api_server", "agents"], "nested_app"),
         (["adk", "api_server", "--port", "8080", "agents"], "nested_app"),
         (
