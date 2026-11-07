@@ -2579,7 +2579,10 @@ def scenario_tools(
         "language or location may then dominate the suite. Set `alike` when they asked for one "
         "kind of caller on purpose, and that bound comes off. Their request decides this, never "
         "your own convenience: a writer that found the bound inconvenient and turned it off has "
-        "made a suite about one person.\n\n"
+        "made a suite about one person. The one other case is an agent that serves one country: "
+        "when its instructions and its customers' records all place them there (local phone "
+        "numbers, a local currency, local names), set `alike`, because a spread of accents across "
+        "those customers is invented, and vary them by temperament and circumstance instead.\n\n"
         "`asked_for` names the coverage levels the person explicitly asked for, for example "
         '{"interface": ["quiet_line"]} for callers with no background noise. Those levels are '
         "not held to their share of the suite. Only what the person said, never a level you "
