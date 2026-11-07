@@ -660,7 +660,7 @@ _MONTHS = ("January", "February", "March", "April", "May", "June", "July", "Augu
 
 def _said_another_way(scenario: Scenario) -> tuple[list[Any], set[str]]:
     """The solution with every fixed date written the way a person says it ("25 June 1984"): the same value, in
-    the form it reaches an agent that heard it."""
+    the form it reaches an agent that heard it. English month names only."""
     steps = list(getattr(scenario, "solution", None) or ())
     said, changed = [], set()
     for step in steps:
@@ -820,13 +820,14 @@ def prove(
     if spoken and held:
         said_world, said_calls, said_refused, _ = _run(scenario, world_root, with_solution=True, steps=said)
         try:
-            # A world that refuses the spoken form shows the agent could not have used it either.
-            proof.too_strict += [
-                f"{name} (the same date said another way: {', '.join(sorted(spoken))})"
-                for name, source in held
-                if not said_refused
-                and not run_check(source, said_world, said_calls, name=name, reference=reference).held
-            ]
+            # Only a world that took the spoken form and ended exactly where the reference does treats it as the
+            # same date; one that refuses it or stores it as given leaves a check free to want the reference form.
+            if not said_refused and right_state is not None and _end_state(said_world) == right_state:
+                proof.too_strict += [
+                    f"{name} (the same date said another way: {', '.join(sorted(spoken))})"
+                    for name, source in held
+                    if not run_check(source, said_world, said_calls, name=name, reference=reference).held
+                ]
         finally:
             said_world.close()
     for number, other in enumerate(getattr(scenario, "alternatives", None) or (), start=1):

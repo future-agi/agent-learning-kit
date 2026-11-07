@@ -403,29 +403,70 @@ def test_the_agents_prompt_is_copied_from_the_lines_named_and_nothing_outside_th
         assert _copy_prompt(kept, tmp_path) and kept.system_prompt_excerpt == "quoted"
 
 
-def test_a_check_that_compares_a_date_as_text_fails_the_date_said_another_way(tmp_path):
+def _booking_world(tmp_path, handle: str):
+    from fi.alk.harness.world import GeneratedWorld
+    from fi.alk.harness.world.snapshot import save
+
+    class W(GeneratedWorld):
+        name = "bookings"
+        tools = [{"name": "book"}]
+        handlers = {"book": handle}
+
+    world = W(":memory:")
+    world.connection.executescript("CREATE TABLE bookings(time TEXT);")
+    world.connection.commit()
+    save(world, tmp_path, notes="test", sequences=[])
+    return tmp_path
+
+
+_NORMALISES = (
+    "import datetime\n"
+    "def handle(args, db):\n"
+    "    for form in ('%Y-%m-%d', '%d %B %Y'):\n"
+    "        try:\n"
+    "            day = datetime.datetime.strptime(args['time'], form).date().isoformat()\n"
+    "            break\n"
+    "        except ValueError:\n"
+    "            day = None\n"
+    "    db.execute('INSERT INTO bookings (time) VALUES (?)', [day])\n"
+    "    return {'ok': 1}\n"
+)
+_AS_GIVEN = "def handle(args, db):\n    db.execute('INSERT INTO bookings (time) VALUES (?)', [args['time']])\n    return {'ok': 1}\n"
+_ISO_ONLY = (
+    "import datetime\n"
+    "def handle(args, db):\n"
+    "    datetime.date.fromisoformat(args['time'])\n"
+    "    db.execute('INSERT INTO bookings (time) VALUES (?)', [args['time']])\n"
+    "    return {'ok': 1}\n"
+)
+
+
+def _date_proof(root, compare: str):
     from fi.alk.harness.scenario import Step
 
-    def proof_of(compare: str):
-        check = (
-            "import datetime\n"
-            "def day(text):\n"
-            "    for form in ('%Y-%m-%d', '%d %B %Y'):\n"
-            "        try:\n"
-            "            return datetime.datetime.strptime(text, form).date()\n"
-            "        except ValueError:\n"
-            "            pass\n"
-            "def check(world, calls, reference):\n"
-            "    want = [s['arguments'].get('time') for s in reference if s['tool'] == 'book'][-1]\n"
-            "    made = [r['time'] for r in world.state()['bookings']]\n"
-            f"    return None if made and {compare} else f'done wrong: time expected {{want!r}}, got {{made!r}}'\n"
-        )
-        solution = [Step(tool="book", arguments={"time": "1984-06-25"}, fixed={"time": "caller: their birthday"})]
-        return _proof(_notes_world(tmp_path), solution, check)
+    check = (
+        "def check(world, calls, reference):\n"
+        "    want = [s['arguments'].get('time') for s in reference if s['tool'] == 'book'][-1]\n"
+        "    sent = [c.arguments.get('time') for c in calls if c.name == 'book' and c.ok]\n"
+        "    made = [r['time'] for r in world.state()['bookings']]\n"
+        f"    return None if made and {compare} else f'done wrong: time expected {{want!r}}'\n"
+    )
+    solution = [Step(tool="book", arguments={"time": "1984-06-25"}, fixed={"time": "caller: their birthday"})]
+    return _proof(root, solution, check)
 
-    assert proof_of("made[-1] == want").too_strict == ["right (the same date said another way: book.time)"]
-    # Compared in one form, the same date said "25 June 1984" holds.
-    assert proof_of("day(made[-1]) == day(want)").too_strict == []
+
+def test_a_check_that_compares_a_date_as_text_fails_the_date_said_another_way(tmp_path):
+    # The world stores both forms as the same day, so a check on the call's text holds the agent to a form.
+    root = _booking_world(tmp_path, _NORMALISES)
+    assert _date_proof(root, "sent[-1] == want").too_strict == ["right (the same date said another way: book.time)"]
+    assert _date_proof(root, "made[-1] == want").too_strict == []
+
+
+def test_a_date_the_world_stores_as_given_or_refuses_leaves_the_check_free_to_want_its_form(tmp_path):
+    as_given = _booking_world(tmp_path / "given", _AS_GIVEN)
+    assert _date_proof(as_given, "made[-1] == want").too_strict == []
+    iso_only = _booking_world(tmp_path / "iso", _ISO_ONLY)
+    assert _date_proof(iso_only, "sent[-1] == want").too_strict == []
 
 
 def test_a_check_that_wants_the_prefixed_id_the_world_resolves_the_same_is_too_strict(tmp_path):
@@ -463,3 +504,17 @@ def test_a_check_that_wants_the_prefixed_id_the_world_resolves_the_same_is_too_s
 
     assert proof_of("paid[-1] == want").too_strict == ["right (the same record named without its prefix: pay.method)"]
     assert proof_of("made[-1] == want.split(':')[-1]").too_strict == []
+
+
+def test_a_prefixed_id_the_world_stores_as_given_leaves_the_check_free_to_want_its_form(tmp_path):
+    from fi.alk.harness.scenario import Step
+
+    root = _booking_world(tmp_path, _AS_GIVEN)
+    check = (
+        "def check(world, calls, reference):\n"
+        "    want = [s['arguments'].get('time') for s in reference if s['tool'] == 'book'][-1]\n"
+        "    made = [r['time'] for r in world.state()['bookings']]\n"
+        "    return None if made and made[-1] == want else 'done wrong'\n"
+    )
+    solution = [Step(tool="book", arguments={"time": "slot:9am"}, fixed={"time": "their record"})]
+    assert _proof(root, solution, check).too_strict == []
