@@ -178,10 +178,56 @@ class _HostedToolStore:
         return self._store.add(collection, dict(record))
 
 
-def chat_door(world: Any, mirror_dsn: str | None, roster: dict[str, dict[str, Any]], faults: list[Any]) -> Any:
-    """The world's door for a chat run: the world's own handlers run every call, the trial's action log is kept in
-    memory (mirrored to the world's table when it keeps actors), and who may do what is the environment's actor list."""
-    from .world_door import AGENT, DictRoster, HandlerExecutor, MemoryLog, PostgresLog, RecordExecutor, Routed, TeeLog, WorldDoor
+class _ServiceTools:
+    """The agent's own tools service runs every call, as the tool proxy forwards them on a voice call; the agent's
+    calls are recorded in the world as its handlers would record them, so grading reads them the same way."""
+
+    def __init__(self, world: Any, service: Any) -> None:
+        self.world = world
+        self.service = service
+
+    def run(self, call: Any) -> Any:
+        from .world_door import AGENT
+
+        ran = self.service.run(call)
+        if call.actor == AGENT and hasattr(self.world, "calls"):
+            ok = ran.status < 400
+            self.world.calls.append(
+                Call(
+                    name=call.name,
+                    arguments=dict(call.arguments or {}),
+                    result=ran.result,
+                    ok=ok,
+                    refused=not ok and ran.status < 500,
+                    error="" if ok else (ran.error or f"HTTP {ran.status}"),
+                    at=time.time(),
+                )
+            )
+        return ran
+
+
+def chat_door(
+    world: Any,
+    mirror_dsn: str | None,
+    roster: dict[str, dict[str, Any]],
+    faults: list[Any],
+    tools_url: str | None = None,
+) -> Any:
+    """The world's door for a chat run: the agent's own tools service runs every call when it has one, else the world's
+    own handlers; the trial's action log is kept in memory (mirrored to the world's table when it keeps actors), and
+    who may do what is the environment's actor list."""
+    from .world_door import (
+        AGENT,
+        DictRoster,
+        HandlerExecutor,
+        HttpExecutor,
+        MemoryLog,
+        PostgresLog,
+        RecordExecutor,
+        Routed,
+        TeeLog,
+        WorldDoor,
+    )
 
     def handle(call: Any) -> tuple[bool, Any, str] | None:
         made = len(getattr(world, "calls", []))
@@ -198,8 +244,9 @@ def chat_door(world: Any, mirror_dsn: str | None, roster: dict[str, dict[str, An
         from .world_door import PostgresRecords
 
         records = RecordExecutor(PostgresRecords(mirror_dsn))
+    tools = _ServiceTools(world, HttpExecutor(tools_url)) if tools_url else HandlerExecutor(handle)
     return WorldDoor(
-        Routed(HandlerExecutor(handle), records),
+        Routed(tools, records),
         TeeLog(MemoryLog(), PostgresLog(mirror_dsn) if mirror_dsn else None),
         DictRoster(roster),
         faults=lambda: [one for one in faults if isinstance(one, dict)],
@@ -701,6 +748,7 @@ class HostedChatCallRunner:
 
         listing = load_actors(self._context.bundle_dir)
         world_db = runtime.endpoints.get("world_db")
+        service = runtime.endpoints.get("tools_api")
         door = chat_door(
             target_world,
             world_db.address if listing.actors and world_db is not None and world_db.protocol == "postgres" else None,
@@ -709,6 +757,7 @@ class HostedChatCallRunner:
                 for one in listing.actors
             },
             list(document.get("faults") or []),
+            tools_url=service.address if service is not None else None,
         )
         acts = DoorActs(door)
         meter = ActorMeter()

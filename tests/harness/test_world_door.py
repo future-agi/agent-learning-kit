@@ -244,6 +244,54 @@ def test_the_chat_surface_keeps_an_actor_s_action_out_of_the_agent_s_own_calls()
     assert [row["actor_id"] for row in door.events()] == ["manager", AGENT]
 
 
+def test_a_chat_agent_s_service_tools_run_in_its_tools_service_for_it_and_for_actors():
+    import json
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    from fi.alk.harness.chat_call_runner import chat_door
+
+    seen = []
+
+    class _Tools(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            return
+
+        def do_POST(self):  # noqa: N802
+            body = json.loads(self.rfile.read(int(self.headers["content-length"])) or b"{}")
+            seen.append((self.path, body))
+            status, answer = (404, {"detail": "no deal"}) if body.get("deal_id") == 0 else (200, {"deal_id": 7})
+            content = json.dumps(answer).encode()
+            self.send_response(status)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Tools)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    world = SimpleNamespace(calls=[], handle_tool_call=lambda call: None)
+    door = chat_door(
+        world,
+        None,
+        {"manager": {"permitted_actions": ["chat.post_message"], "on_behalf_of": None}},
+        [],
+        tools_url=f"http://127.0.0.1:{server.server_address[1]}",
+    )
+    try:
+        assert door.enter(ToolCall(action="crm.get_deal", name="get_deal", arguments={"deal_id": 7})).outcome == "committed"
+        assert door.enter(ToolCall(action="crm.get_deal", name="get_deal", arguments={"deal_id": 0})).outcome == "refused"
+        door.enter(ToolCall(action="chat.post_message", name="post_message", actor="manager", key="k", arguments={"t": 1}))
+    finally:
+        server.shutdown()
+    assert [path for path, _ in seen] == ["/crm/get_deal", "/crm/get_deal", "/chat/post_message"]
+    assert [(call.name, call.ok, call.result) for call in world.calls] == [
+        ("get_deal", True, {"deal_id": 7}),
+        ("get_deal", False, None),
+    ]
+    assert world.calls[1].refused and "no deal" in world.calls[1].error and [row["actor_id"] for row in door.events()] == [AGENT, AGENT, "manager"]
+
+
 def test_a_tee_log_reads_from_memory_even_when_the_mirror_fails():
     class _Down(MemoryLog):
         def write(self, row):
