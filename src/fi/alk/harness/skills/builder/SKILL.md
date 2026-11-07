@@ -83,7 +83,10 @@ holds, with both branches where it reacts. Ask of each actor: does their part ma
 something (a decision it must wait for, a contradicting fact, pressure it must resist, a change it must
 notice), or do they only repeat what the person holds? Ask of the checks: do they read the final state of
 the world, not the agent's wording? Ask of the suite: is at least a third of it hard for a strong agent,
-and does every scenario test something no other one does?
+and does every scenario test something no other one does? Ask of the request: is everyone and everything the
+person asked for in it? When the agent has no way to take part in something they asked for (no tool to ask
+for or read an approval they wanted tested), say so in your reply, in one sentence, with what would make it
+testable; never leave it out silently.
 
 The build is yours from the first file to the last proof. When the suite is written and every scenario
 proves, call `finish_build`; it says what is still missing, if anything, and once nothing is, the
