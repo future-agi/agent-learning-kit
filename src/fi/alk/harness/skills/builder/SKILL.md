@@ -165,7 +165,10 @@ what the gates check. Then:
   actions, or changes only the fields you send of one already listed, so what the person set elsewhere stays.
   `drop_actor` removes one. Read `actors.json` first: edits made in the web app or CLI meet yours there. When the
   person says who may do what, give each actor exactly those actions, decisions as record changes on the collection
-  the world's rule reads, and read every actor's list back against the request before you answer.
+  the world's rule reads, and read every actor's list back against the request before you answer. When the agent's
+  own app has no place for a decision the request asks for (no record its rule reads, no action that records it),
+  say so plainly and ask how to proceed; never stand in for it by giving an actor the change the agent's own action
+  makes.
 - **Units**: when the person gives a field's unit or format (amounts in cents, a timeout in seconds), record it on
   each tool argument that carries it with `fix_tool`'s `arg_units`, as well as in the world's data.
 - **The contract's reading of the agent**: `amend_contract`, `add_rule`, `drop_rule`, `fix_tool`, and

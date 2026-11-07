@@ -23,7 +23,9 @@ or a record change on one of the world's collections (`approvals.put` with the n
 with `where` and `set`); `add_actor`'s reply lists both. The list is exactly what that person may do: when the request says who may do what, each actor gets those
 actions and nothing more, and every permission asked for appears on someone's list. A decision a person makes (an
 approval, a rejection, a grant of access) is a record change on the collection the world's rule reads, never one of the
-agent's own actions; give an actor an action the agent takes only when an actor taking it is what is asked. Give each
+agent's own actions; give an actor an action the agent takes only when an actor taking it is what is asked. When the app has no place for
+the decision (no record its rule reads), the scenario cannot test it: say so rather than give the actor the agent's
+own change. Give each
 actor its `identities` in each service (its Slack handle, its CRM user) so the agent can reach it and it can name
 itself where an action asks who it is. When an action depends on someone else's, write that rule into the world, as
 a record the dependent action checks for, so the world refuses it until a permitted actor has acted. Someone saying
