@@ -415,6 +415,8 @@ def save_actors(root: Path, listing: ActorList) -> None:
     (Path(root) / ACTORS_FILE).write_text(
         json.dumps(body, indent=2) + "\n", encoding="utf-8"
     )
+    # The rules travel with the actors they describe, so whoever edits the list next checks it by this release.
+    write_actor_rules(Path(root))
 
 
 def _literal(value: str | None) -> str:
@@ -814,6 +816,8 @@ def actor_rules() -> dict[str, Any]:
         "situation_before": DETAILS_MARK,
         "reserved_ids": [AGENT],
         "references": REFERENCES,
+        # Fields that may also name one of the actor's own permitted actions (a fallback taken for it).
+        "own_actions": ["activation.fallback"],
         "acyclic": ACYCLIC,
         "world_actions": WORLD_ACTIONS,
         "record_changes": RECORD_CHANGES,

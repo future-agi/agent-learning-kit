@@ -542,6 +542,14 @@ def test_a_one_word_name_and_the_person_the_caller_speaks_for_are_never_read_as_
     assert _folded_actors(said, load_actors(tmp_path).by_id()) == []
 
 
+def test_saving_the_actors_writes_the_rules_that_check_them_beside_them(tmp_path):
+    from fi.alk.harness.actors import ACTOR_RULES_FILE, actor_rules
+
+    save_actors(tmp_path, ActorList(actors=[Actor(id="sup", name="Dana", permitted_actions=["approvals.change"])]))
+    written = json.loads((tmp_path / ACTOR_RULES_FILE).read_text())
+    assert written["own_actions"] == ["activation.fallback"] and written == json.loads(json.dumps(actor_rules()))
+
+
 def test_the_sealed_rules_name_the_record_changes_the_platform_lists_beside_the_routes():
     from fi.alk.harness.actors import actor_rules, record_changes
 
