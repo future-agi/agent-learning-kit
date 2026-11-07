@@ -496,6 +496,29 @@ def test_a_person_folded_into_the_caller_is_refused_and_a_kept_scenario_reads_it
     assert "Alex Vance (manager; comes in: its own; does: approvals.put)" in said and "not in it: Sam Rivera (lead)" in said
 
 
+def test_an_actor_brought_in_when_contacted_needs_an_identity_the_agent_could_name(tmp_path):
+    from fi.alk.harness.actors import load_actors
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _activation_problems
+
+    save_actors(
+        tmp_path,
+        ActorList(
+            actors=[
+                Actor(id="sup", name="Dana Brooks", permitted_actions=["approvals.put"],
+                      activation={"trigger": {"kind": "contacted"}}),
+                Actor(id="mgr", name="Alex Vance", permitted_actions=["approvals.put"], identities={"crm": "mgr"},
+                      activation={"trigger": {"kind": "contacted"}}),
+            ]
+        ),
+    )
+    listed = load_actors(tmp_path).by_id()
+    unreachable = Scenario.model_validate({"name": "x", "instruction": "Cancel it.", "actors": [{"id": "sup"}]})
+    assert "sup comes in when contacted but has no identity" in " ".join(_activation_problems(unreachable, listed))
+    reachable = Scenario.model_validate({"name": "x", "instruction": "Cancel it.", "actors": [{"id": "mgr"}]})
+    assert _activation_problems(reachable, listed) == []
+
+
 def test_a_one_word_name_and_the_person_the_caller_speaks_for_are_never_read_as_folded(tmp_path):
     from fi.alk.harness.actors import load_actors
     from fi.alk.harness.scenario import Scenario

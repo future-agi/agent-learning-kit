@@ -471,6 +471,12 @@ def _activation_problems(scenario: Scenario, listed: dict[str, Actor]) -> list[s
             )
         if trigger.kind == "conditional" and not trigger.collection:
             out.append(f"actors: {entry.id}: conditional needs the `collection` whose record brings them in")
+        if trigger.kind == "contacted" and not any(str(one).strip() for one in actor.identities.values()):
+            # Contact is the agent's call naming one of the actor's identities; with none, it can never happen.
+            out.append(
+                f"actors: {entry.id} comes in when contacted but has no identity the agent's calls could name; give it "
+                "`identities`, or bring it in when the record it answers exists (`conditional` with that collection)"
+            )
     return out
 
 
