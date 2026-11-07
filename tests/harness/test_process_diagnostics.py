@@ -68,6 +68,40 @@ def test_retention_drops_split_credentials_and_rejects_symlinks(tmp_path):
         )
 
 
+def test_retention_collapses_known_noise_so_the_real_error_survives(tmp_path):
+    from fi.alk.harness.process_diagnostics import (
+        _collapse_known_noise,
+        retain_process_log,
+    )
+
+    work = tmp_path / "work"
+    work.mkdir()
+    log = work / "process.log"
+    noise = (
+        "INFO root: ignoring byte stream with topic 'lk.agent.session', "
+        "no callback attached\n"
+    )
+    log.write_text(
+        "starting worker\n"
+        "ERROR stt: Deepgram returned 402 Payment Required key=secret123\n"
+        + noise
+        * 400
+        + "INFO root: ignoring text stream with topic 'lk.transcription', "
+        "no callback attached\n" + "worker idle\n"
+    )
+    retain_process_log(
+        log, work=work, destination=tmp_path / "artifacts", secrets={"k": "secret123"}
+    )
+    body = next((tmp_path / "artifacts").rglob("*.log")).read_text()
+    assert "Deepgram returned 402 Payment Required" in body
+    assert "secret123" not in body
+    assert "no callback attached" not in body
+    assert body.endswith("[401 similar lines omitted]\nworker idle\n")
+    assert _collapse_known_noise("done\n" + noise * 2) == (
+        "done\n[2 similar lines omitted]\n"
+    )
+
+
 def test_retention_write_failure_does_not_prevent_cleanup(tmp_path, monkeypatch):
     from fi.alk.harness import process_diagnostics
 
