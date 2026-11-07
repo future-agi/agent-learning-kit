@@ -229,7 +229,9 @@ def _actor_fields() -> dict[str, Any]:
             "comes. `always` means it is already done before the agent starts: that is starting state, and the "
             "agent is never tested on waiting for it or honouring it. An action the actor is "
             "not permitted is refused by the world and recorded as "
-            "their attempt. An actor can do both. Leave it out for the person alone.",
+            "their attempt. An actor can do both. Whatever an actor brings, one of `sub_goals` checks how the agent "
+            "handled it (honoured the refusal, settled the conflicting fact, used the note); an actor nothing checks is "
+            "scenery. Leave it out for the person alone.",
             "items": {
                 "type": "object",
                 "properties": {
@@ -2153,7 +2155,9 @@ def scenario_tools(
                     "disclose or decide, and no closing line about what counts as done. Those "
                     "are the behaviours under test, and a person primed to expect them plays "
                     "along whether or not they happen, so the check passes on a conversation "
-                    "that never earned it. Give them the value, the preference or the problem "
+                    "that never earned it. Nor the agent's own rules: a customer does not know the "
+                    "limit, the window or who must approve unless someone real would have told them. "
+                    "Give them the value, the preference or the problem "
                     "they arrived with, and let the agent's handling of it be what is measured.\n"
                     "Test every sentence by asking whether this person could say it out loud. "
                     "They have never seen the agent's design, so a parenthetical explaining "
