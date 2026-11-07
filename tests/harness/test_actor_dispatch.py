@@ -530,18 +530,45 @@ def test_a_live_actor_acts_on_a_message_it_can_see_from_the_agent_or_another_act
     assert len(seen) == 2
 
 
-def test_many_actors_each_answering_once_with_the_agent_idle_are_never_stopped_by_a_count():
-    # Ten people each posting once is a conversation, not a loop; no count stops actors at run time.
+def test_many_actors_each_answering_once_with_the_agent_idle_are_a_conversation_not_stopped_early():
+    # Three people each posting a few new lines is a conversation: nobody is stopped before the caps.
+    said = iter(range(1000))
+
     async def decide(situation):
-        return '{"action": "slack.post_message", "arguments": {"text": "agreed"}, "why": "replying"}'
+        return '{"action": "slack.post_message", "arguments": {"text": "point %d"}, "why": "replying"}' % next(said)
 
     dispatcher, log = _channel(["manager", "colleague", "lead"], decide)
     log.append({"name": "post_message", "actor_id": "agent", "action_id": "a1", "arguments": {"text": "Thoughts?"}})
-    asyncio.run(_ticks(dispatcher, count=10))
-    actor_rows = [row for row in log if row["actor_id"] != "agent"]
-    assert len(actor_rows) > 6
-    assert not any(one.get("problem") == "actor_loop" for one in dispatcher.fired)
+    asyncio.run(_ticks(dispatcher, count=3))
+    assert len([row for row in log if row["actor_id"] != "agent"]) >= 6
 
+
+def test_live_actors_reacting_to_each_other_stop_at_the_trial_cap():
+    from fi.simulate.simulation.call_actors import LIMIT_DEFAULTS
+
+    said = iter(range(1000))
+
+    async def decide(situation):
+        return '{"action": "slack.post_message", "arguments": {"text": "reply %d"}, "why": "answering"}' % next(said)
+
+    # Three actors could take ten turns each; together they stop at the trial's twenty.
+    dispatcher, log = _channel(["manager", "colleague", "lead"], decide)
+    log.append({"name": "post_message", "actor_id": "agent", "action_id": "a1", "arguments": {"text": "Thoughts?"}})
+    asyncio.run(_ticks(dispatcher, count=60))
+    assert len([row for row in log if row["actor_id"] != "agent"]) == LIMIT_DEFAULTS["live_turns_per_trial"] == 20
+    assert all(turns <= LIMIT_DEFAULTS["live_turns_per_actor"] for turns in dispatcher.live_turns.values())
+
+
+def test_an_actor_repeating_its_own_action_is_a_loop_and_takes_no_more_turns():
+    async def decide(situation):
+        return '{"action": "slack.post_message", "arguments": {"text": "agreed"}, "why": "replying"}'
+
+    dispatcher, log = _channel(["manager", "colleague"], decide)
+    log.append({"name": "post_message", "actor_id": "agent", "action_id": "a1", "arguments": {"text": "Thoughts?"}})
+    asyncio.run(_ticks(dispatcher, count=10))
+    assert sorted(row["actor_id"] for row in log if row["actor_id"] != "agent") == ["colleague", "manager"]
+    assert dispatcher.looped == {"manager", "colleague"}
+    assert any(one.get("why") == "repeated its own earlier action" for one in dispatcher.fired)
 
 def test_a_live_actor_never_answers_its_own_action():
     async def decide(situation):
@@ -593,3 +620,18 @@ def test_a_speaking_actor_s_wait_and_fallback_are_its_cast_s_so_the_world_sends_
     asyncio.run(dispatcher.send_reported())
     assert [headers["Idempotency-Key"] for headers in sent] == ["trial-1:manager:v1"]
     assert not [one for one in dispatcher.record() if one["play"] in ("waiting", "timeout", "not_triggered")]
+
+
+def test_one_live_actor_stops_at_its_own_turn_cap():
+    from fi.simulate.simulation.call_actors import LIMIT_DEFAULTS
+
+    said = iter(range(1000))
+
+    async def decide(situation):
+        return '{"action": "slack.post_message", "arguments": {"text": "line %d"}, "why": "talking"}' % next(said)
+
+    dispatcher, log = _channel(["manager", "colleague"], decide)
+    dispatcher.turns_per_trial = 100
+    log.append({"name": "post_message", "actor_id": "agent", "action_id": "a1", "arguments": {"text": "Thoughts?"}})
+    asyncio.run(_ticks(dispatcher, count=60))
+    assert dispatcher.live_turns == {"manager": LIMIT_DEFAULTS["live_turns_per_actor"], "colleague": LIMIT_DEFAULTS["live_turns_per_actor"]}

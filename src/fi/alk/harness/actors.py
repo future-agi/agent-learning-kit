@@ -85,6 +85,9 @@ class Limits(BaseModel):
     caller_takes_back_after_turns: int | None = Field(default=None, ge=1)
     actor_seconds_per_call: float | None = Field(default=None, gt=0)
     max_messages: int | None = Field(default=None, ge=1)
+    # Live turns during the run, per actor and for all actors in one trial: actors reacting to each other always stop.
+    live_turns_per_actor: int | None = Field(default=None, ge=1)
+    live_turns_per_trial: int | None = Field(default=None, ge=1)
     # The model actors are played on; unset is the caller simulator's own.
     model: str | None = Field(default=None, max_length=120)
 
@@ -104,6 +107,8 @@ class Limits(BaseModel):
             "caller_takes_back_after_turns": LIMIT_DEFAULTS["caller_takes_back_after_turns"] if spoken else None,
             "actor_seconds_per_call": LIMIT_DEFAULTS["actor_seconds_per_call"] if spoken else None,
             "max_messages": LIMIT_DEFAULTS["max_messages"],
+            "live_turns_per_actor": LIMIT_DEFAULTS["live_turns_per_actor"],
+            "live_turns_per_trial": LIMIT_DEFAULTS["live_turns_per_trial"],
             "model": None,
         }
         given = self.model_dump(exclude_unset=True)
@@ -746,7 +751,10 @@ def actor_rules() -> dict[str, Any]:
         # ones). The editor shows these; a run reads the same values.
         "limits": {
             "voice": dict(LIMIT_DEFAULTS),
-            "chat": {**{key: None for key in LIMIT_DEFAULTS}, "max_messages": LIMIT_DEFAULTS["max_messages"]},
+            "chat": {
+                **{key: None for key in LIMIT_DEFAULTS},
+                **{key: LIMIT_DEFAULTS[key] for key in ("max_messages", "live_turns_per_actor", "live_turns_per_trial")},
+            },
         },
         "schema": ACTOR_RULES_SCHEMA,
         "evaluator_only": EVALUATOR_ONLY,

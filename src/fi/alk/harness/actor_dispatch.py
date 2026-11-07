@@ -211,7 +211,14 @@ class ActorDispatcher:
         reported: Callable[[], list[dict[str, Any]]] | None = None,
         write_session: Decide | None = None,
         session_briefs: dict[str, str] | None = None,
+        limits: dict[str, Any] | None = None,
     ) -> None:
+        from fi.simulate.simulation.call_actors import LIMIT_DEFAULTS
+
+        given = limits or {}
+        # Live turns this trial may take, per actor and in all; a scenario's or the environment's limits set them.
+        self.turns_per_actor = given.get("live_turns_per_actor") or LIMIT_DEFAULTS["live_turns_per_actor"]
+        self.turns_per_trial = given.get("live_turns_per_trial") or LIMIT_DEFAULTS["live_turns_per_trial"]
         self.act = act
         # Writes a `per_trial` pre-run session's messages inside this trial, from each actor's own brief.
         self.write_session = write_session
@@ -260,6 +267,9 @@ class ActorDispatcher:
             and not actors[entry.id].channel
         ]
         self.live_turns: dict[str, int] = {one.id: 0 for one in self.live}
+        # What each live actor has already sent: the same action again is a loop, not a new turn.
+        self.live_sent: dict[str, list[tuple[str, str]]] = {one.id: [] for one in self.live}
+        self.looped: set[str] = set()
         self.answered: dict[str, set[str]] = {one.id: set() for one in self.live}
         self.woken: set[str] = set()
         self.problems: list[dict[str, Any]] = []
@@ -418,9 +428,12 @@ class ActorDispatcher:
     ) -> str | None:
         """The cause of a live actor's next turn: a new event it can see, else its activation the first time it is
         met; None when nothing calls for it."""
-        if actor.id in self.fell_back:
+        if actor.id in self.fell_back or actor.id in self.looped:
             return None
-        if actor.max_turns is not None and self.live_turns[actor.id] >= actor.max_turns:
+        own = actor.max_turns if actor.max_turns is not None else self.turns_per_actor
+        if self.live_turns[actor.id] >= own:
+            return None
+        if sum(self.live_turns.values()) >= self.turns_per_trial:
             return None
         for row in log:
             key = str(row.get("action_id") or "")
@@ -506,6 +519,16 @@ class ActorDispatcher:
                 }
             )
             return
+        said = (decision.action, json.dumps(decision.arguments, sort_keys=True, default=str))
+        if said in self.live_sent[actor.id]:
+            # The same action again is a loop between actors: it is not sent, and this actor takes no more turns.
+            self.looped.add(actor.id)
+            self.fired.append(
+                {"actor": actor.id, "play": "live", "turn": turn, "decided": None,
+                 "why": "repeated its own earlier action", "parent": cause or None}
+            )
+            return
+        self.live_sent[actor.id].append(said)
         # Sent whatever it chose: the world, not the decision, decides whether it may.
         sent = await self._send(
             actor,
@@ -904,7 +927,16 @@ def build_dispatcher(
         records=records,
         names_actor=names_actor,
         reported=reported,
+        limits=_live_limits(listing.limits, doc.get("limits")),
     )
+
+
+def _live_limits(environment: Any, scenario: Any) -> dict[str, Any]:
+    """The environment's actor limits with the scenario's own on top; unset values take the defaults in the dispatcher."""
+    from .actors import Limits
+
+    own = Limits.model_validate(scenario) if isinstance(scenario, dict) else None
+    return environment.merged(own).model_dump(exclude_none=True)
 
 
 def described_with_units(tool: dict[str, Any]) -> str:

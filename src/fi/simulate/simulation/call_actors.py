@@ -128,6 +128,10 @@ LIMIT_DEFAULTS: dict[str, Any] = {
     "caller_takes_back_after_turns": 4,
     "actor_seconds_per_call": 60.0,
     "max_messages": 20,
+    # During the run: at most this many live turns per actor, and for all actors together in one trial, so actors
+    # reacting to each other always stop. An actor's own `max_turns` sets its own.
+    "live_turns_per_actor": 10,
+    "live_turns_per_trial": 20,
 }
 # Someone can only take the phone from a person who already has it: not before the agent's second turn, by
 # which point the person has spoken at least once. A trigger that fires earlier waits for that turn.
