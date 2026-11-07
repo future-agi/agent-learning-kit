@@ -218,6 +218,27 @@ def test_a_solution_step_must_match_the_agents_contract(tmp_path):
     assert problems(Step(tool="hand_over", arguments={"line": "claims"}))
 
 
+def test_a_setup_writing_records_an_in_process_agent_never_loads_is_refused(tmp_path):
+    import json
+
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _records_the_agent_cannot_see
+
+    adds = "def setup(world):\n    world.put('orders', {'order_id': '9', 'amount': 5})\n"
+    changes = "def setup(world):\n    world.change('orders', {'order_id': '1'}, {'amount': 5})\n"
+
+    def problems(store: dict, setup: str) -> list[str]:
+        (tmp_path / "contract.json").write_text(json.dumps({"data_store": store}))
+        return _records_the_agent_cannot_see(Scenario(name="s", instruction="Help.", setup_code=setup), tmp_path)
+
+    in_process = {"kind": "in_process", "configured_by": "hardcoded", "database": "in_memory"}
+    assert problems(in_process, adds)
+    assert not problems(in_process, "")
+    assert problems(in_process, changes)
+    assert not problems({**in_process, "loader_module": "agent.data"}, adds)
+    assert not problems({"kind": "postgres", "configured_by": "env"}, adds)
+
+
 def test_the_proof_varies_every_argument_nothing_fixes_and_keeps_chained_values():
     from fi.alk.harness.prove import _other_choices
     from fi.alk.harness.scenario import Scenario, Step

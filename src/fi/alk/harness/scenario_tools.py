@@ -1143,6 +1143,34 @@ def _identifiers_the_instruction_invents(scenario: Scenario, trial: Any) -> list
     ]
 
 
+def _records_the_agent_cannot_see(scenario: Scenario, world_root: Path) -> list[str]:
+    """A setup that writes records for an agent whose data lives inside its own process.
+
+    Such an agent builds its copy of the data when it starts, so a record added to the world is one it
+    never sees: every run of that scenario fails the agent for a record the scenario invented.
+    """
+    try:
+        contract = json.loads((Path(world_root) / "contract.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    store = contract.get("data_store") or {}
+    if str(store.get("kind") or "").strip().lower() != "in_process":
+        return []
+    if store.get("loader_module") or store.get("loaded_by"):
+        return []
+    from .scenario import _CREATES_A_RECORD, _ONLY_TOUCHES_EXISTING
+
+    setup = scenario.setup_code or ""
+    if not (_CREATES_A_RECORD.search(setup) or _ONLY_TOUCHES_EXISTING.search(setup)):
+        return []
+    return [
+        "this agent keeps its data inside its own process and builds it when it starts, so a record "
+        "setup_code adds or changes is one the agent never sees and every run fails it for something "
+        "the scenario invented. Use only the records the world already holds, as they are, with an "
+        "empty setup_code"
+    ]
+
+
 def _steps_the_contract_refuses(scenario: Scenario, world_root: Path) -> list[str]:
     """Solution steps that call a tool, argument or declared value the agent's contract does not have."""
     try:
@@ -1405,6 +1433,7 @@ def accept_scenario(
                 problems.extend(_identifiers_the_instruction_invents(scenario, trial))
                 problems.extend(_fixed_sources_that_do_not_hold(scenario, trial, instructions))
                 problems.extend(_steps_the_contract_refuses(scenario, world_root))
+                problems.extend(_records_the_agent_cannot_see(scenario, world_root))
                 problems.extend(_overlay_asserts_nothing(scenario, catalogue))
                 problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
                 problems.extend(
