@@ -1542,9 +1542,13 @@ def _call_actors_missing(scenario: Scenario, outcome: CallOutcome) -> str:
     reports = {str(one.get("actor")): one for one in outcome.call_actors}
     # An actor a sub-goal is about is settled on that sub-goal instead.
     graded = {str(getattr(goal, "actor", "") or "") for goal in scenario.sub_goals}
+    # What an actor did in the world reached the agent's world as surely as a line it said.
+    acted = {
+        str(row.get("actor_id") or "") for row in outcome.world_actions if row.get("outcome") == "committed"
+    }
     missing = []
     for actor_id in getattr(scenario, "speaking_actors", ()):
-        if actor_id in graded:
+        if actor_id in graded or actor_id in acted:
             continue
         report = reports.get(actor_id) or {}
         if not report.get("delivered") and report.get("drawn", True):

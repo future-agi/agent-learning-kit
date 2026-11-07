@@ -4804,3 +4804,16 @@ def test_a_sub_goal_about_an_actor_that_acts_through_the_world_reads_its_record(
 )
 def test_each_sub_goal_says_what_it_was_decided_from(goal, recording, evidence) -> None:
     assert hs._evidence_of(goal, replace(_call_outcome(), recording=recording)) == evidence
+
+
+def test_an_actor_who_speaks_but_only_acted_in_the_world_reached_the_agent() -> None:
+    said_nothing = {"actor": "jordan", "name": "Jordan", "triggered": True, "delivered": 0}
+    scenario = SimpleNamespace(sub_goals=[], speaking_actors=("jordan",))
+    posted = replace(
+        _call_outcome(),
+        call_actors=(said_nothing,),
+        world_actions=({"actor_id": "jordan", "outcome": "committed", "name": "post_message"},),
+    )
+    assert hs._call_actors_missing(scenario, posted) == ""
+    refused = replace(posted, world_actions=({"actor_id": "jordan", "outcome": "refused", "name": "post_message"},))
+    assert hs._call_actors_missing(scenario, refused) == "Jordan (not_delivered)"
