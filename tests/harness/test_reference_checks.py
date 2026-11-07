@@ -390,3 +390,28 @@ def test_the_agents_prompt_is_copied_from_the_lines_named_and_nothing_outside_th
     for where in (PromptSource(path="../outside.py", start_line=1, end_line=1), PromptSource(path="prompt.py", start_line=2, end_line=9)):
         kept = AgentContract(agent="a", system_prompt_excerpt="quoted", system_prompt_from=[where])
         assert _copy_prompt(kept, tmp_path) and kept.system_prompt_excerpt == "quoted"
+
+
+def test_a_check_that_compares_a_date_as_text_fails_the_date_said_another_way(tmp_path):
+    from fi.alk.harness.scenario import Step
+
+    def proof_of(compare: str):
+        check = (
+            "import datetime\n"
+            "def day(text):\n"
+            "    for form in ('%Y-%m-%d', '%d %B %Y'):\n"
+            "        try:\n"
+            "            return datetime.datetime.strptime(text, form).date()\n"
+            "        except ValueError:\n"
+            "            pass\n"
+            "def check(world, calls, reference):\n"
+            "    want = [s['arguments'].get('time') for s in reference if s['tool'] == 'book'][-1]\n"
+            "    made = [r['time'] for r in world.state()['bookings']]\n"
+            f"    return None if made and {compare} else f'done wrong: time expected {{want!r}}, got {{made!r}}'\n"
+        )
+        solution = [Step(tool="book", arguments={"time": "1984-06-25"}, fixed={"time": "caller: their birthday"})]
+        return _proof(_notes_world(tmp_path), solution, check)
+
+    assert proof_of("made[-1] == want").too_strict == ["right (the same date said another way: book.time)"]
+    # Compared in one form, the same date said "25 June 1984" holds.
+    assert proof_of("day(made[-1]) == day(want)").too_strict == []

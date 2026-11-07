@@ -29,6 +29,7 @@ from __future__ import annotations
 import ast
 import json
 import logging
+import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Sequence
@@ -157,8 +158,8 @@ class Proof:
         if self.too_strict:
             return (
                 "these checks fail an agent that does every fixed thing right but makes its own "
-                "choice, for an argument this scenario does not mark fixed or a way its "
-                "instructions allow:\n  - "
+                "choice, for an argument this scenario does not mark fixed, a way its "
+                "instructions allow, or a fixed value written the way the person said it:\n  - "
                 + "\n  - ".join(self.too_strict)
                 + "\n\nA check may hold the agent only to what the caller, their record or a "
                 "rule of the agent fixes. Check the outcome instead, or mark the argument fixed "
@@ -652,6 +653,30 @@ def _other_choices(scenario: Scenario, declared: set[str] = frozenset()) -> tupl
     return varied, changed
 
 
+_ISO_DATE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
+_MONTHS = ("January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
+           "November", "December")
+
+
+def _said_another_way(scenario: Scenario) -> tuple[list[Any], set[str]]:
+    """The solution with every fixed date written the way a person says it ("25 June 1984"): the same value, in
+    the form it reaches an agent that heard it."""
+    steps = list(getattr(scenario, "solution", None) or ())
+    said, changed = [], set()
+    for step in steps:
+        for name in step.fixed or ():
+            value = step.arguments.get(name)
+            found = _ISO_DATE.match(value) if isinstance(value, str) else None
+            if found and 1 <= int(found.group(2)) <= 12:
+                spoken = f"{int(found.group(3))} {_MONTHS[int(found.group(2)) - 1]} {found.group(1)}"
+                other = _with_value(step, name, spoken)
+                if other is not None:
+                    step = other
+                    changed.add(f"{step.tool}.{name}")
+        said.append(step)
+    return said, changed
+
+
 def _with_one_wrong(scenario: Scenario) -> list[tuple[str, list[Any], bool]]:
     """For each fixed value, the solution with only that value changed, and whether a later step
     sets that argument again (a draft the solution itself corrects)."""
@@ -764,6 +789,19 @@ def prove(
             ]
         finally:
             other_world.close()
+    said, spoken = _said_another_way(scenario)
+    if spoken and held:
+        said_world, said_calls, said_refused, _ = _run(scenario, world_root, with_solution=True, steps=said)
+        try:
+            # A world that refuses the spoken form shows the agent could not have used it either.
+            proof.too_strict += [
+                f"{name} (the same date said another way: {', '.join(sorted(spoken))})"
+                for name, source in held
+                if not said_refused
+                and not run_check(source, said_world, said_calls, name=name, reference=reference).held
+            ]
+        finally:
+            said_world.close()
     for number, other in enumerate(getattr(scenario, "alternatives", None) or (), start=1):
         alt_world, alt_calls, _, _ = _run(scenario, world_root, with_solution=True, steps=other)
         try:
