@@ -320,7 +320,10 @@ CHECK_RULES = (
     "Compare only what something fixes for this caller: what they said, their record in the world, "
     "or a rule of the agent that names the value; a value the reference holds only because a step "
     "needed one (a category or destination the agent picks, a free-text note) is the agent's choice "
-    "and is never compared. Check the outcome, not the route: where the outcome leaves a record, "
+    "and is never compared. A value the person speaks (a date, an amount, a name) reaches the agent in "
+    "the form they said it, so compare it in one common form (a date parsed, an amount as a number), "
+    "or compare what the tool decided with it instead. Check the outcome, not the route: where the "
+    "outcome leaves a record, "
     "check the record, and otherwise accept every call that achieves it. Use `judged` for what was "
     "said and what nothing observable settles; it holds the criteria. `output` is pass_fail.\n"
 )
