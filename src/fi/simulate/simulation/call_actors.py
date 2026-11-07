@@ -121,13 +121,13 @@ TOOLS_READ_SECONDS = 1.0
 # How much of the conversation an actor hears before writing a line.
 CONVERSATION_LINES = 12
 # The defaults for every limit nobody set, per run: two voices on one phone line, the caller back after four
-# agent turns, a minute of actors per call, a long ceiling on a pre-run conversation. Each is a setting on the
+# agent turns, a minute of actors per call, twenty messages in a conversation actors write among themselves. Each is a setting on the
 # environment's actor list, overridable per scenario; `None` there is no limit.
 LIMIT_DEFAULTS: dict[str, Any] = {
     "max_active": 2,
     "caller_takes_back_after_turns": 4,
     "actor_seconds_per_call": 60.0,
-    "max_messages": 500,
+    "max_messages": 20,
 }
 # Someone can only take the phone from a person who already has it: not before the agent's second turn, by
 # which point the person has spoken at least once. A trigger that fires earlier waits for that turn.

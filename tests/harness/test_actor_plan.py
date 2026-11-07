@@ -295,7 +295,7 @@ def test_limits_are_settings_with_channel_defaults_and_a_scenario_override():
     chat = Limits().resolved("chat")
     assert (voice["max_active"], voice["actor_seconds_per_call"]) == (2, 60.0)
     assert (chat["max_active"], chat["caller_takes_back_after_turns"]) == (None, None)
-    assert chat["max_messages"] == 500
+    assert chat["max_messages"] == 20
     merged = Limits(max_active=3).merged(Limits(max_active=None)).resolved("voice")
     assert merged["max_active"] is None
 
@@ -1103,3 +1103,45 @@ def test_the_models_an_actor_may_name_are_sealed_with_the_actor_rules():
     from fi.alk.harness.actors import ACTOR_MODELS, actor_rules
 
     assert actor_rules()["actor_models"] == list(ACTOR_MODELS) and ACTOR_MODELS
+
+
+def test_a_conversation_actors_write_among_themselves_stops_at_twenty_messages_by_default():
+    from fi.alk.harness.pre_run import generate
+
+    actors = {
+        one: Actor(id=one, name=one.title(), play="live", permitted_actions=["slack.post"])
+        for one in ("priya", "dev")
+    }
+    session = PreRunSession(
+        actors=["priya", "dev"],
+        where={"action": "slack.post", "arguments": {"channel": "#leads"}},
+        about="Acme wants 20%",
+    )
+    count = iter(range(1000))
+
+    async def write(brief, actor):
+        return json.dumps({"text": f"{actor.id} message {next(count)}"})
+
+    written = asyncio.run(generate(session, actors, {}, write))
+    assert len(written.thread) == 20
+
+
+def test_an_actor_repeating_its_own_line_is_a_loop_and_ends_the_conversation():
+    from fi.alk.harness.pre_run import generate
+
+    actors = {
+        one: Actor(id=one, name=one.title(), play="live", permitted_actions=["slack.post"])
+        for one in ("priya", "dev")
+    }
+    session = PreRunSession(
+        actors=["priya", "dev"],
+        where={"action": "slack.post", "arguments": {"channel": "#leads"}},
+        about="Acme wants 20%",
+    )
+
+    async def write(brief, actor):
+        return json.dumps({"text": f"{actor.id}: can we do 20%?"})
+
+    written = asyncio.run(generate(session, actors, {}, write))
+    # Each says its line once; the second round repeats both, so no one writes and the session ends.
+    assert [one.arguments["text"] for one in written.thread] == ["priya: can we do 20%?", "dev: can we do 20%?"]

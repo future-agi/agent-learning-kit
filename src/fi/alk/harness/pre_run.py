@@ -2,7 +2,8 @@
 
 A scenario states the situation of each session (who, where, about what); the actors write the messages. Each turn,
 every actor of the session in order is asked from its own brief and the thread so far whether it writes now, and
-what; an actor may pass. The session ends when a whole round passes with no one writing, or at `max_messages`. The
+what; an actor may pass, and a line it already wrote counts as a pass. The session ends when a whole round passes
+with no one writing, or at `max_messages` (20 unless set). The
 thread is stored with the scenario, with the fingerprint of what it was generated from, and replayed before every
 trial; a session whose fingerprint no longer matches is written again before sealing.
 
@@ -134,6 +135,15 @@ def _read(raw: Any) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+def _repeats(actor: str, text: str, thread: list[ThreadMessage]) -> bool:
+    """Whether this actor already wrote this line in the thread (case and spacing aside)."""
+    said = " ".join(text.lower().split())
+    return any(
+        one.actor == actor and " ".join(str(one.arguments.get("text") or "").lower().split()) == said
+        for one in thread
+    )
+
+
 async def generate(
     session: PreRunSession,
     listed: dict[str, Actor],
@@ -173,6 +183,9 @@ async def generate(
                 continue
             said = _read(raw)
             if not said or not str(said.get("text") or "").strip():
+                continue
+            if _repeats(actor.id, str(said["text"]).strip(), thread):
+                # A line its writer already wrote is a loop: it is not kept, and counts as a pass.
                 continue
             answer = said.get("reply_to")
             if (
