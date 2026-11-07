@@ -1495,6 +1495,14 @@ def test_a_chat_trial_s_faults_are_set_for_the_tool_proxy_and_cleared_after(tmp_
     )
     asyncio.run(chat.HostedChatCallRunner(_Adapter(), context).run(SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), runtime))
     assert written == [[fault], []] and during[0] == [[fault]]
+    # A trial with no faults behind the proxy still writes its own (none), so an earlier trial's never applies.
+    written.clear()
+    document.pop("faults")
+    path.write_text(json.dumps(document), encoding="utf-8")
+    asyncio.run(chat.HostedChatCallRunner(_Adapter(), context).run(SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), runtime))
+    assert written == [[], []]
+    document["faults"] = [fault]
+    path.write_text(json.dumps(document), encoding="utf-8")
     # Without a tool proxy no one reads them, so nothing is written.
     written.clear()
     runtime.endpoints.pop("tool_proxy")
@@ -1510,10 +1518,24 @@ def test_a_chat_trial_s_world_changes_read_the_world_s_table_where_the_proxy_log
         """The world's table: the tool proxy wrote the agent's own call there, beside the actor's mirrored row."""
 
     table = _Table()
-    table.write({"name": "apply_discount", "actor_id": AGENT, "outcome": "committed", "ok": True})
-    door = SimpleNamespace(log=TeeLog(MemoryLog(), table))
-    door.log.write({"name": "put", "actor_id": "manager", "outcome": "committed", "ok": True})
     listing = ActorList(actors=[Actor(id="manager", name="Mia", permitted_actions=["approvals.put"])])
-    record = chat._world_actors_record(door, listing, None, None, SimpleNamespace(rows=list), {})
-    changes = {one["who"]: one["committed"] for one in record["state_changes"]}
-    assert changes == {AGENT: 1, "manager": 1}
+    meter = SimpleNamespace(rows=list)
+    # Trial one on this world: the agent applied twice.
+    for at in (1.0, 2.0):
+        table.write({"name": "apply_discount", "actor_id": AGENT, "outcome": "committed", "ok": True, "at": at})
+    # Trial two on the same world: the agent's own call through the proxy, and the manager's through this door.
+    table.write({"name": "apply_discount", "actor_id": AGENT, "outcome": "committed", "ok": True, "at": 10.0})
+    door = SimpleNamespace(log=TeeLog(MemoryLog(), table))
+    door.log.write({"name": "put", "actor_id": "manager", "outcome": "committed", "ok": True, "at": 11.0})
+    record = chat._world_actors_record(door, listing, None, None, meter, {}, since=9.0)
+    assert {one["who"]: one["committed"] for one in record["state_changes"]} == {AGENT: 1, "manager": 1}
+
+    class _Broken(MemoryLog):
+        def rows(self):
+            raise RuntimeError("no table")
+
+    # The world's table unreadable: this process's own rows still say what the actors did.
+    door = SimpleNamespace(log=TeeLog(MemoryLog(), _Broken()))
+    door.log.write({"name": "put", "actor_id": "manager", "outcome": "committed", "ok": True, "at": 11.0})
+    record = chat._world_actors_record(door, listing, None, None, meter, {}, since=9.0)
+    assert {one["who"]: one["committed"] for one in record["state_changes"]}["manager"] == 1

@@ -287,8 +287,18 @@ def chat_door(
     )
 
 
+def _at(row: Mapping[str, Any]) -> float:
+    value = row.get("at")
+    if isinstance(value, datetime):
+        return value.timestamp()
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _world_actors_record(
-    door: Any, listing: Any, dispatcher: Any, cast: Any, meter: Any, limits: dict[str, Any]
+    door: Any, listing: Any, dispatcher: Any, cast: Any, meter: Any, limits: dict[str, Any], since: float = 0.0
 ) -> dict[str, Any] | None:
     """What actors did in the world this trial and what it changed, sealed beside the transcript as a call seals it;
     None when no actor took part."""
@@ -298,10 +308,16 @@ def _world_actors_record(
     try:
         # The world's own table holds every row, the agent's calls through its tool proxy included; this process's
         # memory holds only what passed its own door.
-        mirror = getattr(door.log, "mirror", None)
-        log = (mirror.rows() if mirror is not None else []) or door.log.rows()
+        log = door.log.rows()
     except Exception:  # noqa: BLE001 - no record, never a failed call
         log = []
+    mirror = getattr(door.log, "mirror", None)
+    if mirror is not None:
+        try:
+            # The world's table keeps every trial played on it; this trial's rows are the ones from its start on.
+            log = [row for row in mirror.rows() if _at(row) >= since] or log
+        except Exception:  # noqa: BLE001 - the world's table unreadable: this process's own rows stand
+            pass
     acted = actor_rows(log, listed)
     decisions = dispatcher.record() if dispatcher is not None else []
     if cast is not None:
@@ -848,13 +864,15 @@ class HostedChatCallRunner:
         failure: CallAborted | None = None
         _clear_file_tool_calls(runtime)
         acting: asyncio.Task[None] | None = None
+        trial_started = time.time()
         # An agent that runs its own tools reaches them through the tool proxy, which reads this trial's faults from
         # the world's database, as on a voice call.
-        proxied_faults = list(document.get("faults") or []) if runtime.endpoints.get("tool_proxy") is not None else []
-        if proxied_faults:
+        proxied = runtime.endpoints.get("tool_proxy") is not None
+        if proxied:
             from .call_runner import _write_trial_state
 
-            _write_trial_state(runtime, proxied_faults)
+            # Every trial writes its own faults, none included, so nothing an earlier trial left can apply to this one.
+            _write_trial_state(runtime, list(document.get("faults") or []))
         try:
             if dispatcher is not None:
                 # What the actors wrote before T0 is in the world before the conversation starts.
@@ -912,10 +930,11 @@ class HostedChatCallRunner:
                     scenario_key=scenario.scenario_key,
                 )
         finally:
-            if proxied_faults:
+            if proxied:
                 from .call_runner import _write_trial_state
 
-                _write_trial_state(runtime, [])
+                with contextlib.suppress(Exception):
+                    _write_trial_state(runtime, [])
             if acting is not None:
                 acting.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -938,7 +957,7 @@ class HostedChatCallRunner:
 
         if cast is not None:
             transcript.call_actors = {"resolved": chat_actors, "summary": cast.summary(), "events": cast.events}
-        world_record = _world_actors_record(door, listing, dispatcher, cast, meter, limits)
+        world_record = _world_actors_record(door, listing, dispatcher, cast, meter, limits, since=trial_started)
         if world_record is not None:
             transcript.world_actors = world_record
         ended = datetime.now(timezone.utc)

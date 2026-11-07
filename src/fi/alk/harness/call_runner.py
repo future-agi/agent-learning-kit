@@ -1990,13 +1990,17 @@ class CallRunnerImpl:
 
         async def place_with_actors() -> SimulationReport:
             faults = list(doc.get("faults") or [])
-            if faults:
+            proxied = runtime.endpoints.get("tool_proxy") is not None
+            if faults or proxied:
+                # Every trial behind a tool proxy writes its own faults, none included, so nothing an earlier trial
+                # left can apply to this one.
                 _write_trial_state(runtime, faults)
             try:
                 return await place_with_world_actors()
             finally:
                 if faults:
-                    _write_trial_state(runtime, [])
+                    with contextlib.suppress(Exception):
+                        _write_trial_state(runtime, [])
 
         async def place_with_world_actors() -> SimulationReport:
             if actors is None:

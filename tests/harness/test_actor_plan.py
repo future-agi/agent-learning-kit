@@ -1240,5 +1240,11 @@ def test_a_pre_run_session_nobody_can_write_is_refused_with_the_fix(tmp_path):
     said = session_problems([{"actors": ["mia"], "about": "deal 8", "where": place}], tmp_path)
     assert said and "nobody here writes" in said[0]
     assert session_problems([{"actors": ["mia", "sam"], "about": "deal 8", "where": place}], tmp_path) == []
+    # An actor that plays both writes as well as following its scheduled actions.
+    save_actors(
+        tmp_path,
+        ActorList(actors=[Actor(id="mia", name="Mia", play="both", permitted_actions=["chat.post_message"])]),
+    )
+    assert session_problems([{"actors": ["mia"], "about": "deal 8", "where": place}], tmp_path) == []
     given = [{"actor": "mia", "action": "chat.post_message", "arguments": {"channel": "#sales", "text": "20% ok?"}}]
     assert session_problems([{"actors": ["mia"], "about": "deal 8", "where": place, "thread": given}], tmp_path) == []

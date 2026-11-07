@@ -2447,6 +2447,22 @@ def test_a_trial_s_faults_go_to_the_world_database_and_are_cleared_after_the_cal
     assert written == [[{"action": "approve", "mode": "timeout_before_commit"}], []]
     assert not list(tmp_path.rglob("trial.json")) and not list(tmp_path.rglob("actor-token"))
 
+def test_a_trial_with_no_faults_behind_a_tool_proxy_still_writes_its_own_none(tmp_path, monkeypatch) -> None:
+    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    written = []
+    monkeypatch.setattr(cr, "_write_trial_state", lambda runtime, faults: written.append(list(faults)))
+
+    async def place_call(spec):
+        return _report(transcript="user: hello", messages=[{"role": "user", "content": "hello"}])
+
+    endpoints = {"database": _postgres_endpoint(), "tool_proxy": RuntimeEndpoint(capability="tool_proxy", protocol="http", address="http://p")}
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
+    _run(runner, _FakeScenario("k1"), _runtime(endpoints=endpoints, metadata={"livekit_agent_name": "agent-w0"}))
+    # An earlier trial's faults left in the world can never apply to this one.
+    assert written == [[]]
+
+
 def test_a_trial_s_action_log_is_read_over_one_connection_and_reopened_after_a_failed_read(
     monkeypatch,
 ) -> None:
