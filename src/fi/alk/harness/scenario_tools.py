@@ -2305,7 +2305,8 @@ def scenario_tools(
                                 "what the world holds for them (and where), or the rule in the agent's "
                                 "instructions that names it, quoted. Checks and the judge are shown "
                                 "only these. Leave out any value you picked because the step needed "
-                                "one. Empty when none is fixed.",
+                                "one, and a date the person gives as a relative day (\"tomorrow\"): the "
+                                "run may happen on another day than the one you wrote. Empty when none is fixed.",
                             },
                         },
                         "required": ["tool", "arguments", "fixed"],
