@@ -395,8 +395,8 @@ class ChatActors:
 async def _started_by_event(
     target: Target, starts_with: Any, on_exchange: Callable[[Exchange], Any] | None
 ) -> Transcript:
-    """One invocation of the agent by an actor's message, and whatever it answers; no one else speaks. What it did
-    is in the world, which is what the run is graded on."""
+    """One invocation of the agent by the scenario's task or an actor's message, and whatever it answers; no one
+    else speaks. What it did is in the world, which is what the run is graded on."""
     transcript = Transcript()
 
     def record(exchange: Exchange) -> None:
@@ -406,7 +406,9 @@ async def _started_by_event(
 
     await target.open()
     try:
-        record(Exchange("actor", starts_with.text, time.time(), {"id": starts_with.actor, "name": starts_with.actor}))
+        sender = starts_with.actor
+        actor = {"id": sender, "name": sender} if sender is not None else None
+        record(Exchange("actor" if sender is not None else "task", starts_with.text, time.time(), actor))
         try:
             reply = await target.say(starts_with.text)
         except TargetConversationEnded as ended:
@@ -433,7 +435,7 @@ async def converse(
 ) -> Transcript:
     """Run one scenario as a conversation and return what happened. `actors` write in it too, each when its trigger
     fires after an agent turn; the agent reads their message as theirs, and the person is told it. An event-started
-    scenario (`starts_with`) has no person: the agent is invoked once by that actor's message."""
+    scenario (`starts_with`) has no person: the agent is invoked once by the scenario's task or that actor's message."""
     starts_with = getattr(scenario, "starts_with", None)
     if starts_with is not None:
         return await _started_by_event(target, starts_with, on_exchange)

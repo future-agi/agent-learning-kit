@@ -344,11 +344,12 @@ def _actor_fields() -> dict[str, Any]:
         },
         "starts_with": {
             "type": "object",
-            "description": "Only for an agent started by an event rather than by a person: the one message from an "
-            "actor that invokes it (a meeting-ended notice, a new ticket). The run has no caller; the agent is graded "
-            "on what it did in the world.",
+            "description": "Only for an agent started by a task or an event rather than by a person: the one "
+            "message that invokes it. Leave out actor for a task the scenario itself hands the agent (summarize this "
+            "thread, fix this ticket); name an actor only when a real person or system sends it (a meeting-ended "
+            "notice from the calendar). The run has no caller; the agent is graded on what it did in the world.",
             "properties": {"actor": {"type": "string"}, "text": {"type": "string"}},
-            "required": ["actor", "text"],
+            "required": ["text"],
             "additionalProperties": False,
         },
     }
@@ -365,7 +366,8 @@ def _unlisted_actors(scenario: Scenario, world_root: Path) -> list[str]:
 
     for number, session in enumerate(scenario.pre_run, start=1):
         problems += session_problems(session, number, listed)
-    if scenario.starts_with is not None and scenario.starts_with.actor not in listed:
+    starter = scenario.starts_with.actor if scenario.starts_with is not None else None
+    if starter is not None and starter not in listed:
         problems.append(f"starts_with: {scenario.starts_with.actor!r} is not an actor; add it with add_actor first")
     if any(entry.id == CALLER for entry in scenario.actors):
         problems.append("actors: the caller is the person in every scenario, through its persona; leave it out of actors")

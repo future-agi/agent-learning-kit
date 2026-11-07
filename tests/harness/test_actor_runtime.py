@@ -349,6 +349,28 @@ def test_an_event_started_run_invokes_the_agent_once_with_no_caller(monkeypatch)
     assert transcript.ended == conv.FINISHED
 
 
+def test_a_task_driven_run_needs_no_actor_and_the_scenario_sends_the_task(monkeypatch):
+    from fi.alk.harness.actors import StartsWith
+
+    agent = _Agent(["Summary posted to #launch."])
+    monkeypatch.setattr(conv, "Stage", lambda *a, **k: pytest.fail("no caller is simulated"))
+    scenario = SimpleNamespace(instruction="", max_turns=4, starts_with=StartsWith(text="Summarize the launch thread"))
+    transcript = asyncio.run(conv.converse(agent, scenario, SimpleNamespace()))
+    assert agent.heard == ["Summarize the launch thread"]
+    assert [one["role"] for one in transcript.canonical_messages()] == ["user", "assistant"]
+    assert transcript.exchanges[0].speaker == "task" and transcript.exchanges[0].actor is None
+
+
+def test_a_task_driven_start_is_valid_without_any_actor_listed(tmp_path):
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _unlisted_actors
+
+    scenario = Scenario(name="summarize", instruction="x", starts_with={"text": "Summarize the launch thread"})
+    assert _unlisted_actors(scenario, tmp_path) == []
+    named = Scenario(name="ended", instruction="x", starts_with={"actor": "notetaker", "text": "Meeting ended"})
+    assert _unlisted_actors(named, tmp_path) == ["starts_with: 'notetaker' is not an actor; add it with add_actor first"]
+
+
 def test_an_event_started_scenario_is_graded_even_when_the_agent_leaves_the_world_untouched(tmp_path):
     from fi.alk.harness.catalogue import Catalogue, SubGoal, save_catalogue
     from fi.alk.harness.folder import write_folder

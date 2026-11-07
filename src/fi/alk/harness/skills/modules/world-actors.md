@@ -53,8 +53,10 @@ themselves when the scenario is kept, and the thread is replayed into the world 
 place the world has; if the environment has no such service, the scenario cannot have that session. The pre-run
 conversation is the starting state and is never graded.
 
-**Event-started runs.** For an agent started by a message rather than by a person, `starts_with` names the actor and
-its message; there is no caller. Only an agent reached by messages can be started this way.
+**Task-driven and event-started runs.** For an agent started by a message rather than by a person, `starts_with`
+gives that message; there is no caller. A task the scenario itself hands the agent (summarize this thread, fix this
+ticket) needs no actor: leave `actor` out. Name an actor only when a real person or system sends it (the calendar's
+meeting-ended notice). Only an agent reached by messages can be started this way.
 
 **What is graded.** Every sub-goal grades the agent, never an actor. A sub-goal can depend on an actor (give its
 `actor`): it then reads not applicable when that actor never came in, and inconclusive when it came in and never

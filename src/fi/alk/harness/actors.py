@@ -337,11 +337,12 @@ class Fault(BaseModel):
 
 
 class StartsWith(BaseModel):
-    """What starts an event-started run: one actor's message to the agent, with no caller at all."""
+    """What starts a run with no caller: the task or event sent to the agent once. With no `actor`, the scenario
+    itself sends it (a task-driven run); with one, that actor does (a meeting-ended notice, a new ticket)."""
 
     model_config = ConfigDict(extra="forbid")
 
-    actor: str = Field(min_length=1)
+    actor: str | None = Field(default=None, min_length=1)
     text: str = Field(min_length=1)
 
 

@@ -1877,8 +1877,9 @@ honest number: a smaller suite that is entirely real is worth more than a padded
 Only when the environment lists actors. When the agent will find something that actors wrote before the run (an
 earlier thread, a note, a record), give it in `history`: each entry one of that actor's permitted actions, in order,
 written as that actor would write it, knowing only what that actor knows. It is the same on every trial and never
-graded; never put the answer to the scenario in it. For an agent started by an event rather than by a person, give
-`starts_with`: the one actor message that invokes it. That scenario has no caller, so its instruction says what
+graded; never put the answer to the scenario in it. For an agent started by a task or an event rather than by a
+person, give `starts_with`: the one message that invokes it, with no `actor` when the scenario itself hands over the
+task, and an actor only when a real person or system sends it. That scenario has no caller, so its instruction says what
 happened, and its sub-goals are graded from what the agent did in the world, including doing nothing.
 
 ## Faults and two systems
