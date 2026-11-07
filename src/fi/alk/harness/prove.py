@@ -313,6 +313,9 @@ def _run(
     acting = _WorldActors(scenario, world_root, world, by_actors)
     # A check reads the trial's action log the way the run gives it: `world.events(actor_id, outcome)`.
     world.events = acting.events
+    # The conversations before the run are in the world when the agent starts, in the proof as in the run, and
+    # they are the actors' own: a check never credits the agent with a message an actor wrote.
+    acting.replay_pre_run()
     if with_solution:
         acting.act_on(None)
         for step in scenario.solution if steps is None else steps:
@@ -351,7 +354,7 @@ _PLAYED_TRIGGERS = ("always", "on_tool", "contacted")
 def _unplayed(scenario: Scenario) -> list[str]:
     return [
         f"{entry.id} {action.action} ({action.trigger.kind})"
-        for entry in scenario.actors
+        for entry in getattr(scenario, "actors", None) or ()
         for action in entry.actions
         if action.trigger.kind not in _PLAYED_TRIGGERS
     ]
@@ -369,9 +372,10 @@ class _WorldActors:
         by_actors: dict[int, str],
     ) -> None:
         listed = load_actors(world_root).by_id()
+        self.scenario = scenario
         self.pending = [
             (listed[entry.id], action)
-            for entry in scenario.actors
+            for entry in getattr(scenario, "actors", None) or ()
             if entry.id in listed
             for action in entry.actions
         ]
@@ -423,6 +427,28 @@ class _WorldActors:
 
             return contacts(step.arguments, actor)
         return False
+
+    def replay_pre_run(self) -> None:
+        """Play each stored pre-run thread into the world, message by message, as its actor; a reply takes the id
+        the world gave the message it answers. A session not yet written has nothing to replay."""
+        for session in getattr(self.scenario, "pre_run", None) or ():
+            results: list[Any] = []
+            for message in session.thread:
+                arguments = dict(message.arguments)
+                from .actor_dispatch import _field
+
+                for name, ref in message.refers.items():
+                    earlier = results[ref.message - 1] if ref.message <= len(results) else None
+                    value = _field(earlier, ref.field)
+                    if value is not None:
+                        arguments[name] = value
+                before = len(self.world.calls)
+                route = message.action.replace(".", "/")
+                known = route in getattr(self.world, "endpoints", ())
+                self.world.call(route if known else message.action.rsplit(".", 1)[-1], arguments)
+                made = self.world.calls[before:]
+                results.append(made[-1].result if made else None)
+                self.by_actors.update(dict.fromkeys(range(before, len(self.world.calls)), message.actor))
 
     def act_on(self, step: Any) -> None:
         if step is not None:

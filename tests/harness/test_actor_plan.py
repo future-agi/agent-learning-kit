@@ -1145,3 +1145,40 @@ def test_an_actor_repeating_its_own_line_is_a_loop_and_ends_the_conversation():
     written = asyncio.run(generate(session, actors, {}, write))
     # Each says its line once; the second round repeats both, so no one writes and the session ends.
     assert [one.arguments["text"] for one in written.thread] == ["priya: can we do 20%?", "dev: can we do 20%?"]
+
+
+def test_a_proof_starts_from_the_world_after_the_pre_run_threads_and_credits_them_to_their_actors(tmp_path):
+    from types import SimpleNamespace
+
+    from fi.alk.harness.actors import save_actors
+    from fi.alk.harness.prove import _WorldActors
+    from fi.alk.harness.scenario import Scenario
+
+    save_actors(tmp_path, ActorList(actors=[Actor(id="priya", name="Priya", play="live",
+                                                  permitted_actions=["slack.post", "slack.reply"])]))
+    scenario = Scenario(name="acme", instruction="x", pre_run=[{
+        "actors": ["priya"], "where": {"action": "slack.post", "arguments": {"channel": "#leads"}},
+        "about": "Acme wants 20%",
+        "thread": [
+            {"actor": "priya", "action": "slack.post", "arguments": {"channel": "#leads", "text": "Acme wants 20%"}},
+            {"actor": "priya", "action": "slack.reply", "arguments": {"text": "Can we?"},
+             "refers": {"thread_ts": {"message": 1, "field": "ts"}}},
+        ],
+    }])
+
+    class World:
+        endpoints = ()
+
+        def __init__(self):
+            self.calls = []
+
+        def call(self, name, arguments):
+            self.calls.append(SimpleNamespace(name=name, arguments=arguments, ok=True,
+                                              result={"ts": f"ts{len(self.calls) + 1}"}))
+
+    world, by_actors = World(), {}
+    acting = _WorldActors(scenario, tmp_path, world, by_actors)
+    acting.replay_pre_run()
+    assert [(one.name, one.arguments.get("thread_ts")) for one in world.calls] == [("post", None), ("reply", "ts1")]
+    assert by_actors == {0: "priya", 1: "priya"}
+    assert [row["actor_id"] for row in acting.events()] == ["priya", "priya"]
