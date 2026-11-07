@@ -2463,6 +2463,17 @@ def test_a_trial_with_no_faults_behind_a_tool_proxy_still_writes_its_own_none(tm
     assert written == [[]]
 
 
+def test_a_world_database_out_of_reach_fails_only_a_trial_with_faults_to_set(monkeypatch) -> None:
+    def unreachable(runtime, faults):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(cr, "_write_trial_state", unreachable)
+    # Nothing to set: the trial runs as dev would have run it.
+    cr._set_trial_faults(None, [])
+    with pytest.raises(OSError):
+        cr._set_trial_faults(None, [{"action": "approve", "mode": "timeout_before_commit"}])
+
+
 def test_a_trial_s_action_log_is_read_over_one_connection_and_reopened_after_a_failed_read(
     monkeypatch,
 ) -> None:

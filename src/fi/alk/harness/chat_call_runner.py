@@ -869,10 +869,10 @@ class HostedChatCallRunner:
         # the world's database, as on a voice call.
         proxied = runtime.endpoints.get("tool_proxy") is not None
         if proxied:
-            from .call_runner import _write_trial_state
+            from .call_runner import _set_trial_faults
 
             # Every trial writes its own faults, none included, so nothing an earlier trial left can apply to this one.
-            _write_trial_state(runtime, list(document.get("faults") or []))
+            _set_trial_faults(runtime, list(document.get("faults") or []))
         try:
             if dispatcher is not None:
                 # What the actors wrote before T0 is in the world before the conversation starts.

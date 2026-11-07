@@ -1171,6 +1171,18 @@ def _write_trial_state(runtime: EnvironmentRuntime, faults: list[Any]) -> None:
         )
 
 
+def _set_trial_faults(runtime: EnvironmentRuntime, faults: list[Any]) -> None:
+    """This trial's faults at its start. A trial with faults to set fails when they cannot be set; one with none only
+    clears what an earlier trial may have left, so a world database out of reach never fails it."""
+    if faults:
+        _write_trial_state(runtime, faults)
+        return
+    try:
+        _write_trial_state(runtime, [])
+    except Exception as exc:  # noqa: BLE001 - nothing to set; the trial runs as it would without faults
+        logger.warning("trial faults could not be cleared before a trial with none: %s", exc)
+
+
 def runner_door(tools_url: str, dsn: str, timeout: float) -> Any:
     """The world's door in the runner's process: the agent's tools service behind it, the world's own action log, actor
     list and records. Actors' actions enter here; the agent's own calls keep going through the tool proxy."""
@@ -1994,7 +2006,7 @@ class CallRunnerImpl:
             if faults or proxied:
                 # Every trial behind a tool proxy writes its own faults, none included, so nothing an earlier trial
                 # left can apply to this one.
-                _write_trial_state(runtime, faults)
+                _set_trial_faults(runtime, faults)
             try:
                 return await place_with_world_actors()
             finally:
