@@ -237,7 +237,11 @@ def _actor_fields() -> dict[str, Any]:
                     "instruction": {
                         "type": "string",
                         "description": "An actor that speaks: who they are here and what they say. Never when: "
-                        "they speak when the trigger fires, so the instruction names no moment, event or turn.",
+                        "they speak when the trigger fires, so the instruction names no moment, event or turn. Give "
+                        "them something the agent has to handle: a fact that differs from the person's (another year, "
+                        "amount or name) the agent must settle, a request of their own the agent may not grant, or a "
+                        "decision only they can make. An actor who only supplies what the person could say tests "
+                        "nothing.",
                     },
                     "trigger": {
                         "type": "object",
@@ -544,7 +548,11 @@ def persona_properties(
 ) -> dict[str, Any]:
     """Who a person is, in the platform's own persona fields: the simulated user's and every actor's."""
     return {
-        "name": {"type": "string"},
+        "name": {
+            "type": "string",
+            "description": "A given name and a family name you would hear every day where this person lives and "
+            "among people with their accent. Never a rare, old-fashioned or literary name.",
+        },
         "gender": persona_field("gender"),
         "age_group": persona_field("age_group"),
         "occupation": persona_field("occupation"),
@@ -2269,7 +2277,13 @@ def scenario_tools(
                     "description": "Names from the shared catalogue that must hold. Use the "
                     "existing names wherever one fits, so results add up across the suite.",
                 },
-                "max_turns": {"type": "integer"},
+                "max_turns": {
+                    "type": "integer",
+                    "description": "Count the turns this person needs to reach the outcome: one per question the "
+                    "agent must ask them, one per value read back, one for each actor's part and each correction "
+                    "or hold, one to close. Set it above that count. A run cut off before its outcome fails for "
+                    "a budget we chose, and it hits the hardest scenarios first.",
+                },
                 "coverage": {
                     "type": "object",
                     "additionalProperties": {"type": "string"},
