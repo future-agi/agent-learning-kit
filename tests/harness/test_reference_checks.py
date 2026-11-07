@@ -238,6 +238,17 @@ def test_a_setup_writing_records_an_in_process_agent_never_loads_is_refused(tmp_
     assert not problems({**in_process, "loader_module": "agent.data"}, adds)
     assert not problems({"kind": "postgres", "configured_by": "env"}, adds)
 
+    # An actor's record change is just as invisible to it; a part spoken on the conversation is not.
+    def with_actor(store: dict, actor: dict) -> list[str]:
+        (tmp_path / "contract.json").write_text(json.dumps({"data_store": store}))
+        scenario = Scenario(name="s", instruction="Help.", actors=[actor])
+        return _records_the_agent_cannot_see(scenario, tmp_path)
+
+    approves = {"id": "manager", "actions": [{"action": "approvals.put", "arguments": {"status": "approved"}}]}
+    assert with_actor(in_process, approves)
+    assert not with_actor(in_process, {"id": "partner", "instruction": "Ask whether it can go to my card."})
+    assert not with_actor({"kind": "postgres", "configured_by": "env"}, approves)
+
 
 def test_the_proof_varies_every_argument_nothing_fixes_and_keeps_chained_values():
     from fi.alk.harness.prove import _other_choices

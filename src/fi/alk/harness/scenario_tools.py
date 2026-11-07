@@ -1174,16 +1174,26 @@ def _records_the_agent_cannot_see(scenario: Scenario, world_root: Path) -> list[
     if store.get("loader_module") or store.get("loaded_by"):
         return []
     from .scenario import _CREATES_A_RECORD, _ONLY_TOUCHES_EXISTING
+    from .world_door import record_action
 
+    out = []
     setup = scenario.setup_code or ""
-    if not (_CREATES_A_RECORD.search(setup) or _ONLY_TOUCHES_EXISTING.search(setup)):
-        return []
-    return [
-        "this agent keeps its data inside its own process and builds it when it starts, so a record "
-        "setup_code adds or changes is one the agent never sees and every run fails it for something "
-        "the scenario invented. Use only the records the world already holds, as they are, with an "
-        "empty setup_code"
-    ]
+    if _CREATES_A_RECORD.search(setup) or _ONLY_TOUCHES_EXISTING.search(setup):
+        out.append(
+            "this agent keeps its data inside its own process and builds it when it starts, so a record "
+            "setup_code adds or changes is one the agent never sees and every run fails it for something "
+            "the scenario invented. Use only the records the world already holds, as they are, with an "
+            "empty setup_code"
+        )
+    for entry in scenario.actors:
+        changes = [one.action for one in entry.actions if record_action(one.action)]
+        if changes:
+            out.append(
+                f"actors: {entry.id} changes {', '.join(changes)}, but this agent keeps its data inside its own "
+                "process, so it never sees the change and the scenario tests nothing about it. Give the actor a "
+                "part on the conversation instead (what they say or ask), or leave them out"
+            )
+    return out
 
 
 def _steps_the_contract_refuses(scenario: Scenario, world_root: Path) -> list[str]:
