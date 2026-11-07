@@ -6,7 +6,6 @@ an actor by this trial's token, and writes the door's outcome back as HTTP. Ever
 
 from __future__ import annotations
 
-import hmac
 import json
 import os
 import time
@@ -41,30 +40,24 @@ except ImportError:  # pragma: no cover - imported as part of the package
 
 UPSTREAM = os.environ.get("UPSTREAM_URL", "").rstrip("/")
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
-# This trial's actor token; a request naming an actor without it is the agent's.
-ACTOR_PROOF_FILE = os.environ.get("ACTOR_PROOF_FILE", "")
 
 __all__ = ["Handler", "door", "permitted"]
 
 
-def _trial_token() -> str:
-    try:
-        with open(ACTOR_PROOF_FILE, encoding="utf-8") as handle:
-            return handle.read().strip()
-    except OSError:
-        return ""
-
-
 def _trial_faults() -> list[dict]:
-    """This trial's faults on the agent's calls, written by the runner beside the token; never from a request."""
-    if not ACTOR_PROOF_FILE:
+    """This trial's faults on the agent's calls, written by the runner into the world's database; never from a request
+    or a file the agent's process could reach."""
+    if not DATABASE_URL:
         return []
     try:
-        with open(os.path.join(os.path.dirname(ACTOR_PROOF_FILE), "trial.json"), encoding="utf-8") as handle:
-            faults = json.load(handle).get("faults") or []
-    except (OSError, ValueError, AttributeError):
+        import psycopg
+
+        with psycopg.connect(DATABASE_URL, autocommit=True, connect_timeout=5) as connection:
+            row = connection.execute("SELECT faults FROM _alk_trial_faults WHERE id = 1").fetchone()
+    except Exception:  # noqa: BLE001 - no table yet, or no database: no faults this trial
         return []
-    return [one for one in faults if isinstance(one, dict)]
+    faults = row[0] if row else []
+    return [one for one in faults if isinstance(one, dict)] if isinstance(faults, list) else []
 
 
 def door() -> WorldDoor:
@@ -108,12 +101,10 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             arguments = {"_raw": body.decode("utf-8", errors="replace")}
         route = self.path.split("?", 1)[0]
+        # Actors act through the door in the runner's own process; a request here that names one is the agent's own
+        # attempt to act as someone else, refused and logged as the agent's.
         actor = (self.headers.get("x-alk-actor") or "").strip()
-        proven = True
-        if actor:
-            token = _trial_token()
-            sent = (self.headers.get("x-alk-actor-token") or "").strip()
-            proven = bool(token) and hmac.compare_digest(sent, token)
+        proven = not actor
         return ToolCall(
             action=route.strip("/").replace("/", ".") or "unknown",
             name=route.rstrip("/").rsplit("/", 1)[-1] or "unknown",

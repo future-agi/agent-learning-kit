@@ -37,7 +37,6 @@ import json
 import random
 import logging
 import os
-import secrets
 import stat
 import tempfile
 from dataclasses import dataclass, field, replace
@@ -63,7 +62,7 @@ from fi.simulate.simulation.call_actors import (
     with_others,
 )
 
-from .actor_dispatch import ActorDispatcher, HttpActs, build_dispatcher, world_summary
+from .actor_dispatch import ActorDispatcher, DoorActs, build_dispatcher, world_summary
 from .actor_meter import ActorMeter
 from .actors import (
     AGENT,
@@ -1148,43 +1147,48 @@ def _agent_marks(
     return marks
 
 
-class PrivateTokenUnavailable(RuntimeError):
-    """The trial token could not be made readable by the tool proxy's user alone."""
-
-
-def _write_trial_token(path: Path, token: str) -> None:
-    """The token, readable only by whoever owns the tool proxy's directory; a stale file or link is replaced.
-
-    Raises `PrivateTokenUnavailable`, and leaves no token behind, when it cannot be given to that user: widening it
-    would let the agent in the same sandbox read it and act as any actor.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.unlink(missing_ok=True)
-    fd = os.open(
-        path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600
-    )
-    try:
-        os.write(fd, token.encode("utf-8"))
-    finally:
-        os.close(fd)
-    owner = path.parent.stat()
-    if owner.st_uid != os.geteuid():
-        try:
-            os.chown(path, owner.st_uid, owner.st_gid)
-        except PermissionError as error:
-            path.unlink(missing_ok=True)
-            raise PrivateTokenUnavailable(str(error)) from error
+# The trial's faults on the agent's calls, kept in the world's own database where the tool proxy reads them: never in a
+# file the agent's process could read or rewrite.
+TRIAL_FAULTS_DDL = "CREATE TABLE IF NOT EXISTS _alk_trial_faults (id INT PRIMARY KEY, faults JSONB NOT NULL)"
 
 
 def _write_trial_state(runtime: EnvironmentRuntime, faults: list[Any]) -> None:
-    """This trial's faults, beside the actor token where the world's door reads them; written by the runner only."""
-    token_path = runtime.metadata.get("actor_proof_path")
-    if not isinstance(token_path, str):
+    """This trial's faults, in the world's database where the door in the tool proxy reads them; written by the runner
+    only, over its own connection."""
+    database = _find_postgres_endpoint(runtime)
+    if database is None:
         if faults:
-            logger.warning("faults cannot be set: this world has no tool proxy reading trial state")
+            logger.warning("faults cannot be set: this world has no database the tool proxy reads trial state from")
         return
-    path = Path(token_path).with_name("trial.json")
-    path.write_text(json.dumps({"faults": list(faults)}), encoding="utf-8")
+    import psycopg
+
+    with psycopg.connect(database.address, autocommit=True, connect_timeout=5) as connection:
+        connection.execute(TRIAL_FAULTS_DDL)
+        connection.execute(
+            "INSERT INTO _alk_trial_faults (id, faults) VALUES (1, %s::jsonb) "
+            "ON CONFLICT (id) DO UPDATE SET faults = EXCLUDED.faults",
+            (json.dumps(list(faults)),),
+        )
+
+
+def runner_door(tools_url: str, dsn: str, timeout: float) -> Any:
+    """The world's door in the runner's process: the agent's tools service behind it, the world's own action log, actor
+    list and records. Actors' actions enter here; the agent's own calls keep going through the tool proxy."""
+    from .world_door import (
+        HttpExecutor,
+        PostgresLog,
+        PostgresRecords,
+        PostgresRoster,
+        RecordExecutor,
+        Routed,
+        WorldDoor,
+    )
+
+    return WorldDoor(
+        Routed(HttpExecutor(tools_url, timeout=timeout), RecordExecutor(PostgresRecords(dsn))),
+        PostgresLog(dsn),
+        PostgresRoster(dsn),
+    )
 
 
 def actor_limits(doc: Mapping[str, Any], bundle_dir: Path, modality: str) -> dict[str, Any]:
@@ -1208,34 +1212,23 @@ def _actor_dispatcher(
     reported: Callable[[], list[dict[str, Any]]] | None = None,
     why_not: list[tuple[str, str]] | None = None,
 ) -> ActorDispatcher | None:
-    """The scenario's actors for this trial over the bundle's tool proxy, with a fresh token only they and the proxy
-    hold; None when the scenario has none. An actor that cannot act here is the scenario's problem, recorded by the
-    caller from `actor_problems`."""
+    """The scenario's actors for this trial, acting through a world door built here in the runner's own process: the
+    agent's process holds nothing that lets it act as an actor, and the tool proxy refuses any request that names one.
+    None when the scenario has none. An actor that cannot act here is the scenario's problem, recorded by the caller
+    from `actor_problems`."""
     if not (doc.get("actors") or doc.get("history") or doc.get("pre_run")):
         return None
-    proxy = runtime.endpoints.get("tool_proxy")
+    tools = runtime.endpoints.get("tools_api")
     database = _find_postgres_endpoint(runtime)
-    token_path = runtime.metadata.get("actor_proof_path")
-    if proxy is None or database is None or not isinstance(token_path, str):
-        logger.warning("actors cannot act: this world has no tool proxy taking actor requests")
+    if tools is None or database is None or runtime.endpoints.get("tool_proxy") is None:
+        logger.warning("actors cannot act: this world has no tools service and action log behind a door")
         if why_not is not None:
             why_not.append(("no_world_door", "no world door: this agent's tools run where actors cannot act"))
-        return None
-    token = secrets.token_hex(32)
-    try:
-        _write_trial_token(Path(token_path), token)
-    except PrivateTokenUnavailable as error:
-        logger.error(
-            "actors cannot act: no_private_token, the trial token cannot be kept from the agent",
-            extra={"reason": "no_private_token", "detail": str(error)},
-        )
-        if why_not is not None:
-            why_not.append(("no_private_token", "the trial token cannot be kept from the agent, so no actor may act"))
         return None
     return build_dispatcher(
         dict(doc),
         bundle_dir,
-        act=HttpActs(proxy.address, token, budget),
+        act=DoorActs(runner_door(tools.address, database.address, budget)),
         read_log=_ActionLog(database.address),
         records=_world_records(runtime),
         trial_id=trial_id,
@@ -2020,8 +2013,6 @@ class CallRunnerImpl:
                 # An action a speaking actor decided on its last line is still sent, inside its own trial.
                 with contextlib.suppress(Exception):
                     await actors.send_reported()
-                # The token proves an actor only during its own trial; the proxy refuses actors once it is empty.
-                _write_trial_token(Path(str(runtime.metadata["actor_proof_path"])), "")
                 if isinstance(actors.read_log, _ActionLog):
                     await asyncio.to_thread(actors.read_log.close)
 

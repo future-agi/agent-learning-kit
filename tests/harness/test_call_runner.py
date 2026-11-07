@@ -2247,43 +2247,24 @@ def _with_actors(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def test_actors_act_only_with_a_proxy_taking_actor_requests(
-    tmp_path, monkeypatch
-) -> None:
+def test_actors_act_through_a_door_in_the_runner_and_no_token_is_ever_written(tmp_path, monkeypatch) -> None:
+    from fi.alk.harness.actor_dispatch import DoorActs
+    from fi.alk.harness.world_door import HttpExecutor
+
     bundle = _with_actors(tmp_path / "bundle")
     doc = {"actors": [{"id": "reviewer", "actions": [{"action": "records.approve"}]}]}
-    token = tmp_path / "w0" / "tool-proxy" / "actor-token"
-    proxy = RuntimeEndpoint(
-        capability="tool_proxy", protocol="http", address="http://127.0.0.1:9"
-    )
-    ready = _runtime(
-        endpoints={"tool_proxy": proxy, "database": _postgres_endpoint()},
-        metadata={"actor_proof_path": str(token)},
-    )
+    proxy = RuntimeEndpoint(capability="tool_proxy", protocol="http", address="http://127.0.0.1:9")
+    tools = RuntimeEndpoint(capability="tools_api", protocol="http", address="http://127.0.0.1:8")
+    ready = _runtime(endpoints={"tool_proxy": proxy, "tools_api": tools, "database": _postgres_endpoint()})
     assert cr._actor_dispatcher({}, bundle, ready, "t1", 60.0) is None
-    assert (
-        cr._actor_dispatcher(
-            doc,
-            bundle,
-            _runtime(endpoints={"database": _postgres_endpoint()}),
-            "t1",
-            60.0,
-        )
-        is None
-    )
+    no_tools = _runtime(endpoints={"tool_proxy": proxy, "database": _postgres_endpoint()})
+    assert cr._actor_dispatcher(doc, bundle, no_tools, "t1", 60.0) is None
     dispatcher = cr._actor_dispatcher(doc, bundle, ready, "t1", 60.0)
-    assert dispatcher is not None and dispatcher.act.proxy_url == "http://127.0.0.1:9"
-    assert token.read_text() == dispatcher.act.token and len(dispatcher.act.token) == 64
-    assert token.stat().st_mode & 0o777 == 0o600
-    elsewhere = tmp_path / "elsewhere"
-    elsewhere.write_text("untouched")
-    token.unlink()
-    token.symlink_to(elsewhere)
-    assert (
-        cr._actor_dispatcher(doc, bundle, ready, "t2", 60.0).act.token != dispatcher.act.token
-    )
-    assert elsewhere.read_text() == "untouched" and not token.is_symlink()
-
+    assert isinstance(dispatcher.act, DoorActs)
+    tools_executor = dispatcher.act.door.executor.tools
+    assert isinstance(tools_executor, HttpExecutor) and tools_executor.upstream == "http://127.0.0.1:8"
+    # Nothing an agent's process could read lets it act as an actor.
+    assert not list(tmp_path.rglob("actor-token"))
 
 def test_actor_rows_are_sealed_named_and_with_their_outcome_and_the_agent_s_are_left_to_its_calls(
     tmp_path, monkeypatch
@@ -2447,48 +2428,24 @@ def test_a_world_actor_s_actions_are_sealed_with_the_transcript_never_as_the_age
     ] == [("approve", "reviewer")]
 
 
-def test_a_trial_s_actor_token_holds_only_while_its_call_runs(
-    tmp_path, monkeypatch
-) -> None:
-    _job_obj, context = _context(
-        tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE
-    )
+def test_a_trial_s_faults_go_to_the_world_database_and_are_cleared_after_the_call(tmp_path, monkeypatch) -> None:
+    _job_obj, context = _context(tmp_path=tmp_path, evidence_seam=EvidenceSeam.TOOL_TRACE)
     _write_scenario_doc(context.bundle_dir, scenario_key="k1")
     document = context.bundle_dir / "scenarios" / "k1" / "scenario.json"
     body = json.loads(document.read_text())
-    body["actors"] = [{"id": "reviewer", "actions": [{"action": "records.approve"}]}]
+    body["faults"] = [{"action": "approve", "mode": "timeout_before_commit"}]
     document.write_text(json.dumps(body))
-    _with_actors(context.bundle_dir)
-    monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg([], ["name", "at"]))
-    token = tmp_path / "w0" / "tool-proxy" / "actor-token"
-    elsewhere = tmp_path / "elsewhere"
-    elsewhere.write_text("untouched")
-    during = []
+    written = []
+    monkeypatch.setattr(cr, "_write_trial_state", lambda runtime, faults: written.append(list(faults)))
 
     async def place_call(spec):
-        during.append(token.read_text())
-        # A link planted during the call is replaced when the token is emptied, never followed.
-        token.unlink()
-        token.symlink_to(elsewhere)
-        return _report(
-            transcript="user: hello", messages=[{"role": "user", "content": "hello"}]
-        )
+        return _report(transcript="user: hello", messages=[{"role": "user", "content": "hello"}])
 
-    proxy = RuntimeEndpoint(
-        capability="tool_proxy", protocol="http", address="http://127.0.0.1:9"
-    )
     runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
-    _run(
-        runner,
-        _FakeScenario("k1"),
-        _runtime(
-            endpoints={"tool_proxy": proxy, "database": _postgres_endpoint()},
-            metadata={"livekit_agent_name": "agent-w0", "actor_proof_path": str(token)},
-        ),
-    )
-    assert len(during[0]) == 64 and token.read_text() == "" and not token.is_symlink()
-    assert elsewhere.read_text() == "untouched"
-
+    _run(runner, _FakeScenario("k1"), _runtime(endpoints={"database": _postgres_endpoint()},
+                                                metadata={"livekit_agent_name": "agent-w0"}))
+    assert written == [[{"action": "approve", "mode": "timeout_before_commit"}], []]
+    assert not list(tmp_path.rglob("trial.json")) and not list(tmp_path.rglob("actor-token"))
 
 def test_a_trial_s_action_log_is_read_over_one_connection_and_reopened_after_a_failed_read(
     monkeypatch,
@@ -2557,34 +2514,12 @@ def test_an_actor_on_the_agent_s_tool_waits_for_the_route_the_log_records_for_it
     proxy = RuntimeEndpoint(
         capability="tool_proxy", protocol="http", address="http://127.0.0.1:9"
     )
-    ready = _runtime(
-        endpoints={"tool_proxy": proxy, "database": _postgres_endpoint()},
-        metadata={
-            "actor_proof_path": str(tmp_path / "w0" / "tool-proxy" / "actor-token")
-        },
-    )
+    tools = RuntimeEndpoint(capability="tools_api", protocol="http", address="http://127.0.0.1:8")
+    ready = _runtime(endpoints={"tool_proxy": proxy, "tools_api": tools, "database": _postgres_endpoint()})
     dispatcher = cr._actor_dispatcher(doc, bundle, ready, "t1", 60.0)
     log = [{"name": "request_approval", "actor_id": "agent", "action_id": "a1"}]
     [(_actor, action)] = [(one[0], one[2]) for one in dispatcher.pending]
     assert dispatcher._cause(_actor, action.trigger, 0.0, log, 0) == "a1"
-
-
-def test_a_trial_token_that_cannot_be_given_to_the_proxy_user_is_never_widened(tmp_path, monkeypatch):
-    import fi.alk.harness.call_runner as cr
-
-    token_path = tmp_path / "proxy" / "actor-token"
-    real_uid = os.geteuid()
-
-    def chown(*args, **kwargs):
-        raise PermissionError("not permitted")
-
-    # The proxy's directory belongs to another user, and this process may not give the file away.
-    monkeypatch.setattr(cr.os, "geteuid", lambda: real_uid + 1)
-    monkeypatch.setattr(cr.os, "chown", chown)
-
-    with pytest.raises(cr.PrivateTokenUnavailable):
-        cr._write_trial_token(token_path, "secret")
-    assert not token_path.exists()
 
 
 def test_an_actor_that_cannot_act_is_recorded_with_the_real_reason(tmp_path, monkeypatch):
@@ -2592,24 +2527,10 @@ def test_an_actor_that_cannot_act_is_recorded_with_the_real_reason(tmp_path, mon
 
     bundle = _with_actors(tmp_path / "bundle")
     doc = {"actors": [{"id": "reviewer", "actions": [{"action": "records.approve"}]}]}
-    proxy = RuntimeEndpoint(capability="tool_proxy", protocol="http", address="http://127.0.0.1:9")
-    ready = _runtime(
-        endpoints={"tool_proxy": proxy, "database": _postgres_endpoint()},
-        metadata={"actor_proof_path": str(tmp_path / "w0" / "tool-proxy" / "actor-token")},
-    )
-
-    def unavailable(path, token):
-        raise cr.PrivateTokenUnavailable("not ours to give")
-
-    monkeypatch.setattr(cr, "_write_trial_token", unavailable)
     why: list = []
-    assert cr._actor_dispatcher(doc, bundle, ready, "t1", 60.0, why_not=why) is None
-    assert why[0][0] == "no_private_token"
-    why = []
     assert cr._actor_dispatcher(doc, bundle, _runtime(endpoints={"database": _postgres_endpoint()}), "t1", 60.0,
                                 why_not=why) is None
     assert why[0][0] == "no_world_door"
-
 
 def test_the_speaking_actors_actions_file_is_the_run_s_alone(tmp_path):
     import stat

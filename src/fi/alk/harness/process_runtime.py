@@ -7081,22 +7081,6 @@ class ProcessRuntimeProvider:
         metadata: dict[str, Any] = (
             {"workspace_roots": workspace_roots} if workspace_roots else {}
         )
-        proxy = next(
-            (p for p in self._manifest.processes if p.name == "tool-proxy"), None
-        )
-        token_file = dict(getattr(proxy, "environment", {}) or {}).get(
-            "ACTOR_PROOF_FILE"
-        )
-        if token_file:
-            # Only the call runner learns where the tool proxy reads a trial's actor token.
-            metadata["actor_proof_path"] = token_file.replace(
-                "{{WORLD_DIR}}",
-                str(
-                    world_scratch_dir(
-                        self._context.work_directory, world_index, "tool-proxy"
-                    )
-                ),
-            )
         control = self._manifest.runtime.control_service
         if control is None:
             return metadata

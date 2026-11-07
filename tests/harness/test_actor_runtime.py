@@ -408,15 +408,31 @@ def test_faults_are_for_graders_only_and_a_world_with_them_gets_the_full_action_
     assert "timeout" not in brief and "faults" not in brief
 
 
-def test_the_runner_writes_a_trial_s_faults_where_the_door_reads_them_and_clears_them(tmp_path):
-    from fi.alk.harness.call_runner import _write_trial_state
+def test_the_runner_writes_a_trial_s_faults_into_the_world_database_never_a_file(tmp_path, monkeypatch):
+    import sys
 
-    runtime = SimpleNamespace(metadata={"actor_proof_path": str(tmp_path / "actor-token")})
-    _write_trial_state(runtime, [{"action": "refunds.create", "mode": "timeout_before_commit"}])
-    assert json.loads((tmp_path / "trial.json").read_text())["faults"][0]["action"] == "refunds.create"
-    _write_trial_state(runtime, [])
-    assert json.loads((tmp_path / "trial.json").read_text()) == {"faults": []}
+    from fi.alk.harness import call_runner as cr
 
+    ran: list = []
+
+    class _Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def execute(self, sql, params=()):
+            ran.append((sql.split()[0], params))
+
+    monkeypatch.setitem(sys.modules, "psycopg", SimpleNamespace(connect=lambda *a, **k: _Connection()))
+    database = SimpleNamespace(protocol="postgres", address="postgresql://world")
+    runtime = SimpleNamespace(endpoints={"db": database}, metadata={})
+    cr._write_trial_state(runtime, [{"action": "refunds.create", "mode": "timeout_before_commit"}])
+    cr._write_trial_state(runtime, [])
+    inserts = [json.loads(params[0]) for verb, params in ran if verb == "INSERT"]
+    assert inserts == [[{"action": "refunds.create", "mode": "timeout_before_commit"}], []]
+    assert not list(tmp_path.rglob("trial.json"))
 
 def test_a_way_of_speaking_sent_as_the_actor_s_surface_is_said_back_never_saved(tmp_path, monkeypatch):
     from fi.alk.harness.actors import load_actors

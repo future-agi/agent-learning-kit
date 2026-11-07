@@ -10521,24 +10521,3 @@ def test_native_config_resource_path_rejects_escape_at_model_boundary(path):
         _source_process(config_files={path: {"values": {"MODE": "test"}}})
 
 
-def test_only_the_call_runner_learns_where_the_tool_proxy_reads_a_trial_s_actor_token(
-    tmp_path,
-) -> None:
-    from types import SimpleNamespace
-
-    from fi.alk.harness.process_runtime import ProcessRuntimeProvider
-
-    def metadata(environment: dict) -> dict:
-        provider = SimpleNamespace(
-            _manifest=SimpleNamespace(
-                processes=[SimpleNamespace(name="tool-proxy", environment=environment)],
-                runtime=SimpleNamespace(control_service=None),
-            ),
-            _context=SimpleNamespace(work_directory=tmp_path),
-        )
-        return ProcessRuntimeProvider._control_metadata(provider, 2)
-
-    assert metadata({"ACTOR_PROOF_FILE": "{{WORLD_DIR}}/actor-token"})[
-        "actor_proof_path"
-    ] == str(tmp_path / "worlds" / "w2" / "tool-proxy" / "actor-token")
-    assert "actor_proof_path" not in metadata({})

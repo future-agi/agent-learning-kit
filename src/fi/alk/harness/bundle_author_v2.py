@@ -2016,7 +2016,6 @@ def _tool_proxy_process() -> SourceProcess:
             "PORT": "{{PORT_tool-proxy}}",
             "UPSTREAM_URL": "{{TOOLS_UPSTREAM_URL}}",
             "DATABASE_URL": "{{WORLD_DATABASE_URL}}",
-            "ACTOR_PROOF_FILE": "{{WORLD_DIR}}/actor-token",
         },
         started_check=StartedCheck(port=True, timeout_seconds=180),
         user=ProcessUser.SVC_TOOLS,

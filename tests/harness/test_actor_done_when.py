@@ -14,7 +14,7 @@ from urllib import error, request
 import pytest
 
 from fi.alk.bench._docker import docker_available
-from fi.alk.harness.actor_dispatch import ActorDispatcher, HttpActs
+from fi.alk.harness.actor_dispatch import ActorDispatcher, DoorActs
 from fi.alk.harness.actors import Actor, ActorList, ScenarioActor, actors_seed
 from fi.alk.harness.bundle_author_v2 import _TOOL_TRACE_DDL
 
@@ -25,7 +25,6 @@ pytestmark = pytest.mark.skipif(
 _PROXY = (
     Path(__file__).parents[2] / "src" / "fi" / "alk" / "harness" / "tool_trace_proxy.py"
 )
-TOKEN = "trial-token"
 ACTORS = ActorList(
     actors=[
         Actor(
@@ -112,10 +111,8 @@ def world(monkeypatch, tmp_path):
         connection.execute("CREATE TABLE approvals (item text NOT NULL)")
         connection.execute("INSERT INTO items(id) VALUES ('d1')")
     records = _serve(_records_service(dsn))
-    (tmp_path / "actor-token").write_text(TOKEN, encoding="utf-8")
     monkeypatch.setenv("UPSTREAM_URL", f"http://127.0.0.1:{records.server_port}")
     monkeypatch.setenv("DATABASE_URL", dsn)
-    monkeypatch.setenv("ACTOR_PROOF_FILE", str(tmp_path / "actor-token"))
     spec = importlib.util.spec_from_file_location("tool_trace_proxy_done_when", _PROXY)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -132,7 +129,10 @@ def world(monkeypatch, tmp_path):
             return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
 
     try:
-        yield f"http://127.0.0.1:{proxy.server_port}", log, query
+        from fi.alk.harness.call_runner import runner_door
+
+        door = runner_door(f"http://127.0.0.1:{records.server_port}", dsn, 30.0)
+        yield f"http://127.0.0.1:{proxy.server_port}", log, query, door
     finally:
         proxy.shutdown()
         records.shutdown()
@@ -157,7 +157,7 @@ def _agent(url: str, path: str, body: dict) -> int:
 def test_the_coworker_cannot_authorise_the_change_the_reviewer_can_and_the_trial_shows_both(
     world,
 ):
-    url, log, query = world
+    url, log, query, door = world
     cast = [
         ScenarioActor.model_validate(
             {
@@ -190,7 +190,7 @@ def test_the_coworker_cannot_authorise_the_change_the_reviewer_can_and_the_trial
     dispatcher = ActorDispatcher(
         ACTORS.by_id(),
         cast,
-        act=HttpActs(url, TOKEN, 30.0),
+        act=DoorActs(door),
         trial_id="t1",
         read_log=log,
         seed="t1",
