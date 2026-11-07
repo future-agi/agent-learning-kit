@@ -504,7 +504,9 @@ def test_an_actor_s_identity_goes_with_its_service_action_but_never_with_a_recor
         seed="t",
     )
     asyncio.run(dispatcher.tick())
-    assert [one[2] for one in sent] == [{"text": "hi", "actor_id": "coworker"}, {"deal_id": 7}]
+    # The body stays as the action gave it, so a strict service is never sent a field it does not take.
+    assert [one[2] for one in sent] == [{"text": "hi"}, {"deal_id": 7}]
+    assert [one[1].get("X-ALK-Actor-Identity") for one in sent] == ["coworker", None]
 
 
 def test_a_session_whose_actor_record_changed_is_written_again_before_sealing(tmp_path):

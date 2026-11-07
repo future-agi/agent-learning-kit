@@ -496,6 +496,27 @@ def test_a_person_folded_into_the_caller_is_refused_and_a_kept_scenario_reads_it
     assert "Alex Vance (manager; comes in: its own; does: approvals.put)" in said and "not in it: Sam Rivera (lead)" in said
 
 
+def test_a_one_word_name_and_the_person_the_caller_speaks_for_are_never_read_as_folded(tmp_path):
+    from fi.alk.harness.actors import load_actors
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _folded_actors
+
+    save_actors(
+        tmp_path,
+        ActorList(
+            actors=[
+                Actor(id="caller", name="The caller", on_behalf_of="owner"),
+                Actor(id="owner", name="Dana Brooks"),
+                Actor(id="boss", name="Manager"),
+            ]
+        ),
+    )
+    said = Scenario.model_validate(
+        {"name": "x", "instruction": "You call for Dana Brooks; ask the manager about it.", "persona": {"name": "Priya"}}
+    )
+    assert _folded_actors(said, load_actors(tmp_path).by_id()) == []
+
+
 def test_an_actor_may_be_given_record_changes_on_the_world_s_own_collections(tmp_path):
     from fi.alk.harness.actors import load_actors
     from fi.alk.harness.world.tools import world_actor_tools

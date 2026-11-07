@@ -106,7 +106,10 @@ class HttpActs:
         key: str,
         parent: str | None,
         form: str = "tool",
+        identity: str = "",
     ) -> dict[str, Any]:
+        from .world_door import IDENTITY_HEADER
+
         headers = {
             "X-ALK-Actor": actor,
             "X-ALK-Actor-Token": self.token,
@@ -116,6 +119,8 @@ class HttpActs:
             headers["X-ALK-Parent-Event"] = parent
         if form == "record":
             headers["X-ALK-Record"] = "1"
+        if identity:
+            headers[IDENTITY_HEADER] = identity
         sent = await asyncio.to_thread(
             self.send,
             f"{self.proxy_url}/{action.replace('.', '/')}",
@@ -150,6 +155,7 @@ class DoorActs:
         key: str,
         parent: str | None,
         form: str = "tool",
+        identity: str = "",
     ) -> dict[str, Any]:
         from .world_door import ToolCall
 
@@ -161,6 +167,7 @@ class DoorActs:
             key=key,
             parent=parent,
             form=form,
+            identity=identity,
         )
         outcome = await asyncio.to_thread(self.door.enter, call)
         return {
@@ -378,13 +385,14 @@ class ActorDispatcher:
 
         service = action.split(".", 1)[0]
         if (
-            "actor_id" not in arguments
+            action in self.names_actor
+            and "actor_id" not in arguments
             and actor.identities.get(service)
-            and (action in self.names_actor or record_action(action) is None)
         ):
-            # The world learns who acts from the actor's identity in that service, as the person it seeded, so what
-            # an actor does is never credited to the agent.
+            # A world that checks who acts takes the actor's id in the call: it is the actor's identity there.
             arguments = {**arguments, "actor_id": actor.identities[service]}
+        # Every service the actor acts in learns who it is beside the call, so its action is never the agent's.
+        identity = actor.identities.get(service, "") if record_action(action) is None else ""
         try:
             return await self.act(
                 actor.id,
@@ -393,6 +401,7 @@ class ActorDispatcher:
                 key=key,
                 parent=cause or None,
                 form=form_of(action, actor),
+                **({"identity": identity} if identity else {}),
             )
         except Exception as exc:  # noqa: BLE001 - one action that cannot be sent never stops the rest
             logger.warning(

@@ -394,7 +394,10 @@ def _in_scenario(scenario: Scenario) -> set[str]:
 
 
 def _named(name: str, text: str) -> bool:
-    return bool(name.strip()) and re.search(rf"(?<!\w){re.escape(name.strip())}(?!\w)", text, re.IGNORECASE) is not None
+    """Whether a person's full name is in the text. A one-word name (a role such as "Manager", or a single letter)
+    reads as an ordinary word, so only a name of two or more words is matched."""
+    name = " ".join(name.split())
+    return len(name.split()) > 1 and re.search(rf"(?<!\w){re.escape(name)}(?!\w)", text, re.IGNORECASE) is not None
 
 
 def _folded_actors(scenario: Scenario, listed: dict[str, Actor]) -> list[str]:
@@ -403,9 +406,11 @@ def _folded_actors(scenario: Scenario, listed: dict[str, Actor]) -> list[str]:
     playing = _in_scenario(scenario)
     persona = scenario.persona
     caller_name = str((persona.get("name") if isinstance(persona, dict) else getattr(persona, "name", "")) or "")
+    caller = listed.get(CALLER)
+    represented = {caller.on_behalf_of} if caller is not None and caller.on_behalf_of else set()
     out = []
     for actor in listed.values():
-        if actor.id == CALLER or not actor.name:
+        if actor.id == CALLER or actor.id in represented or not actor.name:
             continue
         if caller_name and caller_name.strip().lower() == actor.name.strip().lower():
             out.append(

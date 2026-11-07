@@ -178,18 +178,46 @@ class _HostedToolStore:
         return self._store.add(collection, dict(record))
 
 
-class _ServiceTools:
-    """The agent's own tools service runs every call, as the tool proxy forwards them on a voice call; the agent's
-    calls are recorded in the world as its handlers would record them, so grading reads them the same way."""
+def _entries(contract: Any) -> list[dict[str, Any]]:
+    return [entry if isinstance(entry, dict) else entry.model_dump() for entry in (contract.tool_entrypoints or [])]
 
-    def __init__(self, world: Any, service: Any) -> None:
+
+def service_actions(contract: Any) -> set[str]:
+    """The agent's tools its own tools service runs, as world actions: a service entry's route, `/` read as `.`.
+    A route with a path parameter is left to the world's handler."""
+    return {
+        route.replace("/", ".")
+        for entry in _entries(contract)
+        if entry.get("mode") == "service"
+        and (route := str(entry.get("endpoint") or "").strip("/"))
+        and "{" not in route
+    }
+
+
+class _ServiceTools:
+    """The agent's own tools service runs its service actions, as the tool proxy forwards them on a voice call; any
+    other tool runs through the world's handler. The agent's calls are recorded in the world as its handlers would
+    record them, so grading reads them the same way, a call the service never answered included."""
+
+    def __init__(self, world: Any, service: Any, handlers: Any, actions: set[str]) -> None:
         self.world = world
         self.service = service
+        self.handlers = handlers
+        self.actions = actions
 
     def run(self, call: Any) -> Any:
         from .world_door import AGENT
 
-        ran = self.service.run(call)
+        if call.actor == AGENT and call.action not in self.actions:
+            return self.handlers.run(call)
+        try:
+            ran = self.service.run(call)
+        except Exception as failed:
+            if call.actor == AGENT and hasattr(self.world, "calls"):
+                self.world.calls.append(
+                    Call(name=call.name, arguments=dict(call.arguments or {}), ok=False, error=str(failed), at=time.time())
+                )
+            raise
         if call.actor == AGENT and hasattr(self.world, "calls"):
             ok = ran.status < 400
             self.world.calls.append(
@@ -212,9 +240,10 @@ def chat_door(
     roster: dict[str, dict[str, Any]],
     faults: list[Any],
     tools_url: str | None = None,
+    service_actions: set[str] | None = None,
 ) -> Any:
-    """The world's door for a chat run: the agent's own tools service runs every call when it has one, else the world's
-    own handlers; the trial's action log is kept in memory (mirrored to the world's table when it keeps actors), and
+    """The world's door for a chat run: the agent's own tools service runs its service actions and every actor's tool
+    action when it has one, the world's own handlers the rest; the trial's action log is kept in memory (mirrored to the world's table when it keeps actors), and
     who may do what is the environment's actor list."""
     from .world_door import (
         AGENT,
@@ -244,7 +273,11 @@ def chat_door(
         from .world_door import PostgresRecords
 
         records = RecordExecutor(PostgresRecords(mirror_dsn))
-    tools = _ServiceTools(world, HttpExecutor(tools_url)) if tools_url else HandlerExecutor(handle)
+    tools = (
+        _ServiceTools(world, HttpExecutor(tools_url), HandlerExecutor(handle), set(service_actions or ()))
+        if tools_url
+        else HandlerExecutor(handle)
+    )
     return WorldDoor(
         Routed(tools, records),
         TeeLog(MemoryLog(), PostgresLog(mirror_dsn) if mirror_dsn else None),
@@ -474,7 +507,15 @@ class _HostedChatTarget:
 
         del call_id
         arguments = dict(arguments or {}) if isinstance(arguments, Mapping) else {}
-        outcome = self._door.enter(ToolCall(action=self._action(name), name=name, arguments=arguments))
+        method = next(
+            (
+                str(entry.get("method") or "POST").upper()
+                for entry in _entries(self._contract)
+                if entry.get("tool") == name and entry.get("mode") == "service"
+            ),
+            "POST",
+        )
+        outcome = self._door.enter(ToolCall(action=self._action(name), name=name, arguments=arguments, method=method))
         if outcome.fault is not None:
             if outcome.fault.get("mode") == "timeout_after_commit":
                 if self.world.calls:
@@ -758,6 +799,7 @@ class HostedChatCallRunner:
             },
             list(document.get("faults") or []),
             tools_url=service.address if service is not None else None,
+            service_actions=service_actions(self._contract),
         )
         acts = DoorActs(door)
         meter = ActorMeter()

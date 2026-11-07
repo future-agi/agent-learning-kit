@@ -35,6 +35,8 @@ MAX_FAULT_SECONDS = 30.0
 LOG_WRITE_SECONDS = 2.0
 # A record change an actor may be permitted beside the world's tools: `<collection>.change` or `<collection>.put`.
 RECORD_VERBS = ("change", "put")
+# How a tools service learns which person an actor's call is from: the actor's identity in that service.
+IDENTITY_HEADER = "X-ALK-Actor-Identity"
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
 
 
@@ -61,6 +63,8 @@ class ToolCall:
     path: str = ""
     body: bytes | None = None
     content_type: str = "application/json"
+    # Who the actor is in the service it acts in (its identity there), sent to the service beside the call.
+    identity: str = ""
 
 
 @dataclass
@@ -420,7 +424,10 @@ class HttpExecutor:
             self.upstream + path,
             data=body if call.method != "GET" else None,
             method=call.method,
-            headers={"content-type": call.content_type or "application/json"},
+            headers={
+                "content-type": call.content_type or "application/json",
+                **({IDENTITY_HEADER: call.identity} if call.identity and call.actor != AGENT else {}),
+            },
         )
         try:
             with request.urlopen(outgoing, timeout=self.timeout) as response:
