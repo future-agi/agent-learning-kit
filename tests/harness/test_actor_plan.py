@@ -7,7 +7,9 @@ import json
 
 import pytest
 
-from fi.alk.harness.actor_dispatch import ActorDispatcher, HttpActs, world_summary
+from fi.alk.harness.actor_dispatch import ActorDispatcher, world_summary
+
+from tests.harness._door_acts import door_acts
 from fi.alk.harness.actors import (
     Activation,
     Actor,
@@ -148,7 +150,7 @@ def test_a_permitted_action_fallback_is_sent_under_the_actor_and_labelled_as_the
     dispatcher = ActorDispatcher(
         {"manager": manager},
         [ScenarioActor(id="manager")],
-        act=HttpActs("http://p", "t", 5, _sent_to(sent)),
+        act=door_acts(_sent_to(sent)),
         trial_id="t",
         read_log=lambda: log,
         seed="t",
@@ -200,7 +202,7 @@ def test_an_open_wait_and_an_actor_that_never_came_in_are_in_the_record():
     dispatcher = ActorDispatcher(
         actors,
         [ScenarioActor(id="manager"), ScenarioActor(id="auditor")],
-        act=HttpActs("http://p", "t", 5, _sent_to([])),
+        act=door_acts(_sent_to([])),
         trial_id="t",
         read_log=lambda: log,
         seed="t",
@@ -265,7 +267,7 @@ def test_pre_run_sessions_replay_in_order_and_a_reply_takes_the_id_the_world_gav
     dispatcher = ActorDispatcher(
         actors,
         [],
-        act=HttpActs("http://p", "t", 5, _sent_to(sent, lambda n: {"ts": f"ts-{n}"})),
+        act=door_acts(_sent_to(sent, lambda n: {"ts": f"ts-{n}"})),
         trial_id="t",
         read_log=list,
         seed="t",
@@ -472,7 +474,7 @@ def test_a_world_tool_that_asks_who_acts_gets_the_actor_s_identity_there():
                 }
             )
         ],
-        act=HttpActs("http://p", "t", 5, _sent_to(sent)),
+        act=door_acts(_sent_to(sent)),
         trial_id="t",
         read_log=list,
         seed="t",
@@ -503,7 +505,7 @@ def test_an_actor_s_identity_goes_with_its_service_action_but_never_with_a_recor
                 }
             )
         ],
-        act=HttpActs("http://p", "t", 5, _sent_to(sent)),
+        act=door_acts(_sent_to(sent)),
         trial_id="t",
         read_log=list,
         seed="t",
@@ -589,7 +591,7 @@ def test_a_speaking_actor_s_decided_action_is_sent_through_the_door_by_the_run_n
     dispatcher = ActorDispatcher(
         {"manager": manager},
         [ScenarioActor(id="manager")],
-        act=HttpActs("http://p", "tok", 5, _sent_to(sent)),
+        act=door_acts(_sent_to(sent)),
         trial_id="t",
         read_log=list,
         seed="t",
@@ -597,10 +599,8 @@ def test_a_speaking_actor_s_decided_action_is_sent_through_the_door_by_the_run_n
     )
     asyncio.run(dispatcher.tick())
     asyncio.run(dispatcher.tick())
-    # Sent once, under the actor's id and this trial's token, by the harness side.
-    assert [
-        (url, h["X-ALK-Actor"], h["X-ALK-Actor-Token"], a) for url, h, a in sent
-    ] == [("http://p/crm/approve", "manager", "tok", {"deal": 7})]
+    # Sent once, under the actor's id, by the harness side.
+    assert [(url, h["X-ALK-Actor"], a) for url, h, a in sent] == [("http://p/crm/approve", "manager", {"deal": 7})]
     assert (
         dispatcher.fired[-1]["channel"] == "voice"
         and json.loads(handed.read_text().splitlines()[0])["actor"] == "manager"
@@ -730,7 +730,7 @@ def test_a_speaking_live_actor_is_decided_by_its_channel_only_never_also_by_the_
     dispatcher = build_dispatcher(
         {"actors": [{"id": "manager"}]},
         tmp_path,
-        act=HttpActs("http://p", "t", 5, _sent_to(sent)),
+        act=door_acts(_sent_to(sent)),
         read_log=lambda: log,
         records=None,
         trial_id="t",
@@ -813,7 +813,7 @@ def test_a_per_trial_session_is_written_inside_each_trial_and_each_trial_keeps_i
         dispatcher = ActorDispatcher(
             actors,
             [],
-            act=HttpActs("http://p", "t", 5, _sent_to(sent)),
+            act=door_acts(_sent_to(sent)),
             trial_id=trial,
             read_log=list,
             seed=trial,

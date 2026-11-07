@@ -21,7 +21,6 @@ import logging
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
-from urllib import error, request
 
 from fi.simulate.simulation.call_actors import (
     Moment,
@@ -60,84 +59,6 @@ class Acts(Protocol):
         parent: str | None,
         form: str = "tool",
     ) -> Awaitable[dict[str, Any]]: ...
-
-
-class HttpActs:
-    """The bundle's tool proxy: the actor's id and this trial's token in headers, the action as the route."""
-
-    def __init__(
-        self,
-        proxy_url: str,
-        token: str,
-        timeout: float,
-        send: Callable[[str, dict[str, str], dict[str, Any]], Any] | None = None,
-    ) -> None:
-        self.proxy_url = proxy_url.rstrip("/")
-        self.token = token
-        self.timeout = timeout
-        self.send = send or self._send
-
-    def _send(
-        self, url: str, headers: dict[str, str], arguments: dict[str, Any]
-    ) -> dict[str, Any]:
-        outgoing = request.Request(
-            url,
-            data=json.dumps(arguments).encode(),
-            method="POST",
-            headers={"content-type": "application/json", **headers},
-        )
-        try:
-            with request.urlopen(outgoing, timeout=self.timeout) as response:
-                status, content = int(response.status), response.read()
-        except error.HTTPError as exc:
-            status, content = exc.code, exc.read()
-        try:
-            result = json.loads(content) if content else None
-        except ValueError:
-            result = None
-        return {"status": status, "result": result}
-
-    async def __call__(
-        self,
-        actor: str,
-        action: str,
-        arguments: dict[str, Any],
-        *,
-        key: str,
-        parent: str | None,
-        form: str = "tool",
-        identity: str = "",
-    ) -> dict[str, Any]:
-        from .world_door import IDENTITY_HEADER
-
-        headers = {
-            "X-ALK-Actor": actor,
-            "X-ALK-Actor-Token": self.token,
-            "Idempotency-Key": key,
-        }
-        if parent:
-            headers["X-ALK-Parent-Event"] = parent
-        if form == "record":
-            headers["X-ALK-Record"] = "1"
-        if identity:
-            headers[IDENTITY_HEADER] = identity
-        sent = await asyncio.to_thread(
-            self.send,
-            f"{self.proxy_url}/{action.replace('.', '/')}",
-            headers,
-            arguments,
-        )
-        if isinstance(sent, int):
-            sent = {"status": sent, "result": None}
-        status = int(sent.get("status") or 0)
-        return {
-            **sent,
-            "outcome": "committed"
-            if 0 < status < 400
-            else "refused"
-            if status < 500
-            else "faulted",
-        }
 
 
 class DoorActs:
@@ -903,18 +824,7 @@ def build_dispatcher(
         and not listed[entry.id].channel
     }
     world_actions = action_descriptions(contract)
-    takes_actor = {
-        str(one.get("name"))
-        for one in contract.get("tools") or []
-        if isinstance(one, dict) and "actor_id" in (one.get("args") or [])
-    }
-    names_actor = {
-        route.replace("/", ".")
-        for entry in contract.get("tool_entrypoints") or []
-        if isinstance(entry, dict)
-        and str(entry.get("tool") or "") in takes_actor
-        and (route := str(entry.get("endpoint") or "").strip("/"))
-    }
+    names_actor = actions_naming_actor(contract)
     return ActorDispatcher(
         listed,
         cast,
@@ -957,6 +867,22 @@ def described_with_units(tool: dict[str, Any]) -> str:
         return said
     named = "; ".join(f"{field} in {units[field]}" if str(units.get(field) or "").strip() else field for field in fields)
     return f"{said} (fields: {named})" if said else f"Fields: {named}"
+
+
+def actions_naming_actor(contract: dict[str, Any]) -> set[str]:
+    """The world actions whose tool declares who acts (an `actor_id` field): the world reads the actor's identity there."""
+    takes_actor = {
+        str(one.get("name"))
+        for one in contract.get("tools") or []
+        if isinstance(one, dict) and "actor_id" in (one.get("args") or [])
+    }
+    return {
+        route.replace("/", ".")
+        for entry in contract.get("tool_entrypoints") or []
+        if isinstance(entry, dict)
+        and str(entry.get("tool") or "") in takes_actor
+        and (route := str(entry.get("endpoint") or "").strip("/"))
+    }
 
 
 def action_descriptions(contract: dict[str, Any]) -> dict[str, str]:

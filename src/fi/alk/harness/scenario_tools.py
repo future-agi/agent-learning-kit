@@ -393,37 +393,22 @@ def _in_scenario(scenario: Scenario) -> set[str]:
     return playing
 
 
-def _named(name: str, text: str) -> bool:
-    """Whether a person's full name is in the text. A one-word name (a role such as "Manager", or a single letter)
-    reads as an ordinary word, so only a name of two or more words is matched."""
-    name = " ".join(name.split())
-    return len(name.split()) > 1 and re.search(rf"(?<!\w){re.escape(name)}(?!\w)", text, re.IGNORECASE) is not None
-
-
 def _folded_actors(scenario: Scenario, listed: dict[str, Actor]) -> list[str]:
-    """A listed person folded into the caller: the caller played as them, or the caller's instruction naming them while
-    the scenario does not play them. Either way the run never plays that person, so what they do is never tested."""
-    playing = _in_scenario(scenario)
+    """The caller played as a listed actor, read from the persona's name field: the run would never play that person,
+    so what they do is never tested. What the instruction's words mention is never judged here."""
     persona = scenario.persona
     caller_name = str((persona.get("name") if isinstance(persona, dict) else getattr(persona, "name", "")) or "")
     caller = listed.get(CALLER)
     represented = {caller.on_behalf_of} if caller is not None and caller.on_behalf_of else set()
-    out = []
-    for actor in listed.values():
-        if actor.id == CALLER or actor.id in represented or not actor.name:
-            continue
-        if caller_name and caller_name.strip().lower() == actor.name.strip().lower():
-            out.append(
-                f"persona: the caller is played as {actor.name}, who is the actor {actor.id!r}; give the caller a person "
-                f"of their own and put {actor.id} in `actors` with their part"
-            )
-        elif actor.id not in playing and _named(actor.name, scenario.instruction or ""):
-            out.append(
-                f"instruction: it names {actor.name} (the actor {actor.id!r}) but the scenario does not play them; put "
-                f"{actor.id} in `actors` with what they do (actions or a live part), or in `pre_run` or `starts_with`, "
-                "or leave them out of the instruction"
-            )
-    return out
+    return [
+        f"persona: the caller is played as {actor.name}, who is the actor {actor.id!r}; give the caller a person of "
+        f"their own and put {actor.id} in `actors` with their part"
+        for actor in listed.values()
+        if actor.id != CALLER
+        and actor.id not in represented
+        and actor.name
+        and caller_name.strip().lower() == actor.name.strip().lower()
+    ]
 
 
 def cast_read_back(scenario: Scenario, world_root: Path) -> str:

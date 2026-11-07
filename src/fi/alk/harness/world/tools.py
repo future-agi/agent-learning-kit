@@ -646,8 +646,9 @@ def world_actor_tools(
         + ". To act in the world give `permitted_actions`, exactly what this person may do and nothing more: the "
         "world's own actions, each named as the environment names it (the route one of its tools calls, with `/` as "
         "`.`), and record changes on the world's collections, `<collection>.put` to add a record (its fields) and "
-        "`<collection>.change` to edit one (`where` and `set`). An actor that acts in a service needs `identities` "
-        "there: who they are in its records, so the world credits what they do to them. A decision someone makes (an approval, a rejection, a grant of access) is "
+        "`<collection>.change` to edit one (`where` and `set`). Give an actor `identities` in each service it acts "
+        "in, who they are in its records, so the world credits what they do to them; one whose action's tool names "
+        "who acts needs it. A decision someone makes (an approval, a rejection, a grant of access) is "
         "a record change on the collection the world's rule reads, not one of the agent's own actions. Give an actor "
         "an action the agent takes only when the person asked for that actor to take it. The reply lists what can "
         "be given. Anything else they attempt is refused and recorded as their attempt. Who may take an action is "
@@ -692,13 +693,15 @@ def world_actor_tools(
             )
             if problems:
                 return _err("Not added:\n  - " + "\n  - ".join(problems))
-        from ..world_door import record_action
+        from ..actor_dispatch import actions_naming_actor
 
+        # Only where the action's own tool declares who acts does the world need the actor's identity there.
+        naming = actions_naming_actor(contract.model_dump()) if contract is not None else set()
         unnamed = sorted(
             {
                 one.split(".", 1)[0]
                 for one in actor.permitted_actions
-                if "." in one and record_action(one) is None and not actor.identities.get(one.split(".", 1)[0])
+                if one in naming and not actor.identities.get(one.split(".", 1)[0])
             }
         )
         if unnamed:

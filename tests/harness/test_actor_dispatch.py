@@ -7,7 +7,7 @@ import asyncio
 import pytest
 
 from fi.alk.harness.actor_dispatch import ActorDispatcher as _Dispatcher
-from fi.alk.harness.actor_dispatch import HttpActs
+from tests.harness._door_acts import door_acts
 from fi.alk.harness.actors import Actor, ActorList, ScenarioActor
 
 
@@ -19,7 +19,7 @@ def ActorDispatcher(actors, cast, *, proxy_url, token, timeout, send=None, decid
         def wrapped(situation, actor):
             return decide(situation)
 
-    return _Dispatcher(actors, cast, act=HttpActs(proxy_url, token, timeout, send), decide=wrapped, **rest)
+    return _Dispatcher(actors, cast, act=door_acts(send, proxy_url), decide=wrapped, **rest)
 
 
 class _Clock:
@@ -79,7 +79,6 @@ def test_an_actor_acts_through_the_proxy_under_its_own_id_and_this_trial_s_token
             "http://proxy/records/approve",
             {
                 "X-ALK-Actor": "reviewer",
-                "X-ALK-Actor-Token": "t0ken",
                 "Idempotency-Key": "trial-1:reviewer:0",
             },
             {"item": "d1"},
@@ -273,31 +272,12 @@ def test_the_log_is_read_only_while_an_action_waits_on_what_the_agent_does():
     assert reads == [1, 1]
 
 
-def test_an_action_s_request_is_bounded_by_the_call_s_budget(monkeypatch):
-    from fi.alk.harness import actor_dispatch
+def test_an_action_s_request_is_bounded_by_the_call_s_budget():
+    from fi.alk.harness.call_runner import runner_door
 
-    seen = []
-    monkeypatch.setattr(
-        actor_dispatch.HttpActs,
-        "_send",
-        lambda self, url, headers, arguments: seen.append(self.timeout) or {"status": 201},
-    )
-    dispatcher = ActorDispatcher(
-        {"reviewer": Actor(id="reviewer", name="Robin")},
-        [
-            ScenarioActor.model_validate(
-                {"id": "reviewer", "actions": [{"action": "records.approve"}]}
-            )
-        ],
-        trial_id="t",
-        proxy_url="http://proxy",
-        token="x",
-        read_log=list,
-        seed="s",
-        timeout=42.0,
-    )
-    asyncio.run(dispatcher.tick())
-    assert seen == [42.0]
+    # The runner's door forwards an actor's action to the tools service within the call's budget.
+    door = runner_door("http://tools", "postgresql://unused", 42.0)
+    assert door.executor.tools.timeout == 42.0
 
 
 def _live(play, decisions, log, activation=None):
@@ -355,7 +335,6 @@ def test_a_live_actor_decides_its_action_when_the_agent_reaches_it_and_the_world
             "http://proxy/deals/approve",
             {
                 "X-ALK-Actor": "manager",
-                "X-ALK-Actor-Token": "t0ken",
                 "Idempotency-Key": "trial-1:manager:l1",
                 "X-ALK-Parent-Event": "a1",
             },

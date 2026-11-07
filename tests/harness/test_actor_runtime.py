@@ -287,13 +287,13 @@ def _history_dispatcher(history, actors):
         sent.append((url, headers, arguments))
         return 200
 
-    from fi.alk.harness.actor_dispatch import HttpActs
+    from tests.harness._door_acts import door_acts
     from fi.alk.harness.actors import PreRunSession
 
     dispatcher = ActorDispatcher(
         actors,
         [],
-        act=HttpActs("http://proxy/", "t0ken", 60.0, send),
+        act=door_acts(send, "http://proxy"),
         trial_id="trial-2",
         read_log=list,
         seed="trial-2",
@@ -447,15 +447,25 @@ def test_a_way_of_speaking_sent_as_the_actor_s_surface_is_said_back_never_saved(
     assert load_actors(tmp_path).by_id()["dana"].channel == "audio_mix"
 
 
-def test_an_actor_acting_in_a_service_needs_its_identity_there(tmp_path):
+def test_an_actor_needs_its_identity_where_its_action_s_tool_names_who_acts(tmp_path):
     from fi.alk.harness.actors import load_actors
     from fi.alk.harness.world.tools import world_actor_tools
 
-    contract = SimpleNamespace(modality="chat", model_dump=lambda: {})
+    names_who = {
+        "tools": [{"name": "post_message", "args": ["channel", "text", "actor_id"]}, {"name": "get_deal", "args": ["deal_id"]}],
+        "tool_entrypoints": [
+            {"tool": "post_message", "endpoint": "chat/post_message"},
+            {"tool": "get_deal", "endpoint": "crm/get_deal"},
+        ],
+    }
+    contract = SimpleNamespace(modality="chat", model_dump=lambda: names_who)
     add, _drop = world_actor_tools(tmp_path, contract, collections=lambda: ["approvals"])
+    # A tool that does not name who acts needs no identity.
+    reader = asyncio.run(add.handler({"id": "reader", "name": "Kim", "permitted_actions": ["crm.get_deal"]}))
+    assert not reader.get("is_error")
     out = asyncio.run(add.handler({"id": "lead", "name": "Sam", "permitted_actions": ["chat.post_message", "approvals.put"]}))
     assert out.get("is_error") and "has no identity there" in out["content"][0]["text"] and "'chat'" in out["content"][0]["text"]
-    assert load_actors(tmp_path).actors == []
+    assert [one.id for one in load_actors(tmp_path).actors] == ["reader"]
     ok = asyncio.run(
         add.handler(
             {"id": "lead", "name": "Sam", "permitted_actions": ["chat.post_message", "approvals.put"], "identities": {"chat": "lead"}}
@@ -479,8 +489,12 @@ def test_a_person_folded_into_the_caller_is_refused_and_a_kept_scenario_reads_it
         ),
     )
     listed = load_actors(tmp_path).by_id()
-    told = Scenario.model_validate({"name": "x", "instruction": "Alex Vance has already rejected it.", "persona": {"name": "Priya"}})
-    assert ["instruction: it names Alex Vance"] == [one[: len("instruction: it names Alex Vance")] for one in _folded_actors(told, listed)]
+    # What the instruction's words mention is never refused: a person in the world's data may be named in passing.
+    told = Scenario.model_validate(
+        {"name": "x", "instruction": "Ask about the refund Alex Vance approved last month.", "persona": {"name": "Priya"}}
+    )
+    assert _folded_actors(told, listed) == []
+    assert "not in it: Alex Vance (manager), Sam Rivera (lead)" in cast_read_back(told, tmp_path)
     played_as = Scenario.model_validate({"name": "x", "instruction": "Negotiate.", "persona": {"name": "alex vance"}})
     assert _folded_actors(played_as, listed)[0].startswith("persona: the caller is played as Alex Vance")
     kept = Scenario.model_validate(
@@ -521,7 +535,7 @@ def test_an_actor_brought_in_when_contacted_needs_an_identity_the_agent_could_na
     assert _activation_problems(reachable, listed) == []
 
 
-def test_a_one_word_name_and_the_person_the_caller_speaks_for_are_never_read_as_folded(tmp_path):
+def test_the_person_the_caller_speaks_for_may_share_the_caller_s_name(tmp_path):
     from fi.alk.harness.actors import load_actors
     from fi.alk.harness.scenario import Scenario
     from fi.alk.harness.scenario_tools import _folded_actors
@@ -537,7 +551,7 @@ def test_a_one_word_name_and_the_person_the_caller_speaks_for_are_never_read_as_
         ),
     )
     said = Scenario.model_validate(
-        {"name": "x", "instruction": "You call for Dana Brooks; ask the manager about it.", "persona": {"name": "Priya"}}
+        {"name": "x", "instruction": "You call for Dana Brooks.", "persona": {"name": "Dana Brooks"}}
     )
     assert _folded_actors(said, load_actors(tmp_path).by_id()) == []
 

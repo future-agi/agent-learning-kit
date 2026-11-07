@@ -28,6 +28,7 @@ class _World(BaseHTTPRequestHandler):
     """A world whose answer is named by the path: /ok, /no (403), /broken (500)."""
 
     seen: list[str] = []
+    identities: list[str | None] = []
 
     def log_message(self, *_args: object) -> None:
         return
@@ -35,6 +36,7 @@ class _World(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
         self.rfile.read(int(self.headers.get("content-length") or 0))
         _World.seen.append(self.path)
+        _World.identities.append(self.headers.get("X-ALK-Actor-Identity"))
         status, payload = {
             "/ok": (201, {"id": "d-1", "count": len(_World.seen)}),
             "/records/approve": (201, {"approval": "ap-1"}),
@@ -99,6 +101,7 @@ def proxy(store, monkeypatch, tmp_path):
         connection.execute("DROP TABLE IF EXISTS _alk_trial_faults")
     world = _serve(_World)
     _World.seen = []
+    _World.identities = []
     monkeypatch.setenv("PORT", "0")
     monkeypatch.setenv("UPSTREAM_URL", f"http://127.0.0.1:{world.server_port}")
     monkeypatch.setenv("DATABASE_URL", dsn)
@@ -304,6 +307,18 @@ def test_a_request_to_the_proxy_naming_an_actor_is_the_agent_s_attempt_and_refus
         assert _post(url, "/records/approve", {"item": "1"}, **headers)[0] == 403
     assert _World.seen == []
     assert [(r["actor_id"], r["refusal_code"]) for r in rows()] == [("agent", "identity_conflict")] * 2
+
+
+def test_an_identity_the_agent_sends_never_reaches_the_world_but_an_actor_s_does(proxy):
+    # Who acts is told to the world only by the harness: the proxy rebuilds every agent request without it.
+    from fi.alk.harness.world_door import ToolCall
+
+    url, rows = proxy
+    assert _post(url, "/ok", {"item": "1"}, **{"X-ALK-Actor-Identity": "manager"})[0] == 201
+    proxy.door.enter(
+        ToolCall(action="records.approve", name="approve", arguments={"item": "1"}, actor="reviewer", identity="rob")
+    )
+    assert _World.identities == [None, "rob"]
 
 
 def test_an_actor_the_world_does_not_list_is_refused(proxy):
