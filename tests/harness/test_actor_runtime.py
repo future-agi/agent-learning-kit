@@ -588,3 +588,9 @@ def test_a_unit_for_a_field_the_tool_does_not_have_is_a_contract_problem():
     named = AgentContract.model_validate({"agent": "shop", "tools": [ToolSpec(
         name="refund", args=["refund_amount"], arg_units={"refund_amount": "cents, USD"}).model_dump()]})
     assert "units: refund_amount in cents, USD" in named.brief()
+
+
+def test_a_task_driven_run_s_task_reaches_the_platform_as_the_person_s_message():
+    from fi.alk.harness.platform import SPEAKERS
+
+    assert SPEAKERS["task"] == "user"
