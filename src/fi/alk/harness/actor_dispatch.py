@@ -621,7 +621,11 @@ class ActorDispatcher:
         }
         if outcome == "fallback_action":
             sent = await self._send(
-                actor, fallback, {}, f"{self.trial_id}:{actor.id}:fallback", cause
+                actor,
+                fallback,
+                dict(actor.activation.fallback_arguments),
+                f"{self.trial_id}:{actor.id}:fallback",
+                cause,
             )
             record["status"] = sent.get("status")
             record["action_outcome"] = sent.get("outcome")

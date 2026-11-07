@@ -69,6 +69,8 @@ class Activation(BaseModel):
     # `silent`, `decline`, one of the actor's own permitted actions taken for it, or another actor's id who answers
     # instead.
     fallback: str = "silent"
+    # The arguments a fallback action is taken with (the record a decline writes: `{"record": {...}}`, or `where`/`set`).
+    fallback_arguments: dict[str, Any] = Field(default_factory=dict)
 
 
 # The models an actor or the environment's actors may name, for now two flash models; unset is the caller's own.

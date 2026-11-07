@@ -131,7 +131,10 @@ def test_a_permitted_action_fallback_is_sent_under_the_actor_and_labelled_as_the
         permitted_actions=["crm.reject"],
         identities={"crm": "mia"},
         activation=Activation(
-            trigger=Trigger(kind="contacted"), timeout_seconds=30, fallback="crm.reject"
+            trigger=Trigger(kind="contacted"),
+            timeout_seconds=30,
+            fallback="crm.reject",
+            fallback_arguments={"deal_id": 7, "reason": "no answer"},
         ),
     )
     log = [
@@ -165,6 +168,8 @@ def test_a_permitted_action_fallback_is_sent_under_the_actor_and_labelled_as_the
     assert (
         sent[0][0] == "http://p/crm/reject" and sent[0][1]["X-ALK-Parent-Event"] == "a1"
     )
+    # The fallback is taken with the arguments it was given, so a decline writes its record.
+    assert sent[0][2] == {"deal_id": 7, "reason": "no answer"}
 
 
 def test_an_open_wait_and_an_actor_that_never_came_in_are_in_the_record():
