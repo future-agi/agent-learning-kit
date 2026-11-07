@@ -2269,6 +2269,17 @@ def test_a_misread_tool_can_be_corrected(tmp_path):
     assert "dropped values recorded for item_id" in said
 
 
+def test_a_field_s_unit_can_be_recorded_after_the_contract_is_written(tmp_path):
+    from fi.alk.harness.amend import fix_tool
+
+    contract = _written_contract(tmp_path)
+    done, said = fix_tool(contract, tmp_path, tool_name="add", arg_units={"item_id": "SKU code"}, why="the person said")
+    assert done and "units updated" in said
+    assert load(tmp_path).tools[0].arg_units == {"item_id": "SKU code"}
+    refused, said = fix_tool(contract, tmp_path, tool_name="add", arg_units={"amount": "cents"}, why="x")
+    assert not refused and "no argument called amount" in said
+
+
 def test_a_tool_the_agent_does_not_have_can_be_removed(tmp_path):
     from fi.alk.harness.amend import fix_tool
     from fi.alk.harness.contract import Dependency, ToolEntry

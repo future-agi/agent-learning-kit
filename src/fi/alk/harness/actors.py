@@ -539,6 +539,38 @@ def environment_actions(
     return world_action_names(contract) if contract is not None else []
 
 
+# Tables the harness keeps beside the world's own records; never a collection an actor changes.
+HARNESS_TABLES = ("harness_seed_sentinel",)
+
+
+def record_changes(collections: list[str]) -> list[str]:
+    """The record changes an actor may be given on the world's own collections: `<collection>.put` adds a record,
+    `<collection>.change` edits one (an approval, a membership, a status)."""
+    from .world_door import RECORD_VERBS
+
+    own = sorted(
+        {
+            str(one)
+            for one in collections
+            if one and not str(one).lower().startswith("_alk_") and str(one) not in HARNESS_TABLES
+        }
+    )
+    return [f"{one}.{verb}" for one in own for verb in RECORD_VERBS]
+
+
+def environment_collections(destination: Path) -> list[str]:
+    """The world's collections as its source model names them, or none before the world is modelled."""
+    from .certification import GenericHarnessArtifactStore
+
+    artifacts = GenericHarnessArtifactStore(Path(destination) / "generic-harness")
+    if not (artifacts.root / artifacts.SOURCE_MODEL).is_file():
+        return []
+    try:
+        return [table.name for table in artifacts.read_source_model().tables]
+    except (OSError, ValueError):
+        return []
+
+
 # Fields naming another listed actor, with the other values each also takes; `parent` may not form a cycle.
 REFERENCES = {
     "parent": [],

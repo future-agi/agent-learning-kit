@@ -447,6 +447,22 @@ def test_a_way_of_speaking_sent_as_the_actor_s_surface_is_said_back_never_saved(
     assert load_actors(tmp_path).by_id()["dana"].channel == "audio_mix"
 
 
+def test_an_actor_may_be_given_record_changes_on_the_world_s_own_collections(tmp_path):
+    from fi.alk.harness.actors import load_actors
+    from fi.alk.harness.world.tools import world_actor_tools
+
+    contract = SimpleNamespace(modality="chat", model_dump=lambda: {})
+    tables = ["approvals", "deals", "harness_seed_sentinel", "_alk_tool_trace"]
+    add, _drop = world_actor_tools(tmp_path, contract, collections=lambda: tables)
+    assert "approvals.put" in add.description and "_alk_tool_trace" not in add.description
+    out = asyncio.run(add.handler({"id": "lead", "name": "Sam", "permitted_actions": ["approvals.put"]}))
+    text = out["content"][0]["text"]
+    assert "not among them" not in text and "deals.change" in text and "harness_seed_sentinel" not in text
+    assert load_actors(tmp_path).by_id()["lead"].permitted_actions == ["approvals.put"]
+    out = asyncio.run(add.handler({"id": "lead", "permitted_actions": ["_alk_actors.put"]}))
+    assert "_alk_actors.put is not among them" in out["content"][0]["text"]
+
+
 def test_a_voice_actor_s_brief_reads_the_world_records_it_may_see(tmp_path, monkeypatch):
     from fi.alk.harness import call_runner as cr
     from fi.alk.harness.call_actor import CallActor, CallActorList, save_call_actors

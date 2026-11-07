@@ -224,6 +224,7 @@ def fix_tool(
     why: str,
     args: list[str] | None = None,
     arg_types: dict[str, str] | None = None,
+    arg_units: dict[str, str] | None = None,
     description: str = "",
     refuses: str = "",
     effects: str = "",
@@ -266,6 +267,7 @@ def fix_tool(
         spec.args = list(args)
         spec.arg_types = {k: v for k, v in spec.arg_types.items() if k in spec.args}
         spec.arg_values = {k: v for k, v in spec.arg_values.items() if k in spec.args}
+        spec.arg_units = {k: v for k, v in spec.arg_units.items() if k in spec.args}
         changed.append(f"arguments are now {', '.join(args)}")
         if orphaned:
             changed.append(f"dropped values recorded for {', '.join(orphaned)}")
@@ -275,6 +277,12 @@ def fix_tool(
             return False, f"{tool_name} takes no argument called {', '.join(unknown)}"
         spec.arg_types.update(arg_types)
         changed.append("types updated")
+    if arg_units:
+        unknown = sorted(set(arg_units) - set(spec.args))
+        if unknown:
+            return False, f"{tool_name} takes no argument called {', '.join(unknown)}"
+        spec.arg_units.update(arg_units)
+        changed.append("units updated")
     if description:
         spec.description = description
         changed.append("description updated")
@@ -284,7 +292,7 @@ def fix_tool(
             changed.append(f"{field} updated")
     if not changed:
         return False, (
-            "nothing to change: give args, arg_types, description, refuses, effects, inputs_from, "
+            "nothing to change: give args, arg_types, arg_units, description, refuses, effects, inputs_from, "
             "or remove"
         )
 

@@ -21,6 +21,7 @@ import json
 import logging
 import re
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +36,8 @@ from ..actors import (
     load_actors,
     save_actors,
     environment_actions,
+    environment_collections,
+    record_changes,
 )
 from ..amend import add_rule, drop_rule, fix_tool, set_modality, widen
 from ..catalogue import (
@@ -600,9 +603,12 @@ def _tables_the_source_lacks(
 
 
 def world_actor_tools(
-    destination: Path, contract: AgentContract | None = None
+    destination: Path,
+    contract: AgentContract | None = None,
+    collections: Callable[[], list[str]] | None = None,
 ) -> list[Any]:
-    """The tools that keep the environment's actors: for the build and the builder chat."""
+    """The tools that keep the environment's actors: for the build and the builder chat. `collections` reads the
+    world's collections while it is being built; without it they come from the saved source model."""
 
     def world_actions() -> list[str]:
         # Read when called, so actions adopted later in the build count.
@@ -610,11 +616,19 @@ def world_actor_tools(
             destination, contract.model_dump() if contract is not None else None
         )
 
+    def world_records() -> list[str]:
+        try:
+            held = collections() if collections is not None else []
+        except Exception:  # noqa: BLE001 - a world that cannot list its tables offers no record changes
+            held = []
+        return record_changes(held or environment_collections(destination))
+
     modality = str(getattr(contract, "modality", "") or "")
     speaking = available_channels(modality)
 
     # Known before the call when the world is already built (the builder chat), so one request is one confirmation.
     listed = world_actions()
+    records = world_records()
 
     @tool(
         "add_actor",
@@ -629,11 +643,17 @@ def world_actor_tools(
             if speaking
             else " (this agent's calls carry none)"
         )
-        + ". To act in the world give `permitted_actions`: only actions the world already has, each named as the "
-        "environment names it (the route one of its tools calls, with `/` as `.`); the reply lists them. Anything "
-        "else they attempt is refused and recorded as their attempt. Who may take an action is decided by this "
-        "list, never by what anyone says. `role` is who they are to the people around them in a few words."
-        + (f" The world's actions: {', '.join(listed)}." if listed else ""),
+        + ". To act in the world give `permitted_actions`, exactly what this person may do and nothing more: the "
+        "world's own actions, each named as the environment names it (the route one of its tools calls, with `/` as "
+        "`.`), and record changes on the world's collections, `<collection>.put` to add a record and "
+        "`<collection>.change` to edit one. A decision someone makes (an approval, a rejection, a grant of access) is "
+        "a record change on the collection the world's rule reads, not one of the agent's own actions. Give an actor "
+        "an action the agent takes only when the person asked for that actor to take it. The reply lists what can "
+        "be given. Anything else they attempt is refused and recorded as their attempt. Who may take an action is "
+        "decided by this list, never by what anyone says. `role` is who they are to the people around them in a few "
+        "words."
+        + (f" The world's actions: {', '.join(listed)}." if listed else "")
+        + (f" Record changes: {', '.join(records)}." if records else ""),
         actor_input_schema(),
     )
     async def add_actor(args: dict[str, Any]) -> dict[str, Any]:
@@ -685,13 +705,16 @@ def world_actor_tools(
         except ValueError as exc:
             return _err(f"Not added: {exc}")
         known = world_actions()
-        unknown = [one for one in actor.permitted_actions if one not in known]
+        changes = world_records()
+        unknown = [one for one in actor.permitted_actions if one not in known and one not in changes]
         reply = f"{actor.id} may {', '.join(actor.permitted_actions) or 'do nothing in the world'}. "
         reply += (
             f"The world's actions: {', '.join(known)}."
             if known
             else "The world has no actions an actor can take yet."
         )
+        if changes:
+            reply += f" Record changes: {', '.join(changes)}."
         if unknown:
             reply += (
                 f" {', '.join(unknown)} {'is' if len(unknown) == 1 else 'are'} not among them, so the world "
@@ -1485,7 +1508,8 @@ def world_tools(
     @tool(
         "fix_tool",
         "Correct a tool that was read wrong, or remove one the agent does not have. `args` "
-        "replaces its argument names in order; `arg_types` and `description` update those. Set "
+        "replaces its argument names in order; `arg_types`, `arg_units` (the unit or format of a field, cents or "
+        "dollars, seconds or milliseconds) and `description` update those. Set "
         "`remove` to take the tool away entirely. Everything downstream is built from these, so "
         "a wrong argument name produces a world that refuses everything. Say why.",
         schema(
@@ -1493,6 +1517,7 @@ def world_tools(
                 "tool_name": str,
                 "args": list,
                 "arg_types": dict,
+                "arg_units": dict,
                 "description": str,
                 "refuses": str,
                 "effects": str,
@@ -1513,6 +1538,7 @@ def world_tools(
             arg_types={
                 str(k): str(v) for k, v in (args.get("arg_types") or {}).items()
             },
+            arg_units={str(k): str(v) for k, v in (args.get("arg_units") or {}).items()},
             description=str(args.get("description") or ""),
             refuses=str(args.get("refuses") or ""),
             effects=str(args.get("effects") or ""),
@@ -2057,7 +2083,11 @@ def world_tools(
             run_env_command,
             check_world,
             save_world,
-            *world_actor_tools(destination, contract),
+            *world_actor_tools(
+                destination,
+                contract,
+                collections=lambda: list(getattr(getattr(world, "store", None), "collections", list)()),
+            ),
         ],
     )
     return server, world

@@ -163,7 +163,11 @@ what the gates check. Then:
   which one and why, offer what can be used instead, and change it only once they agree.
 - **World actors**, where `add_actor` is offered: `add_actor` adds someone who acts through the world's own
   actions, or changes only the fields you send of one already listed, so what the person set elsewhere stays.
-  `drop_actor` removes one. Read `actors.json` first: edits made in the web app or CLI meet yours there.
+  `drop_actor` removes one. Read `actors.json` first: edits made in the web app or CLI meet yours there. When the
+  person says who may do what, give each actor exactly those actions, decisions as record changes on the collection
+  the world's rule reads, and read every actor's list back against the request before you answer.
+- **Units**: when the person gives a field's unit or format (amounts in cents, a timeout in seconds), record it on
+  each tool argument that carries it with `fix_tool`'s `arg_units`, as well as in the world's data.
 - **The contract's reading of the agent**: `amend_contract`, `add_rule`, `drop_rule`, `fix_tool`, and
   `declare_tool` for a tool the contract lacks (with the line in the agent's source that defines it),
   always with the reason. This corrects the harness's understanding; it never changes the agent.

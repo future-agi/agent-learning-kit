@@ -19,7 +19,11 @@ who knows the order, someone who takes the phone, a phone menu, a manager acting
 already decided before the run starts is a record in the seed, not an actor.
 
 **What an actor may do is world data.** An actor's `permitted_actions` are chosen only from the world's own actions
-(`add_actor`'s reply lists them), or a record change on one of the world's collections (`approvals.change`). Give each
+or a record change on one of the world's collections (`approvals.put`, `approvals.change`); `add_actor`'s reply lists
+both. The list is exactly what that person may do: when the request says who may do what, each actor gets those
+actions and nothing more, and every permission asked for appears on someone's list. A decision a person makes (an
+approval, a rejection, a grant of access) is a record change on the collection the world's rule reads, never one of the
+agent's own actions; give an actor an action the agent takes only when an actor taking it is what is asked. Give each
 actor its `identities` in each service (its Slack handle, its CRM user) so the agent can reach it and it can name
 itself where an action asks who it is. When an action depends on someone else's, write that rule into the world, as
 a record the dependent action checks for, so the world refuses it until a permitted actor has acted. Someone saying

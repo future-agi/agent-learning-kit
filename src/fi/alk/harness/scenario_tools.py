@@ -2369,12 +2369,14 @@ def scenario_tools(
     @tool(
         "fix_tool",
         "Correct a tool that was read wrong, or remove one the agent does not have. Everything "
-        "is built from these, so a wrong argument name produces a world that refuses everything.",
+        "is built from these, so a wrong argument name produces a world that refuses everything. `arg_units` "
+        "records the unit or format of a field (cents or dollars, seconds or milliseconds).",
         schema(
             {
                 "tool_name": str,
                 "args": list,
                 "arg_types": dict,
+                "arg_units": dict,
                 "description": str,
                 "refuses": str,
                 "effects": str,
@@ -2395,6 +2397,7 @@ def scenario_tools(
             arg_types={
                 str(k): str(v) for k, v in (args.get("arg_types") or {}).items()
             },
+            arg_units={str(k): str(v) for k, v in (args.get("arg_units") or {}).items()},
             description=str(args.get("description") or ""),
             refuses=str(args.get("refuses") or ""),
             effects=str(args.get("effects") or ""),
