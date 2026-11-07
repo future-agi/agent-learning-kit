@@ -282,7 +282,12 @@ def fix_tool(
         if unknown:
             return False, f"{tool_name} takes no argument called {', '.join(unknown)}"
         spec.arg_units.update(arg_units)
-        changed.append("units updated")
+        changed.append(
+            "units updated ("
+            + "; ".join(f"{field} in {unit}" for field, unit in sorted(arg_units.items()))
+            + "); if the code that reads a field or the data it holds says otherwise, the code's unit is the one to "
+            "record, and the person is told about the mismatch"
+        )
     if description:
         spec.description = description
         changed.append("description updated")

@@ -170,7 +170,9 @@ what the gates check. Then:
   say so plainly and ask how to proceed; never stand in for it by giving an actor the change the agent's own action
   makes.
 - **Units**: when the person gives a field's unit or format (amounts in cents, a timeout in seconds), record it on
-  each tool argument that carries it with `fix_tool`'s `arg_units`, as well as in the world's data.
+  each tool argument that carries it with `fix_tool`'s `arg_units`, as well as in the world's data. Check it against
+  the code that reads the field and the data it holds first: when they disagree, the code wins, and you tell the
+  person about the mismatch instead of recording their unit.
 - **The contract's reading of the agent**: `amend_contract`, `add_rule`, `drop_rule`, `fix_tool`, and
   `declare_tool` for a tool the contract lacks (with the line in the agent's source that defines it),
   always with the reason. This corrects the harness's understanding; it never changes the agent.

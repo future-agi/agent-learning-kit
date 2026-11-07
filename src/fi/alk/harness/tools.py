@@ -389,7 +389,8 @@ def contract_tools(
                                 "type": "object",
                                 "description": "The unit or format of every amount, duration, date or "
                                 "time argument whose name does not say it, from the code that reads it, the "
-                                "data it holds or what the person you work with said: "
+                                "data it holds or what the person you work with said; when the code and "
+                                "their words disagree, the code's: "
                                 '{"refund_amount": "cents, USD", "timeout": "milliseconds"}.',
                             },
                             "description": {"type": "string"},

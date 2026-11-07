@@ -2274,7 +2274,7 @@ def test_a_field_s_unit_can_be_recorded_after_the_contract_is_written(tmp_path):
 
     contract = _written_contract(tmp_path)
     done, said = fix_tool(contract, tmp_path, tool_name="add", arg_units={"item_id": "SKU code"}, why="the person said")
-    assert done and "units updated" in said
+    assert done and "units updated (item_id in SKU code)" in said and "the code's unit" in said
     assert load(tmp_path).tools[0].arg_units == {"item_id": "SKU code"}
     refused, said = fix_tool(contract, tmp_path, tool_name="add", arg_units={"amount": "cents"}, why="x")
     assert not refused and "no argument called amount" in said
