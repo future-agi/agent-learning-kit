@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -275,3 +276,15 @@ def test_the_dispatcher_acts_in_process_through_the_door():
     assert sent["outcome"] == "committed"
     [row] = door.events("manager")
     assert row["parent_event_id"] == "a1"
+
+
+def test_access_is_read_from_the_world_on_every_call_so_a_grant_during_the_run_takes_effect_at_once():
+    # Access is world state: when the CEO adds the developer to the channel mid-run, the next post goes through.
+    roster = {"dev": {"permitted_actions": [], "on_behalf_of": None}}
+    executor = _Executor()
+    door = WorldDoor(executor, MemoryLog(), DictRoster(roster))
+    post = ToolCall(action="slack.post", name="post", actor="dev", key="t:dev:1")
+    assert door.enter(post).refusal_code == "not_permitted"
+    roster["dev"]["permitted_actions"].append("slack.post")
+    assert door.enter(replace(post, key="t:dev:2")).outcome == "committed"
+    assert [one.actor for one in executor.ran] == ["dev"]
