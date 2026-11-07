@@ -1500,3 +1500,20 @@ def test_a_chat_trial_s_faults_are_set_for_the_tool_proxy_and_cleared_after(tmp_
     runtime.endpoints.pop("tool_proxy")
     asyncio.run(chat.HostedChatCallRunner(_Adapter(), context).run(SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), runtime))
     assert written == []
+
+
+def test_a_chat_trial_s_world_changes_read_the_world_s_table_where_the_proxy_logs_the_agent() -> None:
+    from fi.alk.harness.actors import Actor, ActorList
+    from fi.alk.harness.world_door import AGENT, MemoryLog, TeeLog
+
+    class _Table(MemoryLog):
+        """The world's table: the tool proxy wrote the agent's own call there, beside the actor's mirrored row."""
+
+    table = _Table()
+    table.write({"name": "apply_discount", "actor_id": AGENT, "outcome": "committed", "ok": True})
+    door = SimpleNamespace(log=TeeLog(MemoryLog(), table))
+    door.log.write({"name": "put", "actor_id": "manager", "outcome": "committed", "ok": True})
+    listing = ActorList(actors=[Actor(id="manager", name="Mia", permitted_actions=["approvals.put"])])
+    record = chat._world_actors_record(door, listing, None, None, SimpleNamespace(rows=list), {})
+    changes = {one["who"]: one["committed"] for one in record["state_changes"]}
+    assert changes == {AGENT: 1, "manager": 1}

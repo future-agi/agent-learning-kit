@@ -296,7 +296,10 @@ def _world_actors_record(
 
     listed = listing.by_id()
     try:
-        log = door.log.rows()
+        # The world's own table holds every row, the agent's calls through its tool proxy included; this process's
+        # memory holds only what passed its own door.
+        mirror = getattr(door.log, "mirror", None)
+        log = (mirror.rows() if mirror is not None else []) or door.log.rows()
     except Exception:  # noqa: BLE001 - no record, never a failed call
         log = []
     acted = actor_rows(log, listed)
