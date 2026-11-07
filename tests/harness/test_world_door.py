@@ -278,13 +278,47 @@ def test_the_dispatcher_acts_in_process_through_the_door():
     assert row["parent_event_id"] == "a1"
 
 
-def test_access_is_read_from_the_world_on_every_call_so_a_grant_during_the_run_takes_effect_at_once():
-    # Access is world state: when the CEO adds the developer to the channel mid-run, the next post goes through.
-    roster = {"dev": {"permitted_actions": [], "on_behalf_of": None}}
-    executor = _Executor()
-    door = WorldDoor(executor, MemoryLog(), DictRoster(roster))
-    post = ToolCall(action="slack.post", name="post", actor="dev", key="t:dev:1")
-    assert door.enter(post).refusal_code == "not_permitted"
-    roster["dev"]["permitted_actions"].append("slack.post")
+def test_a_record_change_to_the_harness_s_own_tables_is_refused_before_any_sql():
+    from fi.alk.harness.world_door import RecordExecutor
+
+    ran = []
+    executor = RecordExecutor(lambda sql, params: ran.append(sql) or 1)
+    for action in ("_alk_actors.change", "_ALK_tool_trace.put", "_alk_trial_faults.put"):
+        args = {"where": {"id": "x"}, "set": {"permitted_actions": "[]"}} if action.endswith("change") else {"record": {"id": 1}}
+        result = executor.run(ToolCall(action=action, name=action, arguments=args, actor="manager"))
+        assert result.status == 403 and "harness's own table" in result.error
+    assert ran == []
+
+
+def test_access_is_a_world_record_the_world_s_rule_reads_so_a_grant_by_an_actor_takes_effect_at_once():
+    # The developer may post only once they are a member of the channel. Membership is a world record; the CEO's
+    # grant is a record change through the door, and the world's own rule reads it on the developer's next post.
+    from fi.alk.harness.world_door import RecordExecutor
+
+    members: set[str] = set()
+
+    def handle(call):
+        who = call.arguments.get("author")
+        if call.name == "post" and who not in members:
+            return False, {"detail": f"{who} is not in #deals"}, "not a member"
+        return True, {"posted": True}, "posted"
+
+    def execute(sql, params):
+        assert sql.startswith('INSERT INTO "channel_members"')
+        members.add(params[0])
+        return 1
+
+    roster = {
+        "ceo": {"permitted_actions": ["channel_members.put"], "on_behalf_of": None},
+        "dev": {"permitted_actions": ["slack.post"], "on_behalf_of": None},
+    }
+    door = WorldDoor(Routed(HandlerExecutor(handle), RecordExecutor(execute)), MemoryLog(), DictRoster(roster))
+    post = ToolCall(action="slack.post", name="post", arguments={"author": "dev"}, actor="dev", key="t:dev:1")
+    assert door.enter(post).outcome == "refused"
+    grant = ToolCall(action="channel_members.put", name="put", arguments={"record": {"member": "dev"}}, actor="ceo",
+                     key="t:ceo:1", form="record")
+    assert door.enter(grant).outcome == "committed"
     assert door.enter(replace(post, key="t:dev:2")).outcome == "committed"
-    assert [one.actor for one in executor.ran] == ["dev"]
+    assert [(row["actor_id"], row["outcome"]) for row in door.events()] == [
+        ("dev", "refused"), ("ceo", "committed"), ("dev", "committed")
+    ]

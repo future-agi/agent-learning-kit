@@ -452,6 +452,9 @@ class RecordExecutor:
         if named is None:
             return Executed(400, None, error=f"{call.action} is not a record change")
         collection, verb = named
+        if collection.lower().startswith("_alk_"):
+            # The harness's own tables (who may act, the action log, the trial's faults) are never a world record.
+            return Executed(403, None, error=f"{collection} is the harness's own table, not a world record")
         values = arguments.get("record" if verb == "put" else "set")
         where = arguments.get("where") if verb == "change" else {}
         if (

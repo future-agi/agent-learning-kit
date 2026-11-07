@@ -25,8 +25,9 @@ itself where an action asks who it is. When an action depends on someone else's,
 a record the dependent action checks for, so the world refuses it until a permitted actor has acted. Someone saying
 they have done it is not the record. Access works the same way: who is in which channel, who may see a document or a
 record, is seeded per scenario as world records the world's own actions check, and it can change during the run (the
-CEO adds the developer to the channel: that is an action, and the developer's next post goes through). The door reads
-access as it stands on every call, for the agent and for every actor.
+CEO adds the developer to the channel: a record change the CEO is permitted, such as `channel_members.put`, and the
+developer's next post goes through). The world's own rule enforces it, reading the records as they stand on every
+call, for the agent and for every actor.
 
 **One branch per scenario.** Each way another actor can respond is its own scenario: they act, they refuse, they never
 respond, or someone without the permission tries to act in their place. An action the actor is not permitted belongs
