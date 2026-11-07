@@ -510,6 +510,28 @@ def test_a_person_folded_into_the_caller_is_refused_and_a_kept_scenario_reads_it
     assert "Alex Vance (manager; comes in: its own; does: approvals.put (a record change))" in said
     assert "not in it: Sam Rivera (lead)" in said
     assert "Talked before the run: nobody (no `pre_run`)" in said and "Started by: the caller (no `starts_with`)" in said
+    # An action with no trigger of its own fires at the start, so it is read back as already done.
+    assert "Already done before the agent starts (`always`): manager (approvals.put)" in said
+    assert "has to handle" not in said
+    asked = kept.model_copy(
+        update={"actors": [{"id": "manager", "actions": [{"action": "approvals.put", "trigger": {"kind": "on_tool", "tool": "ask"}}]}]}
+    )
+    assert "Already done" not in cast_read_back(Scenario.model_validate(asked.model_dump()), tmp_path)
+    # A decision already made at the start, and a part spoken on the call, are each read back with what to check.
+    decided = kept.model_copy(
+        update={
+            "actors": [
+                {
+                    "id": "manager",
+                    "actions": [{"action": "approvals.put", "arguments": {}, "trigger": {"kind": "always"}}],
+                },
+                {"id": "lead", "instruction": "Say the order number is 1043."},
+            ]
+        }
+    )
+    said = cast_read_back(Scenario.model_validate(decided.model_dump()), tmp_path)
+    assert "Already done before the agent starts (`always`): manager (approvals.put)" in said
+    assert "For lead: name what the agent has to handle" in said
 
 
 def test_an_actor_brought_in_when_contacted_needs_an_identity_the_agent_could_name(tmp_path):

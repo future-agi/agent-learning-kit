@@ -448,6 +448,13 @@ def cast_read_back(scenario: Scenario, world_root: Path) -> str:
     else:
         starter = "the caller (no `starts_with`)"
     left_out = [f"{one.name} ({one.id})" for one in others if one.id not in _in_scenario(scenario)]
+    settled = [
+        f"{entry.id} ({one.action})"
+        for entry in scenario.actors
+        for one in entry.actions
+        if record_action(one.action) and one.trigger is not None and one.trigger.kind == "always"
+    ]
+    speaking = [entry.id for entry in scenario.actors if entry.instruction]
     return (
         "\nCast: the caller" + "".join(f"; {one}" for one in parts)
         + f". Talked before the run: {'; '.join(sessions) if sessions else 'nobody (no `pre_run`)'}. Started by: {starter}."
@@ -455,6 +462,19 @@ def cast_read_back(scenario: Scenario, world_root: Path) -> str:
         + " Compare this with the request: everyone it names as acting during the run is played here; a decision "
         "someone makes in the world is a record change; people who talked before the run are a `pre_run` session; "
         "a run started by someone's message has `starts_with`."
+        + (
+            f" Already done before the agent starts (`always`): {', '.join(settled)}. If that is a decision the agent "
+            "asks for and must wait for or honour, fire it on the agent's request instead."
+            if settled
+            else ""
+        )
+        + (
+            f" For {', '.join(speaking)}: name what the agent has to handle because of them (a fact that differs "
+            "from the person's, a request it may not grant, a decision only they make). If they only say what the "
+            "person could have said, change their part with `edit_scenario`."
+            if speaking
+            else ""
+        )
     )
 
 
