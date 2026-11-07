@@ -103,8 +103,12 @@ Find, in roughly this order:
    when a record says so; and each argument whose text the agent writes itself rather than takes
    from the person or a record. `refuses`: every refusal by value or by something outside the
    call, and every refusal returned as an ordinary value rather than an error. `inputs_from`: an
-   argument whose value must come from an earlier tool's output, and that tool. Fill these for
-   every tool that has them; a writer sees nothing else.
+   argument whose value must come from an earlier tool's output, and that tool. `arg_units`: the
+   unit or format of every amount, duration, date or time argument whose name does not say it
+   (cents or dollars, seconds or milliseconds, an ISO date or a timestamp), from the code that reads
+   it, the data it holds, or what the person you work with told you. The agent, the world and every
+   actor read the field by it, so a field left without one is read three ways. Fill these for every
+   tool that has them; a writer sees nothing else.
 
 6. **The rules.** Hard constraints the agent is instructed or coded to obey. Prefer the exact
    wording from its system prompt or its validation code. These matter: the agent under test is

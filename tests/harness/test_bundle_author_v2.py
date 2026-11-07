@@ -4836,6 +4836,79 @@ def test_a_changed_world_reaches_the_sealed_seed_on_reseal(
     assert reseal_scenarios(authoring) == digest
 
 
+def test_an_actor_who_speaks_on_calls_is_sealed_in_the_one_actor_list(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    (authoring / "actors.json").write_text(
+        json.dumps(
+            {
+                "actors": [
+                    {"id": "partner", "name": "Sam", "role": "the person's partner", "channel": "audio_mix"}
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    output = tmp_path / "bundle"
+    author_bundle_v2(
+        source=source,
+        job=_job(connector="http", scenario_count=1),
+        authoring=authoring,
+        output=output,
+    )
+    manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    sealed = {one["path"] for one in manifest["files"]}
+    assert "actors.json" in sealed
+    assert sealed.isdisjoint({"sub_actors.json", "call_actors.json"})
+    assert json.loads((output / "actors.json").read_text())["actors"][0]["channel"] == "audio_mix"
+
+
+def test_a_bundle_with_actors_seals_the_rules_its_release_checks_them_by(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    (authoring / "actors.json").write_text(
+        '{"actors": [{"id": "reviewer", "name": "Robin"}]}\n', encoding="utf-8"
+    )
+
+    output = tmp_path / "bundle"
+    author_bundle_v2(
+        source=source,
+        job=_job(connector="http", scenario_count=1),
+        authoring=authoring,
+        output=output,
+    )
+    manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    assert {"actors.json", "actor_rules.json"} <= {
+        one["path"] for one in manifest["files"]
+    }
+    rules = json.loads((output / "actor_rules.json").read_text(encoding="utf-8"))
+    assert set(rules["records"]) == {"actors.json"}
+
+
+def test_a_world_without_actors_is_seeded_with_the_tool_trace_it_always_had(
+    tmp_path: Path,
+) -> None:
+    from fi.alk.harness.bundle_author_v2 import _action_log_seed
+
+    assert _action_log_seed(tmp_path) == (
+        "CREATE TABLE IF NOT EXISTS _alk_tool_trace ("
+        "id bigserial PRIMARY KEY, name text NOT NULL, arguments jsonb NOT NULL, "
+        "result jsonb, ok boolean NOT NULL, error text, at double precision NOT NULL);\n"
+    )
+    (tmp_path / "actors.json").write_text(
+        '{"actors": [{"id": "reviewer", "name": "Robin"}]}\n', encoding="utf-8"
+    )
+    with_actors = _action_log_seed(tmp_path)
+    assert "actor_id text" in with_actors and "INSERT INTO _alk_actors" in with_actors
+
+
 # The platform pins the same digest for the same files (test_harness_versioning_reseal.py).
 GOLDEN_SEALED_FROM = (
     "sha256:402ed05450abe6c943865dd538ebd78e94d15c7e7a15d9b6a934e51cf4d26d3e"

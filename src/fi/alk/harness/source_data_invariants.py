@@ -336,6 +336,7 @@ async def author_invariants(
             business_tables = set(state) - {
                 "harness_seed_sentinel",
                 "_alk_tool_trace",
+                "_alk_actors",
             }
             if not business_tables:
                 evidence = {

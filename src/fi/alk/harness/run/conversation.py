@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 from itertools import accumulate
 from typing import Any, Callable
 
+from fi.simulate.simulation.call_actors import declined_line
+
 from ..backends import SessionSpec
 
 from ..config import chosen_model
@@ -51,6 +53,8 @@ class Exchange:
     # Epoch seconds when the turn was delivered, on the same clock as `Call.at`, so a tool call
     # the agent made before replying sorts between the customer's turn and the reply.
     at: float = 0.0
+    # An actor's turn: who wrote it (`id`, `name`). Empty for the person and the agent.
+    actor: dict[str, Any] | None = None
 
 
 @dataclass
@@ -63,19 +67,18 @@ class Transcript:
     spent_usd: float = 0.0
     simulator_input_tokens: int = 0
     simulator_output_tokens: int = 0
+    # Who else was in the conversation and what happened to each, as a call's record keeps it.
+    call_actors: dict[str, Any] | None = None
+    # What actors did in the world and what it changed, as a call's record keeps it.
+    world_actors: dict[str, Any] | None = None
 
     def spoken(self) -> str:
         return "\n".join(f"{turn.speaker}: {turn.text}" for turn in self.exchanges)
 
     def canonical_messages(self) -> list[dict[str, str]]:
-        """The turns in the role convention the judge reads: `user` said it, `assistant` answered."""
-        return [
-            {
-                "role": "assistant" if turn.speaker == "agent" else "user",
-                "content": turn.text,
-            }
-            for turn in self.exchanges
-        ]
+        """The turns in the role convention the judge reads: `user` said it, `assistant` answered, `actor` is someone
+        else in the conversation."""
+        return [_message(turn) for turn in self.exchanges]
 
     def artifact(self) -> bytes:
         """Return the lossless transcript wire format used by hosted ingestion."""
@@ -84,16 +87,12 @@ class Transcript:
                 {
                     "transcript": self.spoken(),
                     "messages": [
-                        {
-                            "role": "user"
-                            if turn.speaker == "customer"
-                            else "assistant",
-                            "content": turn.text,
-                            **({"at": turn.at} if turn.at else {}),
-                        }
+                        {**_message(turn), **({"at": turn.at} if turn.at else {})}
                         for turn in self.exchanges
                     ],
                     "ended": self.ended,
+                    **({"call_actors": self.call_actors} if self.call_actors else {}),
+                    **({"world_actors": self.world_actors} if self.world_actors else {}),
                 },
                 sort_keys=True,
             )
@@ -220,6 +219,221 @@ def customer_prompt(
     )
 
 
+def _message(turn: Exchange) -> dict[str, Any]:
+    if turn.actor:
+        return {
+            "role": "actor",
+            "actor": turn.actor.get("id"),
+            "name": turn.actor.get("name"),
+            "content": turn.text,
+        }
+    return {"role": "assistant" if turn.speaker == "agent" else "user", "content": turn.text}
+
+
+class ChatActors:
+    """The actors who write in one chat conversation. Each comes in when its trigger is met (one definition with every
+    other runtime, `due`), and from then on is asked after every agent turn what it does: write a message, act in the
+    world through the door, both, or wait. Nothing caps an actor but the limits the environment sets (`limits`, and
+    an actor's own `max_lines`); what happened to each is recorded as a call records it."""
+
+    def __init__(
+        self,
+        actors: list[dict[str, Any]],
+        *,
+        seed: str,
+        model: str | None,
+        limits: dict[str, Any] | None = None,
+        act: Callable[..., Any] | None = None,
+        records: Callable[[str], list[dict[str, Any]]] | None = None,
+        meter: Any = None,
+        clock: Callable[[], float] = time.time,
+        about: dict[str, str] | None = None,
+    ) -> None:
+        from fi.simulate.simulation.call_actors import Waits
+
+        self.actors = [one for one in actors if one.get("entered", True) is not False]
+        self.skipped = [one for one in actors if one.get("entered", True) is False]
+        self.seed = seed
+        self.model = model
+        self.limits = dict(limits or {})
+        # Sends an actor's action through the world's door: `act(actor_id, action, arguments, key=, parent=)`.
+        self.act = act
+        # What each world action is and the fields it takes, by its route, so an actor sends what the world reads.
+        self.about = dict(about or {})
+        self.records = records
+        self.meter = meter
+        self.turns_taken = 0
+        self.written: dict[str, list[str]] = {str(one["id"]): [] for one in self.actors}
+        self.triggered: set[str] = set()
+        self.done: set[str] = set()
+        self.decisions = 0
+        self.events: list[dict[str, Any]] = []
+        # How long the conversation waits for an actor once due, and its fallback when it does not answer.
+        self.waits = Waits(clock)
+
+    def _room(self) -> bool:
+        cap = self.limits.get("caller_takes_back_after_turns")
+        return cap is None or self.turns_taken < int(cap)
+
+    async def due_lines(
+        self, *, agent_turns: int, last_text: str, tools_called: list[str], conversation: list[str]
+    ) -> list[tuple[dict[str, Any], str]]:
+        """The lines actors write now, after the agent's latest turn, in the scenario's order; their actions in the
+        world are sent as they decide them."""
+        from fi.simulate.simulation.call_actors import Moment, decision_brief, due, read_decision
+
+        if not self._room():
+            return []
+        moment = Moment(
+            agent_turns=agent_turns, last_text=last_text, tools_called=tools_called, records=self.records
+        )
+        cap = self.limits.get("max_active")
+        out = []
+        for actor in self.actors:
+            key = str(actor["id"])
+            if key in self.done:
+                continue
+            if key not in self.triggered:
+                if not due(dict(actor.get("trigger") or {}), moment, seed=self.seed, actor_id=key):
+                    continue
+                if cap is not None and len(self.triggered - self.done) >= int(cap):
+                    self.events.append({"actor": key, "kind": "dropped", "reason": "no room: max_active"})
+                    continue
+                self.triggered.add(key)
+                self.events.append({"actor": key, "kind": "triggered", "turn": agent_turns})
+                self.waits.due(actor)
+            if actor.get("max_lines") is not None and len(self.written[key]) >= int(actor["max_lines"]):
+                self.done.add(key)
+                self.events.append({"actor": key, "kind": "finished", "reason": "its own line limit reached"})
+                continue
+            brief = decision_brief(
+                actor,
+                situation=str(actor.get("situation") or ""),
+                said=self.written[key],
+                conversation=conversation,
+                language=str(actor.get("language") or ""),
+                actions={one: self.about.get(one, "") for one in actor.get("permitted_actions") or []} if self.act else {},
+            )
+            decision = read_decision(await self._write(actor, brief))
+            if decision.action and self.act is not None:
+                self.decisions += 1
+                from ..world_door import record_action
+
+                identity = (actor.get("identities") or {}).get(decision.action.split(".", 1)[0], "")
+                outcome = await self.act(
+                    key,
+                    decision.action,
+                    decision.arguments,
+                    key=f"{self.seed}:{key}:c{self.decisions}",
+                    parent=None,
+                    **({"identity": identity} if identity and record_action(decision.action) is None else {}),
+                )
+                self.events.append(
+                    {"actor": key, "kind": "acted", "action": decision.action, "outcome": outcome, "why": decision.why}
+                )
+                self.waits.answered(actor)
+            if not decision.line:
+                if decision.waits:
+                    self.events.append({"actor": key, "kind": "waited", "why": decision.why})
+                continue
+            self.written[key].append(decision.line)
+            self.events.append({"actor": key, "kind": "delivered", "name": actor.get("name"), "text": decision.line})
+            self.waits.answered(actor)
+            out.append((actor, decision.line))
+        out += await self._fall_back()
+        if out:
+            self.turns_taken += 1
+        return out
+
+    async def _fall_back(self) -> list[tuple[dict[str, Any], str]]:
+        """Each actor whose wait ran out: its fallback applied and recorded. A declined request is a labelled line,
+        never written in the actor's own words."""
+        out = []
+        for actor, fallback, outcome in self.waits.expired(self.actors):
+            key = str(actor["id"])
+            self.done.add(key)
+            self.events.append({"actor": key, "kind": "timeout", "fallback": fallback, "outcome": outcome,
+                                "reason": f"no answer in time: {outcome}"})
+            if outcome == "declined":
+                out.append((actor, declined_line(actor)))
+            elif outcome == "fallback_action" and self.act is not None:
+                self.decisions += 1
+                await self.act(key, fallback, {}, key=f"{self.seed}:{key}:fallback", parent=None)
+            elif outcome == "answered_by":
+                instead = next((one for one in self.actors if str(one["id"]) == fallback), None)
+                if instead is not None and fallback not in self.triggered:
+                    self.triggered.add(fallback)
+                    self.events.append({"actor": fallback, "kind": "triggered", "instead_of": key})
+        return out
+
+    def end(self) -> None:
+        """The conversation is over: a wait still open is recorded as such, as the world records its own."""
+        for key in self.waits.open():
+            self.events.append({"actor": key, "kind": "timeout", "outcome": "unresolved_at_end",
+                                "reason": "no answer in time: unresolved_at_end"})
+            self.waits.settled.add(key)
+
+    async def _write(self, actor: dict[str, Any], brief: str) -> str:
+        from ..actor_model import decider
+
+        decide = decider(self.meter, self.limits.get("model") or self.model)
+        return (await decide(brief, str(actor["id"]), actor.get("model"))).strip()
+
+    def summary(self) -> list[dict[str, Any]]:
+        """Each actor the conversation included: triggered, delivered, dropped, as a call records them."""
+        out = [
+            {
+                "actor": str(one["id"]),
+                "name": one.get("name"),
+                "triggered": str(one["id"]) in self.triggered,
+                "delivered": len(self.written[str(one["id"])]),
+                "dropped": [
+                    e.get("reason")
+                    for e in self.events
+                    if e["actor"] == one["id"] and e["kind"] in ("dropped", "timeout")
+                ],
+            }
+            for one in self.actors
+        ]
+        out += [
+            {"actor": str(one["id"]), "name": one.get("name"), "triggered": False, "delivered": 0,
+             "dropped": [], "entered": False, "reason": one.get("reason")}
+            for one in self.skipped
+        ]
+        return out
+
+
+async def _started_by_event(
+    target: Target, starts_with: Any, on_exchange: Callable[[Exchange], Any] | None
+) -> Transcript:
+    """One invocation of the agent by the scenario's task or an actor's message, and whatever it answers; no one
+    else speaks. What it did is in the world, which is what the run is graded on."""
+    transcript = Transcript()
+
+    def record(exchange: Exchange) -> None:
+        transcript.exchanges.append(exchange)
+        if on_exchange:
+            on_exchange(exchange)
+
+    await target.open()
+    try:
+        sender = starts_with.actor
+        actor = {"id": sender, "name": sender} if sender is not None else None
+        record(Exchange("actor" if sender is not None else "task", starts_with.text, time.time(), actor))
+        try:
+            reply = await target.say(starts_with.text)
+        except TargetConversationEnded as ended:
+            reply = ended.final_message
+        if reply:
+            record(Exchange("agent", reply, time.time()))
+        transcript.ended = FINISHED
+    finally:
+        await target.close()
+    transcript.calls = list(target.world.calls) if hasattr(target, "world") else []
+    transcript.spent_usd = target.spent_usd
+    return transcript
+
+
 async def converse(
     target: Target,
     scenario: Scenario,
@@ -228,8 +442,14 @@ async def converse(
     world_root: Any = None,
     model: str | None = None,
     on_exchange: Callable[[Exchange], Any] | None = None,
+    actors: ChatActors | None = None,
 ) -> Transcript:
-    """Run one scenario as a conversation and return what happened."""
+    """Run one scenario as a conversation and return what happened. `actors` write in it too, each when its trigger
+    fires after an agent turn; the agent reads their message as theirs, and the person is told it. An event-started
+    scenario (`starts_with`) has no person: the agent is invoked once by the scenario's task or that actor's message."""
+    starts_with = getattr(scenario, "starts_with", None)
+    if starts_with is not None:
+        return await _started_by_event(target, starts_with, on_exchange)
     transcript = Transcript()
     from ..simulator import load_simulator_prompt
 
@@ -249,8 +469,8 @@ async def converse(
         name="customer",
     )
 
-    def record(speaker: str, text: str) -> None:
-        exchange = Exchange(speaker, text, time.time())
+    def record(speaker: str, text: str, actor: dict[str, Any] | None = None) -> None:
+        exchange = Exchange(speaker, text, time.time(), actor)
         transcript.exchanges.append(exchange)
         if on_exchange:
             on_exchange(exchange)
@@ -283,6 +503,31 @@ async def converse(
             record("agent", reply or "(said nothing)")
 
             heard = reply or "(no response)"
+            if actors is not None:
+                written = await actors.due_lines(
+                    agent_turns=_turn + 1,
+                    last_text=reply or "",
+                    tools_called=[str(one.name) for one in getattr(getattr(target, "world", None), "calls", [])],
+                    conversation=[f"{turn.speaker}: {turn.text}" for turn in transcript.exchanges],
+                )
+                for actor, line in written:
+                    record("actor", line, {"id": actor["id"], "name": actor.get("name")})
+                    try:
+                        # A declined request reads as the labelled line it is, never as the actor writing it.
+                        labelled = line == declined_line(actor)
+                        answer = await target.say(line if labelled else f"{actor.get('name') or 'Someone else'}: {line}")
+                    except TargetConversationEnded as ended:
+                        if ended.final_message:
+                            record("agent", ended.final_message)
+                        transcript.ended = FINISHED
+                        break
+                    record("agent", answer or "(said nothing)")
+                    heard = (
+                        f"{actor.get('name') or 'Someone else'} wrote in the conversation: {line}\n"
+                        f"The agent replied: {answer or '(no response)'}"
+                    )
+                if transcript.ended:
+                    break
             if opened_for_them:
                 heard = f"You opened with: {said}\nThe agent replied: {heard}"
                 opened_for_them = False
@@ -311,6 +556,7 @@ async def converse(
             transcript.simulator_input_tokens,
             transcript.simulator_output_tokens,
         ) = getattr(customer, "simulator_tokens", (0, 0))
+        _close_actors(transcript, actors)
         setattr(exc, "partial_transcript", transcript)
         trace_path = getattr(target, "trace_path", None)
         trace = getattr(exc, "trace", None)
@@ -331,4 +577,19 @@ async def converse(
         transcript.simulator_input_tokens,
         transcript.simulator_output_tokens,
     ) = getattr(customer, "simulator_tokens", (0, 0))
+    _close_actors(transcript, actors)
     return transcript
+
+
+def _close_actors(transcript: Transcript, actors: ChatActors | None) -> None:
+    """The conversation is over: open waits are recorded, and actors' model calls are counted as simulator usage like
+    the caller's, into the call's tokens and cost."""
+    if actors is not None:
+        actors.end()
+    meter = getattr(actors, "meter", None)
+    if meter is None:
+        return
+    tokens_in, tokens_out, cost = meter.totals()
+    transcript.simulator_input_tokens += tokens_in
+    transcript.simulator_output_tokens += tokens_out
+    transcript.spent_usd += cost

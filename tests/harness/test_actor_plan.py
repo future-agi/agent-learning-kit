@@ -1,0 +1,1216 @@
+"""Actors as the plan defines them: one activation, fallbacks, limits as settings, pre-run sessions, the record."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+
+import pytest
+
+from fi.alk.harness.actor_dispatch import ActorDispatcher, HttpActs, world_summary
+from fi.alk.harness.actors import (
+    Activation,
+    Actor,
+    ActorList,
+    Limits,
+    PreRunSession,
+    ScenarioActor,
+    Trigger,
+    cycles,
+    is_pre_run,
+)
+from fi.simulate.simulation.call_actors import Moment, due, read_decision
+
+
+class _Clock:
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
+
+
+def _sent_to(sent, result=None):
+    def send(url, headers, arguments):
+        sent.append((url, headers, arguments))
+        return {"status": 200, "result": result(len(sent)) if result else None}
+
+    return send
+
+
+@pytest.mark.parametrize(
+    "key, pre_run",
+    [
+        ("t:priya:h1", True),
+        ("t:hr_manager:0", False),
+        ("t:hr_manager:l2", False),
+        ("t:h:h12", True),
+        (None, False),
+    ],
+)
+def test_only_a_key_ending_in_h_and_a_number_is_a_pre_run_row(key, pre_run):
+    # An actor whose id starts with "h" (hr_manager) is never read as history.
+    assert is_pre_run(key) is pre_run
+
+
+def test_hr_manager_s_actions_stay_in_the_trial_s_changes():
+    from fi.alk.harness.call_runner import trial_state_changes
+
+    log = [
+        {
+            "actor_id": "hr_manager",
+            "name": "approve",
+            "outcome": "committed",
+            "idempotency_key": "t:hr_manager:0",
+        }
+    ]
+    changes = trial_state_changes(
+        log, {"hr_manager": Actor(id="hr_manager", name="Hana")}
+    )
+    assert [one["who"] for one in changes] == ["agent", "hr_manager"]
+    # The agent did nothing: "no change" is its result, shown, never left out.
+    assert changes[0]["no_change"] is True and changes[0]["attempted"] == 0
+
+
+def test_conditional_is_due_once_a_matching_record_exists_on_every_runtime():
+    # A record of the collection that does not match is not enough.
+    rows: list[dict] = [{"status": "approved", "id": 0}]
+    trigger = {
+        "kind": "conditional",
+        "collection": "approvals",
+        "where": {"status": "pending"},
+    }
+    for turns in (None, 3):
+        moment = Moment(agent_turns=turns, records=lambda collection: list(rows))
+        assert not due(trigger, moment, seed="s", actor_id="a")
+    rows.append({"status": "pending", "id": 1})
+    for turns in (None, 3):
+        assert due(
+            trigger,
+            Moment(agent_turns=turns, records=lambda collection: list(rows)),
+            seed="s",
+            actor_id="a",
+        )
+
+
+def test_always_is_at_once_beside_the_call_and_after_the_first_turn_on_it():
+    assert due({"kind": "always"}, Moment(agent_turns=None), seed="s", actor_id="a")
+    assert not due({"kind": "always"}, Moment(agent_turns=0), seed="s", actor_id="a")
+    assert due({"kind": "always"}, Moment(agent_turns=1), seed="s", actor_id="a")
+
+
+def test_a_fallback_may_be_one_of_the_actor_s_own_permitted_actions():
+    ActorList(
+        actors=[
+            Actor(
+                id="manager",
+                name="Mia",
+                permitted_actions=["crm.reject"],
+                activation=Activation(timeout_seconds=30, fallback="crm.reject"),
+            )
+        ]
+    )
+    with pytest.raises(ValueError):
+        ActorList(
+            actors=[
+                Actor(
+                    id="manager",
+                    name="Mia",
+                    activation=Activation(fallback="crm.reject"),
+                )
+            ]
+        )
+
+
+def test_a_permitted_action_fallback_is_sent_under_the_actor_and_labelled_as_the_timeout_s():
+    sent: list = []
+    clock = _Clock()
+    manager = Actor(
+        id="manager",
+        name="Mia",
+        permitted_actions=["crm.reject"],
+        identities={"crm": "mia"},
+        activation=Activation(
+            trigger=Trigger(kind="contacted"), timeout_seconds=30, fallback="crm.reject"
+        ),
+    )
+    log = [
+        {
+            "actor_id": "agent",
+            "name": "request",
+            "action_id": "a1",
+            "arguments": {"to": "mia"},
+        }
+    ]
+    dispatcher = ActorDispatcher(
+        {"manager": manager},
+        [ScenarioActor(id="manager")],
+        act=HttpActs("http://p", "t", 5, _sent_to(sent)),
+        trial_id="t",
+        read_log=lambda: log,
+        seed="t",
+        clock=clock,
+    )
+
+    async def run():
+        await dispatcher.tick()
+        clock.now = 31
+        await dispatcher.tick()
+
+    asyncio.run(run())
+    assert [(one["play"], one.get("outcome")) for one in dispatcher.fired] == [
+        ("waiting", None),
+        ("timeout", "fallback_action"),
+    ]
+    assert (
+        sent[0][0] == "http://p/crm/reject" and sent[0][1]["X-ALK-Parent-Event"] == "a1"
+    )
+
+
+def test_an_open_wait_and_an_actor_that_never_came_in_are_in_the_record():
+    clock = _Clock()
+    actors = {
+        "manager": Actor(
+            id="manager",
+            name="Mia",
+            identities={"crm": "mia"},
+            activation=Activation(
+                trigger=Trigger(kind="contacted"), timeout_seconds=30
+            ),
+        ),
+        "auditor": Actor(
+            id="auditor",
+            name="Ada",
+            activation=Activation(trigger=Trigger(kind="on_tool", tool="close")),
+        ),
+    }
+    log = [
+        {
+            "actor_id": "agent",
+            "name": "request",
+            "action_id": "a1",
+            "arguments": {"to": "mia"},
+        }
+    ]
+    dispatcher = ActorDispatcher(
+        actors,
+        [ScenarioActor(id="manager"), ScenarioActor(id="auditor")],
+        act=HttpActs("http://p", "t", 5, _sent_to([])),
+        trial_id="t",
+        read_log=lambda: log,
+        seed="t",
+        clock=clock,
+    )
+    asyncio.run(dispatcher.tick())
+    record = dispatcher.record()
+    assert {
+        "actor": "manager",
+        "play": "timeout",
+        "outcome": "unresolved_at_end",
+        "parent": "a1",
+    } in record
+    # A trigger that never came is recorded as not triggered, never as the scenario's problem.
+    assert any(
+        one["actor"] == "auditor" and one.get("play") == "not_triggered"
+        for one in record
+    )
+    assert not any(one.get("play") == "problem" for one in record)
+
+
+def test_pre_run_sessions_replay_in_order_and_a_reply_takes_the_id_the_world_gave_its_message():
+    sent: list = []
+    actors = {
+        "priya": Actor(id="priya", name="Priya", permitted_actions=["slack.post"]),
+        "ravi": Actor(
+            id="ravi", name="Ravi", permitted_actions=["slack.post", "slack.reply"]
+        ),
+    }
+    sessions = [
+        PreRunSession.model_validate(
+            {
+                "actors": ["priya", "ravi"],
+                "thread": [
+                    {
+                        "actor": "priya",
+                        "action": "slack.post",
+                        "arguments": {"channel": "#leads", "text": "20% for Acme?"},
+                    },
+                    {
+                        "actor": "ravi",
+                        "action": "slack.reply",
+                        "arguments": {"text": "Too much."},
+                        "refers": {"thread_ts": {"message": 1, "field": "ts"}},
+                    },
+                ],
+            }
+        ),
+        PreRunSession.model_validate(
+            {
+                "actors": ["ravi"],
+                "thread": [
+                    {
+                        "actor": "ravi",
+                        "action": "slack.post",
+                        "arguments": {"channel": "#eng"},
+                    }
+                ],
+            }
+        ),
+    ]
+    dispatcher = ActorDispatcher(
+        actors,
+        [],
+        act=HttpActs("http://p", "t", 5, _sent_to(sent, lambda n: {"ts": f"ts-{n}"})),
+        trial_id="t",
+        read_log=list,
+        seed="t",
+        pre_run=sessions,
+    )
+    asyncio.run(dispatcher.replay())
+    assert [(h["X-ALK-Actor"], h["Idempotency-Key"]) for _, h, _ in sent] == [
+        ("priya", "t:priya:h1"),
+        ("ravi", "t:ravi:h2"),
+        ("ravi", "t:ravi:h3"),
+    ]
+    assert sent[1][2] == {"text": "Too much.", "thread_ts": "ts-1"}
+    assert all(one["play"] == "history" for one in dispatcher.fired)
+
+
+def test_an_old_scenario_s_typed_history_reads_as_one_pre_run_session():
+    from fi.alk.harness.scenario import pre_run_of
+
+    doc = pre_run_of(
+        {
+            "history": [
+                {"actor": "priya", "action": "slack.post", "arguments": {"text": "hi"}}
+            ]
+        }
+    )
+    assert "history" not in doc
+    assert doc["pre_run"][0]["thread"][0]["actor"] == "priya"
+
+
+def test_limits_are_settings_with_channel_defaults_and_a_scenario_override():
+    voice = Limits().resolved("voice")
+    chat = Limits().resolved("chat")
+    assert (voice["max_active"], voice["actor_seconds_per_call"]) == (2, 60.0)
+    assert (chat["max_active"], chat["caller_takes_back_after_turns"]) == (None, None)
+    assert chat["max_messages"] == 20
+    merged = Limits(max_active=3).merged(Limits(max_active=None)).resolved("voice")
+    assert merged["max_active"] is None
+
+
+def test_the_voice_cast_takes_no_limit_when_the_setting_says_none():
+    from fi.simulate.simulation.call_actors import Cast
+
+    cast = Cast(
+        [{"id": "a", "name": "A", "trigger": {"kind": "always"}}],
+        "s",
+        limits={
+            "actor_seconds_per_call": None,
+            "max_active": None,
+            "caller_takes_back_after_turns": None,
+        },
+    )
+    assert cast.remaining() == float("inf")
+    cast.entering(Moment(agent_turns=1))
+    for turn in range(1, 20):
+        cast.took_turn()
+    assert cast.may_speak(cast.actors[0], 20)
+
+
+def test_a_cycle_of_actors_triggering_each_other_is_found():
+    actors = {
+        "a": Actor(id="a", name="A", permitted_actions=["approvals.change"]),
+        "b": Actor(id="b", name="B", permitted_actions=["approvals.put"]),
+    }
+    entries = [
+        ScenarioActor(
+            id="a", trigger=Trigger(kind="conditional", collection="approvals")
+        ),
+        ScenarioActor(
+            id="b", trigger=Trigger(kind="conditional", collection="approvals")
+        ),
+    ]
+    assert cycles(actors, entries) == [["a", "b"]]
+    assert cycles(actors, entries[:1]) == []
+
+
+def test_every_actor_acting_through_the_world_is_in_the_call_s_actor_summary():
+    listed = {
+        "manager": Actor(id="manager", name="Mia"),
+        "auditor": Actor(id="auditor", name="Ada"),
+    }
+    rows = world_summary(
+        [
+            {
+                "actor": "manager",
+                "play": "live",
+                "action": "crm.approve",
+                "outcome": "committed",
+            },
+            {
+                "actor": "auditor",
+                "play": "problem",
+                "problem": "no_world_door",
+                "why": "no world door",
+            },
+            {"actor": "nearby", "play": "live", "action": "x", "outcome": "committed"},
+        ],
+        listed,
+        speaking={"nearby"},
+    )
+    assert [
+        (one["actor"], one["triggered"], one["delivered"], one.get("problem"))
+        for one in rows
+    ] == [
+        ("manager", True, 1, None),
+        ("auditor", False, 0, "no_world_door"),
+    ]
+
+
+def test_a_decision_is_a_line_an_action_both_or_a_wait():
+    both = read_decision(
+        '{"line": "Approved.", "action": "crm.approve", "arguments": {"deal": 7}, "why": "ok"}'
+    )
+    assert (both.line, both.action, both.arguments) == (
+        "Approved.",
+        "crm.approve",
+        {"deal": 7},
+    )
+    assert read_decision('{"line": null, "action": null}').waits
+    assert read_decision("Just a line.").line == "Just a line."
+
+
+def test_actor_model_calls_are_metered_into_the_simulator_usage():
+    from types import SimpleNamespace
+
+    from fi.alk.harness.actor_meter import ActorMeter
+    from fi.alk.harness.run.conversation import Transcript, _close_actors
+
+    meter = ActorMeter()
+    meter.add(
+        "manager", "flash", SimpleNamespace(tokens_in=10, tokens_out=4, cost_usd=0.01)
+    )
+    transcript = Transcript(simulator_input_tokens=100, simulator_output_tokens=50)
+    _close_actors(transcript, SimpleNamespace(meter=meter, end=lambda: None))
+    assert (transcript.simulator_input_tokens, transcript.simulator_output_tokens) == (
+        110,
+        54,
+    )
+    assert meter.rows()[0]["actor"] == "manager"
+
+
+def test_an_approval_line_reads_request_decision_and_the_agent_s_writes_around_it_from_the_log():
+    from fi.alk.harness.call_runner import approvals
+
+    log = [
+        {
+            "actor_id": "agent",
+            "name": "request_discount",
+            "action_id": "a1",
+            "at": 1.0,
+            "outcome": "committed",
+        },
+        {
+            "actor_id": "agent",
+            "name": "apply_discount",
+            "action_id": "a2",
+            "at": 2.0,
+            "outcome": "refused",
+        },
+        {
+            "actor_id": "manager",
+            "name": "approve",
+            "action_id": "m1",
+            "at": 3.0,
+            "outcome": "committed",
+            "parent_event_id": "a1",
+        },
+        {
+            "actor_id": "agent",
+            "name": "apply_discount",
+            "action_id": "a3",
+            "at": 4.0,
+            "outcome": "committed",
+        },
+    ]
+    [line] = approvals(log)
+    assert (
+        line["request"]["action"] == "request_discount"
+        and line["decision"]["by"] == "manager"
+    )
+    assert line["before_decision"] == [
+        {"action": "apply_discount", "outcome": "refused"}
+    ]
+    assert line["after_decision"] == [
+        {"action": "apply_discount", "outcome": "committed"}
+    ]
+    assert line["acted_before_decision"] is False
+
+
+def test_a_world_tool_that_asks_who_acts_gets_the_actor_s_identity_there():
+    sent: list = []
+    actor = Actor(
+        id="priya",
+        name="Priya",
+        permitted_actions=["slack.post"],
+        identities={"slack": "U-priya"},
+    )
+    dispatcher = ActorDispatcher(
+        {"priya": actor},
+        [
+            ScenarioActor.model_validate(
+                {
+                    "id": "priya",
+                    "actions": [{"action": "slack.post", "arguments": {"text": "hi"}}],
+                }
+            )
+        ],
+        act=HttpActs("http://p", "t", 5, _sent_to(sent)),
+        trial_id="t",
+        read_log=list,
+        seed="t",
+        names_actor={"slack.post"},
+    )
+    asyncio.run(dispatcher.tick())
+    assert sent[0][2] == {"text": "hi", "actor_id": "U-priya"}
+
+
+def test_an_actor_s_identity_goes_with_its_service_action_but_never_with_a_record_change():
+    sent = []
+    actor = Actor(
+        id="priya",
+        name="Priya",
+        permitted_actions=["chat.post_message", "approvals.put"],
+        identities={"chat": "coworker", "approvals": "coworker"},
+    )
+    dispatcher = ActorDispatcher(
+        {"priya": actor},
+        [
+            ScenarioActor.model_validate(
+                {
+                    "id": "priya",
+                    "actions": [
+                        {"action": "chat.post_message", "arguments": {"text": "hi"}},
+                        {"action": "approvals.put", "arguments": {"deal_id": 7}},
+                    ],
+                }
+            )
+        ],
+        act=HttpActs("http://p", "t", 5, _sent_to(sent)),
+        trial_id="t",
+        read_log=list,
+        seed="t",
+    )
+    asyncio.run(dispatcher.tick())
+    # The body stays as the action gave it, so a strict service is never sent a field it does not take.
+    assert [one[2] for one in sent] == [{"text": "hi"}, {"deal_id": 7}]
+    assert [one[1].get("X-ALK-Actor-Identity") for one in sent] == ["coworker", None]
+
+
+def test_a_session_whose_actor_record_changed_is_written_again_before_sealing(tmp_path):
+    import json
+
+    from fi.alk.harness.actors import save_actors, session_fingerprint
+    from fi.alk.harness.pre_run import refresh_stale
+
+    priya = Actor(
+        id="priya", name="Priya", play="live", permitted_actions=["slack.post"]
+    )
+    save_actors(tmp_path, ActorList(actors=[priya]))
+    session = PreRunSession(
+        actors=["priya"],
+        where={"action": "slack.post", "arguments": {"channel": "#leads"}},
+        about="Acme wants 20%",
+    )
+    fresh = session.model_copy(
+        update={
+            "thread": [
+                {"actor": "priya", "action": "slack.post", "arguments": {"text": "old"}}
+            ],
+            "fingerprint": session_fingerprint(session, {"priya": priya}),
+        }
+    )
+    folder = tmp_path / "scenarios" / "acme"
+    folder.mkdir(parents=True)
+    (folder / "scenario.json").write_text(
+        json.dumps({"name": "acme", "pre_run": [fresh.model_dump(mode="json")]})
+    )
+    written = []
+
+    async def write(brief, actor):
+        written.append(actor.id)
+        return '{"text": "new"}' if len(written) == 1 else '{"text": null}'
+
+    assert asyncio.run(refresh_stale(tmp_path, write)) == []
+    # Priya's record changes: her session is stale and is written again from her new record.
+    save_actors(
+        tmp_path,
+        ActorList(actors=[priya.model_copy(update={"goal": "Hold the price"})]),
+    )
+    assert asyncio.run(refresh_stale(tmp_path, write)) == ["acme"]
+    sealed = json.loads((folder / "scenario.json").read_text())["pre_run"][0]
+    assert [one["arguments"]["text"] for one in sealed["thread"]] == ["new"]
+    assert sealed["fingerprint"] != fresh.fingerprint
+
+
+def test_a_speaking_actor_s_decided_action_is_sent_through_the_door_by_the_run_never_by_the_voice_engine(
+    tmp_path,
+):
+    import json
+
+    from fi.alk.harness.call_runner import _reported_actions
+    from fi.simulate.simulation.engines.livekit import _action_reporter
+
+    handed = tmp_path / "actor-actions.jsonl"
+    report = _action_reporter(str(handed))
+    report(
+        {
+            "actor": "manager",
+            "action": "crm.approve",
+            "arguments": {"deal": 7},
+            "why": "within my limit",
+        }
+    )
+    sent: list = []
+    manager = Actor(
+        id="manager",
+        name="Mia",
+        channel="audio_handoff",
+        role="manager",
+        permitted_actions=["crm.approve"],
+    )
+    dispatcher = ActorDispatcher(
+        {"manager": manager},
+        [ScenarioActor(id="manager")],
+        act=HttpActs("http://p", "tok", 5, _sent_to(sent)),
+        trial_id="t",
+        read_log=list,
+        seed="t",
+        reported=_reported_actions(handed),
+    )
+    asyncio.run(dispatcher.tick())
+    asyncio.run(dispatcher.tick())
+    # Sent once, under the actor's id and this trial's token, by the harness side.
+    assert [
+        (url, h["X-ALK-Actor"], h["X-ALK-Actor-Token"], a) for url, h, a in sent
+    ] == [("http://p/crm/approve", "manager", "tok", {"deal": 7})]
+    assert (
+        dispatcher.fired[-1]["channel"] == "voice"
+        and json.loads(handed.read_text().splitlines()[0])["actor"] == "manager"
+    )
+
+
+def test_a_voice_actor_with_actions_decides_its_line_and_its_action_in_one_turn(
+    monkeypatch,
+):
+    from fi.simulate.simulation.engines import call_actor_voice
+
+    reported: list = []
+
+    async def complete(model, context):
+        return '{"line": "Approved, go ahead.", "action": "crm.approve", "arguments": {"deal": 7}, "why": "ok"}'
+
+    async def voiced(tts, text):
+        return None
+
+    monkeypatch.setattr(call_actor_voice, "complete_text", complete)
+    monkeypatch.setattr(call_actor_voice, "voiced", voiced)
+    voice = call_actor_voice.CallActorVoice(
+        actor={
+            "id": "manager",
+            "name": "Mia",
+            "channel": "audio_handoff",
+            "permitted_actions": ["crm.approve"],
+        },
+        model=None,
+        tts=None,
+        situation="",
+        language="",
+        report_action=reported.append,
+    )
+    text, audio, _done = asyncio.run(voice.line(["The agent: May I apply 12%?"]))
+    assert text == "Approved, go ahead." and audio is None
+    assert reported[0]["action"] == "crm.approve" and reported[0]["arguments"] == {
+        "deal": 7
+    }
+
+
+def test_a_built_environment_lists_the_caller_once_and_an_empty_caller_changes_no_scenario(
+    tmp_path,
+):
+    from fi.alk.harness.actors import (
+        CALLER,
+        ensure_caller,
+        load_actors,
+        with_caller_actor,
+    )
+
+    assert ensure_caller(tmp_path) is True
+    assert ensure_caller(tmp_path) is False
+    assert [one.id for one in load_actors(tmp_path).actors] == [CALLER]
+    doc = {"instruction": "Move my order.", "persona": {"name": "Asha"}}
+    assert with_caller_actor(doc, tmp_path) == doc
+
+
+def test_a_voice_actor_with_permitted_actions_reaches_the_engine_able_to_act(tmp_path):
+    from fi.alk.harness.actors import save_actors
+    from fi.alk.harness.call_runner import _resolved_call_actors
+    from fi.simulate.simulation.engines.call_actor_voice import CallActorVoice
+
+    manager = Actor(
+        id="manager",
+        name="Mia",
+        channel="audio_handoff",
+        role="manager",
+        play="live",
+        permitted_actions=["crm.approve"],
+        persona={"gender": "female"},
+    )
+    save_actors(tmp_path, ActorList(actors=[manager]))
+    doc = {
+        "instruction": "Move my order.",
+        "persona": {"name": "Asha", "gender": "male"},
+        "actors": [
+            {
+                "id": "manager",
+                "instruction": "Approve if within limits.",
+                "trigger": {"kind": "always"},
+            }
+        ],
+    }
+    [voice] = [
+        one
+        for one in _resolved_call_actors(doc, tmp_path, "deepgram", "", "run")
+        if one.get("entered", True)
+    ]
+    assert voice["permitted_actions"] == ["crm.approve"]
+    assert CallActorVoice(
+        actor=voice,
+        model=None,
+        tts=None,
+        situation="",
+        language="",
+        report_action=lambda one: None,
+    ).acts
+
+
+def test_a_speaking_live_actor_is_decided_by_its_channel_only_never_also_by_the_dispatcher(
+    tmp_path,
+):
+    from fi.alk.harness.actor_dispatch import build_dispatcher
+    from fi.alk.harness.actors import save_actors
+
+    decided: list = []
+    manager = Actor(
+        id="manager",
+        name="Mia",
+        channel="audio_handoff",
+        role="manager",
+        play="live",
+        permitted_actions=["crm.approve"],
+        identities={"crm": "mia"},
+    )
+    save_actors(tmp_path, ActorList(actors=[manager]))
+    log = [
+        {
+            "actor_id": "agent",
+            "name": "request",
+            "action_id": "a1",
+            "arguments": {"to": "mia"},
+        }
+    ]
+    sent: list = []
+    dispatcher = build_dispatcher(
+        {"actors": [{"id": "manager"}]},
+        tmp_path,
+        act=HttpActs("http://p", "t", 5, _sent_to(sent)),
+        read_log=lambda: log,
+        records=None,
+        trial_id="t",
+    )
+    dispatcher.decide = lambda situation, actor: (
+        decided.append(actor.id) or '{"action": "crm.approve"}'
+    )
+    asyncio.run(dispatcher.tick())
+    assert dispatcher.live == [] and decided == [] and sent == []
+
+
+def test_one_decider_serves_every_runtime_on_the_actor_s_model_and_meters_each_call(
+    monkeypatch,
+):
+    from types import SimpleNamespace
+
+    from fi.alk.harness import session
+    from fi.alk.harness.actor_meter import ActorMeter
+    from fi.alk.harness.actor_model import decider
+
+    asked: list = []
+
+    class _Stage:
+        def __init__(self, spec, name):
+            asked.append(spec.model)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return None
+
+        async def say(self, text):
+            return SimpleNamespace(text="ok", tokens_in=3, tokens_out=2, cost_usd=0.0)
+
+    monkeypatch.setattr(session, "Stage", _Stage)
+    meter = ActorMeter()
+    decide = decider(meter, "env-model")
+    assert asyncio.run(decide("brief", "mia", "own-model")) == "ok"
+    asyncio.run(decide("brief", "sam", None))
+    assert asked == ["own-model", "env-model"]
+    assert [(one["actor"], one["model"]) for one in meter.rows()] == [
+        ("mia", "own-model"),
+        ("sam", "env-model"),
+    ]
+
+
+def test_actors_triggered_by_the_agent_s_calls_never_form_a_cycle_whatever_they_may_do():
+    actors = {
+        "rep": Actor(id="rep", name="R", permitted_actions=["crm.request"]),
+        "mgr": Actor(id="mgr", name="M", permitted_actions=["crm.approve"]),
+    }
+    entries = [
+        ScenarioActor(id="rep", trigger=Trigger(kind="on_tool", tool="crm.approve")),
+        ScenarioActor(id="mgr", trigger=Trigger(kind="on_tool", tool="crm.request")),
+    ]
+    assert cycles(actors, entries) == []
+
+
+def test_a_per_trial_session_is_written_inside_each_trial_and_each_trial_keeps_its_own_thread():
+    actors = {
+        "priya": Actor(
+            id="priya", name="Priya", play="live", permitted_actions=["slack.post"]
+        )
+    }
+    session = PreRunSession(
+        actors=["priya"],
+        where={"action": "slack.post", "arguments": {"channel": "#leads"}},
+        about="Acme wants 20%",
+        per_trial=True,
+    )
+    threads = []
+    for trial, said in (("t1", "Twenty?"), ("t2", "Too much.")):
+        sent: list = []
+        turns = iter([json.dumps({"text": said}), json.dumps({"text": None})])
+
+        async def write(brief, actor, turns=turns):
+            return next(turns)
+
+        dispatcher = ActorDispatcher(
+            actors,
+            [],
+            act=HttpActs("http://p", "t", 5, _sent_to(sent)),
+            trial_id=trial,
+            read_log=list,
+            seed=trial,
+            pre_run=[session],
+            write_session=write,
+            session_briefs={"priya": "You are Priya."},
+        )
+        asyncio.run(dispatcher.replay())
+        threads.append(
+            [
+                one["arguments"]["text"]
+                for one in dispatcher.fired
+                if one["play"] == "history"
+            ]
+        )
+        assert sent[0][1]["Idempotency-Key"] == f"{trial}:priya:h1"
+    assert threads == [["Twenty?"], ["Too much."]]
+
+
+@pytest.mark.parametrize(
+    "fallback, line, acted",
+    [
+        ("silent", None, []),
+        ("decline", "Mia did not answer: declined", []),
+        ("crm.reject", None, ["crm.reject"]),
+    ],
+)
+def test_a_chat_actor_that_does_not_answer_in_time_gets_its_fallback(
+    fallback, line, acted
+):
+    from fi.alk.harness.run import conversation as conv
+
+    clock = _Clock()
+    sent: list = []
+
+    async def act(actor_id, action, arguments, *, key, parent):
+        sent.append(action)
+        return {"outcome": "committed"}
+
+    cast = conv.ChatActors(
+        [
+            {
+                "id": "mia",
+                "name": "Mia",
+                "trigger": {"kind": "always"},
+                "brief": "You are Mia.",
+                "timeout_seconds": 30,
+                "fallback": fallback,
+                "permitted_actions": ["crm.reject"],
+            }
+        ],
+        seed="t",
+        model=None,
+        act=act,
+        clock=clock,
+    )
+
+    async def wait(actor, brief):
+        return '{"line": null, "action": null, "why": "thinking"}'
+
+    cast._write = wait
+
+    async def turns():
+        first = await cast.due_lines(
+            agent_turns=1, last_text="", tools_called=[], conversation=[]
+        )
+        clock.now = 31
+        return first, await cast.due_lines(
+            agent_turns=2, last_text="", tools_called=[], conversation=[]
+        )
+
+    first, second = asyncio.run(turns())
+    assert first == []
+    assert [text for _, text in second] == ([line] if line else [])
+    assert sent == acted
+    assert any(
+        one["kind"] == "timeout" and one["fallback"] == fallback for one in cast.events
+    )
+
+
+def test_a_voice_actor_that_does_not_answer_in_time_is_recorded_with_its_fallback_never_voiced():
+    from fi.simulate.simulation.call_actors import Cast
+
+    clock = _Clock()
+    actors = [
+        {
+            "id": "mia",
+            "name": "Mia",
+            "trigger": {"kind": "always"},
+            "timeout_seconds": 30,
+            "fallback": "decline",
+        },
+        {
+            "id": "dev",
+            "name": "Dev",
+            "trigger": {"kind": "on_keyword", "words": ["never"]},
+        },
+        {
+            "id": "ana",
+            "name": "Ana",
+            "trigger": {"kind": "always"},
+            "timeout_seconds": 30,
+            "fallback": "dev",
+        },
+    ]
+    cast = Cast(
+        actors,
+        "s",
+        clock,
+        limits={
+            "max_active": None,
+            "caller_takes_back_after_turns": None,
+            "actor_seconds_per_call": None,
+        },
+    )
+    cast.entering(Moment(agent_turns=1))
+    clock.now = 31
+    expired = cast.fallbacks()
+    assert [(actor["id"], outcome) for actor, _, outcome in expired] == [
+        ("mia", "declined"),
+        ("ana", "answered_by"),
+    ]
+    declined = next(
+        one
+        for one in cast.events
+        if one.get("actor") == "mia" and one.get("kind") == "timeout"
+    )
+    assert declined["text"] == "Mia did not answer: declined"
+    # The actor named as the fallback comes in next, whatever its own trigger.
+    assert [one["id"] for one in cast.entering(Moment(agent_turns=2))] == ["dev"]
+
+
+def test_a_voice_actor_that_answered_in_time_has_no_fallback():
+    from fi.simulate.simulation.call_actors import Cast
+
+    clock = _Clock()
+    actor = {
+        "id": "mia",
+        "name": "Mia",
+        "trigger": {"kind": "always"},
+        "timeout_seconds": 30,
+        "fallback": "decline",
+    }
+    cast = Cast(
+        [actor],
+        "s",
+        clock,
+        limits={
+            "max_active": None,
+            "caller_takes_back_after_turns": None,
+            "actor_seconds_per_call": None,
+        },
+    )
+    cast.entering(Moment(agent_turns=1))
+    cast.delivered(actor, "Approved.", 1, 1.0, 2.0)
+    clock.now = 31
+    assert cast.fallbacks() == []
+
+
+def test_a_scenario_never_lists_the_caller_among_its_actors(tmp_path):
+    from fi.alk.harness.actors import ensure_caller
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _unlisted_actors
+
+    ensure_caller(tmp_path)
+    scenario = Scenario(name="s", instruction="x", actors=[{"id": "caller"}])
+    assert any(
+        "the caller is the person" in one
+        for one in _unlisted_actors(scenario, tmp_path)
+    )
+
+
+def test_a_pre_run_session_with_no_place_is_refused_with_its_fix_before_any_model_is_asked(
+    tmp_path,
+):
+    from fi.alk.harness.actors import save_actors
+    from fi.alk.harness.pre_run import session_problems
+
+    save_actors(
+        tmp_path,
+        ActorList(
+            actors=[
+                Actor(
+                    id="priya",
+                    name="Priya",
+                    play="live",
+                    permitted_actions=["slack.post"],
+                )
+            ]
+        ),
+    )
+    said = session_problems(
+        [{"actors": ["priya"], "about": "Acme", "where": {}}], tmp_path
+    )
+    assert said == [
+        "pre_run 1: `where.action` names the action that writes into this place"
+    ]
+    assert (
+        session_problems(
+            [{"actors": ["priya"], "about": "Acme", "where": {"action": "slack.post"}}],
+            tmp_path,
+        )
+        == []
+    )
+
+
+@pytest.mark.parametrize("channel", ["voice", "chat"])
+def test_the_sealed_limit_defaults_are_the_ones_a_run_uses(channel):
+    from fi.alk.harness.actors import actor_rules
+
+    sealed = actor_rules()["limits"][channel]
+    used = Limits().resolved(channel)
+    assert {key: used[key] for key in sealed} == sealed
+
+
+def test_a_speaking_actor_that_names_a_model_talks_on_it_and_is_counted_as_simulator_usage():
+    from fi.simulate.agent.definition import LLMConfig
+    from fi.simulate.simulation.engines.livekit import actor_llm
+
+    class Model:
+        def __init__(self, config):
+            self.config, self.listeners = config, []
+
+        def on(self, event, callback):
+            self.listeners.append((event, callback))
+
+    class Collector:
+        def collect(self, metrics):
+            pass
+
+    config = LLMConfig(provider="google", model="caller-model")
+    collector = Collector()
+    shared = object()
+    own = actor_llm({"id": "mia", "model": "actor-model"}, shared, config, collector, build=Model)
+    assert own.config.model == "actor-model" and own.config.provider == "google"
+    assert own.listeners == [("metrics_collected", collector.collect)]
+    assert actor_llm({"id": "dev"}, shared, config, collector, build=Model) is shared
+    assert actor_llm({"id": "ana", "model": "caller-model"}, shared, config, collector, build=Model) is shared
+
+
+def test_an_approval_that_timed_out_reads_the_fallback_as_its_decision_and_every_agent_write_after_the_request():
+    from fi.alk.harness.call_runner import approvals
+
+    log = [
+        {"action_id": "a1", "actor_id": "agent", "name": "approvals.request", "outcome": "committed", "at": 1.0},
+        {"action_id": "a2", "actor_id": "agent", "name": "orders.cancel", "outcome": "committed", "at": 5.0},
+    ]
+    decisions = [{"actor": "manager", "play": "timeout", "fallback": "decline", "outcome": "declined", "parent": "a1"}]
+    (line,) = approvals(log, decisions)
+    assert line["decision"] == {"by": "manager", "action": "timeout: decline", "outcome": "declined", "at": None}
+    # With no time for the decision, every write after the request came before it.
+    assert line["before_decision"] == [{"action": "orders.cancel", "outcome": "committed"}]
+    assert line["acted_before_decision"] is True
+
+
+def test_a_wait_still_open_when_the_conversation_ends_is_recorded_and_a_timeout_reads_in_the_summary():
+    from fi.alk.harness.run import conversation as conv
+
+    clock = _Clock()
+    cast = conv.ChatActors(
+        [
+            {"id": "mia", "name": "Mia", "trigger": {"kind": "always"}, "timeout_seconds": 30, "fallback": "silent"},
+            {"id": "dev", "name": "Dev", "trigger": {"kind": "always"}, "timeout_seconds": 300, "fallback": "silent"},
+        ],
+        seed="t", model=None, clock=clock,
+    )
+
+    async def wait(actor, brief):
+        return '{"line": null, "action": null, "why": "thinking"}'
+
+    cast._write = wait
+
+    async def turns():
+        await cast.due_lines(agent_turns=1, last_text="", tools_called=[], conversation=[])
+        clock.now = 31
+        await cast.due_lines(agent_turns=2, last_text="", tools_called=[], conversation=[])
+
+    asyncio.run(turns())
+    conv._close_actors(conv.Transcript(), cast)
+    dropped = {row["actor"]: row["dropped"] for row in cast.summary()}
+    assert dropped == {"mia": ["no answer in time: timed_out"], "dev": ["no answer in time: unresolved_at_end"]}
+
+
+def test_a_voice_wait_open_at_hang_up_is_recorded_and_a_declined_request_is_a_labelled_unspoken_row():
+    from fi.simulate.simulation.call_actors import Cast
+    from fi.simulate.simulation.engines.call_actor_voice import with_call_actor_turns
+
+    clock = _Clock()
+    actors = [
+        {"id": "mia", "name": "Mia", "trigger": {"kind": "always"}, "timeout_seconds": 30, "fallback": "decline"},
+        {"id": "dev", "name": "Dev", "trigger": {"kind": "always"}, "timeout_seconds": 300, "fallback": "silent"},
+    ]
+    cast = Cast(actors, "s", clock, limits={"max_active": None, "caller_takes_back_after_turns": None,
+                                            "actor_seconds_per_call": None})
+    cast.entering(Moment(agent_turns=1))
+    clock.now = 31
+    cast.fallbacks()
+    cast.hang_up()
+    dropped = {row["actor"]: row["dropped"] for row in cast.summary()}
+    assert "no answer in time: declined" in dropped["mia"]
+    assert "no answer in time: unresolved_at_end" in dropped["dev"]
+    rows = with_call_actor_turns([{"role": "user", "content": "hi", "created_at": 1.0}], cast.events)
+    assert [(row["role"], row["content"], row.get("spoken")) for row in rows] == [
+        ("user", "hi", None), ("actor", "Mia did not answer: declined", False),
+    ]
+
+
+def test_a_speaking_actor_on_the_caller_s_model_is_counted_by_the_session_the_engine_already_meters():
+    """An actor without a model of its own talks on the session's model. Its calls count because LiveKit's activity
+    forwards that model's metrics to the session, and the engine collects the session's. Either link gone, and those
+    calls stop counting as simulator usage."""
+    import inspect
+
+    from livekit.agents.voice import agent_activity
+
+    from fi.simulate.simulation.engines import livekit as engine
+
+    assert 'self.llm.on("metrics_collected", self._on_metrics_collected)' in inspect.getsource(agent_activity)
+    assert "lambda event: self._usage_collector.collect(event.metrics)" in inspect.getsource(engine)
+    assert engine.actor_llm({"id": "mia"}, "shared", None, None) == "shared"
+
+
+def test_the_models_an_actor_may_name_are_sealed_with_the_actor_rules():
+    from fi.alk.harness.actors import ACTOR_MODELS, actor_rules
+
+    assert actor_rules()["actor_models"] == list(ACTOR_MODELS) and ACTOR_MODELS
+
+
+def test_a_conversation_actors_write_among_themselves_stops_at_twenty_messages_by_default():
+    from fi.alk.harness.pre_run import generate
+
+    actors = {
+        one: Actor(id=one, name=one.title(), play="live", permitted_actions=["slack.post"])
+        for one in ("priya", "dev")
+    }
+    session = PreRunSession(
+        actors=["priya", "dev"],
+        where={"action": "slack.post", "arguments": {"channel": "#leads"}},
+        about="Acme wants 20%",
+    )
+    count = iter(range(1000))
+
+    async def write(brief, actor):
+        return json.dumps({"text": f"{actor.id} message {next(count)}"})
+
+    written = asyncio.run(generate(session, actors, {}, write))
+    assert len(written.thread) == 20
+
+
+def test_an_actor_repeating_its_own_line_is_a_loop_and_ends_the_conversation():
+    from fi.alk.harness.pre_run import generate
+
+    actors = {
+        one: Actor(id=one, name=one.title(), play="live", permitted_actions=["slack.post"])
+        for one in ("priya", "dev")
+    }
+    session = PreRunSession(
+        actors=["priya", "dev"],
+        where={"action": "slack.post", "arguments": {"channel": "#leads"}},
+        about="Acme wants 20%",
+    )
+
+    async def write(brief, actor):
+        return json.dumps({"text": f"{actor.id}: can we do 20%?"})
+
+    written = asyncio.run(generate(session, actors, {}, write))
+    # Each says its line once; the second round repeats both, so no one writes and the session ends.
+    assert [one.arguments["text"] for one in written.thread] == ["priya: can we do 20%?", "dev: can we do 20%?"]
+
+
+def test_a_proof_starts_from_the_world_after_the_pre_run_threads_and_credits_them_to_their_actors(tmp_path):
+    from types import SimpleNamespace
+
+    from fi.alk.harness.actors import save_actors
+    from fi.alk.harness.prove import _WorldActors
+    from fi.alk.harness.scenario import Scenario
+
+    save_actors(tmp_path, ActorList(actors=[Actor(id="priya", name="Priya", play="live",
+                                                  permitted_actions=["slack.post", "slack.reply"])]))
+    scenario = Scenario(name="acme", instruction="x", pre_run=[{
+        "actors": ["priya"], "where": {"action": "slack.post", "arguments": {"channel": "#leads"}},
+        "about": "Acme wants 20%",
+        "thread": [
+            {"actor": "priya", "action": "slack.post", "arguments": {"channel": "#leads", "text": "Acme wants 20%"}},
+            {"actor": "priya", "action": "slack.reply", "arguments": {"text": "Can we?"},
+             "refers": {"thread_ts": {"message": 1, "field": "ts"}}},
+        ],
+    }])
+
+    class World:
+        endpoints = ()
+
+        def __init__(self):
+            self.calls = []
+
+        def call(self, name, arguments):
+            self.calls.append(SimpleNamespace(name=name, arguments=arguments, ok=True,
+                                              result={"ts": f"ts{len(self.calls) + 1}"}))
+
+    world, by_actors = World(), {}
+    acting = _WorldActors(scenario, tmp_path, world, by_actors)
+    acting.replay_pre_run()
+    assert [(one.name, one.arguments.get("thread_ts")) for one in world.calls] == [("post", None), ("reply", "ts1")]
+    assert by_actors == {0: "priya", 1: "priya"}
+    assert [row["actor_id"] for row in acting.events()] == ["priya", "priya"]

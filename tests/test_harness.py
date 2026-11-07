@@ -2269,6 +2269,17 @@ def test_a_misread_tool_can_be_corrected(tmp_path):
     assert "dropped values recorded for item_id" in said
 
 
+def test_a_field_s_unit_can_be_recorded_after_the_contract_is_written(tmp_path):
+    from fi.alk.harness.amend import fix_tool
+
+    contract = _written_contract(tmp_path)
+    done, said = fix_tool(contract, tmp_path, tool_name="add", arg_units={"item_id": "SKU code"}, why="the person said")
+    assert done and "units updated" in said
+    assert load(tmp_path).tools[0].arg_units == {"item_id": "SKU code"}
+    refused, said = fix_tool(contract, tmp_path, tool_name="add", arg_units={"amount": "cents"}, why="x")
+    assert not refused and "no argument called amount" in said
+
+
 def test_a_tool_the_agent_does_not_have_can_be_removed(tmp_path):
     from fi.alk.harness.amend import fix_tool
     from fi.alk.harness.contract import Dependency, ToolEntry
@@ -9311,3 +9322,981 @@ def test_an_old_contract_gains_the_new_tool_fields_through_fix_tool(tmp_path):
         tool.effects == "clears the basket total"
         and tool.refuses == "returns ok false for an unknown item"
     )
+
+
+# --- actors ------------------------------------------------------------------------
+
+
+def _listed(*entries):
+    from fi.alk.harness.call_actor import CallActor, CallActorList
+
+    return CallActorList(call_actors=[CallActor.model_validate(one) for one in entries])
+
+
+_NEARBY = {
+    "id": "nearby",
+    "name": "Rowan",
+    "role": "someone with the person",
+    "channel": "audio_mix",
+}
+_MENU = {
+    "id": "menu",
+    "name": "Line menu",
+    "role": "the person's phone menu",
+    "channel": "ivr",
+}
+_ON_A_PAGE = {
+    "id": "page",
+    "name": "Banner",
+    "role": "something on the page",
+    "channel": "page_content",
+}
+_SECOND = {
+    "id": "second",
+    "name": "Rowan",
+    "role": "someone who takes the phone",
+    "channel": "audio_handoff",
+}
+
+
+@pytest.mark.parametrize(
+    "entry, modality, overrides, refused",
+    [
+        (_NEARBY, "voice", {}, ""),
+        (
+            {"id": "ghost", "instruction": "x"},
+            "voice",
+            {},
+            "ghost is not on the environment's list",
+        ),
+        # With no instruction of its own here, the actor plays from its own record.
+        ({"id": "nearby", "instruction": " "}, "voice", {}, ""),
+        (_NEARBY, "chat", {}, "which a chat scenario cannot carry"),
+        (
+            _MENU,
+            "voice",
+            {"call_direction": "inbound"},
+            "only answers a call the agent places",
+        ),
+        (
+            {**_MENU, "trigger": {"kind": "mid_journey", "turn": 2}},
+            "voice",
+            {},
+            "use `always`",
+        ),
+        (
+            {**_NEARBY, "trigger": {"kind": "mid_journey", "turn": 0}},
+            "voice",
+            {},
+            "a turn of 1 or more",
+        ),
+        ({**_NEARBY, "trigger": {"kind": "mid_journey", "turn": 40}}, "voice", {}, ""),
+        (
+            {**_NEARBY, "trigger": {"kind": "on_tool"}},
+            "voice",
+            {},
+            "needs the `tool` it waits for",
+        ),
+        (
+            {**_NEARBY, "trigger": {"kind": "on_tool", "tool": "refund"}},
+            "voice",
+            {},
+            "not one of the agent's tools",
+        ),
+        (
+            {**_NEARBY, "trigger": {"kind": "on_tool", "tool": "lookup"}},
+            "voice",
+            {},
+            "runs only inside the agent",
+        ),
+        ({**_NEARBY, "trigger": {"kind": "on_tool", "tool": "add"}}, "voice", {}, ""),
+        (
+            {**_NEARBY, "trigger": {"kind": "on_keyword", "words": [" "]}},
+            "voice",
+            {},
+            "needs the words",
+        ),
+        (
+            {**_NEARBY, "trigger": {"kind": "probability", "p": 0}},
+            "voice",
+            {},
+            "p above 0 and at most 1",
+        ),
+        (
+            {**_NEARBY, "trigger": {"kind": "probability", "p": 1.5}},
+            "voice",
+            {},
+            "p above 0 and at most 1",
+        ),
+        ({**_NEARBY, "trigger": {"kind": "probability", "p": 1}}, "voice", {}, ""),
+        (
+            {**_NEARBY, "trigger": {"kind": "sometimes"}},
+            "voice",
+            {},
+            "trigger 'sometimes' is not one of",
+        ),
+        (_NEARBY, "voice", {"person": "rowan"}, "has the simulated user's name"),
+    ],
+)
+def test_a_scenario_s_call_actors_are_refused_with_the_reason_no_run_could_honour_them(
+    entry, modality, overrides, refused
+):
+    from fi.alk.harness.call_actor import ScenarioCallActor, scenario_problems
+
+    included = ScenarioCallActor.model_validate(
+        {
+            "instruction": "You want something else and say so.",
+            "trigger": {"kind": "always"},
+            **entry,
+        }
+    )
+    problems = scenario_problems(
+        [included],
+        _listed(_NEARBY, _MENU),
+        modality=modality,
+        call_direction=overrides.get("call_direction", "outbound"),
+        person=overrides.get("person", "Sam"),
+        tools={"add", "lookup"},
+        runs_in_world=lambda tool: tool == "add",
+    )
+    if refused:
+        assert len(problems) == 1 and refused in problems[0], problems
+    else:
+        assert problems == []
+
+
+def test_a_scenario_names_each_call_actor_once():
+    from fi.alk.harness.call_actor import ScenarioCallActor, scenario_problems
+
+    one = ScenarioCallActor(id="nearby", instruction="You want something else.")
+    twice = scenario_problems(
+        [one, one],
+        _listed(_NEARBY),
+        modality="voice",
+        call_direction="",
+        person="Sam",
+        tools=None,
+        runs_in_world=lambda _tool: True,
+    )
+    assert twice == ["actors: nearby is included twice"]
+
+
+@pytest.mark.parametrize(
+    "on_call, accepted", [(-1, False), (0, False), (1, True), (2, True)]
+)
+def test_an_on_tool_trigger_counts_calls_from_the_first(on_call, accepted):
+    from pydantic import ValidationError
+
+    from fi.alk.harness.call_actor import Trigger
+
+    if accepted:
+        trigger = Trigger(kind="on_tool", tool="lookup", on_call=on_call)
+        assert trigger.on_call == on_call
+    else:
+        with pytest.raises(ValidationError):
+            Trigger(kind="on_tool", tool="lookup", on_call=on_call)
+
+
+def test_the_list_keeps_one_entry_per_call_actor_and_refuses_what_no_run_can_deliver(
+    tmp_path, monkeypatch
+):
+    import asyncio
+
+    from fi.alk.harness.call_actor import load_call_actors
+    from fi.alk.harness.world.tools import world_actor_tools
+
+    add, drop = world_actor_tools(tmp_path, _contract(modality="voice"))
+
+    def said(tool, args):
+        out = asyncio.run(tool.handler(args))
+        return bool(out.get("is_error")), out["content"][0]["text"]
+
+    assert said(add, {**_NEARBY, "persona": {"gender": "female"}}) == (
+        False,
+        said(add, _NEARBY)[1],
+    )
+    listed = load_call_actors(tmp_path)
+    # Only the fields sent change: the persona given first is kept.
+    assert [(one.id, one.name, one.persona) for one in listed.call_actors] == [
+        ("nearby", "Rowan", {"gender": "female"})
+    ]
+    assert (
+        said(add, _ON_A_PAGE)[0]
+        and "channel 'page_content' is not one of" in said(add, _ON_A_PAGE)[1]
+    )
+    assert "needs a role" in said(add, {**_NEARBY, "id": "other", "role": ""})[1]
+    assert (
+        "persona is named 'Sam'"
+        in said(add, {**_NEARBY, "id": "other", "persona": {"name": "Sam"}})[1]
+    )
+    assert [one.id for one in load_call_actors(tmp_path).call_actors] == ["nearby"]
+
+    (tmp_path / "scenarios" / "uses-it").mkdir(parents=True)
+    (tmp_path / "scenarios" / "uses-it" / "scenario.json").write_text(
+        json.dumps(
+            {"name": "uses-it", "actors": [{"id": "nearby", "instruction": "x"}]}
+        )
+    )
+    refused, text = said(drop, {"id": "nearby"})
+    assert refused and "uses-it" in text
+    (tmp_path / "scenarios" / "uses-it" / "scenario.json").write_text(
+        json.dumps({"name": "uses-it"})
+    )
+    assert said(drop, {"id": "nearby"})[0] is False
+    assert load_call_actors(tmp_path).call_actors == []
+
+
+def test_a_scenario_keeps_its_call_actors_and_one_without_is_written_as_before(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness.scenario_tools import accept_scenario
+    from fi.alk.harness.call_actor import save_call_actors
+
+    root, _contract_, catalogue = _built_environment(tmp_path)
+    save_call_actors(root, _listed(_SECOND))
+    included = [
+        {
+            "id": "second",
+            "instruction": "You want a different item and say so.",
+            "trigger": {"kind": "on_tool", "tool": "add"},
+        }
+    ]
+
+    def submit(payload):
+        return accept_scenario(
+            payload,
+            world_root=root,
+            catalogue=catalogue,
+            kept=[],
+            spoken=True,
+            call_actor_list=_listed(_SECOND),
+            tools={"add", "lst"},
+        )
+
+    kept = submit(_delta(actors=included))
+    assert not kept.get("is_error"), kept
+    written = json.loads(
+        (root / "scenarios" / "adds-a-big-mac" / "scenario.json").read_text()
+    )
+    [entry] = written["actors"]
+    assert (entry["id"], entry["instruction"]) == ("second", included[0]["instruction"])
+    assert entry["trigger"]["kind"] == "on_tool" and entry["trigger"]["tool"] == "add"
+
+    plain = submit(_delta(name="adds-another"))
+    assert not plain.get("is_error"), plain
+    assert "actors" not in json.loads(
+        (root / "scenarios" / "adds-another" / "scenario.json").read_text()
+    )
+
+
+def test_call_actor_tools_and_fields_are_offered_only_when_switched_on(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness.scenario_tools import scenario_tools
+    from fi.alk.harness.world.tools import world_tools
+
+    root, contract, _catalogue = _built_environment(tmp_path)
+    contract.modality = "voice"
+
+    def offered():
+        server, _kept = scenario_tools(contract, root, root, wanted=2)
+        submit = next(one for one in server.tools if one.name == "submit_scenario")
+        goal = next(one for one in server.tools if one.name == "add_sub_goal")
+        world_server, _world = world_tools(
+            contract, tmp_path / "w", external_runtime=True
+        )
+        return (
+            "actors" in submit.input_schema["properties"],
+            "actor" in goal.input_schema["properties"],
+            {"add_actor", "drop_actor"}
+            <= {one.name for one in world_server.tools},
+            any(
+                words in json.dumps(submit.input_schema)
+                for words in ("who else is on the call", "hand-off of the phone")
+            ),
+        )
+
+    # A sub-goal may name the actor it depends on; always offered (there is no switch).
+    assert offered() == (True, True, True, True)
+
+
+def test_a_actor_id_is_one_every_part_of_the_platform_can_address():
+    from fi.alk.harness.call_actor import CallActor, entry_problems
+
+    assert entry_problems(CallActor.model_validate(_SECOND), modality="voice") == []
+    wrong = entry_problems(
+        CallActor.model_validate({**_SECOND, "id": "Front-Desk"}), modality="voice"
+    )
+    assert wrong == [
+        "id 'Front-Desk' must be 1 to 64 lowercase letters, digits or underscores"
+    ]
+
+
+def test_a_call_actor_scenarios_include_keeps_its_channel(tmp_path, monkeypatch):
+    import asyncio
+
+    from fi.alk.harness.call_actor import load_call_actors, save_call_actors
+    from fi.alk.harness.world.tools import world_tools
+
+    _root, contract, _catalogue = _built_environment(tmp_path)
+    contract.modality = "voice"
+    destination = tmp_path / "w"
+    save_call_actors(destination, _listed(_SECOND))
+    server, _world = world_tools(contract, destination, external_runtime=True)
+    add = {one.name: one.handler for one in server.tools}["add_actor"]
+    used = destination / "scenarios" / "one" / "scenario.json"
+    used.parent.mkdir(parents=True, exist_ok=True)
+    used.write_text(json.dumps({"name": "one", "actors": [{"id": "second"}]}))
+    moved = {**_SECOND, "channel": "audio_mix"}
+    assert "Not changed" in asyncio.run(add(moved))["content"][0]["text"]
+    assert load_call_actors(destination).get("second").channel == "audio_handoff"
+    assert (
+        asyncio.run(add({**_SECOND, "role": "someone close to the person"})).get(
+            "is_error"
+        )
+        is None
+    )
+    used.unlink()
+    asyncio.run(add(moved))
+    assert load_call_actors(destination).get("second").channel == "audio_mix"
+
+
+def test_check_world_says_when_the_list_of_call_actors_is_empty(tmp_path, monkeypatch):
+    import asyncio
+
+    from fi.alk.harness.call_actor import save_call_actors
+    from fi.alk.harness.world.tools import world_tools
+
+    _root, contract, _catalogue = _built_environment(tmp_path)
+    contract.modality = "voice"
+    destination = tmp_path / "w"
+
+    def said():
+        server, _world = world_tools(contract, destination, external_runtime=True)
+        tools = {one.name: one.handler for one in server.tools}
+        return asyncio.run(tools["check_world"]({}))["content"][0]["text"]
+
+    assert "No actor speaks on calls yet" in said()
+    save_call_actors(destination, _listed(_SECOND))
+    assert "No actor speaks on calls yet" not in said()
+
+
+def test_the_coverage_plan_and_the_world_view_name_the_environment_s_call_actors(
+    tmp_path, monkeypatch
+):
+    import asyncio
+
+    from fi.alk.harness.scenario_tools import CANONICAL_AXES, scenario_tools
+    from fi.alk.harness.call_actor import save_call_actors
+
+    root, contract, _catalogue = _built_environment(tmp_path)
+    contract.modality = "voice"
+    save_call_actors(root, _listed(_SECOND))
+
+    def replies(levels):
+        server, _kept = scenario_tools(contract, root, root, wanted=2)
+        tools = {one.name: one.handler for one in server.tools}
+        axes = {axis: ["plain"] for axis in CANONICAL_AXES}
+        aim = {"count": 2, "axes": {**axes, "interface": levels}}
+        aimed = asyncio.run(tools["aim_for"](aim))["content"][0]["text"]
+        seen = asyncio.run(tools["inspect_world"]({}))["content"][0]["text"]
+        return aimed, seen
+
+    aimed, seen = replies(["quiet_line"])
+    assert (
+        "no level is named for them yet" in aimed
+        and "- second: Rowan (someone who takes the phone), audio_handoff: someone who takes the phone from the person"
+        in aimed
+    )
+    assert "  second: Rowan, someone who takes the phone; speaks on calls (audio_handoff)" in seen
+    aimed, _seen = replies(["quiet_line", "second"])
+    assert "no level is named" not in aimed
+
+
+def test_editing_a_scenario_written_before_call_actors_existed_is_never_refused_for_the_share(
+    tmp_path, monkeypatch
+):
+    import asyncio
+
+    from fi.alk.harness.scenario_tools import scenario_tools
+    from fi.alk.harness.call_actor import save_call_actors
+
+    root, contract, _catalogue = _built_environment(tmp_path)
+    voice = contract.model_copy(update={"modality": "voice"})
+    server, kept = scenario_tools(voice, root, root, wanted=4)
+    submit = next(one for one in server.tools if one.name == "submit_scenario")
+    persona = {
+        "name": "Asha Rao",
+        "personality": "Friendly and cooperative",
+        "communication_style": "Direct and concise",
+        "initial_message": "Hi, I would like to place an order.",
+        "languages": ["English"],
+        "accent": "Neutral",
+        "gender": "female",
+        "age_group": "25-32",
+    }
+    for name, caller in (
+        ("adds-one", "Asha Rao"),
+        ("adds-two", "Ravi Kumar"),
+        ("adds-three", "Lena Park"),
+        ("adds-four", "Omar Haddad"),
+    ):
+        said = asyncio.run(
+            submit.handler(_delta(name=name, persona={**persona, "name": caller}))
+        )
+        assert not said.get("is_error"), said
+
+    save_call_actors(root, _listed(_SECOND))
+    server, kept = scenario_tools(voice, root, root, wanted=4)
+    edit = next(one for one in server.tools if one.name == "edit_scenario")
+    said = asyncio.run(
+        edit.handler(
+            {"scenario_key": kept[0].scenario_key, "persona": {"name": "Meera Iyer"}}
+        )
+    )
+    assert not said.get("is_error"), said
+    assert kept[0].persona.name == "Meera Iyer"
+
+
+def test_the_person_s_instruction_never_names_a_call_actor(monkeypatch):
+    from types import SimpleNamespace
+
+    from fi.alk.harness import scenario_tools
+
+    monkeypatch.setattr(scenario_tools, "scenario_problems", lambda *args, **kwargs: [])
+    listing = _listed(_SECOND)
+
+    def problems(instruction):
+        scenario = SimpleNamespace(
+            actors=[SimpleNamespace(id="second", instruction="x", trigger=None)],
+            instruction=instruction,
+            persona=None,
+            call_direction="",
+        )
+        return scenario_tools._call_actors_that_cannot_run(
+            scenario, listing, None, True, set()
+        )
+
+    assert problems(
+        "Ask for two tickets. Hand the phone to Rowan when the agent quotes a price."
+    ) == [
+        "instruction: the person's instruction names Rowan, who speaks on this call. Write the person's situation "
+        "as if no one else were there; the trigger brings them in and the run tells the person who is with them"
+    ]
+    assert problems("Ask for two tickets for the evening show.") == []
+
+
+@pytest.mark.parametrize(
+    ("name", "instruction", "names"),
+    [
+        ("Al", "Ask for two tickets and also a receipt.", False),
+        ("Al", "Al takes the phone when the price is quoted.", True),
+        ("Al", "Say AL is with you.", True),
+        ("Al", "Mention that Al, your brother, is nearby.", True),
+        ("Ann", "Ask for the annual plan.", False),
+        ("Will", "You will ask for two tickets.", False),
+        ("Will", "Hand the phone to Will.", True),
+        ("Mary Ann", "Hand the phone to Mary\nAnn.", True),
+        ("Mary Ann", "Ask Mary for the date.", False),
+        ("Rowan", "Ask about the rowan trees.", False),
+        ("rowan", "Ask what rowan thinks.", True),
+    ],
+)
+def test_a_call_actor_s_name_is_found_only_as_a_name(
+    monkeypatch, name, instruction, names
+):
+    from types import SimpleNamespace
+
+    from fi.alk.harness import scenario_tools
+
+    monkeypatch.setattr(scenario_tools, "scenario_problems", lambda *args, **kwargs: [])
+    scenario = SimpleNamespace(
+        actors=[SimpleNamespace(id="second", instruction="x", trigger=None)],
+        instruction=instruction,
+        persona=None,
+        call_direction="",
+    )
+    listing = _listed({**_SECOND, "name": name})
+    refused = scenario_tools._call_actors_that_cannot_run(
+        scenario, listing, None, True, set()
+    )
+    assert bool(refused) is names
+
+
+def test_a_suite_keeps_its_share_of_scenarios_with_a_call_actor_unless_the_person_set_another():
+    from types import SimpleNamespace
+
+    from fi.alk.harness.scenario_tools import _call_actors_short
+
+    with_one = SimpleNamespace(name="a", actors=[SimpleNamespace(id="near")])
+    alone = [SimpleNamespace(name=f"p{i}", actors=[]) for i in range(8)]
+    plain = {"name": "next"}
+    # 9 written of 10, one with an actor; a 20% share needs 2, so the last one must include one.
+    refused = _call_actors_short(plain, [with_one, *alone], 10, 0.2, ["near"])
+    assert (
+        "1 of the 10 scenarios" in refused
+        and "at least 2 must" in refused
+        and "near" in refused
+    )
+    assert (
+        _call_actors_short(
+            {**plain, "actors": [{"id": "near"}]},
+            [with_one, *alone],
+            10,
+            0.2,
+            ["near"],
+        )
+        == ""
+    )
+    # Room left: the share can still be met by the scenarios still to come.
+    assert _call_actors_short(plain, [with_one, *alone[:3]], 10, 0.2, ["near"]) == ""
+    # None asked for, or nothing this agent can be reached by: no share to keep.
+    assert _call_actors_short(plain, [with_one, *alone], 10, 0.0, ["near"]) == ""
+    assert _call_actors_short(plain, [with_one, *alone], 10, 0.2, []) == ""
+
+
+def test_aim_for_reports_the_default_share_and_takes_the_person_s_own(
+    tmp_path, monkeypatch
+):
+    import asyncio
+
+    from fi.alk.harness.scenario_tools import CANONICAL_AXES, scenario_tools
+    from fi.alk.harness.call_actor import save_call_actors
+    from fi.simulate.simulation.call_actors import SHARE_RANGE, at_least, default_share
+
+    root, contract, _catalogue = _built_environment(tmp_path)
+    contract.modality = "voice"
+    save_call_actors(root, _listed(_SECOND))
+    server, _kept = scenario_tools(contract, root, root, wanted=40)
+    aim = next(one.handler for one in server.tools if one.name == "aim_for")
+    axes = {axis: ["plain", "with_second"] for axis in CANONICAL_AXES}
+
+    def said(**extra):
+        return asyncio.run(aim({"count": 40, "axes": axes, **extra}))["content"][0][
+            "text"
+        ]
+
+    share = default_share(str(root))
+    assert SHARE_RANGE[0] <= share <= SHARE_RANGE[1]
+    assert (
+        f"At least {at_least(share, 40)} of the 40 scenarios include an actor"
+        in said()
+    )
+    job = next(
+        f"job-{n}"
+        for n in range(100)
+        if at_least(default_share(f"job-{n}"), 40) != at_least(share, 40)
+    )
+    monkeypatch.setenv("ALK_HARNESS_JOB_ID", job)
+    assert (
+        f"At least {at_least(default_share(job), 40)} of the 40 scenarios include an actor"
+        in said()
+    )
+    monkeypatch.delenv("ALK_HARNESS_JOB_ID")
+    assert "At least 16 of the 40" in said(call_actor_share=40)
+    assert "No scenario includes an actor, as the person asked" in said(
+        call_actor_share=0
+    )
+
+
+def test_world_actors_are_offered_only_when_switched_on_and_kept_in_the_environment_s_list(
+    tmp_path, monkeypatch
+):
+    import asyncio
+
+    from fi.alk.harness.actors import load_actors
+    from fi.alk.harness.world import tools as world_tools
+
+    _root, contract = _saved_world(tmp_path)
+    server, _world = world_tools.world_tools(contract, tmp_path)
+    assert {"add_actor", "drop_actor"} <= set(_published(server))
+
+    async def call(name, payload):
+        from mcp.types import CallToolRequestParams
+
+        handler = _request_handler(_instance(server), "tools/call")
+        result = await handler.handler(
+            None, CallToolRequestParams(name=name, arguments=payload)
+        )
+        return result.content[0].text
+
+    reviewer = {
+        "id": "reviewer",
+        "name": "Robin",
+        "role": "reviewer",
+        "permitted_actions": ["records.approve"],
+        "identities": {"records": "robin"},
+    }
+    assert "records.approve" in asyncio.run(call("add_actor", reviewer))
+    assert "Not added" in asyncio.run(
+        call("add_actor", {"id": "agent", "name": "x", "role": "y"})
+    )
+    asyncio.run(
+        call("add_actor", {"id": "deputy", "name": "Lee", "on_behalf_of": "reviewer"})
+    )
+    refused = asyncio.run(call("drop_actor", {"id": "reviewer"}))
+    assert refused.startswith("Not dropped") and "on behalf of" in refused
+    assert asyncio.run(call("drop_actor", {"id": "deputy"})) == "deputy dropped"
+    asyncio.run(
+        call(
+            "add_actor",
+            {**reviewer, "permitted_actions": ["records.approve", "records.reject"]},
+        )
+    )
+    [kept] = load_actors(tmp_path).actors
+    assert kept.permitted_actions == ["records.approve", "records.reject"]
+    # In the build and the chat alike, an action the world lacks is kept and named, never a refusal.
+    lacking = asyncio.run(
+        call(
+            "add_actor",
+            {
+                "id": "reviewer",
+                "name": "Robin",
+                "permitted_actions": ["records.no_such_action"],
+            },
+        )
+    )
+    assert "records.no_such_action is not among them" in lacking
+    assert load_actors(tmp_path).actors[0].permitted_actions == [
+        "records.no_such_action"
+    ]
+    asyncio.run(
+        call(
+            "add_actor",
+            {**reviewer, "permitted_actions": ["records.approve", "records.reject"]},
+        )
+    )
+    # Every field the editor sets can be set from the chat, and a later call changes only what it sends.
+    full = {
+        "id": "reviewer",
+        "name": "Robin",
+        "goal": "Approve only changes she can justify",
+        "constraints": {
+            "may_agree": ["Up to 25%"],
+            "private": ["The quarter's budget"],
+            "stop_when": ["Decided"],
+        },
+        "behaviour": {
+            "style": "brisk",
+            "response_timing": {"kind": "delayed", "seconds": 5},
+        },
+        "knowledge": [{"kind": "facts", "text": "Changes above 25% need the VP"}],
+        "activation": {
+            "trigger": {"kind": "on_tool", "tool": "records.request_approval"},
+            "fallback": "decline",
+        },
+        "provenance": {"origin": "forged"},
+    }
+    asyncio.run(call("add_actor", full))
+    asyncio.run(
+        call(
+            "add_actor",
+            {"id": "reviewer", "name": "Robin", "role": "regional reviewer"},
+        )
+    )
+    [kept] = load_actors(tmp_path).actors
+    assert (kept.role, kept.goal, kept.constraints.stop_when) == (
+        "regional reviewer",
+        "Approve only changes she can justify",
+        ["Decided"],
+    )
+    assert kept.permitted_actions == ["records.approve", "records.reject"]
+    assert (
+        kept.activation.trigger.tool == "records.request_approval"
+        and kept.behaviour.response_timing.seconds == 5
+    )
+    asyncio.run(
+        call(
+            "add_actor",
+            {
+                "id": "reviewer",
+                "name": "Robin",
+                "constraints": {"stop_when": ["Asked twice"]},
+            },
+        )
+    )
+    [kept] = load_actors(tmp_path).actors
+    assert (kept.constraints.stop_when, kept.constraints.may_agree) == (
+        ["Asked twice"],
+        ["Up to 25%"],
+    )
+    assert kept.provenance == {}
+    used = tmp_path / "scenarios" / "one" / "scenario.json"
+    used.parent.mkdir(parents=True, exist_ok=True)
+    used.write_text(json.dumps({"name": "one", "actors": [{"id": "reviewer"}]}))
+    assert "Not dropped. These scenarios include reviewer: one" in asyncio.run(
+        call("drop_actor", {"id": "reviewer"})
+    )
+    used.unlink()
+    assert "dropped" in asyncio.run(call("drop_actor", {"id": "reviewer"}))
+    assert load_actors(tmp_path).actors == []
+
+
+def test_a_built_environment_s_chat_can_still_change_its_cast_and_nothing_else_of_the_world(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness.world import tools as world_tools
+
+    _root, contract = _saved_world(tmp_path)
+    voice = contract.model_copy(update={"modality": "voice"})
+    server = world_tools.actor_tools_server(voice, tmp_path)
+    assert set(_published(server)) == {
+        "add_actor",
+        "drop_actor",
+        "add_actor",
+        "drop_actor",
+    }
+
+
+def test_a_scenario_naming_an_actor_the_world_does_not_list_is_not_kept(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness.actors import Actor, ActorList, save_actors
+    from fi.alk.harness.scenario_tools import _actor_fields, _unlisted_actors
+
+    assert "actors" in _actor_fields()
+    save_actors(tmp_path, ActorList(actors=[Actor(id="reviewer", name="Robin")]))
+    scenario = Scenario(
+        name="wrong-person-approval",
+        actors=[
+            {"id": "reviewer", "actions": [{"action": "records.approve"}]},
+            {"id": "ghost"},
+        ],
+    )
+    assert _unlisted_actors(scenario, tmp_path) == [
+        "actors: 'ghost' is not an actor; add it with add_actor first"
+    ]
+    from fi.alk.harness.folder import document_for
+
+    assert "actors" not in document_for(Scenario(name="plain"))
+    assert (
+        document_for(scenario)["actors"][0]["actions"][0]["trigger"]["kind"] == "always"
+    )
+
+
+def test_the_writer_is_always_told_how_to_write_actors():
+    from fi.alk.harness.config import discovered_skills
+
+    # There is no switch: every build's writer reads the actors module.
+    assert "add_actor" in discovered_skills(modality="voice")
+    assert "add_actor" in discovered_skills(modality="chat")
+
+
+def test_a_proof_plays_permitted_actor_actions_at_their_triggers_and_keeps_them_out_of_the_agent_s_calls(
+    tmp_path,
+):
+    from fi.alk.harness.actors import Actor, ActorList, save_actors
+    from fi.alk.harness.prove import _WorldActors
+    from fi.alk.harness.scenario import Step
+    from fi.alk.harness.world.runtime import Call
+
+    class World:
+        def __init__(self):
+            self.calls = []
+
+        def call(self, name, arguments):
+            self.calls.append(
+                Call(
+                    name=name,
+                    arguments=arguments,
+                    result=None,
+                    ok=True,
+                    error="",
+                    refused=False,
+                )
+            )
+
+    save_actors(
+        tmp_path,
+        ActorList(
+            actors=[
+                Actor(
+                    id="reviewer", name="Robin", permitted_actions=["records.approve"]
+                ),
+                Actor(
+                    id="coworker",
+                    name="Sam",
+                    identities={"slack": "@sam"},
+                    permitted_actions=["slack.post_message"],
+                ),
+            ]
+        ),
+    )
+    scenario = Scenario(
+        name="approval",
+        actors=[
+            {
+                "id": "coworker",
+                "actions": [
+                    {"action": "records.approve"},
+                    {"action": "slack.post_message", "trigger": {"kind": "contacted"}},
+                ],
+            },
+            {
+                "id": "reviewer",
+                "actions": [
+                    {
+                        "action": "records.approve",
+                        "arguments": {"item": "d1"},
+                        "trigger": {
+                            "kind": "on_tool",
+                            "tool": "request_approval",
+                            "on_call": 2,
+                        },
+                    },
+                ],
+            },
+        ],
+    )
+    world, by_actors = World(), {}
+    acting = _WorldActors(scenario, tmp_path, world, by_actors)
+    acting.act_on(None)
+    assert world.calls == []  # the coworker may not approve, so nothing happened
+    for step in [
+        Step(tool="request_approval"),
+        Step(tool="post_message", arguments={"to": "@sam"}),
+        Step(tool="request_approval"),
+    ]:
+        world.call(step.tool, step.arguments)
+        acting.act_on(step)
+    assert [call.name for call in world.calls] == [
+        "request_approval",
+        "post_message",
+        "post_message",
+        "request_approval",
+        "approve",
+    ]
+    assert by_actors == {2: "coworker", 4: "reviewer"}
+    assert [
+        (one["actor_id"], one["outcome"], one["refusal_code"])
+        for one in acting.events(outcome="refused")
+    ] == [("coworker", "refused", "not_permitted")]
+    assert [one["actor_id"] for one in acting.events()] == [
+        "coworker",
+        "agent",
+        "agent",
+        "coworker",
+        "agent",
+        "reviewer",
+    ]
+
+    # A source-hosted world takes the action at its own route, which the agent's tools never name.
+    world, by_actors = World(), {}
+    world.endpoints = {"records/approve", "records/request_approval"}
+    acting = _WorldActors(scenario, tmp_path, world, by_actors)
+    for _ in range(2):
+        step = Step(tool="request_approval")
+        world.call(step.tool, step.arguments)
+        acting.act_on(step)
+    assert [call.name for call in world.calls][-1] == "records/approve"
+
+
+def test_a_check_reads_the_proof_s_action_log_as_it_reads_the_run_s(tmp_path):
+    from fi.alk.harness.actors import Actor, ActorList, save_actors
+    from fi.alk.harness.checks import run_check
+    from fi.alk.harness.prove import _run
+
+    root, _contract, _catalogue = _built_environment(tmp_path)
+    save_actors(root, ActorList(actors=[Actor(id="reviewer", name="Robin")]))
+    scenario = Scenario.model_validate(
+        {
+            **_delta(),
+            "actors": [{"id": "reviewer", "actions": [{"action": "records.approve"}]}],
+        }
+    )
+    world, calls, _refused, _assumed = _run(scenario, root, with_solution=True)
+    check = (
+        "def check(world, calls):\n"
+        "    tried = world.events(actor_id='reviewer', outcome='refused')\n"
+        "    return None if len(tried) == 1 and world.events('agent') else 'the log is wrong'\n"
+    )
+    outcome = run_check(check, world, calls, name="reviewer_refused")
+    assert outcome.held is True and not outcome.broken, outcome
+
+
+def test_a_proof_names_the_actor_actions_on_a_clock_or_a_chance_it_could_not_play():
+    from fi.alk.harness.prove import _unplayed
+
+    scenario = Scenario(
+        name="later",
+        actors=[
+            {
+                "id": "reviewer",
+                "actions": [
+                    {
+                        "action": "records.approve",
+                        "trigger": {"kind": "after_seconds", "seconds": 5},
+                    },
+                    {
+                        "action": "records.hold",
+                        "trigger": {"kind": "probability", "p": 0.5},
+                    },
+                    {
+                        "action": "records.note",
+                        "trigger": {"kind": "on_tool", "tool": "records.request"},
+                    },
+                    {"action": "records.open"},
+                ],
+            },
+        ],
+    )
+    assert _unplayed(scenario) == [
+        "reviewer records.approve (after_seconds)",
+        "reviewer records.hold (probability)",
+    ]
+
+
+def test_the_writer_is_told_which_world_actors_there_are_only_when_switched_on(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness.actors import Actor, ActorList, save_actors
+    from fi.alk.harness.scenario_tools import world_summary
+
+    _saved_world(tmp_path)
+    save_actors(
+        tmp_path,
+        ActorList(
+            actors=[
+                Actor(
+                    id="reviewer",
+                    name="Robin",
+                    role="reviewer",
+                    permitted_actions=["records.approve"],
+                )
+            ]
+        ),
+    )
+    assert "  reviewer: Robin, reviewer; may records.approve" in world_summary(tmp_path)
+
+
+def _with_actor_listed(root, **fields):
+    from fi.alk.harness.actors import Actor, ActorList, save_actors
+
+    save_actors(root, ActorList(actors=[Actor(id="mia", name="Mia", play="live", **fields)]))
+
+
+def test_a_trigger_its_runtime_cannot_evaluate_is_refused_when_the_scenario_is_written(tmp_path):
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    # A speaking actor is brought in by the conversation; elapsed seconds are only kept by the world.
+    _with_actor_listed(root, channel="audio_mix", voice="v1", role="the caller's sister")
+    said = accept_scenario(
+        _delta(actors=[{"id": "mia", "trigger": {"kind": "after_seconds", "seconds": 30}}]),
+        world_root=root, catalogue=catalogue, kept=[],
+    )
+    assert said.get("is_error")
+    assert "mia speaks on the call, where `after_seconds` cannot be evaluated" in said["content"][0]["text"]
+
+
+def test_an_event_started_scenario_for_an_agent_reached_by_a_call_is_refused(tmp_path):
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    _with_actor_listed(root, permitted_actions=["add"])
+    said = accept_scenario(
+        _delta(actors=[{"id": "mia"}], starts_with={"actor": "mia", "text": "New order in."}),
+        world_root=root, catalogue=catalogue, kept=[], spoken=True,
+    )
+    assert said.get("is_error")
+    assert "nothing can deliver an event to it" in said["content"][0]["text"]

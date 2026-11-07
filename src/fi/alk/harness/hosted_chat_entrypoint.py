@@ -70,11 +70,15 @@ _NEEDS_CONFIRMATION = frozenset(
         "add_rule",
         "drop_rule",
         "add_sub_goal",
+        "add_actor",
+        "drop_actor",
     }
 )
-# Removals and changes to the world or contract: each asks on its own, even after a yes to every change.
+# Removals and changes to the world, its cast or the contract: each asks on its own, even after a yes to every change.
 _ASKS_ALONE = frozenset(
     {
+        "add_actor",
+        "drop_actor",
         "drop_scenario",
         "drop_scenarios",
         "change_world",
@@ -107,6 +111,7 @@ _PUBLISHED_PARTS = (
     "scenarios",
     "scenarios.json",
     "sub_goals.json",
+    "actors.json",
     "contract.json",
     "simulator_prompt.md",
     "world.sqlite",
@@ -128,6 +133,8 @@ _WRITING_TOOLS = frozenset(
         "change_world",
         "declare_tool",
         "remember",
+        "add_actor",
+        "drop_actor",
     }
 )
 
@@ -430,13 +437,21 @@ class HostedChatRuntime:
             ),
             hosted_prompt=self._hosted_prompt(),
             sealed=not self._control_only(),
-            # While building, the world itself (tools, data, caller prompt) can still change.
-            more_servers=self._world_servers(contract, catalogue) if world else None,
+            # While building, the world itself (tools, data, caller prompt) can still change; once built, only the cast.
+            more_servers=self._world_servers(contract, catalogue)
+            if world
+            else self._cast_servers(contract),
             catalogue=catalogue,
         )
         if self._nudge is not None:
             self._nudge_tools(stage, catalogue)
         return stage
+
+    def _cast_servers(self, contract: Any) -> dict[str, Any] | None:
+        from .world.tools import ACTOR_SERVER, actor_tools_server
+
+        server = actor_tools_server(contract, self.workspace)
+        return {ACTOR_SERVER: server} if server is not None else None
 
     def _world_servers(self, contract: Any, catalogue: Any = None) -> dict[str, Any]:
         from .build import open_stage as build_stage
@@ -571,6 +586,18 @@ class HostedChatRuntime:
 
         async def guarded(args: dict[str, Any]) -> Any:
             if self._from_platform:
+                if spec.name == "drop_actor":
+                    return {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Not done: during the build and its check the environment keeps "
+                                "the actors it lists. Give each a level in aim_for so some scenarios "
+                                "include it; removing one is for the person to ask for in the chat.",
+                            }
+                        ],
+                        "is_error": True,
+                    }
                 if spec.name in ("drop_scenarios", "drop_scenario") or (
                     spec.name in _SUBMITS and self._changes_situation(args)
                 ):
@@ -628,7 +655,15 @@ class HostedChatRuntime:
         """Whether a submission changes what an existing scenario tests, not how it is graded."""
         return self._changes(
             args,
-            ("instruction", "use_case", "branch", "tests", "coverage", "fixture"),
+            (
+                "instruction",
+                "use_case",
+                "branch",
+                "tests",
+                "coverage",
+                "fixture",
+                "actors",
+            ),
             whole_persona=True,
         )
 
@@ -639,7 +674,17 @@ class HostedChatRuntime:
 
     def _changes_meaning(self, args: dict[str, Any]) -> bool:
         """Whether a submission rewrites an existing scenario's test rather than its surface."""
-        return self._changes(args, ("instruction", "use_case", "branch", "sub_goals", "solution"))
+        return self._changes(
+            args,
+            (
+                "instruction",
+                "use_case",
+                "branch",
+                "sub_goals",
+                "solution",
+                "actors",
+            ),
+        )
 
     def _changes(self, args: dict[str, Any], fields: tuple[str, ...], whole_persona: bool = False) -> bool:
         """Whether a submission changes any of these fields of an existing scenario, or who its person is.
@@ -972,8 +1017,11 @@ class HostedChatRuntime:
         if fingerprint == self._published_fingerprint() and not force:
             return {"applied": True, "unchanged": True, "message": "nothing is waiting to be saved"}
         from .bundle_author_v2 import reseal_scenarios
+        from .pre_run import refresh_stale
 
         try:
+            # A pre-run session written from an actor record that has since changed is written again before sealing.
+            await refresh_stale(self.workspace)
             await asyncio.to_thread(reseal_scenarios, self.workspace)
         except Exception as exc:  # noqa: BLE001 - reported to the model, never swallowed
             traceback.print_exc()
