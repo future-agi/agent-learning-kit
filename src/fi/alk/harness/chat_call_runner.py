@@ -782,7 +782,7 @@ class HostedChatCallRunner:
                 ),
             }
         # The world's door for this trial: the agent's calls and the actors' actions, one rule set, one log.
-        from .actor_dispatch import DoorActs, build_dispatcher
+        from .actor_dispatch import DoorActs, action_descriptions, build_dispatcher
         from .actor_meter import ActorMeter
         from .actors import acting_fields, load_actors
         from .call_runner import actor_limits
@@ -816,6 +816,7 @@ class HostedChatCallRunner:
             ChatActors(
                 [{**one, **acting_fields(listing.by_id().get(str(one.get("id"))))} for one in chat_actors],
                 seed=trial, model=None, limits=limits, act=acts, records=records, meter=meter,
+                about=action_descriptions(self._contract.model_dump()),
             )
             if chat_actors
             else None

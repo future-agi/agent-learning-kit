@@ -898,17 +898,7 @@ def build_dispatcher(
         and listed[entry.id].play != "mocked"
         and not listed[entry.id].channel
     }
-    about = {
-        str(one.get("name")): described_with_units(one)
-        for one in contract.get("tools") or []
-        if isinstance(one, dict)
-    }
-    world_actions = {
-        route.replace("/", "."): about.get(str(entry.get("tool") or ""), "")
-        for entry in contract.get("tool_entrypoints") or []
-        if isinstance(entry, dict)
-        and (route := str(entry.get("endpoint") or "").strip("/"))
-    }
+    world_actions = action_descriptions(contract)
     takes_actor = {
         str(one.get("name"))
         for one in contract.get("tools") or []
@@ -952,14 +942,32 @@ def _live_limits(environment: Any, scenario: Any) -> dict[str, Any]:
 
 
 def described_with_units(tool: dict[str, Any]) -> str:
-    """A tool's description with the unit or format of each field that has one, so an actor writes and reads the
-    value the way the agent and the world do (`refund_amount` in cents, not dollars)."""
+    """A tool's description with its fields by name, and the unit or format of each that has one, so an actor sends
+    the arguments the world takes and writes the value the way the agent and the world do (`refund_amount` in cents,
+    not dollars)."""
     units = tool.get("arg_units") or {}
+    units = units if isinstance(units, dict) else {}
     said = str(tool.get("description") or "")
-    if not isinstance(units, dict) or not units:
+    fields = [str(one) for one in tool.get("args") or []] + sorted(str(one) for one in units if one not in (tool.get("args") or []))
+    if not fields:
         return said
-    named = "; ".join(f"{field} in {unit}" for field, unit in sorted(units.items()) if str(unit).strip())
+    named = "; ".join(f"{field} in {units[field]}" if str(units.get(field) or "").strip() else field for field in fields)
     return f"{said} (fields: {named})" if said else f"Fields: {named}"
+
+
+def action_descriptions(contract: dict[str, Any]) -> dict[str, str]:
+    """Each world action an actor may take, by its route, described as the agent's tool behind it is."""
+    about = {
+        str(one.get("name")): described_with_units(one)
+        for one in contract.get("tools") or []
+        if isinstance(one, dict)
+    }
+    return {
+        route.replace("/", "."): about.get(str(entry.get("tool") or ""), "")
+        for entry in contract.get("tool_entrypoints") or []
+        if isinstance(entry, dict)
+        and (route := str(entry.get("endpoint") or "").strip("/"))
+    }
 
 
 def world_summary(

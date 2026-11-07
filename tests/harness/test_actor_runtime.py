@@ -660,8 +660,39 @@ def test_a_field_s_unit_reaches_the_actor_and_the_contract_line_every_stage_read
          "description": "Refund an order"}
     )
     assert spec.arg_units == {"refund_amount": "cents, USD"}
-    assert described_with_units(spec.model_dump()) == "Refund an order (fields: refund_amount in cents, USD)"
+    # Every field by name, so a live actor sends the arguments the world takes, with the unit where there is one.
+    assert described_with_units(spec.model_dump()) == "Refund an order (fields: refund_amount in cents, USD; order_id)"
     assert described_with_units({"description": "Refund an order"}) == "Refund an order"
+
+
+def test_a_chat_actor_is_told_each_action_s_fields_and_acts_under_its_identity():
+    from fi.alk.harness.run.conversation import ChatActors
+
+    acted, briefs = [], []
+
+    async def act(actor, action, arguments, *, key, parent, identity=""):
+        acted.append((action, arguments, identity))
+        return {"status": 200, "outcome": "committed"}
+
+    cast = ChatActors(
+        [{"id": "coworker", "name": "Jordan", "permitted_actions": ["chat.post_message", "approvals.put"],
+          "identities": {"chat": "coworker", "approvals": "coworker"}, "trigger": {"kind": "always"}}],
+        seed="t", model=None, act=act, about={"chat.post_message": "Post (fields: channel; text)"},
+    )
+    replies = iter([
+        json.dumps({"action": "chat.post_message", "arguments": {"channel": "#sales", "text": "hi"}}),
+        json.dumps({"action": "approvals.put", "arguments": {"deal_id": 7}}),
+    ])
+
+    async def write(actor, brief):
+        briefs.append(brief)
+        return next(replies)
+
+    cast._write = write
+    for turn in (1, 2):
+        asyncio.run(cast.due_lines(agent_turns=turn, last_text="", tools_called=[], conversation=[]))
+    assert "Post (fields: channel; text)" in json.dumps(briefs[0])
+    assert acted == [("chat.post_message", {"channel": "#sales", "text": "hi"}, "coworker"), ("approvals.put", {"deal_id": 7}, "")]
 
 
 def test_a_unit_for_a_field_the_tool_does_not_have_is_a_contract_problem():

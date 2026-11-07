@@ -247,6 +247,7 @@ class ChatActors:
         records: Callable[[str], list[dict[str, Any]]] | None = None,
         meter: Any = None,
         clock: Callable[[], float] = time.time,
+        about: dict[str, str] | None = None,
     ) -> None:
         from fi.simulate.simulation.call_actors import Waits
 
@@ -257,6 +258,8 @@ class ChatActors:
         self.limits = dict(limits or {})
         # Sends an actor's action through the world's door: `act(actor_id, action, arguments, key=, parent=)`.
         self.act = act
+        # What each world action is and the fields it takes, by its route, so an actor sends what the world reads.
+        self.about = dict(about or {})
         self.records = records
         self.meter = meter
         self.turns_taken = 0
@@ -309,13 +312,21 @@ class ChatActors:
                 said=self.written[key],
                 conversation=conversation,
                 language=str(actor.get("language") or ""),
-                actions={one: "" for one in actor.get("permitted_actions") or []} if self.act else {},
+                actions={one: self.about.get(one, "") for one in actor.get("permitted_actions") or []} if self.act else {},
             )
             decision = read_decision(await self._write(actor, brief))
             if decision.action and self.act is not None:
                 self.decisions += 1
+                from ..world_door import record_action
+
+                identity = (actor.get("identities") or {}).get(decision.action.split(".", 1)[0], "")
                 outcome = await self.act(
-                    key, decision.action, decision.arguments, key=f"{self.seed}:{key}:c{self.decisions}", parent=None
+                    key,
+                    decision.action,
+                    decision.arguments,
+                    key=f"{self.seed}:{key}:c{self.decisions}",
+                    parent=None,
+                    **({"identity": identity} if identity and record_action(decision.action) is None else {}),
                 )
                 self.events.append(
                     {"actor": key, "kind": "acted", "action": decision.action, "outcome": outcome, "why": decision.why}

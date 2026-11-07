@@ -727,6 +727,8 @@ def acting_fields(actor: "Actor | None") -> dict[str, Any]:
     activation = actor.activation
     return {
         "permitted_actions": list(actor.permitted_actions),
+        # Who it is in each service it acts in, so its actions there are credited to it.
+        "identities": dict(actor.identities),
         "max_lines": actor.max_lines,
         "model": actor.model,
         # How long the run waits for it once due, and what happens if it does not answer.
