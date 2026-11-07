@@ -493,7 +493,9 @@ def test_a_person_folded_into_the_caller_is_refused_and_a_kept_scenario_reads_it
     )
     assert _folded_actors(kept, listed) == []
     said = cast_read_back(kept, tmp_path)
-    assert "Alex Vance (manager; comes in: its own; does: approvals.put)" in said and "not in it: Sam Rivera (lead)" in said
+    assert "Alex Vance (manager; comes in: its own; does: approvals.put (a record change))" in said
+    assert "not in it: Sam Rivera (lead)" in said
+    assert "Talked before the run: nobody (no `pre_run`)" in said and "Started by: the caller (no `starts_with`)" in said
 
 
 def test_an_actor_brought_in_when_contacted_needs_an_identity_the_agent_could_name(tmp_path):

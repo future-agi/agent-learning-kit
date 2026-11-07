@@ -428,26 +428,37 @@ def _folded_actors(scenario: Scenario, listed: dict[str, Actor]) -> list[str]:
 
 def cast_read_back(scenario: Scenario, world_root: Path) -> str:
     """Who this scenario plays and how, beside the environment's actors it leaves out, for the writer to compare with
-    the request before moving on."""
+    the request before moving on: each action as a record change or a message, whether anyone talked before the run,
+    and who starts it."""
+    from .world_door import record_action
+
     listed = load_actors(world_root).by_id()
     others = [one for one in listed.values() if one.id != CALLER]
     if not others:
         return ""
+
+    def kind(action: str) -> str:
+        return f"{action} (a record change)" if record_action(action) else f"{action} (a message or tool call)"
+
     parts = []
     for entry in scenario.actors:
         actor = listed.get(entry.id)
         trigger = entry.trigger.kind if entry.trigger is not None else "its own"
-        acts = ", ".join(one.action for one in entry.actions) or ("a live part" if entry.instruction else "nothing")
+        acts = ", ".join(kind(one.action) for one in entry.actions) or ("a live part" if entry.instruction else "nothing")
         parts.append(f"{actor.name if actor else entry.id} ({entry.id}; comes in: {trigger}; does: {acts})")
     sessions = [f"{session.where.get('action', '?')} with {', '.join(session.actors)}" for session in scenario.pre_run]
-    starter = scenario.starts_with.actor or "the scenario's own task" if scenario.starts_with is not None else ""
+    if scenario.starts_with is not None:
+        starter = f"a message from {scenario.starts_with.actor}" if scenario.starts_with.actor else "the scenario's own task"
+    else:
+        starter = "the caller (no `starts_with`)"
     left_out = [f"{one.name} ({one.id})" for one in others if one.id not in _in_scenario(scenario)]
     return (
         "\nCast: the caller" + "".join(f"; {one}" for one in parts)
-        + f". Before the run: {'; '.join(sessions) or 'nothing'}. Started by: {starter or 'the caller'}."
+        + f". Talked before the run: {'; '.join(sessions) if sessions else 'nobody (no `pre_run`)'}. Started by: {starter}."
         + (f" Listed actors not in it: {', '.join(left_out)}." if left_out else "")
-        + " Compare this with the request: everyone it names as acting during the run is played here, by their "
-        "actions or a live part, never folded into the caller."
+        + " Compare this with the request: everyone it names as acting during the run is played here; a decision "
+        "someone makes in the world is a record change; people who talked before the run are a `pre_run` session; "
+        "a run started by someone's message has `starts_with`."
     )
 
 
