@@ -376,3 +376,25 @@ def test_a_fault_never_applies_to_an_actor_s_action(proxy, store):
     url, rows = proxy
     _faults(store, [{"action": "records.approve", "mode": "timeout_before_commit", "delay_seconds": 0}])
     assert _act(proxy.door, "reviewer", "/records/approve", {"item": "1"}, key="k-1")[0] == 201
+
+
+def test_reading_the_trial_s_faults_keeps_one_connection_for_every_agent_call(proxy, store, monkeypatch):
+    import psycopg
+
+    url, _rows = proxy
+    _faults(store, [])
+    opened = []
+    real = psycopg.connect
+
+    def counting(*args, **kwargs):
+        opened.append(args[0] if args else kwargs.get("conninfo"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(psycopg, "connect", counting)
+    for _ in range(2):
+        assert _post(url, "/ok", {"item": "1"})[0] == 201
+    warmed = len(opened)
+    for _ in range(4):
+        assert _post(url, "/ok", {"item": "1"})[0] == 201
+    # Once warm, an agent call opens one connection, its log row's, as on dev: reading faults opens none.
+    assert len(opened) - warmed == 4

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -44,18 +45,27 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "")
 __all__ = ["Handler", "door", "permitted"]
 
 
+# One connection, opened on the first agent call and kept: reading the trial's faults never opens a connection per call.
+_FAULTS_CONNECTION = None
+_FAULTS_LOCK = threading.Lock()
+
+
 def _trial_faults() -> list[dict]:
     """This trial's faults on the agent's calls, written by the runner into the world's database; never from a request
-    or a file the agent's process could reach."""
+    or a file the agent's process could reach. Read over one kept connection; a world whose runner set no faults has
+    no row, and an unreadable table is no faults."""
+    global _FAULTS_CONNECTION
     if not DATABASE_URL:
         return []
-    try:
-        import psycopg
+    with _FAULTS_LOCK:
+        try:
+            if _FAULTS_CONNECTION is None or _FAULTS_CONNECTION.closed:
+                import psycopg
 
-        with psycopg.connect(DATABASE_URL, autocommit=True, connect_timeout=5) as connection:
-            row = connection.execute("SELECT faults FROM _alk_trial_faults WHERE id = 1").fetchone()
-    except Exception:  # noqa: BLE001 - no table yet, or no database: no faults this trial
-        return []
+                _FAULTS_CONNECTION = psycopg.connect(DATABASE_URL, autocommit=True, connect_timeout=5)
+            row = _FAULTS_CONNECTION.execute("SELECT faults FROM _alk_trial_faults WHERE id = 1").fetchone()
+        except Exception:  # noqa: BLE001 - no table (no faults were ever set), or no database: no faults this trial
+            return []
     faults = row[0] if row else []
     return [one for one in faults if isinstance(one, dict)] if isinstance(faults, list) else []
 

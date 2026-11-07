@@ -338,3 +338,21 @@ def test_one_actor_s_key_is_not_another_s_and_a_keyed_row_is_written_before_the_
     again = door.enter(ToolCall(action="crm.approve", name="approve", arguments={"deal": 7}, actor="manager", key="k"))
     assert (first.outcome, other.outcome, again.outcome) == ("committed", "committed", "duplicate")
     assert len(executor.ran) == 2
+
+
+def test_a_keyed_action_s_row_is_written_before_its_answer_even_on_a_slow_log_so_a_retry_finds_it():
+    import time as clock
+
+    class _Slow(MemoryLog):
+        def write(self, row):
+            clock.sleep(0.3)
+            super().write(row)
+
+    roster = {"manager": {"permitted_actions": ["crm.approve"], "on_behalf_of": None}}
+    executor = _Executor()
+    door = WorldDoor(executor, _Slow(), DictRoster(roster), write_seconds=0.01)
+    first = door.enter(ToolCall(action="crm.approve", name="approve", arguments={"deal": 7}, actor="manager", key="k"))
+    # The retry comes at once: the first row must already be in the log, or the world would be asked twice.
+    again = door.enter(ToolCall(action="crm.approve", name="approve", arguments={"deal": 7}, actor="manager", key="k"))
+    assert (first.outcome, again.outcome) == ("committed", "duplicate")
+    assert len(executor.ran) == 1
