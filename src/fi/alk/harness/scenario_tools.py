@@ -2461,6 +2461,11 @@ def scenario_tools(
                 result["content"][0]["text"] += cast_read_back(Scenario.model_validate(args), world_root)
             except Exception:  # noqa: BLE001 - the read-back never changes whether a scenario was kept
                 pass
+            result["content"][0]["text"] += (
+                "\nRead the instruction as the person would: any sentence saying what the agent will tell them, find, "
+                "approve or refuse hands them the verdict this scenario measures. Replace it with what they want and "
+                "what they would accept, using `edit_scenario`."
+            )
             name = str(args.get("name") or "")
             for key in [key for key in refused if key[0] == name]:
                 refused.pop(key, None)
