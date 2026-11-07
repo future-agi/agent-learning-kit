@@ -43,6 +43,9 @@ class SubGoal(BaseModel):
     output: str = "pass_fail"
     # Which overlay level this sub-goal is the claim for, when it is one.
     overlay: str = ""
+    # The actor this sub-goal is about, by id: not applicable on a call that actor never came into, inconclusive when
+    # it came in and never reached the agent (plan #76 s8). Empty: about the agent's task alone.
+    actor: str = ""
     # The check contract; `verifier` is code, llm or both, empty settles by the check if there is one.
     reference: str = ""
     observed: str = ""

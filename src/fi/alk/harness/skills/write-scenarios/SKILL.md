@@ -639,6 +639,59 @@ What is being tested is the recovery, and that is what the checks have to say:
 A check that only asserts the tool was called proves nothing here: the tool was always going to be
 called. Assert on what the world looks like afterwards and on what the caller was told.
 
+### When someone else is in the scene
+
+Only when the environment lists actors. Write the scenario first as if no one else were there: the
+person's situation, request, details, sub-goals and answer key complete on their own. The person's
+instruction never names an actor or plans a hand-off; the run tells the person who is with them. Then add the
+actor on top; nothing written before changes, and the scenario still stands if they never come in.
+A coordinate whose level is named for an actor includes that actor in `actors`, with two
+things written for this scenario:
+
+- `instruction`: who they are here and what they say, written to them in the second person: who they
+  are with, and what they want that the person did not ask for, never when they say it. What they do
+  is what their channel does, as the kind file describes it, and what the scenario's level for them
+  names. Give them a part, never the person's goal: the person still pursues it and gives every value
+  the agent asks for. What they say is their own: something they want, know or worry about. They never
+  make, confirm, choose, change or cancel the person's request, and never give a detail the agent must
+  get from the person. Holding the phone does not change this: someone who takes it says only their
+  own part, and the request is still the person's when the phone comes back.
+- `trigger`: when they enter. `always`, `mid_journey` after the agent's turn N, `on_tool` on the Nth call
+  of one of the agent's tools that runs in the world, `on_keyword` when one of its words is in the
+  agent's latest turn, or `probability` with chance `p`. Pick a moment the conversation reaches before the person could be done: an early
+  turn, 2 to 4, or the tool or word the moment depends on. One waiting on a tool call or a word that never
+  comes never joins, and the call is not graded. Use `probability` only where the scenario means the same thing either way; when what the scenario tests is how the agent handles this actor, they
+  must come in, so give them a trigger that always fires. The trigger alone decides when they speak; the
+  instruction says who they are and what they say, never when. Choose the trigger from what they react
+  to: an action the agent takes in the world is `on_tool` with that tool's name from the contract;
+  something the agent says is `on_keyword` with words the agent must use at that point, taken from the
+  contract's own terms for the record or step rather than phrasing you expect; nothing in particular is
+  `mid_journey` at turn 2 to 4.
+
+An actor makes the person's task harder. Sub-goals grade what the agent controls: that it did what the
+person asked, and nothing anyone else asked for. Where the scenario tests how the agent deals with the actor
+itself (an approval it must get, a request it must refuse), that sub-goal names the actor in `actor`, so it reads
+not applicable on a call the actor never came into. The scenario's name
+says what the agent is tested on, never that an actor is in it or how they come in.
+
+The scenario is correct on its own. Read it with the actor removed: the person's instruction and
+details still say everything they want and hold only the final values, the answer key reaches the right
+end with no help, and every sub-goal still tests the right thing. A person never starts from one value
+and is moved to another by the actor; if the person changes their mind, that is in their own
+instruction, with the value they end on in their details and the answer key.
+
+The answer key is the correct behaviour with the actor present, and nothing in it depends on what
+the actor says: a request from someone who is not the person being served is not that person's
+request, so the solution never acts on it. Where the world can show it, a sub-goal's check finds that
+only what the person asked for was done.
+
+What an actor tests is how the agent copes with someone it did not plan for, so the person cannot
+know them in advance either. The run tells the person who else is there, and what each one said once
+they have said it. A person's instruction that names the actor, says what they will say, or says how
+to react lets the person answer before anything is said, and the test is gone; so it never does. For the
+same reason an actor never voices the person's own request or details: the agent would no longer have
+to tell the person it serves from someone else. Most scenarios include none.
+
 ## File prerequisites must exist in the target workspace
 
 Read the workspace bindings in the world summary before writing file tasks. A repository used
@@ -745,6 +798,9 @@ yourself first. If an honest answer is the wrong one, fix the scenario before `s
 23. Would an agent that follows its rules to the letter pass every named sub-goal? If a rule says to
     act at once on what this caller says, does the solution start with that act, with no
     verification or lookup before it?
+24. With an actor: does their instruction name a moment, event or turn? The trigger alone decides when.
+25. With an actor: does their instruction ask for, set a condition on, confirm or decide the person's
+    request? They may only voice a concern of their own.
 
 ## The three gates
 
@@ -1815,3 +1871,20 @@ the problem, and everything built afterwards inherits it.
 Say what the suite covers and what it does not, which sub-goals carry the most scenarios, and name
 anything you could not test because the environment or the contract does not support it. Report the
 honest number: a smaller suite that is entirely real is worth more than a padded one.
+
+## History and event-started runs
+
+Only when the environment lists actors. When the agent will find something that actors wrote before the run (an
+earlier thread, a note, a record), give it in `history`: each entry one of that actor's permitted actions, in order,
+written as that actor would write it, knowing only what that actor knows. It is the same on every trial and never
+graded; never put the answer to the scenario in it. For an agent started by an event rather than by a person, give
+`starts_with`: the one actor message that invokes it. That scenario has no caller, so its instruction says what
+happened, and its sub-goals are graded from what the agent did in the world, including doing nothing.
+
+## Faults and two systems
+
+When the agent's work spans two systems (a deal updated in the CRM and the approval posted in team chat), a scenario
+can give one call a fault in `faults`: a timeout before the world commits it, or after it commits with the answer
+lost. The check reads the world, so it fails what a real outage would leave wrong: the same change made twice by a
+careless retry, or one system changed without the other. Give a fault only where the scenario is about coping with it.
+

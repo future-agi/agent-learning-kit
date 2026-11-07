@@ -153,6 +153,17 @@ what the gates check. Then:
   difference. "Twenty more like #5" is `aim_for` plus a writer brief naming #5's cell and what differs.
 - **Prove again without changing**: `prove_scenarios`.
 - **Sub-goals**: `add_sub_goal` defines or repairs one in the shared catalogue.
+- **Actors**, where `add_actor` is offered: `add_actor` and `drop_actor` change the
+  environment's list of who might be around its users, and no scenario changes with it. Including one
+  in scenarios changes what they test: give each its `actors` entry and resubmit it. A share of
+  scenarios the person asks for, including none, goes to `aim_for` as `call_actor_share` and replaces the
+  default; brief the sub-agents with it. When a request does not say whether it means the list or
+  scenarios, ask. An entry you write follows the write-scenarios rules for actors. When an actor
+  or trigger the person asked for cannot be used with this agent, or a check refuses it, stop: tell them
+  which one and why, offer what can be used instead, and change it only once they agree.
+- **World actors**, where `add_actor` is offered: `add_actor` adds someone who acts through the world's own
+  actions, or changes only the fields you send of one already listed, so what the person set elsewhere stays.
+  `drop_actor` removes one. Read `actors.json` first: edits made in the web app or CLI meet yours there.
 - **The contract's reading of the agent**: `amend_contract`, `add_rule`, `drop_rule`, `fix_tool`, and
   `declare_tool` for a tool the contract lacks (with the line in the agent's source that defines it),
   always with the reason. This corrects the harness's understanding; it never changes the agent.

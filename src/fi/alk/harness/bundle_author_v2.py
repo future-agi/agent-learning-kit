@@ -30,6 +30,13 @@ import yaml
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.version import Version
 
+from .actors import (
+    ACTOR_RULES_FILE,
+    ACTORS_FILE,
+    actors_seed,
+    load_actors,
+    write_actor_rules,
+)
 from .bundle import CapabilityProtocol
 from .catalogue import CATALOGUE
 from .bundle_v2 import (
@@ -130,6 +137,49 @@ class EnvironmentPlanV2:
 
 _IGNORED_ARTIFACT_PARTS = {".git", ".venv", "__pycache__", "node_modules"}
 _CERTIFIED_BUNDLE_DIRECTORY = "certified-bundle"
+# The agent's tool trace, as every world without actors is seeded.
+_AGENT_TRACE_DDL = (
+    "CREATE TABLE IF NOT EXISTS _alk_tool_trace ("
+    "id bigserial PRIMARY KEY, name text NOT NULL, arguments jsonb NOT NULL, "
+    "result jsonb, ok boolean NOT NULL, error text, at double precision NOT NULL);\n"
+)
+# With actors, the world's action log: every action the tool proxy saw, who took it and what came of it.
+_TOOL_TRACE_DDL = (
+    "CREATE TABLE IF NOT EXISTS _alk_tool_trace ("
+    "id bigserial PRIMARY KEY, name text NOT NULL, arguments jsonb NOT NULL, "
+    "result jsonb, ok boolean NOT NULL, error text, at double precision NOT NULL, "
+    "action_id text NOT NULL DEFAULT md5(random()::text || clock_timestamp()::text), "
+    "actor_id text NOT NULL DEFAULT 'agent', worker_id text, parent_event_id text, "
+    "outcome text NOT NULL DEFAULT 'committed', refusal text, refusal_code text, "
+    "on_behalf_of text, idempotency_key text);\n"
+    # The columns a prebuilt world's own tool server writes, so one row carries both sets.
+    "ALTER TABLE _alk_tool_trace ADD COLUMN IF NOT EXISTS agent_tool text, "
+    "ADD COLUMN IF NOT EXISTS provider_call_id text, ADD COLUMN IF NOT EXISTS tool_call_id text, "
+    "ADD COLUMN IF NOT EXISTS status text;\n"
+)
+
+
+def _sets_trial_state(authoring: Path) -> bool:
+    """Whether any scenario has a pre-run session or sets faults: both need the full action log."""
+    for document in Path(authoring).glob("scenarios/*/scenario.json"):
+        try:
+            body = json.loads(document.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(body, dict) and (body.get("faults") or body.get("pre_run") or body.get("history")):
+            return True
+    return False
+
+
+def _action_log_seed(authoring: Path) -> str:
+    """The action log and who may do what in the world; a world without actors, pre-run sessions or faults is seeded exactly
+    as before."""
+    listing = load_actors(authoring)
+    return (
+        _TOOL_TRACE_DDL + actors_seed(listing)
+        if listing.actors or _sets_trial_state(authoring)
+        else _AGENT_TRACE_DDL
+    )
 
 
 def _catalog_image(image: str) -> tuple[str, str]:
@@ -1966,6 +2016,7 @@ def _tool_proxy_process() -> SourceProcess:
             "PORT": "{{PORT_tool-proxy}}",
             "UPSTREAM_URL": "{{TOOLS_UPSTREAM_URL}}",
             "DATABASE_URL": "{{WORLD_DATABASE_URL}}",
+            "ACTOR_PROOF_FILE": "{{WORLD_DIR}}/actor-token",
         },
         started_check=StartedCheck(port=True, timeout_seconds=180),
         user=ProcessUser.SVC_TOOLS,
@@ -3592,6 +3643,11 @@ def author_bundle_v2(
         if include_scenarios:
             _copy_scenarios(authoring_root, temporary, count=job.scenario_count)
             adopted_catalogue = _copy_sub_goal_catalogue(authoring_root, temporary)
+            if (authoring_root / ACTORS_FILE).is_file():
+                shutil.copy2(authoring_root / ACTORS_FILE, temporary / ACTORS_FILE)
+                # Only with actors, so a bundle without them seals exactly as before.
+                write_actor_rules(temporary)
+                adopted_catalogue += [ACTORS_FILE, ACTOR_RULES_FILE]
         adopted_chat_files = _copy_chat_authoring(
             authoring_root, temporary, include_simulator=include_scenarios
         )
@@ -3609,6 +3665,11 @@ def author_bundle_v2(
             shutil.copy2(
                 Path(__file__).with_name("tool_trace_proxy.py"),
                 generated / "proxy.py",
+            )
+            # The proxy is one surface of the world's door, which it imports from beside it.
+            shutil.copy2(
+                Path(__file__).with_name("world_door.py"),
+                generated / "world_door.py",
             )
         if any(process.name == "mcp-toolbox" for process in plan.processes):
             toolbox = _mcp_toolbox_definition(source_root)
@@ -3630,9 +3691,7 @@ def author_bundle_v2(
         prefix = (
             "CREATE TABLE IF NOT EXISTS harness_seed_sentinel (id text PRIMARY KEY);\n"
             "INSERT INTO harness_seed_sentinel(id) VALUES ('ready') ON CONFLICT DO NOTHING;\n"
-            "CREATE TABLE IF NOT EXISTS _alk_tool_trace ("
-            "id bigserial PRIMARY KEY, name text NOT NULL, arguments jsonb NOT NULL, "
-            "result jsonb, ok boolean NOT NULL, error text, at double precision NOT NULL);\n"
+            + _action_log_seed(authoring_root)
         )
         generic_pipeline = job.metadata.get("generic_harness_v1") is True
         if generic_pipeline:
