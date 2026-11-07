@@ -1830,14 +1830,26 @@ def _runtime_component(root: Path, configured_workdir: str) -> Path:
     return component
 
 
-def _is_adk_web_command(command: list[str]) -> bool:
-    """Return whether argv starts Google ADK's source-owned HTTP development server."""
+def _adk_server_arguments(command: list[str]) -> list[str] | None:
+    """The arguments after ``adk web`` or ``adk api_server``, or None for any other argv.
+
+    Both start ADK's source-owned HTTP server with the same API; ``web`` adds the dev UI.
+    """
 
     normalized = [str(item).strip() for item in command]
-    return any(
-        normalized[index : index + 2] == ["adk", "web"]
-        for index in range(max(0, len(normalized) - 1))
-    )
+    for index in range(len(normalized) - 1):
+        if normalized[index] == "adk" and normalized[index + 1] in {
+            "web",
+            "api_server",
+        }:
+            return normalized[index + 2 :]
+    return None
+
+
+def _is_adk_web_command(command: list[str]) -> bool:
+    """Return whether argv starts Google ADK's source-owned HTTP server."""
+
+    return _adk_server_arguments(command) is not None
 
 
 def _command_port(command: list[str], *, default: int) -> int:
@@ -1859,12 +1871,16 @@ def _command_port(command: list[str], *, default: int) -> int:
     return default
 
 
-def _adk_app_name(root: Path, configured_workdir: str) -> str | None:
-    """Discover the unique ADK app package exposed by ``adk web``.
+def _adk_app_name(
+    root: Path, configured_workdir: str, command: list[str] | None = None
+) -> str | None:
+    """Discover the unique ADK app package exposed by ``adk web`` or ``adk api_server``.
 
-    ADK discovers applications as immediate Python packages below its working directory. Keep
-    this source-derived and deterministic: when a checkout contains more than one possible app,
-    authoring must describe the desired HTTP boundary instead of the compiler guessing.
+    ADK serves the agents directory named by the command's positional argument (default: its
+    working directory). That directory is one app when it holds ``agent.py`` itself; otherwise
+    ADK discovers applications as its immediate Python packages. Keep this source-derived and
+    deterministic: when a checkout contains more than one possible app, authoring must describe
+    the desired HTTP boundary instead of the compiler guessing.
     """
 
     configured = configured_workdir.strip()
@@ -1875,6 +1891,13 @@ def _adk_app_name(root: Path, configured_workdir: str) -> str | None:
     )
     if not workdir.is_relative_to(root.resolve()) or not workdir.is_dir():
         return None
+    for token in reversed(_adk_server_arguments(command or []) or []):
+        agents_dir = (workdir / token).resolve()
+        if agents_dir.is_relative_to(root.resolve()) and agents_dir.is_dir():
+            workdir = agents_dir
+            break
+    if (workdir / "agent.py").is_file():
+        return workdir.name
     candidates = sorted(
         path.name
         for path in workdir.iterdir()
@@ -1892,7 +1915,7 @@ def _adk_web_interface(root: Path, runtime: dict[str, Any]) -> dict[str, Any] | 
     command = [str(item) for item in (runtime.get("command") or [])]
     if not _is_adk_web_command(command):
         return None
-    app_name = _adk_app_name(root, str(runtime.get("workdir") or ""))
+    app_name = _adk_app_name(root, str(runtime.get("workdir") or ""), command)
     if app_name is None:
         return None
     return _adk_interface_for(command, app_name)
@@ -3497,7 +3520,8 @@ def author_bundle_v2(
             runtime = dict(runtime)
             adk_interface = _adk_web_interface(source_root, runtime)
             if adk_interface is not None:
-                # ``adk web`` is a persistent source-owned HTTP server, not a one-shot command.
+                # ``adk web`` / ``adk api_server`` is a persistent source-owned HTTP server, not
+                # a one-shot command.
                 # Launch it directly and describe its existing API rather than nesting it inside
                 # the subprocess bridge (which would make both processes bind the same port).
                 runtime["interface"] = adk_interface
@@ -3507,7 +3531,8 @@ def author_bundle_v2(
                     "generated_runtime_entrypoint_ambiguous: runtime.command requires an "
                     "explicit chat interface. Inspect the source and declare its native "
                     "chat transport, or kind=command only if the command accepts a chat "
-                    "request and exits with the response."
+                    "request and exits with the response. A terminal REPL cannot serve a "
+                    "hosted chat; use the framework's web or API server command instead."
                 )
             contract_body = {**contract_body, "runtime": runtime}
         if (
@@ -4003,9 +4028,10 @@ def _adk_web_app(source: Path, contract: dict[str, Any]) -> dict[str, str]:
     """The ADK app a build resolves for an ``adk web`` runtime, as manifest metadata."""
     runtime = contract.get("runtime")
     runtime = runtime if isinstance(runtime, dict) else {}
-    if not _is_adk_web_command([str(item) for item in (runtime.get("command") or [])]):
+    command = [str(item) for item in (runtime.get("command") or [])]
+    if not _is_adk_web_command(command):
         return {}
-    app_name = _adk_app_name(source, str(runtime.get("workdir") or ""))
+    app_name = _adk_app_name(source, str(runtime.get("workdir") or ""), command)
     return {"adk_web_app": app_name or ""}
 
 

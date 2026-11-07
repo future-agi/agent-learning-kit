@@ -3845,6 +3845,55 @@ def test_adk_web_command_without_interface_uses_source_http_api(tmp_path: Path) 
     )
 
 
+@pytest.mark.parametrize(
+    ("server", "app_name"),
+    [
+        (["adk", "web"], "root_app"),
+        (["adk", "api_server"], "root_app"),
+        (["adk", "api_server", "agents"], "nested_app"),
+        (["adk", "api_server", "--port", "8080", "agents"], "nested_app"),
+        (
+            ["adk", "api_server", "agents", "--host", "0.0.0.0", "--reload"],
+            "nested_app",
+        ),
+        (["adk", "api_server", "--port=8080", "agents/nested_app"], "nested_app"),
+    ],
+)
+def test_adk_http_servers_resolve_the_app_their_agents_directory_serves(
+    tmp_path: Path, server: list[str], app_name: str
+) -> None:
+    source = tmp_path / "source"
+    for app in (source / "root_app", source / "agents" / "nested_app"):
+        app.mkdir(parents=True)
+        (app / "__init__.py").write_text("", encoding="utf-8")
+        (app / "agent.py").write_text("root_agent = object()\n", encoding="utf-8")
+    (source / "pyproject.toml").write_text(
+        "[project]\nname='adk-app'\nversion='1'\n", encoding="utf-8"
+    )
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(authoring, command=["uv", "run", *server])
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("CREATE TABLE fixture (id TEXT PRIMARY KEY)")
+
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source,
+        job=_job(connector="auto", metadata={"generic_harness_v1": True}),
+        authoring=authoring,
+        output=output,
+    )
+
+    assert manifest.metadata["adk_web_app"] == app_name
+    interface = json.loads((output / "contract.json").read_text())["runtime"][
+        "interface"
+    ]
+    assert interface["path"] == "/run_sse"
+    assert interface["request_template"]["app_name"] == app_name
+    assert interface["setup_requests"][0]["path"] == (
+        f"/apps/{app_name}/users/{{{{thread_id}}}}/sessions"
+    )
+
+
 def test_adk_source_toolbox_is_hosted_against_world_database(tmp_path: Path) -> None:
     source = tmp_path / "source"
     app = source / "bug_agent"
