@@ -260,6 +260,8 @@ class DataStore(BaseModel):
     schema_from: str = ""
     loaded_by: str = ""
     loader_module: str = ""
+    # When the loader runs: "start" (once, as the agent starts) or "each_call"; empty when unknown.
+    loads: str = ""
 
     def has_seam(self) -> bool:
         """Whether there is any way to point this agent at our store.

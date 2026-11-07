@@ -248,11 +248,22 @@ def test_a_setup_writing_records_an_in_process_agent_never_loads_is_refused(tmp_
     assert with_actor(in_process, approves)
     assert not with_actor(in_process, {"id": "partner", "instruction": "Ask whether it can go to my card."})
     assert not with_actor({"kind": "postgres", "configured_by": "env"}, approves)
-    # An agent that loads the world's records when it starts sees what was there at the start, never a later change.
-    loads = {**in_process, "loaded_by": "load_profile"}
-    assert not with_actor(loads, approves)
+    # An agent recorded as loading the world's records once, at start, never sees a later change; one that reads
+    # them on every call does, and one whose loader timing is not recorded gets a note instead of a refusal.
+    from fi.alk.harness.scenario_tools import late_changes_note
+
     later = {"id": "manager", "actions": [{"action": "approvals.put", "trigger": {"kind": "on_tool", "tool": "ask"}}]}
-    assert with_actor(loads, later)
+    once = {**in_process, "loaded_by": "load_profile", "loads": "start"}
+    assert not with_actor(once, approves)
+    assert with_actor(once, later)
+    assert not with_actor({**once, "loads": "each_call"}, later)
+    unknown = {**in_process, "loaded_by": "load_profile"}
+    assert not with_actor(unknown, later)
+    (tmp_path / "contract.json").write_text(json.dumps({"data_store": unknown}))
+    noted = Scenario(name="s", instruction="Help.", actors=[later])
+    assert "If this agent's loader runs only when it starts" in late_changes_note(noted, tmp_path)
+    (tmp_path / "contract.json").write_text(json.dumps({"data_store": once}))
+    assert late_changes_note(noted, tmp_path) == ""
     assert with_actor(in_process, later)
 
 

@@ -1178,37 +1178,63 @@ def _identifiers_the_instruction_invents(scenario: Scenario, trial: Any) -> list
     ]
 
 
+_LOADED_ONCE = (
+    "change records after the run starts, but this agent loads its data once when it starts and never reads it "
+    "again, so it never sees the change. Make it starting state (`always`), or give the actor a part on the "
+    "conversation instead"
+)
+
+
+def _in_process_store(world_root: Path) -> dict[str, Any]:
+    """The contract's data store when the agent keeps its data inside its own process, else {}."""
+    try:
+        contract = json.loads((Path(world_root) / "contract.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    store = contract.get("data_store") or {}
+    return store if str(store.get("kind") or "").strip().lower() == "in_process" else {}
+
+
+def _late_record_changes(scenario: Scenario) -> list[str]:
+    """Each actor record change that fires after the run starts."""
+    from .world_door import record_action
+
+    return [
+        f"{entry.id} ({one.action}, {one.trigger.kind})"
+        for entry in scenario.actors
+        for one in entry.actions
+        if record_action(one.action) and one.trigger.kind != "always"
+    ]
+
+
+def late_changes_note(scenario: Scenario, world_root: Path) -> str:
+    """A note, never a refusal, when an agent with a loader may not see a change made after it starts: the
+    contract does not record whether the loader runs once or on every call."""
+    store = _in_process_store(world_root)
+    if not (store.get("loader_module") or store.get("loaded_by")) or str(store.get("loads") or "").strip():
+        return ""
+    late = _late_record_changes(scenario)
+    return f"\nIf this agent's loader runs only when it starts: {', '.join(late)} {_LOADED_ONCE}." if late else ""
+
+
 def _records_the_agent_cannot_see(scenario: Scenario, world_root: Path) -> list[str]:
     """A setup that writes records for an agent whose data lives inside its own process.
 
     Such an agent builds its copy of the data when it starts, so a record added to the world is one it
     never sees: every run of that scenario fails the agent for a record the scenario invented.
     """
-    try:
-        contract = json.loads((Path(world_root) / "contract.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return []
-    store = contract.get("data_store") or {}
-    if str(store.get("kind") or "").strip().lower() != "in_process":
+    store = _in_process_store(world_root)
+    if not store:
         return []
     from .scenario import _CREATES_A_RECORD, _ONLY_TOUCHES_EXISTING
     from .world_door import record_action
 
     if store.get("loader_module") or store.get("loaded_by"):
-        # It loads the world's records once, when it starts: a change made after that never reaches it.
-        late = [
-            f"{entry.id} ({one.action}, {one.trigger.kind})"
-            for entry in scenario.actors
-            for one in entry.actions
-            if record_action(one.action) and one.trigger.kind != "always"
-        ]
-        if not late:
+        # Refused only when the contract records that the loader runs once, at start; otherwise a note.
+        late = _late_record_changes(scenario)
+        if not late or str(store.get("loads") or "").strip().lower() != "start":
             return []
-        return [
-            f"actors: {', '.join(late)} change records after the run starts, but this agent loads its data once when "
-            "it starts and never reads it again, so it never sees the change. Make it starting state (`always`), "
-            "or give the actor a part on the conversation instead"
-        ]
+        return [f"actors: {', '.join(late)} {_LOADED_ONCE}"]
 
     out = []
     setup = scenario.setup_code or ""
@@ -2477,7 +2503,9 @@ def scenario_tools(
             except Exception:  # noqa: BLE001 - the read-back never changes whether a scenario was kept
                 pass
             try:
-                result["content"][0]["text"] += records_of_someone_else(Scenario.model_validate(args), world_root)
+                kept_one = Scenario.model_validate(args)
+                result["content"][0]["text"] += late_changes_note(kept_one, world_root)
+                result["content"][0]["text"] += records_of_someone_else(kept_one, world_root)
             except Exception:  # noqa: BLE001 - the note never changes whether a scenario was kept
                 pass
             result["content"][0]["text"] += (

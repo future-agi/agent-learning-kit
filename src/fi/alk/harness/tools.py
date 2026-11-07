@@ -689,6 +689,13 @@ def contract_tools(
                             "description": "The module that loader is imported from, so it can "
                             "be called rather than reimplemented.",
                         },
+                        "loads": {
+                            "type": "string",
+                            "enum": ["", "start", "each_call"],
+                            "description": "When that loader runs, read from the code: `start` when "
+                            "the agent loads its data once as it starts, `each_call` when it reads "
+                            "it again on every request. Empty when the code does not show it.",
+                        },
                         "version": {
                             "type": "string",
                             "description": "The engine version, where the agent pins one.",
