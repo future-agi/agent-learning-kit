@@ -477,6 +477,36 @@ def test_a_world_tool_that_asks_who_acts_gets_the_actor_s_identity_there():
     assert sent[0][2] == {"text": "hi", "actor_id": "U-priya"}
 
 
+def test_an_actor_s_identity_goes_with_its_service_action_but_never_with_a_record_change():
+    sent = []
+    actor = Actor(
+        id="priya",
+        name="Priya",
+        permitted_actions=["chat.post_message", "approvals.put"],
+        identities={"chat": "coworker", "approvals": "coworker"},
+    )
+    dispatcher = ActorDispatcher(
+        {"priya": actor},
+        [
+            ScenarioActor.model_validate(
+                {
+                    "id": "priya",
+                    "actions": [
+                        {"action": "chat.post_message", "arguments": {"text": "hi"}},
+                        {"action": "approvals.put", "arguments": {"deal_id": 7}},
+                    ],
+                }
+            )
+        ],
+        act=HttpActs("http://p", "t", 5, _sent_to(sent)),
+        trial_id="t",
+        read_log=list,
+        seed="t",
+    )
+    asyncio.run(dispatcher.tick())
+    assert [one[2] for one in sent] == [{"text": "hi", "actor_id": "coworker"}, {"deal_id": 7}]
+
+
 def test_a_session_whose_actor_record_changed_is_written_again_before_sealing(tmp_path):
     import json
 

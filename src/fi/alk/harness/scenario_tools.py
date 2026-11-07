@@ -374,12 +374,76 @@ def _unlisted_actors(scenario: Scenario, world_root: Path) -> list[str]:
     if any(entry.id == CALLER for entry in scenario.actors):
         problems.append("actors: the caller is the person in every scenario, through its persona; leave it out of actors")
     problems += _activation_problems(scenario, listed)
+    problems += _folded_actors(scenario, listed)
     for loop in cycles(listed, scenario.actors):
         problems.append(
             "actors: " + " and ".join(loop) + " bring each other in (each one's trigger is an action only the next "
             "can take): a cycle no run can settle; give one of them a trigger of its own"
         )
     return problems
+
+
+def _in_scenario(scenario: Scenario) -> set[str]:
+    """Every actor this scenario plays: in `actors`, in a pre-run session, or sending the message that starts it."""
+    playing = {entry.id for entry in scenario.actors}
+    for session in scenario.pre_run:
+        playing.update(session.actors)
+    if scenario.starts_with is not None and scenario.starts_with.actor:
+        playing.add(scenario.starts_with.actor)
+    return playing
+
+
+def _named(name: str, text: str) -> bool:
+    return bool(name.strip()) and re.search(rf"(?<!\w){re.escape(name.strip())}(?!\w)", text, re.IGNORECASE) is not None
+
+
+def _folded_actors(scenario: Scenario, listed: dict[str, Actor]) -> list[str]:
+    """A listed person folded into the caller: the caller played as them, or the caller's instruction naming them while
+    the scenario does not play them. Either way the run never plays that person, so what they do is never tested."""
+    playing = _in_scenario(scenario)
+    persona = scenario.persona
+    caller_name = str((persona.get("name") if isinstance(persona, dict) else getattr(persona, "name", "")) or "")
+    out = []
+    for actor in listed.values():
+        if actor.id == CALLER or not actor.name:
+            continue
+        if caller_name and caller_name.strip().lower() == actor.name.strip().lower():
+            out.append(
+                f"persona: the caller is played as {actor.name}, who is the actor {actor.id!r}; give the caller a person "
+                f"of their own and put {actor.id} in `actors` with their part"
+            )
+        elif actor.id not in playing and _named(actor.name, scenario.instruction or ""):
+            out.append(
+                f"instruction: it names {actor.name} (the actor {actor.id!r}) but the scenario does not play them; put "
+                f"{actor.id} in `actors` with what they do (actions or a live part), or in `pre_run` or `starts_with`, "
+                "or leave them out of the instruction"
+            )
+    return out
+
+
+def cast_read_back(scenario: Scenario, world_root: Path) -> str:
+    """Who this scenario plays and how, beside the environment's actors it leaves out, for the writer to compare with
+    the request before moving on."""
+    listed = load_actors(world_root).by_id()
+    others = [one for one in listed.values() if one.id != CALLER]
+    if not others:
+        return ""
+    parts = []
+    for entry in scenario.actors:
+        actor = listed.get(entry.id)
+        trigger = entry.trigger.kind if entry.trigger is not None else "its own"
+        acts = ", ".join(one.action for one in entry.actions) or ("a live part" if entry.instruction else "nothing")
+        parts.append(f"{actor.name if actor else entry.id} ({entry.id}; comes in: {trigger}; does: {acts})")
+    sessions = [f"{session.where.get('action', '?')} with {', '.join(session.actors)}" for session in scenario.pre_run]
+    starter = scenario.starts_with.actor or "the scenario's own task" if scenario.starts_with is not None else ""
+    left_out = [f"{one.name} ({one.id})" for one in others if one.id not in _in_scenario(scenario)]
+    return (
+        "\nCast: the caller" + "".join(f"; {one}" for one in parts)
+        + f". Before the run: {'; '.join(sessions) or 'nothing'}. Started by: {starter or 'the caller'}."
+        + (f" Listed actors not in it: {', '.join(left_out)}." if left_out else "")
+        + " Compare this with the request: everyone it names as acting during the run is played here, by their "
+        "actions or a live part, never folded into the caller."
+    )
 
 
 def _activation_problems(scenario: Scenario, listed: dict[str, Actor]) -> list[str]:
@@ -2304,6 +2368,10 @@ def scenario_tools(
         )
         if not result.get("is_error"):
             exploration["since_submit"] = 0
+            try:
+                result["content"][0]["text"] += cast_read_back(Scenario.model_validate(args), world_root)
+            except Exception:  # noqa: BLE001 - the read-back never changes whether a scenario was kept
+                pass
             name = str(args.get("name") or "")
             for key in [key for key in refused if key[0] == name]:
                 refused.pop(key, None)

@@ -641,7 +641,12 @@ called. Assert on what the world looks like afterwards and on what the caller wa
 
 ### When someone else is in the scene
 
-Only when the environment lists actors. Write the scenario first as if no one else were there: the
+Only when the environment lists actors. Someone the request names as acting during the run (deciding, objecting,
+negotiating, granting access) is an actor in that scenario, with their actions or a live part, never a line in the
+caller's instruction or a record already in place, and never the caller. A kept scenario's reply reads its cast back
+beside the actors it leaves out: compare it with the request before the next one.
+
+Write the scenario first as if no one else were there: the
 person's situation, request, details, sub-goals and answer key complete on their own. The person's
 instruction never names an actor or plans a hand-off; the run tells the person who is with them. Then add the
 actor on top; nothing written before changes, and the scenario still stands if they never come in.

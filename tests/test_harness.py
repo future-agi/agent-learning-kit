@@ -9925,6 +9925,7 @@ def test_world_actors_are_offered_only_when_switched_on_and_kept_in_the_environm
         "name": "Robin",
         "role": "reviewer",
         "permitted_actions": ["records.approve"],
+        "identities": {"records": "robin"},
     }
     assert "records.approve" in asyncio.run(call("add_actor", reviewer))
     assert "Not added" in asyncio.run(

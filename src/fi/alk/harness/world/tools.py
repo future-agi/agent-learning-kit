@@ -646,7 +646,8 @@ def world_actor_tools(
         + ". To act in the world give `permitted_actions`, exactly what this person may do and nothing more: the "
         "world's own actions, each named as the environment names it (the route one of its tools calls, with `/` as "
         "`.`), and record changes on the world's collections, `<collection>.put` to add a record (its fields) and "
-        "`<collection>.change` to edit one (`where` and `set`). A decision someone makes (an approval, a rejection, a grant of access) is "
+        "`<collection>.change` to edit one (`where` and `set`). An actor that acts in a service needs `identities` "
+        "there: who they are in its records, so the world credits what they do to them. A decision someone makes (an approval, a rejection, a grant of access) is "
         "a record change on the collection the world's rule reads, not one of the agent's own actions. Give an actor "
         "an action the agent takes only when the person asked for that actor to take it. The reply lists what can "
         "be given. Anything else they attempt is refused and recorded as their attempt. Who may take an action is "
@@ -691,6 +692,22 @@ def world_actor_tools(
             )
             if problems:
                 return _err("Not added:\n  - " + "\n  - ".join(problems))
+        from ..world_door import record_action
+
+        unnamed = sorted(
+            {
+                one.split(".", 1)[0]
+                for one in actor.permitted_actions
+                if "." in one and record_action(one) is None and not actor.identities.get(one.split(".", 1)[0])
+            }
+        )
+        if unnamed:
+            # Without it the world cannot tell who acted, and credits the actor's post or change to the agent.
+            return _err(
+                f"Not added: {actor.id} acts in {', '.join(unnamed)} but has no identity there. Give `identities` "
+                f"with who they are in each one's records (the member, user or handle the world seeds for them), "
+                f"for example {{{', '.join(repr(one) + ': ...' for one in unnamed)}}}."
+            )
         if current is not None and current.channel != actor.channel:
             using = scenarios_using(destination, actor.id)
             if using:

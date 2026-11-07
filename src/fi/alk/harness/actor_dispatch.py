@@ -374,13 +374,16 @@ class ActorDispatcher:
     async def _send(
         self, actor: Actor, action: str, arguments: dict[str, Any], key: str, cause: str
     ) -> dict[str, Any]:
+        from .world_door import record_action
+
         service = action.split(".", 1)[0]
         if (
-            action in self.names_actor
-            and "actor_id" not in arguments
+            "actor_id" not in arguments
             and actor.identities.get(service)
+            and (action in self.names_actor or record_action(action) is None)
         ):
-            # A world that checks who acts takes the actor's id in the call: it is the actor's identity there.
+            # The world learns who acts from the actor's identity in that service, as the person it seeded, so what
+            # an actor does is never credited to the agent.
             arguments = {**arguments, "actor_id": actor.identities[service]}
         try:
             return await self.act(

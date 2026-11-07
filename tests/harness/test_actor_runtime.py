@@ -447,6 +447,55 @@ def test_a_way_of_speaking_sent_as_the_actor_s_surface_is_said_back_never_saved(
     assert load_actors(tmp_path).by_id()["dana"].channel == "audio_mix"
 
 
+def test_an_actor_acting_in_a_service_needs_its_identity_there(tmp_path):
+    from fi.alk.harness.actors import load_actors
+    from fi.alk.harness.world.tools import world_actor_tools
+
+    contract = SimpleNamespace(modality="chat", model_dump=lambda: {})
+    add, _drop = world_actor_tools(tmp_path, contract, collections=lambda: ["approvals"])
+    out = asyncio.run(add.handler({"id": "lead", "name": "Sam", "permitted_actions": ["chat.post_message", "approvals.put"]}))
+    assert out.get("is_error") and "has no identity there" in out["content"][0]["text"] and "'chat'" in out["content"][0]["text"]
+    assert load_actors(tmp_path).actors == []
+    ok = asyncio.run(
+        add.handler(
+            {"id": "lead", "name": "Sam", "permitted_actions": ["chat.post_message", "approvals.put"], "identities": {"chat": "lead"}}
+        )
+    )
+    assert not ok.get("is_error") and load_actors(tmp_path).by_id()["lead"].identities == {"chat": "lead"}
+
+
+def test_a_person_folded_into_the_caller_is_refused_and_a_kept_scenario_reads_its_cast_back(tmp_path):
+    from fi.alk.harness.actors import load_actors
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _folded_actors, cast_read_back
+
+    save_actors(
+        tmp_path,
+        ActorList(
+            actors=[
+                Actor(id="manager", name="Alex Vance", permitted_actions=["approvals.put"]),
+                Actor(id="lead", name="Sam Rivera", permitted_actions=["approvals.put"]),
+            ]
+        ),
+    )
+    listed = load_actors(tmp_path).by_id()
+    told = Scenario.model_validate({"name": "x", "instruction": "Alex Vance has already rejected it.", "persona": {"name": "Priya"}})
+    assert ["instruction: it names Alex Vance"] == [one[: len("instruction: it names Alex Vance")] for one in _folded_actors(told, listed)]
+    played_as = Scenario.model_validate({"name": "x", "instruction": "Negotiate.", "persona": {"name": "alex vance"}})
+    assert _folded_actors(played_as, listed)[0].startswith("persona: the caller is played as Alex Vance")
+    kept = Scenario.model_validate(
+        {
+            "name": "x",
+            "instruction": "Ask whether Alex Vance approved it.",
+            "persona": {"name": "Priya"},
+            "actors": [{"id": "manager", "actions": [{"action": "approvals.put", "arguments": {"deal_id": 7}}]}],
+        }
+    )
+    assert _folded_actors(kept, listed) == []
+    said = cast_read_back(kept, tmp_path)
+    assert "Alex Vance (manager; comes in: its own; does: approvals.put)" in said and "not in it: Sam Rivera (lead)" in said
+
+
 def test_an_actor_may_be_given_record_changes_on_the_world_s_own_collections(tmp_path):
     from fi.alk.harness.actors import load_actors
     from fi.alk.harness.world.tools import world_actor_tools
