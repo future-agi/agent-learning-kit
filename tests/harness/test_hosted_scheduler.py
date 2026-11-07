@@ -13,6 +13,7 @@ import threading
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -200,6 +201,7 @@ class FakeSubGoal:
     fn: Any
     judged: str = ""
     both: bool = False
+    actor: str = ""
 
     def check(self, world: Any, calls: Any) -> object:
         return self.fn(world, calls)
@@ -4200,7 +4202,26 @@ def test_a_judge_whose_signature_does_not_match_is_not_a_pass(
     asyncio.run(scenario())
 
 
-def _two_judged(monkeypatch, joint_judge, *, mode="", silent=False, goals=None, recording=None):
+def test_the_judge_is_given_who_else_took_part_what_each_did_and_each_actor_s_brief(monkeypatch) -> None:
+    seen: dict[str, Any] = {}
+
+    async def _all(goals, world, calls, *, messages=(), actors=None):
+        seen["actors"] = actors
+        return {goal.name: (True, "held") for goal in goals}
+
+    with_actors = replace(
+        _call_outcome(),
+        call_actors=({"actor": "mia", "name": "Mia", "triggered": True, "delivered": 1},),
+        world_actions=({"actor_id": "mia", "name": "approve", "outcome": "committed"},),
+        actor_briefs={"mia": "You are Mia, the manager."},
+    )
+    receipt, _ = _two_judged(monkeypatch, _all, outcome=with_actors)
+    assert receipt.status == "passed"
+    assert seen["actors"]["briefs"] == {"mia": "You are Mia, the manager."}
+    assert seen["actors"]["actions"][0]["actor_id"] == "mia"
+
+
+def _two_judged(monkeypatch, joint_judge, *, mode="", silent=False, goals=None, recording=None, outcome=None):
     """Run one scenario with two judged sub-goals; return (receipt, sub-goals the per-goal judge saw)."""
     alone: list[str] = []
 
@@ -4218,7 +4239,7 @@ def _two_judged(monkeypatch, joint_judge, *, mode="", silent=False, goals=None, 
         await pool.start()
         class Runner:
             async def run(self, scenario, runtime):
-                return replace(_call_outcome(turns=0 if silent else 4), recording=recording)
+                return outcome or replace(_call_outcome(turns=0 if silent else 4), recording=recording)
 
         scheduler = hs.HostedScheduler(
             pool=pool,
@@ -4294,6 +4315,8 @@ def test_a_call_with_no_words_and_no_actions_is_not_judged(monkeypatch) -> None:
     receipt, alone = _two_judged(monkeypatch, _all, silent=True)
     assert alone == []
     assert receipt.status == "errored" and receipt.failure.code == "judge_undecided"
+    # Its evidence never arrived: each judged sub-goal reads unmeasured, never pass, fail or a blank.
+    assert {goal.verdict for goal in receipt.sub_goals} == {"unmeasured"}
 
 
 def test_a_call_whose_only_evidence_is_its_recording_is_still_judged(monkeypatch) -> None:
@@ -4367,10 +4390,34 @@ def test_a_sub_goal_settled_by_both_fails_when_either_fails(monkeypatch) -> None
         FakeSubGoal("confirmed", lambda w, c: "ignored for a judged-only sub-goal", judged="judge"),
     ]
     receipt, _ = _two_judged(monkeypatch, _all, goals=goals)
-    held = {g.name: (g.held, g.reason) for g in receipt.sub_goals}
-    assert held["saved_feedback"] == (False, "no feedback row saved_feedback said right")
-    assert held["confirmed"] == (True, "confirmed said right")
+    held = {g.name: (g.held, g.reason, g.verdict) for g in receipt.sub_goals}
+    assert held["saved_feedback"] == (
+        False,
+        "no feedback row saved_feedback said right",
+        "fail",
+    )
+    assert held["confirmed"] == (True, "confirmed said right", "pass")
     assert receipt.status == "failed"
+
+
+def test_a_failed_check_is_not_explained_by_a_not_applicable_judge(monkeypatch) -> None:
+    async def _all(goals, world, calls, *, messages=()):
+        return {
+            "saved_feedback": (True, "Not applicable: the caller never asked for it")
+        }
+
+    goals = [
+        FakeSubGoal(
+            "saved_feedback", lambda w, c: "no feedback row", judged="judge", both=True
+        )
+    ]
+    receipt, _ = _two_judged(monkeypatch, _all, goals=goals)
+    result = receipt.sub_goals[0]
+    assert (result.held, result.reason, result.verdict) == (
+        False,
+        "no feedback row",
+        "fail",
+    )
 
 
 def test_a_sub_goal_settled_by_both_takes_the_judge_when_the_check_holds(monkeypatch) -> None:
@@ -4610,3 +4657,150 @@ def test_job_tool_requirement_uses_observed_calls(required, with_calls, expected
         await pool.close()
 
     asyncio.run(scenario())
+
+
+def _run_with_friend(monkeypatch, summary, sub_goals) -> hs.ResultReceipt:
+
+    async def scenario() -> hs.ResultReceipt:
+        outbound = FakeOutbound()
+        pool, _ = _pool(1, outbound=outbound)
+        await pool.start()
+        outcome = replace(_call_outcome(), call_actors=(summary,) if summary else ())
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=FakeCallRunner({"s1": outcome}),
+            outbound=outbound,
+            job_seed=1,
+        )
+        one = FakeScenario(
+            "s1", "id-1", sub_goals=sub_goals, requires_tool_evidence=False
+        )
+        # As `scenario_source` compiles it for a hosted run: the ids alone.
+        one.actors = one.speaking_actors = ("friend",)
+        result = await asyncio.wait_for(scheduler.run([one]), timeout=5.0)
+        await pool.close()
+        return result.receipts[0]
+
+    return asyncio.run(scenario())
+
+
+def _friend(**seen) -> dict:
+    return {
+        "actor": "friend",
+        "name": "Rowan",
+        "triggered": True,
+        "delivered": 0,
+        "dropped": [],
+        **seen,
+    }
+
+
+@pytest.mark.parametrize(
+    "seen, why",
+    [
+        (_friend(dropped=["not ready in time"]), "Rowan (not_delivered)"),
+        (_friend(triggered=False), "Rowan (not_triggered)"),
+        (None, "friend (not_triggered)"),
+    ],
+)
+def test_a_call_its_call_actor_never_reached_is_inconclusive_never_a_pass(
+    monkeypatch, seen, why
+) -> None:
+    receipt = _run_with_friend(
+        monkeypatch, seen, [FakeSubGoal("booked", lambda w, c: None)]
+    )
+    assert receipt.status == "errored"
+    assert (receipt.failure.code, receipt.failure.message) == (
+        "actor_missing",
+        f"inconclusive: scenario problem, not the agent's: did not reach the agent: {why}",
+    )
+    assert [one.verdict for one in receipt.sub_goals] == [None]
+
+
+def test_a_call_actor_a_probability_draw_left_out_leaves_the_call_graded(
+    monkeypatch,
+) -> None:
+    receipt = _run_with_friend(
+        monkeypatch,
+        _friend(triggered=False, drawn=False),
+        [FakeSubGoal("booked", lambda w, c: None)],
+    )
+    assert (receipt.status, receipt.failure) == ("passed", None)
+
+
+def test_a_call_actor_that_came_in_leaves_the_call_s_result_as_graded(
+    monkeypatch,
+) -> None:
+    receipt = _run_with_friend(
+        monkeypatch,
+        _friend(delivered=1),
+        [FakeSubGoal("booked", lambda w, c: None)],
+    )
+    assert (receipt.status, receipt.failure) == ("passed", None)
+    failed = _run_with_friend(
+        monkeypatch,
+        _friend(delivered=1, dropped=["voice failed"]),
+        [FakeSubGoal("booked", lambda w, c: "booked for the wrong time")],
+    )
+    assert failed.status == "failed"
+
+
+@pytest.mark.parametrize(
+    "seen, verdict, status",
+    [
+        (_friend(triggered=False), "not_applicable", "passed"),
+        (_friend(triggered=False, drawn=False), "not_applicable", "passed"),
+        (_friend(dropped=["not ready in time"]), "inconclusive", "errored"),
+        (_friend(delivered=1), "pass", "passed"),
+    ],
+)
+def test_a_sub_goal_about_an_actor_is_settled_by_whether_the_actor_came_in(monkeypatch, seen, verdict, status) -> None:
+    about = FakeSubGoal("asked_the_friend", lambda w, c: None, actor="friend")
+    task = FakeSubGoal("booked", lambda w, c: None)
+    receipt = _run_with_friend(monkeypatch, seen, [task, about])
+    assert receipt.status == status
+    assert [one.verdict for one in receipt.sub_goals] == ["pass", verdict]
+    if status == "errored":
+        assert receipt.failure.code == "actor_missing" and "asked_the_friend" in receipt.failure.message
+
+
+@pytest.mark.parametrize("problem", ["no_world_door", "no_private_token", "not_listed"])
+def test_an_actor_that_could_not_act_names_itself_and_why_in_the_verdict(problem) -> None:
+    outcome = replace(
+        _call_outcome(),
+        call_actors=({"actor": "mia", "name": "Mia", "triggered": False, "delivered": 0, "problem": problem},),
+    )
+    scenario = SimpleNamespace(sub_goals=[], speaking_actors=())
+    assert hs._call_actors_missing(scenario, outcome) == f"Mia ({problem})"
+    # A sub-goal about that actor settles it there instead.
+    scenario = SimpleNamespace(sub_goals=[FakeSubGoal("approved", lambda w, c: None, actor="mia")], speaking_actors=())
+    assert hs._call_actors_missing(scenario, outcome) == ""
+
+
+@pytest.mark.parametrize(
+    "row, verdict",
+    [
+        ({"triggered": False, "delivered": 0}, "not_applicable"),
+        ({"triggered": True, "delivered": 0}, "inconclusive"),
+        ({"triggered": True, "delivered": 1}, "pass"),
+    ],
+)
+def test_a_sub_goal_about_an_actor_that_acts_through_the_world_reads_its_record(row, verdict) -> None:
+    outcome = replace(_call_outcome(), call_actors=({"actor": "mia", "name": "Mia", "acts_in_world": True, **row},))
+    graded = hs.SubGoalResult(name="approved", held=True, reason="the refund was approved", judged=False)
+    goal = FakeSubGoal("approved", lambda w, c: None, actor="mia")
+    assert hs._about_an_actor(goal, graded, outcome).verdict == verdict
+
+
+@pytest.mark.parametrize(
+    "goal, recording, evidence",
+    [
+        (SimpleNamespace(check="x", judged=""), None, ("world_state", "tool_calls")),
+        (SimpleNamespace(check="", judged="j"), None, ("transcript",)),
+        (SimpleNamespace(check="", judged="j"), "call.wav", ("transcript", "recording")),
+        (SimpleNamespace(check="x", judged="j"), "call.wav", ("world_state", "tool_calls", "transcript", "recording")),
+    ],
+)
+def test_each_sub_goal_says_what_it_was_decided_from(goal, recording, evidence) -> None:
+    assert hs._evidence_of(goal, replace(_call_outcome(), recording=recording)) == evidence
