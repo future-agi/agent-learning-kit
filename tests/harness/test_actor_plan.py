@@ -1221,3 +1221,24 @@ def test_a_proof_starts_from_the_world_after_the_pre_run_threads_and_credits_the
     assert [(one.name, one.arguments.get("thread_ts")) for one in world.calls] == [("post", None), ("reply", "ts1")]
     assert by_actors == {0: "priya", 1: "priya"}
     assert [row["actor_id"] for row in acting.events()] == ["priya", "priya"]
+
+
+def test_a_pre_run_session_nobody_can_write_is_refused_with_the_fix(tmp_path):
+    from fi.alk.harness.actors import save_actors
+    from fi.alk.harness.pre_run import session_problems
+
+    save_actors(
+        tmp_path,
+        ActorList(
+            actors=[
+                Actor(id="mia", name="Mia", play="mocked", permitted_actions=["chat.post_message"]),
+                Actor(id="sam", name="Sam", play="live", permitted_actions=["chat.post_message"]),
+            ]
+        ),
+    )
+    place = {"action": "chat.post_message", "arguments": {"channel": "#sales"}}
+    said = session_problems([{"actors": ["mia"], "about": "deal 8", "where": place}], tmp_path)
+    assert said and "nobody here writes" in said[0]
+    assert session_problems([{"actors": ["mia", "sam"], "about": "deal 8", "where": place}], tmp_path) == []
+    given = [{"actor": "mia", "action": "chat.post_message", "arguments": {"channel": "#sales", "text": "20% ok?"}}]
+    assert session_problems([{"actors": ["mia"], "about": "deal 8", "where": place, "thread": given}], tmp_path) == []

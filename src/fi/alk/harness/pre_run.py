@@ -64,6 +64,15 @@ def problems(
             'naming the place, such as {"action": "chat.post_message", "arguments": {"channel": "#sales"}}'
             + (f"; these actors may write with {', '.join(writes)}" if writes else "")
         )
+    writers = [one for one in session.actors if (actor := listed.get(one)) and actor.play in ("live", "both")]
+    if session.actors and not writers and not session.thread:
+        # A mocked actor writes nothing of its own, so this conversation would be empty before every trial.
+        out.append(
+            f"{label}: nobody here writes: {', '.join(session.actors)} "
+            + ("is" if len(session.actors) == 1 else "are")
+            + " mocked and write nothing of their own; include an actor who plays live, or give the mocked "
+            "actors' messages in `thread`"
+        )
     for position, message in enumerate(session.thread, start=1):
         actor = listed.get(message.actor)
         if actor is None:
