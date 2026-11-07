@@ -845,6 +845,13 @@ class HostedChatCallRunner:
         failure: CallAborted | None = None
         _clear_file_tool_calls(runtime)
         acting: asyncio.Task[None] | None = None
+        # An agent that runs its own tools reaches them through the tool proxy, which reads this trial's faults from
+        # the world's database, as on a voice call.
+        proxied_faults = list(document.get("faults") or []) if runtime.endpoints.get("tool_proxy") is not None else []
+        if proxied_faults:
+            from .call_runner import _write_trial_state
+
+            _write_trial_state(runtime, proxied_faults)
         try:
             if dispatcher is not None:
                 # What the actors wrote before T0 is in the world before the conversation starts.
@@ -902,6 +909,10 @@ class HostedChatCallRunner:
                     scenario_key=scenario.scenario_key,
                 )
         finally:
+            if proxied_faults:
+                from .call_runner import _write_trial_state
+
+                _write_trial_state(runtime, [])
             if acting is not None:
                 acting.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
