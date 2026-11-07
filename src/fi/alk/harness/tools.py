@@ -385,6 +385,12 @@ def contract_tools(
                                 "constrained to a set, an enum or a lookup: "
                                 '{"priority": ["low", "normal", "urgent"]}.',
                             },
+                            "arg_units": {
+                                "type": "object",
+                                "description": "The unit or format per argument where the name does "
+                                "not say it and the source does: "
+                                '{"refund_amount": "cents, USD", "timeout": "milliseconds"}.',
+                            },
                             "description": {"type": "string"},
                             "requires": {
                                 "type": "array",

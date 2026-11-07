@@ -864,7 +864,7 @@ def build_dispatcher(
         and not listed[entry.id].channel
     }
     about = {
-        str(one.get("name")): str(one.get("description") or "")
+        str(one.get("name")): described_with_units(one)
         for one in contract.get("tools") or []
         if isinstance(one, dict)
     }
@@ -905,6 +905,17 @@ def build_dispatcher(
         names_actor=names_actor,
         reported=reported,
     )
+
+
+def described_with_units(tool: dict[str, Any]) -> str:
+    """A tool's description with the unit or format of each field that has one, so an actor writes and reads the
+    value the way the agent and the world do (`refund_amount` in cents, not dollars)."""
+    units = tool.get("arg_units") or {}
+    said = str(tool.get("description") or "")
+    if not isinstance(units, dict) or not units:
+        return said
+    named = "; ".join(f"{field} in {unit}" for field, unit in sorted(units.items()) if str(unit).strip())
+    return f"{said} (fields: {named})" if said else f"Fields: {named}"
 
 
 def world_summary(

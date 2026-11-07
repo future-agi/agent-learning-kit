@@ -22,7 +22,8 @@ Each stage produces something the next needs, and each is a conversation you can
 in, corrected in, and resumed in.
 
 **1. Understand.** Read the agent's source and write down what is verifiably true about it: the
-tools it really has with their exact argument names and permitted values, the rules it obeys, what
+tools it really has with their exact argument names, permitted values and the unit or format of any
+field whose name does not say it (cents or dollars, seconds or milliseconds), the rules it obeys, what
 it depends on, its data, and what it is for. This is the contract, and everything afterwards is
 confined to it.
 

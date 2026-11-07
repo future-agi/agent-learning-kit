@@ -547,3 +547,28 @@ def test_a_chat_actor_that_declines_reaches_the_agent_as_a_labelled_line_never_i
     _run(monkeypatch, cast, agent, person)
     assert "Mia did not answer: declined" in agent.heard
     assert "Mia: Mia did not answer: declined" not in agent.heard
+
+
+def test_a_field_s_unit_reaches_the_actor_and_the_contract_line_every_stage_reads():
+    from fi.alk.harness.actor_dispatch import described_with_units
+    from fi.alk.harness.contract import ToolSpec
+
+    spec = ToolSpec.model_validate(
+        {"name": "refund", "args": ["refund_amount", "order_id"], "units": {"refund_amount": "cents, USD"},
+         "description": "Refund an order"}
+    )
+    assert spec.arg_units == {"refund_amount": "cents, USD"}
+    assert described_with_units(spec.model_dump()) == "Refund an order (fields: refund_amount in cents, USD)"
+    assert described_with_units({"description": "Refund an order"}) == "Refund an order"
+
+
+def test_a_unit_for_a_field_the_tool_does_not_have_is_a_contract_problem():
+    from fi.alk.harness.contract import ToolSpec, validate_contract
+    from fi.alk.harness.contract import AgentContract
+
+    contract = AgentContract.model_validate({"agent": "shop", "tools": [ToolSpec(
+        name="refund", args=["order_id"], arg_units={"refund_amount": "cents"}).model_dump()]})
+    assert "tool[refund]:units-for-unknown-args:refund_amount" in validate_contract(contract)
+    named = AgentContract.model_validate({"agent": "shop", "tools": [ToolSpec(
+        name="refund", args=["refund_amount"], arg_units={"refund_amount": "cents, USD"}).model_dump()]})
+    assert "units: refund_amount in cents, USD" in named.brief()
