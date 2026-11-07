@@ -338,6 +338,21 @@ def test_a_record_change_to_the_harness_s_own_tables_is_refused_before_any_sql()
     assert ran == []
 
 
+def test_a_put_takes_the_record_s_fields_as_they_come_or_under_record():
+    from fi.alk.harness.world_door import RecordExecutor
+
+    ran = []
+    executor = RecordExecutor(lambda sql, params: ran.append((sql, params)) or 1)
+    for arguments in ({"deal_id": 7, "status": "approved"}, {"record": {"deal_id": 7, "status": "approved"}}):
+        done = executor.run(ToolCall(action="approvals.put", name="put", actor="manager", form="record", arguments=arguments))
+        assert done.status == 200
+    assert ran == [('INSERT INTO "approvals" ("deal_id", "status") VALUES (%s, %s)', [7, "approved"])] * 2
+    flat = executor.run(
+        ToolCall(action="approvals.change", name="change", actor="manager", form="record", arguments={"status": "x"})
+    )
+    assert flat.status == 400 and "`where`" in flat.error
+
+
 def test_access_is_a_world_record_the_world_s_rule_reads_so_a_grant_by_an_actor_takes_effect_at_once():
     # The developer may post only once they are a member of the channel. Membership is a world record; the CEO's
     # grant is a record change through the door, and the world's own rule reads it on the developer's next post.

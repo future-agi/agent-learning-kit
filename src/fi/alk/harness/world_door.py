@@ -445,7 +445,8 @@ class HttpExecutor:
 
 class RecordExecutor:
     """A record change on one of the world's collections: `<collection>.change` with `{where, set}` or
-    `<collection>.put` with `{record}`. Identifiers are checked; values are always parameters."""
+    `<collection>.put` with the record's fields (or `{record}`). Identifiers are checked; values are always
+    parameters."""
 
     def __init__(
         self, execute: Callable[[str, list[Any]], Any], placeholder: str = "%s"
@@ -462,7 +463,11 @@ class RecordExecutor:
         if collection.lower().startswith("_alk_"):
             # The harness's own tables (who may act, the action log, the trial's faults) are never a world record.
             return Executed(403, None, error=f"{collection} is the harness's own table, not a world record")
-        values = arguments.get("record" if verb == "put" else "set")
+        if verb == "put":
+            # A put's arguments are the record, or carry it under `record`.
+            values = arguments.get("record") if "record" in arguments else arguments
+        else:
+            values = arguments.get("set")
         where = arguments.get("where") if verb == "change" else {}
         if (
             not isinstance(values, dict)
@@ -473,7 +478,8 @@ class RecordExecutor:
             return Executed(
                 400,
                 None,
-                error="a change needs `where` and `set`; a put needs `record`, each a non-empty object",
+                error="a change needs `where` (which records) and `set` (the new values); a put needs the record's fields, "
+                "each a non-empty object",
             )
         names = [*values, *where]
         bad = [one for one in names if not _IDENTIFIER.match(str(one))]

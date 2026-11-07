@@ -221,7 +221,9 @@ def _actor_fields() -> dict[str, Any]:
             "world gets its `actions` here in order: a world action with its arguments and when it fires: "
             "`on_tool` on the agent's `on_call`th call of `tool`, `contacted` when the agent reaches one of the "
             "actor's identities, `after_seconds`, `probability`, or `always`, at the start of the run before the "
-            "agent has done anything. An action the actor is not permitted is refused by the world and recorded as "
+            "agent has done anything. A record change takes `<collection>.put` with the new record's fields, or "
+            "`<collection>.change` with `where` (which records) and `set` (the new values). An action the actor is "
+            "not permitted is refused by the world and recorded as "
             "their attempt. An actor can do both. Leave it out for the person alone.",
             "items": {
                 "type": "object",

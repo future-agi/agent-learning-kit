@@ -645,8 +645,8 @@ def world_actor_tools(
         )
         + ". To act in the world give `permitted_actions`, exactly what this person may do and nothing more: the "
         "world's own actions, each named as the environment names it (the route one of its tools calls, with `/` as "
-        "`.`), and record changes on the world's collections, `<collection>.put` to add a record and "
-        "`<collection>.change` to edit one. A decision someone makes (an approval, a rejection, a grant of access) is "
+        "`.`), and record changes on the world's collections, `<collection>.put` to add a record (its fields) and "
+        "`<collection>.change` to edit one (`where` and `set`). A decision someone makes (an approval, a rejection, a grant of access) is "
         "a record change on the collection the world's rule reads, not one of the agent's own actions. Give an actor "
         "an action the agent takes only when the person asked for that actor to take it. The reply lists what can "
         "be given. Anything else they attempt is refused and recorded as their attempt. Who may take an action is "

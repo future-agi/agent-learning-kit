@@ -1874,12 +1874,15 @@ honest number: a smaller suite that is entirely real is worth more than a padded
 
 ## History and event-started runs
 
-Only when the environment lists actors. When the agent will find something that actors wrote before the run (an
-earlier thread, a note, a record), give it in `history`: each entry one of that actor's permitted actions, in order,
+Only when the environment lists actors. When people talked before the run (a channel thread, a DM, an email chain
+the agent will find), that conversation is a `pre_run` session: name who was in it, where it happened and what it was
+about, and they write it themselves when the scenario is kept. Never fold it into the instruction or a single action.
+When the agent will find something one actor wrote before the run (a note, a record), give it in `history`: each entry one of that actor's permitted actions, in order,
 written as that actor would write it, knowing only what that actor knows. It is the same on every trial and never
 graded; never put the answer to the scenario in it. For an agent started by a task or an event rather than by a
 person, give `starts_with`: the one message that invokes it, with no `actor` when the scenario itself hands over the
-task, and an actor only when a real person or system sends it. That scenario has no caller, so its instruction says what
+task, and an actor only when a real person or system sends it. When a request says a run is started by someone's
+message, the scenario has `starts_with` with that actor, never a caller asking on their behalf. That scenario has no caller, so its instruction says what
 happened, and its sub-goals are graded from what the agent did in the world, including doing nothing.
 
 ## Faults and two systems
