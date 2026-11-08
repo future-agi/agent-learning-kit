@@ -819,6 +819,34 @@ def test_a_field_s_unit_reaches_the_actor_and_the_contract_line_every_stage_read
     assert described_with_units({"description": "Refund an order"}) == "Refund an order"
 
 
+def test_an_actor_is_told_a_record_change_s_fields_from_the_world_s_data_schema():
+    from fi.alk.harness.actor_dispatch import action_descriptions
+
+    contract = {
+        "data_schema": {
+            "approvals": {
+                "id": "SERIAL PRIMARY KEY",
+                "deal_id": "INTEGER NOT NULL REFERENCES deals(id)",
+                "discount_percent": "INTEGER NOT NULL",
+                "status": "TEXT NOT NULL",
+                "posted_at": "TIMESTAMPTZ NOT NULL DEFAULT now()",
+            }
+        },
+        "tools": [{"name": "post_message", "args": ["channel", "text"], "description": "Post in a channel"}],
+        "tool_entrypoints": [{"tool": "post_message", "endpoint": "/chat/post_message"}],
+    }
+    about = action_descriptions(contract)
+    # The fields the world fills itself are left out of a put; a change can match on any of them.
+    assert about["approvals.put"] == (
+        "Add a record to approvals. Fields: deal_id (integer); discount_percent (integer); status (text)"
+    )
+    assert "`where` picks them and `set` gives the new values" in about["approvals.change"]
+    assert "id; deal_id; discount_percent; status; posted_at" in about["approvals.change"]
+    assert about["chat.post_message"] == "Post in a channel (fields: channel; text)"
+    # No data schema, no record descriptions.
+    assert "approvals.put" not in action_descriptions({**contract, "data_schema": {}})
+
+
 def test_a_chat_actor_is_told_each_action_s_fields_and_acts_under_its_identity():
     from fi.alk.harness.run.conversation import ChatActors
 

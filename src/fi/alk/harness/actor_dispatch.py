@@ -18,6 +18,7 @@ import asyncio
 import inspect
 import json
 import logging
+import re
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
@@ -892,12 +893,31 @@ def action_descriptions(contract: dict[str, Any]) -> dict[str, str]:
         for one in contract.get("tools") or []
         if isinstance(one, dict)
     }
-    return {
+    routes = {
         route.replace("/", "."): about.get(str(entry.get("tool") or ""), "")
         for entry in contract.get("tool_entrypoints") or []
         if isinstance(entry, dict)
         and (route := str(entry.get("endpoint") or "").strip("/"))
     }
+    return {**record_descriptions(contract), **routes}
+
+
+def record_descriptions(contract: dict[str, Any]) -> dict[str, str]:
+    """Each record change on the world's collections, with the collection's fields as the contract's data schema
+    names them, so an actor writes a record the world takes rather than guessing its fields."""
+    out: dict[str, str] = {}
+    for collection, columns in (contract.get("data_schema") or {}).items():
+        if not isinstance(columns, dict) or not columns:
+            continue
+        # A column the world fills itself (a serial id, a default) need not be sent.
+        given = [name for name, kind in columns.items() if not re.search(r"SERIAL|DEFAULT", str(kind), re.I)]
+        named = "; ".join(f"{name} ({str(columns[name]).split()[0].lower()})" for name in given)
+        out[f"{collection}.put"] = f"Add a record to {collection}. Fields: {named}"
+        out[f"{collection}.change"] = (
+            f"Change {collection} records: `where` picks them and `set` gives the new values, both by these fields: "
+            f"{'; '.join(map(str, columns))}"
+        )
+    return out
 
 
 def world_summary(
