@@ -151,7 +151,28 @@ def test_a_request_the_agent_cannot_answer_leaves_the_tool_unobserved(
 def test_the_request_names_the_tool_and_an_example_from_its_contract():
     text = chat_readiness._tool_request(_contract().tools[0])
 
-    assert "lookup_order" in text and "order_id='A-1'" in text and "read-only" in text
+    assert (
+        "lookup_order" in text
+        and "order_id='A-1'" in text
+        and "disposable test world" in text
+    )
+
+
+def test_an_argument_without_an_example_takes_a_plain_value_of_its_type():
+    tool = AgentContract.model_validate(
+        {
+            "agent": "a",
+            "tools": [
+                {
+                    "name": "apply",
+                    "args": ["deal_id", "note"],
+                    "arg_types": {"deal_id": "integer"},
+                }
+            ],
+        }
+    ).tools[0]
+
+    assert "deal_id=1, note='test'" in chat_readiness._tool_request(tool)
 
 
 def test_a_call_the_agent_reports_but_the_world_never_saw_went_elsewhere(

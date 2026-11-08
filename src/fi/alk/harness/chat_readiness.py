@@ -297,20 +297,27 @@ def _reported_calls(reply) -> set[str]:
     return names
 
 
+_TYPE_EXAMPLES = {"int": 1, "integer": 1, "number": 1, "float": 1.0, "bool": True, "boolean": True}
+
+
 def _tool_request(tool) -> str:
-    """A non-destructive request for one tool, built from its contract."""
-    values = {
-        arg: (tool.arg_values.get(arg) or [None])[0]
-        if isinstance(tool.arg_values.get(arg), list)
-        else tool.arg_values.get(arg)
-        for arg in tool.args
-    }
-    shown = ", ".join(f"{arg}={value!r}" for arg, value in values.items() if value is not None)
+    """One request for one tool, built from its contract: each argument takes the
+    contract's first example value, else a plain value of its type."""
+    values = {}
+    for arg in tool.args:
+        listed = tool.arg_values.get(arg)
+        if isinstance(listed, list) and listed:
+            values[arg] = listed[0]
+        elif listed not in (None, [], ""):
+            values[arg] = listed
+        else:
+            values[arg] = _TYPE_EXAMPLES.get(str(tool.arg_types.get(arg, "")).lower(), "test")
+    shown = ", ".join(f"{arg}={value!r}" for arg, value in values.items())
     about = f" ({tool.description.strip()})" if tool.description.strip() else ""
     return (
         f"Please use your {tool.name} tool{about} now"
         + (f" with {shown}" if shown else "")
-        + ". This is a read-only check: only look the answer up and tell me what it returns."
+        + ". This runs in a disposable test world: call the tool once and tell me what it returns."
     )
 
 
