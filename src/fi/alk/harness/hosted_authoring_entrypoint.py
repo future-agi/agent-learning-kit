@@ -146,7 +146,9 @@ def _authoring_job_context(forwarded: list[str]) -> tuple[str, str, dict]:
     return "", "", {}
 
 
-def main(argv: list[str] | None = None) -> int:
+def configure_authoring_credentials() -> dict[str, str]:
+    """Put the platform's generation credentials in this process's environment; return every
+    value the secrets channel holds."""
     # This process authors the environment but never runs the submitted target. Do not let a
     # launcher-provided parent environment accidentally bypass the target-secrets file boundary.
     for name in _TARGET_CREDENTIAL_NAMES:
@@ -178,6 +180,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     _configure_generation_environment(values)
     _configure_observability_environment(all_values)
+    return all_values
+
+
+def main(argv: list[str] | None = None) -> int:
+    all_values = configure_authoring_credentials()
     target_values = {
         name: all_values[name]
         for name in _TARGET_CREDENTIAL_NAMES
