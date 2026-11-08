@@ -893,6 +893,53 @@ def test_private_tool_artifacts_preserve_json_lines_during_redaction(tmp_path, c
     assert Path(path).stat().st_mode & 0o777 == 0o600
 
 
+def test_private_workflow_counts_a_returned_call_the_harness_ran_at_the_world(
+    tmp_path, profile_app, monkeypatch
+):
+    from fi.alk.harness import chat_call_runner
+    from fi.alk.harness.run.conversation import Exchange, Transcript
+
+    url, state = profile_app
+    state.update(
+        profile=True,
+        body={"content": "", "tool_calls": [{"id": "t-1", "name": "lookup_account", "arguments": {}}]},
+    )
+
+    async def conversation(target, *_args):
+        async def answered(*_a, **_k):
+            response = await sent(*_a, **_k)
+            state["body"] = {"content": "Done"}  # once the harness has run the call
+            return response
+
+        sent = target._wrapper.call
+        target._wrapper.call = answered
+        reply = await target.say("Look up my account")
+        return Transcript(
+            exchanges=[Exchange("customer", "Look up my account"), Exchange("agent", reply)],
+            calls=list(target.world.calls), ended="finished",
+        )
+
+    class World:
+        calls: list = []
+
+        def handle_tool_call(self, call):
+            from fi.alk.harness.world.runtime import Call
+
+            self.calls.append(Call(name=call["name"], arguments={}))
+            return SimpleNamespace(content="{}")
+
+    monkeypatch.setattr(chat_call_runner, "_drive_conversation", conversation)
+    monkeypatch.setattr(chat_call_runner, "_tool_world", lambda *_a: World())
+    contract = AgentContract(
+        runtime=Runtime(language="python", command=["python", "app.py"], interface=interface()),
+        tools=[{"name": "lookup_account", "args": []}],
+    )
+    asyncio.run(workflow_probe(tmp_path, url, contract=contract))
+
+    routing = json.loads((tmp_path / "generic-harness" / "tool-routing-observations.json").read_text())
+    assert [(one["tool"], one["routed"]) for one in routing["tools"]] == [("lookup_account", True)]
+
+
 @pytest.mark.parametrize("kind", ["trace", "transcript"])
 @pytest.mark.parametrize("redactions", [None, {"credential": "x" * (1024 * 1024 + 1)}])
 def test_private_json_artifacts_fail_closed_without_safe_credential_context(tmp_path, kind, redactions):
@@ -960,9 +1007,8 @@ def test_private_workflow_checks_executed_tools_after_clarification(
     assert receipt["candidate_hash"] == "candidate"
     routing = tmp_path / "generic-harness" / "tool-routing-observations.json"
     if completed:
-        assert [one["tool"] for one in json.loads(routing.read_text())["tools"]] == [
-            "lookup_account"
-        ]
+        # The callback ran the tool itself and the world received nothing: never routed.
+        assert json.loads(routing.read_text())["tools"] == []
     else:
         assert not routing.exists()
     assert receipt["bundle_digest"] == "bundle"

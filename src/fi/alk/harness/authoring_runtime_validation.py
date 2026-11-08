@@ -1184,6 +1184,7 @@ async def validate_once(
                     probe_chat_workflow,
                     record_tool_routing,
                     request_uncovered_tools,
+                    world_call_log,
                 )
 
                 chat_ingress = CheckStatus.NOT_APPLICABLE
@@ -1229,10 +1230,13 @@ async def validate_once(
                             runtime=runtime,
                             contract=contract,
                             authoring=authoring,
+                            bundle=bundle,
+                            source=source,
                             secret_values=target_secret_values,
                             local_auth_values=getattr(runtime, "_local_auth_values", None),
                         )
                     else:
+                        since = time.time()
                         await probe_chat_ingress(
                             interface=interface,
                             endpoint=endpoint.address,
@@ -1256,7 +1260,12 @@ async def validate_once(
                         except Exception:  # noqa: BLE001 - no trace, nothing observed
                             called = ()
                         record_tool_routing(
-                            authoring, representative.scenario_key, called
+                            authoring,
+                            representative.scenario_key,
+                            contract,
+                            runtime,
+                            received=world_call_log(runtime, since),
+                            reported=called,
                         )
                         await request_uncovered_tools(
                             interface=interface,
@@ -1264,6 +1273,8 @@ async def validate_once(
                             runtime=runtime,
                             contract=contract,
                             authoring=authoring,
+                            bundle=bundle,
+                            source=source,
                             secret_values=target_secret_values,
                             local_auth_values=getattr(runtime, "_local_auth_values", None),
                         )

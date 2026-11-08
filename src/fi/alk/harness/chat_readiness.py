@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import time
 from pathlib import Path
 from uuid import uuid4
 
@@ -226,41 +227,98 @@ class _PrivateWorkflowArtifacts:
 TOOL_ROUTING = "tool-routing-observations.json"
 
 
-def record_tool_routing(authoring: Path, scenario_key: str, calls) -> None:
-    """Every tool call the qualification conversation made that reached the test world,
-    beside the tool certification: what readiness reads as observed routing, per tool.
+def world_call_log(runtime, since=0.0):
+    """The calls the test world itself received since ``since``: its call log, written by
+    the world's own surfaces (the tool proxy in front of a tools service, the MCP toolbox),
+    never by the agent."""
+    from .call_runner import _collect_tool_trace_calls
 
-    The calls are the world's own record of what arrived at it, so each one was routed to
-    the world; a tool never called here is simply absent."""
-    tools: dict[str, dict] = {}
-    for call in calls:
-        name = str(getattr(call, "name", "") or "")
-        if not name:
-            continue
-        outcome = (
-            "refused"
-            if getattr(call, "refused", False)
-            else "ok" if getattr(call, "ok", True) else "error"
-        )
-        seen = tools.setdefault(name, {"tool": name, "routed": True, "calls": 0, "outcomes": []})
-        seen["calls"] += 1
-        if outcome not in seen["outcomes"]:
-            seen["outcomes"].append(outcome)
+    try:
+        return [call for call in _collect_tool_trace_calls(runtime) if call.at >= since]
+    except Exception:  # noqa: BLE001 - no log to read, nothing received
+        return []
+
+
+def _logged_tools(contract, runtime) -> set[str]:
+    """Tools the world logs every call of: a service tool behind the tool proxy. Any other
+    tool runs inside the agent, so the world holds its data but no record of the call."""
+    if "tool_proxy" not in (getattr(runtime, "endpoints", None) or {}):
+        return set()
+    return {entry.tool for entry in contract.tool_entrypoints if entry.mode == "service"}
+
+
+def _tool_names(contract) -> dict[str, str]:
+    """Each tool by the name its calls carry: its own, or for a service tool the last
+    segment of its path, which is what the proxy logs."""
+    names = {tool.name: tool.name for tool in contract.tools}
+    for entry in contract.tool_entrypoints:
+        segment = entry.endpoint.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1]
+        if entry.mode == "service" and segment:
+            names.setdefault(segment, entry.tool)
+    return names
+
+
+def _outcome(call) -> str:
+    if getattr(call, "refused", False):
+        return "refused"
+    return "ok" if getattr(call, "ok", True) else "error"
+
+
+def _routing(contract, runtime, *, received, reported):
+    """Routing read from the world's side only. A tool the world received is routed. A tool
+    the agent reports calling that the world logs but never received is not routed. Any
+    other reported tool runs inside the agent, so its routing cannot be observed."""
+    names = _tool_names(contract)
+    arrived: dict[str, list] = {}
+    for call in received:
+        tool = names.get(str(getattr(call, "name", "") or ""))
+        if tool:
+            arrived.setdefault(tool, []).append(call)
+    tools = [
+        {
+            "tool": tool,
+            "routed": True,
+            "calls": len(calls),
+            "outcomes": sorted({_outcome(call) for call in calls}),
+        }
+        for tool, calls in arrived.items()
+    ]
+    unobserved = []
+    logged = _logged_tools(contract, runtime)
+    claimed = {names.get(str(getattr(call, "name", "") or "")) for call in reported}
+    for tool in sorted(claimed - set(arrived) - {None}):
+        if tool in logged:
+            tools.append({"tool": tool, "routed": False, "reason": "not_received"})
+        else:
+            unobserved.append({"tool": tool, "reason": "no_world_record"})
+    return tools, unobserved
+
+
+def _write_routing(authoring: Path, body) -> None:
+    body["tools"] = sorted(body["tools"], key=lambda one: one["tool"])
+    body["unobserved"] = sorted(body["unobserved"], key=lambda one: one["tool"])
     path = authoring / "generic-harness" / TOOL_ROUTING
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "source": "qualification_conversation",
-                "scenario_key": scenario_key,
-                "tools": sorted(tools.values(), key=lambda one: one["tool"]),
-            },
-            indent=2,
-            sort_keys=True,
-        )
-        + "\n",
-        encoding="utf-8",
+    path.write_text(json.dumps(body, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def record_tool_routing(
+    authoring: Path, scenario_key: str, contract, runtime, *, received, reported
+) -> None:
+    """Which tools the qualification conversation routed to the test world, beside the tool
+    certification: what readiness reads as observed routing, per tool. ``received`` is what
+    the world got (its call log and the calls the harness ran there); ``reported`` is every
+    call the conversation shows, including those only the agent says it made."""
+    tools, unobserved = _routing(contract, runtime, received=received, reported=reported)
+    _write_routing(
+        authoring,
+        {
+            "schema_version": 1,
+            "source": "world_call_log",
+            "scenario_key": scenario_key,
+            "tools": tools,
+            "unobserved": unobserved,
+        },
     )
 
 
@@ -315,93 +373,77 @@ async def request_uncovered_tools(
     runtime,
     contract,
     authoring: Path,
+    bundle: Path,
+    source: Path | None,
     secret_values,
     local_auth_values=None,
     timeout=120.0,
 ) -> None:
-    """Ask the agent once for each tool the qualification conversation did not call.
+    """Ask the agent once for each tool the qualification conversation did not show.
 
     The world is disposable and reset after qualification, so a tool is asked whatever it
-    changes there; only a tool the contract says leaves the world (no reachable implementation,
-    or a dependency the environment cannot copy) is not asked, since the request could reach a
-    real system. Each request is a fresh
-    one-message conversation; the tool counts as routed only when the world's own trace shows
-    the call. The results join the routing observations. Never raises.
+    changes there; only a tool the contract says leaves the world (no reachable
+    implementation, or a dependency the environment cannot copy) is not asked, since the
+    request could reach a real system. Each request is a fresh one-message conversation
+    driven like a scenario's, so tool calls the agent returns are run at the world. Its
+    routing is read from the world's side as in the conversation. Never raises.
     """
     from .call_runner import _collect_file_tool_calls
+    from .chat_call_runner import _HostedChatTarget, _tool_world
 
     path = authoring / "generic-harness" / TOOL_ROUTING
     try:
         body = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return
-    seen = {one["tool"] for one in body.get("tools") or []}
+    body.setdefault("unobserved", [])
+    shown = {one["tool"] for one in [*body["tools"], *body["unobserved"]]}
     outside = _outside_world(contract)
-    unasked: list[dict] = []
     for tool in getattr(contract, "tools", None) or []:
-        if tool.name in seen:
+        if tool.name in shown:
             continue
         if tool.name in outside:
             # Asking could reach a real system: the contract says the tool leaves the world.
-            unasked.append({"tool": tool.name, "reason": "reaches_outside"})
+            body["unobserved"].append({"tool": tool.name, "reason": "reaches_outside"})
             continue
+        since = time.time()
         try:
-            before = sum(
-                1 for call in _collect_file_tool_calls(runtime) if call.name == tool.name
-            )
-        except Exception:  # noqa: BLE001 - no trace to read, nothing can be observed
-            unasked.append({"tool": tool.name, "reason": "not_called"})
-            continue
-        message = {"role": "user", "content": _tool_request(tool)}
-        try:
-            wrapper = create_chat_wrapper(
-                interface,
-                endpoint,
-                timeout=timeout,
-                total_timeout=timeout,
-                secret_values=secret_values,
-                local_auth_values=local_auth_values,
-            )
+            traced = len(_collect_file_tool_calls(runtime))
             key = f"tool-request-{uuid4().hex}"
-            await wrapper.call(
-                AgentInput(
-                    thread_id=key,
-                    execution_id=key,
-                    modality="text",
-                    tools=[],
-                    scenario_name=key,
-                    turn_index=0,
-                    messages=[message],
-                    new_message=message,
-                )
+            target = _HostedChatTarget(
+                wrapper=create_chat_wrapper(
+                    interface,
+                    endpoint,
+                    timeout=timeout,
+                    total_timeout=timeout,
+                    secret_values=secret_values,
+                    local_auth_values=local_auth_values,
+                ),
+                contract=contract,
+                world=_tool_world(bundle, contract, runtime, source),
+                scenario_key=key,
+                scenario_id=key,
             )
+            await target.say(_tool_request(tool))
+            reported = [
+                *target.world.calls,
+                *_collect_file_tool_calls(runtime)[traced:],
+            ]
         except Exception:  # noqa: BLE001 - an unanswered request leaves the tool unobserved
-            unasked.append({"tool": tool.name, "reason": "request_failed"})
+            body["unobserved"].append({"tool": tool.name, "reason": "request_failed"})
             continue
-        calls = [call for call in _collect_file_tool_calls(runtime) if call.name == tool.name]
-        if len(calls) > before:
-            outcomes = sorted(
-                {
-                    "refused"
-                    if getattr(call, "refused", False)
-                    else "ok" if getattr(call, "ok", True) else "error"
-                    for call in calls[before:]
-                }
-            )
-            body["tools"].append(
-                {
-                    "tool": tool.name,
-                    "routed": True,
-                    "calls": len(calls) - before,
-                    "outcomes": outcomes,
-                    "source": "tool_request",
-                }
-            )
-        else:
-            unasked.append({"tool": tool.name, "reason": "not_called"})
-    body["tools"] = sorted(body["tools"], key=lambda one: one["tool"])
-    body["unobserved"] = sorted(unasked, key=lambda one: one["tool"])
-    path.write_text(json.dumps(body, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        tools, unobserved = _routing(
+            contract,
+            runtime,
+            received=[*world_call_log(runtime, since), *target.received],
+            reported=[call for call in reported if call.name == tool.name],
+        )
+        asked = [one for one in tools if one["tool"] == tool.name]
+        body["tools"].extend({**one, "source": "tool_request"} for one in asked)
+        body["unobserved"].extend(one for one in unobserved if one["tool"] == tool.name)
+        if not asked and not any(one["tool"] == tool.name for one in unobserved):
+            body["unobserved"].append({"tool": tool.name, "reason": "not_called"})
+    _write_routing(authoring, body)
 
 
 async def probe_chat_workflow(
@@ -493,6 +535,7 @@ async def probe_chat_workflow(
                 source_directory=source,
             ),
         )
+        since = time.time()
         async with asyncio.timeout(timeout):
             outcome = await runner.run(scenario, runtime)
         receipt["tool_call_count"] = len(outcome.calls)
@@ -511,7 +554,14 @@ async def probe_chat_workflow(
             )
         if not outcome.calls:
             receipt["tool_evidence_status"] = "not_observed"
-        record_tool_routing(authoring, scenario.scenario_key, outcome.calls)
+        record_tool_routing(
+            authoring,
+            scenario.scenario_key,
+            runner._contract,
+            runtime,
+            received=[*world_call_log(runtime, since), *runner.received],
+            reported=outcome.calls,
+        )
         receipt["status"] = "passed"
     except RuntimeValidationError:
         raise
