@@ -148,7 +148,7 @@ class Actor(BaseModel):
     activation: Activation | None = None
     # How the actor is played in the world: `mocked` takes only the actions each scenario schedules for it, `live`
     # decides its own actions from its brief when the agent reaches it (or its activation trigger fires), `both` does
-    # the two.
+    # the two. One with a `channel` decides in the moment after every agent reply, whatever this is.
     play: Literal["mocked", "live", "both"] = "mocked"
     # How the actor is heard or seen on a call when it speaks in one: beside the person, taking over from them, or
     # answering before them. Empty: it does not speak on calls, it acts through the world.
@@ -859,8 +859,9 @@ def actor_record_schema() -> dict[str, Any]:
     fields["surface"]["description"] = "Where the actor acts in the world; never how it speaks (that is `channel`)"
     fields["side"]["description"] = "Whose side the actor is on, for reading the cast; it changes no rule"
     fields["play"]["description"] = (
-        "mocked: only the actions each scenario gives it; live: decides its own actions from what it sees when "
-        "reached; both"
+        "What the actor does in the world when it does not speak: mocked takes only the actions each scenario "
+        "lists for it; live decides its own actions in the moment, from what it sees when reached; both does the "
+        "two. An actor with a `channel` speaks and decides in the moment after every agent reply whatever this is"
     )
     persona = Persona.model_json_schema()
     fields["persona"] = {**persona, "additionalProperties": True}

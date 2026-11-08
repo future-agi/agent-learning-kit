@@ -436,12 +436,25 @@ def cast_read_back(scenario: Scenario, world_root: Path) -> str:
     def kind(action: str) -> str:
         return f"{action} (a record change)" if record_action(action) else f"{action} (a message or tool call)"
 
+    def plays(actor: Actor | None) -> str:
+        if actor is None:
+            return "unknown"
+        if actor.channel:
+            return "speaks, deciding in the moment on each agent turn its channel allows"
+        return {
+            "mocked": "mocked, only the actions listed here",
+            "live": "live, decides its own actions in the moment",
+            "both": "both, the actions listed here and its own decisions",
+        }[actor.play]
+
     parts = []
     for entry in scenario.actors:
         actor = listed.get(entry.id)
         trigger = entry.trigger.kind if entry.trigger is not None else "its own"
         acts = ", ".join(kind(one.action) for one in entry.actions) or ("a live part" if entry.instruction else "nothing")
-        parts.append(f"{actor.name if actor else entry.id} ({entry.id}; comes in: {trigger}; does: {acts})")
+        parts.append(
+            f"{actor.name if actor else entry.id} ({entry.id}; plays: {plays(actor)}; comes in: {trigger}; does: {acts})"
+        )
     sessions = [f"{session.where.get('action', '?')} with {', '.join(session.actors)}" for session in scenario.pre_run]
     if scenario.starts_with is not None:
         starter = f"a message from {scenario.starts_with.actor}" if scenario.starts_with.actor else "the scenario's own task"
@@ -455,6 +468,10 @@ def cast_read_back(scenario: Scenario, world_root: Path) -> str:
         if record_action(one.action) and one.trigger is not None and one.trigger.kind == "always"
     ]
     speaking = [entry.id for entry in scenario.actors if entry.instruction]
+    # A chat actor answers the agent again within the person's turn; the person still decides when the chat ends.
+    answering = [
+        entry.id for entry in scenario.actors if entry.id in listed and listed[entry.id].channel == "chat_message"
+    ]
     return (
         "\nCast: the caller" + "".join(f"; {one}" for one in parts)
         + f". Talked before the run: {'; '.join(sessions) if sessions else 'nobody (no `pre_run`)'}. Started by: {starter}."
@@ -473,6 +490,13 @@ def cast_read_back(scenario: Scenario, world_root: Path) -> str:
             "from the person's, a request it may not grant, a decision only they make). If they only say what the "
             "person could have said, change their part with `edit_scenario`."
             if speaking
+            else ""
+        )
+        + (
+            f" {', '.join(answering)} answer the agent until their live turns run out, but the chat ends when the "
+            "caller closes it: keep what they decide out of the caller's instruction, or the caller closes before "
+            "they have decided."
+            if answering
             else ""
         )
     )

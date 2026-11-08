@@ -267,6 +267,8 @@ class ChatActors:
         self.triggered: set[str] = set()
         self.done: set[str] = set()
         self.decisions = 0
+        # Turns each actor took answering the agent again within one of the person's turns, held to the live limits.
+        self.follow_ups: dict[str, int] = {}
         self.events: list[dict[str, Any]] = []
         # How long the conversation waits for an actor once due, and its fallback when it does not answer.
         self.waits = Waits(clock)
@@ -275,11 +277,30 @@ class ChatActors:
         cap = self.limits.get("caller_takes_back_after_turns")
         return cap is None or self.turns_taken < int(cap)
 
+    def follow_up_room(self) -> bool:
+        """Whether an actor may answer the agent again before the person's next turn: within the live-turn limits,
+        and while some actor in the conversation still has turns of its own."""
+        per_trial = self.limits.get("live_turns_per_trial")
+        if per_trial is not None and sum(self.follow_ups.values()) >= int(per_trial):
+            return False
+        return self._room() and any(self._may_follow_up(key) for key in self.triggered - self.done)
+
+    def _may_follow_up(self, key: str) -> bool:
+        per_actor = self.limits.get("live_turns_per_actor")
+        return per_actor is None or self.follow_ups.get(key, 0) < int(per_actor)
+
     async def due_lines(
-        self, *, agent_turns: int, last_text: str, tools_called: list[str], conversation: list[str]
+        self,
+        *,
+        agent_turns: int,
+        last_text: str,
+        tools_called: list[str],
+        conversation: list[str],
+        follow_up: bool = False,
     ) -> list[tuple[dict[str, Any], str]]:
         """The lines actors write now, after the agent's latest turn, in the scenario's order; their actions in the
-        world are sent as they decide them."""
+        world are sent as they decide them. A `follow_up` asks again, after the agent answered an actor, only the
+        actors with live turns left; each that writes or acts spends one."""
         from fi.simulate.simulation.call_actors import Moment, decision_brief, due, read_decision
 
         if not self._room():
@@ -292,6 +313,8 @@ class ChatActors:
         for actor in self.actors:
             key = str(actor["id"])
             if key in self.done:
+                continue
+            if follow_up and (key not in self.triggered or not self._may_follow_up(key) or not self.follow_up_room()):
                 continue
             if key not in self.triggered:
                 if not due(dict(actor.get("trigger") or {}), moment, seed=self.seed, actor_id=key):
@@ -315,6 +338,8 @@ class ChatActors:
                 actions={one: self.about.get(one, "") for one in actor.get("permitted_actions") or []} if self.act else {},
             )
             decision = read_decision(await self._write(actor, brief))
+            if follow_up and (decision.line or decision.action):
+                self.follow_ups[key] = self.follow_ups.get(key, 0) + 1
             if decision.action and self.act is not None:
                 self.decisions += 1
                 from ..world_door import record_action
@@ -504,28 +529,42 @@ async def converse(
 
             heard = reply or "(no response)"
             if actors is not None:
-                written = await actors.due_lines(
-                    agent_turns=_turn + 1,
-                    last_text=reply or "",
-                    tools_called=[str(one.name) for one in getattr(getattr(target, "world", None), "calls", [])],
-                    conversation=[f"{turn.speaker}: {turn.text}" for turn in transcript.exchanges],
-                )
-                for actor, line in written:
-                    record("actor", line, {"id": actor["id"], "name": actor.get("name")})
-                    try:
-                        # A declined request reads as the labelled line it is, never as the actor writing it.
-                        labelled = line == declined_line(actor)
-                        answer = await target.say(line if labelled else f"{actor.get('name') or 'Someone else'}: {line}")
-                    except TargetConversationEnded as ended:
-                        if ended.final_message:
-                            record("agent", ended.final_message)
-                        transcript.ended = FINISHED
-                        break
-                    record("agent", answer or "(said nothing)")
-                    heard = (
-                        f"{actor.get('name') or 'Someone else'} wrote in the conversation: {line}\n"
-                        f"The agent replied: {answer or '(no response)'}"
+                exchanged: list[str] = []
+                last, follow_up = reply or "", False
+                # An actor the agent answered is asked again, so the two can go back and forth; the actors' own
+                # limits end it, and the person always takes the next turn.
+                while not transcript.ended and (not follow_up or actors.follow_up_room()):
+                    written = await actors.due_lines(
+                        agent_turns=_turn + 1,
+                        last_text=last,
+                        tools_called=[str(one.name) for one in getattr(getattr(target, "world", None), "calls", [])],
+                        conversation=[f"{turn.speaker}: {turn.text}" for turn in transcript.exchanges],
+                        follow_up=follow_up,
                     )
+                    if not written:
+                        break
+                    for actor, line in written:
+                        record("actor", line, {"id": actor["id"], "name": actor.get("name")})
+                        try:
+                            # A declined request reads as the labelled line it is, never as the actor writing it.
+                            labelled = line == declined_line(actor)
+                            answer = await target.say(
+                                line if labelled else f"{actor.get('name') or 'Someone else'}: {line}"
+                            )
+                        except TargetConversationEnded as ended:
+                            if ended.final_message:
+                                record("agent", ended.final_message)
+                            transcript.ended = FINISHED
+                            break
+                        record("agent", answer or "(said nothing)")
+                        last = answer or ""
+                        exchanged.append(
+                            f"{actor.get('name') or 'Someone else'} wrote in the conversation: {line}\n"
+                            f"The agent replied: {answer or '(no response)'}"
+                        )
+                    follow_up = True
+                if exchanged:
+                    heard = "\n".join(exchanged)
                 if transcript.ended:
                     break
             if opened_for_them:

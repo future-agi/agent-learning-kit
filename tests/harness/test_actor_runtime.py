@@ -181,6 +181,45 @@ def test_an_actor_writes_in_the_chat_when_its_trigger_fires_and_the_agent_reads_
     ]
 
 
+def test_an_actor_the_agent_answers_goes_back_and_forth_with_it_until_its_live_turns_run_out(monkeypatch):
+    # One person's turn: the actor writes, the agent answers, the actor answers that, up to its own live turns.
+    lines = ["20% is too high.", "Why not 14%?", "16% then, final.", "Fine, approved.", "One more thing."]
+    cast = _cast({"kind": "always"}, monkeypatch, lines=lines, limits={"live_turns_per_actor": 3})
+    agent = _Agent(["Hello, which deal?", "Submitted 20%.", "Margins allow 16%.", "I can do 16%.", "Noted.", "x"])
+    person = _Person(["Deal 9, 20% please.", conv.DONE])
+    transcript = _run(monkeypatch, cast, agent, person)
+    actor_lines = [one["content"] for one in transcript.canonical_messages() if one["role"] == "actor"]
+    # The first line, then three answers to the agent, and no more: the fifth is never asked for.
+    assert actor_lines == lines[:4]
+    assert cast.follow_ups == {"manager": 3}
+    assert [one for one in agent.heard if one.startswith("Mia: ")] == [f"Mia: {line}" for line in lines[:4]]
+
+
+def test_the_person_takes_the_turn_after_the_actor_and_hears_every_exchange(monkeypatch):
+    lines = ["20% is too high.", "16% then.", ""]
+    cast = _cast({"kind": "always"}, monkeypatch, lines=lines)
+    agent = _Agent(["Hello.", "Submitted 20%.", "Margins allow 16%.", "Done at 16%.", "Bye."])
+    person = _Person(["Deal 9, 20% please.", "Thanks.", conv.DONE])
+    transcript = _run(monkeypatch, cast, agent, person)
+    speakers = [one.speaker for one in transcript.exchanges]
+    # The actor stopped (a wait), so the person spoke next, not another actor round.
+    assert speakers[:7] == ["customer", "agent", "actor", "agent", "actor", "agent", "customer"]
+    told = person.told[1]
+    assert "Mia wrote in the conversation: 20% is too high." in told and "Mia wrote in the conversation: 16% then." in told
+
+
+@pytest.mark.parametrize("limits, rounds", [({"live_turns_per_trial": 2}, 2), ({"caller_takes_back_after_turns": 2}, 1)])
+def test_actor_answers_stop_at_the_trial_s_limits_and_the_person_still_speaks(monkeypatch, limits, rounds):
+    cast = _cast({"kind": "always"}, monkeypatch, lines=[f"line {n}" for n in range(20)], limits=limits)
+    agent = _Agent([f"reply {n}" for n in range(30)])
+    person = _Person(["Start.", conv.DONE])
+    transcript = _run(monkeypatch, cast, agent, person)
+    assert sum(cast.follow_ups.values()) == rounds
+    # The person was asked after the actors stopped, and ended the chat on that turn.
+    assert len(person.told) == 2 and "wrote in the conversation" in person.told[1]
+    assert transcript.exchanges[-1].speaker == "agent" and transcript.ended == conv.FINISHED
+
+
 def test_an_actor_whose_word_never_comes_never_writes_and_is_recorded_not_triggered(monkeypatch):
     cast = _cast({"kind": "on_keyword", "words": ["refund"]}, monkeypatch)
     agent = _Agent(["Hello.", "Done, moved."])
@@ -507,7 +546,7 @@ def test_a_person_folded_into_the_caller_is_refused_and_a_kept_scenario_reads_it
     )
     assert _folded_actors(kept, listed) == []
     said = cast_read_back(kept, tmp_path)
-    assert "Alex Vance (manager; comes in: its own; does: approvals.put (a record change))" in said
+    assert "Alex Vance (manager; plays: mocked, only the actions listed here; comes in: its own; does: approvals.put (a record change))" in said
     assert "not in it: Sam Rivera (lead)" in said
     assert "Talked before the run: nobody (no `pre_run`)" in said and "Started by: the caller (no `starts_with`)" in said
     # An action with no trigger of its own fires at the start, so it is read back as already done.
@@ -532,6 +571,42 @@ def test_a_person_folded_into_the_caller_is_refused_and_a_kept_scenario_reads_it
     said = cast_read_back(Scenario.model_validate(decided.model_dump()), tmp_path)
     assert "Already done before the agent starts (`always`): manager (approvals.put)" in said
     assert "For lead: name what the agent has to handle" in said
+
+
+def test_the_read_back_says_how_each_actor_plays_and_that_a_chat_actor_s_decision_stays_out_of_the_caller_s_part(tmp_path):
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import cast_read_back
+
+    save_actors(
+        tmp_path,
+        ActorList(
+            actors=[
+                Actor(id="manager", name="Alex Vance", channel="chat_message", role="Sales manager"),
+                Actor(id="lead", name="Sam Rivera", play="live", permitted_actions=["approvals.put"]),
+                Actor(id="ceo", name="Jo Park", play="both", permitted_actions=["approvals.put"]),
+            ]
+        ),
+    )
+    said = cast_read_back(
+        Scenario.model_validate(
+            {
+                "name": "x",
+                "instruction": "Ask for 20% on deal 9.",
+                "actors": [{"id": "manager", "instruction": "Negotiate down to 16%."}, {"id": "lead"}, {"id": "ceo"}],
+            }
+        ),
+        tmp_path,
+    )
+    assert "manager; plays: speaks, deciding in the moment on each agent turn its channel allows;" in said
+    assert "lead; plays: live, decides its own actions in the moment;" in said
+    assert "ceo; plays: both, the actions listed here and its own decisions;" in said
+    assert "manager answer the agent until their live turns run out" in said
+    assert "keep what they decide out of the caller's instruction" in said
+    # Without a chat actor, no such note.
+    quiet = cast_read_back(
+        Scenario.model_validate({"name": "x", "instruction": "Ask.", "actors": [{"id": "lead"}]}), tmp_path
+    )
+    assert "answer the agent until" not in quiet
 
 
 def test_an_actor_brought_in_when_contacted_needs_an_identity_the_agent_could_name(tmp_path):
