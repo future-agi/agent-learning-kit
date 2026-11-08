@@ -9,31 +9,30 @@ from pathlib import Path
 
 from fi._diagnostics import sanitize_diagnostic
 
-# Framework lines that repeat throughout a healthy process and carry no failure evidence. Kept
-# out of a retained tail so they cannot push the line that explains a failure out of it.
-_KNOWN_NOISE = (
-    # LiveKit agents logs this for every agent-session stream a participant does not consume.
-    re.compile(
-        r"ignoring (?:byte|text) stream with topic '[^']*', no callback attached"
-    ),
-)
+_DIGITS = str.maketrans("", "", "0123456789")
 
 
-def _collapse_known_noise(text: str) -> str:
-    """Replace each run of known-noise lines with one line counting them."""
+def _collapse_repeated_lines(text: str) -> str:
+    """Keep a repeated line only where it last appears, with a count of the earlier ones.
 
+    A healthy process repeats some lines all through its log (stream notices, polling, retries);
+    left in, they push the one line that explains a failure out of the retained tail. Lines that
+    differ only in digits (times, ids, counters) count as the same line.
+    """
+
+    lines = text.splitlines(keepends=True)
+    shapes = [line.translate(_DIGITS) for line in lines]
+    last = {shape: index for index, shape in enumerate(shapes)}
     kept: list[str] = []
     omitted = 0
-    for line in text.splitlines(keepends=True):
-        if any(pattern.search(line) for pattern in _KNOWN_NOISE):
+    for index, line in enumerate(lines):
+        if last[shapes[index]] != index:
             omitted += 1
             continue
         if omitted:
-            kept.append(f"[{omitted} similar lines omitted]\n")
+            kept.append(f"[{omitted} earlier repeated lines omitted]\n")
             omitted = 0
         kept.append(line)
-    if omitted:
-        kept.append(f"[{omitted} similar lines omitted]\n")
     return "".join(kept)
 
 
@@ -62,7 +61,7 @@ def retain_process_log(
             if offset:
                 # Drop the incomplete first record, including any split credential.
                 raw = raw.partition(b"\n")[2]
-        text = _collapse_known_noise(
+        text = _collapse_repeated_lines(
             sanitize_diagnostic(
                 raw.decode("utf-8", errors="replace"), secrets, limit=65536
             )

@@ -68,37 +68,42 @@ def test_retention_drops_split_credentials_and_rejects_symlinks(tmp_path):
         )
 
 
-def test_retention_collapses_known_noise_so_the_real_error_survives(tmp_path):
+def test_retention_collapses_repeated_lines_so_the_real_error_survives(tmp_path):
     from fi.alk.harness.process_diagnostics import (
-        _collapse_known_noise,
+        _collapse_repeated_lines,
         retain_process_log,
     )
 
     work = tmp_path / "work"
     work.mkdir()
     log = work / "process.log"
-    noise = (
-        "INFO root: ignoring byte stream with topic 'lk.agent.session', "
-        "no callback attached\n"
-    )
+    # Any framework's steady chatter, alternating and stamped with changing times.
+    chatter = "".join(
+        f"12:00:{second:02d} INFO stream {kind} not consumed\n"
+        for second in range(60)
+        for kind in ("byte", "text")
+    ) * 4
     log.write_text(
         "starting worker\n"
-        "ERROR stt: Deepgram returned 402 Payment Required key=secret123\n"
-        + noise
-        * 400
-        + "INFO root: ignoring text stream with topic 'lk.transcription', "
-        "no callback attached\n" + "worker idle\n"
+        "ERROR stt: provider returned 402 Payment Required key=secret123\n"
+        + chatter
+        + "worker idle\n"
     )
     retain_process_log(
         log, work=work, destination=tmp_path / "artifacts", secrets={"k": "secret123"}
     )
     body = next((tmp_path / "artifacts").rglob("*.log")).read_text()
-    assert "Deepgram returned 402 Payment Required" in body
+    assert "provider returned 402 Payment Required" in body
     assert "secret123" not in body
-    assert "no callback attached" not in body
-    assert body.endswith("[401 similar lines omitted]\nworker idle\n")
-    assert _collapse_known_noise("done\n" + noise * 2) == (
-        "done\n[2 similar lines omitted]\n"
+    assert body.endswith(
+        "[478 earlier repeated lines omitted]\n"
+        "12:00:59 INFO stream byte not consumed\n"
+        "12:00:59 INFO stream text not consumed\n"
+        "worker idle\n"
+    )
+    # A line that does not repeat is never dropped, wherever it is.
+    assert _collapse_repeated_lines("a 1\nb\na 2\nc\n") == (
+        "[1 earlier repeated lines omitted]\nb\na 2\nc\n"
     )
 
 
