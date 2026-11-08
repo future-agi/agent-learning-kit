@@ -251,11 +251,11 @@ def test_an_argument_without_an_example_takes_a_plain_value_of_its_type():
             "tools": [
                 {
                     "name": "apply",
-                    "args": ["deal_id", "note"],
-                    "arg_types": {"deal_id": "integer"},
+                    "args": ["item_id", "note"],
+                    "arg_types": {"item_id": "integer"},
                 }
             ],
         }
     ).tools[0]
 
-    assert "deal_id=1, note='test'" in chat_readiness._tool_request(tool)
+    assert "item_id=1, note='test'" in chat_readiness._tool_request(tool)
