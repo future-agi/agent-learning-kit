@@ -3431,6 +3431,84 @@ def test_canonical_seed_replays_bundled_discovery_without_authoring_directory(
         assert applied[0].source_schema_hash == discovered.fingerprint
 
 
+@pytest.mark.parametrize(
+    ("built", "live", "applies"),
+    [
+        (("items",), ("_alk_tool_trace", "items"), True),
+        (("_alk_tool_trace", "items"), ("_alk_tool_trace+", "items"), True),
+        (("_alk_tool_trace", "items"), ("_alk_tool_trace", "items"), True),
+        (("_alk_tool_trace", "items"), ("_alk_tool_trace", "items", "orders"), False),
+        (("_alk_tool_trace", "items"), ("_alk_tool_trace", "items+"), False),
+    ],
+    ids=[
+        "log-the-build-did-not-record",
+        "log-widened-since-the-build",
+        "same-harness",
+        "agent-table-added",
+        "agent-column-added",
+    ],
+)
+def test_canonical_seed_reads_the_harness_tables_as_the_build_recorded_them(
+    tmp_path: Path, monkeypatch, built: tuple[str, ...], live: tuple[str, ...], applies: bool
+) -> None:
+    """Certify-only seeds a saved World IR under whatever harness runs it: the harness's own
+    `_alk_` tables never change the fingerprint, any change to the agent's schema does."""
+    from contextlib import nullcontext
+
+    from fi.alk.harness.compile import postgres as compiler
+    from fi.alk.harness.source_model import LogicalType, SourceColumn, SourceModel, SourceTable
+    from fi.alk.harness.source_schema import postgres as schema
+    from fi.alk.harness.world_ir import WorldIR
+
+    def table(spec: str) -> SourceTable:
+        name = spec.rstrip("+")
+        names = ("id", "extra") if spec.endswith("+") else ("id",)
+        columns = tuple(
+            SourceColumn(
+                name=one,
+                logical_type=LogicalType.STRING,
+                native_type="text",
+                nullable=one != "id",
+                has_default=False,
+            )
+            for one in names
+        )
+        return SourceTable(name=name, columns=columns, primary_key=("id",))
+
+    digest = "sha256:" + "b" * 64
+    recorded = SourceModel.create(source_digest=digest, engine="postgres", tables=tuple(map(table, built)))
+    inspected = SourceModel.create(source_digest=digest, engine="postgres", tables=tuple(map(table, live)))
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    (seed / "source-model.json").write_text(recorded.model_dump_json())
+    (seed / "world-ir.json").write_text(
+        WorldIR.create(source_model_fingerprint=recorded.fingerprint, tables=()).model_dump_json()
+    )
+    applied = []
+    monkeypatch.setitem(
+        sys.modules, "psycopg", types.SimpleNamespace(connect=lambda **_: nullcontext(object()))
+    )
+    monkeypatch.setattr(schema, "inspect_postgres", lambda *_args, **_kwargs: inspected)
+    monkeypatch.setattr(compiler, "apply_postgres", lambda _connection, compiled: applied.append(compiled))
+
+    def seed_world():
+        pr.apply_postgres_world_ir(
+            seed / "world-ir.json",
+            port=14000,
+            dbname="baseline",
+            credentials=pr.EngineCredentials(username="harness", password="pw"),
+            source_digest=digest,
+        )
+
+    if applies:
+        seed_world()
+        assert applied[0].source_schema_hash == recorded.fingerprint
+    else:
+        with pytest.raises(pr.GenericWorldSeedError):
+            seed_world()
+        assert not applied
+
+
 def test_canonical_seed_names_a_source_model_recorded_for_other_source(
     tmp_path: Path, monkeypatch
 ) -> None:

@@ -46,7 +46,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Protocol, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Protocol, Sequence
 from urllib.parse import quote as urlquote, urlsplit
 
 from pydantic import BaseModel, Field, JsonValue, PrivateAttr, ValidationError
@@ -85,6 +85,9 @@ from .provider_lifecycle import (
     run_lifecycle_invocation,
     validate_provision_receipt,
 )
+
+if TYPE_CHECKING:
+    from .source_model import SourceModel
 
 logger = logging.getLogger(__name__)
 
@@ -3582,6 +3585,37 @@ def apply_postgres_sqlite_world(
             artifacts.write_world_ir(imported.world)
 
 
+def _without_later_harness_tables(
+    live: SourceModel, recorded: SourceModel
+) -> SourceModel:
+    """The live schema with the harness's own `_alk_` tables as the build recorded them, or left out where it had
+    none: they are not the agent's data, and another harness version adds or widens them."""
+    from .source_model import SourceModel
+
+    built = {table.name: table for table in recorded.tables}
+    tables = tuple(
+        built.get(table.name, table) if table.name.startswith("_alk_") else table
+        for table in live.tables
+        if not table.name.startswith("_alk_") or table.name in built
+    )
+    if tables == live.tables:
+        return live
+    return SourceModel.create(
+        source_digest=live.source_digest,
+        engine=live.engine,
+        engine_version=live.engine_version,
+        tables=tables,
+        processes=live.processes,
+        interfaces=live.interfaces,
+        actions=live.actions,
+        configuration_names=live.configuration_names,
+        migrations=live.migrations,
+        seeds=live.seeds,
+        evidence=live.evidence,
+        unsupported=live.unsupported,
+    )
+
+
 def _compose_seed_source_model(source, seed_file: Path, artifact_root: Path | None):
     """Reconcile bundled code facts with the independently inspected live schema."""
     from .certification import GenericHarnessArtifactStore
@@ -3599,8 +3633,9 @@ def _compose_seed_source_model(source, seed_file: Path, artifact_root: Path | No
             raise ValueError("seed_source_model_symlink")
         if path.is_file():
             try:
+                recorded = GenericHarnessArtifactStore(root).read_source_model()
                 return compose_source_models(
-                    GenericHarnessArtifactStore(root).read_source_model(), source
+                    recorded, _without_later_harness_tables(source, recorded)
                 )
             except ValueError as error:
                 # Code facts recorded for other source than the schema running here.
