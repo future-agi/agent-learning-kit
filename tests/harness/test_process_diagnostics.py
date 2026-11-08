@@ -89,21 +89,26 @@ def test_retention_collapses_repeated_lines_so_the_real_error_survives(tmp_path)
         + chatter
         + "worker idle\n"
     )
+    # A secret whose value is a digit must not split lines that differ only in digits.
     retain_process_log(
-        log, work=work, destination=tmp_path / "artifacts", secrets={"k": "secret123"}
+        log,
+        work=work,
+        destination=tmp_path / "artifacts",
+        secrets={"k": "secret123", "n": "1"},
     )
     body = next((tmp_path / "artifacts").rglob("*.log")).read_text()
     assert "provider returned 402 Payment Required" in body
     assert "secret123" not in body
     assert body.endswith(
-        "[478 earlier repeated lines omitted]\n"
-        "12:00:59 INFO stream byte not consumed\n"
-        "12:00:59 INFO stream text not consumed\n"
+        "[earlier copies of the next line omitted: 239]\n"
+        "<redacted>2:00:59 INFO stream byte not consumed\n"
+        "[earlier copies of the next line omitted: 239]\n"
+        "<redacted>2:00:59 INFO stream text not consumed\n"
         "worker idle\n"
     )
-    # A line that does not repeat is never dropped, wherever it is.
-    assert _collapse_repeated_lines("a 1\nb\na 2\nc\n") == (
-        "[1 earlier repeated lines omitted]\nb\na 2\nc\n"
+    # A repeated real error stays, with its own count; a line that does not repeat is never dropped.
+    assert _collapse_repeated_lines("error 402\nb\nerror 402\nc\n") == (
+        "b\n[earlier copies of the next line omitted: 1]\nerror 402\nc\n"
     )
 
 

@@ -4,6 +4,7 @@ import os
 import re
 import stat
 import uuid
+from collections import Counter
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -13,7 +14,7 @@ _DIGITS = str.maketrans("", "", "0123456789")
 
 
 def _collapse_repeated_lines(text: str) -> str:
-    """Keep a repeated line only where it last appears, with a count of the earlier ones.
+    """Keep a repeated line only where it last appears, above it the count of its earlier copies.
 
     A healthy process repeats some lines all through its log (stream notices, polling, retries);
     left in, they push the one line that explains a failure out of the retained tail. Lines that
@@ -23,15 +24,13 @@ def _collapse_repeated_lines(text: str) -> str:
     lines = text.splitlines(keepends=True)
     shapes = [line.translate(_DIGITS) for line in lines]
     last = {shape: index for index, shape in enumerate(shapes)}
+    copies = Counter(shapes)
     kept: list[str] = []
-    omitted = 0
     for index, line in enumerate(lines):
         if last[shapes[index]] != index:
-            omitted += 1
             continue
-        if omitted:
-            kept.append(f"[{omitted} earlier repeated lines omitted]\n")
-            omitted = 0
+        if copies[shapes[index]] > 1:
+            kept.append(f"[earlier copies of the next line omitted: {copies[shapes[index]] - 1}]\n")
         kept.append(line)
     return "".join(kept)
 
@@ -61,10 +60,11 @@ def retain_process_log(
             if offset:
                 # Drop the incomplete first record, including any split credential.
                 raw = raw.partition(b"\n")[2]
-        text = _collapse_repeated_lines(
-            sanitize_diagnostic(
-                raw.decode("utf-8", errors="replace"), secrets, limit=65536
-            )
+        # Collapse before redacting: a redacted value can split lines that differ only in digits.
+        text = sanitize_diagnostic(
+            _collapse_repeated_lines(raw.decode("utf-8", errors="replace")),
+            secrets,
+            limit=65536,
         )[-8192:]
         if not text:
             return
