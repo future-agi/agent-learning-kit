@@ -1179,7 +1179,11 @@ async def validate_once(
                     _tools,
                     _chat_target_timeout_seconds,
                 )
-                from .chat_readiness import probe_chat_ingress, probe_chat_workflow
+                from .chat_readiness import (
+                    probe_chat_ingress,
+                    probe_chat_workflow,
+                    request_uncovered_tools,
+                )
 
                 chat_ingress = CheckStatus.NOT_APPLICABLE
                 interface = contract.runtime.interface if contract.runtime else None
@@ -1217,6 +1221,15 @@ async def validate_once(
                             bundle_digest=manifest.digest,
                             secret_values=target_secret_values,
                             redaction_values=redaction_values,
+                        )
+                        await request_uncovered_tools(
+                            interface=interface,
+                            endpoint=endpoint.address,
+                            runtime=runtime,
+                            contract=contract,
+                            authoring=authoring,
+                            secret_values=target_secret_values,
+                            local_auth_values=getattr(runtime, "_local_auth_values", None),
                         )
                     else:
                         await probe_chat_ingress(

@@ -264,6 +264,109 @@ def record_tool_routing(authoring: Path, scenario_key: str, calls) -> None:
     )
 
 
+def _tool_request(tool) -> str:
+    """A non-destructive request for one tool, built from its contract."""
+    values = {
+        arg: (tool.arg_values.get(arg) or [None])[0]
+        if isinstance(tool.arg_values.get(arg), list)
+        else tool.arg_values.get(arg)
+        for arg in tool.args
+    }
+    shown = ", ".join(f"{arg}={value!r}" for arg, value in values.items() if value is not None)
+    about = f" ({tool.description.strip()})" if tool.description.strip() else ""
+    return (
+        f"Please use your {tool.name} tool{about} now"
+        + (f" with {shown}" if shown else "")
+        + ". This is a read-only check: only look the answer up and tell me what it returns."
+    )
+
+
+async def request_uncovered_tools(
+    *,
+    interface,
+    endpoint,
+    runtime,
+    contract,
+    authoring: Path,
+    secret_values,
+    local_auth_values=None,
+    timeout=120.0,
+) -> None:
+    """Ask the agent once for each tool the qualification conversation did not call.
+
+    Only a tool whose contract names no effect is asked: a request for one that changes state
+    could change the world, so it stays unobserved with that reason. Each request is a fresh
+    one-message conversation; the tool counts as routed only when the world's own trace shows
+    the call. The results join the routing observations. Never raises.
+    """
+    from .call_runner import _collect_file_tool_calls
+
+    path = authoring / "generic-harness" / TOOL_ROUTING
+    try:
+        body = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    seen = {one["tool"] for one in body.get("tools") or []}
+    unasked: list[dict] = []
+    for tool in getattr(contract, "tools", None) or []:
+        if tool.name in seen:
+            continue
+        if (tool.effects or "").strip():
+            unasked.append({"tool": tool.name, "reason": "changes_state"})
+            continue
+        before = sum(1 for call in _collect_file_tool_calls(runtime) if call.name == tool.name)
+        message = {"role": "user", "content": _tool_request(tool)}
+        try:
+            wrapper = create_chat_wrapper(
+                interface,
+                endpoint,
+                timeout=timeout,
+                total_timeout=timeout,
+                secret_values=secret_values,
+                local_auth_values=local_auth_values,
+            )
+            key = f"tool-request-{uuid4().hex}"
+            await wrapper.call(
+                AgentInput(
+                    thread_id=key,
+                    execution_id=key,
+                    modality="text",
+                    tools=[],
+                    scenario_name=key,
+                    turn_index=0,
+                    messages=[message],
+                    new_message=message,
+                )
+            )
+        except Exception:  # noqa: BLE001 - an unanswered request leaves the tool unobserved
+            unasked.append({"tool": tool.name, "reason": "request_failed"})
+            continue
+        calls = [call for call in _collect_file_tool_calls(runtime) if call.name == tool.name]
+        if len(calls) > before:
+            outcomes = sorted(
+                {
+                    "refused"
+                    if getattr(call, "refused", False)
+                    else "ok" if getattr(call, "ok", True) else "error"
+                    for call in calls[before:]
+                }
+            )
+            body["tools"].append(
+                {
+                    "tool": tool.name,
+                    "routed": True,
+                    "calls": len(calls) - before,
+                    "outcomes": outcomes,
+                    "source": "tool_request",
+                }
+            )
+        else:
+            unasked.append({"tool": tool.name, "reason": "not_called"})
+    body["tools"] = sorted(body["tools"], key=lambda one: one["tool"])
+    body["unobserved"] = sorted(unasked, key=lambda one: one["tool"])
+    path.write_text(json.dumps(body, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 async def probe_chat_workflow(
     *,
     job,
