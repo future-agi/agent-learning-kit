@@ -20,6 +20,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from . import failure_record
+
 if TYPE_CHECKING:
     from .source_model import SourceModel
     from .world_ir import WorldIR
@@ -1627,6 +1629,7 @@ async def validate_and_repair(
         for _attempt in range(decision_bound):
             try:
                 count = await validate(job, source, authoring)
+                failure_record.clear()
             except RuntimeValidationError as exc:
                 if readiness_only and exc.phase == "scenarios":
                     raise
@@ -1641,6 +1644,7 @@ async def validate_and_repair(
                     f"runtime validation: {exc.phase}: {exc}",
                     flush=True,
                 )
+                failure_record.record(exc.phase, exc)
                 phase = (
                     RepairPhase.SCENARIOS
                     if exc.phase == "scenarios"
@@ -1903,8 +1907,10 @@ async def validate_and_repair(
         print(f"runtime validation: attempt {attempt + 1}/5", flush=True)
         try:
             count = await validate(job, source, authoring)
+            failure_record.clear()
         except RuntimeValidationError as exc:
             print(f"runtime validation: {exc.phase}: {exc}", flush=True)
+            failure_record.record(exc.phase, exc)
             if exc.phase not in repairs or repairs[exc.phase] >= 2:
                 raise
             repairs[exc.phase] += 1
