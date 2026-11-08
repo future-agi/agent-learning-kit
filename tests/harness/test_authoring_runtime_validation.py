@@ -326,7 +326,7 @@ def test_a_seed_value_in_the_wrong_shape_is_rewritten_by_authoring_repair(
                         has_default=False,
                     ),
                     SourceColumn(
-                        name="diet_preference",
+                        name="labels",
                         logical_type=logical_type,
                         native_type=logical_type.value,
                         nullable=False,
@@ -341,8 +341,8 @@ def test_a_seed_value_in_the_wrong_shape_is_rewritten_by_authoring_repair(
     )
     world = authoring / "world.sqlite"
     with sqlite3.connect(world) as database:
-        database.execute("CREATE TABLE users (id TEXT, diet_preference TEXT)")
-        database.execute("INSERT INTO users VALUES ('u1', 'vegetarian')")
+        database.execute("CREATE TABLE users (id TEXT, labels TEXT)")
+        database.execute("INSERT INTO users VALUES ('u1', 'blue')")
     calls = []
 
     async def validate(*args):
@@ -370,7 +370,7 @@ def test_a_seed_value_in_the_wrong_shape_is_rewritten_by_authoring_repair(
                     ),
                 ) from error
         row = imported.world.tables[0].rows[0]
-        assert row.values["diet_preference"].value == ["vegetarian"]
+        assert row.values["labels"].value == ["blue"]
         return 1
 
     async def repair(phase, guidance):
@@ -378,13 +378,13 @@ def test_a_seed_value_in_the_wrong_shape_is_rewritten_by_authoring_repair(
         assert phase == "environment"
         assert f"{code}@world_import" in guidance
         assert "strategy=author_value_in_declared_shape" in guidance
-        assert '"column":"diet_preference"' in guidance
+        assert '"column":"labels"' in guidance
         assert '"table":"users"' in guidance
         assert f"expected={logical_type.value},sqlite_type=str" in guidance
         with sqlite3.connect(world) as database:
             database.execute(
-                "UPDATE users SET diet_preference = ? WHERE id = 'u1'",
-                ('["vegetarian"]',),
+                "UPDATE users SET labels = ? WHERE id = 'u1'",
+                ('["blue"]',),
             )
         return 0
 
