@@ -314,7 +314,13 @@ async def request_uncovered_tools(
         if (tool.effects or "").strip():
             unasked.append({"tool": tool.name, "reason": "changes_state"})
             continue
-        before = sum(1 for call in _collect_file_tool_calls(runtime) if call.name == tool.name)
+        try:
+            before = sum(
+                1 for call in _collect_file_tool_calls(runtime) if call.name == tool.name
+            )
+        except Exception:  # noqa: BLE001 - no trace to read, nothing can be observed
+            unasked.append({"tool": tool.name, "reason": "not_called"})
+            continue
         message = {"role": "user", "content": _tool_request(tool)}
         try:
             wrapper = create_chat_wrapper(

@@ -1182,6 +1182,7 @@ async def validate_once(
                 from .chat_readiness import (
                     probe_chat_ingress,
                     probe_chat_workflow,
+                    record_tool_routing,
                     request_uncovered_tools,
                 )
 
@@ -1246,6 +1247,25 @@ async def validate_once(
                             tools=_tools(contract) if interface.include_tools else (),
                             scenario_id=representative.scenario_id,
                             timeout=_chat_target_timeout_seconds(),
+                        )
+                        from .call_runner import _collect_file_tool_calls
+
+                        # A test message can call tools too; then ask for the rest.
+                        try:
+                            called = _collect_file_tool_calls(runtime)
+                        except Exception:  # noqa: BLE001 - no trace, nothing observed
+                            called = ()
+                        record_tool_routing(
+                            authoring, representative.scenario_key, called
+                        )
+                        await request_uncovered_tools(
+                            interface=interface,
+                            endpoint=endpoint.address,
+                            runtime=runtime,
+                            contract=contract,
+                            authoring=authoring,
+                            secret_values=target_secret_values,
+                            local_auth_values=getattr(runtime, "_local_auth_values", None),
                         )
                     chat_ingress = CheckStatus.PASSED
             phase = "environment"
