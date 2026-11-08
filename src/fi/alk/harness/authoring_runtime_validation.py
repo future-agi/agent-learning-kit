@@ -1266,6 +1266,7 @@ async def validate_once(
                             runtime,
                             received=world_call_log(runtime, since),
                             reported=called,
+                            bundle=bundle,
                         )
                         await request_uncovered_tools(
                             interface=interface,

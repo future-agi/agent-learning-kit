@@ -121,6 +121,29 @@ def test_a_tool_the_agent_runs_itself_is_never_counted_routed(tmp_path):
     ]
 
 
+def test_a_tool_the_mcp_toolbox_serves_is_logged_by_the_world(tmp_path):
+    served = tmp_path / "bundle" / "generated" / "mcp-toolbox"
+    served.mkdir(parents=True)
+    (served / "toolbox.json").write_text(json.dumps({"tools": {"get_hours": {}, "track_parcel": {}}}))
+    runtime = SimpleNamespace(endpoints={"mcp_toolbox": object()})
+
+    record_tool_routing(
+        tmp_path,
+        "s-1",
+        _contract(),
+        runtime,
+        received=[_call("get_hours")],
+        reported=[_call("get_hours"), _call("track_parcel")],
+        bundle=tmp_path / "bundle",
+    )
+
+    assert _body(tmp_path)["tools"] == [
+        {"tool": "get_hours", "routed": True, "calls": 1, "outcomes": ["ok"]},
+        # Reported, and the toolbox would have logged it: the call went elsewhere.
+        {"tool": "track_parcel", "routed": False, "reason": "not_received"},
+    ]
+
+
 class _World:
     def __init__(self):
         self.calls = []

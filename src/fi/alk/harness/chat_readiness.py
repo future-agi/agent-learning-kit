@@ -239,12 +239,23 @@ def world_call_log(runtime, since=0.0):
         return []
 
 
-def _logged_tools(contract, runtime) -> set[str]:
-    """Tools the world logs every call of: a service tool behind the tool proxy. Any other
-    tool runs inside the agent, so the world holds its data but no record of the call."""
-    if "tool_proxy" not in (getattr(runtime, "endpoints", None) or {}):
-        return set()
-    return {entry.tool for entry in contract.tool_entrypoints if entry.mode == "service"}
+def _logged_tools(contract, runtime, bundle: Path | None = None) -> set[str]:
+    """Tools the world logs every call of: a service tool behind the tool proxy, and a tool
+    the bundle's MCP toolbox serves. Any other tool runs inside the agent, so the world holds
+    its data but no record of the call."""
+    endpoints = getattr(runtime, "endpoints", None) or {}
+    logged: set[str] = set()
+    if "tool_proxy" in endpoints:
+        logged |= {e.tool for e in contract.tool_entrypoints if e.mode == "service"}
+    if "mcp_toolbox" in endpoints and bundle is not None:
+        try:
+            served = json.loads(
+                (bundle / "generated" / "mcp-toolbox" / "toolbox.json").read_text(encoding="utf-8")
+            ).get("tools")
+        except (OSError, ValueError, AttributeError):
+            served = None
+        logged |= set(served) if isinstance(served, dict) else set()
+    return logged
 
 
 def _tool_names(contract) -> dict[str, str]:
@@ -264,7 +275,7 @@ def _outcome(call) -> str:
     return "ok" if getattr(call, "ok", True) else "error"
 
 
-def _routing(contract, runtime, *, received, reported):
+def _routing(contract, runtime, *, received, reported, bundle=None):
     """Routing read from the world's side only. A tool the world received is routed. A tool
     the agent reports calling that the world logs but never received is not routed. Any
     other reported tool runs inside the agent, so its routing cannot be observed."""
@@ -284,7 +295,7 @@ def _routing(contract, runtime, *, received, reported):
         for tool, calls in arrived.items()
     ]
     unobserved = []
-    logged = _logged_tools(contract, runtime)
+    logged = _logged_tools(contract, runtime, bundle)
     claimed = {names.get(str(getattr(call, "name", "") or "")) for call in reported}
     for tool in sorted(claimed - set(arrived) - {None}):
         if tool in logged:
@@ -303,13 +314,15 @@ def _write_routing(authoring: Path, body) -> None:
 
 
 def record_tool_routing(
-    authoring: Path, scenario_key: str, contract, runtime, *, received, reported
+    authoring: Path, scenario_key: str, contract, runtime, *, received, reported, bundle=None
 ) -> None:
     """Which tools the qualification conversation routed to the test world, beside the tool
     certification: what readiness reads as observed routing, per tool. ``received`` is what
     the world got (its call log and the calls the harness ran there); ``reported`` is every
     call the conversation shows, including those only the agent says it made."""
-    tools, unobserved = _routing(contract, runtime, received=received, reported=reported)
+    tools, unobserved = _routing(
+        contract, runtime, received=received, reported=reported, bundle=bundle
+    )
     _write_routing(
         authoring,
         {
@@ -437,6 +450,7 @@ async def request_uncovered_tools(
             runtime,
             received=[*world_call_log(runtime, since), *target.received],
             reported=[call for call in reported if call.name == tool.name],
+            bundle=bundle,
         )
         asked = [one for one in tools if one["tool"] == tool.name]
         body["tools"].extend({**one, "source": "tool_request"} for one in asked)
@@ -561,6 +575,7 @@ async def probe_chat_workflow(
             runtime,
             received=[*world_call_log(runtime, since), *runner.received],
             reported=outcome.calls,
+            bundle=bundle,
         )
         receipt["status"] = "passed"
     except RuntimeValidationError:
