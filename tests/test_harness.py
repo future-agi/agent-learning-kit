@@ -2274,8 +2274,14 @@ def test_a_field_s_unit_can_be_recorded_after_the_contract_is_written(tmp_path):
 
     contract = _written_contract(tmp_path)
     done, said = fix_tool(contract, tmp_path, tool_name="add", arg_units={"item_id": "SKU code"}, why="the person said")
-    assert done and "units updated (item_id in SKU code)" in said and "the code's unit" in said
+    assert done and "units updated (item_id in SKU code" in said and "the code's unit" in said
     assert load(tmp_path).tools[0].arg_units == {"item_id": "SKU code"}
+    # The unit is written beside what the code and the stored data say about the field, so a mismatch is in view.
+    written = load(tmp_path)
+    written.tools[0].arg_types["item_id"] = "float"
+    written.data_schema = {"basket": {"item_id": "numeric(10,2)"}}
+    done, said = fix_tool(written, tmp_path, tool_name="add", arg_units={"item_id": "cents"}, why="the person said")
+    assert done and "item_id in cents (the code types it float; basket.item_id is stored as numeric(10,2))" in said
     refused, said = fix_tool(contract, tmp_path, tool_name="add", arg_units={"amount": "cents"}, why="x")
     assert not refused and "no argument called amount" in said
 

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from .contract import AgentContract, known_modalities, validate_contract
 
@@ -284,7 +285,9 @@ def fix_tool(
         spec.arg_units.update(arg_units)
         changed.append(
             "units updated ("
-            + "; ".join(f"{field} in {unit}" for field, unit in sorted(arg_units.items()))
+            + "; ".join(
+                f"{field} in {unit}{_code_says(contract, spec, field)}" for field, unit in sorted(arg_units.items())
+            )
             + "); if the code that reads a field or the data it holds says otherwise, the code's unit is the one to "
             "record, and the person is told about the mismatch"
         )
@@ -359,3 +362,14 @@ def not_offered(contract: AgentContract, candidates: dict[str, set[str]]) -> lis
             if absent:
                 missing.append(f"{tool.name}.{argument}: {', '.join(absent)}")
     return missing
+
+
+def _code_says(contract: Any, spec: Any, field: str) -> str:
+    """What the code and the world's data say about a field, beside the unit just recorded for it: its declared type
+    and each stored column of that name, so the unit is checked against them where it is written."""
+    seen = [f"the code types it {spec.arg_types[field]}"] if spec.arg_types.get(field) else []
+    for collection, columns in sorted((getattr(contract, "data_schema", None) or {}).items()):
+        if isinstance(columns, dict) and field in columns:
+            seen.append(f"{collection}.{field} is stored as {columns[field]}")
+    return f" ({'; '.join(seen)})" if seen else ""
+
