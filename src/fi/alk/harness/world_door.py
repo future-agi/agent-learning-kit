@@ -507,10 +507,24 @@ class RecordExecutor:
             matches = " AND ".join(f"{quoted[one]} = {mark}" for one in where)
             sql = f'UPDATE "{collection}" SET {assignments} WHERE {matches}'
             params = [*values.values(), *where.values()]
-        changed = self.execute(sql, params)
+        try:
+            changed = self.execute(sql, params)
+        except Exception as exc:
+            if not _breaks_a_rule(exc):
+                raise
+            # The world's own rule (a unique key, a check, a missing parent) refuses it, as the agent's call would be.
+            return Executed(409, None, error=f"the world refuses this record: {str(exc).strip()[:300]}")
         if verb == "change" and isinstance(changed, int) and changed == 0:
             return Executed(404, None, error=f"no {collection} record matches")
         return Executed(200, {"changed": changed if isinstance(changed, int) else 1})
+
+
+def _breaks_a_rule(exc: Exception) -> bool:
+    """Whether a database error is the data breaking one of the world's constraints (SQL state class 23), not the
+    database being out of reach."""
+    import sqlite3
+
+    return isinstance(exc, sqlite3.IntegrityError) or str(getattr(exc, "sqlstate", "") or "").startswith("23")
 
 
 class HandlerExecutor:

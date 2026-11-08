@@ -373,6 +373,38 @@ def test_a_put_takes_the_record_s_fields_as_they_come_or_under_record():
     assert flat.status == 400 and "`where`" in flat.error
 
 
+def test_a_record_that_breaks_a_world_constraint_is_refused_and_an_unreachable_world_is_still_a_fault():
+    import sqlite3
+
+    from fi.alk.harness.world_door import MemoryLog, RecordExecutor, Routed
+
+    db = sqlite3.connect(":memory:")
+    db.execute('CREATE TABLE "channel_members" (member TEXT, channel TEXT, UNIQUE (member, channel))')
+
+    def execute(sql, params):
+        return db.execute(sql.replace("%s", "?"), params).rowcount
+
+    door = WorldDoor(Routed(HandlerExecutor(lambda call: None), RecordExecutor(execute)), MemoryLog(),
+                     DictRoster({"ceo": {"permitted_actions": ["channel_members.put"]}}))
+    grant = {"member": "coworker", "channel": "#deals"}
+    first = door.enter(ToolCall(action="channel_members.put", name="put", actor="ceo", form="record", arguments=grant))
+    again = door.enter(ToolCall(action="channel_members.put", name="put", actor="ceo", form="record", arguments=grant,
+                                key="second"))
+    assert first.outcome == "committed"
+    assert again.outcome == "refused" and again.status == 409 and "UNIQUE" in again.reason
+
+    class Down(Exception):
+        sqlstate = "08006"
+
+    def down(sql, params):
+        raise Down("connection lost")
+
+    lost = WorldDoor(Routed(HandlerExecutor(lambda call: None), RecordExecutor(down)), MemoryLog(),
+                     DictRoster({"ceo": {"permitted_actions": ["channel_members.put"]}}))
+    out = lost.enter(ToolCall(action="channel_members.put", name="put", actor="ceo", form="record", arguments=grant))
+    assert out.outcome == "faulted"
+
+
 def test_access_is_a_world_record_the_world_s_rule_reads_so_a_grant_by_an_actor_takes_effect_at_once():
     # The developer may post only once they are a member of the channel. Membership is a world record; the CEO's
     # grant is a record change through the door, and the world's own rule reads it on the developer's next post.
