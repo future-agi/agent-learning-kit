@@ -30,9 +30,9 @@ def handle(args, db):
 
     actor_row = db.one("SELECT user_id FROM current_actor WHERE id = 'default'")
     user_id = actor_row["user_id"] if actor_row else "u_alice"
-    user_record = db.one("SELECT role FROM users WHERE user_id = ?", (user_id,))
+    user_record = db.one("SELECT role FROM drive_users WHERE user_id = ?", (user_id,))
     is_admin = user_record and user_record["role"] == "administrator"
-    owners = {u["user_id"]: u["email"] for u in db.query("SELECT user_id, email FROM users")}
+    owners = {u["user_id"]: u["email"] for u in db.query("SELECT user_id, email FROM drive_users")}
 
     def matches(f):
         for term, op, value in clauses:
@@ -53,12 +53,12 @@ def handle(args, db):
                 return False
         return True
 
-    files = db.query("SELECT * FROM files WHERE NOT is_deleted ORDER BY file_id")
+    files = db.query("SELECT * FROM drive_files WHERE NOT is_deleted ORDER BY file_id")
     accessible = []
     for f in files:
         if not is_admin:
-            perm = db.one("SELECT role FROM permissions WHERE target_type = 'folder' AND target_id = ? AND user_id = ?", (f["folder_id"], user_id))
-            file_perm = db.one("SELECT role FROM permissions WHERE target_type = 'file' AND target_id = ? AND user_id = ?", (f["file_id"], user_id))
+            perm = db.one("SELECT role FROM drive_permissions WHERE target_type = 'folder' AND target_id = ? AND user_id = ?", (f["folder_id"], user_id))
+            file_perm = db.one("SELECT role FROM drive_permissions WHERE target_type = 'file' AND target_id = ? AND user_id = ?", (f["file_id"], user_id))
             if not perm and not file_perm:
                 continue
         if not matches(f):

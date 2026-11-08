@@ -4,7 +4,7 @@ def check(world, calls, reference=None):
         return "not done: no successful create_draft call was made"
 
     # The draft replies to a message; the thread it joins is that message's.
-    thread_of = {m["id"]: m["thread_id"] for m in world.state().get("messages", [])}
+    thread_of = {m["id"]: m["thread_id"] for m in world.state().get("gmail_messages", [])}
     wanted_thread = None
     wanted_recipient = None
     if reference:
@@ -20,7 +20,7 @@ def check(world, calls, reference=None):
     ):
         return f"not done: thread {wanted_thread!r} was not read with get_thread before drafting"
 
-    drafts = world.state().get("drafts", [])
+    drafts = world.state().get("gmail_drafts", [])
 
     for c in made_calls:
         t_id = thread_of.get(c.arguments.get("replyToMessageId"))

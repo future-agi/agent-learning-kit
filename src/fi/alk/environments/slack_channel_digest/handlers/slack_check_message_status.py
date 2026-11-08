@@ -3,11 +3,11 @@ def handle(args, db):
         raise ToolError("Missing required parameter: request_key.")
         
     request_key = args["request_key"]
-    row = db.one("SELECT * FROM message_ledger WHERE request_key = ?", [request_key])
+    row = db.one("SELECT * FROM slack_message_ledger WHERE request_key = ?", [request_key])
     if row is None:
         raise ToolError(f"Request key {request_key!r} not found in message ledger.")
         
-    msg = db.one("SELECT permalink FROM messages WHERE message_id = ?", [row["message_id"]])
+    msg = db.one("SELECT permalink FROM slack_messages WHERE message_id = ?", [row["message_id"]])
     permalink = msg["permalink"] if msg else f"https://slack.example.com/archives/{row['channel_id']}/{row['message_id']}"
     
     return {

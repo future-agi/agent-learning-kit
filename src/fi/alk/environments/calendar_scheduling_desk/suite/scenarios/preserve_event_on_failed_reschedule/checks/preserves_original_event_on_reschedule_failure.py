@@ -14,7 +14,7 @@ def check(world, calls, reference):
         return None
         
     st = world.state()
-    evts = st.get("events", [])
+    evts = st.get("calendar_events", [])
     target = [e for e in evts if e.get("event_id") == target_id]
     if not target:
         return f"not done: original event {target_id} was removed from world state"

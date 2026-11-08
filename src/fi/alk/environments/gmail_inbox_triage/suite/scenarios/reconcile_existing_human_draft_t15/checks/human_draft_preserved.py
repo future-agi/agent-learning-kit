@@ -1,7 +1,7 @@
 def check(world, calls, reference):
     if not any(c.ok for c in calls):
         return "not done: no successful actions taken by agent"
-    drafts = world.state().get("drafts", [])
+    drafts = world.state().get("gmail_drafts", [])
     human_drafts = [d for d in drafts if d.get("is_human_edited")]
 
     for hd in human_drafts:
@@ -10,7 +10,7 @@ def check(world, calls, reference):
         if len(thread_drafts) > 1:
             return f"done wrong: duplicate draft created for thread {t_id!r} with human draft"
 
-    thread_of = {m["id"]: m["thread_id"] for m in world.state().get("messages", [])}
+    thread_of = {m["id"]: m["thread_id"] for m in world.state().get("gmail_messages", [])}
     for c in calls:
         if c.name == "create_draft" and c.ok and any(
             hd["thread_id"] == thread_of.get(c.arguments.get("replyToMessageId")) for hd in human_drafts

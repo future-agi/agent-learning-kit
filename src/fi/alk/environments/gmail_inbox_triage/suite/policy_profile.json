@@ -6,7 +6,8 @@
     ],
     "grounded_facts_only": [
       "missing_information_clarified",
-      "draft_created_for_thread"
+      "draft_created_for_thread",
+      "draft_follows_latest_correction"
     ],
     "human_draft_reconciliation": [
       "human_draft_preserved"

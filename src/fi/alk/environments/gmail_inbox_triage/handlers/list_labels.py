@@ -12,11 +12,11 @@ def handle(args, db):
     # User-defined labels only; the system label IDs (INBOX, UNREAD, STARRED, IMPORTANT, SENT,
     # DRAFT, SPAM, TRASH, CHAT) are known without listing them.
     labels = []
-    for label in db.query("SELECT * FROM labels WHERE type = 'user' ORDER BY name ASC"):
-        threads = [row["thread_id"] for row in db.query("SELECT thread_id FROM thread_labels WHERE label_id = ?", (label["id"],))]
+    for label in db.query("SELECT * FROM gmail_labels WHERE type = 'user' ORDER BY name ASC"):
+        threads = [row["thread_id"] for row in db.query("SELECT thread_id FROM gmail_thread_labels WHERE label_id = ?", (label["id"],))]
         unread = [
             thread for thread in threads
-            if db.one("SELECT 1 FROM thread_labels WHERE thread_id = ? AND label_id = 'UNREAD'", (thread,))
+            if db.one("SELECT 1 FROM gmail_thread_labels WHERE thread_id = ? AND label_id = 'UNREAD'", (thread,))
         ]
         labels.append({"labelId": label["id"], "name": label["name"], "threadsTotal": len(threads), "threadsUnread": len(unread)})
 

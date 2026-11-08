@@ -15,13 +15,13 @@ def handle(args, db):
 
     actor = db.one("SELECT user_id FROM current_actor WHERE id = 'default'")
     actor_id = actor["user_id"] if actor else "U01"
-    channel = db.one("SELECT * FROM channels WHERE channel_id = ?", [channel_id])
+    channel = db.one("SELECT * FROM slack_channels WHERE channel_id = ?", [channel_id])
     if channel is None:
         raise ToolError(f"channel_not_found: {channel_id!r}.", category="not_found")
-    member = db.one("SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ?", [channel_id, actor_id])
+    member = db.one("SELECT 1 FROM slack_channel_members WHERE channel_id = ? AND user_id = ?", [channel_id, actor_id])
     if channel["is_private"] and member is None:
         raise ToolError(f"Access denied: you are not a member of private channel {channel_id!r}.", category="permission_denied")
-    if thread_ts and db.one("SELECT 1 FROM messages WHERE channel_id = ? AND ts = ?", [channel_id, thread_ts]) is None:
+    if thread_ts and db.one("SELECT 1 FROM slack_messages WHERE channel_id = ? AND ts = ?", [channel_id, thread_ts]) is None:
         raise ToolError(f"thread_not_found: no message {thread_ts!r} in channel {channel_id!r}.", category="not_found")
 
     if "@channel" in text or "@here" in text or "@everyone" in text:
@@ -45,7 +45,7 @@ def handle(args, db):
     if mode == "approval_gated":
         if not approval_id:
             raise ToolError("Posting needs an approval_id: ask for approval of the exact text and destination first.", category="policy_blocked")
-        app = db.one("SELECT * FROM approvals WHERE approval_id = ?", [approval_id])
+        app = db.one("SELECT * FROM slack_approvals WHERE approval_id = ?", [approval_id])
         if app is None:
             raise ToolError(f"Approval {approval_id!r} not found.", category="not_found")
         if app["status"] != "approved":
@@ -57,9 +57,9 @@ def handle(args, db):
 
     # Idempotency (workbook C07): a repeated request_key returns the message already posted.
     if request_key:
-        existing = db.one("SELECT * FROM message_ledger WHERE request_key = ?", [request_key])
+        existing = db.one("SELECT * FROM slack_message_ledger WHERE request_key = ?", [request_key])
         if existing:
-            msg = db.one("SELECT * FROM messages WHERE message_id = ?", [existing["message_id"]])
+            msg = db.one("SELECT * FROM slack_messages WHERE message_id = ?", [existing["message_id"]])
             return {
                 "channel_id": existing["channel_id"],
                 "ts": msg["ts"] if msg else "",
@@ -70,18 +70,18 @@ def handle(args, db):
                 "thread_ts": existing["thread_ts"],
             }
 
-    cnt = db.one("SELECT COUNT(*) as c FROM messages", [])["c"]
+    cnt = db.one("SELECT COUNT(*) as c FROM slack_messages", [])["c"]
     message_id = f"M{cnt + 1:02d}"
     ts = f"1729900000.{cnt + 1000:06d}"
     permalink = f"https://slack.example.com/archives/{channel_id}/p{ts.replace('.', '')}"
     clock_row = db.one("SELECT now FROM clock", [])
     now_str = clock_row["now"] if clock_row else "2026-10-26T12:00:00Z"
     db.execute(
-        "INSERT INTO messages (message_id, channel_id, user_id, text, ts, thread_ts, permalink) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO slack_messages (message_id, channel_id, user_id, text, ts, thread_ts, permalink) VALUES (?, ?, ?, ?, ?, ?, ?)",
         [message_id, channel_id, actor_id, text, ts, thread_ts, permalink],
     )
     db.execute(
-        "INSERT INTO message_ledger (request_key, message_id, channel_id, thread_ts, text, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO slack_message_ledger (request_key, message_id, channel_id, thread_ts, text, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
         [request_key or message_id, message_id, channel_id, thread_ts, text, "delivered", now_str],
     )
     return {

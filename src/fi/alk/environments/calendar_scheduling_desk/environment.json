@@ -36,7 +36,7 @@
         }
       ],
       "expect_state": {
-        "events.count": 1
+        "calendar_events.count": 1
       },
       "name": "schedule_and_reschedule_flow"
     },
@@ -64,14 +64,14 @@
         }
       ],
       "expect_state": {
-        "events.count": 1
+        "calendar_events.count": 1
       },
       "name": "cancel_event_flow"
     }
   ],
   "world_checks": {
-    "attendees_and_working_hours_exist": "def check(world):\n    st = world.state()\n    atts = st.get(\"attendees\", [])\n    if len(atts) < 4:\n        return f\"Expected at least 4 attendees with working hours, found {len(atts)}\"\n    for a in atts:\n        if not a.get(\"email\") or not a.get(\"time_zone\") or not a.get(\"working_hours_start\"):\n            return f\"Attendee record incomplete: {a}\"\n    return None",
-    "calendars_have_primary_and_roles": "def check(world):\n    st = world.state()\n    cals = st.get(\"calendars\", [])\n    if len(cals) < 3:\n        return f\"Expected at least 3 calendars, found {len(cals)}\"\n    primaries = [c for c in cals if c.get(\"primary_calendar\")]\n    if len(primaries) != 1:\n        return f\"Expected exactly 1 primary calendar, found {len(primaries)}\"\n    roles = {c.get(\"access_role\") for c in cals}\n    if \"owner\" not in roles or \"reader\" not in roles:\n        return f\"Expected owner and reader roles in calendars, got {roles}\"\n    return None",
-    "events_and_clock_configured": "def check(world):\n    st = world.state()\n    clk = st.get(\"clock\", [])\n    if not clk or not clk[0].get(\"now\"):\n        return \"Clock table must have now timestamp\"\n    cals = st.get(\"calendars\", [])\n    if len(cals) < 3:\n        return \"Calendars table must have baseline calendars\"\n    return None"
+    "attendees_and_working_hours_exist": "def check(world):\n    st = world.state()\n    atts = st.get(\"calendar_attendees\", [])\n    if len(atts) < 4:\n        return f\"Expected at least 4 attendees with working hours, found {len(atts)}\"\n    for a in atts:\n        if not a.get(\"email\") or not a.get(\"time_zone\") or not a.get(\"working_hours_start\"):\n            return f\"Attendee record incomplete: {a}\"\n    return None",
+    "calendars_have_primary_and_roles": "def check(world):\n    st = world.state()\n    cals = st.get(\"calendar_calendars\", [])\n    if len(cals) < 3:\n        return f\"Expected at least 3 calendars, found {len(cals)}\"\n    primaries = [c for c in cals if c.get(\"primary_calendar\")]\n    if len(primaries) != 1:\n        return f\"Expected exactly 1 primary calendar, found {len(primaries)}\"\n    roles = {c.get(\"access_role\") for c in cals}\n    if \"owner\" not in roles or \"reader\" not in roles:\n        return f\"Expected owner and reader roles in calendars, got {roles}\"\n    return None",
+    "events_and_clock_configured": "def check(world):\n    st = world.state()\n    clk = st.get(\"clock\", [])\n    if not clk or not clk[0].get(\"now\"):\n        return \"Clock table must have now timestamp\"\n    cals = st.get(\"calendar_calendars\", [])\n    if len(cals) < 3:\n        return \"Calendars table must have baseline calendars\"\n    return None"
   }
 }

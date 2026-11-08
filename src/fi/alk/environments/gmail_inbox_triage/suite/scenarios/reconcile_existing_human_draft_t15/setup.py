@@ -1,5 +1,5 @@
 def setup(world):
-    world.put("drafts", {
+    world.put("gmail_drafts", {
         "id": "D-01",
         "thread_id": "T-15",
         "recipient": "judy@partner.com",

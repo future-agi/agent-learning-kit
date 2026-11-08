@@ -4,13 +4,13 @@ def handle(args, db):
         raise ToolError("Missing required parameter: eventId", category="invalid_input")
     cal_id = args.get("calendarId")
     if not cal_id:
-        primary = db.one("SELECT calendar_id FROM calendars WHERE primary_calendar = TRUE")
+        primary = db.one("SELECT calendar_id FROM calendar_calendars WHERE primary_calendar = TRUE")
         cal_id = primary["calendar_id"] if primary else "CAL-PRIMARY"
-    cal = db.one("SELECT * FROM calendars WHERE calendar_id = ?", (cal_id,))
+    cal = db.one("SELECT * FROM calendar_calendars WHERE calendar_id = ?", (cal_id,))
     if not cal:
         raise ToolError(f"Calendar not found: {cal_id}", category="not_found")
 
-    r = db.one("SELECT * FROM events WHERE calendar_id = ? AND event_id = ?", (cal_id, evt_id))
+    r = db.one("SELECT * FROM calendar_events WHERE calendar_id = ? AND event_id = ?", (cal_id, evt_id))
     if not r:
         raise ToolError(f"Event {evt_id!r} not found on calendar {cal_id!r}.", category="not_found")
 
@@ -22,7 +22,7 @@ def handle(args, db):
             "organizer": bool(a["is_organizer"]),
             "optionalAttendee": bool(a["is_optional"]),
         }
-        for a in db.query("SELECT email, display_name, response_status, is_organizer, is_optional FROM event_attendees WHERE event_id = ?", (evt_id,))
+        for a in db.query("SELECT email, display_name, response_status, is_organizer, is_optional FROM calendar_event_attendees WHERE event_id = ?", (evt_id,))
     ]
     return {
         "id": r["event_id"],

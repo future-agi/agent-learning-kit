@@ -37,7 +37,7 @@ def handle(args, db):
         kind, value = m.groups()
         if kind == "in":
             ref = value.strip("<>#@")
-            row = db.one("SELECT channel_id FROM channels WHERE channel_id = ? OR name = ?", [ref, ref])
+            row = db.one("SELECT channel_id FROM slack_channels WHERE channel_id = ? OR name = ?", [ref, ref])
             if row is None:
                 raise ToolError(f"channel_not_found: {value!r}.", category="not_found")
             channels_in.append(row["channel_id"])
@@ -66,8 +66,8 @@ def handle(args, db):
     actor = db.one("SELECT user_id FROM current_actor WHERE id = 'default'")
     actor_id = actor["user_id"] if actor else "U01"
     visible = {}
-    for channel in db.query("SELECT * FROM channels"):
-        member = db.one("SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ?", [channel["channel_id"], actor_id]) is not None
+    for channel in db.query("SELECT * FROM slack_channels"):
+        member = db.one("SELECT 1 FROM slack_channel_members WHERE channel_id = ? AND user_id = ?", [channel["channel_id"], actor_id]) is not None
         if channel["is_private"] and not member:
             continue
         if args.get("only_my_channels") and not member:
@@ -80,7 +80,7 @@ def handle(args, db):
 
     terms = [k.strip('"').lower() for k in keywords if k.strip('"')]
     found = []
-    for m in db.query("SELECT message_id, channel_id, user_id, text, ts, thread_ts, permalink FROM messages ORDER BY ts DESC"):
+    for m in db.query("SELECT message_id, channel_id, user_id, text, ts, thread_ts, permalink FROM slack_messages ORDER BY ts DESC"):
         if m["channel_id"] not in visible:
             continue
         if from_users and m["user_id"] not in from_users:

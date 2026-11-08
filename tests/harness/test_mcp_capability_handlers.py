@@ -77,7 +77,11 @@ def test_calendar_replacing_a_non_last_attendee(tmp_path: Path) -> None:
         "bob@company.com",
         "charlie@company.com",
     ]
-    rows = [r for r in world.state()["event_attendees"] if r["event_id"] == event["id"]]
+    rows = [
+        r
+        for r in world.state()["calendar_event_attendees"]
+        if r["event_id"] == event["id"]
+    ]
     assert len({r["id"] for r in rows}) == len(rows) == 2
 
 

@@ -67,7 +67,7 @@ def handle(args, db):
     busy = []
     for email in attendees:
         for er in db.query(
-            "SELECT e.start_time, e.end_time FROM events e JOIN event_attendees a ON e.event_id = a.event_id "
+            "SELECT e.start_time, e.end_time FROM calendar_events e JOIN calendar_event_attendees a ON e.event_id = a.event_id "
             "WHERE a.email = ? AND e.status != 'cancelled' AND e.end_time > ? AND e.start_time < ?",
             (email, start_str, end_str),
         ):

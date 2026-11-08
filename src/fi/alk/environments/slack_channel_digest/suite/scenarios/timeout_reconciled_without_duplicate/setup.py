@@ -1,6 +1,6 @@
 def setup(world):
     world.change("current_actor", "default", {"user_id": "U01"}, by="id")
-    world.put("message_ledger", {
+    world.put("slack_message_ledger", {
         "request_key": "REQ-TIMEOUT-501",
         "message_id": "MSG-NEW-501",
         "channel_id": "C01",
@@ -9,7 +9,7 @@ def setup(world):
         "status": "sent",
         "created_at": "2026-10-26T09:15:00Z"
     })
-    world.put("messages", {
+    world.put("slack_messages", {
         "message_id": "MSG-NEW-501",
         "channel_id": "C01",
         "user_id": "U01",

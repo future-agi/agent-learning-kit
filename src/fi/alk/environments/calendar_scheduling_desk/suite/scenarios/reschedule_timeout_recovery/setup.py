@@ -1,12 +1,12 @@
 def setup(world):
-    world.put("attendees", {
+    world.put("calendar_attendees", {
         "email": "aarav@company.com",
         "display_name": "Aarav Patel",
         "time_zone": "Asia/Kolkata",
         "working_hours_start": "09:00:00",
         "working_hours_end": "18:00:00"
     })
-    world.put("events", {
+    world.put("calendar_events", {
         "event_id": "EVT-04",
         "calendar_id": "CAL-PRIMARY",
         "summary": "Quarterly Roadmap Review",
@@ -23,7 +23,7 @@ def setup(world):
         "created_at": "2026-10-26T09:00:00Z",
         "updated_at": "2026-10-26T09:00:00Z"
     })
-    world.put("event_attendees", {
+    world.put("calendar_event_attendees", {
         "id": 1,
         "event_id": "EVT-04",
         "email": "aarav@company.com",
@@ -32,7 +32,7 @@ def setup(world):
         "is_organizer": True,
         "is_optional": False
     })
-    world.put("fault_injections", {
+    world.put("calendar_fault_injections", {
         "fault_id": "FLT-01",
         "operation": "update_event",
         "target_id": "EVT-04",

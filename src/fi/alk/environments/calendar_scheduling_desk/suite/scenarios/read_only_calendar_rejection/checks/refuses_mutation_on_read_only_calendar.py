@@ -9,7 +9,7 @@ def check(world, calls, reference):
             return "done wrong: write mutation succeeded on read-only calendar CAL-RO"
 
     st = world.state()
-    evts = st.get("events", [])
+    evts = st.get("calendar_events", [])
     cal_ro_evts = [e for e in evts if e.get("calendar_id") == "CAL-RO" and e.get("event_id") != "EVT-RO-01"]
     if cal_ro_evts:
         return f"done wrong: unauthorized events found on read-only calendar CAL-RO: {[e['event_id'] for e in cal_ro_evts]}"

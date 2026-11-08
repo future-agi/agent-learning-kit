@@ -43,8 +43,8 @@
       },
       "environment_arguments": {},
       "fixed": {
-        "eventId": "record: events.event_id for target recurring meeting",
-        "calendarId": "record: calendars.calendar_id where access_role is owner"
+        "eventId": "record: calendar_events.event_id for target recurring meeting",
+        "calendarId": "record: calendar_calendars.calendar_id where access_role is owner"
       }
     },
     {
@@ -57,10 +57,10 @@
       },
       "environment_arguments": {},
       "fixed": {
-        "approval_id": "record: approvals.approval_id for delete_event",
+        "approval_id": "record: calendar_approvals.approval_id for delete_event",
         "recurring_action": "caller: this_event",
-        "eventId": "record: events.event_id for target recurring meeting",
-        "calendarId": "record: calendars.calendar_id where access_role is owner"
+        "eventId": "record: calendar_events.event_id for target recurring meeting",
+        "calendarId": "record: calendar_calendars.calendar_id where access_role is owner"
       }
     }
   ],

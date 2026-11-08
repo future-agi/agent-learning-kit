@@ -15,12 +15,12 @@ def handle(args, db):
             raise ToolError(f"Invalid pageToken: {args['pageToken']}", category="invalid_input")
 
     # The user's primary calendar only, as the official tool searches.
-    primary = db.one("SELECT calendar_id FROM calendars WHERE primary_calendar = TRUE")
+    primary = db.one("SELECT calendar_id FROM calendar_calendars WHERE primary_calendar = TRUE")
     cal_id = primary["calendar_id"] if primary else "CAL-PRIMARY"
     terms = query.lower().split()
     events = []
-    for r in db.query("SELECT * FROM events WHERE calendar_id = ? AND status != 'cancelled' ORDER BY start_time ASC", (cal_id,)):
-        att_rows = db.query("SELECT email, display_name, response_status, is_organizer, is_optional FROM event_attendees WHERE event_id = ?", (r["event_id"],))
+    for r in db.query("SELECT * FROM calendar_events WHERE calendar_id = ? AND status != 'cancelled' ORDER BY start_time ASC", (cal_id,)):
+        att_rows = db.query("SELECT email, display_name, response_status, is_organizer, is_optional FROM calendar_event_attendees WHERE event_id = ?", (r["event_id"],))
         text = f"{r['summary']} {r['description'] or ''} {r['location'] or ''} {' '.join(a['email'] + ' ' + (a['display_name'] or '') for a in att_rows)}".lower()
         if not all(term in text for term in terms):
             continue

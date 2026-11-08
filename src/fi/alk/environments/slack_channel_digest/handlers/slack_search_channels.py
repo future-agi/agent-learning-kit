@@ -22,8 +22,8 @@ def handle(args, db):
     terms = [k.strip('"').lower() for k in keywords if k.strip('"')]
 
     found = []
-    for channel in db.query("SELECT * FROM channels ORDER BY name ASC"):
-        member = db.one("SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ?", (channel["channel_id"], actor_id)) is not None
+    for channel in db.query("SELECT * FROM slack_channels ORDER BY name ASC"):
+        member = db.one("SELECT 1 FROM slack_channel_members WHERE channel_id = ? AND user_id = ?", (channel["channel_id"], actor_id)) is not None
         private = bool(channel["is_private"])
         # A private channel is visible only to its members; the rest of the workspace cannot
         # learn it exists.
@@ -36,7 +36,7 @@ def handle(args, db):
             continue
         if not terms and query and not any(word in text for word in query.lower().split()):
             continue
-        count = db.one("SELECT COUNT(*) AS cnt FROM channel_members WHERE channel_id = ?", (channel["channel_id"],))
+        count = db.one("SELECT COUNT(*) AS cnt FROM slack_channel_members WHERE channel_id = ?", (channel["channel_id"],))
         found.append({
             "channel_id": channel["channel_id"],
             "name": channel["name"],

@@ -3,22 +3,22 @@ def handle(args, db):
         raise ToolError("Missing required argument: fileId", category="invalid_input")
     file_id = str(args["fileId"])
 
-    file_row = db.one("SELECT * FROM files WHERE file_id = ?", (file_id,))
+    file_row = db.one("SELECT * FROM drive_files WHERE file_id = ?", (file_id,))
     if not file_row or file_row["is_deleted"]:
         raise ToolError(f"File '{file_id}' not found or has been deleted.", category="not_found")
 
     actor_row = db.one("SELECT user_id FROM current_actor WHERE id = 'default'")
     user_id = actor_row["user_id"] if actor_row else "u_alice"
-    user_record = db.one("SELECT role FROM users WHERE user_id = ?", (user_id,))
+    user_record = db.one("SELECT role FROM drive_users WHERE user_id = ?", (user_id,))
     is_admin = user_record and user_record["role"] == "administrator"
 
     if not is_admin:
-        perm = db.one("SELECT role FROM permissions WHERE target_type = 'folder' AND target_id = ? AND user_id = ?", (file_row["folder_id"], user_id))
-        file_perm = db.one("SELECT role FROM permissions WHERE target_type = 'file' AND target_id = ? AND user_id = ?", (file_id, user_id))
+        perm = db.one("SELECT role FROM drive_permissions WHERE target_type = 'folder' AND target_id = ? AND user_id = ?", (file_row["folder_id"], user_id))
+        file_perm = db.one("SELECT role FROM drive_permissions WHERE target_type = 'file' AND target_id = ? AND user_id = ?", (file_id, user_id))
         if not perm and not file_perm:
             raise ToolError(f"Permission denied: You do not have access to file '{file_id}'.", category="permission_denied")
 
-    owner = db.one("SELECT email FROM users WHERE user_id = ?", (file_row["owner_id"],))
+    owner = db.one("SELECT email FROM drive_users WHERE user_id = ?", (file_row["owner_id"],))
     content = file_row["content"] or ""
     f = file_row
     item = {

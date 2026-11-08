@@ -4,9 +4,9 @@ def handle(args, db):
 
     cal_id = args.get("calendarId")
     if not cal_id:
-        primary = db.one("SELECT calendar_id FROM calendars WHERE primary_calendar = TRUE")
+        primary = db.one("SELECT calendar_id FROM calendar_calendars WHERE primary_calendar = TRUE")
         cal_id = primary["calendar_id"] if primary else "CAL-PRIMARY"
-    cal = db.one("SELECT * FROM calendars WHERE calendar_id = ?", (cal_id,))
+    cal = db.one("SELECT * FROM calendar_calendars WHERE calendar_id = ?", (cal_id,))
     if not cal:
         raise ToolError(f"Calendar not found: {cal_id}", category="not_found")
     if cal["access_role"] not in ("writer", "owner"):
@@ -31,7 +31,7 @@ def handle(args, db):
     if require_app:
         if not approval_id:
             raise ToolError("Policy: creating an event needs an approval_id for this exact event; confirm it with the user first.", category="policy_blocked")
-        if not db.one("SELECT * FROM approvals WHERE approval_id = ? AND status = 'approved'", (approval_id,)):
+        if not db.one("SELECT * FROM calendar_approvals WHERE approval_id = ? AND status = 'approved'", (approval_id,)):
             raise ToolError(f"Invalid or unapproved approval_id: {approval_id!r}.", category="policy_blocked")
 
     attendees_in = []
@@ -53,24 +53,24 @@ def handle(args, db):
                 raise ToolError(f"Policy violation: attendee domain {em.split('@')[-1]!r} is not in the attendee allowlist.", category="policy_blocked")
 
     cal_conflicts = db.query(
-        "SELECT event_id, summary FROM events WHERE calendar_id = ? AND status != 'cancelled' AND start_time < ? AND end_time > ?",
+        "SELECT event_id, summary FROM calendar_events WHERE calendar_id = ? AND status != 'cancelled' AND start_time < ? AND end_time > ?",
         (cal_id, end_time, start_time),
     )
     if cal_conflicts:
         raise ToolError(f"Conflict: slot {start_time} - {end_time} conflicts with existing event {cal_conflicts[0]['event_id']} ({cal_conflicts[0]['summary']}).", category="conflict")
     for em, _, _ in attendees_in:
         att_conflicts = db.query(
-            "SELECT e.event_id FROM events e JOIN event_attendees a ON e.event_id = a.event_id "
+            "SELECT e.event_id FROM calendar_events e JOIN calendar_event_attendees a ON e.event_id = a.event_id "
             "WHERE a.email = ? AND e.status != 'cancelled' AND e.start_time < ? AND e.end_time > ?",
             (em, end_time, start_time),
         )
         if att_conflicts:
             raise ToolError(f"Conflict: attendee {em} has a conflicting event {att_conflicts[0]['event_id']}.", category="conflict")
 
-    fault = db.one("SELECT * FROM fault_injections WHERE operation = 'create_event' AND is_active = TRUE")
+    fault = db.one("SELECT * FROM calendar_fault_injections WHERE operation = 'create_event' AND is_active = TRUE")
     if fault:
         if fault["trigger_once"]:
-            db.execute("UPDATE fault_injections SET is_active = FALSE WHERE fault_id = ?", (fault["fault_id"],))
+            db.execute("UPDATE calendar_fault_injections SET is_active = FALSE WHERE fault_id = ?", (fault["fault_id"],))
         if fault["fault_type"] == "timeout":
             raise ToolError("Gateway timeout: request timed out waiting for upstream server.", category="timeout_unknown_outcome")
         if fault["fault_type"] == "permission_denied":
@@ -78,25 +78,25 @@ def handle(args, db):
 
     clock_row = db.one("SELECT now FROM clock LIMIT 1")
     now_str = clock_row["now"] if clock_row else "2026-10-26T09:00:00Z"
-    event_id = f"EVT-CR-{101 + db.one('SELECT COUNT(*) as c FROM events')['c']}"
+    event_id = f"EVT-CR-{101 + db.one('SELECT COUNT(*) as c FROM calendar_events')['c']}"
     recurrence = args.get("recurrenceData") or []
     if not isinstance(recurrence, list) or not all(isinstance(r, str) for r in recurrence):
         raise ToolError("recurrenceData must be a list of RRULE, RDATE or EXDATE strings", category="invalid_input")
     db.execute(
-        "INSERT INTO events (event_id, calendar_id, summary, description, location, start_time, end_time, time_zone, status, recurrence_rule, version, created_at, updated_at) "
+        "INSERT INTO calendar_events (event_id, calendar_id, summary, description, location, start_time, end_time, time_zone, status, recurrence_rule, version, created_at, updated_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, 1, ?, ?)",
         (event_id, cal_id, summary, args.get("description"), args.get("location"), start_time, end_time, time_zone, recurrence[0] if recurrence else None, now_str, now_str),
     )
     res_attendees = []
     for em, d_name, optional in attendees_in:
-        att_id = db.one("SELECT COALESCE(MAX(id), 0) + 1 AS c FROM event_attendees")["c"]
+        att_id = db.one("SELECT COALESCE(MAX(id), 0) + 1 AS c FROM calendar_event_attendees")["c"]
         db.execute(
-            "INSERT INTO event_attendees (id, event_id, email, display_name, response_status, is_organizer, is_optional) VALUES (?, ?, ?, ?, 'needsAction', FALSE, ?)",
+            "INSERT INTO calendar_event_attendees (id, event_id, email, display_name, response_status, is_organizer, is_optional) VALUES (?, ?, ?, ?, 'needsAction', FALSE, ?)",
             (att_id, event_id, em, d_name, optional),
         )
         res_attendees.append({"email": em, "displayName": d_name, "responseStatus": "needsAction", "organizer": False, "optionalAttendee": optional})
         db.execute(
-            "INSERT INTO simulated_outbox (message_id, event_id, recipient_email, action, subject, payload, sent_at) VALUES (?, ?, ?, 'invitation', ?, ?, ?)",
+            "INSERT INTO calendar_simulated_outbox (message_id, event_id, recipient_email, action, subject, payload, sent_at) VALUES (?, ?, ?, 'invitation', ?, ?, ?)",
             (f"MSG-{event_id}-{em.replace('@', '_at_')}", event_id, em, f"Invitation: {summary}", json.dumps({"start": start_time, "end": end_time}), now_str),
         )
 

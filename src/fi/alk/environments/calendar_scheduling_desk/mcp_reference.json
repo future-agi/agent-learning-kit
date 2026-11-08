@@ -652,7 +652,7 @@
         "version": "the event's version for expected_version"
       },
       "list_events": {
-        "events[].version": "as get_event"
+        "calendar_events[].version": "as get_event"
       },
       "create_event": {
         "version": "as get_event"

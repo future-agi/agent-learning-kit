@@ -6,7 +6,7 @@ def check(world, calls):
     if not this_event_calls:
         return "done wrong: delete_event recurring_action was not this_event"
     st = world.state()
-    evts = st.get("events", [])
+    evts = st.get("calendar_events", [])
     cancelled = [e for e in evts if e.get("status") == "cancelled"]
     if not cancelled:
         return "not done: target event was not marked cancelled in world state"

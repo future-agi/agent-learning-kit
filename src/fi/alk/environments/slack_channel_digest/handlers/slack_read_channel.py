@@ -14,14 +14,14 @@ def handle(args, db):
 
     actor = db.one("SELECT user_id FROM current_actor WHERE id = 'default'")
     actor_id = actor["user_id"] if actor else "U01"
-    channel = db.one("SELECT * FROM channels WHERE channel_id = ?", [channel_id])
+    channel = db.one("SELECT * FROM slack_channels WHERE channel_id = ?", [channel_id])
     if channel is None:
         raise ToolError(f"channel_not_found: {channel_id!r}.", category="not_found")
-    member = db.one("SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ?", [channel_id, actor_id])
+    member = db.one("SELECT 1 FROM slack_channel_members WHERE channel_id = ? AND user_id = ?", [channel_id, actor_id])
     if channel["is_private"] and member is None:
         raise ToolError(f"Access denied: you are not a member of private channel {channel_id!r}.", category="permission_denied")
 
-    sql = "SELECT message_id, channel_id, user_id, text, ts, thread_ts, permalink FROM messages WHERE channel_id = ?"
+    sql = "SELECT message_id, channel_id, user_id, text, ts, thread_ts, permalink FROM slack_messages WHERE channel_id = ?"
     params = [channel_id]
     if args.get("oldest"):
         sql += " AND ts >= ?"

@@ -14,7 +14,7 @@ def check(world, calls, reference=None):
     ):
         return "not done: expected a status check for the request key or a read-back of channel 'C01'"
     st = world.state()
-    ledger = [r for r in st.get("message_ledger", []) if r.get("request_key") == key]
+    ledger = [r for r in st.get("slack_message_ledger", []) if r.get("request_key") == key]
     if len(ledger) > 1:
         return "failed: duplicate entries created in message_ledger"
     if any(c.name == "slack_send_message" and c.ok and c.arguments.get("request_key") != key for c in calls):

@@ -24,38 +24,38 @@ def handle(args, db):
     now = clock_row["now"] if clock_row else "2026-10-26T10:00:00Z"
 
     if reply_to:
-        original = db.one("SELECT * FROM messages WHERE id = ?", (reply_to,))
+        original = db.one("SELECT * FROM gmail_messages WHERE id = ?", (reply_to,))
         if original is None:
             raise ToolError(f"Message {reply_to!r} not found", category="not_found")
         thread_id = original["thread_id"]
-        t = db.one("SELECT * FROM threads WHERE id = ?", (thread_id,))
+        t = db.one("SELECT * FROM gmail_threads WHERE id = ?", (thread_id,))
         if t and t["is_restricted"]:
             raise ToolError(f"Access to thread {thread_id!r} is restricted", category="permission_denied")
         if not subject:
             subject = original["subject"] if original["subject"].lower().startswith("re:") else f"Re: {original['subject']}"
     else:
         # A new conversation: Gmail starts a thread for a draft that replies to nothing.
-        count = db.one("SELECT COUNT(*) AS c FROM threads")["c"]
+        count = db.one("SELECT COUNT(*) AS c FROM gmail_threads")["c"]
         thread_id = f"T-{count + 1:02d}"
-        while db.one("SELECT 1 FROM threads WHERE id = ?", (thread_id,)):
+        while db.one("SELECT 1 FROM gmail_threads WHERE id = ?", (thread_id,)):
             count += 1
             thread_id = f"T-{count + 1:02d}"
         db.execute(
-            "INSERT INTO threads (id, subject, snippet, history_id, is_restricted, updated_at) VALUES (?, ?, ?, ?, FALSE, ?)",
+            "INSERT INTO gmail_threads (id, subject, snippet, history_id, is_restricted, updated_at) VALUES (?, ?, ?, ?, FALSE, ?)",
             (thread_id, subject, (body or html_body)[:80], f"H-{2000 + count}", now),
         )
 
-    existing_human_draft = db.one("SELECT * FROM drafts WHERE thread_id = ? AND is_human_edited = TRUE", (thread_id,))
+    existing_human_draft = db.one("SELECT * FROM gmail_drafts WHERE thread_id = ? AND is_human_edited = TRUE", (thread_id,))
     if existing_human_draft:
         raise ToolError(
             f"A human-edited draft ({existing_human_draft['id']}) already exists for thread {thread_id!r}. Cannot overwrite without human confirmation.",
             category="conflict",
         )
 
-    count = db.one("SELECT COUNT(*) AS c FROM drafts")["c"]
+    count = db.one("SELECT COUNT(*) AS c FROM gmail_drafts")["c"]
     draft_id = f"D-{1001 + count}"
     db.execute(
-        "INSERT INTO drafts (id, thread_id, recipient, cc, bcc, subject, body, is_human_edited, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, FALSE, ?, ?)",
+        "INSERT INTO gmail_drafts (id, thread_id, recipient, cc, bcc, subject, body, is_human_edited, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, FALSE, ?, ?)",
         (draft_id, thread_id, ",".join(to), ",".join(cc), ",".join(bcc), subject, body or html_body, now, now),
     )
     return {

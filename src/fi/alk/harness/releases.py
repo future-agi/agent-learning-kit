@@ -1438,7 +1438,7 @@ class PostgresProof:
         `catalogue` grades with sub-goals not yet written to the suite."""
         import random
 
-        from .checks import run_check
+        from .checks import reference_of, run_check
         from .folder import apply_setup, check_ready
         from .world.handle import HostedWorld
         from .world.runtime import Call
@@ -1500,11 +1500,15 @@ class PostgresProof:
             tools.close()
         if ready.ok and observed is not None:
             played = list(observed)
+        # The checks see the scenario's reference (the values its solution marks fixed), as they do
+        # on SQLite and in runs: without it a reference-aware check cannot tell the right target
+        # from a wrong one, and the PostgreSQL proof would pass a dispute filed on another charge.
+        reference = reference_of(getattr(scenario, "solution", None) or [])
         return Attempt(
             ready,
             faults,
             [
-                (name, run_check(source, world, played, name=name))
+                (name, run_check(source, world, played, name=name, reference=reference))
                 for name, source in self.checks(scenario, catalogue)
             ]
             if ready.ok

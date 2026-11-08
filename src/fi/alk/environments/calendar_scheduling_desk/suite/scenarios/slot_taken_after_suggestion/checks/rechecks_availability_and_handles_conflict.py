@@ -3,7 +3,7 @@ def check(world, calls, reference):
     if not successful_calls:
         return "not done: agent made no calendar inspection or time check call"
     st = world.state()
-    evts = st.get("events", [])
+    evts = st.get("calendar_events", [])
     cals = set(e.get("calendar_id") for e in evts)
     for cid in cals:
         cal_evts = [e for e in evts if e.get("calendar_id") == cid and e.get("status") == "confirmed"]

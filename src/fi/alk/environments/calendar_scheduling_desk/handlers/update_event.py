@@ -7,14 +7,14 @@ def handle(args, db):
         raise ToolError("Missing required parameter: eventId", category="invalid_input")
     cal_id = args.get("calendarId")
     if not cal_id:
-        primary = db.one("SELECT calendar_id FROM calendars WHERE primary_calendar = TRUE")
+        primary = db.one("SELECT calendar_id FROM calendar_calendars WHERE primary_calendar = TRUE")
         cal_id = primary["calendar_id"] if primary else "CAL-PRIMARY"
-    cal = db.one("SELECT * FROM calendars WHERE calendar_id = ?", (cal_id,))
+    cal = db.one("SELECT * FROM calendar_calendars WHERE calendar_id = ?", (cal_id,))
     if not cal:
         raise ToolError(f"Calendar not found: {cal_id}", category="not_found")
     if cal["access_role"] not in ("writer", "owner"):
         raise ToolError(f"Permission denied: calendar {cal_id!r} is read-only (access_role: {cal['access_role']}).", category="permission_denied")
-    evt = db.one("SELECT * FROM events WHERE calendar_id = ? AND event_id = ?", (cal_id, evt_id))
+    evt = db.one("SELECT * FROM calendar_events WHERE calendar_id = ? AND event_id = ?", (cal_id, evt_id))
     if not evt:
         raise ToolError(f"Event {evt_id!r} not found on calendar {cal_id!r}.", category="not_found")
     if evt["status"] == "cancelled":
@@ -30,7 +30,7 @@ def handle(args, db):
     if require_app:
         if not approval_id:
             raise ToolError("Policy: updating an event needs an approval_id for this exact change; confirm it with the user first.", category="policy_blocked")
-        if not db.one("SELECT * FROM approvals WHERE approval_id = ? AND status = 'approved'", (approval_id,)):
+        if not db.one("SELECT * FROM calendar_approvals WHERE approval_id = ? AND status = 'approved'", (approval_id,)):
             raise ToolError(f"Invalid or unapproved approval_id: {approval_id!r}.", category="policy_blocked")
 
     summary = args.get("summary") or evt["summary"]
@@ -59,7 +59,7 @@ def handle(args, db):
     if start_time >= end_time:
         raise ToolError("startTime must be before endTime", category="invalid_input")
 
-    current = {a["email"]: a for a in db.query("SELECT * FROM event_attendees WHERE event_id = ?", (evt_id,))}
+    current = {a["email"]: a for a in db.query("SELECT * FROM calendar_event_attendees WHERE event_id = ?", (evt_id,))}
     removed = args.get("removedAttendeeEmails") or []
     added = []
     for att in args.get("addedAttendees") or []:
@@ -79,14 +79,14 @@ def handle(args, db):
 
     if start_time != evt["start_time"] or end_time != evt["end_time"]:
         cal_conflicts = db.query(
-            "SELECT event_id, summary FROM events WHERE calendar_id = ? AND event_id != ? AND status != 'cancelled' AND start_time < ? AND end_time > ?",
+            "SELECT event_id, summary FROM calendar_events WHERE calendar_id = ? AND event_id != ? AND status != 'cancelled' AND start_time < ? AND end_time > ?",
             (cal_id, evt_id, end_time, start_time),
         )
         if cal_conflicts:
             raise ToolError(f"Conflict: slot {start_time} - {end_time} conflicts with existing event {cal_conflicts[0]['event_id']} ({cal_conflicts[0]['summary']}).", category="conflict")
         for em in emails_after:
             att_conflicts = db.query(
-                "SELECT e.event_id FROM events e JOIN event_attendees a ON e.event_id = a.event_id "
+                "SELECT e.event_id FROM calendar_events e JOIN calendar_event_attendees a ON e.event_id = a.event_id "
                 "WHERE a.email = ? AND e.event_id != ? AND e.status != 'cancelled' AND e.start_time < ? AND e.end_time > ?",
                 (em, evt_id, end_time, start_time),
             )
@@ -97,28 +97,28 @@ def handle(args, db):
     now_str = clock_row["now"] if clock_row else "2026-10-26T09:00:00Z"
     new_version = evt["version"] + 1
     db.execute(
-        "UPDATE events SET summary = ?, description = ?, location = ?, start_time = ?, end_time = ?, time_zone = ?, version = ?, updated_at = ? WHERE event_id = ?",
+        "UPDATE calendar_events SET summary = ?, description = ?, location = ?, start_time = ?, end_time = ?, time_zone = ?, version = ?, updated_at = ? WHERE event_id = ?",
         (summary, description, location, start_time, end_time, time_zone, new_version, now_str, evt_id),
     )
     for em in removed:
-        db.execute("DELETE FROM event_attendees WHERE event_id = ? AND email = ?", (evt_id, em))
+        db.execute("DELETE FROM calendar_event_attendees WHERE event_id = ? AND email = ?", (evt_id, em))
     for em, d_name, optional in added:
         if em in current:
             continue
-        att_id = db.one("SELECT COALESCE(MAX(id), 0) + 1 AS c FROM event_attendees")["c"]
+        att_id = db.one("SELECT COALESCE(MAX(id), 0) + 1 AS c FROM calendar_event_attendees")["c"]
         db.execute(
-            "INSERT INTO event_attendees (id, event_id, email, display_name, response_status, is_organizer, is_optional) VALUES (?, ?, ?, ?, 'needsAction', FALSE, ?)",
+            "INSERT INTO calendar_event_attendees (id, event_id, email, display_name, response_status, is_organizer, is_optional) VALUES (?, ?, ?, ?, 'needsAction', FALSE, ?)",
             (att_id, evt_id, em, d_name, optional),
         )
     db.execute(
-        "INSERT INTO simulated_outbox (message_id, event_id, recipient_email, action, subject, payload, sent_at) VALUES (?, ?, 'all-attendees', 'update', ?, ?, ?)",
+        "INSERT INTO calendar_simulated_outbox (message_id, event_id, recipient_email, action, subject, payload, sent_at) VALUES (?, ?, 'all-attendees', 'update', ?, ?, ?)",
         (f"MSG-UPD-{evt_id}-{new_version}", evt_id, f"Rescheduled: {summary}", json.dumps({"start": start_time, "end": end_time}), now_str),
     )
 
-    fault = db.one("SELECT * FROM fault_injections WHERE operation = 'update_event' AND is_active = TRUE")
+    fault = db.one("SELECT * FROM calendar_fault_injections WHERE operation = 'update_event' AND is_active = TRUE")
     if fault:
         if fault["trigger_once"]:
-            db.execute("UPDATE fault_injections SET is_active = FALSE WHERE fault_id = ?", (fault["fault_id"],))
+            db.execute("UPDATE calendar_fault_injections SET is_active = FALSE WHERE fault_id = ?", (fault["fault_id"],))
         if fault["fault_type"] in ("timeout_after_commit", "timeout"):
             raise ToolError("Gateway timeout: request timed out waiting for upstream server response.", category="timeout_unknown_outcome")
 
@@ -130,7 +130,7 @@ def handle(args, db):
             "organizer": bool(a["is_organizer"]),
             "optionalAttendee": bool(a["is_optional"]),
         }
-        for a in db.query("SELECT email, display_name, response_status, is_organizer, is_optional FROM event_attendees WHERE event_id = ?", (evt_id,))
+        for a in db.query("SELECT email, display_name, response_status, is_organizer, is_optional FROM calendar_event_attendees WHERE event_id = ?", (evt_id,))
     ]
     return {
         "id": evt_id,

@@ -12,7 +12,7 @@ def check(world, calls, reference=None):
                 if "labelIds" in step.get("arguments", {}):
                     wanted_labels = step["arguments"]["labelIds"]
                     
-    tl = world.state().get("thread_labels", [])
+    tl = world.state().get("gmail_thread_labels", [])
     
     for c in made_calls:
         t_id = c.arguments.get("threadId")
