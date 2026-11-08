@@ -223,6 +223,47 @@ class _PrivateWorkflowArtifacts:
         return str(path)
 
 
+TOOL_ROUTING = "tool-routing-observations.json"
+
+
+def record_tool_routing(authoring: Path, scenario_key: str, calls) -> None:
+    """Every tool call the qualification conversation made that reached the test world,
+    beside the tool certification: what readiness reads as observed routing, per tool.
+
+    The calls are the world's own record of what arrived at it, so each one was routed to
+    the world; a tool never called here is simply absent."""
+    tools: dict[str, dict] = {}
+    for call in calls:
+        name = str(getattr(call, "name", "") or "")
+        if not name:
+            continue
+        outcome = (
+            "refused"
+            if getattr(call, "refused", False)
+            else "ok" if getattr(call, "ok", True) else "error"
+        )
+        seen = tools.setdefault(name, {"tool": name, "routed": True, "calls": 0, "outcomes": []})
+        seen["calls"] += 1
+        if outcome not in seen["outcomes"]:
+            seen["outcomes"].append(outcome)
+    path = authoring / "generic-harness" / TOOL_ROUTING
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "source": "qualification_conversation",
+                "scenario_key": scenario_key,
+                "tools": sorted(tools.values(), key=lambda one: one["tool"]),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 async def probe_chat_workflow(
     *,
     job,
@@ -330,6 +371,7 @@ async def probe_chat_workflow(
             )
         if not outcome.calls:
             receipt["tool_evidence_status"] = "not_observed"
+        record_tool_routing(authoring, scenario.scenario_key, outcome.calls)
         receipt["status"] = "passed"
     except RuntimeValidationError:
         raise

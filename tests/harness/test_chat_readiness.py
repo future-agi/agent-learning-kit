@@ -958,6 +958,13 @@ def test_private_workflow_checks_executed_tools_after_clarification(
     assert receipt["status"] == ("passed" if completed else "failed")
     assert receipt["tool_call_count"] == int(completed)
     assert receipt["candidate_hash"] == "candidate"
+    routing = tmp_path / "generic-harness" / "tool-routing-observations.json"
+    if completed:
+        assert [one["tool"] for one in json.loads(routing.read_text())["tools"]] == [
+            "lookup_account"
+        ]
+    else:
+        assert not routing.exists()
     assert receipt["bundle_digest"] == "bundle"
     assert receipt["scenario_key"] == "private"
     assert receipt["turns"] == 4
