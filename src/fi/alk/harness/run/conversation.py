@@ -345,12 +345,18 @@ class ChatActors:
                 from ..world_door import record_action
 
                 identity = (actor.get("identities") or {}).get(decision.action.split(".", 1)[0], "")
+                # A record change the actor may make goes to the world's records, as a scheduled one does; anything
+                # else is a tool call in its service.
+                record = record_action(decision.action) is not None and decision.action in (
+                    actor.get("permitted_actions") or []
+                )
                 outcome = await self.act(
                     key,
                     decision.action,
                     decision.arguments,
                     key=f"{self.seed}:{key}:c{self.decisions}",
                     parent=None,
+                    **({"form": "record"} if record else {}),
                     **({"identity": identity} if identity and record_action(decision.action) is None else {}),
                 )
                 self.events.append(

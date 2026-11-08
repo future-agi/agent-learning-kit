@@ -852,8 +852,8 @@ def test_a_chat_actor_is_told_each_action_s_fields_and_acts_under_its_identity()
 
     acted, briefs = [], []
 
-    async def act(actor, action, arguments, *, key, parent, identity=""):
-        acted.append((action, arguments, identity))
+    async def act(actor, action, arguments, *, key, parent, identity="", form="tool"):
+        acted.append((action, arguments, identity, form))
         return {"status": 200, "outcome": "committed"}
 
     cast = ChatActors(
@@ -864,6 +864,7 @@ def test_a_chat_actor_is_told_each_action_s_fields_and_acts_under_its_identity()
     replies = iter([
         json.dumps({"action": "chat.post_message", "arguments": {"channel": "#sales", "text": "hi"}}),
         json.dumps({"action": "approvals.put", "arguments": {"deal_id": 7}}),
+        json.dumps({"action": "approvals.change", "arguments": {"where": {"deal_id": 7}, "set": {"status": "x"}}}),
     ])
 
     async def write(actor, brief):
@@ -871,10 +872,16 @@ def test_a_chat_actor_is_told_each_action_s_fields_and_acts_under_its_identity()
         return next(replies)
 
     cast._write = write
-    for turn in (1, 2):
+    for turn in (1, 2, 3):
         asyncio.run(cast.due_lines(agent_turns=turn, last_text="", tools_called=[], conversation=[]))
     assert "Post (fields: channel; text)" in json.dumps(briefs[0])
-    assert acted == [("chat.post_message", {"channel": "#sales", "text": "hi"}, "coworker"), ("approvals.put", {"deal_id": 7}, "")]
+    # A permitted record change goes to the world's records, as a scheduled one does; one it may not make stays a
+    # tool call, for the door to refuse.
+    assert acted == [
+        ("chat.post_message", {"channel": "#sales", "text": "hi"}, "coworker", "tool"),
+        ("approvals.put", {"deal_id": 7}, "", "record"),
+        ("approvals.change", {"where": {"deal_id": 7}, "set": {"status": "x"}}, "", "tool"),
+    ]
 
 
 def test_a_unit_for_a_field_the_tool_does_not_have_is_a_contract_problem():
