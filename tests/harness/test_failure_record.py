@@ -6,13 +6,29 @@ import pytest
 
 from fi.alk.harness import failure_record
 from fi.alk.harness.authoring_runtime_validation import RuntimeValidationError
+from fi.alk.harness.diagnostics import HarnessDiagnostic
+from fi.alk.harness.job import HarnessStage
 from fi.alk.harness.process_runtime import ProcessRuntimeError
 
 CANONICAL = "canonical World IR could not be compiled or applied: "
 
 
-def _wrapped(stage, code, message, *, process=None, phase="runtime", tail=""):
-    cause = ProcessRuntimeError(stage, code, message, process=process)
+def _diagnostics(*codes):
+    return tuple(
+        HarnessDiagnostic.create(
+            stage=HarnessStage.VALIDATING_ENVIRONMENT,
+            component="world_ir",
+            code=code,
+            message="seed",
+        )
+        for code in codes
+    )
+
+
+def _wrapped(stage, code, message, *, process=None, phase="runtime", tail="", codes=()):
+    cause = ProcessRuntimeError(
+        stage, code, message, process=process, diagnostics=_diagnostics(*codes)
+    )
     try:
         raise RuntimeValidationError(phase, f"{cause}{tail}") from cause
     except RuntimeValidationError as exc:
@@ -26,28 +42,27 @@ def _written(tmp_path, phase, exc):
 
 
 @pytest.mark.parametrize(
-    ("stage", "code", "process", "message", "domain"),
+    ("stage", "code", "process", "codes", "domain"),
     [
-        ("render", "internal_unknown_placeholder", None, "x", "harness"),
-        ("render", "store_statement_failed", "agent", "x", "harness"),
-        ("spawn", "spawn_failed", "tool-proxy", "exited 1", "world"),
+        ("render", "internal_unknown_placeholder", None, (), "harness"),
+        ("render", "store_statement_failed", "agent", (), "harness"),
+        ("spawn", "spawn_failed", "tool-proxy", (), "world"),
+        ("seed", "seed_failed", "world-db", ("source_model_fingerprint_mismatch",), "world"),
         (
             "seed",
             "seed_failed",
             "world-db",
-            CANONICAL + "source_model_fingerprint_mismatch",
-            "world",
+            ("source_model_fingerprint_mismatch", "unknown_column"),
+            "agent",
         ),
-        ("seed", "seed_failed", "world-db", CANONICAL + "column missing", "agent"),
-        ("seed", "seed_failed", "world-db", "migration 003 failed", "agent"),
-        ("spawn", "spawn_failed", "agent", "exited 1", "agent"),
-        ("depends_on", "depends_on_timeout", "world-api", "not ready", "agent"),
+        ("seed", "seed_failed", "world-db", (), "agent"),
+        ("spawn", "spawn_failed", "agent", (), "agent"),
+        ("depends_on", "depends_on_timeout", "world-api", (), "agent"),
     ],
 )
-def test_domain_follows_the_error_itself(
-    tmp_path, stage, code, process, message, domain
-):
-    exc = _wrapped(stage, code, message, process=process)
+def test_domain_follows_the_error_itself(tmp_path, stage, code, process, codes, domain):
+    # The message never decides: only the error's own fields and diagnostics do.
+    exc = _wrapped(stage, code, CANONICAL + ", ".join(codes), process=process, codes=codes)
 
     body = _written(tmp_path, "runtime", exc)
 
@@ -89,6 +104,7 @@ def test_a_typed_line_without_its_exception_is_read_from_the_harness_text(tmp_pa
         "seed/seed_failed (world-db): "
         + CANONICAL
         + "source_model_fingerprint_mismatch",
+        diagnostics=_diagnostics("source_model_fingerprint_mismatch"),
     )
 
     body = _written(tmp_path, "runtime", exc)

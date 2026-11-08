@@ -34,8 +34,7 @@ _HARNESS_CODES = frozenset(
         "resource_capacity_unavailable",
     }
 )
-# A canonical seed that failed only for the harness's own fingerprint check.
-_CANONICAL_SEED = "canonical World IR could not be compiled or applied: "
+# A seed that failed only for the harness's own fingerprint check.
 _OWNED_SEED_DIAGNOSTICS = frozenset({"source_model_fingerprint_mismatch"})
 # Where the harness's text ends and the agent's output lines begin (process_runtime).
 _AGENT_OUTPUT = "; last output:"
@@ -60,25 +59,37 @@ def _typed(exc: BaseException) -> tuple[str, str, str | None, str] | None:
     return found.groups() if found else None  # type: ignore[return-value]
 
 
+def _diagnostic_codes(exc: BaseException) -> set[str]:
+    """The codes of the structured diagnostics the failure carries, nearest first."""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        diagnostics = getattr(current, "diagnostics", None) or ()
+        if diagnostics:
+            return {str(getattr(item, "code", "")) for item in diagnostics}
+        current = current.__cause__ or current.__context__
+    return set()
+
+
 def _own_text(exc: BaseException) -> str:
     return str(exc).split(_AGENT_OUTPUT, 1)[0].strip()
 
 
-def _domain(phase: str, typed: tuple[str, str, str | None, str] | None) -> str:
+def _domain(
+    phase: str, typed: tuple[str, str, str | None, str] | None, codes: set[str]
+) -> str:
     """The same rule the platform applied to the log, from the error itself."""
     if phase != "runtime" or typed is None:
         return "agent"
-    _stage, code, process, detail = typed
+    _stage, code, process, _detail = typed
     if code.startswith("internal_") or code in _HARNESS_CODES:
         return "harness"
     if process not in _OWNED_PROCESSES:
         return "agent"
     if code != "seed_failed":
         return "world"
-    if not detail.startswith(_CANONICAL_SEED):
-        return "agent"
-    diagnostics = set(detail.removeprefix(_CANONICAL_SEED).split(", "))
-    return "world" if diagnostics <= _OWNED_SEED_DIAGNOSTICS else "agent"
+    return "world" if codes and codes <= _OWNED_SEED_DIAGNOSTICS else "agent"
 
 
 def record(
@@ -93,7 +104,7 @@ def record(
         line = " ".join(redact_outbound_text(_own_text(exc)).split())
         body = {
             "schema_version": SCHEMA_VERSION,
-            "domain": _domain(phase, typed),
+            "domain": _domain(phase, typed, _diagnostic_codes(exc)),
             "phase": phase,
             "stage": typed[0] if typed else None,
             "code": typed[1] if typed else None,
