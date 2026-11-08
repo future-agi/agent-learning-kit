@@ -264,6 +264,19 @@ def record_tool_routing(authoring: Path, scenario_key: str, calls) -> None:
     )
 
 
+def _reported_calls(reply) -> set[str]:
+    """The tool names the agent's own reply says it called."""
+    names: set[str] = set()
+    for call in getattr(reply, "tool_calls", None) or []:
+        if not isinstance(call, dict):
+            continue
+        function = call.get("function") if isinstance(call.get("function"), dict) else {}
+        name = call.get("name") or function.get("name")
+        if name:
+            names.add(str(name))
+    return names
+
+
 def _tool_request(tool) -> str:
     """A non-destructive request for one tool, built from its contract."""
     values = {
@@ -332,7 +345,7 @@ async def request_uncovered_tools(
                 local_auth_values=local_auth_values,
             )
             key = f"tool-request-{uuid4().hex}"
-            await wrapper.call(
+            reply = await wrapper.call(
                 AgentInput(
                     thread_id=key,
                     execution_id=key,
@@ -364,6 +377,19 @@ async def request_uncovered_tools(
                     "calls": len(calls) - before,
                     "outcomes": outcomes,
                     "source": "tool_request",
+                }
+            )
+        elif tool.name in _reported_calls(reply):
+            # The agent says it called the tool, but the world never saw the call: it
+            # went somewhere else.
+            body["tools"].append(
+                {
+                    "tool": tool.name,
+                    "routed": False,
+                    "calls": 0,
+                    "outcomes": [],
+                    "source": "tool_request",
+                    "reason": "reported_not_seen",
                 }
             )
         else:

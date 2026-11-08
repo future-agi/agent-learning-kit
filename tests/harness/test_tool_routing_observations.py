@@ -69,7 +69,7 @@ def _contract():
     )
 
 
-def _requests(tmp_path, monkeypatch, *, answers, fails=()):
+def _requests(tmp_path, monkeypatch, *, answers, fails=(), elsewhere=()):
     trace: list = []
     sent: list = []
 
@@ -82,6 +82,12 @@ def _requests(tmp_path, monkeypatch, *, answers, fails=()):
                     trace.append(_call(tool))
             if any(f"your {tool} tool" in text for tool in fails):
                 raise RuntimeError("agent down")
+            said = [tool for tool in elsewhere if f"your {tool} tool" in text]
+            return SimpleNamespace(
+                tool_calls=[
+                    {"type": "function", "function": {"name": one}} for one in said
+                ]
+            )
 
     monkeypatch.setattr(
         chat_readiness, "create_chat_wrapper", lambda *a, **k: Wrapper()
@@ -131,3 +137,13 @@ def test_the_request_names_the_tool_and_an_example_from_its_contract():
     text = chat_readiness._tool_request(_contract().tools[0])
 
     assert "lookup_order" in text and "order_id='A-1'" in text and "read-only" in text
+
+
+def test_a_call_the_agent_reports_but_the_world_never_saw_went_elsewhere(
+    tmp_path, monkeypatch
+):
+    body, _ = _requests(tmp_path, monkeypatch, answers=(), elsewhere=("track_parcel",))
+
+    entry = next(one for one in body["tools"] if one["tool"] == "track_parcel")
+    assert (entry["routed"], entry["reason"]) == (False, "reported_not_seen")
+    assert {"tool": "get_hours", "reason": "not_called"} in body["unobserved"]
