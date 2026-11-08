@@ -167,7 +167,20 @@ def _application(definitions: dict[str, Any], database_url: str, trace_path: Pat
         if scope.get("type") == "http" and str(scope.get("path") or "").startswith(
             "/mcp/"
         ):
-            scope = {**scope, "path": "/mcp/", "raw_path": b"/mcp/"}
+            # Toolbox clients send ``Accept: */*``; the JSON-response server requires the
+            # JSON type to be named, so a bare wildcard would refuse every client.
+            headers = [
+                (name, value)
+                for name, value in scope.get("headers") or []
+                if name.lower() != b"accept"
+            ]
+            accept = b", ".join(
+                value for name, value in scope.get("headers") or [] if name.lower() == b"accept"
+            )
+            if b"application/json" not in accept:
+                accept = b", ".join(filter(None, (b"application/json", accept)))
+            headers.append((b"accept", accept))
+            scope = {**scope, "path": "/mcp/", "raw_path": b"/mcp/", "headers": headers}
         await application(scope, receive, send)
 
     return toolset_compatible
