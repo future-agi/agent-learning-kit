@@ -63,7 +63,16 @@ def _contract():
                     "args": ["order_id"],
                     "effects": "creates a refund row",
                 },
+                {"name": "send_sms", "args": ["to"]},
                 {"name": "get_hours"},
+            ],
+            "dependencies": [
+                {
+                    "kind": "service",
+                    "name": "sms-gateway",
+                    "what": "a hosted SMS API",
+                    "used_by": ["send_sms"],
+                }
             ],
         }
     )
@@ -112,16 +121,22 @@ def _requests(tmp_path, monkeypatch, *, answers, fails=(), elsewhere=()):
 def test_each_uncalled_read_only_tool_is_asked_once_and_counted_when_the_world_sees_it(
     tmp_path, monkeypatch
 ):
-    body, sent = _requests(tmp_path, monkeypatch, answers=("track_parcel",))
+    body, sent = _requests(
+        tmp_path, monkeypatch, answers=("track_parcel", "issue_refund")
+    )
 
-    assert [one["tool"] for one in body["tools"]] == ["lookup_order", "track_parcel"]
-    assert body["tools"][1]["source"] == "tool_request"
+    assert [one["tool"] for one in body["tools"]] == [
+        "issue_refund",
+        "lookup_order",
+        "track_parcel",
+    ]
+    assert body["tools"][2]["source"] == "tool_request"
     assert body["unobserved"] == [
         {"tool": "get_hours", "reason": "not_called"},
-        {"tool": "issue_refund", "reason": "changes_state"},
+        {"tool": "send_sms", "reason": "reaches_outside"},
     ]
-    assert len(sent) == 2
-    assert not any("issue_refund" in text for text in sent)
+    assert len(sent) == 3
+    assert not any("send_sms" in text for text in sent)
     assert not any("lookup_order" in text for text in sent)
 
 

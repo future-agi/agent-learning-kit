@@ -264,6 +264,26 @@ def record_tool_routing(authoring: Path, scenario_key: str, calls) -> None:
     )
 
 
+_REACH_FIELDS = ("dsn_env", "config_key", "host", "port", "database", "loader_module")
+
+
+def _outside_world(contract) -> set[str]:
+    """Tools the contract says cannot be routed to the test world: no reachable
+    implementation, or a dependency the environment cannot stand up a copy of."""
+    document = contract.model_dump(mode="json") if hasattr(contract, "model_dump") else {}
+    names = {
+        str(entry.get("tool") or "")
+        for entry in document.get("tool_entrypoints") or []
+        if entry.get("mode") == "unreachable"
+        or (entry.get("mode") == "service" and not entry.get("service"))
+    }
+    for dependency in document.get("dependencies") or []:
+        reached = dependency.get("reached") or {}
+        if not (dependency.get("engine") and any(reached.get(f) for f in _REACH_FIELDS)):
+            names.update(str(tool) for tool in dependency.get("used_by") or [])
+    return names
+
+
 def _reported_calls(reply) -> set[str]:
     """The tool names the agent's own reply says it called."""
     names: set[str] = set()
@@ -307,8 +327,10 @@ async def request_uncovered_tools(
 ) -> None:
     """Ask the agent once for each tool the qualification conversation did not call.
 
-    Only a tool whose contract names no effect is asked: a request for one that changes state
-    could change the world, so it stays unobserved with that reason. Each request is a fresh
+    The world is disposable and reset after qualification, so a tool is asked whatever it
+    changes there; only a tool the contract says leaves the world (no reachable implementation,
+    or a dependency the environment cannot copy) is not asked, since the request could reach a
+    real system. Each request is a fresh
     one-message conversation; the tool counts as routed only when the world's own trace shows
     the call. The results join the routing observations. Never raises.
     """
@@ -320,12 +342,14 @@ async def request_uncovered_tools(
     except (OSError, ValueError):
         return
     seen = {one["tool"] for one in body.get("tools") or []}
+    outside = _outside_world(contract)
     unasked: list[dict] = []
     for tool in getattr(contract, "tools", None) or []:
         if tool.name in seen:
             continue
-        if (tool.effects or "").strip():
-            unasked.append({"tool": tool.name, "reason": "changes_state"})
+        if tool.name in outside:
+            # Asking could reach a real system: the contract says the tool leaves the world.
+            unasked.append({"tool": tool.name, "reason": "reaches_outside"})
             continue
         try:
             before = sum(
