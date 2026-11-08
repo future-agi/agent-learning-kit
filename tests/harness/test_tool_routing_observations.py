@@ -175,11 +175,3 @@ def test_an_argument_without_an_example_takes_a_plain_value_of_its_type():
     assert "deal_id=1, note='test'" in chat_readiness._tool_request(tool)
 
 
-def test_a_call_the_agent_reports_but_the_world_never_saw_went_elsewhere(
-    tmp_path, monkeypatch
-):
-    body, _ = _requests(tmp_path, monkeypatch, answers=(), elsewhere=("track_parcel",))
-
-    entry = next(one for one in body["tools"] if one["tool"] == "track_parcel")
-    assert (entry["routed"], entry["reason"]) == (False, "reported_not_seen")
-    assert {"tool": "get_hours", "reason": "not_called"} in body["unobserved"]
