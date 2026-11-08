@@ -24,7 +24,7 @@ def handle(args, db):
             raise ToolError(f"Unsupported draft search operator {part!r}; drafts support to:, cc:, bcc: and subject:", category="invalid_input")
 
     drafts = []
-    for d in db.query("SELECT * FROM drafts ORDER BY updated_at DESC"):
+    for d in db.query("SELECT * FROM gmail_drafts ORDER BY updated_at DESC"):
         text = f"{d['subject']} {d['body']} {d['recipient']}".lower()
         if terms and not all(term in text for term in terms):
             continue

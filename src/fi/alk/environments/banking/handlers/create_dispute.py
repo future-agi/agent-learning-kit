@@ -39,6 +39,16 @@ def handle(args, db):
         if not allow_pending:
             raise ToolError(f"Transaction {transaction_id} is currently pending. Policy forbids disputing pending charges until posted.")
             
+    max_age_row = db.one("SELECT value FROM environment_policy WHERE name = 'max_dispute_age_days'")
+    max_age_days = int(json.loads(max_age_row["value"])) if max_age_row else 60
+    now_row = db.one("SELECT now FROM clock")
+    now_str = now_row["now"] if now_row else "2026-10-26T12:00:00Z"
+    from datetime import datetime
+    posted = datetime.fromisoformat(tx["transaction_time"].replace("Z", "+00:00"))
+    now_dt = datetime.fromisoformat(now_str.replace("Z", "+00:00"))
+    if (now_dt - posted).days > max_age_days:
+        raise ToolError(f"Transaction {transaction_id} posted on {tx['transaction_time'][:10]} is older than the {max_age_days}-day dispute window and cannot be disputed.")
+
     reasons_row = db.one("SELECT value FROM environment_policy WHERE name = 'allowed_reasons'")
     if reasons_row:
         raw = json.loads(reasons_row["value"])
@@ -83,14 +93,11 @@ def handle(args, db):
             "next_steps": f"A dispute ({existing_by_tx['dispute_id']}) is already open for this transaction."
         }
         
-    now_row = db.one("SELECT now FROM clock")
-    now_str = now_row["now"] if now_row else "2026-10-26T12:00:00Z"
-    
     count = len(db.query("SELECT dispute_id FROM disputes"))
     dispute_id = f"D{count + 1:02d}"
     
     db.execute(
-        "INSERT INTO disputes (dispute_id, transaction_id, customer_id, amount, currency, dispute_reason, status, created_at, updated_at, request_key, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO disputes (dispute_id, transaction_id, customer_id, amount, currency, dispute_reason, status, created_at, updated_at, request_key, notes, withdrawn_at, resolution) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)",
         [dispute_id, transaction_id, customer_id, tx["amount"], tx["currency"], dispute_reason, "open", now_str, now_str, request_key, customer_notes or ""]
     )
     

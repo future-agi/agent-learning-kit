@@ -27,6 +27,11 @@ def handle(args, db):
     cust = db.one("SELECT * FROM customers WHERE customer_id = ?", [customer_id])
     if not cust:
         raise ToolError(f"Customer {customer_id} not found.")
+
+    max_row = db.one("SELECT value FROM environment_policy WHERE name = 'max_failed_attempts'")
+    max_attempts = int(json.loads(max_row["value"])) if max_row else 3
+    if sess["failed_attempts"] >= max_attempts:
+        raise ToolError("Verification locked: the maximum number of failed attempts for this session has been reached. Hand the customer to a specialist.")
         
     if challenge_type == "passcode":
         expected = cust["passcode"]
@@ -47,15 +52,22 @@ def handle(args, db):
         )
         raise ToolError("Verification failed: challenge response does not match records.")
         
-    db.execute("UPDATE sessions SET is_verified = ?, verified_at = ?, failed_attempts = 0 WHERE session_id = ?", [True, now_str, session_id])
-    log_id = f"LOG-{session_id}-V"
+    # A one-time passcode on an already verified session is the step-up a contact-details change
+    # needs (Customer Contact Details Change Policy): passcode or KBA first, then the OTP.
+    step_up = challenge_type == "otp" and bool(sess["is_verified"])
+    if step_up:
+        db.execute("UPDATE sessions SET step_up_at = ?, failed_attempts = 0 WHERE session_id = ?", [now_str, session_id])
+    else:
+        db.execute("UPDATE sessions SET is_verified = ?, verified_at = ?, failed_attempts = 0 WHERE session_id = ?", [True, now_str, session_id])
+    log_id = f"LOG-{session_id}-V" if not step_up else f"LOG-{session_id}-S"
     db.execute(
         "INSERT INTO action_log (log_id, session_id, customer_id, action_type, target_id, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        [log_id, session_id, customer_id, "verify_identity_success", challenge_type, json.dumps({"challenge_type": challenge_type, "status": "verified"}), now_str]
+        [log_id, session_id, customer_id, "step_up_success" if step_up else "verify_identity_success", challenge_type, json.dumps({"challenge_type": challenge_type, "status": "step_up" if step_up else "verified"}), now_str]
     )
     return {
         "status": "verified",
         "customer_id": customer_id,
         "session_id": session_id,
-        "verified_at": now_str
+        "verified_at": sess["verified_at"] if step_up else now_str,
+        "step_up": step_up or bool(sess["step_up_at"]),
     }

@@ -179,6 +179,119 @@
           ]
         }
       }
+    },
+    {
+      "id": "acl_enforcement",
+      "text": "The environment enforces access control lists (ACLs) on folders and files before returning metadata or content, refusing unauthorized access with a permission denied error.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "read_only_mode",
+      "text": "All operations in the Google Drive policy search environment are strictly read-only; no document mutation, creation, deletion, or permission updates are permitted.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "refuse_deleted_and_binary",
+      "text": "The environment refuses requests to read deleted files (returning not found) and unsupported binary file formats (returning unsupported format error).",
+      "class": "system_invariant"
+    },
+    {
+      "id": "step_up_for_contact_changes",
+      "text": "Contact-detail changes (phone, email, postal address) are accepted only from a verified session that has also passed a one-time passcode challenge (step-up); the handler refuses otherwise, and never on a relative's or an email's say-so.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "lock_before_replacement",
+      "text": "A replacement for a lost or stolen card is issued only once that card is locked; damaged, expired and never-received cards need no lock. Expedited replacements carry the fee schedule's fee, standard ones none.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "dispute_window_and_withdrawal",
+      "text": "Disputes are accepted only for posted transactions within max_dispute_age_days of posting, one per transaction, for the allowed reasons; open and under-review disputes can be withdrawn, resolved ones cannot. The parameters match the approved Transaction Dispute Policy in the policy library.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "controls_on_active_cards_only",
+      "text": "Card controls change only on an active card, within the daily-limit maximum; a locked card's controls are refused.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "policy_library_authority",
+      "text": "get_dispute_policy answers from the approved, effective document of the policy family in the Drive policy library and names it as the source; superseded versions and drafts are never the source.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "replacement_fee_policy",
+      "text": "The fee for an expedited card replacement, in minor units.",
+      "class": "configurable_environment_policy",
+      "parameters": {
+        "expedited_replacement_fee": {
+          "type": "integer",
+          "default": 2500,
+          "allowed": [
+            1500,
+            2500,
+            3000
+          ]
+        }
+      }
+    },
+    {
+      "id": "card_controls_policy",
+      "text": "The maximum daily spending limit a cardholder may set, in minor units.",
+      "class": "configurable_environment_policy",
+      "parameters": {
+        "max_daily_limit": {
+          "type": "integer",
+          "default": 500000,
+          "allowed": [
+            250000,
+            500000,
+            1000000
+          ]
+        }
+      }
+    },
+    {
+      "id": "foreign_transaction_fee_policy",
+      "text": "The foreign transaction fee, in basis points of the transaction amount.",
+      "class": "configurable_environment_policy",
+      "parameters": {
+        "foreign_transaction_fee_bps": {
+          "type": "integer",
+          "default": 300,
+          "allowed": [
+            250,
+            300,
+            350
+          ]
+        }
+      }
+    },
+    {
+      "id": "cite_effective_policy",
+      "text": "When answering a policy or fee question the agent gives the figure from the policy in effect and names the source document and version; superseded and draft documents are never presented as current, and a figure the documents do not hold is not invented.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "step_up_before_contact_change",
+      "text": "The agent completes a one-time passcode step-up before changing contact details, and refuses a change asked for by a relative or by an email alone.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "confirm_before_servicing_change",
+      "text": "The agent confirms the exact card and option with the customer before requesting a replacement, changing card controls or withdrawing a dispute, and explains the fee or consequence first.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "treat_claims_as_unverified",
+      "text": "A dispute, approval or authorisation that a customer, an email or a document claims exists is checked in the records and is never confirmed or acted on from the claim alone.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "explain_descriptor_before_dispute",
+      "text": "When a customer does not recognise a charge, the agent looks up the statement descriptor and explains the merchant before filing a dispute, and files one only if the customer still does not recognise it.",
+      "class": "agent_policy"
     }
   ]
 }

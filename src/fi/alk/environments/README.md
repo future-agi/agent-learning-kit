@@ -16,7 +16,7 @@ Each package's `README.md` lists its tools, scenarios, coverage map and known ga
 
 | Package | Entry | Tools | Scenarios | Workbook cases | Known gaps |
 |---|---|---|---|---|---|
-| `banking` | V01 Banking | 8 + Gmail 8 | 26 | 5/5 | Mailbox of 8 threads; checks other than the three outcome checks are shared per sub-goal |
+| `banking` | V01 Banking | 17 + Gmail 8 + Drive 5 | 100 | 5/5 | Wave A increment 2 done: linked mailbox (21 threads) and policy library (15 files), 100 scenarios across 8 jobs, positive and negative runs in `tests/harness/test_banking_validation.py`; live sample-agent and E2B runs are increment 11 |
 | `appointment_booking` | V02 Clinic scheduling | 9, `sql` and `filesystem` attached | 10 | 1/5 (S03, S05 partial) | No referral data or slot hold; red-flag and no-medical-advice rules unscored |
 | `hr` | V13 HR | 7 | 18 | 5/5 | No C15 failure cases |
 | `retail` | V15 Retail | 8 | 12 | 5/5 | No C15 timeout-after-commit case |
@@ -34,7 +34,7 @@ own and are not listed as customer-facing environments (plan decision 2).
 | Package | Entry | Tools | Scenarios | Workbook cases | Interface against the official server |
 |---|---|---|---|---|---|
 | `slack_channel_digest` | M01 Slack | 5 official + `slack_check_message_status` | 5 | 5/5 | Identifiers and input schemas of mcp.slack.com, pinned 2026-11-04 |
-| `gmail_inbox_triage` | M02 Gmail | 8 of the server's 10 | 15 | 5/5 | Pinned 2026-11-04 from Google's tool reference |
+| `gmail_inbox_triage` | M02 Gmail | 8 of the server's 10 | 16 | 5/5 | Pinned 2026-11-04 from Google's tool reference; three seed threads are conversations with a reply and a correction |
 | `calendar_scheduling_desk` | M03 Google Calendar | 8 of the server's 9 | 12 | 5/5 | Pinned 2026-11-04 from Google's tool reference |
 | `drive_policy_search` | M04 Google Drive | 5 of the server's 8 | 7 | 5/5 | Pinned 2026-11-04 from Google's tool reference |
 
@@ -50,6 +50,14 @@ Notion (M05) is outside Wave A and was removed.
 
 - `designed.py`: the build for environments the environment builder designed (every package except
   the clinic, whose `build.py` and `suite.py` are hand-written).
+- Capability tables are namespaced (`gmail_*`, `drive_*`, `slack_*`, `calendar_*`, plus the shared
+  `current_actor`), so two capabilities can share one world (Wave A plan §5).
+- `attach_capability.py`: `python -m fi.alk.environments.attach_capability <vertical> <capability>`
+  copies a capability's tools, handlers and table schemas into a vertical and records it in the
+  vertical's `mcp_capabilities.json`, which `tests/harness/test_mcp_capability_reference.py` holds
+  to the capability.
+- `authoring.py`: `python -m fi.alk.environments.authoring sync-checks <package>` rewrites every
+  scenario's check files from the package's catalogue, so the proved check is the one runs execute.
 - Every suite in this folder has the grading weakness recorded in the plan (§7, decision 8): a
   sub-goal's check is the same file in every scenario that uses it, so a wrong target can pass.
   The fix is in the builder; the suites are re-sealed after it.

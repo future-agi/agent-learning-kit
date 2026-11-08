@@ -1,0 +1,95 @@
+{
+  "name": "unfamiliar_descriptor_recognised_after_lookup_no_dispute",
+  "scenario_key": "unfamiliar-descriptor-recognised-after-lookup-no-dispute",
+  "scenario_id": "",
+  "use_case": "Evaluate dispute eligibility and file or track transaction dispute",
+  "branch": "The customer reads 'BOSE STR 2214 FRAMINGHAM MA $178.00' and does not recognise it. The lookup shows the Bose Store in Framingham; the customer then remembers the headphones. No dispute is filed.",
+  "tests": "passes when the agent verifies, looks up TX325's descriptor, and files no dispute once the customer recognises the merchant.",
+  "instruction": "There is a charge on your credit card ending 5591 that reads 'BOSE STR 2214 FRAMINGHAM MA' for $178.00 on October 4 and you do not recognise it. Ask the assistant what it is. If it explains it is the Bose Store in Framingham, remember that you bought headphones there that day and say you no longer want to dispute it. Provide passcode 6617 when asked.\n\nYour details:\n- Name: Leo Marchetti\n- Customer ID: C325\n- Session ID: SESS325\n- Card: CARD325 (ending 5591)\n- Transaction: TX325\n- Statement line: BOSE STR 2214 FRAMINGHAM MA $178.00\n- Passcode: 6617",
+  "keywords": [
+    "descriptor",
+    "no_dispute"
+  ],
+  "persona": {
+    "name": "Leo Marchetti",
+    "gender": "male",
+    "age_group": "50-60",
+    "occupation": "Teacher",
+    "location": "United States",
+    "personality": "Cautious and skeptical",
+    "communication_style": "Questioning",
+    "initial_message": "What is 'BOSE STR 2214 FRAMINGHAM MA' for $178 on my card ending 5591? I don't recognise it.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "generated",
+    "customer_id": "C325",
+    "session_id": "SESS325",
+    "transaction_id": "TX325",
+    "descriptor": "BOSE STR 2214 FRAMINGHAM MA",
+    "passcode": "6617"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C325",
+        "session_id": "SESS325",
+        "challenge_type": "passcode",
+        "challenge_response": "6617"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C325",
+        "session_id": "record: SESS325",
+        "challenge_response": "caller: 6617",
+        "challenge_type": "rule: the verification method the desk uses"
+      }
+    },
+    {
+      "tool": "lookup_merchant_descriptor",
+      "arguments": {
+        "transaction_id": "TX325",
+        "customer_id": "C325",
+        "session_id": "SESS325"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "transaction_id": "record: TX325",
+        "customer_id": "record: C325",
+        "session_id": "record: SESS325"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "file_or_track_dispute",
+    "disposition": "descriptor_recognised",
+    "interaction": "multi_turn",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "merchant_descriptor_looked_up",
+    "merchant_explained_before_dispute"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,108 @@
+{
+  "name": "email_pickup_repeat_dispute_request_returns_existing",
+  "scenario_key": "email-pickup-repeat-dispute-request-returns-existing",
+  "scenario_id": "",
+  "use_case": "Pick up a case that started by email and continue it with the banking tools",
+  "branch": "Hannah emailed again asking to dispute the Nordstrom TX15 charge, which already carries dispute D01. The thread is read, the existing dispute is returned, no duplicate is created.",
+  "tests": "passes when the agent reads th_c08_second_request, verifies Hannah, and the create_dispute call returns the existing D01 with exactly one dispute for TX15 in the records.",
+  "instruction": "You emailed support again yesterday because the $92.00 Nordstrom charge (TX15) is still on your card ending 4345, and you want it disputed. You do not remember that a dispute was already opened last week. In this chat ask the assistant to file the dispute from your email; if it tells you one already exists, ask for its reference and status and accept that. Provide passcode 9482 when asked.\n\nYour details:\n- Name: Hannah Wilson\n- Customer ID: C08\n- Session ID: SESS208\n- Email: hannah.w@example.com\n- Card: CARD15 (ending 4345)\n- Transaction: TX15\n- Passcode: 9482",
+  "keywords": [
+    "email_pickup",
+    "idempotency"
+  ],
+  "persona": {
+    "name": "Hannah Wilson",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Accountant",
+    "location": "United States",
+    "personality": "Detail-oriented",
+    "communication_style": "Technical",
+    "initial_message": "I emailed yesterday about the Nordstrom charge on my card ending 4345. Please file the dispute.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "mixed",
+    "customer_id": "C08",
+    "session_id": "SESS208",
+    "thread_id": "th_c08_second_request",
+    "transaction_id": "TX15",
+    "existing_dispute": "D01"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C08",
+        "session_id": "SESS208",
+        "challenge_type": "passcode",
+        "challenge_response": "9482"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C08",
+        "session_id": "record: SESS208",
+        "challenge_response": "caller: 9482",
+        "challenge_type": "rule: the verification method the desk uses"
+      }
+    },
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_c08_second_request"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: th_c08_second_request, Hannah's repeated request"
+      }
+    },
+    {
+      "tool": "create_dispute",
+      "arguments": {
+        "customer_id": "C08",
+        "session_id": "SESS208",
+        "transaction_id": "TX15",
+        "dispute_reason": "unrecognized_charge",
+        "request_key": "REQ-C08-TX15",
+        "customer_notes": "Repeated request; existing dispute D01"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C08",
+        "session_id": "record: SESS208",
+        "transaction_id": "record: TX15",
+        "dispute_reason": "rule: one of the allowed dispute reasons in the Transaction Dispute Policy"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "pickup_email_case",
+    "disposition": "existing_dispute",
+    "interaction": "multi_turn",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "idempotent_dispute_reused"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

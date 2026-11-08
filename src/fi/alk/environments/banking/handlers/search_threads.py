@@ -52,15 +52,15 @@ def handle(args, db):
         else:
             terms.append(lower)
 
-    threads = db.query("SELECT * FROM threads WHERE is_restricted = FALSE ORDER BY updated_at DESC")
+    threads = db.query("SELECT * FROM gmail_threads WHERE is_restricted = FALSE ORDER BY updated_at DESC")
     matched = []
     for t in threads:
-        t_labels = [row["label_id"] for row in db.query("SELECT label_id FROM thread_labels WHERE thread_id = ?", (t["id"],))]
+        t_labels = [row["label_id"] for row in db.query("SELECT label_id FROM gmail_thread_labels WHERE thread_id = ?", (t["id"],))]
         if "SPAM" in t_labels or ("TRASH" in t_labels and not include_trash):
             continue
         if any(lid not in t_labels for lid in label_ids):
             continue
-        msgs = db.query("SELECT * FROM messages WHERE thread_id = ? ORDER BY date ASC", (t["id"],))
+        msgs = db.query("SELECT * FROM gmail_messages WHERE thread_id = ? ORDER BY date ASC", (t["id"],))
         if sender and not any(sender in m["sender"].lower() for m in msgs):
             continue
         if recipient and not any(recipient in m["recipient"].lower() for m in msgs):

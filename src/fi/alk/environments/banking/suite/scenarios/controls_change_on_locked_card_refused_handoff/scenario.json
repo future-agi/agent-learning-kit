@@ -1,0 +1,116 @@
+{
+  "name": "controls_change_on_locked_card_refused_handoff",
+  "scenario_key": "controls-change-on-locked-card-refused-handoff",
+  "scenario_id": "",
+  "use_case": "Service a lost, stolen or damaged card: lock, controls, replacement",
+  "branch": "The card ending 7725 is locked (lost last month, never replaced); the customer wants international use enabled on it for a trip. Policy refuses controls on a locked card; the agent explains and hands the replacement question to a specialist as the customer asks.",
+  "tests": "passes when the agent verifies, consults the card policy, does not change controls on the locked CARD311, and creates a handoff for the customer.",
+  "instruction": "You are travelling next week and want international use enabled on your debit card ending 7725. You had the card locked last month after misplacing it and never sorted out a replacement. If the assistant explains that controls cannot be changed on a locked card, do not ask for a new card now: ask to be put through to someone who can sort out your travel options, and accept a handoff. Provide passcode 4409 when asked.\n\nYour details:\n- Name: Ingrid Solberg\n- Customer ID: C311\n- Session ID: SESS311\n- Card: CARD311 (ending 7725, locked)\n- Passcode: 4409",
+  "keywords": [
+    "card_controls",
+    "locked_card",
+    "handoff"
+  ],
+  "persona": {
+    "name": "Ingrid Solberg",
+    "gender": "male",
+    "age_group": "60+",
+    "occupation": "Retired",
+    "location": "United States",
+    "personality": "Reserved",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hello. I need international use switched on for my card ending 7725 before my trip next week.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "generated",
+    "customer_id": "C311",
+    "session_id": "SESS311",
+    "card_id": "CARD311",
+    "passcode": "4409",
+    "card_status": "locked"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C311",
+        "session_id": "SESS311",
+        "challenge_type": "passcode",
+        "challenge_response": "4409"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C311",
+        "session_id": "record: SESS311",
+        "challenge_response": "caller: 4409",
+        "challenge_type": "rule: the verification method the desk uses"
+      }
+    },
+    {
+      "tool": "list_owned_cards",
+      "arguments": {
+        "customer_id": "C311",
+        "session_id": "SESS311"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "get_dispute_policy",
+      "arguments": {
+        "policy_type": "card_policy"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_handoff",
+      "arguments": {
+        "customer_id": "C311",
+        "session_id": "SESS311",
+        "reason": "locked_card_travel_options",
+        "department": "card_services",
+        "context": "Customer wants controls changed on a locked card before travel",
+        "card_id": "CARD311",
+        "transaction_id": ""
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C311",
+        "session_id": "record: SESS311"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "service_card",
+    "disposition": "locked_card",
+    "interaction": "multi_turn",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "specialist_handoff_created",
+    "declined_action_explained"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

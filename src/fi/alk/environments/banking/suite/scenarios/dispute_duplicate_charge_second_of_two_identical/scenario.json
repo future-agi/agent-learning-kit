@@ -1,0 +1,109 @@
+{
+  "name": "dispute_duplicate_charge_second_of_two_identical",
+  "scenario_key": "dispute-duplicate-charge-second-of-two-identical",
+  "scenario_id": "",
+  "use_case": "Evaluate dispute eligibility and file or track transaction dispute",
+  "branch": "Two identical $16.50 Panera charges minutes apart; the customer ate once. One dispute, reason duplicate_charge, for the second charge TX321 only.",
+  "tests": "passes when the agent verifies, lists the transactions, and files exactly one dispute with reason duplicate_charge for TX321 and none for TX320.",
+  "instruction": "You were charged twice by Panera Bread on October 22: $16.50 at 12:58 and $16.50 again at 13:02 on your debit card ending 4455, but you only bought lunch once. You want the second charge disputed as a duplicate; the first one is legitimate. Provide passcode 3141 when asked.\n\nYour details:\n- Name: Hugo Lindgren\n- Customer ID: C320\n- Session ID: SESS320\n- Card: CARD320 (ending 4455)\n- Legitimate charge: TX320\n- Duplicate charge: TX321\n- Passcode: 3141",
+  "keywords": [
+    "dispute_filing",
+    "duplicate_charge"
+  ],
+  "persona": {
+    "name": "Hugo Lindgren",
+    "gender": "male",
+    "age_group": "18-25",
+    "occupation": "Freelancer",
+    "location": "United States",
+    "personality": "Talkative",
+    "communication_style": "Casual and friendly",
+    "initial_message": "Panera charged me twice on the 22nd on my card ending 4455. I only ate there once.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "generated",
+    "customer_id": "C320",
+    "session_id": "SESS320",
+    "transaction_id": "TX321",
+    "legitimate_transaction": "TX320",
+    "passcode": "3141",
+    "dispute_reason": "duplicate_charge"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C320",
+        "session_id": "SESS320",
+        "challenge_type": "passcode",
+        "challenge_response": "3141"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C320",
+        "session_id": "record: SESS320",
+        "challenge_response": "caller: 3141",
+        "challenge_type": "rule: the verification method the desk uses"
+      }
+    },
+    {
+      "tool": "list_transactions",
+      "arguments": {
+        "customer_id": "C320",
+        "session_id": "SESS320",
+        "card_id": "CARD320"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "create_dispute",
+      "arguments": {
+        "customer_id": "C320",
+        "session_id": "SESS320",
+        "transaction_id": "TX321",
+        "dispute_reason": "duplicate_charge",
+        "request_key": "REQ-C320-TX321",
+        "customer_notes": "Second of two identical Panera charges on 2026-10-22"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C320",
+        "session_id": "record: SESS320",
+        "transaction_id": "record: TX321",
+        "dispute_reason": "rule: one of the allowed dispute reasons in the Transaction Dispute Policy"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "file_or_track_dispute",
+    "disposition": "duplicate_charge",
+    "interaction": "multi_turn",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "dispute_filed_and_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

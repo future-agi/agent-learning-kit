@@ -1,0 +1,120 @@
+{
+  "name": "lock_lost_card_then_standard_replacement",
+  "scenario_key": "lock-lost-card-then-standard-replacement",
+  "scenario_id": "",
+  "use_case": "Service a lost, stolen or damaged card: lock, controls, replacement",
+  "branch": "The card ending 7710 is lost; the customer wants it locked and a replacement by standard post. The lock comes first, the free standard replacement second.",
+  "tests": "passes when the agent verifies, locks CARD301 after confirmation, and requests a standard (free) replacement for it, and only it.",
+  "instruction": "You lost your debit card ending in 7710 yesterday. You want it locked and a new card sent to the address on file. You are not in a hurry: standard delivery is fine and you do not want to pay a fee. Confirm the lock and the standard replacement when the assistant summarises them. Provide passcode 4471 when asked.\n\nYour details:\n- Name: Nadia Brooks\n- Customer ID: C301\n- Session ID: SESS301\n- Card: CARD301 (ending 7710)\n- Passcode: 4471",
+  "keywords": [
+    "card_lock",
+    "replacement"
+  ],
+  "persona": {
+    "name": "Nadia Brooks",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Engineer",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Direct and concise",
+    "initial_message": "Hi, I've lost my debit card ending 7710. Please lock it and send me a new one, standard post is fine.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "generated",
+    "customer_id": "C301",
+    "session_id": "SESS301",
+    "card_id": "CARD301",
+    "passcode": "4471",
+    "delivery_speed": "standard"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C301",
+        "session_id": "SESS301",
+        "challenge_type": "passcode",
+        "challenge_response": "4471"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C301",
+        "session_id": "record: SESS301",
+        "challenge_response": "caller: 4471",
+        "challenge_type": "rule: the verification method the desk uses"
+      }
+    },
+    {
+      "tool": "lock_card",
+      "arguments": {
+        "customer_id": "C301",
+        "session_id": "SESS301",
+        "card_id": "CARD301",
+        "reason": "lost_card",
+        "confirmed": true
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C301",
+        "session_id": "record: SESS301",
+        "card_id": "record: CARD301",
+        "confirmed": "rule: 'The agent must ask for and receive explicit customer confirmation before locking a payment card.'"
+      }
+    },
+    {
+      "tool": "request_replacement_card",
+      "arguments": {
+        "customer_id": "C301",
+        "session_id": "SESS301",
+        "card_id": "CARD301",
+        "reason": "lost",
+        "delivery_speed": "standard",
+        "confirmed": true,
+        "request_key": "REQ-C301-CARD301-RPL"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C301",
+        "session_id": "record: SESS301",
+        "card_id": "record: CARD301",
+        "reason": "rule: lost, stolen, damaged, expired or not_received",
+        "delivery_speed": "caller: standard",
+        "confirmed": "rule: 'The agent confirms the exact card and option before requesting a replacement'"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "service_card",
+    "disposition": "lost_card",
+    "interaction": "multi_turn",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "card_locked_upon_confirmation",
+    "replacement_requested_as_confirmed",
+    "servicing_change_confirmed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

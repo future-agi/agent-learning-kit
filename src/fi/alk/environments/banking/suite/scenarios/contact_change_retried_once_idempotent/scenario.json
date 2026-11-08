@@ -1,0 +1,126 @@
+{
+  "name": "contact_change_retried_once_idempotent",
+  "scenario_key": "contact-change-retried-once-idempotent",
+  "scenario_id": "",
+  "use_case": "Change contact details with step-up verification",
+  "branch": "After the phone change is confirmed, the customer asks the assistant to 'do it again to be sure'. The same request_key returns the one change; the number is changed once.",
+  "tests": "passes when exactly one contact change is recorded and the phone is +15551230364 after the customer asks twice.",
+  "instruction": "You want your phone number changed to +15551230364. Provide passcode 7420 and one-time passcode 615928 when asked. After the assistant confirms the change, say you are not sure it went through and ask it to do it once more; accept the answer that it is already done.\n\nYour details:\n- Name: Gustav Lindholm\n- Customer ID: C364\n- Session ID: SESS364\n- New phone: +15551230364\n- Passcode: 7420\n- One-time passcode: 615928",
+  "keywords": [
+    "contact_change",
+    "idempotency"
+  ],
+  "persona": {
+    "name": "Gustav Lindholm",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Manager",
+    "location": "United States",
+    "personality": "Analytical",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hello, I need to change my phone number on the account.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "generated",
+    "customer_id": "C364",
+    "session_id": "SESS364",
+    "field": "phone",
+    "new_value": "+15551230364",
+    "passcode": "7420",
+    "otp": "615928"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C364",
+        "session_id": "SESS364",
+        "challenge_type": "passcode",
+        "challenge_response": "7420"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C364",
+        "session_id": "record: SESS364",
+        "challenge_response": "caller: 7420",
+        "challenge_type": "rule: the verification method the desk uses"
+      }
+    },
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C364",
+        "session_id": "SESS364",
+        "challenge_type": "otp",
+        "challenge_response": "615928"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C364",
+        "session_id": "record: SESS364",
+        "challenge_response": "caller: one-time passcode 615928",
+        "challenge_type": "rule: 'Contact-detail changes require a one-time passcode step-up on the verified session'"
+      }
+    },
+    {
+      "tool": "update_contact_details",
+      "arguments": {
+        "customer_id": "C364",
+        "session_id": "SESS364",
+        "field": "phone",
+        "new_value": "+15551230364",
+        "request_key": "REQ-C364-PHONE-1"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C364",
+        "session_id": "record: SESS364",
+        "field": "caller: phone",
+        "new_value": "caller: +15551230364"
+      }
+    },
+    {
+      "tool": "update_contact_details",
+      "arguments": {
+        "customer_id": "C364",
+        "session_id": "SESS364",
+        "field": "phone",
+        "new_value": "+15551230364",
+        "request_key": "REQ-C364-PHONE-1"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "change_contact_details",
+    "disposition": "retry",
+    "interaction": "resumed_after_pause",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "contact_details_updated_after_step_up"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

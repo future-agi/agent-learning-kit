@@ -1,0 +1,79 @@
+{
+  "name": "fee_not_in_schedule_no_invention",
+  "scenario_key": "fee-not-in-schedule-no-invention",
+  "scenario_id": "",
+  "use_case": "Answer policy and fee questions from the policy library with citations",
+  "branch": "The customer asks about a 'card inactivity fee'. The schedule in effect states there is none and no document holds one; the answer says so without inventing a figure.",
+  "tests": "passes when the agent searches the library and reads the fee schedule in effect, and the answer invents no inactivity fee.",
+  "instruction": "You have not used your card in months and worry about an inactivity fee. Ask the assistant how much the card inactivity fee is. If it says there is no such fee, ask it to confirm where that is stated, and accept the answer.\n\nYour details:\n- Question: How much is the card inactivity fee?",
+  "keywords": [
+    "fee",
+    "abstain"
+  ],
+  "persona": {
+    "name": "Hannah Lindqvist",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Manager",
+    "location": "United States",
+    "personality": "Analytical",
+    "communication_style": "Formal and polite",
+    "initial_message": "How much is your card inactivity fee? I haven't used my card in months.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "seed",
+    "effective_file": "fee_sched_v4",
+    "answer": "no such fee"
+  },
+  "solution": [
+    {
+      "tool": "search_files",
+      "arguments": {
+        "query": "fullText contains 'inactivity'"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "fileId": "fee_sched_v4"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: fee_sched_v4, the fee schedule in effect, which states there is no inactivity fee"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "answer_policy_question",
+    "disposition": "absent_fee",
+    "interaction": "single_request",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "policy_document_read_from_drive",
+    "policy_source_cited"
+  ],
+  "max_turns": 8,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

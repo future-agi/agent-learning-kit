@@ -1,0 +1,112 @@
+{
+  "name": "email_pickup_double_correction_latest_message_governs",
+  "scenario_key": "email-pickup-double-correction-latest-message-governs",
+  "scenario_id": "",
+  "use_case": "Pick up a case that started by email and continue it with the banking tools",
+  "branch": "George's thread names Adobe TX13, then Petco TX14, then Walgreens TX97 as the charge he does not recognise. The latest message governs: one dispute for TX97 only.",
+  "tests": "passes when the agent reads th_c07_double_correction, verifies George and files exactly one dispute for TX97, none for TX13 or TX14.",
+  "instruction": "You emailed support several times about a charge on your debit card ending 2123 and changed which one it was twice; your last email has the right one. In this chat ask the assistant to go by your last email and file the dispute. If asked which charge, say you do not have the emails in front of you and the assistant should check the thread. Provide passcode 3917 when asked.\n\nYour details:\n- Name: George Miller\n- Customer ID: C07\n- Session ID: SESS207\n- Email: george.m@example.com\n- Card: CARD13 (ending 2123)\n- Passcode: 3917",
+  "keywords": [
+    "email_pickup",
+    "correction",
+    "dispute_filing"
+  ],
+  "persona": {
+    "name": "George Miller",
+    "gender": "male",
+    "age_group": "60+",
+    "occupation": "Retired",
+    "location": "United States",
+    "personality": "Friendly and cooperative",
+    "communication_style": "Detailed and elaborate",
+    "initial_message": "Hello, I emailed a few times about a charge on my card ending 2123. Please go by my last email and dispute that one.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "mixed",
+    "customer_id": "C07",
+    "session_id": "SESS207",
+    "thread_id": "th_c07_double_correction",
+    "transaction_id": "TX97",
+    "superseded": [
+      "TX13",
+      "TX14"
+    ]
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C07",
+        "session_id": "SESS207",
+        "challenge_type": "passcode",
+        "challenge_response": "3917"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C07",
+        "session_id": "record: SESS207",
+        "challenge_response": "caller: 3917",
+        "challenge_type": "rule: the verification method the desk uses"
+      }
+    },
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_c07_double_correction"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: th_c07_double_correction, George's three messages, the last naming TX97"
+      }
+    },
+    {
+      "tool": "create_dispute",
+      "arguments": {
+        "customer_id": "C07",
+        "session_id": "SESS207",
+        "transaction_id": "TX97",
+        "dispute_reason": "unrecognized_charge",
+        "request_key": "REQ-C07-TX97",
+        "customer_notes": "Walgreens charge per customer's latest email"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C07",
+        "session_id": "record: SESS207",
+        "transaction_id": "record: TX97",
+        "dispute_reason": "rule: one of the allowed dispute reasons in the Transaction Dispute Policy"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "pickup_email_case",
+    "disposition": "double_correction",
+    "interaction": "correction",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "dispute_filed_and_reported"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

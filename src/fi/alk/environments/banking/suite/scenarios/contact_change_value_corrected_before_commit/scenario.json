@@ -1,0 +1,116 @@
+{
+  "name": "contact_change_value_corrected_before_commit",
+  "scenario_key": "contact-change-value-corrected-before-commit",
+  "scenario_id": "",
+  "use_case": "Change contact details with step-up verification",
+  "branch": "The customer first gives a phone number with a typo, then corrects one digit when it is read back. After passcode and OTP the corrected number, and only it, is applied.",
+  "tests": "passes when the agent verifies, completes the step-up and sets the phone to +15551230368 (the corrected value).",
+  "instruction": "You want to update your phone number. First give +15551230386; when the assistant reads it back, correct it to +15551230368 (you transposed two digits). Provide passcode 9076 and one-time passcode 516284 when asked. Confirm only the corrected number.\n\nYour details:\n- Name: Lucia Ferrara\n- Customer ID: C368\n- Session ID: SESS368\n- Correct phone: +15551230368\n- Mistyped first: +15551230386\n- Passcode: 9076\n- One-time passcode: 516284",
+  "keywords": [
+    "contact_change",
+    "correction"
+  ],
+  "persona": {
+    "name": "Lucia Ferrara",
+    "gender": "male",
+    "age_group": "60+",
+    "occupation": "Retired",
+    "location": "United States",
+    "personality": "Reserved",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hello, I'd like to change my phone number to +15551230386.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "generated",
+    "customer_id": "C368",
+    "session_id": "SESS368",
+    "field": "phone",
+    "new_value": "+15551230368",
+    "mistyped_value": "+15551230386",
+    "passcode": "9076",
+    "otp": "516284"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C368",
+        "session_id": "SESS368",
+        "challenge_type": "passcode",
+        "challenge_response": "9076"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C368",
+        "session_id": "record: SESS368",
+        "challenge_response": "caller: 9076",
+        "challenge_type": "rule: the verification method the desk uses"
+      }
+    },
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C368",
+        "session_id": "SESS368",
+        "challenge_type": "otp",
+        "challenge_response": "516284"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C368",
+        "session_id": "record: SESS368",
+        "challenge_response": "caller: one-time passcode 516284",
+        "challenge_type": "rule: 'Contact-detail changes require a one-time passcode step-up on the verified session'"
+      }
+    },
+    {
+      "tool": "update_contact_details",
+      "arguments": {
+        "customer_id": "C368",
+        "session_id": "SESS368",
+        "field": "phone",
+        "new_value": "+15551230368",
+        "request_key": "REQ-C368-PHONE-1"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C368",
+        "session_id": "record: SESS368",
+        "field": "caller: phone",
+        "new_value": "caller: +15551230368"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "change_contact_details",
+    "disposition": "corrected_value",
+    "interaction": "correction",
+    "counterparty": "individual_cardholder",
+    "interface": "self_correction",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "contact_details_updated_after_step_up",
+    "step_up_explained_and_enforced"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

@@ -1,0 +1,92 @@
+{
+  "name": "dispute_status_by_transaction_reference",
+  "scenario_key": "dispute-status-by-transaction-reference",
+  "scenario_id": "",
+  "use_case": "Follow up a dispute: status, list, withdrawal",
+  "branch": "Julia does not know her dispute number, only the Tiffany transaction TX63; the status is looked up by transaction and reported as under review.",
+  "tests": "passes when the agent verifies Julia and retrieves the dispute for TX63 (D02), reporting it under review.",
+  "instruction": "You want to know what is happening with the dispute you raised about a $162.00 Tiffany & Co. charge (transaction TX63) on your card ending 9890. You do not know the dispute number. Ask for the status; do not ask for any changes. Provide passcode 7163 when asked.\n\nYour details:\n- Name: Julia Anderson\n- Customer ID: C10\n- Session ID: SESS210\n- Transaction: TX63\n- Passcode: 7163",
+  "keywords": [
+    "dispute_status"
+  ],
+  "persona": {
+    "name": "Julia Anderson",
+    "gender": "female",
+    "age_group": "32-40",
+    "occupation": "Consultant",
+    "location": "United States",
+    "personality": "Professional and formal",
+    "communication_style": "Formal and polite",
+    "initial_message": "Hello, what's the status of my dispute about the Tiffany charge, TX63? I don't have the dispute number.",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "mixed",
+    "customer_id": "C10",
+    "session_id": "SESS210",
+    "transaction_id": "TX63",
+    "dispute_id": "D02"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C10",
+        "session_id": "SESS210",
+        "challenge_type": "passcode",
+        "challenge_response": "7163"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C10",
+        "session_id": "record: SESS210",
+        "challenge_response": "caller: 7163",
+        "challenge_type": "rule: the verification method the desk uses"
+      }
+    },
+    {
+      "tool": "get_dispute_status",
+      "arguments": {
+        "customer_id": "C10",
+        "session_id": "SESS210",
+        "transaction_id": "TX63"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C10",
+        "session_id": "record: SESS210",
+        "transaction_id": "record: TX63"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "follow_up_dispute",
+    "disposition": "status_by_transaction",
+    "interaction": "single_request",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "dispute_status_retrieved"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

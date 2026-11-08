@@ -1,0 +1,402 @@
+{
+  "auth_passcode_and_list_cards_txs": {
+    "job": "verification",
+    "mcp": false
+  },
+  "auth_privacy_cross_customer_refusal": {
+    "job": "verification",
+    "mcp": false
+  },
+  "auth_prompt_injection_resistance": {
+    "job": "verification",
+    "mcp": false
+  },
+  "buyers_remorse_not_a_dispute_reason_explained": {
+    "job": "dispute_intake",
+    "mcp": false
+  },
+  "change_email_address_with_otp_step_up": {
+    "job": "contact_changes",
+    "mcp": false
+  },
+  "change_phone_number_with_otp_step_up": {
+    "job": "contact_changes",
+    "mcp": false
+  },
+  "change_postal_address_with_otp_step_up": {
+    "job": "contact_changes",
+    "mcp": false
+  },
+  "chat_correction_overrides_email_transaction": {
+    "job": "email_drafts",
+    "mcp": true
+  },
+  "contact_change_refused_without_otp_handoff": {
+    "job": "contact_changes",
+    "mcp": false
+  },
+  "contact_change_requested_by_spouse_refused": {
+    "job": "contact_changes",
+    "mcp": false
+  },
+  "contact_change_retried_once_idempotent": {
+    "job": "contact_changes",
+    "mcp": false
+  },
+  "contact_change_then_confirmation_draft_on_thread": {
+    "job": "contact_changes",
+    "mcp": true
+  },
+  "contact_change_value_corrected_before_commit": {
+    "job": "contact_changes",
+    "mcp": false
+  },
+  "controls_change_on_locked_card_refused_handoff": {
+    "job": "servicing",
+    "mcp": false
+  },
+  "daily_limit_above_maximum_capped_at_policy": {
+    "job": "servicing",
+    "mcp": false
+  },
+  "damaged_card_replacement_without_lock": {
+    "job": "servicing",
+    "mcp": false
+  },
+  "disable_online_payments_after_suspicious_pending_charge": {
+    "job": "servicing",
+    "mcp": false
+  },
+  "dispute_duplicate_charge_second_of_two_identical": {
+    "job": "dispute_intake",
+    "mcp": false
+  },
+  "dispute_fraud_abuse_provisional_credit_refusal": {
+    "job": "dispute_intake",
+    "mcp": false
+  },
+  "dispute_goods_not_received_after_merchant_contact": {
+    "job": "dispute_intake",
+    "mcp": false
+  },
+  "dispute_incorrect_amount_receipt_differs": {
+    "job": "dispute_intake",
+    "mcp": false
+  },
+  "dispute_of_another_customers_transaction_refused": {
+    "job": "dispute_intake",
+    "mcp": false
+  },
+  "dispute_outside_sixty_day_window_declined": {
+    "job": "dispute_intake",
+    "mcp": false
+  },
+  "dispute_status_by_transaction_reference": {
+    "job": "follow_up",
+    "mcp": false
+  },
+  "dispute_status_lookup_tracking": {
+    "job": "follow_up",
+    "mcp": false
+  },
+  "draft_blocked_by_existing_human_edited_draft": {
+    "job": "email_drafts",
+    "mcp": true
+  },
+  "draft_descriptor_explanation_reply": {
+    "job": "email_drafts",
+    "mcp": true
+  },
+  "draft_dispute_status_reply_matches_record": {
+    "job": "follow_up",
+    "mcp": true
+  },
+  "draft_fee_reply_from_effective_schedule": {
+    "job": "email_drafts",
+    "mcp": true
+  },
+  "draft_replacement_eta_reply_from_card_policy": {
+    "job": "email_drafts",
+    "mcp": true
+  },
+  "draft_reply_declines_provisional_credit_request": {
+    "job": "email_drafts",
+    "mcp": true
+  },
+  "draft_reply_on_correct_thread_same_subject_two_customers": {
+    "job": "email_drafts",
+    "mcp": true
+  },
+  "draft_reply_only_after_reading_thread_no_blind_draft": {
+    "job": "email_drafts",
+    "mcp": true
+  },
+  "draft_reply_to_customer_charge_inquiry": {
+    "job": "email_drafts",
+    "mcp": true
+  },
+  "email_complaint_correction_pickup_lock_and_dispute": {
+    "job": "email_drafts",
+    "mcp": true
+  },
+  "email_history_irrelevant_to_lock_request_records_only": {
+    "job": "email_drafts",
+    "mcp": false
+  },
+  "email_pickup_address_change_from_thread_with_step_up": {
+    "job": "contact_changes",
+    "mcp": true
+  },
+  "email_pickup_ambiguous_transactions_disambiguation": {
+    "job": "email_drafts",
+    "mcp": true
+  },
+  "email_pickup_claimed_dispute_does_not_exist": {
+    "job": "follow_up",
+    "mcp": true
+  },
+  "email_pickup_double_correction_latest_message_governs": {
+    "job": "dispute_intake",
+    "mcp": true
+  },
+  "email_pickup_existing_dispute_status_lookup": {
+    "job": "follow_up",
+    "mcp": true
+  },
+  "email_pickup_false_authority_in_email_verification_still_required": {
+    "job": "verification",
+    "mcp": true
+  },
+  "email_pickup_found_by_sender_search_not_thread_id": {
+    "job": "email_drafts",
+    "mcp": true
+  },
+  "email_pickup_label_thread_after_dispute_filed": {
+    "job": "email_drafts",
+    "mcp": true
+  },
+  "email_pickup_lost_card_lock_requested_by_email": {
+    "job": "servicing",
+    "mcp": true
+  },
+  "email_pickup_no_matching_email_graceful_handling": {
+    "job": "email_drafts",
+    "mcp": true
+  },
+  "email_pickup_prompt_injection_resistance": {
+    "job": "verification",
+    "mcp": true
+  },
+  "email_pickup_repeat_dispute_request_returns_existing": {
+    "job": "dispute_intake",
+    "mcp": true
+  },
+  "email_pickup_replacement_speed_corrected_in_thread": {
+    "job": "servicing",
+    "mcp": true
+  },
+  "email_pickup_restricted_and_cross_customer_thread_refusal": {
+    "job": "verification",
+    "mcp": true
+  },
+  "email_pickup_travel_controls_from_thread_dates": {
+    "job": "email_drafts",
+    "mcp": true
+  },
+  "email_pickup_withdraw_dispute_customer_recognised_charge": {
+    "job": "follow_up",
+    "mcp": true
+  },
+  "emergency_crisis_escalation": {
+    "job": "out_of_scope",
+    "mcp": false
+  },
+  "enable_international_use_for_travel": {
+    "job": "servicing",
+    "mcp": false
+  },
+  "fee_expedited_replacement_is_twenty_five": {
+    "job": "policy_questions",
+    "mcp": true
+  },
+  "fee_foreign_transaction_percentage": {
+    "job": "policy_questions",
+    "mcp": true
+  },
+  "fee_not_in_schedule_no_invention": {
+    "job": "policy_questions",
+    "mcp": true
+  },
+  "first_contact_no_email_standard_dispute": {
+    "job": "dispute_intake",
+    "mcp": false
+  },
+  "full_card_number_request_refused_masked_only": {
+    "job": "verification",
+    "mcp": false
+  },
+  "list_all_disputes_overview": {
+    "job": "follow_up",
+    "mcp": false
+  },
+  "lock_card_confirmed_representative": {
+    "job": "servicing",
+    "mcp": false
+  },
+  "lock_card_destructive_request_refusal": {
+    "job": "verification",
+    "mcp": false
+  },
+  "lock_card_idempotent_already_locked": {
+    "job": "servicing",
+    "mcp": false
+  },
+  "lock_card_social_engineering_bypass_refusal": {
+    "job": "verification",
+    "mcp": false
+  },
+  "lock_lost_card_then_standard_replacement": {
+    "job": "servicing",
+    "mcp": false
+  },
+  "lock_only_the_card_named_when_two_are_held": {
+    "job": "servicing",
+    "mcp": false
+  },
+  "multi_turn_self_correction_lock_and_dispute": {
+    "job": "dispute_intake",
+    "mcp": false
+  },
+  "out_of_scope_credit_limit_increase_redirected": {
+    "job": "out_of_scope",
+    "mcp": false
+  },
+  "out_of_scope_wire_transfer_redirection": {
+    "job": "out_of_scope",
+    "mcp": false
+  },
+  "policy_dispute_window_is_sixty_days_not_ninety": {
+    "job": "policy_questions",
+    "mcp": true
+  },
+  "policy_document_with_injected_instructions_treated_as_data": {
+    "job": "policy_questions",
+    "mcp": true
+  },
+  "policy_draft_pending_dispute_rule_not_in_effect": {
+    "job": "policy_questions",
+    "mcp": true
+  },
+  "policy_duplicate_title_effective_version_chosen": {
+    "job": "policy_questions",
+    "mcp": true
+  },
+  "policy_lock_requires_confirmation_rule_cited": {
+    "job": "policy_questions",
+    "mcp": true
+  },
+  "policy_provisional_credit_timeline_from_guideline": {
+    "job": "policy_questions",
+    "mcp": true
+  },
+  "policy_question_answered_by_policy_reader_route": {
+    "job": "policy_questions",
+    "mcp": false
+  },
+  "policy_restricted_fraud_playbook_not_disclosed": {
+    "job": "policy_questions",
+    "mcp": true
+  },
+  "policy_scanned_form_unreadable_disclosed": {
+    "job": "policy_questions",
+    "mcp": true
+  },
+  "policy_superseded_version_asked_about_by_name": {
+    "job": "policy_questions",
+    "mcp": true
+  },
+  "posted_and_pending_pair_only_posted_disputed": {
+    "job": "dispute_intake",
+    "mcp": false
+  },
+  "profile_and_accounts_summary_read_only": {
+    "job": "contact_changes",
+    "mcp": false
+  },
+  "raise_daily_limit_within_policy_maximum": {
+    "job": "servicing",
+    "mcp": false
+  },
+  "replacement_request_retried_once_idempotent": {
+    "job": "servicing",
+    "mcp": false
+  },
+  "replacement_wrong_card_first_named_then_corrected": {
+    "job": "servicing",
+    "mcp": false
+  },
+  "session_belongs_to_another_customer_refused": {
+    "job": "verification",
+    "mcp": false
+  },
+  "status_of_another_customers_dispute_refused": {
+    "job": "follow_up",
+    "mcp": false
+  },
+  "stolen_card_lock_then_expedited_replacement_fee_disclosed": {
+    "job": "servicing",
+    "mcp": false
+  },
+  "two_fraudulent_charges_two_disputes_one_each": {
+    "job": "dispute_intake",
+    "mcp": false
+  },
+  "unfamiliar_descriptor_recognised_after_lookup_no_dispute": {
+    "job": "dispute_intake",
+    "mcp": false
+  },
+  "unfamiliar_descriptor_unknown_after_lookup_dispute_filed": {
+    "job": "dispute_intake",
+    "mcp": false
+  },
+  "v01_s01_happy_path_lock_and_dispute": {
+    "job": "servicing",
+    "mcp": false
+  },
+  "v01_s02_auth_challenge_failure_handoff": {
+    "job": "verification",
+    "mcp": false
+  },
+  "v01_s03_pending_charge_dispute_declined": {
+    "job": "dispute_intake",
+    "mcp": false
+  },
+  "v01_s04_idempotent_dispute_retry_timeout": {
+    "job": "dispute_intake",
+    "mcp": false
+  },
+  "v01_s05_partial_failure_lock_ok_dispute_failed": {
+    "job": "dispute_intake",
+    "mcp": false
+  },
+  "verification_locked_after_max_failed_attempts_handoff": {
+    "job": "verification",
+    "mcp": false
+  },
+  "vulnerable_customer_protective_handoff": {
+    "job": "out_of_scope",
+    "mcp": false
+  },
+  "withdraw_dispute_after_merchant_refund": {
+    "job": "follow_up",
+    "mcp": false
+  },
+  "withdraw_one_of_two_disputes_first_id_corrected": {
+    "job": "follow_up",
+    "mcp": false
+  },
+  "withdraw_resolved_dispute_refused_explained": {
+    "job": "follow_up",
+    "mcp": false
+  }
+}

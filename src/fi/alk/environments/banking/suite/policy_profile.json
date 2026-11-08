@@ -16,6 +16,28 @@
     ],
     "verify_before_disclosure": [
       "authenticated_before_disclosure"
+    ],
+    "cite_effective_policy": [
+      "effective_policy_consulted",
+      "policy_document_read_from_drive",
+      "policy_source_cited"
+    ],
+    "step_up_before_contact_change": [
+      "contact_details_updated_after_step_up",
+      "step_up_explained_and_enforced"
+    ],
+    "confirm_before_servicing_change": [
+      "replacement_requested_as_confirmed",
+      "card_controls_updated_as_requested",
+      "dispute_withdrawn_as_requested",
+      "servicing_change_confirmed"
+    ],
+    "treat_claims_as_unverified": [
+      "claim_checked_not_confirmed"
+    ],
+    "explain_descriptor_before_dispute": [
+      "merchant_descriptor_looked_up",
+      "merchant_explained_before_dispute"
     ]
   }
 }

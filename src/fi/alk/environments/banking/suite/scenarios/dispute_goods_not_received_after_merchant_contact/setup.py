@@ -1,0 +1,6 @@
+def setup(world):
+    world.put("customers", {"customer_id": "C323", "first_name": "Noah", "last_name": "Fischer", "email": "noah.fischer@example.com", "phone": "+1555123323", "passcode": "2093", "kba_answer": "Pepper", "otp_code": "716428", "address": "323 Example Street, Springfield, IL 62701", "customer_since": "2021-04-12"})
+    world.put("accounts", {"account_id": "ACC323", "customer_id": "C323", "account_number": "1000000323", "account_type": "checking", "balance": 350000, "currency": "USD", "status": "active"})
+    world.put("cards", {"card_id": "CARD323", "account_id": "ACC323", "customer_id": "C323", "card_number_masked": "••••••••••••7271", "last_four": "7271", "card_type": "debit", "status": "active", "expiration_date": "2028-11-30", "locked_at": None})
+    world.put("sessions", {"session_id": "SESS323", "customer_id": "C323", "channel": "chat", "is_verified": 0, "verified_at": None, "failed_attempts": 0, "created_at": "2026-10-26T11:50:00Z", "step_up_at": None})
+    world.put("transactions", {"transaction_id": "TX323", "account_id": "ACC323", "card_id": "CARD323", "merchant_name": "Lumen Home Goods", "amount": 24900, "currency": "USD", "status": "posted", "transaction_time": "2026-10-02T11:00:00Z", "description": "Online order", "statement_descriptor": "LUMEN HOME GOODS ONLINE"})

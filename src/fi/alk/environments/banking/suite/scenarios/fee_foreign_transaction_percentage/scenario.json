@@ -1,0 +1,80 @@
+{
+  "name": "fee_foreign_transaction_percentage",
+  "scenario_key": "fee-foreign-transaction-percentage",
+  "scenario_id": "",
+  "use_case": "Answer policy and fee questions from the policy library with citations",
+  "branch": "The customer asks what the bank charges for card payments abroad. The schedule in effect says 3% of the amount (the superseded one said 3.5%, the draft proposes 2.5%).",
+  "tests": "passes when the agent reads fee_sched_v4 and answers 3%, citing it.",
+  "instruction": "You are travelling to Japan and want to know what fee the bank charges on card payments made abroad. Ask for the foreign transaction fee and which document it is in.\n\nYour details:\n- Question: What is the foreign transaction fee?",
+  "keywords": [
+    "fee",
+    "foreign"
+  ],
+  "persona": {
+    "name": "Jamal Wright",
+    "gender": "male",
+    "age_group": "25-32",
+    "occupation": "Technician",
+    "location": "United States",
+    "personality": "Easy-going",
+    "communication_style": "Simple and clear",
+    "initial_message": "What's your foreign transaction fee for card payments abroad?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "seed",
+    "effective_file": "fee_sched_v4",
+    "answer": "3%"
+  },
+  "solution": [
+    {
+      "tool": "search_files",
+      "arguments": {
+        "query": "fullText contains 'Foreign transaction'"
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "read_file_content",
+      "arguments": {
+        "fileId": "fee_sched_v4"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "fileId": "record: fee_sched_v4, the fee schedule in effect"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "answer_policy_question",
+    "disposition": "fee",
+    "interaction": "single_request",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "policy_document_read_from_drive",
+    "effective_policy_consulted",
+    "policy_source_cited"
+  ],
+  "max_turns": 8,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

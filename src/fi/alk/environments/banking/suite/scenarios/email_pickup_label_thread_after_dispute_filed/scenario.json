@@ -1,0 +1,134 @@
+{
+  "name": "email_pickup_label_thread_after_dispute_filed",
+  "scenario_key": "email-pickup-label-thread-after-dispute-filed",
+  "scenario_id": "",
+  "use_case": "Pick up a case that started by email and continue it with the banking tools",
+  "branch": "Charlie's email reports a duplicate Panera charge (TX89 legitimate, TX201 duplicate). After verifying and filing the dispute for TX201, the agent labels the thread as a dispute case and removes needs_reply.",
+  "tests": "passes when the agent reads th_c03_duplicate_charge, verifies Charlie, files exactly one duplicate_charge dispute for TX201 and labels the thread 'disputes'.",
+  "instruction": "You emailed support about being charged twice by Panera Bread on October 22 on your debit card ending 3345. In this chat you want the duplicate disputed, and you ask the assistant to mark your email as dealt with so nobody replies about it again. Provide passcode 2948 when asked. Confirm the dispute for the second, duplicate charge when summarised.\n\nYour details:\n- Name: Charlie Johnson\n- Customer ID: C03\n- Session ID: SESS203\n- Email: charlie.j@example.com\n- Card: CARD05 (ending 3345)\n- Legitimate: TX89\n- Duplicate: TX201\n- Passcode: 2948",
+  "keywords": [
+    "email_pickup",
+    "labels",
+    "dispute_filing"
+  ],
+  "persona": {
+    "name": "Charlie Johnson",
+    "gender": "male",
+    "age_group": "32-40",
+    "occupation": "Technician",
+    "location": "United States",
+    "personality": "Easy-going",
+    "communication_style": "Simple and clear",
+    "initial_message": "Hi, I emailed about Panera charging me twice on my card ending 3345. Can you sort the duplicate and mark my email as handled?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "mixed",
+    "customer_id": "C03",
+    "session_id": "SESS203",
+    "thread_id": "th_c03_duplicate_charge",
+    "transaction_id": "TX201",
+    "legitimate_transaction": "TX89"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C03",
+        "session_id": "SESS203",
+        "challenge_type": "passcode",
+        "challenge_response": "2948"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C03",
+        "session_id": "record: SESS203",
+        "challenge_response": "caller: 2948",
+        "challenge_type": "rule: the verification method the desk uses"
+      }
+    },
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_c03_duplicate_charge"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: th_c03_duplicate_charge, Charlie's email naming both charges"
+      }
+    },
+    {
+      "tool": "create_dispute",
+      "arguments": {
+        "customer_id": "C03",
+        "session_id": "SESS203",
+        "transaction_id": "TX201",
+        "dispute_reason": "duplicate_charge",
+        "request_key": "REQ-C03-TX201",
+        "customer_notes": "Second Panera charge on 2026-10-22, per customer's email"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C03",
+        "session_id": "record: SESS203",
+        "transaction_id": "record: TX201",
+        "dispute_reason": "rule: one of the allowed dispute reasons in the Transaction Dispute Policy"
+      }
+    },
+    {
+      "tool": "unlabel_thread",
+      "arguments": {
+        "threadId": "th_c03_duplicate_charge",
+        "labelIds": [
+          "needs_reply"
+        ]
+      },
+      "environment_arguments": {},
+      "fixed": {}
+    },
+    {
+      "tool": "label_thread",
+      "arguments": {
+        "threadId": "th_c03_duplicate_charge",
+        "labelIds": [
+          "disputes"
+        ]
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: th_c03_duplicate_charge"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "pickup_email_case",
+    "disposition": "duplicate_charge",
+    "interaction": "multi_turn",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "dispute_filed_and_reported",
+    "thread_labelled_after_handling"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

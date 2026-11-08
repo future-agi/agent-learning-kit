@@ -65,17 +65,23 @@ def test_mailbox_is_linked_to_the_records(built: Path) -> None:
     try:
         state = world.state()
         customers = {c["email"] for c in state["customers"]}
-        assert state["threads"] and state["messages"]
+        assert state["gmail_threads"] and state["gmail_messages"]
         assert all(
             m["sender"] in customers or m["sender"].endswith("@apexhorizonbank.com")
-            for m in state["messages"]
+            for m in state["gmail_messages"]
         ), "every email is from one of the bank's customers or from the bank"
-        assert any(m["sender"] in customers for m in state["messages"])
+        assert any(m["sender"] in customers for m in state["gmail_messages"])
         by_thread: dict[str, int] = {}
-        for message in state["messages"]:
+        for message in state["gmail_messages"]:
             by_thread[message["thread_id"]] = by_thread.get(message["thread_id"], 0) + 1
         assert max(by_thread.values()) >= 3, "no multi-message thread with a correction"
-        assert [d["dispute_id"] for d in state["disputes"]] == ["D01"]
+        assert [d["dispute_id"] for d in state["disputes"]] == [
+            "D01",
+            "D02",
+            "D03",
+            "D04",
+            "D05",
+        ]
     finally:
         world.close()
 
@@ -149,13 +155,16 @@ def seeded_state(built: Path) -> dict:
 
 
 def _message(state: dict, message_id: str) -> dict:
-    return next(m for m in state["messages"] if m["id"] == message_id)
+    return next(m for m in state["gmail_messages"] if m["id"] == message_id)
 
 
 def test_consistency_check_holds_on_the_seeded_mailbox(seeded_state: dict) -> None:
     assert _consistency_check()(_State(seeded_state)) is None
     # The bank's dispute confirmation is not the last message, so the old loop never saw it.
-    assert _message(seeded_state, "msg_005")["id"] != seeded_state["messages"][-1]["id"]
+    assert (
+        _message(seeded_state, "msg_005")["id"]
+        != seeded_state["gmail_messages"][-1]["id"]
+    )
 
 
 def test_nonexistent_dispute_in_any_message_fails(seeded_state: dict) -> None:
@@ -189,7 +198,7 @@ def test_unverified_claim_by_a_customer_is_allowed_but_not_by_the_bank(
     complaint = _message(state, "msg_003")  # Alice's correction, a customer message
     complaint["body"] += " Your colleague told me this was already dispute D99."
     assert _consistency_check()(_State(state)), "a false claim fails without the label"
-    state["thread_labels"].append(
+    state["gmail_thread_labels"].append(
         {"thread_id": "th_c01_complaint", "label_id": "claims_unverified"}
     )
     assert _consistency_check()(_State(state)) is None, (

@@ -1,0 +1,108 @@
+{
+  "name": "email_pickup_travel_controls_from_thread_dates",
+  "scenario_key": "email-pickup-travel-controls-from-thread-dates",
+  "scenario_id": "",
+  "use_case": "Pick up a case that started by email and continue it with the banking tools",
+  "branch": "Laura emailed that she flies to Lisbon on 2 November and wants her card ending 2323 to work abroad and online. International use is enabled on CARD23 after verification; the thread supplies the request.",
+  "tests": "passes when the agent reads th_c12_travel_controls, verifies Laura and sets international_enabled to true on CARD23.",
+  "instruction": "You emailed support about your trip to Lisbon and your debit card ending 2323. In this chat ask the assistant to action your email; if asked for details, say they are in the email. Confirm the control change when summarised. Provide passcode 3619 when asked.\n\nYour details:\n- Name: Laura Martinez\n- Customer ID: C12\n- Session ID: SESS212b\n- Email: laura.m@example.com\n- Card: CARD23 (ending 2323)\n- Passcode: 3619",
+  "keywords": [
+    "email_pickup",
+    "card_controls"
+  ],
+  "persona": {
+    "name": "Laura Martinez",
+    "gender": "female",
+    "age_group": "40-50",
+    "occupation": "Marketing Professional",
+    "location": "United States",
+    "personality": "Detail-oriented",
+    "communication_style": "Detailed and elaborate",
+    "initial_message": "Hello, I emailed about my Lisbon trip and my card ending 2323. Can you action that email?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "mixed",
+    "customer_id": "C12",
+    "session_id": "SESS212b",
+    "thread_id": "th_c12_travel_controls",
+    "card_id": "CARD23"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C12",
+        "session_id": "SESS212b",
+        "challenge_type": "passcode",
+        "challenge_response": "3619"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C12",
+        "session_id": "record: SESS212b",
+        "challenge_response": "caller: 3619",
+        "challenge_type": "rule: the verification method the desk uses"
+      }
+    },
+    {
+      "tool": "get_thread",
+      "arguments": {
+        "threadId": "th_c12_travel_controls"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "threadId": "record: th_c12_travel_controls, Laura's travel email"
+      }
+    },
+    {
+      "tool": "update_card_controls",
+      "arguments": {
+        "customer_id": "C12",
+        "session_id": "SESS212b",
+        "card_id": "CARD23",
+        "confirmed": true,
+        "international_enabled": true
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C12",
+        "session_id": "record: SESS212b",
+        "card_id": "record: CARD23",
+        "confirmed": "rule: 'The agent confirms the exact changes before changing card controls'",
+        "international_enabled": "caller: True"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "pickup_email_case",
+    "disposition": "travel",
+    "interaction": "multi_turn",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "card_controls_updated_as_requested",
+    "servicing_change_confirmed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

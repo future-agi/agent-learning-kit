@@ -1,10 +1,20 @@
-def check(world, calls):
+def check(world, calls, reference=None):
+    wanted = None
+    for step in reference or ():
+        if step.get("tool") == "create_handoff" and step.get("arguments", {}).get("customer_id"):
+            wanted = step["arguments"]["customer_id"]
     handoff_calls = [c for c in calls if c.name == "create_handoff" and c.ok]
     if not handoff_calls:
         return "not done: create_handoff was not called"
     handoffs = world.state().get("handoffs", [])
     if not handoffs:
         return "not done: no handoff record found in database"
+    for c in handoff_calls:
+        cid = c.arguments.get("customer_id")
+        if wanted and cid != wanted:
+            return f"done wrong: the handoff was created for {cid}, not for this customer {wanted}"
+        if not any(h.get("customer_id") == cid for h in handoffs):
+            return f"not done: no handoff record in database for {cid}"
     return None
 
 

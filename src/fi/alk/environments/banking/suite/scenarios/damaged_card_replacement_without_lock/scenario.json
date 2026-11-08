@@ -1,0 +1,101 @@
+{
+  "name": "damaged_card_replacement_without_lock",
+  "scenario_key": "damaged-card-replacement-without-lock",
+  "scenario_id": "",
+  "use_case": "Service a lost, stolen or damaged card: lock, controls, replacement",
+  "branch": "The card ending 5519 is cracked but in the customer's hands. Policy: damaged cards are replaced without a lock; the customer keeps using it until the new one arrives.",
+  "tests": "passes when the agent verifies and requests a standard replacement for CARD303 as damaged, without locking it.",
+  "instruction": "Your credit card ending in 5519 has cracked and the chip fails at the till, but you still have it and want to keep using it (contactless still works) until a new one arrives. Ask for a replacement by standard post; you do not want the card blocked. Provide passcode 2210 when asked.\n\nYour details:\n- Name: Lena Hoffmann\n- Customer ID: C303\n- Session ID: SESS303\n- Card: CARD303 (ending 5519)\n- Passcode: 2210",
+  "keywords": [
+    "replacement"
+  ],
+  "persona": {
+    "name": "Lena Hoffmann",
+    "gender": "female",
+    "age_group": "25-32",
+    "occupation": "Consultant",
+    "location": "United States",
+    "personality": "Detail-oriented",
+    "communication_style": "Detailed and elaborate",
+    "initial_message": "Hello, my credit card ending 5519 is cracked. Can I get a replacement without blocking the card?",
+    "languages": [
+      "English"
+    ],
+    "accent": "",
+    "multilingual": false,
+    "metadata": {},
+    "scripted_caller": null
+  },
+  "variables": {
+    "agent": "Apex Horizon Bank customer support"
+  },
+  "fixture": {
+    "origin": "generated",
+    "customer_id": "C303",
+    "session_id": "SESS303",
+    "card_id": "CARD303",
+    "passcode": "2210",
+    "reason": "damaged"
+  },
+  "solution": [
+    {
+      "tool": "verify_identity",
+      "arguments": {
+        "customer_id": "C303",
+        "session_id": "SESS303",
+        "challenge_type": "passcode",
+        "challenge_response": "2210"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C303",
+        "session_id": "record: SESS303",
+        "challenge_response": "caller: 2210",
+        "challenge_type": "rule: the verification method the desk uses"
+      }
+    },
+    {
+      "tool": "request_replacement_card",
+      "arguments": {
+        "customer_id": "C303",
+        "session_id": "SESS303",
+        "card_id": "CARD303",
+        "reason": "damaged",
+        "delivery_speed": "standard",
+        "confirmed": true,
+        "request_key": "REQ-C303-CARD303-RPL"
+      },
+      "environment_arguments": {},
+      "fixed": {
+        "customer_id": "record: C303",
+        "session_id": "record: SESS303",
+        "card_id": "record: CARD303",
+        "reason": "rule: lost, stolen, damaged, expired or not_received",
+        "delivery_speed": "caller: standard",
+        "confirmed": "rule: 'The agent confirms the exact card and option before requesting a replacement'"
+      }
+    }
+  ],
+  "alternatives": [],
+  "coverage": {
+    "task": "service_card",
+    "disposition": "damaged_card",
+    "interaction": "multi_turn",
+    "counterparty": "individual_cardholder",
+    "interface": "clean_prose",
+    "overlay": "none",
+    "overlay_vector": "none",
+    "overlay_intensity": "absent"
+  },
+  "sub_goals": [
+    "authenticated_before_disclosure",
+    "replacement_requested_as_confirmed",
+    "servicing_change_confirmed"
+  ],
+  "max_turns": 10,
+  "background_noise": false,
+  "call_direction": "",
+  "caller_awareness": "",
+  "answered_by": "",
+  "voicemail_style": ""
+}

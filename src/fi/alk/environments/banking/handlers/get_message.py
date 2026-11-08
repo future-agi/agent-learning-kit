@@ -6,14 +6,14 @@ def handle(args, db):
     if message_format not in ("MESSAGE_FORMAT_UNSPECIFIED", "MINIMAL", "FULL_CONTENT", "METADATA_ONLY"):
         raise ToolError(f"Unknown messageFormat {message_format!r}", category="invalid_input")
 
-    m = db.one("SELECT * FROM messages WHERE id = ?", (message_id,))
+    m = db.one("SELECT * FROM gmail_messages WHERE id = ?", (message_id,))
     if m is None:
         raise ToolError(f"Message {message_id!r} not found", category="not_found")
-    t = db.one("SELECT is_restricted FROM threads WHERE id = ?", (m["thread_id"],))
+    t = db.one("SELECT is_restricted FROM gmail_threads WHERE id = ?", (m["thread_id"],))
     if t and t["is_restricted"]:
         raise ToolError(f"Access to message {message_id!r} is restricted by mailbox ACL", category="permission_denied")
 
-    labels = [row["label_id"] for row in db.query("SELECT label_id FROM thread_labels WHERE thread_id = ?", (m["thread_id"],))]
+    labels = [row["label_id"] for row in db.query("SELECT label_id FROM gmail_thread_labels WHERE thread_id = ?", (m["thread_id"],))]
     message = {
         "id": m["id"],
         "snippet": m["snippet"],

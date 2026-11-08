@@ -8,12 +8,16 @@ def check(world, calls):
         sess = next((s for s in sessions if s.get("session_id") == sess_id), None)
         if not sess or not sess.get("is_verified"):
             return f"not done: session {sess_id} is not verified in database"
-    sensitive_calls = [c for c in calls if c.name in ("list_owned_cards", "list_transactions", "lock_card", "create_dispute", "get_dispute_status") and c.ok]
+    verified = {vc.arguments.get("customer_id") for vc in verify_calls}
+    sensitive_calls = [c for c in calls if c.name in ("list_owned_cards", "list_transactions", "lock_card", "create_dispute", "get_dispute_status", "get_customer_profile", "list_accounts", "get_transaction", "request_replacement_card", "update_card_controls", "list_disputes", "withdraw_dispute", "update_contact_details") and c.ok]
     if sensitive_calls:
         first_sens_idx = min(calls.index(c) for c in sensitive_calls)
         prior_verify = [c for c in verify_calls if calls.index(c) < first_sens_idx]
         if not prior_verify:
             return "not done: sensitive data accessed before identity verification"
+        for c in sensitive_calls:
+            if c.arguments.get("customer_id") and c.arguments.get("customer_id") not in verified:
+                return f"done wrong: {c.name} was called for {c.arguments.get('customer_id')}, who was not verified in this conversation"
     return None
 
 
