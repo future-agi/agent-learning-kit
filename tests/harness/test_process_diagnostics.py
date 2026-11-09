@@ -78,11 +78,14 @@ def test_retention_collapses_repeated_lines_so_the_real_error_survives(tmp_path)
     work.mkdir()
     log = work / "process.log"
     # Any framework's steady chatter, alternating and stamped with changing times.
-    chatter = "".join(
-        f"12:00:{second:02d} INFO stream {kind} not consumed\n"
-        for second in range(60)
-        for kind in ("byte", "text")
-    ) * 4
+    chatter = (
+        "".join(
+            f"12:00:{second:02d} INFO stream {kind} not consumed\n"
+            for second in range(60)
+            for kind in ("byte", "text")
+        )
+        * 4
+    )
     log.write_text(
         "starting worker\n"
         "ERROR stt: provider returned 402 Payment Required key=secret123\n"
@@ -137,6 +140,68 @@ def test_collapsing_keeps_each_traceback_whole_and_its_own_error():
         + frames
         + "RuntimeError: session closed\n"
     )
+
+
+def test_a_chained_traceback_is_one_record_across_its_blank_lines():
+    import traceback
+
+    from fi.alk.harness.process_diagnostics import _collapse_repeated_lines, _records
+
+    def inner():
+        raise KeyError("api_key")
+
+    def outer(error):
+        try:
+            inner()
+        except KeyError as cause:
+            raise error from cause
+
+    printed = []
+    for error in (RuntimeError("config load failed"), ValueError("retry also failed")):
+        try:
+            outer(error)
+        except Exception:
+            printed.append(traceback.format_exc())
+    assert len(_records(printed[0].splitlines(keepends=True))) == 1
+    # The same cause under two different errors stays with each of them.
+    collapsed = _collapse_repeated_lines(
+        "INFO a\n" + printed[0] + "INFO b\n" + printed[1]
+    )
+    assert collapsed.count("KeyError: 'api_key'") == 2
+    assert "RuntimeError: config load failed" in collapsed
+    assert "ValueError: retry also failed" in collapsed
+
+
+def test_records_that_differ_in_a_status_or_exit_code_are_different_errors():
+    from fi.alk.harness.process_diagnostics import _collapse_repeated_lines
+
+    for first, second in (
+        (
+            "ERROR stt: provider returned HTTP 402 Payment Required",
+            "ERROR stt: provider returned HTTP 500 Server Error",
+        ),
+        ("worker exited with code 1", "worker exited with code 137"),
+        (
+            '{"level":"error","msg":"stt failed","status_code":402,"ts":"12:00:01"}',
+            '{"level":"error","msg":"stt failed","status_code":429,"ts":"12:00:09"}',
+        ),
+    ):
+        collapsed = _collapse_repeated_lines(f"{first}\nINFO poll\n{second}\n")
+        assert first in collapsed and second in collapsed, (first, second)
+
+
+def test_records_that_differ_only_in_times_ids_or_counters_still_collapse():
+    from fi.alk.harness.process_diagnostics import _collapse_repeated_lines
+
+    log = (
+        '{"msg":"stt failed","status_code":402,"ts":"2026-11-09T12:00:01.123Z","req":"a1b2c3d4e5f6"}\n'
+        '{"msg":"stt failed","status_code":402,"ts":"2026-11-09T12:00:09.456Z","req":"f6e5d4c3b2a1"}\n'
+        "INFO poll 18342 took 0.53s\n"
+        "INFO poll 18343 took 0.61s\n"
+    )
+    collapsed = _collapse_repeated_lines(log)
+    assert collapsed.count("stt failed") == 1
+    assert collapsed.count("INFO poll") == 1
 
 
 def test_retention_write_failure_does_not_prevent_cleanup(tmp_path, monkeypatch):

@@ -11,6 +11,13 @@ from pathlib import Path
 from fi._diagnostics import sanitize_diagnostic
 
 _DIGITS = str.maketrans("", "", "0123456789")
+# Numbers that tell two errors apart: a status, exit or signal code, an HTTP code.
+_MEANINGFUL = re.compile(
+    r"(?i)(?:status(?:_code)?|code|exit(?:\s+(?:code|status))?|returncode|signal|http(?:/\d\.\d)?)"
+    r"[\"'\s:=_]*\d+|\b[1-5]\d\d\b"
+)
+# Opaque ids: hex runs that carry a digit, so two copies of one record with different ids match.
+_OPAQUE_ID = re.compile(r"\b(?=[0-9a-fA-F-]*\d)[0-9a-fA-F][0-9a-fA-F-]{7,}\b")
 
 
 _CHAINED = (
@@ -28,7 +35,9 @@ def _records(lines: list[str]) -> list[list[str]]:
     for line in lines:
         indented = line[:1] in (" ", "\t")
         if line.startswith("Traceback (most recent call last)"):
-            if records and records[-1][-1].strip().startswith(_CHAINED):
+            # Python prints a blank line between "...direct cause..." and the next traceback.
+            said = [one for one in records[-1] if one.strip()] if records else []
+            if said and said[-1].strip().startswith(_CHAINED):
                 records[-1].append(line)
             else:
                 records.append([line])
@@ -47,6 +56,22 @@ def _records(lines: list[str]) -> list[list[str]]:
     return records
 
 
+def _shape(record: list[str]) -> str:
+    """A record with its volatile parts (times, ids, counters) removed and its meaningful numbers
+    (status, exit and HTTP codes) kept, so only real copies share a shape."""
+
+    text = _OPAQUE_ID.sub("#", "".join(record))
+    kept: list[str] = []
+
+    def hold(match: re.Match[str]) -> str:
+        kept.append(match.group(0))
+        # A placeholder with no digits, so removing digits cannot touch it.
+        return "\0" + chr(0xE000 + len(kept) - 1) + "\0"
+
+    held = _MEANINGFUL.sub(hold, text).translate(_DIGITS)
+    return re.sub("\0(.)\0", lambda m: kept[ord(m.group(1)) - 0xE000], held)
+
+
 def _collapse_repeated_lines(text: str) -> str:
     """Keep a repeated log record only where it last appears, above it the count of its earlier
     copies.
@@ -55,11 +80,12 @@ def _collapse_repeated_lines(text: str) -> str:
     left in, they push the one line that explains a failure out of the retained tail. A record is
     a line with its indented continuation, and a traceback stays whole, so two different errors
     never share or lose frames. Records that differ only in digits (times, ids, counters) count
-    as the same record.
+    as the same record, but a status, exit or HTTP code keeps two errors apart. The kept copy is the
+    last one, so its time is the latest, not the first.
     """
 
     records = _records(text.splitlines(keepends=True))
-    shapes = ["".join(record).translate(_DIGITS) for record in records]
+    shapes = [_shape(record) for record in records]
     last = {shape: index for index, shape in enumerate(shapes)}
     copies = Counter(shapes)
     kept: list[str] = []
