@@ -954,6 +954,9 @@ class HostedChatCallRunner:
                 acting.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await acting
+                # An actor the agent's last calls woke still takes its turn, within the settle's bound.
+                with contextlib.suppress(Exception):
+                    await dispatcher.settle()
             await _record_text_usage(
                 self._context.usage_reporter,
                 scenario_key=scenario.scenario_key,

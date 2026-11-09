@@ -43,6 +43,9 @@ from .actors import (
 logger = logging.getLogger(__name__)
 
 POLL_SECONDS = 0.25
+# At the trial's end, how long actors may still take a turn that was due or under way: the agent's last call often
+# wakes an actor just as the conversation ends.
+SETTLE_SECONDS = 30.0
 
 Decide = Callable[[str, Actor], Any]
 
@@ -198,6 +201,8 @@ class ActorDispatcher:
         self.live_turns: dict[str, int] = {one.id: 0 for one in self.live}
         # What each live actor has already sent: the same action again is a loop, not a new turn.
         self.live_sent: dict[str, list[tuple[str, str]]] = {one.id: [] for one in self.live}
+        # Live turns the trial's end cut short, with what called for them: taken again when the trial settles.
+        self.cut: list[tuple[Actor, str]] = []
         self.looped: set[str] = set()
         self.answered: dict[str, set[str]] = {one.id: set() for one in self.live}
         self.woken: set[str] = set()
@@ -296,6 +301,17 @@ class ActorDispatcher:
         return contacts(row.get("arguments"), actor) or any(
             name in (one, one.rsplit(".", 1)[-1], one.replace(".", "/"))
             for one in actor.permitted_actions
+        )
+
+    def _watches(self, actor: Actor, row: dict[str, Any]) -> bool:
+        """Whether a row is the agent's call this actor's own on_tool trigger watches. The actor sees it when it
+        decides, whether or not it may take that action itself; when it comes in stays its trigger's to decide."""
+        trigger = self.triggers.get(actor.id)
+        return (
+            trigger is not None
+            and trigger.kind == "on_tool"
+            and (row.get("actor_id") or AGENT) == AGENT
+            and str(row.get("name") or "") == trigger.tool
         )
 
     # -- acting ------------------------------------------------------------------------------------------------
@@ -397,7 +413,9 @@ class ActorDispatcher:
                 default=str,
             )
             for r in log
-            if self._sees(actor, r) or r.get("actor_id") == actor.id
+            if self._sees(actor, r)
+            or self._watches(actor, r)
+            or r.get("actor_id") == actor.id
         ]
         return decision_brief(
             {
@@ -428,6 +446,11 @@ class ActorDispatcher:
             if inspect.isawaitable(raw):
                 raw = await raw
             decision = read_decision(raw)
+        except asyncio.CancelledError:
+            # The trial ended mid-turn: the turn was not taken, and the trial's settle takes it again.
+            self.live_turns[actor.id] -= 1
+            self.cut.append((actor, cause))
+            raise
         except Exception as exc:  # noqa: BLE001 - a failed decision is recorded, never a failed trial
             self.fired.append(
                 {
@@ -746,6 +769,38 @@ class ActorDispatcher:
         ):
             await self.tick()
             await asyncio.sleep(POLL_SECONDS)
+
+    async def settle(self, seconds: float = SETTLE_SECONDS) -> None:
+        """At the trial's end, after `run()` is cancelled: the turns the end cut short are taken again, and one last
+        look at the log gives a turn to each actor the agent's last calls woke, all within `seconds`. A turn still
+        unfinished then is recorded as such, never lost."""
+
+        async def last_turns() -> None:
+            try:
+                log = await asyncio.to_thread(self.read_log)
+            except Exception:  # noqa: BLE001 - the cut turns still decide on what they saw
+                log = []
+            while self.cut:
+                actor, cause = self.cut.pop(0)
+                await self._live_turn(actor, cause, log)
+            await self.tick()
+
+        try:
+            await asyncio.wait_for(last_turns(), timeout=seconds)
+        except asyncio.TimeoutError:
+            pass
+        for actor, cause in self.cut:
+            self.fired.append(
+                {
+                    "actor": actor.id,
+                    "play": "live",
+                    "turn": self.live_turns[actor.id] + 1,
+                    "decided": None,
+                    "why": "the trial ended before its turn finished",
+                    "parent": cause or None,
+                }
+            )
+        self.cut = []
 
     def record(self) -> list[dict[str, Any]]:
         """Everything this dispatcher did and found, in order, with the waits still open and the actors that never

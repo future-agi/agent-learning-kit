@@ -2453,6 +2453,9 @@ class CallRunnerImpl:
                 acting.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await acting
+                # An actor the agent's last calls woke still takes its turn, within the settle's bound.
+                with contextlib.suppress(Exception):
+                    await actors.settle()
                 # An action a speaking actor decided on its last line is still sent, inside its own trial.
                 with contextlib.suppress(Exception):
                     await actors.send_reported()
