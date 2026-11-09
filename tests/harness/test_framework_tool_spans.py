@@ -848,8 +848,12 @@ def test_calls_the_other_tracer_never_stamped_are_not_paired_by_order(
 ) -> None:
     natives = [_search("a", 0.0), _search("b", 0.0)]
     spans = [
-        _search_span("a", 1.0, "worker-a", ended_at=1.4, input_omitted=True),
-        _search_span("b", 2.0, "worker-b", ended_at=2.4, input_omitted=True),
+        _search_span(
+            "a", 1.0, "worker-a", ended_at=1.4, input_omitted=True, result=None
+        ),
+        _search_span(
+            "b", 2.0, "worker-b", ended_at=2.4, input_omitted=True, result=None
+        ),
     ]
     if reversed_spans:
         spans.reverse()
@@ -865,7 +869,7 @@ def test_a_span_that_cannot_be_told_apart_lends_its_worker_to_no_call_when_fewer
 ):
     # One of the calls may be one no span saw, such as the coordinator's own.
     natives = [_search("a", 9.1), _search("b", 9.2)]
-    spans = [_search_span("a", 1.0, "worker-a", input_omitted=True)]
+    spans = [_search_span("a", 1.0, "worker-a", input_omitted=True, result=None)]
     merged = call_runner._merge_span_calls(natives, spans)
     assert [(c.arguments["q"], c.worker_id) for c in merged] == [("a", ""), ("b", "")]
 
@@ -887,6 +891,7 @@ def test_overlapping_calls_of_one_tool_nothing_tells_apart_keep_their_agent_and_
             "worker-a",
             ended_at=4.0,
             input_omitted=True,
+            result=None,
             delegated_to="reader",
         ),
         _search_span(
@@ -895,6 +900,7 @@ def test_overlapping_calls_of_one_tool_nothing_tells_apart_keep_their_agent_and_
             "worker-b",
             ended_at=3.0,
             input_omitted=True,
+            result=None,
             delegated_to="reader",
         ),
     ]
@@ -1028,6 +1034,114 @@ def test_spans_paired_by_order_must_agree_with_their_calls_on_the_outcome() -> N
     ]
 
 
+def _calls(merged) -> list[tuple]:
+    return sorted(
+        (
+            c.name,
+            c.ok,
+            str(c.result),
+            c.worker_id,
+            c.runtime_ids.get("event_id") or "",
+            c.delegated_to,
+        )
+        for c in merged
+    )
+
+
+@pytest.mark.parametrize(
+    ("native", "span"),
+    [
+        (
+            Call(name="send_email", arguments={"to": "a"}, ok=True, at=1.0),
+            Call(
+                name="send_email",
+                arguments={"to": "a"},
+                ok=False,
+                error="boom",
+                worker_id="B",
+                at=1.0,
+                runtime_ids={"event_id": "sB"},
+            ),
+        ),
+        (
+            _search("a", 1.0, worker_id="A"),
+            _search_span("a", 1.0, "B"),
+        ),
+        (
+            Call(name="delegate", arguments={}, ok=True, delegated_to="X", at=1.0),
+            Call(
+                name="delegate",
+                arguments={},
+                ok=True,
+                delegated_to="Y",
+                worker_id="root",
+                at=1.0,
+                runtime_ids={"event_id": "d1"},
+            ),
+        ),
+        (
+            Call(name="researcher", arguments={}, ok=True, at=1.0),
+            Call(
+                name="researcher",
+                arguments={},
+                ok=True,
+                worker_id="researcher",
+                handoff=True,
+                at=1.0,
+                runtime_ids={"event_id": "r1"},
+            ),
+        ),
+        (
+            _search("a", 1.0, result="first"),
+            _search_span("a", 5.0, "B", result="second"),
+        ),
+    ],
+    ids=["void-outcome", "worker", "hand-off-target", "kind", "output"],
+)
+def test_a_span_and_a_call_that_disagree_on_any_recorded_field_are_two_calls(
+    native: Call, span: Call
+) -> None:
+    expected = _calls([native, span])
+    assert _calls(call_runner._merge_span_calls([native], [span])) == expected
+
+
+def test_order_pairs_only_calls_that_ended_the_same_way() -> None:
+    # Each tracer missed a different call: three calls happened.
+    natives = [
+        Call(name="roll", arguments={}, result="b", at=10.0),
+        Call(name="roll", arguments={}, result="c", at=20.0),
+    ]
+    spans = [
+        Call(
+            name="roll", arguments={}, result="a", worker_id="A", at=1.0, ended_at=1.5
+        ),
+        Call(
+            name="roll", arguments={}, result="b", worker_id="B", at=2.0, ended_at=2.5
+        ),
+    ]
+    assert [
+        (c.result, c.worker_id)
+        for c in sorted(
+            call_runner._merge_span_calls(natives, spans), key=lambda c: c.result
+        )
+    ] == [("a", "A"), ("b", "B"), ("c", "")]
+
+
+@pytest.mark.parametrize("natives", [1, 2])
+def test_spans_that_outnumber_the_calls_left_are_each_kept_without_a_guessed_owner(
+    natives: int,
+) -> None:
+    calls = [_search("a", float(at)) for at in range(1, natives + 1)]
+    spans = [
+        _search_span("a", 1.0 + at / 10, worker, runtime_ids={"event_id": f"s{at}"})
+        for at, worker in enumerate("ABC"[: natives + 1])
+    ]
+    merged = call_runner._merge_span_calls(calls, spans)
+    assert len(merged) == natives + 1
+    assert {c.worker_id for c in merged} == {""}
+    assert {c.runtime_ids.get("event_id") for c in merged} == {None}
+
+
 @pytest.mark.parametrize("reversed_spans", [True, False])
 def test_two_spans_claiming_one_call_go_to_the_stronger_claim_and_a_tie_leaves_it_unknown(
     reversed_spans: bool,
@@ -1051,13 +1165,14 @@ def test_two_spans_claiming_one_call_go_to_the_stronger_claim_and_a_tie_leaves_i
         ({"q": "b"}, True, "worker-b", "event-b"),
     ]
     tied = [
-        _search_span("a", 1.0, "worker-a", input_omitted=True),
-        _search_span("b", 2.0, "worker-b", input_omitted=True),
+        _search_span("a", 1.0, "worker-a", input_omitted=True, result=None),
+        _search_span("b", 2.0, "worker-b", input_omitted=True, result=None),
     ]
     if reversed_spans:
         tied.reverse()
-    (merged,) = call_runner._merge_span_calls([_search("b", 9.0)], tied)
-    assert (merged.worker_id, merged.runtime_ids) == ("", {})
+    # Two spans are two calls; which is the one the other tracer saw, nothing says.
+    merged = call_runner._merge_span_calls([_search("b", 9.0)], tied)
+    assert [(c.worker_id, c.runtime_ids) for c in merged] == [("", {}), ("", {})]
 
 
 @pytest.mark.parametrize("reversed_spans", [True, False])
@@ -1548,6 +1663,29 @@ def test_an_agent_the_framework_records_as_handed_control_holds_its_calls(
         ("lookup", "tool_call", "Triage", "observed", ""),
     ]
     assert "ended_at" not in rows[0]
+
+
+def test_a_control_pass_made_through_a_tool_is_written_once_as_the_transfer(
+    tmp_path: Path,
+) -> None:
+    # The agent handed control runs inside the tool that passed it, and the framework names who passed it.
+    _run(
+        tmp_path,
+        """
+        with span("Triage", **{"fi.span.kind": "AGENT", "graph.node.id": "Triage"}):
+            with span("transfer_to_refunds", **{"fi.span.kind": "TOOL", "gen_ai.tool.name": "transfer_to_refunds"}):
+                with span("Refunds", **{"fi.span.kind": "AGENT", "graph.node.id": "Refunds"}) as refunds:
+                    with span("issue_refund", **{"fi.span.kind": "TOOL", "gen_ai.tool.name": "issue_refund"}):
+                        pass
+                    refunds.set_attribute("graph.node.parent_id", "Triage")
+    """,
+    )
+    rows = _sealed(tmp_path)
+    passes = [row for row in rows if row.get("delegated_to")]
+    assert [(row["name"], row["kind"], row["agent"]) for row in passes] == [
+        ("transfer_to_refunds", "transferred", "Triage")
+    ]
+    assert "ended_at" not in passes[0]
 
 
 def test_an_agent_handed_control_inside_an_openai_agents_run_holds_its_calls(

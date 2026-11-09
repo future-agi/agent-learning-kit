@@ -31,6 +31,7 @@ from __future__ import annotations
 import ast
 import atexit
 import asyncio
+import dataclasses
 import gc
 import json
 import random
@@ -985,6 +986,10 @@ def _merge_span_calls(calls: list[Call], from_spans: list[Call]) -> tuple[Call, 
         unknown |= {span.runtime_ids.get("event_id") for span in spans_left}
         if spans_left and len(spans_left) >= len(calls_left):
             _lend_shared(spans_left, calls_left)
+        # More spans than calls left are more calls than the other tracer saw: each extra is kept, owned by no one.
+        extras = [_unowned(span) for span in spans_left[len(calls_left) :]]
+        _lend_shared(spans_left, extras)
+        merged.extend(extras)
     for call in merged:
         if call.parent_span_id and call.parent_span_id in unknown:
             call.parent_span_id, call.relationship = "", ""
@@ -1017,7 +1022,10 @@ def _pair_tool(
     values = {id(call): _argument_values(call) for call in [*rest, *free]}
 
     def fit(span: Call, call: Call) -> tuple[bool, bool] | None:
-        """How strongly a span claims a call: matching arguments, then outcome; None when an argument differs."""
+        """How strongly a span claims a call: matching arguments, then outcome; None when anything both recorded
+        differs."""
+        if _recorded_differently(span, call):
+            return None
         mine, theirs = values[id(span)], values[id(call)]
         shared = (
             mine.keys() & theirs.keys()
@@ -1074,10 +1082,38 @@ def _pair_tool(
 
 
 def _compatible(span: Call, call: Call, fit: Callable[[Call, Call], Any]) -> bool:
-    """Whether a span and a call can be one call: no argument differs, and they agree on the outcome or record the
-    same result (two tracers can read one refusal differently)."""
+    """Whether a span and a call can be one call: nothing both recorded differs, and they agree on the outcome or
+    record the same result (two tracers can read one refusal differently)."""
     strength = fit(span, call)
-    return strength is not None and (strength[1] or span.result == call.result)
+    return strength is not None and (
+        strength[1]
+        or (_kept_result(span) and _kept_result(call) and _same_result(span, call))
+    )
+
+
+def _kept_result(call: Call) -> bool:
+    # A tracer that wrote no output, or only part of it, recorded nothing to compare.
+    return call.result not in (None, "") and not call.output_omitted
+
+
+def _same_result(span: Call, call: Call) -> bool:
+    return _loose(span.result) == _loose(call.result)
+
+
+def _recorded_differently(span: Call, call: Call) -> bool:
+    """Whether a span and a call each recorded something about the call that the other contradicts: its result, the
+    worker that made it, the worker it handed work to, or whether it was a worker's run. Event ids are not compared
+    here: each tracer may number events in its own way, and a shared id is matched before any of this."""
+    return (
+        (_kept_result(span) and _kept_result(call) and not _same_result(span, call))
+        or bool(span.worker_id and call.worker_id and span.worker_id != call.worker_id)
+        or bool(
+            span.delegated_to
+            and call.delegated_to
+            and _tool_key(span.delegated_to) != _tool_key(call.delegated_to)
+        )
+        or span.handoff != call.handoff
+    )
 
 
 def _pair_in_order(
@@ -1116,7 +1152,9 @@ def _pair_interchangeable(
     wanting: dict[str, list[Call]] = {}
     for span in spans:
         fitting = [
-            digest for digest, group in alike.items() if _compatible(span, group[0], fit)
+            digest
+            for digest, group in alike.items()
+            if _compatible(span, group[0], fit)
         ]
         if len(fitting) == 1:
             wanting.setdefault(fitting[0], []).append(span)
@@ -1156,6 +1194,19 @@ def _digest(call: Call) -> str:
         key: value for key, value in vars(call).items() if key not in ("at", "ended_at")
     }
     return json.dumps(fields, sort_keys=True, default=repr)
+
+
+def _unowned(span: Call) -> Call:
+    return dataclasses.replace(
+        span,
+        worker_id="",
+        worker_label="",
+        delegated_to="",
+        transferred=False,
+        runtime_ids={},
+        parent_span_id="",
+        relationship="",
+    )
 
 
 def _lend_shared(spans: list[Call], calls: list[Call]) -> None:
