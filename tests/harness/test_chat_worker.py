@@ -401,3 +401,116 @@ def test_failed_worker_uploads_partial_evidence_before_raising(tmp_path, monkeyp
     assert adapter.uploads == [b"partial transcript", b"http failure trace"]
     assert failure.value.partial.transcript_artifact == "transcript-1"
     assert failure.value.partial.turns == 2
+
+
+class _Reporter:
+    def __init__(self, denied: bool = False) -> None:
+        self.denied = denied
+        self.checked: list[str] = []
+        self.recorded: list[dict] = []
+
+    def check(self, action):
+        self.checked.append(action)
+        if self.denied:
+            from fi.alk.harness.usage import UsageDenied
+
+            raise UsageDenied({"allowed": False, "reason": "plan limit"})
+
+    def record(self, **facts):
+        self.recorded.append(facts)
+
+
+def _ready_runtime() -> EnvironmentRuntime:
+    return EnvironmentRuntime(
+        runtime_id="runtime-1",
+        world_index=0,
+        bundle_digest="sha256:" + "a" * 64,
+        state=RuntimeState.READY,
+        endpoints={
+            "target_http": RuntimeEndpoint(
+                capability="target_http", protocol="http", address="http://agent.invalid",
+            )
+        },
+    )
+
+
+def test_a_text_call_run_in_the_worker_is_checked_and_recorded_with_its_tokens(
+    tmp_path, monkeypatch
+):
+    from dataclasses import replace
+    from datetime import datetime
+
+    reporter = _Reporter()
+    context = replace(_context(tmp_path), usage_reporter=reporter)
+
+    class Wrapper:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def call(self, _input):
+            return AgentResponse(content="Your account is active.")
+
+    async def exchange_with_tokens(*args):
+        transcript = await _single_exchange(*args)
+        transcript.simulator_input_tokens, transcript.simulator_output_tokens = 11, 7
+        return transcript
+
+    async def worker(_module, payload, *, environ, work_directory):
+        result_path = tmp_path / "worker-result.json"
+        monkeypatch.setattr(chat_worker.sys, "stdin", io.StringIO(json.dumps(payload)))
+        monkeypatch.setattr(chat_worker.sys, "argv", ["chat_worker", str(result_path)])
+        await chat_worker.main()
+        return json.loads(result_path.read_text())
+
+    monkeypatch.delenv("ALK_SIMULATOR_FUNDING", raising=False)
+    monkeypatch.setattr(chat_worker, "run_json_worker", worker)
+    monkeypatch.setattr(chat_call_runner, "HTTPAgentWrapper", Wrapper)
+    monkeypatch.setattr(chat_call_runner, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat_call_runner, "_drive_conversation", exchange_with_tokens)
+
+    asyncio.run(
+        chat_worker.IsolatedChatCallRunner(_Adapter(), context).run(
+            SimpleNamespace(scenario_key="trial-key", source_scenario_key="one", scenario_id="id-1"),
+            _ready_runtime(),
+        )
+    )
+
+    assert reporter.checked == ["text_call"]
+    [recorded] = reporter.recorded
+    assert isinstance(recorded.pop("occurred_at"), datetime)
+    assert recorded == {
+        "action": "text_call",
+        "scenario_key": "trial-key",
+        "amount": 18,
+        "funding": "platform",
+        "outcome": "completed",
+        "failure_domain": None,
+    }
+
+
+def test_a_text_call_the_plan_does_not_allow_never_starts_its_worker(tmp_path, monkeypatch):
+    from dataclasses import replace
+
+    reporter = _Reporter(denied=True)
+    started = []
+
+    async def worker(*_args, **_kwargs):
+        started.append(True)
+        return {"error": "should not run"}
+
+    monkeypatch.delenv("ALK_SIMULATOR_FUNDING", raising=False)
+    monkeypatch.setattr(chat_worker, "run_json_worker", worker)
+    runner = chat_worker.IsolatedChatCallRunner(
+        _Adapter(), replace(_context(tmp_path), usage_reporter=reporter)
+    )
+
+    with pytest.raises(CallAborted) as denied:
+        asyncio.run(
+            runner.run(
+                SimpleNamespace(scenario_key="trial-key", source_scenario_key="one", scenario_id="id-1"),
+                _ready_runtime(),
+            )
+        )
+
+    assert reporter.checked == ["text_call"]
+    assert denied.value.code == "usage_exhausted" and started == []

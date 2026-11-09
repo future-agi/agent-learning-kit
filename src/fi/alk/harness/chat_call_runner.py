@@ -41,6 +41,22 @@ from .world.stores.postgres import AttachedPostgresStore
 logger = logging.getLogger(__name__)
 
 
+async def _check_text_usage(reporter: Any, funding: str) -> None:
+    """Stop a platform-funded text call the plan does not allow, before it starts."""
+    if reporter is None or funding != "platform":
+        return
+    try:
+        await asyncio.to_thread(reporter.check, "text_call")
+    except UsageDenied as exc:
+        raise CallAborted(
+            f"text_usage_check_denied: {exc}", code="usage_exhausted"
+        ) from exc
+    except UsageUnavailable as exc:
+        raise CallAborted(
+            f"text_usage_check_failed: {exc}", code="usage_check_failed"
+        ) from exc
+
+
 async def _record_text_usage(
     reporter: Any,
     *,
@@ -529,17 +545,7 @@ class HostedChatCallRunner:
             },
         )
         funding = simulator_funding()
-        if self._context.usage_reporter is not None and funding == "platform":
-            try:
-                await asyncio.to_thread(self._context.usage_reporter.check, "text_call")
-            except UsageDenied as exc:
-                raise CallAborted(
-                    f"text_usage_check_denied: {exc}", code="usage_exhausted"
-                ) from exc
-            except UsageUnavailable as exc:
-                raise CallAborted(
-                    f"text_usage_check_failed: {exc}", code="usage_check_failed"
-                ) from exc
+        await _check_text_usage(self._context.usage_reporter, funding)
         started = datetime.now(timezone.utc)
         transcript: Transcript | None = None
         failure: CallAborted | None = None
