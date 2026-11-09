@@ -1838,11 +1838,13 @@ def _adk_server_arguments(command: list[str]) -> list[str] | None:
 
     normalized = [str(item).strip() for item in command]
     for index in range(len(normalized) - 1):
-        if normalized[index] == "adk" and normalized[index + 1] in {
-            "web",
-            "api_server",
-        }:
-            return normalized[index + 2 :]
+        token = normalized[index]
+        # `adk` on PATH or by path (`.venv/bin/adk`), or the module (`python -m google.adk.cli`).
+        if Path(token).name == "adk" or (
+            token == "google.adk.cli" and index > 0 and normalized[index - 1] == "-m"
+        ):
+            if normalized[index + 1] in {"web", "api_server"}:
+                return normalized[index + 2 :]
     return None
 
 
@@ -1877,8 +1879,9 @@ def _adk_app_name(
     """Discover the unique ADK app package exposed by ``adk web`` or ``adk api_server``.
 
     ADK serves the agents directory named by the command's positional argument (default: its
-    working directory). That directory is one app when it holds ``agent.py`` itself; otherwise
-    ADK discovers applications as its immediate Python packages. Keep this source-derived and
+    working directory). That directory is one app when it holds ``agent.py`` or
+    ``root_agent.yaml`` itself; otherwise ADK discovers applications as its immediate Python
+    packages with an ``agent.py``, or subdirectories with a ``root_agent.yaml``. Keep this source-derived and
     deterministic: when a checkout contains more than one possible app, authoring must describe
     the desired HTTP boundary instead of the compiler guessing.
     """
@@ -1896,15 +1899,18 @@ def _adk_app_name(
         if agents_dir.is_relative_to(root.resolve()) and agents_dir.is_dir():
             workdir = agents_dir
             break
-    if (workdir / "agent.py").is_file():
+    # ADK treats a directory as one app when it holds agent.py or root_agent.yaml.
+    if (workdir / "agent.py").is_file() or (workdir / "root_agent.yaml").is_file():
         return workdir.name
     candidates = sorted(
         path.name
         for path in workdir.iterdir()
         if path.is_dir()
         and path.name not in _IGNORED_ARTIFACT_PARTS
-        and (path / "__init__.py").is_file()
-        and (path / "agent.py").is_file()
+        and (
+            ((path / "__init__.py").is_file() and (path / "agent.py").is_file())
+            or (path / "root_agent.yaml").is_file()
+        )
     )
     return candidates[0] if len(candidates) == 1 else None
 

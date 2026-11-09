@@ -3895,6 +3895,46 @@ def test_adk_http_servers_resolve_the_app_their_agents_directory_serves(
     )
 
 
+@pytest.mark.parametrize(
+    ("command", "app_name"),
+    [
+        ([".venv/bin/adk", "api_server", "agents"], "nested_app"),
+        (["/usr/local/bin/adk", "web", "agents"], "nested_app"),
+        (["python", "-m", "google.adk.cli", "api_server", "agents"], "nested_app"),
+        (["python3", "-m", "google.adk.cli", "web", "agents"], "nested_app"),
+        (["adk", "api_server", "yaml_app"], "yaml_app"),
+        (["adk", "api_server", "yaml_agents"], "only_yaml"),
+    ],
+)
+def test_adk_servers_are_recognised_however_adk_is_invoked_and_however_the_app_is_defined(
+    tmp_path: Path, command: list[str], app_name: str
+) -> None:
+    from fi.alk.harness.bundle_author_v2 import _adk_app_name, _adk_server_arguments
+
+    nested = tmp_path / "agents" / "nested_app"
+    nested.mkdir(parents=True)
+    (nested / "__init__.py").write_text("", encoding="utf-8")
+    (nested / "agent.py").write_text("root_agent = object()\n", encoding="utf-8")
+    # ADK also accepts an app defined by root_agent.yaml, as one app or as a sub-app.
+    (tmp_path / "yaml_app").mkdir()
+    (tmp_path / "yaml_app" / "root_agent.yaml").write_text("name: x\n", encoding="utf-8")
+    (tmp_path / "yaml_agents" / "only_yaml").mkdir(parents=True)
+    (tmp_path / "yaml_agents" / "only_yaml" / "root_agent.yaml").write_text(
+        "name: y\n", encoding="utf-8"
+    )
+
+    assert _adk_server_arguments(command) is not None
+    assert _adk_app_name(tmp_path, ".", command) == app_name
+
+
+def test_a_command_that_only_mentions_adk_is_not_its_server() -> None:
+    from fi.alk.harness.bundle_author_v2 import _adk_server_arguments
+
+    assert _adk_server_arguments(["python", "-m", "google.adk.cli", "deploy"]) is None
+    assert _adk_server_arguments(["python", "main.py", "adk", "notes"]) is None
+    assert _adk_server_arguments(["myadk", "web"]) is None
+
+
 def test_adk_source_toolbox_is_hosted_against_world_database(tmp_path: Path) -> None:
     source = tmp_path / "source"
     app = source / "bug_agent"
