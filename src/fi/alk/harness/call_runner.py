@@ -1672,20 +1672,21 @@ def _merge_span_calls(calls: list[Call], from_spans: list[Call]) -> tuple[Call, 
             tools[_tool_key(call.name)][1].append(call)
     unknown: set[str | None] = set()
     for spans, natives in tools.values():
-        spans_left, calls_left, apart = _pair_tool(spans, natives, span_ids)
+        groups, apart, can_be = _pair_tool(spans, natives, span_ids)
+        # A span no call left could be is a call only the spans saw.
         merged.extend(apart)
-        if not calls_left:
-            # Calls only the spans saw.
-            merged.extend(spans_left)
-            continue
-        # Which of these calls each span is, nothing says: their ids and places stay unknown rather than be swapped.
-        unknown |= {span.runtime_ids.get("event_id") for span in spans_left}
-        if spans_left and len(spans_left) >= len(calls_left):
-            _lend_shared(spans_left, calls_left)
-        # More spans than calls left are more calls than the other tracer saw: each extra is kept, owned by no one.
-        extras = [_unowned(span) for span in spans_left[len(calls_left) :]]
-        _lend_shared(spans_left, extras)
-        merged.extend(extras)
+        for spans_left, calls_left in groups:
+            # Which of these calls each span is, nothing says: their ids and places stay unknown rather than be swapped.
+            unknown |= {span.runtime_ids.get("event_id") for span in spans_left}
+            # Only a call every one of these spans could be takes what they agree on.
+            shared = [call for call in calls_left if all(can_be(span, call) for span in spans_left)]
+            if len(spans_left) >= len(calls_left):
+                _lend_shared(spans_left, shared)
+            # More spans than the calls they could be are more calls than the other tracer saw: each extra is kept,
+            # owned by no one.
+            extras = [_unowned(span) for span in spans_left[len(calls_left) :]]
+            _lend_shared(spans_left, extras)
+            merged.extend(extras)
     for call in merged:
         if call.parent_span_id and call.parent_span_id in unknown:
             call.parent_span_id, call.relationship = "", ""
@@ -1694,11 +1695,11 @@ def _merge_span_calls(calls: list[Call], from_spans: list[Call]) -> tuple[Call, 
 
 def _pair_tool(
     spans: list[Call], natives: list[Call], span_ids: set[str]
-) -> tuple[list[Call], list[Call], list[Call]]:
+) -> tuple[list[tuple[list[Call], list[Call]]], list[Call], Callable[[Call, Call], bool]]:
     """Pair one tool's spans with the calls another tracer saw of it, on evidence that holds across the two tracers'
     clocks: an event id, then arguments and outcome between competing calls, then order when the spans did not
-    overlap, then calls that are the same in all but time. Returns the spans and calls left unpaired, and the spans that
-    can be none of the calls left."""
+    overlap, then calls that are the same in all but time. Returns the unpaired spans and calls in groups that could be
+    each other, the spans that can be none of the calls left, and the test of whether a span could be a call."""
     by_id = {
         call.runtime_ids["event_id"]: call
         for call in natives
@@ -1736,8 +1737,8 @@ def _pair_tool(
         # Nothing competes, but count alone is not identity: each tracer may have missed a different call.
         if _compatible(rest[0], free[0], fit):
             _lend_span(rest[0], free[0])
-            return [], [], []
-        return [], [], rest
+            return [], [], lambda _span, _call: False
+        return [], rest, lambda _span, _call: False
     contested_spans: list[Call] = []
     contested_calls: list[Call] = []
     while True:
@@ -1769,12 +1770,45 @@ def _pair_tool(
         rest, free = [], []
     rest, free = _pair_interchangeable(rest, free, fit)
     left = [*free, *contested_calls]
-    # A span no call left could be is a call only the spans saw.
-    apart = [
-        span for span in rest if not any(_compatible(span, call, fit) for call in left)
-    ]
-    rest = [span for span in rest if not any(span is other for other in apart)]
-    return [*rest, *contested_spans], left, apart
+
+    def can_be(span: Call, call: Call) -> bool:
+        return _compatible(span, call, fit)
+
+    spans_left = [*rest, *contested_spans]
+    apart = [span for span in spans_left if not any(can_be(span, call) for call in left)]
+    spans_left = [span for span in spans_left if not any(span is other for other in apart)]
+    return _compatible_groups(spans_left, left, can_be), apart, can_be
+
+
+def _compatible_groups(
+    spans: list[Call], calls: list[Call], can_be: Callable[[Call, Call], bool]
+) -> list[tuple[list[Call], list[Call]]]:
+    """Spans and calls left unpaired, in groups that share no possible pairing: a span counts only against the calls
+    it could be, so an unrelated call never absorbs another call's span. Calls no span could be are left out."""
+    group = list(range(len(spans)))
+
+    def root(index: int) -> int:
+        while group[index] != index:
+            group[index] = group[group[index]]
+            index = group[index]
+        return index
+
+    owner: dict[int, int] = {}
+    for at, span in enumerate(spans):
+        for position, call in enumerate(calls):
+            if not can_be(span, call):
+                continue
+            if position in owner:
+                group[root(at)] = root(owner[position])
+            else:
+                owner[position] = at
+    found: dict[int, tuple[list[Call], list[Call]]] = {}
+    for at, span in enumerate(spans):
+        found.setdefault(root(at), ([], []))[0].append(span)
+    for position, call in enumerate(calls):
+        if position in owner:
+            found[root(owner[position])][1].append(call)
+    return list(found.values())
 
 
 def _compatible(span: Call, call: Call, fit: Callable[[Call, Call], Any]) -> bool:
@@ -1802,7 +1836,7 @@ def _recorded_differently(span: Call, call: Call) -> bool:
     here: each tracer may number events in its own way, and a shared id is matched before any of this."""
     return (
         (_kept_result(span) and _kept_result(call) and not _same_result(span, call))
-        or bool(span.worker_id and call.worker_id and span.worker_id != call.worker_id)
+        or _other_worker(span, call)
         or bool(
             span.delegated_to
             and call.delegated_to
@@ -1921,6 +1955,18 @@ def _lend_shared(spans: list[Call], calls: list[Call]) -> None:
             call.worker_id, call.worker_label = worker
         call.delegated_to = call.delegated_to or delegated_to or ""
         call.transferred = call.transferred or bool(transferred)
+
+
+def _worker_names(call: Call) -> set[str]:
+    return {_tool_key(name) for name in (call.worker_id, call.worker_label) if name}
+
+
+def _other_worker(span: Call, call: Call) -> bool:
+    """Whether two records name different workers. Tracers spell a worker in different id spaces (a framework's
+    hashed key, its role name), so they are the same worker when any name either recorded matches, and different only
+    when both named a worker and no name matches."""
+    mine, theirs = _worker_names(span), _worker_names(call)
+    return bool(mine and theirs and not (mine & theirs))
 
 
 def _lend_span(span: Call, other: Call) -> None:
