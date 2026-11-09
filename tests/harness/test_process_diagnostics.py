@@ -112,6 +112,33 @@ def test_retention_collapses_repeated_lines_so_the_real_error_survives(tmp_path)
     )
 
 
+def test_collapsing_keeps_each_traceback_whole_and_its_own_error():
+    from fi.alk.harness.process_diagnostics import _collapse_repeated_lines
+
+    frames = 'Traceback (most recent call last):\n  File "/app/agent.py", line 10, in run\n    speak()\n'
+    log = (
+        "INFO start\n"
+        + frames
+        + "HTTPStatusError: 402 Payment Required\n"
+        + "INFO poll 1\n"
+        + frames
+        + "RuntimeError: session closed\n"
+        + "INFO poll 2\n"
+        + frames
+        + "RuntimeError: session closed\n"
+    )
+    assert _collapse_repeated_lines(log) == (
+        "INFO start\n"
+        + frames
+        + "HTTPStatusError: 402 Payment Required\n"
+        + "[earlier copies of the next line omitted: 1]\n"
+        + "INFO poll 2\n"
+        + "[earlier copies of the next 4 lines omitted: 1]\n"
+        + frames
+        + "RuntimeError: session closed\n"
+    )
+
+
 def test_retention_write_failure_does_not_prevent_cleanup(tmp_path, monkeypatch):
     from fi.alk.harness import process_diagnostics
 

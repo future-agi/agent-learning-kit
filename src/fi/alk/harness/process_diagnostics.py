@@ -13,25 +13,65 @@ from fi._diagnostics import sanitize_diagnostic
 _DIGITS = str.maketrans("", "", "0123456789")
 
 
+_CHAINED = (
+    "During handling of the above exception",
+    "The above exception was the direct cause",
+)
+
+
+def _records(lines: list[str]) -> list[list[str]]:
+    """Split log lines into records: a line with its indented continuation lines, and a Python
+    traceback kept whole from its header to its exception line, chained tracebacks included."""
+
+    records: list[list[str]] = []
+    in_traceback = False
+    for line in lines:
+        indented = line[:1] in (" ", "\t")
+        if line.startswith("Traceback (most recent call last)"):
+            if records and records[-1][-1].strip().startswith(_CHAINED):
+                records[-1].append(line)
+            else:
+                records.append([line])
+            in_traceback = True
+        elif records and (indented or not line.strip()):
+            records[-1].append(line)
+        elif records and line.startswith(_CHAINED):
+            records[-1].append(line)
+        elif records and in_traceback:
+            # The exception line closes the traceback.
+            records[-1].append(line)
+            in_traceback = False
+        else:
+            records.append([line])
+            in_traceback = False
+    return records
+
+
 def _collapse_repeated_lines(text: str) -> str:
-    """Keep a repeated line only where it last appears, above it the count of its earlier copies.
+    """Keep a repeated log record only where it last appears, above it the count of its earlier
+    copies.
 
     A healthy process repeats some lines all through its log (stream notices, polling, retries);
-    left in, they push the one line that explains a failure out of the retained tail. Lines that
-    differ only in digits (times, ids, counters) count as the same line.
+    left in, they push the one line that explains a failure out of the retained tail. A record is
+    a line with its indented continuation, and a traceback stays whole, so two different errors
+    never share or lose frames. Records that differ only in digits (times, ids, counters) count
+    as the same record.
     """
 
-    lines = text.splitlines(keepends=True)
-    shapes = [line.translate(_DIGITS) for line in lines]
+    records = _records(text.splitlines(keepends=True))
+    shapes = ["".join(record).translate(_DIGITS) for record in records]
     last = {shape: index for index, shape in enumerate(shapes)}
     copies = Counter(shapes)
     kept: list[str] = []
-    for index, line in enumerate(lines):
+    for index, record in enumerate(records):
         if last[shapes[index]] != index:
             continue
         if copies[shapes[index]] > 1:
-            kept.append(f"[earlier copies of the next line omitted: {copies[shapes[index]] - 1}]\n")
-        kept.append(line)
+            what = "line" if len(record) == 1 else f"{len(record)} lines"
+            kept.append(
+                f"[earlier copies of the next {what} omitted: {copies[shapes[index]] - 1}]\n"
+            )
+        kept.extend(record)
     return "".join(kept)
 
 
