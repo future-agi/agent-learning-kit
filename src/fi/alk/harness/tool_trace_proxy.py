@@ -24,6 +24,7 @@ try:  # Beside the proxy in a bundle; the harness package when run from source.
         ToolCall,
         WorldDoor,
         permitted,
+        world_action,
     )
 except ImportError:  # pragma: no cover - imported as part of the package
     from fi.alk.harness.world_door import (  # type: ignore[no-redef]
@@ -37,6 +38,7 @@ except ImportError:  # pragma: no cover - imported as part of the package
         ToolCall,
         WorldDoor,
         permitted,
+        world_action,
     )
 
 UPSTREAM = os.environ.get("UPSTREAM_URL", "").rstrip("/")
@@ -176,7 +178,7 @@ class Handler(BaseHTTPRequestHandler):
         # attempt to act as someone else, refused and logged as the agent's.
         actor = (self.headers.get("x-alk-actor") or "").strip()
         proven = not actor
-        action = route.strip("/").replace("/", ".") or "unknown"
+        action = world_action(route) or "unknown"
         tool = (_read_json(ACTIONS_FILE) or {}).get(action)
         return ToolCall(
             action=action,

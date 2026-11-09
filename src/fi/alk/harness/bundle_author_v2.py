@@ -88,6 +88,7 @@ from .provision import source_fingerprint
 from .provider_lifecycle import ProviderRepositoryManifest, load_provider_manifest
 from .provider_import import ProviderImportSpec
 from .world.tools import _binding
+from .world_door import world_action
 
 
 class BundleAuthorError(RuntimeError):
@@ -2032,7 +2033,7 @@ def _tool_actions(contract_body: dict[str, Any] | None) -> dict[str, str]:
     tool's own name: a route is often named otherwise (`get_order` -> `orders/get`)."""
     contract = AgentContract.model_validate(contract_body or {})
     return {
-        entry.endpoint.split("?", 1)[0].strip("/").replace("/", "."): entry.tool
+        world_action(entry.endpoint): entry.tool
         for entry in contract.tool_entrypoints
         if entry.endpoint.strip() and "{" not in entry.endpoint
     }
@@ -2045,7 +2046,7 @@ def _worker_permissions(contract_body: dict[str, Any] | None) -> dict[str, dict[
     return {
         f"worker:{worker.id}": {
             "allow": sorted(
-                {endpoints.get(tool, tool).strip("/").replace("/", ".") for tool in worker.allowed_tools or worker.tools}
+                {world_action(endpoints.get(tool, tool)) for tool in worker.allowed_tools or worker.tools}
             )
         }
         for worker in contract.workers

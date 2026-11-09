@@ -39,6 +39,7 @@ from .usage import (
 )
 from .world.runtime import Call, GeneratedWorld, trace_row
 from .world.stores.postgres import AttachedPostgresStore
+from .world_door import world_action
 
 logger = logging.getLogger(__name__)
 
@@ -186,7 +187,7 @@ def service_actions(contract: Any) -> set[str]:
     """The agent's tools its own tools service runs, as world actions: a service entry's route, `/` read as `.`.
     A route with a path parameter is left to the world's handler."""
     return {
-        route.replace("/", ".")
+        world_action(route)
         for entry in _entries(contract)
         if entry.get("mode") == "service"
         and (route := str(entry.get("endpoint") or "").strip("/"))
@@ -523,7 +524,7 @@ class _HostedChatTarget:
         for entry in self._contract.tool_entrypoints or []:
             entry = entry if isinstance(entry, dict) else entry.model_dump()
             if entry.get("tool") == tool and str(entry.get("endpoint") or "").strip("/"):
-                return str(entry["endpoint"]).strip("/").replace("/", ".")
+                return world_action(str(entry["endpoint"]))
         return tool
 
     def _world_call(self, call_id: str, name: str, arguments: Any) -> str:

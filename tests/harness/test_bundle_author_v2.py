@@ -5902,6 +5902,28 @@ def test_each_declared_worker_is_sealed_with_the_world_actions_its_tools_call():
     assert _worker_permissions({"tools": [{"name": "a"}]}) == {}
 
 
+def test_a_worker_allowed_a_templated_or_queried_route_is_permitted_its_real_calls():
+    from fi.alk.harness.bundle_author_v2 import _worker_permissions
+    from fi.alk.harness.world_door import permitted, world_action
+
+    contract = {
+        "tools": [{"name": "get_order"}, {"name": "create_refund"}],
+        "tool_entrypoints": [
+            {"tool": "get_order", "mode": "service", "service": "api", "endpoint": "/orders/{order_id}"},
+            {"tool": "create_refund", "mode": "service", "service": "api", "endpoint": "/refunds/create?x=1"},
+        ],
+        "workers": [{"id": "lookup", "tools": ["get_order", "create_refund"]}],
+    }
+    allow = _worker_permissions(contract)["worker:lookup"]["allow"]
+    # The proxy names the action from the real request: these are the calls the worker may make.
+    assert permitted(allow, world_action("/orders/1043"))
+    assert permitted(allow, world_action("/refunds/create?amount=5"))
+    # One segment per template value, nothing wider.
+    assert not permitted(allow, world_action("/orders/1043/cancel"))
+    assert not permitted(allow, world_action("/orders"))
+    assert not permitted(allow, world_action("/refunds/delete"))
+
+
 def test_limited_workers_seed_the_action_log_that_keeps_whose_attempt_was_refused(tmp_path: Path) -> None:
     from fi.alk.harness.bundle_author_v2 import _AGENT_TRACE_DDL, _TOOL_TRACE_DDL, _action_log_seed
 

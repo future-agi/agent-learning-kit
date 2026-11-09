@@ -140,9 +140,30 @@ class ActionLog(Protocol):
     def agent_calls(self, name: str) -> int: ...
 
 
+def world_action(route: str) -> str:
+    """A route or endpoint as the world names the action it takes: the path without its query, `/` read as `.`.
+    Every surface (the proxy, the sealed allow-lists, the service routes) names actions through this one rule."""
+    return str(route or "").split("?", 1)[0].strip("/").replace("/", ".")
+
+
+def _matches(allowed: str, action: str) -> bool:
+    """An allowed action matches the same action, and a templated route (`orders.{order_id}`) matches any value in
+    each of its `{...}` segments."""
+    if allowed == action:
+        return True
+    if "{" not in allowed:
+        return False
+    want, have = allowed.split("."), action.split(".")
+    return len(want) == len(have) and all(
+        (w.startswith("{") and w.endswith("}") and h) or w == h for w, h in zip(want, have)
+    )
+
+
 def permitted(permitted_actions: object, action: str) -> bool:
-    """Whether an actor with these permitted actions may take this world action."""
-    return isinstance(permitted_actions, list) and action in permitted_actions
+    """Whether an actor or worker with these permitted actions may take this world action."""
+    return isinstance(permitted_actions, list) and any(
+        _matches(str(allowed), action) for allowed in permitted_actions
+    )
 
 
 def record_action(action: str) -> tuple[str, str] | None:
