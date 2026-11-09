@@ -2039,6 +2039,28 @@ def _worker_permissions(contract_body: dict[str, Any] | None) -> dict[str, dict[
     }
 
 
+def _with_worker_channels(plan: EnvironmentPlanV2, contract_body: dict[str, Any] | None) -> EnvironmentPlanV2:
+    """Point each separately wired worker's tool address at its own channel on the tool proxy, so the world can tell
+    the workers apart and hold each to its own tools."""
+    if not any(process.name == "tool-proxy" for process in plan.processes):
+        return plan
+    workers = AgentContract.model_validate(contract_body or {}).workers
+    channels = {
+        one.address_env: f"{{{{TOOLS_API_URL}}}}/w/{{{{WORKER_CHANNEL_{one.id}}}}}"
+        for one in workers
+        if one.binding == "separate" and one.address_env.strip()
+    }
+    if not channels:
+        return plan
+    processes = tuple(
+        process.model_copy(update={"environment": {**process.environment, **channels}})
+        if isinstance(process, SourceProcess) and process.name == plan.control_service
+        else process
+        for process in plan.processes
+    )
+    return replace(plan, processes=processes)
+
+
 def _mcp_toolbox_definition(root: Path) -> tuple[Path, dict[str, Any]] | None:
     """Find one source-owned MCP Toolbox SQL configuration.
 
@@ -3670,6 +3692,7 @@ def author_bundle_v2(
         plan = _package_process_sources(
             source_root, temporary, plan, Runtime.model_validate(runtime or {}),
         )
+        plan = _with_worker_channels(plan, contract_body)
         (temporary / "credentials.json").write_text(
             credential_manifest.model_dump_json(indent=2) + "\n", encoding="utf-8"
         )
