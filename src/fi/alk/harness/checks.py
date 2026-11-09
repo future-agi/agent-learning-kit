@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import re
 from dataclasses import dataclass
 from typing import Any, Sequence
 
@@ -77,6 +78,20 @@ def takes_reference(checker: object) -> bool:
         return False
 
 
+_ID_NOISE = re.compile(r"[\s\-_.:/#]")
+
+
+def same_id(first: Any, second: Any) -> bool:
+    """Whether two identifiers name the same record however they were typed or spoken.
+
+    An agent says "CLM88213" for "CLM-88213", or "clm 88213"; a check comparing them as text fails a correct answer.
+    Only separators and case are ignored, so a different number is still different.
+    """
+    if first is None or second is None:
+        return False
+    return _ID_NOISE.sub("", str(first)).casefold() == _ID_NOISE.sub("", str(second)).casefold()
+
+
 def run_check(
     source: str,
     world: GeneratedWorld,
@@ -86,7 +101,7 @@ def run_check(
     reference: Sequence[dict[str, Any]] = (),
 ) -> Outcome:
     """Execute one check against what the run left behind, with the reference when it takes one."""
-    namespace: dict[str, Any] = {}
+    namespace: dict[str, Any] = {"same_id": same_id}
     try:
         exec(compile(source, f"<check:{name}>", "exec"), namespace)
     except Exception as failed:
