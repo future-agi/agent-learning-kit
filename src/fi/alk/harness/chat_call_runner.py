@@ -814,9 +814,14 @@ class HostedChatCallRunner:
         listing = load_actors(self._context.bundle_dir)
         world_db = runtime.endpoints.get("world_db")
         service = runtime.endpoints.get("tools_api")
+        # The tool proxy logs the agent's own calls (and the faults it applies) in the world's table: read that table
+        # whenever the trial is proxied, cast or not, so the trial record and the fault notices see those calls.
+        proxied = runtime.endpoints.get("tool_proxy") is not None
         door = chat_door(
             target_world,
-            world_db.address if listing.actors and world_db is not None and world_db.protocol == "postgres" else None,
+            world_db.address
+            if (listing.actors or proxied) and world_db is not None and world_db.protocol == "postgres"
+            else None,
             {
                 one.id: {"permitted_actions": list(one.permitted_actions), "on_behalf_of": one.on_behalf_of}
                 for one in listing.actors
@@ -873,7 +878,6 @@ class HostedChatCallRunner:
         acting: asyncio.Task[None] | None = None
         # An agent that runs its own tools reaches them through the tool proxy, which reads this trial's faults from
         # the world's database, as on a voice call.
-        proxied = runtime.endpoints.get("tool_proxy") is not None
         if proxied:
             from .call_runner import _set_trial_faults
 

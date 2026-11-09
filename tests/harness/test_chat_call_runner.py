@@ -1510,6 +1510,50 @@ def test_a_chat_trial_s_faults_are_set_for_the_tool_proxy_and_cleared_after(tmp_
     assert written == []
 
 
+def test_a_proxied_chat_trial_without_actors_still_reads_the_world_s_table(tmp_path: Path, monkeypatch: Any) -> None:
+    """The proxy logs the agent's own calls and the faults it applies in the world's table; a trial with no actors must
+    read it too, or its fault notices and world changes see nothing."""
+    from fi.alk.harness import call_runner
+
+    context = _context(tmp_path)
+    monkeypatch.setattr(call_runner, "_write_trial_state", lambda _runtime, _faults: None)
+    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
+    mirrors: list = []
+    real_door = chat.chat_door
+
+    def _door(world, mirror_dsn, *args, **kwargs):
+        mirrors.append(mirror_dsn)
+        return real_door(world, None, *args, **kwargs)
+
+    monkeypatch.setattr(chat, "chat_door", _door)
+
+    class Wrapper:
+        def __init__(self, **_kwargs: Any) -> None:
+            return
+
+        async def call(self, _request: Any) -> AgentResponse:
+            return AgentResponse(content="Done.")
+
+    monkeypatch.setattr(chat, "HTTPAgentWrapper", Wrapper)
+    endpoints = {
+        "target_http": RuntimeEndpoint(capability="target_http", protocol="http", address="http://localhost:18080"),
+        "tool_proxy": RuntimeEndpoint(capability="tool_proxy", protocol="http", address="http://localhost:18081"),
+        "world_db": RuntimeEndpoint(capability="world_db", protocol="postgres", address="postgresql://world"),
+    }
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1", world_index=0, bundle_digest="sha256:" + "a" * 64, state=RuntimeState.READY,
+        endpoints=endpoints,
+    )
+    scenario = SimpleNamespace(scenario_key="one", scenario_id="scenario-1")
+    asyncio.run(chat.HostedChatCallRunner(_Adapter(), context).run(scenario, runtime))
+    assert mirrors == ["postgresql://world"]
+    # Without the proxy and without actors, nothing writes there: the trial keeps its own log.
+    runtime.endpoints.pop("tool_proxy")
+    asyncio.run(chat.HostedChatCallRunner(_Adapter(), context).run(scenario, runtime))
+    assert mirrors[-1] is None
+
+
 def test_a_chat_trial_s_world_changes_read_the_world_s_table_where_the_proxy_logs_the_agent() -> None:
     from fi.alk.harness.actors import Actor, ActorList
     from fi.alk.harness.world_door import AGENT, MemoryLog, TeeLog
