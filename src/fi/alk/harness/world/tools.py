@@ -359,7 +359,7 @@ def _binding(
     """
     root = called.split(".")[0]
     reach = f"from {module} import {root}" if module else ""
-    state = "db.state, " if first_arg else ""
+    state = "True" if first_arg else "False"
     # Their code may be async, which is true of every framework-decorated tool. The result is
     # settled here rather than by the caller so that a handler stays synchronous, which is what
     # every other part of the world already assumes.
@@ -368,16 +368,16 @@ def _binding(
         attr = called.split(".", 1)[1] if "." in called else "__call__"
         return (
             f"{reach}\n"
-            "from fi.alk.harness.world.runtime import settled\n\n"
+            "from fi.alk.harness.world.runtime import call_agent_tool, settled\n\n"
             "def handle(args, db):\n"
             f"    instance = {built}\n"
-            f"    return settled(instance.{attr}({state}**args))\n"
+            f"    return settled(call_agent_tool(instance.{attr}, args, db, state={state}))\n"
         )
     return (
         f"{reach}\n"
-        "from fi.alk.harness.world.runtime import settled\n\n"
+        "from fi.alk.harness.world.runtime import call_agent_tool, settled\n\n"
         "def handle(args, db):\n"
-        f"    return settled({called}({state}**args))\n"
+        f"    return settled(call_agent_tool({called}, args, db, state={state}))\n"
     )
 
 
