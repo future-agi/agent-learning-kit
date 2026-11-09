@@ -997,6 +997,16 @@ class _ActionLog:
 _OUTCOMES = ("committed", "refused", "faulted", "duplicate")
 
 
+def _shown_action(name: str, actor: Any) -> str:
+    """How a person reads an actor's logged action: the door logs it by its last part (`change`, `post_message`), as
+    the proof does, so the actor's one permitted action ending that way (`approvals.change`) names it. More than one,
+    or none, keeps the logged name."""
+    if actor is None or "." in name:
+        return name
+    full = [one for one in getattr(actor, "permitted_actions", None) or () if one.rsplit(".", 1)[-1] == name]
+    return full[0] if len(full) == 1 else name
+
+
 def trial_state_changes(log: list[dict[str, Any]], listed: Mapping[str, Any]) -> list[dict[str, Any]]:
     """What each participant attempted in this trial and what the world made of it: one entry for the agent and one
     per actor that acted, with attempted, committed, refused, faulted and duplicate counts and the actions it
@@ -1026,7 +1036,7 @@ def trial_state_changes(log: list[dict[str, Any]], listed: Mapping[str, Any]) ->
         if outcome in _OUTCOMES:
             entry[outcome] += 1
         if outcome == "committed":
-            entry["committed_actions"].append(str(row.get("name") or ""))
+            entry["committed_actions"].append(_shown_action(str(row.get("name") or ""), actor))
     # The agent always has a line: "no change" is a result, since doing nothing can be correct.
     agent = entries.pop(AGENT, None) or {
         "who": AGENT, "name": "the agent", "attempted": 0, **{outcome: 0 for outcome in _OUTCOMES},
@@ -1108,7 +1118,7 @@ def actor_rows(log: list[dict[str, Any]], listed: Mapping[str, Any]) -> list[dic
             continue
         rows.append(
             {
-                "name": row.get("name"),
+                "name": _shown_action(str(row.get("name") or ""), actor),
                 "arguments": row.get("arguments") or {},
                 "result": _structured(row.get("result")),
                 "ok": bool(row.get("ok")),

@@ -317,6 +317,26 @@ def test_a_trial_s_state_changes_keep_attempted_refused_and_committed_apart_per_
     assert changes[0]["committed_actions"] == ["deals.request_approval", "deals.apply_discount"]
 
 
+def test_an_actor_s_action_is_shown_by_its_full_name_where_its_permissions_name_one():
+    from fi.alk.harness.call_runner import actor_rows, trial_state_changes
+
+    log = [
+        {"actor_id": "manager", "name": "put", "outcome": "committed", "ok": True},
+        {"actor_id": "manager", "name": "change", "outcome": "committed", "ok": True},
+        {"actor_id": "both", "name": "change", "outcome": "committed", "ok": True},
+        {"actor_id": "manager", "name": "post_message", "outcome": "committed", "ok": True},
+    ]
+    listed = {
+        "manager": Actor(id="manager", name="Mia", permitted_actions=["approvals.put", "approvals.change", "chat.post_message"]),
+        # Two collections it may change: the verb alone can't say which, so it is kept as logged.
+        "both": Actor(id="both", name="Bo", permitted_actions=["approvals.change", "deals.change"]),
+    }
+    changes = {c["who"]: c["committed_actions"] for c in trial_state_changes(log, listed)}
+    assert changes["manager"] == ["approvals.put", "approvals.change", "chat.post_message"]
+    assert changes["both"] == ["change"]
+    assert [row["name"] for row in actor_rows(log, listed)] == ["approvals.put", "approvals.change", "change", "chat.post_message"]
+
+
 def _history_dispatcher(history, actors):
     from fi.alk.harness.actor_dispatch import ActorDispatcher
 
