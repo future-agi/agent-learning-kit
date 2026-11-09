@@ -1,0 +1,62 @@
+{
+  "schema_version": "futureagi.multi-agent-reference.v1",
+  "id": "crewai-self-evaluation-flow",
+  "framework": {
+    "name": "crewai",
+    "version": "1.6.1"
+  },
+  "source": {
+    "repository": "https://github.com/crewAIInc/crewAI-examples.git",
+    "commit": "da94a91e691e1cf5b3151416bb15b5b62729bea8",
+    "subdirectory": "flows/self_evaluation_loop_flow",
+    "license": "MIT"
+  },
+  "adaptation": {
+    "patch": "agentcc.patch",
+    "sha256": "1d66c1d4c09c5761a2691995f0e371b196936eebbd02b19db78c1977249ed018",
+    "scope": "Declare the existing OpenAI-compatible runtime boundary, pin the LiteLLM fallback, route both workers through AgentCC, and update the tool import for the pinned CrewAI release. Flow, prompts, retry loop, and topology are unchanged."
+  },
+  "source_checks": [
+    {"path": "src/self_evaluation_loop_flow/main.py", "contains": "class ShakespeareXPostFlow"},
+    {"path": "src/self_evaluation_loop_flow/main.py", "contains": "return \"retry\""},
+    {"path": "src/self_evaluation_loop_flow/crews/shakespeare_crew/shakespeare_crew.py", "contains": "def shakespearean_bard"},
+    {"path": "src/self_evaluation_loop_flow/crews/x_post_review_crew/x_post_review_crew.py", "contains": "def x_post_verifier"},
+    {"path": "pyproject.toml", "contains": "crewai[tools]>=0.152.0"}
+  ],
+  "runtime": {
+    "kind": "batch_process",
+    "command": ["uv", "run", "--with", "litellm==1.101.0", "python", "-m", "self_evaluation_loop_flow.main"],
+    "model_environment": {
+      "CREWAI_TRACING_ENABLED": "false",
+      "OTEL_SDK_DISABLED": "true"
+    }
+  },
+  "topology": {
+    "coordinator": "ShakespeareXPostFlow",
+    "workers": [
+      {"id": "shakespearean_bard", "parent": "ShakespeareXPostFlow"},
+      {"id": "x_post_verifier", "parent": "ShakespeareXPostFlow"}
+    ]
+  },
+  "scenarios": [
+    {
+      "id": "reject_then_revise",
+      "instruction": "Run the native self-evaluation flow. The verifier should reject an invalid draft with actionable feedback, the flow should route that feedback back to the generator, and a later valid draft should be saved.",
+      "expected_workers": ["ShakespeareXPostFlow", "shakespearean_bard", "x_post_verifier"],
+      "expected_effects": [
+        "generator produces a draft",
+        "verifier returns structured validity and feedback",
+        "invalid feedback routes back to the generator",
+        "a valid final draft is saved or the bounded retry path terminates"
+      ]
+    }
+  ],
+  "required_evidence": [
+    "stable parent and child IDs under one run ID",
+    "delegation and return events for every handoff",
+    "every tool call attributed to its worker",
+    "separate tool permissions per worker",
+    "independent results for each exercised worker and the whole task",
+    "missing child evidence reported as unmeasured"
+  ]
+}

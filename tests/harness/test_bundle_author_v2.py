@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -12,6 +13,7 @@ import pytest
 
 from fi.alk.harness.bundle_author_v2 import (
     BundleAuthorError,
+    _carries_world,
     _compile_source_tool_handlers,
     _contract_column_declarations,
     _contract_sql_type,
@@ -22,6 +24,7 @@ from fi.alk.harness.bundle_author_v2 import (
     author_bundle_v2,
     reseal_scenarios,
     resolve_environment_plan,
+    sealed_from,
 )
 from fi.alk.harness.authoring_runtime_validation import _artifact_digest
 from fi.alk.harness.bundle_v2 import load_bundle_v2
@@ -37,6 +40,7 @@ from fi.alk.harness.certification import (
 )
 from fi.alk.harness.job import HarnessJob, ProviderExecutionMode
 from fi.alk.harness.process_preflight import preflight_bundle
+from fi.alk.harness.process_runtime import plan_ports
 from fi.alk.harness.provision import source_fingerprint
 from fi.alk.harness.repair_controller import RepairHistory
 from fi.alk.harness.source_model import SourceModel
@@ -78,6 +82,187 @@ def test_source_tool_handler_rejects_path_separator(tmp_path: Path) -> None:
             },
             tmp_path,
         )
+
+
+@pytest.mark.parametrize("dependency", ["requirements", "selected", "unselected", "extra", "supplemental"])
+@pytest.mark.parametrize("mode", ["import", "construct", "none", "http"])
+def test_native_command_tool_trace_uses_executable_source_bindings(
+    tmp_path: Path, dependency: str, mode: str,
+) -> None:
+    (tmp_path / "agent.py").write_text("print('ready')\n")
+    dependencies = '["crewai==1.6.1"]' if dependency == "selected" else "[]"
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="agent"\nversion="1"\n'
+        f'dependencies={dependencies}\n'
+        '[project.optional-dependencies]\ncrew=["crewai==1.6.1"]\n'
+    )
+    (tmp_path / "requirements.txt").write_text("crewai==1.6.1\n")
+    if dependency == "requirements":
+        (tmp_path / "pyproject.toml").unlink()
+    runtime = {
+        "language": "python", "execution": "native", "command": ["python", "agent.py"],
+        "extras": ["crew"] if dependency == "extra" else [],
+        "requirements_files": ["requirements.txt"] if dependency == "supplemental" else [],
+    }
+    entries = [] if mode == "none" else [{
+        "tool": "Lookup tool", "mode": mode, "module": "agent_tools", "callable": "lookup",
+    }]
+    plan = resolve_environment_plan(
+        tmp_path, _job(connector="auto"), contract_runtime=runtime,
+        tool_entrypoints=entries, contract_interface_kind="command", contract_modality="chat",
+    )
+    control = next(p for p in plan.processes if p.name == plan.control_service)
+    if mode in {"none", "http"}:
+        assert "HARNESS_TOOL_TRACE" not in control.environment
+        assert "ALK_TOOL_TRACE_BINDINGS" not in control.environment
+        assert "ALK_CREWAI_TOOL_TRACE" not in control.environment
+        return
+    assert control.environment["HARNESS_TOOL_TRACE"] == "{{WORLD_DIR}}/agent-tool-calls.jsonl"
+    assert json.loads(control.environment["ALK_TOOL_TRACE_BINDINGS"]) == [{
+        "name": "Lookup tool", "module": "agent_tools", "callable": "lookup",
+    }]
+    assert (control.environment.get("ALK_CREWAI_TOOL_TRACE") == "1") == (
+        dependency in {"requirements", "selected", "extra", "supplemental"}
+    )
+    assert all(
+        "HARNESS_TOOL_TRACE" not in getattr(p, "environment", {})
+        for p in plan.processes if p.name != plan.control_service
+    )
+
+
+def test_bundle_author_carries_command_tool_trace_bindings(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ready')\n")
+    (source / "agent_tools.py").write_text("def lookup(query): return query\n")
+    (source / "requirements.txt").write_text("crewai==1.6.1\n")
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring, command=["python", "agent.py"],
+        interface={"kind": "command", "protocol": "fi.alk"},
+    )
+    contract_path = authoring / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract["tool_entrypoints"] = [
+        {
+            "tool": "lookup",
+            "mode": "import",
+            "module": "agent_tools",
+            "callable": "lookup",
+        },
+        {
+            "tool": "editor",
+            "mode": "construct",
+            "module": "agent_tools",
+            "callable": "Editor.update",
+        },
+    ]
+    contract_path.write_text(json.dumps(contract))
+    bundle = author_bundle_v2(
+        source=source, job=_job(connector="auto"), authoring=authoring,
+        output=tmp_path / "bundle",
+    )
+    process = next(p for p in bundle.processes if p.name == bundle.runtime.control_service)
+    assert process.environment["HARNESS_TOOL_TRACE"] == "{{WORLD_DIR}}/agent-tool-calls.jsonl"
+    assert process.environment["ALK_CREWAI_TOOL_TRACE"] == "1"
+    assert json.loads(process.environment["ALK_TOOL_TRACE_BINDINGS"]) == [
+        {"name": "lookup", "module": "agent_tools", "callable": "lookup"},
+        {
+            "name": "editor",
+            "module": "agent_tools",
+            "callable": "Editor.update",
+        },
+    ]
+
+
+def test_reseal_compiles_tools_added_to_a_traced_command_agent(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ready')\n")
+    (source / "agent_tools.py").write_text(
+        "def lookup(query): return query\n"
+        "def update(value): return value\n"
+    )
+    (source / "requirements.txt").write_text("requests==2.32.5\n")
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring, command=["python", "agent.py"],
+        interface={"kind": "command", "protocol": "fi.alk"},
+    )
+    contract_path = authoring / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract["tools"] = [{"name": "lookup", "args": ["query"]}]
+    contract["tool_entrypoints"] = [{
+        "tool": "lookup", "mode": "import", "module": "agent_tools", "callable": "lookup",
+    }]
+    contract_path.write_text(json.dumps(contract))
+    bundle = authoring / "environment-bundle"
+    author_bundle_v2(
+        source=source, job=_job(connector="auto"), authoring=authoring, output=bundle,
+    )
+    contract["tools"].append({"name": "update", "args": ["value"]})
+    contract["tool_entrypoints"].append({
+        "tool": "update", "mode": "import", "module": "agent_tools", "callable": "update",
+    })
+    contract_path.write_text(json.dumps(contract))
+
+    reseal_scenarios(authoring)
+
+    resealed = load_bundle_v2(bundle)
+    assert resealed.metadata["source_tool_trace_version"] == 1
+    assert "handlers/update.py" in {file.path for file in resealed.files}
+    assert "contract_copied" not in resealed.metadata
+
+
+def test_reseal_preserves_construct_only_crewai_command_trace(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ready')\n")
+    (source / "agent_tools.py").write_text(
+        "class Editor:\n"
+        "    def update(self, value): return value\n"
+    )
+    (source / "requirements.txt").write_text("crewai==1.6.1\n")
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring, command=["python", "agent.py"],
+        interface={"kind": "command", "protocol": "fi.alk"},
+    )
+    contract_path = authoring / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract["tool_entrypoints"] = [{
+        "tool": "editor", "mode": "construct", "module": "agent_tools",
+        "callable": "Editor.update",
+    }]
+    contract_path.write_text(json.dumps(contract))
+    bundle_path = authoring / "environment-bundle"
+    built = author_bundle_v2(
+        source=source, job=_job(connector="auto"), authoring=authoring,
+        output=bundle_path,
+    )
+    original = next(
+        process for process in built.processes
+        if process.name == built.runtime.control_service
+    ).environment
+
+    contract["one_liner"] = "edited after the build"
+    contract_path.write_text(json.dumps(contract))
+    reseal_scenarios(authoring)
+
+    resealed = load_bundle_v2(bundle_path)
+    process = next(
+        item for item in resealed.processes
+        if item.name == resealed.runtime.control_service
+    )
+    assert process.environment == original
+    assert process.environment["HARNESS_TOOL_TRACE"] == (
+        "{{WORLD_DIR}}/agent-tool-calls.jsonl"
+    )
+    assert process.environment["ALK_CREWAI_TOOL_TRACE"] == "1"
+    assert json.loads(process.environment["ALK_TOOL_TRACE_BINDINGS"]) == [{
+        "name": "editor", "module": "agent_tools", "callable": "Editor.update",
+    }]
+    assert resealed.metadata["source_tool_trace_version"] == 1
 
 
 def _job(
@@ -473,6 +658,60 @@ def test_bundle_compiles_discovered_source_tool_entrypoint(tmp_path: Path) -> No
     }
 
 
+def test_bundle_observes_imported_chat_tool_execution(tmp_path: Path) -> None:
+    source = tmp_path / "chat-agent"
+    source.mkdir()
+    (source / "agent.py").write_text(
+        "def search_books(query):\n    return {'query': query, 'matches': 1}\n",
+        encoding="utf-8",
+    )
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring,
+        command=["python3", "agent.py"],
+        interface={
+            "kind": "http", "protocol": "openai_chat", "port": 8080,
+            "path": "/v1/chat/completions", "include_tools": False,
+        },
+    )
+    contract_path = authoring / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract["tool_entrypoints"] = [
+        {
+            "tool": "search_books", "mode": "import", "module": "agent",
+            "callable": "search_books",
+        }
+    ]
+    contract_path.write_text(json.dumps(contract))
+    bundle = author_bundle_v2(
+        source=source, job=_job(connector="http"), authoring=authoring,
+        output=tmp_path / "bundle",
+    )
+    process = next(
+        item for item in bundle.processes if item.name == bundle.runtime.control_service
+    )
+    trace = tmp_path / "agent-tool-calls.jsonl"
+    bootstrap = Path(__file__).resolve().parents[2] / "src/fi/alk/harness/livekit_tool_trace_bootstrap.py"
+    shutil.copy2(bootstrap, source / "sitecustomize.py")
+    result = subprocess.run(
+        [sys.executable, "-c", "from agent import search_books; print(search_books('Dune'))"],
+        env={
+            **os.environ,
+            **{
+                key: value.replace("{{WORLD_DIR}}", str(tmp_path))
+                for key, value in process.environment.items()
+            },
+            "PYTHONPATH": str(source),
+        },
+        capture_output=True, text=True, check=True,
+    )
+    assert "'matches': 1" in result.stdout
+    records = [json.loads(line) for line in trace.read_text().splitlines()]
+    assert records[0]["name"] == "search_books"
+    assert records[0]["arguments"] == {"query": "Dune"}
+    assert bundle.metadata["source_tool_trace_version"] == 1
+
+
 def test_tool_registration_is_not_observed_as_tool_execution(tmp_path: Path) -> None:
     source = tmp_path / "chat-agent"
     source.mkdir()
@@ -533,6 +772,15 @@ def test_auto_voice_contract_compiles_livekit_process_runtime(tmp_path: Path) ->
     )
     authoring = _authoring(tmp_path)
     _write_voice_contract(authoring)
+    contract_path = authoring / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract["tool_entrypoints"] = [
+        {
+            "tool": "search_books", "mode": "import", "module": "agent",
+            "callable": "search_books",
+        }
+    ]
+    contract_path.write_text(json.dumps(contract))
     job = _job(
         connector="auto",
         with_secrets=True,
@@ -546,6 +794,8 @@ def test_auto_voice_contract_compiles_livekit_process_runtime(tmp_path: Path) ->
     agent = next(process for process in bundle.processes if process.name == "agent")
     assert agent.environment["LIVEKIT_AGENT_NAME"].endswith("-w{{WORLD_INDEX}}")
     assert agent.environment["HARNESS_MODE"] == "1"
+    assert "ALK_TOOL_TRACE_BINDINGS" not in agent.environment
+    assert "source_tool_trace_version" not in bundle.metadata
     assert "target_provider" in agent.secret_purposes
     assert "target_http" not in bundle.capabilities
 
@@ -836,6 +1086,7 @@ def test_callable_contract_compiles_repository_callback_adapter(
     assert "ThreadingHTTPServer" in agent.run_command[2]
     assert agent.environment["ALK_CALLBACK_ENTRYPOINT"] == "app.agent:agent_callback"
     assert agent.environment["PORT"] == "{{PORT_agent}}"
+    assert agent.fixed_port is None
     assert bundle.capabilities["target_http"].service == "agent"
     assert any(probe.capability == "target_http" for probe in bundle.readiness)
     preflight_bundle(
@@ -1942,9 +2193,9 @@ def test_generic_pipeline_prefers_canonical_world_ir(tmp_path: Path) -> None:
     (artifact_root / "world-ir.schema.json").write_text(
         '{"title":"WorldIR"}\n', encoding="utf-8"
     )
-    # A stale compatibility artifact must not override the canonical semantic artifact.
+    # A world.sqlite the IR was imported from: the IR is its cache.
     with sqlite3.connect(authoring / "world.sqlite") as database:
-        database.execute("CREATE TABLE stale (id TEXT)")
+        database.execute("PRAGMA user_version = 1")
 
     output = tmp_path / "bundle"
     manifest = author_bundle_v2(
@@ -2183,6 +2434,119 @@ def test_generic_pipeline_compiles_harness_schema_for_in_process_store(
     assert "acct-1" not in schema
     with sqlite3.connect(output / "seed" / "world.sqlite") as copied:
         assert copied.execute("SELECT status FROM accounts").fetchone() == ("active",)
+
+
+_SQLITE_ORDERS_DDL = (
+    "CREATE TABLE orders (\n"
+    "  id INTEGER PRIMARY KEY AUTOINCREMENT,\n"
+    "  status TEXT NOT NULL\n"
+    ");\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("path", "content", "schema_from"),
+    [
+        ("data/seed.sql", _SQLITE_ORDERS_DDL, "data/seed.sql"),
+        ("schema.sql", _SQLITE_ORDERS_DDL, ""),
+        ("README.md", f"# Orders\n\n```sql\n{_SQLITE_ORDERS_DDL}```\n", ""),
+    ],
+    ids=["declared", "conventional", "readme"],
+)
+def test_generic_pipeline_adopts_a_sqlite_stores_schema_as_postgres(
+    tmp_path: Path, path: str, content: str, schema_from: str
+) -> None:
+    source = tmp_path / "source"
+    (source / path).parent.mkdir(parents=True)
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    (source / path).write_text(content, encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    contract = {
+        "modality": "chat",
+        "data_store": {"kind": "sqlite", "schema_from": schema_from},
+    }
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("CREATE TABLE orders (id INTEGER PRIMARY KEY, status TEXT)")
+        database.execute("INSERT INTO orders VALUES (?, ?)", (1, "shipped"))
+
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source,
+        job=_job(connector="http", metadata={"generic_harness_v1": True}),
+        authoring=authoring,
+        output=output,
+    )
+
+    assert manifest.seed.stores[0].migrations == ["seed/source-schema.sql"]
+    schema = (output / "seed" / "source-schema.sql").read_text(encoding="utf-8")
+    assert "AUTOINCREMENT" not in schema
+    # The source's own columns, not the authored world's: only the source says NOT NULL.
+    assert (
+        'CREATE TABLE IF NOT EXISTS "orders" ("id" bigint PRIMARY KEY, '
+        '"status" text NOT NULL);'
+    ) in schema
+
+
+def test_generic_pipeline_refuses_a_sqlite_store_schema_sqlite_cannot_load(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    (source / "db").mkdir(parents=True)
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    (source / "db" / "schema.sql").write_text("CREATE TABLE (;\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    (authoring / "contract.json").write_text(
+        json.dumps({"modality": "chat", "data_store": {"kind": "sqlite"}}),
+        encoding="utf-8",
+    )
+    sqlite3.connect(authoring / "world.sqlite").close()
+
+    with pytest.raises(BundleAuthorError, match="source_schema_not_sqlite"):
+        author_bundle_v2(
+            source=source,
+            job=_job(connector="http", metadata={"generic_harness_v1": True}),
+            authoring=authoring,
+            output=tmp_path / "bundle",
+        )
+
+
+@pytest.mark.parametrize(
+    "escape",
+    [
+        "ATTACH DATABASE '{outside}' AS outside; CREATE TABLE outside.proof (id INTEGER);",
+        "CREATE TABLE orders (id INTEGER); VACUUM INTO '{outside}';",
+        "ATTACH DATABASE 'relative.db' AS outside; CREATE TABLE outside.proof (id INTEGER);",
+    ],
+    ids=["attach", "vacuum-into", "attach-relative"],
+)
+def test_a_sqlite_store_schema_cannot_write_outside_its_scratch_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, escape: str
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    outside = tmp_path / "outside.db"
+    source = tmp_path / "source"
+    (source / "db").mkdir(parents=True)
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    (source / "db" / "schema.sql").write_text(
+        escape.format(outside=outside), encoding="utf-8"
+    )
+    authoring = _authoring(tmp_path)
+    (authoring / "contract.json").write_text(
+        json.dumps({"modality": "chat", "data_store": {"kind": "sqlite"}}),
+        encoding="utf-8",
+    )
+    sqlite3.connect(authoring / "world.sqlite").close()
+
+    with pytest.raises(BundleAuthorError, match="source_schema_not_sqlite"):
+        author_bundle_v2(
+            source=source,
+            job=_job(connector="http", metadata={"generic_harness_v1": True}),
+            authoring=authoring,
+            output=tmp_path / "bundle",
+        )
+    assert not outside.exists()
+    assert not (tmp_path / "relative.db").exists()
 
 
 def test_generic_pipeline_accepts_explicitly_tool_free_agent(tmp_path: Path) -> None:
@@ -2788,6 +3152,7 @@ def test_chat_command_runtime_compiles_generic_subprocess_bridge(
     agent = next(process for process in manifest.processes if process.name == "agent")
     assert agent.source_origin == "bundle"
     assert agent.working_directory == "generated/source/agent"
+    assert agent.fixed_port is None
     assert agent.environment["ALK_SUBPROCESS_COMMAND"] == json.dumps(
         [".venv/bin/python", "main.py"]
     )
@@ -2882,6 +3247,7 @@ def test_declared_langgraph_graph_compiles_without_agent_script(tmp_path: Path) 
 
     agent = next(process for process in manifest.processes if process.name == "agent")
     assert agent.environment["ALK_LANGGRAPH_ENTRYPOINT"] == "src/example/graph.py:graph"
+    assert agent.fixed_port is None
     assert "ThreadingHTTPServer" in agent.run_command[-1]
     sealed_contract = json.loads((output / "contract.json").read_text())
     assert sealed_contract["runtime"]["interface"]["kind"] == "callable"
@@ -3030,6 +3396,106 @@ def test_declared_http_runtime_uses_contract_command_port_and_health(
         item for item in plan.readiness if item.capability == "target_http"
     )
     assert readiness.path == "/docs"
+
+
+_PLAIN_HTTP_RUNTIME = {
+    "language": "python",
+    "command": ["python", "agent.py"],
+    "workdir": ".",
+    "interface": {
+        "kind": "http",
+        "protocol": "openai_chat",
+        "path": "/chat",
+        "health_path": "/health",
+        "port": 8080,
+    },
+}
+
+
+def _plain_http_agent(source: Path, files: dict[str, str]):
+    for name, text in {"agent.py": "", **files}.items():
+        path = source / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    plan = resolve_environment_plan(
+        source,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime=_PLAIN_HTTP_RUNTIME,
+    )
+    return next(process for process in plan.processes if process.name == "agent")
+
+
+@pytest.mark.parametrize(
+    ("name", "text"),
+    [
+        ("agent.py", 'port = int(os.environ.get("PORT", "8080"))\n'),
+        ("agent.py", "port = int(os.environ['PORT'])\n"),
+        ("agent.py", 'port = int(os.getenv("PORT", 8080))\n'),
+        ("app/server.py", 'port = os.environ.get(\n    "PORT",\n    "8080",\n)\n'),
+        ("server.ts", "const port = Number(process.env.PORT ?? 8080);\n"),
+        ("server.ts", "const port = Number(Bun.env.PORT ?? 8080);\n"),
+    ],
+)
+def test_http_agent_that_reads_port_has_no_fixed_port(
+    tmp_path: Path, name: str, text: str
+) -> None:
+    agent = _plain_http_agent(tmp_path / "source", {name: text})
+    assert agent.fixed_port is None
+    assert agent.environment["PORT"] == "{{PORT_agent}}"
+    assert agent.started_check is not None and agent.started_check.port is True
+
+
+@pytest.mark.parametrize(
+    "files",
+    [
+        {"agent.py": 'ThreadingHTTPServer(("0.0.0.0", 8080), Handler)\n'},
+        {"agent.py": 'db_port = os.environ.get("DB_PORT", "5432")\n'},
+        {"agent.py": "port = process.env.PORT_ADMIN\n"},
+        {".venv/lib/uvicorn.py": 'port = os.environ.get("PORT")\n'},
+        {"node_modules/server.js": "const port = process.env.PORT;\n"},
+    ],
+)
+def test_http_agent_without_a_port_read_keeps_its_fixed_port(
+    tmp_path: Path, files: dict[str, str]
+) -> None:
+    assert _plain_http_agent(tmp_path / "source", files).fixed_port == 8080
+
+
+def test_http_agent_that_reads_port_passes_preflight_at_several_worlds(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text(
+        'port = int(os.environ.get("PORT", "8080"))\n', encoding="utf-8"
+    )
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring,
+        command=_PLAIN_HTTP_RUNTIME["command"],
+        interface=_PLAIN_HTTP_RUNTIME["interface"],
+    )
+    output = tmp_path / "bundle"
+    job = _job(connector="auto")
+
+    bundle = author_bundle_v2(
+        source=source, job=job, authoring=authoring, output=output
+    )
+
+    preflight_bundle(
+        output,
+        load_bundle_v2(output),
+        parallelism=4,
+        secret_refs={
+            alias: ref.purpose for alias, ref in job.agent.secret_refs.items()
+        },
+    )
+    plan = plan_ports(bundle, instances=4)
+    assert plan.effective_instances == 4
+    assert plan.degraded_reason is None
+    assert plan.port_for("agent", 0) != plan.port_for("agent", 1)
 
 
 @pytest.mark.parametrize("declare_mount_root", [False, True])
@@ -3562,6 +4028,419 @@ def test_livekit_lower_bound_in_pyproject_is_read(tmp_path):
     assert not _livekit_isolatable(tmp_path)
 
 
+def _tool_entry(name: str) -> dict[str, str]:
+    return {"tool": name, "mode": "import", "module": "customer_tools", "callable": name}
+
+
+def _chat_tools_build(tmp_path: Path) -> tuple[Path, Path, dict]:
+    """A chat target with one source tool, built and sealed."""
+    source = tmp_path / "chat-agent"
+    source.mkdir()
+    (source / "agent.py").write_text("print('agent')\n", encoding="utf-8")
+    (source / "customer_tools.py").write_text(
+        "def lookup_account(email):\n    return {'email': email}\n\n"
+        "def refund(order):\n    return {'refunded': order}\n",
+        encoding="utf-8",
+    )
+    authoring = _authoring(tmp_path)
+    contract = {
+        "modality": "chat",
+        "runtime": {
+            "language": "python",
+            "interface": {"kind": "openai_chat", "protocol": "openai", "include_tools": False},
+        },
+        "tools": [{"name": "lookup_account", "args": ["email"]}],
+        "tool_entrypoints": [_tool_entry("lookup_account")],
+    }
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+    author_bundle_v2(
+        source=source,
+        job=_job(connector="http"),
+        authoring=authoring,
+        output=authoring / "environment-bundle",
+    )
+    return source, authoring, contract
+
+
+@pytest.mark.parametrize("persisted", [False, True])
+def test_a_reseal_compiles_the_tool_a_contract_edit_adds(
+    tmp_path: Path, persisted: bool
+) -> None:
+    from fi.alk.harness.amend import _persist
+    from fi.alk.harness.contract import AgentContract
+
+    source, authoring, contract = _chat_tools_build(tmp_path)
+    bundle = authoring / "environment-bundle"
+    contract["tools"].append({"name": "refund", "args": ["order"]})
+    contract["tool_entrypoints"].append(_tool_entry("refund"))
+    if persisted:
+        # As a nudge's contract tools write it.
+        _persist(AgentContract.model_validate(contract), authoring)
+    else:
+        (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+
+    reseal_scenarios(authoring)
+
+    resealed = load_bundle_v2(bundle)
+    fresh = author_bundle_v2(
+        source=source, job=_job(connector="http"), authoring=authoring, output=tmp_path / "fresh"
+    )
+    assert "handlers/refund.py" in {one.path for one in resealed.files}
+    for path in ("contract.json", "handlers/lookup_account.py", "handlers/refund.py"):
+        assert (bundle / path).read_bytes() == (tmp_path / "fresh" / path).read_bytes()
+    assert resealed.processes == fresh.processes
+    assert resealed.metadata["sealed_from"] == sealed_from(authoring)
+    assert resealed.metadata["contract_compiled"] == hashlib.sha256(
+        (authoring / "contract.json").read_bytes()
+    ).hexdigest()
+
+
+def test_a_reseal_drops_the_handler_of_a_tool_a_contract_edit_removes(
+    tmp_path: Path,
+) -> None:
+    _source, authoring, contract = _chat_tools_build(tmp_path)
+    contract["tools"].append({"name": "refund", "args": ["order"]})
+    contract["tool_entrypoints"] = [_tool_entry("refund")]
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+
+    reseal_scenarios(authoring)
+
+    handlers = authoring / "environment-bundle" / "handlers"
+    assert sorted(path.name for path in handlers.iterdir()) == ["refund.py"]
+
+
+def _graph_build(tmp_path: Path) -> tuple[Path, dict, dict]:
+    """A langgraph target whose contract names no interface; the build seals ``callable``."""
+    source = tmp_path / "source"
+    graph_source = source / "src" / "example" / "graph.py"
+    graph_source.parent.mkdir(parents=True)
+    graph_source.write_text("graph = object()\n", encoding="utf-8")
+    (source / "pyproject.toml").write_text(
+        '[project]\nname = "example"\nversion = "0.1"\n', encoding="utf-8"
+    )
+    (source / "langgraph.json").write_text(
+        json.dumps({"graphs": {"Example": "./src/example/graph.py:graph"}}),
+        encoding="utf-8",
+    )
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(authoring, command=[])
+    contract = json.loads((authoring / "contract.json").read_text(encoding="utf-8"))
+    contract["tools"] = [{"name": "status", "args": []}]
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+    bundle = authoring / "environment-bundle"
+    author_bundle_v2(source=source, job=_job(connector="auto"), authoring=authoring, output=bundle)
+    built = json.loads((bundle / "contract.json").read_text(encoding="utf-8"))
+    assert built["runtime"]["interface"]["kind"] == "callable"
+    return authoring, contract, built
+
+
+def test_a_reseal_keeps_the_runtime_interface_the_build_sealed(tmp_path: Path) -> None:
+    authoring, contract, built = _graph_build(tmp_path)
+    bundle = authoring / "environment-bundle"
+    contract["tools"].append({"name": "history", "args": []})
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+
+    reseal_scenarios(authoring)
+
+    resealed = json.loads((bundle / "contract.json").read_text(encoding="utf-8"))
+    assert "interface" not in contract["runtime"]
+    assert resealed["runtime"] == built["runtime"]
+    assert [tool["name"] for tool in resealed["tools"]] == ["status", "history"]
+    metadata = load_bundle_v2(bundle).metadata
+    assert "sealed_from" in metadata and "contract_compiled" in metadata
+
+
+@pytest.mark.parametrize(
+    "edit",
+    [
+        {"runtime": {"language": "python", "command": ["python", "other.py"], "workdir": "."}},
+        {"modality": "voice"},
+        {"data_store": {"kind": "postgres"}},
+        {"runtime_dependencies": [{"name": "orders", "kind": "database"}]},
+    ],
+)
+def test_a_reseal_leaves_a_contract_edit_it_cannot_compile_unstamped(
+    tmp_path: Path, edit: dict
+) -> None:
+    _source, authoring, contract = _chat_tools_build(tmp_path)
+    bundle = authoring / "environment-bundle"
+    (authoring / "contract.json").write_text(json.dumps({**contract, **edit}), encoding="utf-8")
+
+    reseal_scenarios(authoring)
+
+    metadata = load_bundle_v2(bundle).metadata
+    assert "sealed_from" not in metadata and "contract_compiled" not in metadata
+    assert (bundle / "contract.json").read_bytes() == (authoring / "contract.json").read_bytes()
+
+
+def test_a_reseal_after_a_copied_contract_stays_unstamped(tmp_path: Path) -> None:
+    _source, authoring, contract = _chat_tools_build(tmp_path)
+    bundle = authoring / "environment-bundle"
+    contract["runtime"]["command"] = ["python", "other.py"]
+    contract["tool_entrypoints"].append(_tool_entry("refund"))
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+    reseal_scenarios(authoring)
+
+    # The copied contract now equals the authored one; the bundle still runs the build's.
+    reseal_scenarios(authoring)
+
+    metadata = load_bundle_v2(bundle).metadata
+    assert "sealed_from" not in metadata and "contract_compiled" not in metadata
+    assert sorted(path.name for path in (bundle / "handlers").iterdir()) == [
+        "lookup_account.py"
+    ]
+
+
+def test_a_reseal_leaves_an_interface_edit_unstamped(tmp_path: Path) -> None:
+    _source, authoring, contract = _chat_tools_build(tmp_path)
+    bundle = authoring / "environment-bundle"
+    interface = contract["runtime"]["interface"]
+    contract["runtime"]["interface"] = {**interface, "port": 9123, "include_tools": True}
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+
+    reseal_scenarios(authoring)
+
+    metadata = load_bundle_v2(bundle).metadata
+    assert "sealed_from" not in metadata and "contract_compiled" not in metadata
+
+
+def test_a_reseal_leaves_an_interface_edit_on_a_graph_unstamped(tmp_path: Path) -> None:
+    authoring, contract, _built = _graph_build(tmp_path)
+    bundle = authoring / "environment-bundle"
+    contract["runtime"]["interface"] = {"kind": "callable", "include_tools": True}
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+
+    reseal_scenarios(authoring)
+
+    metadata = load_bundle_v2(bundle).metadata
+    assert "sealed_from" not in metadata and "contract_compiled" not in metadata
+
+
+@pytest.mark.parametrize("older", ["traced", "bridged"])
+def test_a_reseal_leaves_a_bundle_an_older_build_compiled_unstamped(
+    tmp_path: Path, older: str
+) -> None:
+    from fi.alk.harness.bundle_author_v2 import _files
+    from fi.alk.harness.bundle_v2 import BUNDLE_V2_MANIFEST, seal_bundle_v2
+
+    _source, authoring, contract = _chat_tools_build(tmp_path)
+    bundle = authoring / "environment-bundle"
+    manifest = load_bundle_v2(bundle)
+    if older == "traced":
+        extra = {"ALK_TOOL_TRACE_BINDINGS": "[]"}
+        manifest = manifest.model_copy(
+            update={
+                "metadata": {
+                    key: value
+                    for key, value in manifest.metadata.items()
+                    if key != "source_tool_trace_version"
+                }
+            }
+        )
+    else:
+        # A ``callable`` command an older build bridged through a subprocess.
+        extra = {"ALK_SUBPROCESS_COMMAND": '["python", "main.py"]'}
+        sealed = json.loads((bundle / "contract.json").read_text(encoding="utf-8"))
+        sealed["runtime"]["interface"] = {
+            "kind": "callable", "protocol": "fi.alk", "path": "",
+            "health_path": "", "include_tools": False,
+        }
+        (bundle / "contract.json").write_text(json.dumps(sealed), encoding="utf-8")
+        del contract["runtime"]["interface"]
+    processes = [
+        process.model_copy(update={"environment": {**process.environment, **extra}})
+        if hasattr(process, "environment")
+        else process
+        for process in manifest.processes
+    ]
+    manifest = manifest.model_copy(update={"processes": processes, "files": _files(bundle)})
+    manifest = manifest.model_copy(update={"digest": seal_bundle_v2(manifest)})
+    (bundle / BUNDLE_V2_MANIFEST).write_text(
+        json.dumps(manifest.model_dump(mode="json"), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    contract["tools"].append({"name": "refund", "args": ["order"]})
+    contract["tool_entrypoints"].append(_tool_entry("refund"))
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+
+    reseal_scenarios(authoring)
+
+    metadata = load_bundle_v2(bundle).metadata
+    assert "sealed_from" not in metadata and "contract_compiled" not in metadata
+    assert metadata["contract_copied"] is True
+    assert (bundle / "contract.json").read_bytes() == (authoring / "contract.json").read_bytes()
+
+
+def _adk_build(tmp_path: Path) -> tuple[Path, dict]:
+    """An ``adk web`` chat target whose contract names no interface; the build seals ADK's."""
+    source = tmp_path / "source"
+    app = source / "bug_agent"
+    app.mkdir(parents=True)
+    (source / "pyproject.toml").write_text(
+        "[project]\nname='bug-agent'\nversion='1'\n", encoding="utf-8"
+    )
+    (app / "__init__.py").write_text("", encoding="utf-8")
+    (app / "agent.py").write_text("root_agent = object()\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(authoring, command=["uv", "run", "adk", "web", "--port=9090"])
+    contract = json.loads((authoring / "contract.json").read_text(encoding="utf-8"))
+    contract["tools"] = [{"name": "status", "args": []}]
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+    author_bundle_v2(
+        source=source,
+        job=_job(connector="auto"),
+        authoring=authoring,
+        output=authoring / "environment-bundle",
+    )
+    return authoring, contract
+
+
+@pytest.mark.parametrize("written", [False, True])
+def test_a_reseal_stamps_an_adk_bundle_only_when_it_seals_adks_interface(
+    tmp_path: Path, written: bool
+) -> None:
+    from fi.alk.harness.bundle_author_v2 import _files
+    from fi.alk.harness.bundle_v2 import BUNDLE_V2_MANIFEST, seal_bundle_v2
+
+    authoring, contract = _adk_build(tmp_path)
+    bundle = authoring / "environment-bundle"
+    if written:
+        # An older build kept the HTTP interface the model wrote for ``adk web``.
+        stale = {"kind": "http", "port": 9090, "path": "/run"}
+        sealed = json.loads((bundle / "contract.json").read_text(encoding="utf-8"))
+        sealed["runtime"]["interface"] = stale
+        (bundle / "contract.json").write_text(json.dumps(sealed), encoding="utf-8")
+        contract["runtime"]["interface"] = stale
+        manifest = load_bundle_v2(bundle).model_copy(update={"files": _files(bundle)})
+        manifest = manifest.model_copy(update={"digest": seal_bundle_v2(manifest)})
+        (bundle / BUNDLE_V2_MANIFEST).write_text(
+            json.dumps(manifest.model_dump(mode="json"), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    contract["tools"].append({"name": "history", "args": []})
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+
+    reseal_scenarios(authoring)
+
+    metadata = load_bundle_v2(bundle).metadata
+    assert ("contract_compiled" in metadata) is not written
+    assert ("sealed_from" in metadata) is not written
+
+
+@pytest.mark.parametrize(
+    ("written", "root_app", "stamped"),
+    [(True, False, False), (False, False, True), (False, True, True)],
+)
+def test_a_reseal_judges_an_adk_bundle_by_the_app_in_its_workdir(
+    tmp_path: Path, written: bool, root_app: bool, stamped: bool
+) -> None:
+    from fi.alk.harness.bundle_author_v2 import _files
+    from fi.alk.harness.bundle_v2 import BUNDLE_V2_MANIFEST, seal_bundle_v2
+
+    # ``adk web`` runs in agents/, below the project root; a root package is not its app.
+    source = tmp_path / "source"
+    for app in ["agents/bug_agent", *(["other_agent"] if root_app else [])]:
+        (source / app).mkdir(parents=True)
+        (source / app / "__init__.py").write_text("", encoding="utf-8")
+        (source / app / "agent.py").write_text("root_agent = object()\n", encoding="utf-8")
+    (source / "pyproject.toml").write_text("[project]\nname='x'\nversion='1'\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring, command=["uv", "run", "adk", "web", "--port=9090"], workdir="agents"
+    )
+    contract = json.loads((authoring / "contract.json").read_text(encoding="utf-8"))
+    contract["tools"] = [{"name": "status", "args": []}]
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+    bundle = authoring / "environment-bundle"
+    author_bundle_v2(source=source, job=_job(connector="auto"), authoring=authoring, output=bundle)
+    if written:
+        stale = {"kind": "http", "port": 9090, "path": "/run"}
+        sealed = json.loads((bundle / "contract.json").read_text(encoding="utf-8"))
+        sealed["runtime"]["interface"] = stale
+        (bundle / "contract.json").write_text(json.dumps(sealed), encoding="utf-8")
+        contract["runtime"]["interface"] = stale
+        manifest = load_bundle_v2(bundle).model_copy(update={"files": _files(bundle)})
+        manifest = manifest.model_copy(update={"digest": seal_bundle_v2(manifest)})
+        (bundle / BUNDLE_V2_MANIFEST).write_text(
+            json.dumps(manifest.model_dump(mode="json"), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    contract["tools"].append({"name": "history", "args": []})
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+
+    reseal_scenarios(authoring)
+
+    assert ("contract_compiled" in load_bundle_v2(bundle).metadata) is stamped
+
+
+def test_a_reseal_leaves_an_adk_bundle_that_recorded_no_app_unstamped(tmp_path: Path) -> None:
+    from fi.alk.harness.bundle_author_v2 import _files
+    from fi.alk.harness.bundle_v2 import BUNDLE_V2_MANIFEST, seal_bundle_v2
+
+    authoring, contract = _adk_build(tmp_path)
+    bundle = authoring / "environment-bundle"
+    manifest = load_bundle_v2(bundle)
+    metadata = {k: v for k, v in manifest.metadata.items() if k != "adk_web_app"}
+    manifest = manifest.model_copy(update={"metadata": metadata, "files": _files(bundle)})
+    manifest = manifest.model_copy(update={"digest": seal_bundle_v2(manifest)})
+    (bundle / BUNDLE_V2_MANIFEST).write_text(
+        json.dumps(manifest.model_dump(mode="json"), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    contract["tools"].append({"name": "history", "args": []})
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+
+    reseal_scenarios(authoring)
+
+    assert "contract_compiled" not in load_bundle_v2(bundle).metadata
+
+
+@pytest.mark.parametrize("template", [{"message": "{{new_message}}"}, "{{new_message}}"])
+def test_a_reseal_stamps_an_adk_bundle_whose_build_kept_the_written_interface(
+    tmp_path: Path, template: object
+) -> None:
+    # Two app packages: no build derives ADK's interface, so the written one is the build's.
+    source = tmp_path / "source"
+    for name in ("first_agent", "second_agent"):
+        (source / name).mkdir(parents=True)
+        (source / name / "__init__.py").write_text("", encoding="utf-8")
+        (source / name / "agent.py").write_text("root_agent = object()\n", encoding="utf-8")
+    (source / "pyproject.toml").write_text(
+        "[project]\nname='agents'\nversion='1'\n", encoding="utf-8"
+    )
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring,
+        command=["uv", "run", "adk", "web", "--port=9090"],
+        interface={
+            "kind": "http", "port": 9090, "path": "/run", "request_template": template,
+        },
+    )
+    contract = json.loads((authoring / "contract.json").read_text(encoding="utf-8"))
+    contract["tools"] = [{"name": "status", "args": []}]
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+    bundle = authoring / "environment-bundle"
+    author_bundle_v2(source=source, job=_job(connector="auto"), authoring=authoring, output=bundle)
+    contract["tools"].append({"name": "history", "args": []})
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+
+    reseal_scenarios(authoring)
+
+    metadata = load_bundle_v2(bundle).metadata
+    assert "sealed_from" in metadata and "contract_compiled" in metadata
+
+
+def test_a_reseal_leaves_a_contract_added_after_the_build_unstamped(tmp_path: Path) -> None:
+    _source, authoring, _model, bundle, _ = _places(tmp_path, ir_seed=False)
+    assert not (bundle / "contract.json").exists()
+    (authoring / "contract.json").write_text(json.dumps({"modality": "chat"}), encoding="utf-8")
+
+    reseal_scenarios(authoring)
+
+    metadata = load_bundle_v2(bundle).metadata
+    assert "sealed_from" not in metadata and "contract_compiled" not in metadata
+
+
 def test_reseal_carries_an_added_scenario_into_the_sealed_bundle(tmp_path: Path) -> None:
     source = tmp_path / "provider-target"
     source.mkdir()
@@ -3616,11 +4495,264 @@ def test_reseal_carries_an_added_scenario_into_the_sealed_bundle(tmp_path: Path)
     )
 
 
+@pytest.mark.parametrize("case", ["edited", "stale", "unimportable"])
+def test_a_compile_seeds_world_sqlite_over_a_world_ir_it_does_not_import_to(
+    tmp_path: Path, case: str
+) -> None:
+    """A stale canonical IR never seeds; the hashed world.sqlite does."""
+    from fi.alk.harness.certification import GenericHarnessArtifactStore
+    from fi.alk.harness.world_import.sqlite import import_sqlite_world
+
+    source, authoring, source_model, _, _ = _places(tmp_path, ir_seed=False)
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        # Runtime validation records the World IR it imported from the SQLite seed.
+        world = import_sqlite_world(database, source_model, validate=False).world
+        if case == "edited":
+            database.execute("UPDATE places SET label = 'renamed' WHERE id = 'home'")
+        elif case == "unimportable":
+            database.execute("ALTER TABLE places ADD COLUMN extra TEXT")
+    if case == "stale":
+        # An IR that went stale earlier, with world.sqlite unchanged since.
+        with sqlite3.connect(":memory:") as database:
+            database.execute("CREATE TABLE places (id TEXT PRIMARY KEY, label TEXT)")
+            database.execute("INSERT INTO places VALUES ('home', 'stale')")
+            world = import_sqlite_world(database, source_model, validate=False).world
+    GenericHarnessArtifactStore(authoring / "generic-harness").write_world_ir(world)
+    reseal_scenarios(authoring)
+
+    # A later compile, as certify-only and validation make one.
+    fresh = tmp_path / "fresh"
+    author_bundle_v2(
+        source=source,
+        job=_job(connector="http", metadata={"generic_harness_v1": True}),
+        authoring=authoring,
+        output=fresh,
+    )
+    assert not (fresh / "seed" / "world-ir.json").exists()
+    with sqlite3.connect(fresh / "seed" / "world.sqlite") as database:
+        assert database.execute("SELECT label FROM places").fetchall() == [
+            ("renamed" if case == "edited" else "home",)
+        ]
+
+
+def test_a_reseal_keeps_a_validation_repair_of_the_world(tmp_path: Path) -> None:
+    from fi.alk.harness.authoring_runtime_validation import _stored_in_world
+    from fi.alk.harness.certification import GenericHarnessArtifactStore
+    from fi.alk.harness.world_ir import WorldRow, WorldTable, WorldValue
+
+    source, authoring, source_model, bundle, _ = _places(tmp_path, ir_seed=True)
+    store = GenericHarnessArtifactStore(authoring / "generic-harness")
+    world = store.read_world_ir()
+    [row] = world.tables[0].rows
+    label = WorldValue.present(row.values["label"].logical_type, "repaired")
+    repaired = world.model_copy(
+        update={
+            "tables": (
+                WorldTable(
+                    source_name="places",
+                    rows=(
+                        WorldRow(
+                            identity=row.identity,
+                            values={**row.values, "label": label},
+                        ),
+                    ),
+                ),
+            )
+        }
+    )
+    # Runtime validation repairs the world, then the build seals it.
+    store.write_world_ir(_stored_in_world(authoring, repaired, source_model))
+    author_bundle_v2(
+        source=source,
+        job=_job(connector="http", metadata={"generic_harness_v1": True}),
+        authoring=authoring,
+        output=bundle,
+    )
+    # A scenario-only chat save reseals.
+    scenario = authoring / "scenarios" / "one" / "scenario.json"
+    scenario.write_text(
+        json.dumps({"name": "one", "instruction": "Edited", "sub_goals": ["works"]}),
+        encoding="utf-8",
+    )
+
+    reseal_scenarios(authoring)
+
+    for ir in (bundle / "seed" / "world-ir.json", store.root / "world-ir.json"):
+        assert "repaired" in ir.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("ir_seed", [True, False])
+def test_the_world_a_bundle_seeds_is_always_the_hashed_world_sqlite(
+    tmp_path: Path, ir_seed: bool
+) -> None:
+    """The environment hash covers world.sqlite, not generic-harness/world-ir.json.
+
+    Through a repair stored in the world or an IR recorded after the build, a reseal
+    without and with a world edit, and certify-only's compile, the seeded world stays
+    what world.sqlite imports to.
+    """
+    from fi.alk.harness.authoring_runtime_validation import _stored_in_world
+    from fi.alk.harness.certification import GenericHarnessArtifactStore
+    from fi.alk.harness.world_import.sqlite import import_sqlite_world
+    from fi.alk.harness.world_ir import WorldRow, WorldTable, WorldValue
+
+    source, authoring, source_model, bundle, _ = _places(tmp_path, ir_seed=ir_seed)
+    store = GenericHarnessArtifactStore(authoring / "generic-harness")
+    job = _job(connector="http", metadata={"generic_harness_v1": True})
+
+    def imported() -> WorldIR:
+        with sqlite3.connect(authoring / "world.sqlite") as database:
+            return import_sqlite_world(database, source_model, validate=False).world
+
+    def seeded(output: Path) -> WorldIR:
+        ir = output / "seed" / "world-ir.json"
+        if ir.is_file():
+            return WorldIR.model_validate_json(ir.read_text(encoding="utf-8"))
+        with sqlite3.connect(output / "seed" / "world.sqlite") as database:
+            return import_sqlite_world(database, source_model, validate=False).world
+
+    def holds(output: Path) -> None:
+        assert seeded(output) == imported()
+        preflight_bundle(output, load_bundle_v2(output), parallelism=1, secret_refs={})
+
+    world = imported()
+    if ir_seed:
+        # A repair stored as runtime validation stores it, then the build seals it.
+        [row] = world.tables[0].rows
+        label = WorldValue.present(row.values["label"].logical_type, "repaired")
+        world = _stored_in_world(
+            authoring,
+            world.model_copy(
+                update={
+                    "tables": (
+                        WorldTable(
+                            source_name="places",
+                            rows=(
+                                WorldRow(
+                                    identity=row.identity,
+                                    values={**row.values, "label": label},
+                                ),
+                            ),
+                        ),
+                    )
+                }
+            ),
+            source_model,
+        )
+        store.write_world_ir(world)
+        author_bundle_v2(source=source, job=job, authoring=authoring, output=bundle)
+    else:
+        # Runtime validation records the IR it imported, after the build sealed.
+        store.write_world_ir(world)
+    holds(bundle)
+    # A scenario-only chat save, then a world edit, each resealed.
+    (authoring / "scenarios" / "one" / "scenario.json").write_text(
+        json.dumps({"name": "one", "instruction": "Edited", "sub_goals": ["works"]}),
+        encoding="utf-8",
+    )
+    reseal_scenarios(authoring)
+    holds(bundle)
+    assert ("repaired" in seeded(bundle).model_dump_json()) is ir_seed
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("UPDATE places SET label = 'renamed' WHERE id = 'home'")
+    reseal_scenarios(authoring)
+    holds(bundle)
+    # The compile certify-only makes after its preparation.
+    from fi.alk.harness.authoring_entrypoint import _refresh_source_facts
+
+    _refresh_source_facts(job, source, authoring)
+    fresh = tmp_path / "fresh"
+    author_bundle_v2(source=source, job=job, authoring=authoring, output=fresh)
+    holds(fresh)
+    assert "renamed" in seeded(fresh).model_dump_json()
+
+
+@pytest.mark.parametrize("ir_seed", [True, False])
+@pytest.mark.parametrize("resealed", [True, False])
+def test_a_certified_bundle_is_reused_only_while_it_seeds_world_sqlite(
+    tmp_path: Path, resealed: bool, ir_seed: bool
+) -> None:
+    from fi.alk.harness.certification import GenericHarnessArtifactStore
+    from fi.alk.harness.world_import.sqlite import import_sqlite_world
+
+    source, authoring, source_model, bundle, sealed = _places(
+        tmp_path, ir_seed=ir_seed, contract=True
+    )
+    root = authoring / "generic-harness"
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        world = import_sqlite_world(database, source_model, validate=False).world
+    GenericHarnessArtifactStore(root).write_world_ir(world)
+    shutil.copytree(bundle, root / "certified-bundle")
+    certificate = HarnessCertification.create(
+        status=CertificationStatus.CERTIFIED,
+        source=CertificationSource(
+            digest=source_fingerprint(source), schema_hash=source_model.fingerprint
+        ),
+        authoring=CertificationAuthoring(
+            contract_hash=_artifact_digest(authoring / "contract.json"),
+            world_ir_hash=world.fingerprint,
+            scenario_set_hash=_artifact_digest(authoring / "scenarios"),
+        ),
+        compiler=CertificationCompiler(version="test", bundle_digest=sealed.digest),
+        runtime=CertificationRuntime(snapshot="test", validation_attempts=1),
+        checks=CertificationChecks(
+            static=CheckStatus.PASSED,
+            schema_and_seed=CheckStatus.PASSED,
+            processes=CheckStatus.PASSED,
+            chat_ingress=CheckStatus.PASSED,
+            source_invariants=CheckStatus.PASSED,
+            scenario_setup_ready="1/1",
+            tool_contract="0/0",
+            action_behavior="0/0",
+            reset_equivalence=CheckStatus.PASSED,
+            world_isolation=CheckStatus.PASSED,
+        ),
+        repairs=RepairHistory(
+            decisions=(),
+            results=(),
+            compiler_candidates_used=0,
+            environment_patches_used=0,
+            scenario_patches_used=0,
+        ),
+    )
+    (authoring / "runtime-validation.json").write_text(
+        certificate.model_dump_json(indent=2) + "\n", encoding="utf-8"
+    )
+    # A world edit after validation froze the bundle; a chat save reseals it.
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("UPDATE places SET label = 'renamed' WHERE id = 'home'")
+    if resealed:
+        reseal_scenarios(authoring)
+
+    def compile_() -> None:
+        author_bundle_v2(
+            source=source,
+            job=_job(connector="http", metadata={"generic_harness_v1": True}),
+            authoring=authoring,
+            output=tmp_path / "out",
+        )
+
+    if not resealed:
+        with pytest.raises(BundleAuthorError, match="world.sqlite"):
+            compile_()
+        return
+    compile_()
+    seed = tmp_path / "out" / "seed"
+    if ir_seed:
+        assert "renamed" in (seed / "world-ir.json").read_text(encoding="utf-8")
+    else:
+        with sqlite3.connect(seed / "world.sqlite") as database:
+            assert database.execute("SELECT label FROM places").fetchall() == [
+                ("renamed",)
+            ]
+
+
 def test_reseal_without_a_sealed_bundle_changes_nothing(tmp_path: Path) -> None:
     assert reseal_scenarios(_authoring(tmp_path)) is None
 
 
-def test_a_changed_world_reaches_a_world_ir_seed_on_reseal(tmp_path: Path) -> None:
+def _places(tmp_path: Path, *, ir_seed: bool, contract: bool = False):
+    """A generic-harness world of places, built and sealed with an IR or SQLite seed."""
     from fi.alk.harness.source_model import LogicalType, SourceColumn, SourceTable
     from fi.alk.harness.world_import.sqlite import import_sqlite_world
 
@@ -3648,7 +4780,14 @@ def test_a_changed_world_reaches_a_world_ir_seed_on_reseal(tmp_path: Path) -> No
         database.execute("INSERT INTO places VALUES ('home', 'home')")
     with sqlite3.connect(authoring / "world.sqlite") as database:
         world = import_sqlite_world(database, source_model, validate=False).world
-    (artifact_root / "world-ir.json").write_text(world.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    if ir_seed:
+        (artifact_root / "world-ir.json").write_text(
+            world.model_dump_json(indent=2) + "\n", encoding="utf-8"
+        )
+    if contract:
+        (authoring / "contract.json").write_text(
+            json.dumps({"modality": "chat", "tools": []}), encoding="utf-8"
+        )
     bundle = authoring / "environment-bundle"
     sealed = author_bundle_v2(
         source=source,
@@ -3656,15 +4795,120 @@ def test_a_changed_world_reaches_a_world_ir_seed_on_reseal(tmp_path: Path) -> No
         authoring=authoring,
         output=bundle,
     )
+    return source, authoring, source_model, bundle, sealed
 
-    with sqlite3.connect(authoring / "world.sqlite") as database:
-        database.execute("UPDATE places SET label = 'renamed' WHERE id = 'home'")
+
+@pytest.mark.parametrize(
+    ("ir_seed", "through_save_world"), [(True, False), (True, True), (False, True)]
+)
+def test_a_changed_world_reaches_the_sealed_seed_on_reseal(
+    tmp_path: Path, ir_seed: bool, through_save_world: bool
+) -> None:
+    source, authoring, source_model, bundle, sealed = _places(tmp_path, ir_seed=ir_seed)
+    artifact_root = authoring / "generic-harness"
+    assert (bundle / "seed" / "world-ir.json").is_file() is ir_seed
+
+    if through_save_world:
+        from fi.alk.harness.world.snapshot import save
+
+        # What save_world writes: the world's own SQLite file in the authoring root.
+        changed = GeneratedWorld(":memory:")
+        changed.connection.executescript(
+            "CREATE TABLE places (id TEXT PRIMARY KEY, label TEXT);"
+            "INSERT INTO places VALUES ('home', 'renamed');"
+        )
+        changed.connection.commit()
+        save(changed, authoring)
+    else:
+        with sqlite3.connect(authoring / "world.sqlite") as database:
+            database.execute("UPDATE places SET label = 'renamed' WHERE id = 'home'")
     digest = reseal_scenarios(authoring)
 
     assert digest is not None and digest != sealed.digest
-    assert "renamed" in (bundle / "seed" / "world-ir.json").read_text(encoding="utf-8")
-    assert "renamed" in (artifact_root / "world-ir.json").read_text(encoding="utf-8")
+    preflight_bundle(bundle, load_bundle_v2(bundle), parallelism=1, secret_refs={})
+    if ir_seed:
+        for ir in (bundle / "seed" / "world-ir.json", artifact_root / "world-ir.json"):
+            assert "renamed" in ir.read_text(encoding="utf-8")
+    else:
+        with sqlite3.connect(bundle / "seed" / "world.sqlite") as database:
+            labels = database.execute("SELECT label FROM places").fetchall()
+        assert labels == [("renamed",)]
     assert reseal_scenarios(authoring) == digest
+
+
+# The platform pins the same digest for the same files (test_harness_versioning_reseal.py).
+GOLDEN_SEALED_FROM = (
+    "sha256:402ed05450abe6c943865dd538ebd78e94d15c7e7a15d9b6a934e51cf4d26d3e"
+)
+
+
+def test_sealed_from_digests_only_the_reseal_inputs(tmp_path: Path) -> None:
+    folder = tmp_path / "scenarios" / "r\u00e9servation"
+    (folder / "__pycache__").mkdir(parents=True)
+    (folder / "scenario.json").write_bytes(b'{"name": "r"}')
+    (folder / "__pycache__" / "x.pyc").write_bytes(b"x")
+    for skipped in ("outbound-spool", "telemetry"):
+        (folder / skipped).mkdir()
+        (folder / skipped / "x.json").write_bytes(b"x")
+    nested = tmp_path / "scenarios" / "nested" / "deeper"
+    nested.mkdir(parents=True)
+    (nested / "ready.py").write_bytes(b"def ready(world): ...")
+    (tmp_path / "contract.json").write_bytes(b"{}")
+    (tmp_path / "sub_goals.json").write_bytes(b"[]")
+    (tmp_path / "world.sqlite").write_bytes(b"world")
+    (tmp_path / "simulator_prompt.md").write_bytes(b"not carried")
+
+    assert sealed_from(tmp_path) == GOLDEN_SEALED_FROM
+
+
+@pytest.mark.parametrize("ir_seed", [True, False])
+def test_a_bundle_keeps_the_stamp_of_the_world_it_was_sealed_from(
+    tmp_path: Path, ir_seed: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, authoring, _, bundle, _ = _places(tmp_path, ir_seed=ir_seed)
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("UPDATE places SET label = 'first' WHERE id = 'home'")
+    reseal_scenarios(authoring)
+    stamp = load_bundle_v2(bundle).metadata["sealed_from"]
+    assert stamp == sealed_from(authoring)
+    preflight_bundle(bundle, load_bundle_v2(bundle), parallelism=1, secret_refs={})
+
+    # A later world edit whose reseal fails leaves the bundle stamped for the first.
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("UPDATE places SET label = 'second' WHERE id = 'home'")
+
+    def fails(*_args: object) -> None:
+        raise RuntimeError("reseal failed")
+
+    monkeypatch.setattr("fi.alk.harness.bundle_author_v2._reseeded", fails)
+    with pytest.raises(RuntimeError):
+        reseal_scenarios(authoring)
+    assert load_bundle_v2(bundle).metadata["sealed_from"] == stamp
+    assert sealed_from(authoring) != stamp
+
+
+@pytest.mark.parametrize(
+    ("seed", "carried"),
+    [
+        (("world.sqlite",), True),
+        (("world-ir.json", "source-model.json"), True),
+        (("world-ir.json",), False),
+        (("world.sql",), False),
+    ],
+)
+def test_a_bundle_is_stamped_only_when_a_reseal_carries_its_world(
+    tmp_path: Path, seed: tuple[str, ...], carried: bool
+) -> None:
+    authoring, staging = tmp_path / "authoring", tmp_path / "staging"
+    (staging / "seed").mkdir(parents=True)
+    authoring.mkdir()
+    for name in seed:
+        (staging / "seed" / name).write_bytes(b"built")
+    assert _carries_world(authoring, staging) is True
+
+    (authoring / "world.sqlite").write_bytes(b"edited")
+
+    assert _carries_world(authoring, staging) is carried
 
 
 def test_bundle_retains_unused_static_credential_inventory_without_blocking(tmp_path):

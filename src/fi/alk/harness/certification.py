@@ -10,7 +10,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 
 from .diagnostics import HarnessDiagnostic
 from .repair_controller import RepairHistory
@@ -80,6 +80,19 @@ class CertificationChecks(BaseModel):
     action_behavior: str = "0/0"
     reset_equivalence: CheckStatus = CheckStatus.NOT_RUN
     world_isolation: CheckStatus = CheckStatus.NOT_RUN
+
+    @property
+    def records_chat_ingress(self) -> bool:
+        """False for a certificate made before chat readiness was certified."""
+        return "chat_ingress" in self.model_fields_set
+
+    @model_serializer(mode="wrap")
+    def _without_unrecorded_chat_ingress(self, handler: Any) -> Any:
+        # Keeps such a certificate's fingerprint and format when it is read and reissued.
+        data = handler(self)
+        if not self.records_chat_ingress and isinstance(data, dict):
+            data.pop("chat_ingress", None)
+        return data
 
 
 class RuntimeValidationEvidence(BaseModel):
@@ -236,17 +249,20 @@ def verify_runtime_certification(
     # Every Level 1-3 prerequisite is fail-closed.  A validator may record PASSED for a
     # capability that is vacuously satisfied (for example schema_and_seed on a data-free
     # agent), but it may not dispatch while the check is merely NOT_RUN.
+    # A certificate made before chat readiness was certified carries no chat_ingress check;
+    # the environments it certified keep running.
+    chat_ingress = (
+        {"chat_ingress": certificate.checks.chat_ingress}
+        if certificate.checks.records_chat_ingress
+        else {}
+    )
     required = {
         "static": certificate.checks.static,
         "processes": certificate.checks.processes,
-        **(
-            {"chat_ingress": certificate.checks.chat_ingress}
-            if chat_ingress_required
-            else {}
-        ),
+        **(chat_ingress if chat_ingress_required else {}),
     }
     required_or_not_applicable = {
-        "chat_ingress": certificate.checks.chat_ingress,
+        **chat_ingress,
         "schema_and_seed": certificate.checks.schema_and_seed,
         "source_invariants": certificate.checks.source_invariants,
         "reset_equivalence": certificate.checks.reset_equivalence,

@@ -97,6 +97,21 @@ def test_certificate_is_canonical_and_tamper_evident() -> None:
         HarnessCertification.model_validate(body)
 
 
+def test_certificate_preserves_legacy_repair_history_fingerprint() -> None:
+    body = json.loads(_certificate().model_dump_json())
+
+    assert "runtime_patches_used" not in body["repairs"]
+    assert HarnessCertification.model_validate(body).fingerprint == body["fingerprint"]
+
+
+def test_certificate_serializes_explicit_runtime_patch_count() -> None:
+    body = json.loads(
+        _history().model_copy(update={"runtime_patches_used": 0}).model_dump_json()
+    )
+
+    assert body["runtime_patches_used"] == 0
+
+
 def test_execution_gate_accepts_only_matching_complete_certificate(
     tmp_path: Path,
 ) -> None:
@@ -345,6 +360,61 @@ def test_chat_certificate_requires_explicit_pass(tmp_path, status):
             bundle_digest=_digest("f"),
             source_digest=_digest("a"),
             chat_ingress_required=False,
+        )
+
+
+def _predating_chat_ingress(tmp_path: Path) -> Path:
+    """A certificate as written before chat readiness was certified: no chat_ingress key."""
+    from fi.alk.harness.certification import _fingerprint
+
+    raw = _certificate().model_dump(mode="json")
+    del raw["checks"]["chat_ingress"]
+    del raw["fingerprint"]
+    raw["fingerprint"] = _fingerprint(raw)
+    path = tmp_path / "certificate.json"
+    path.write_text(json.dumps(raw))
+    return path
+
+
+def test_a_certificate_predating_the_chat_check_still_runs(tmp_path):
+    path = _predating_chat_ingress(tmp_path)
+
+    held = verify_runtime_certification(
+        path, bundle_digest=_digest("f"), source_digest=_digest("a")
+    )
+
+    assert not held.checks.records_chat_ingress
+    reissued = HarnessCertification.create(
+        status=held.status,
+        source=held.source,
+        authoring=held.authoring,
+        compiler=held.compiler,
+        runtime=held.runtime,
+        checks=held.checks.model_copy(update={"scenario_setup_ready": "5/5"}),
+        repairs=held.repairs,
+        limitations=held.limitations,
+    )
+    assert "chat_ingress" not in json.loads(reissued.model_dump_json())["checks"]
+    path.write_text(reissued.model_dump_json())
+    assert verify_runtime_certification(
+        path, bundle_digest=_digest("f"), source_digest=_digest("a")
+    )
+
+
+@pytest.mark.parametrize("status", ["not_run", "failed"])
+def test_a_written_chat_check_that_did_not_pass_is_still_rejected(tmp_path, status):
+    path = _predating_chat_ingress(tmp_path)
+    from fi.alk.harness.certification import _fingerprint
+
+    raw = json.loads(path.read_text())
+    raw["checks"]["chat_ingress"] = status
+    del raw["fingerprint"]
+    raw["fingerprint"] = _fingerprint(raw)
+    path.write_text(json.dumps(raw))
+
+    with pytest.raises(CertificationGateError, match="chat_ingress"):
+        verify_runtime_certification(
+            path, bundle_digest=_digest("f"), source_digest=_digest("a")
         )
 
 

@@ -2325,6 +2325,15 @@ def spawn_source_process(
                     .read_bytes()
                 )
                 mark_module.chmod(0o444)
+        if process.environment.get("ALK_CREWAI_TOOL_TRACE") == "1":
+            observer = world_dir / "crewai_runtime_observer_bootstrap.py"
+            if not observer.exists():
+                observer.write_bytes(
+                    Path(__file__)
+                    .with_name("crewai_runtime_observer_bootstrap.py")
+                    .read_bytes()
+                )
+                observer.chmod(0o444)
         if resolved_user is not None:
             chown(world_dir, resolved_user.pw_uid, resolved_user.pw_gid)
     except OSError as exc:
@@ -3589,9 +3598,33 @@ def _compose_seed_source_model(source, seed_file: Path, artifact_root: Path | No
         if path.is_symlink():
             raise ValueError("seed_source_model_symlink")
         if path.is_file():
-            return compose_source_models(
-                GenericHarnessArtifactStore(root).read_source_model(), source
-            )
+            try:
+                return compose_source_models(
+                    GenericHarnessArtifactStore(root).read_source_model(), source
+                )
+            except ValueError as error:
+                # Code facts recorded for other source than the schema running here.
+                code, _, name = str(error).partition(": ")
+                raise GenericWorldSeedError(
+                    (
+                        HarnessDiagnostic.create(
+                            stage=HarnessStage.VALIDATING_ENVIRONMENT,
+                            component="source_model",
+                            code=(
+                                code
+                                if code == "source_model_digest_conflict"
+                                else "source_model_conflict"
+                            ),
+                            message=f"bundled source model conflicts with the live schema: {code}",
+                            location=(
+                                DiagnosticLocation(table=name)
+                                if code == "source_model_tables_conflict"
+                                else None
+                            ),
+                            evidence_refs=("artifact://source-model",),
+                        ),
+                    )
+                ) from error
     return source
 
 

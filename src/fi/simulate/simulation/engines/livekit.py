@@ -2749,8 +2749,12 @@ class LiveKitEngine(BaseEngine):
                 if prompt_opening is not None:
                     prompt_opening.stream_started()
                 opening_turn = target_transcription_sequence == 1
+                # Only an agent-first opening is ever classified; waiting on it when the caller
+                # spoke first would silence the caller for the rest of the call.
                 await_opening_classification = (
-                    not opening_turn and not opening_transcription_classified.is_set()
+                    conversation_direction == "agent_first"
+                    and not opening_turn
+                    and not opening_transcription_classified.is_set()
                 )
                 # Authoritative target transcription disables the simulator's
                 # STT audio input, so a later real greeting may not produce a

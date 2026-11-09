@@ -189,6 +189,31 @@ def test_a_rejected_publish_is_never_reported_as_done(tmp_path, monkeypatch):
     assert not (tmp_path / ".futureagi-authoring-basis.json").exists()
 
 
+def test_a_failed_reseal_ends_the_turn_failed_with_nothing_to_land(
+    tmp_path, monkeypatch
+):
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    runtime.conversation = EditingConversation(tmp_path, writes=True)
+    runtime._published_fingerprint()
+
+    def fails(root):
+        raise RuntimeError("seed import failed")
+
+    monkeypatch.setattr("fi.alk.harness.bundle_author_v2.reseal_scenarios", fails)
+
+    _turn(runtime, {"content": "edit the world"})
+
+    assert client.published == []
+    reply = next(e for e in client.events if e["kind"] == "assistant_message")
+    assert "These changes were NOT saved" in reply["payload"]["text"]
+    assert reply["payload"]["error"] == "reseal_failed"
+    kinds = [event["kind"] for event in client.events]
+    assert "checkpoint_committed" not in kinds
+    assert client.events[-1]["kind"] == "turn_completed"
+    assert client.events[-1]["payload"]["outcome"] == "failed"
+
+
 def test_read_only_tools_skip_the_workspace_checkpoint(tmp_path, monkeypatch):
     client = BuilderClient()
     runtime = _runtime(tmp_path, client, monkeypatch)
@@ -208,6 +233,68 @@ def test_read_only_tools_skip_the_workspace_checkpoint(tmp_path, monkeypatch):
     _turn(runtime, {"content": "look"})
 
     # One before the turn, one for the write, one at the end; none for the read.
+    assert client.checkpoints == 3
+
+
+class PackFailingClient(BuilderClient):
+    """A client whose workspace pack fails on the checkpoints named, as when a file shrinks mid-pack."""
+
+    def __init__(self, failing: set[int]):
+        super().__init__()
+        self.failing = failing
+
+    async def checkpoint(self, workspace):
+        self.checkpoints += 1
+        if self.checkpoints in self.failing:
+            raise OSError("unexpected end of data")
+        return {"digest": f"sha256:{self.checkpoints:064x}", "size": 1}
+
+
+def test_a_checkpoint_whose_pack_fails_leaves_the_pump_running_for_the_next_one(
+    tmp_path, monkeypatch
+):
+    client = PackFailingClient(failing={1})
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    queue: asyncio.Queue = asyncio.Queue()
+    for name in ("submit_scenario", "edit_scenario"):
+        queue.put_nowait(RuntimeEvent(kind="tool", tool=f"mcp__x__{name}", detail={"call_id": name}))
+    queue.put_nowait(RuntimeEvent(kind="text", text="Both kept.", detail={}))
+    queue.put_nowait(None)
+    said: list[str] = []
+
+    asyncio.run(
+        runtime._pump_events(
+            queue,
+            assistant_message_id="a-1",
+            fallback_invocation_id="turn-1",
+            emitted_text=said,
+            turn_failures=[],
+        )
+    )
+
+    assert client.checkpoints == 2
+    committed = [e for e in client.events if e["kind"] == "checkpoint_committed"]
+    assert [e["payload"]["digest"] for e in committed] == [f"sha256:{2:064x}"]
+    assert said == ["Both kept."]
+
+
+def test_a_turn_whose_pump_failed_still_sends_its_reply_and_completes(tmp_path, monkeypatch):
+    # The turn's opening checkpoint is the first; the write's, packed by the pump, fails.
+    client = PackFailingClient(failing={2})
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    runtime._published_fingerprint()
+
+    class WritingConversation(EditingConversation):
+        async def say(self, message, on_event=None):
+            on_event(RuntimeEvent(kind="tool", tool="mcp__x__edit_scenario", detail={"call_id": "e"}))
+            on_event(RuntimeEvent(kind="text", text="Edited it.", detail={}))
+
+    runtime.conversation = WritingConversation(tmp_path, writes=False)
+    _turn(runtime, {"content": "make it harder"})
+
+    assert _reply(client) == "Edited it."
+    completed = [e for e in client.events if e["kind"] == "turn_completed"]
+    assert [e["payload"]["outcome"] for e in completed] == ["success"]
     assert client.checkpoints == 3
 
 
@@ -438,12 +525,164 @@ def test_an_edit_and_a_clear_go_through_the_same_confirmation_as_a_submission(
     assert len(calls) == 1
 
 
+_EVERY_CHANGE = "Yes, make every change for this request"
+
+
+def _guarded_refund_changes(tmp_path, monkeypatch, answer):
+    """A saved scenario and sub-goal, and guarded tools whose changes to them each need a yes."""
+    from fi.alk.harness.backends import ToolSpec
+
+    runtime = _runtime(tmp_path, BuilderClient(), monkeypatch)
+    (tmp_path / "scenarios" / "one" / "scenario.json").write_text(
+        json.dumps({"name": "one", "scenario_key": "one", "instruction": "ask for a refund"})
+    )
+    (tmp_path / "sub_goals.json").write_text(
+        json.dumps({"sub_goals": [{"name": "refunded", "description": "x"}]})
+    )
+    ran, offered = [], []
+
+    async def handler(args):
+        ran.append(args)
+        return {"content": [{"type": "text", "text": "kept"}]}
+
+    async def ask(tool, payload, context):
+        offered.append(payload["options"])
+        await asyncio.sleep(0.01)  # the person takes a moment to answer
+        return {"content": [{"type": "text", "text": answer(len(offered))}]}
+
+    runtime._ask = ask
+
+    def guarded(name):
+        return runtime._confirmed(ToolSpec(name, "", {}, handler)).handler
+
+    return runtime, guarded, ran, offered
+
+
+def test_one_yes_to_every_change_runs_the_rest_of_its_message_and_the_next_message_asks_again(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness.hosted_chat_entrypoint import _CONFIRM
+
+    answers = [_EVERY_CHANGE, "No"]
+    runtime, guarded, ran, offered = _guarded_refund_changes(
+        tmp_path, monkeypatch, lambda asked: answers[asked - 1]
+    )
+    edit, goal = guarded("edit_scenario"), guarded("add_sub_goal")
+    turns = [
+        [
+            lambda: edit({"scenario_key": "one", "instruction": "ask for a cancellation"}),
+            lambda: goal({"name": "refunded", "description": "y"}),
+            lambda: edit({"scenario_key": "one", "instruction": "ask for store credit"}),
+        ],
+        [lambda: edit({"scenario_key": "one", "instruction": "ask for an exchange"})],
+    ]
+    results: list[list[dict]] = []
+
+    class Changing(BuilderConversation):
+        def __init__(self):
+            super().__init__(lambda: None)
+
+        async def say(self, message, on_event=None):
+            results.append([await change() for change in turns[len(results)]])
+            on_event(RuntimeEvent(kind="text", text="Done.", detail={"stage": "builder"}))
+
+    runtime.conversation = Changing()
+    runtime._published_fingerprint()
+    for sequence in (1, 2):
+        command = {
+            "sequence": sequence,
+            "message_id": f"m-{sequence}",
+            "kind": "user_message",
+            "payload": {"content": "Add 30 more scenarios so it has 60 in total"},
+        }
+        asyncio.run(runtime._handle(command))
+
+    # One question for the whole first message, then one again for the next.
+    assert offered == [[_CONFIRM, _EVERY_CHANGE, "No"]] * 2
+    assert [one.get("is_error") for one in results[0]] == [None, None, None]
+    assert results[1][0]["is_error"] is True and "they said: No" in results[1][0]["content"][0]["text"]
+    assert [args.get("instruction") or args["name"] for args in ran] == [
+        "ask for a cancellation",
+        "refunded",
+        "ask for store credit",
+    ]
+
+
+def test_a_yes_to_one_change_runs_only_that_change_and_a_no_still_refuses(tmp_path, monkeypatch):
+    from fi.alk.harness.hosted_chat_entrypoint import _CONFIRM
+
+    answers = [_CONFIRM, "No", _CONFIRM]
+    _, guarded, ran, offered = _guarded_refund_changes(
+        tmp_path, monkeypatch, lambda asked: answers[asked - 1]
+    )
+    edit, goal = guarded("edit_scenario"), guarded("add_sub_goal")
+
+    assert asyncio.run(edit({"scenario_key": "one", "instruction": "ask for a cancellation"})).get("is_error") is None
+    refused = asyncio.run(goal({"name": "refunded", "description": "y"}))
+    assert refused["is_error"] is True and "did not confirm" in refused["content"][0]["text"]
+    assert asyncio.run(goal({"name": "refunded", "description": "z"})).get("is_error") is None
+    assert len(offered) == 3
+    assert [args.get("instruction") or args["description"] for args in ran] == ["ask for a cancellation", "z"]
+
+
+def test_changes_made_at_once_ask_one_at_a_time_so_one_yes_to_every_change_runs_them_all(
+    tmp_path, monkeypatch
+):
+    _, guarded, ran, offered = _guarded_refund_changes(
+        tmp_path, monkeypatch, lambda asked: _EVERY_CHANGE
+    )
+    edit = guarded("edit_scenario")
+
+    async def together():
+        return await asyncio.gather(
+            *(
+                edit({"scenario_key": "one", "instruction": f"ask for refund number {n}"})
+                for n in range(3)
+            )
+        )
+
+    assert [one.get("is_error") for one in asyncio.run(together())] == [None, None, None]
+    # A second open question would have no answer: the platform takes one to the latest only.
+    assert len(offered) == 1 and len(ran) == 3
+
+
+def test_a_drop_after_a_yes_to_every_change_still_asks_on_its_own(tmp_path, monkeypatch):
+    from fi.alk.harness.hosted_chat_entrypoint import _CONFIRM
+
+    answers = [_EVERY_CHANGE, _EVERY_CHANGE, _CONFIRM]
+    _, guarded, ran, offered = _guarded_refund_changes(
+        tmp_path, monkeypatch, lambda asked: answers[asked - 1]
+    )
+    edit, drop = guarded("edit_scenario"), guarded("drop_scenario")
+
+    assert asyncio.run(edit({"scenario_key": "one", "instruction": "ask for a cancellation"})).get("is_error") is None
+    # Not offered on a drop, so the batch answer typed in does not run it.
+    assert asyncio.run(drop({"name": "one"})).get("is_error") is True
+    assert asyncio.run(drop({"name": "one"})).get("is_error") is None
+    assert asyncio.run(edit({"scenario_key": "one", "instruction": "ask for store credit"})).get("is_error") is None
+    assert offered == [[_CONFIRM, _EVERY_CHANGE, "No"], [_CONFIRM, "No"], [_CONFIRM, "No"]]
+    assert [args.get("instruction") or args["name"] for args in ran] == [
+        "ask for a cancellation",
+        "one",
+        "ask for store credit",
+    ]
+
+
+def test_only_scenario_and_sub_goal_changes_are_covered_by_a_yes_to_every_change():
+    from fi.alk.harness.hosted_chat_entrypoint import _ASKS_ALONE, _NEEDS_CONFIRMATION
+
+    # A newly guarded tool fails here until it is put on one side or the other.
+    assert _ASKS_ALONE < _NEEDS_CONFIRMATION
+    assert _NEEDS_CONFIRMATION - _ASKS_ALONE == {"submit_scenario", "edit_scenario", "add_sub_goal"}
+
+
 def test_the_keys_the_platform_has_used_are_never_given_to_a_new_scenario(
     tmp_path, monkeypatch
 ):
     from fi.alk.harness.scenario import used_keys
 
     monkeypatch.setenv("ALK_HARNESS", "vertex-gemini")
+    monkeypatch.setenv("ALK_GOOGLE_ADK_EXPLICITLY_APPROVED_BY_USER", "1")
     policy = tmp_path / "policy.yaml"
     policy.write_text(
         "schema_version: 1\nharness_chat:\n  enabled: true\n", encoding="utf-8"
@@ -729,6 +968,967 @@ def test_file_tools_on_any_backend_never_return_credentials(tmp_path):
     assert ".env" not in run("Glob", pattern="*", path="..")
     assert "a.json" in run("Glob", pattern="*.json")
     assert "kept out of this session" in run("Grep", pattern="x", path="/")
+
+
+class RebuildClient(BuilderClient):
+    def __init__(self, workspace: Path):
+        super().__init__()
+        self.workspace = workspace
+        self.results: list[dict | None] = []
+
+    async def overview(self):
+        return {}
+
+    async def checkpoint(self, workspace):
+        from fi.alk.harness.nudge import NUDGE_RESULT
+
+        path = self.workspace / NUDGE_RESULT
+        self.results.append(json.loads(path.read_text()) if path.is_file() else None)
+        return await super().checkpoint(workspace)
+
+
+class RebuildConversation(BuilderConversation):
+    """A builder whose model turn is ``act``, run against the stage the runtime opens."""
+
+    def __init__(self, runtime: HostedChatRuntime, act):
+        super().__init__(runtime._open_builder)
+        self.act = act
+        self.messages: list[str] = []
+
+    async def say(self, message, on_event=None):
+        self.messages.append(message)
+        self.stage = await self._open_stage(resume=True)
+        self.stage.emit_event = on_event
+        await self.act(self.stage)
+        on_event(
+            RuntimeEvent(kind="text", text="Updated.", detail={"stage": "builder"})
+        )
+
+    async def resume(self, invocation_id, on_event=None):
+        await self.say("", on_event)
+
+
+def _rebuild(
+    tmp_path: Path,
+    monkeypatch,
+    stage: str,
+    act,
+    *,
+    stale_result: bool = False,
+    draft_keys: tuple[str, ...] = (),
+    journal: dict | None = None,
+    redeliver: bool = False,
+    resumed: bool = False,
+):
+    from test_nudge_turn import _suite
+
+    from fi.alk.harness import spend
+
+    monkeypatch.setenv("ALK_HARNESS", "vertex-gemini" if resumed else "claude")
+    monkeypatch.setenv("ALK_GOOGLE_ADK_EXPLICITLY_APPROVED_BY_USER", "1")
+    monkeypatch.setattr(spend, "_stages", {})
+    workspace = tmp_path / "work"
+    workspace.mkdir()
+    _suite(workspace, "adds-a-big-mac")
+    if stale_result:
+        from fi.alk.harness.nudge import NUDGE_RESULT
+
+        (workspace / NUDGE_RESULT).write_text('{"nudge_id": "an-older-turn"}')
+    if journal is not None:
+        (workspace / ".futureagi-conversation.json").write_text(json.dumps(journal))
+    policy = tmp_path / "policy.yaml"
+    policy.write_text(
+        "schema_version: 1\nharness_chat:\n  enabled: true\n  stages:\n    builder:\n"
+        "      enabled: true\n",
+        encoding="utf-8",
+    )
+    client = RebuildClient(workspace)
+    if resumed:
+        client.turn_context = {**client.turn_context, "active_invocation_id": "inv-1"}
+    runtime = HostedChatRuntime(
+        client=client,  # type: ignore[arg-type]
+        policy=load_chat_policy(policy),
+        workspace=workspace,
+        source=tmp_path / "source",
+        job={"metadata": {"agent_name": "cart"}, "scenario_count": 1},
+    )
+    asked: list[str] = []
+
+    async def ask(tool, payload, context):
+        asked.append(tool)
+        return {"content": [{"type": "text", "text": "No"}]}
+
+    runtime._ask = ask
+    conversation = RebuildConversation(runtime, act)
+    runtime.conversation = conversation
+    command = {
+        "sequence": 3,
+        "message_id": "m-3",
+        "kind": "nudge",
+        "payload": {
+            "content": "The agent moved to v2: add was renamed.",
+            "nudge_id": "n-1",
+            "stage": stage,
+            "user_draft_keys": list(draft_keys),
+        },
+    }
+    asyncio.run(runtime._handle(command))
+    if redeliver:
+        # The turn_completed was lost: the same command reaches the restored workspace.
+        client.redelivered_at = len(client.events)
+        asyncio.run(runtime._handle(command))
+    return runtime, client, conversation, asked
+
+
+def _tool(stage, server: str, name: str):
+    return next(one for one in stage.spec.servers[server].tools if one.name == name)
+
+
+def _called(stage, name: str) -> None:
+    stage.emit_event(
+        RuntimeEvent(kind="tool", tool=f"mcp__x__{name}", detail={"call_id": name})
+    )
+
+
+def test_an_environment_rebuild_turn_runs_its_own_tools_and_ends_the_sandbox(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness import spend
+    from fi.alk.harness.catalogue import load_catalogue
+    from fi.alk.harness.nudge import NUDGE_RESULT
+    from fi.alk.harness.source_data_invariants import ARTIFACT
+
+    seen: dict = {}
+
+    async def act(stage):
+        seen["result_at_start"] = (tmp_path / "work" / NUDGE_RESULT).exists()
+        seen["granted"] = set(stage.spec.granted())
+        seen["workers"] = dict(stage.spec.workers)
+        seen["rule"] = await _tool(stage, "scenarios", "add_rule").handler(
+            {"rule": "Always read the item back.", "why": "v2 says so in agent.py"}
+        )
+        await _tool(stage, "nudge", "retire_sub_goal").handler(
+            {"name": "right-item", "why": "gone in v2"}
+        )
+        seen["added"] = await _tool(stage, "world", "add_sub_goal").handler(
+            {
+                "name": "cart-exists",
+                "what": "the cart table is still there",
+                "check": "def check(world, calls):\n    return None if 'cart' in world.state() else 'no cart'\n",
+            }
+        )
+        seen["added_too"] = await _tool(stage, "scenarios", "add_sub_goal").handler(
+            {
+                "name": "one-row",
+                "what": "the cart holds at most one row",
+                "check": "def check(world, calls):\n    return None if len(world.state()['cart']) <= 1 else 'more'\n",
+            }
+        )
+        spend.record(
+            "builder", 0.25, turns=1, models={"m2"}, tokens_in=40, tokens_out=6
+        )
+        (tmp_path / "source").mkdir()
+        (tmp_path / "source" / "agent.py").write_text("def add_item(item_id):\n")
+        review = {
+            "name": "items-exist",
+            "evidence": [{"path": "agent.py", "quote": "def add("}],
+        }
+        (tmp_path / "work" / ARTIFACT).write_text(json.dumps({"checks": [review]}))
+        await _tool(stage, "nudge", "report_update").handler(
+            {"changed": True, "notes": "rule added"}
+        )
+
+    runtime, client, conversation, asked = _rebuild(
+        tmp_path, monkeypatch, "environment", act, stale_result=True
+    )
+
+    granted = seen["granted"]
+    assert seen["result_at_start"] is False
+    assert {
+        "mcp__nudge__report_update",
+        "mcp__nudge__retire_sub_goal",
+        "mcp__world__save_world",
+    } <= granted
+    assert (
+        not {
+            "mcp__scenarios__submit_scenario",
+            "mcp__platform__save_changes",
+            "Delegate",
+        }
+        & granted
+    )
+    # One world writer: change_world would bypass the world save_world keeps.
+    assert not any(name.endswith("__change_world") for name in granted)
+    assert seen["workers"] == {}
+    # No confirmation in a rebuild turn: nobody is there to answer.
+    assert asked == [] and not seen["rule"].get("is_error"), seen["rule"]
+    assert not seen["added"].get("is_error"), seen["added"]
+    assert not seen["added_too"].get("is_error"), seen["added_too"]
+    assert load_catalogue(tmp_path / "work").names() == {
+        "item-added",
+        "cart-exists",
+        "one-row",
+    }
+    assert "add was renamed" in conversation.messages[0]
+    assert "builder/agent-update" in conversation.messages[0]
+
+    kinds = [one["kind"] for one in client.events]
+    committed = kinds.index("checkpoint_committed")
+    completed = client.events[-1]
+    assert kinds[-1] == "turn_completed" and committed < len(kinds) - 1
+    assert client.events[committed]["invocation_id"] == completed["invocation_id"]
+    result = client.results[-1]
+    assert result["nudge_id"] == "n-1" and result["checks"]["passed"]
+    # The agent's source at /work/source is what the stale-review warning reads.
+    assert "items-exist" in result["checks"]["warnings"][0]
+    assert client.published, "the turn's changes are published before turn_completed"
+    assert completed["payload"]["outcome"] == "success"
+    assert completed["payload"]["usage"] == {
+        "tokens_in": 40,
+        "tokens_out": 6,
+        "tokens_cached": 0,
+        "usd": 0.25,
+        "unpriced_turns": 0,
+        "models": ["m2"],
+    }
+    assert runtime.stopping.is_set()
+
+
+def test_a_suite_rebuild_turn_cannot_amend_the_contract_or_rename(
+    tmp_path, monkeypatch
+):
+    from test_nudge_turn import _scenario
+
+    from fi.alk.harness.proofs import PROOFS, load_proofs
+
+    seen: dict = {}
+
+    async def act(stage):
+        seen["granted"] = set(stage.spec.granted())
+        (tmp_path / "work" / PROOFS).unlink(missing_ok=True)
+        seen["renamed"] = await _tool(stage, "scenarios", "submit_scenario").handler(
+            _scenario("orders-a-big-mac", scenario_key="adds-a-big-mac")
+        )
+        await _tool(stage, "nudge", "report_update").handler(
+            {"changed": False, "notes": "fits"}
+        )
+
+    runtime, client, _conversation, asked = _rebuild(
+        tmp_path, monkeypatch, "suite", act
+    )
+
+    granted = seen["granted"]
+    assert {"mcp__scenarios__submit_scenario", "mcp__suite__prove_scenarios"} <= granted
+    assert not {"mcp__scenarios__amend_contract", "mcp__world__save_world"} & granted
+    assert (
+        seen["renamed"]["is_error"]
+        and "rename" in seen["renamed"]["content"][0]["text"]
+    )
+    assert load_proofs(tmp_path / "work")["adds-a-big-mac"]["holds"] is True
+    assert client.results[-1]["stage"] == "suite" and asked == []
+    assert client.events[-1]["payload"]["usage"]["tokens_in"] == 0
+    assert runtime.stopping.is_set()
+
+
+def test_a_failed_rebuild_turn_still_reports_usage_and_ends_the_sandbox(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness import spend
+
+    async def act(stage):
+        spend.record("builder", 0.1, turns=1, models={"m2"}, tokens_in=5)
+        raise RuntimeError("model unavailable")
+
+    runtime, client, _conversation, _asked = _rebuild(
+        tmp_path, monkeypatch, "environment", act
+    )
+
+    completed = client.events[-1]
+    assert (
+        completed["kind"] == "turn_completed"
+        and completed["payload"]["outcome"] == "failed"
+    )
+    assert completed["payload"]["usage"]["tokens_in"] == 5
+    assert runtime.stopping.is_set()
+
+
+def test_a_chat_turn_carries_no_usage_and_keeps_the_sandbox(tmp_path, monkeypatch):
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    runtime.conversation = EditingConversation(tmp_path, writes=False)
+
+    _turn(runtime, {"content": "hello"})
+
+    assert "usage" not in client.events[-1]["payload"]
+    assert not runtime.stopping.is_set()
+
+
+def test_prove_scenarios_records_each_proof(tmp_path):
+    from test_nudge_turn import _suite
+
+    from fi.alk.harness.proofs import PROOFS, load_proofs
+    from fi.alk.harness.scenario_tools import load_scenarios
+
+    root = _suite(tmp_path, "adds-a-big-mac", "adds-one-big-mac")
+    (root / PROOFS).unlink(missing_ok=True)
+    server = builder.suite_server(root, load_scenarios(root))
+    prove = next(one for one in server.tools if one.name == "prove_scenarios")
+
+    said = asyncio.run(prove.handler({"names": ["adds-a-big-mac", "not-there"]}))
+
+    proofs = load_proofs(root)
+    assert "adds-a-big-mac: holds" in said["content"][0]["text"]
+    assert set(proofs) == {"adds-a-big-mac"}
+    assert (
+        proofs["adds-a-big-mac"]["holds"] is True
+        and proofs["adds-a-big-mac"]["proved_at"]
+    )
+
+
+def test_a_write_after_the_last_report_runs_the_checks_again(tmp_path, monkeypatch):
+    from test_nudge_turn import _break_scenario
+
+    async def act(stage):
+        _called(stage, "report_update")
+        await _tool(stage, "nudge", "report_update").handler(
+            {"changed": False, "notes": "fits"}
+        )
+        _called(stage, "submit_scenario")
+        _break_scenario(tmp_path / "work", "adds-a-big-mac")
+        _called(stage, "find_scenarios")
+
+    _runtime, client, _conversation, _asked = _rebuild(
+        tmp_path, monkeypatch, "suite", act
+    )
+
+    result = client.results[-1]
+    assert result["checks"]["passed"] is False
+    assert [one["item"] for one in result["checks"]["problems"]] == ["adds-a-big-mac"]
+    assert result["changed"] is True and result["notes"] == (
+        "fits (changed after this report; checks re-run at the end of the turn)"
+    )
+
+
+def test_a_tool_added_without_saving_the_world_fails_the_report(
+    tmp_path, monkeypatch
+):
+    from test_nudge_turn import _add_tool
+
+    async def act(stage):
+        _add_tool(tmp_path / "work", "send_otp")
+        await _tool(stage, "nudge", "report_update").handler(
+            {"changed": True, "notes": "added send_otp"}
+        )
+
+    _runtime, client, _conversation, _asked = _rebuild(
+        tmp_path, monkeypatch, "environment", act
+    )
+
+    result = client.results[-1]
+    assert result["checks"]["passed"] is False
+    assert [(one["item"], one["kind"]) for one in result["checks"]["problems"]] == [
+        ("send_otp", "world")
+    ]
+    # The turn added it and no sub-goal names it: a prompt to look, not a gate.
+    assert any("tool send_otp was added" in one for one in result["checks"]["warnings"])
+
+
+def test_world_changes_fail_the_report_until_the_world_is_saved(tmp_path, monkeypatch):
+    import test_nudge_turn
+
+    from fi.alk.harness.simulator import save_simulator_prompt
+
+    suite = test_nudge_turn._suite
+
+    def _checked_suite(root: Path, *names: str) -> Path:
+        suite(root, *names)
+        test_nudge_turn._set_manifest(
+            root,
+            world_checks={
+                "menu-has-items": "def check(world):\n"
+                "    return None if world.state().get('menu') else 'no menu'\n"
+            },
+        )
+        save_simulator_prompt(
+            "You are a customer described by {{ persona }}. Follow {{ instruction }} in a "
+            "natural multi-turn conversation. Never invent the assistant's responses or claim "
+            "a tool result you have not heard. Ask a concise follow-up when needed and end "
+            "once the task resolves.",
+            root,
+        )
+        return root
+
+    monkeypatch.setattr(test_nudge_turn, "_suite", _checked_suite)
+    seen: dict = {}
+
+    async def act(stage):
+        seeded = await _tool(stage, "world", "seed").handler(
+            {"table": "menu", "rows": [{"id": "fries"}]}
+        )
+        assert not seeded.get("is_error"), seeded
+        seen["unsaved"] = await _tool(stage, "nudge", "report_update").handler(
+            {"changed": True, "notes": "seeded fries"}
+        )
+        seen["saved"] = await _tool(stage, "world", "save_world").handler({})
+        await _tool(stage, "nudge", "report_update").handler(
+            {"changed": True, "notes": "seeded fries"}
+        )
+
+    _runtime, client, _conversation, _asked = _rebuild(
+        tmp_path, monkeypatch, "environment", act
+    )
+
+    assert seen["unsaved"].get("is_error")
+    assert '"kind": "world"' in seen["unsaved"]["content"][0]["text"]
+    assert not seen["saved"].get("is_error"), seen["saved"]
+    assert client.results[-1]["checks"]["passed"] is True
+
+
+_OLD_SEED_CHECKS = {
+    "seed_matches_source": "def check(world):\n"
+    "    ids = sorted(row['id'] for row in world.state().get('menu') or [])\n"
+    "    return None if ids == ['big_mac'] else f'menu is {ids}'\n",
+    "key_balances": "def check(world):\n"
+    "    rows = world.state().get('wallet') or []\n"
+    "    dana = [row['balance'] for row in rows if row['rider'] == 'dana']\n"
+    "    return None if dana == [60.0] else f'dana holds {dana}'\n",
+}
+_NEW_SEED = (
+    "INSERT INTO menu (id) VALUES ('big_mac');\n"
+    "INSERT INTO menu (id) VALUES ('fries');\n"
+    "INSERT INTO wallet (rider, balance) VALUES ('dana', 5.00);\n"
+)
+
+
+def _seed_rebuild(tmp_path, monkeypatch, act, checks=_OLD_SEED_CHECKS):
+    """An environment rebuild whose world checks pin the old seed: big_mac only, dana 60."""
+    import test_nudge_turn
+
+    from fi.alk.harness.simulator import save_simulator_prompt
+    from fi.alk.harness.world.snapshot import read_manifest, restore, save
+
+    suite = test_nudge_turn._suite
+
+    def _old_seed_suite(root: Path, *names: str) -> Path:
+        suite(root, *names)
+        world = restore(root)
+        world.connection.executescript(
+            "CREATE TABLE wallet(rider TEXT PRIMARY KEY, balance REAL);"
+            "INSERT INTO wallet VALUES ('dana', 60.0);"
+        )
+        world.connection.commit()
+        save(
+            world,
+            root,
+            notes="old seed",
+            sequences=list(read_manifest(root).get("sequences") or []),
+            world_checks=checks,
+        )
+        save_simulator_prompt(
+            "You are a customer described by {{ persona }}. Follow {{ instruction }} in a "
+            "natural multi-turn conversation. Never invent the assistant's responses or claim "
+            "a tool result you have not heard. Ask a concise follow-up when needed and end "
+            "once the task resolves.",
+            root,
+        )
+        return root
+
+    monkeypatch.setattr(test_nudge_turn, "_suite", _old_seed_suite)
+    return _rebuild(tmp_path, monkeypatch, "environment", act)
+
+
+def _reseed(stage):
+    async def run():
+        seeded = await _tool(stage, "world", "seed").handler(
+            {"table": "menu", "rows": [{"id": "fries"}]}
+        )
+        changed = await _tool(stage, "world", "change_data").handler(
+            {"sql": "UPDATE wallet SET balance = 5.0 WHERE rider = 'dana'"}
+        )
+        assert not seeded.get("is_error") and not changed.get("is_error"), changed
+
+    return run()
+
+
+def test_a_seed_change_rewrites_the_world_checks_that_pin_the_old_seed(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness.world.snapshot import read_manifest
+
+    seen: dict = {}
+    menu = (
+        "def check(world):\n"
+        "    ids = sorted(row['id'] for row in world.state().get('menu') or [])\n"
+        "    return None if ids == ['big_mac', 'fries'] else f'menu is {ids}'\n"
+    )
+    balances = _OLD_SEED_CHECKS["key_balances"].replace("[60.0]", "[5.0]")
+
+    async def act(stage):
+        (tmp_path / "source" / "db").mkdir(parents=True)
+        (tmp_path / "source" / "db" / "seed.sql").write_text(_NEW_SEED)
+        seen["granted"] = set(stage.spec.granted())
+        await _reseed(stage)
+        seen["refused"] = await _tool(stage, "world", "save_world").handler({})
+        for name, code, quote in (
+            ("seed_matches_source", menu, "INSERT INTO menu (id) VALUES ('fries');"),
+            ("key_balances", balances, "VALUES ('dana', 5.00);"),
+        ):
+            edited = await _tool(stage, "world", "add_world_check").handler(
+                {
+                    "name": name,
+                    "code": code,
+                    "source_path": "db/seed.sql",
+                    "source_quote": quote,
+                }
+            )
+            assert not edited.get("is_error"), edited
+        seen["saved"] = await _tool(stage, "world", "save_world").handler({})
+        seen["report"] = await _tool(stage, "nudge", "report_update").handler(
+            {"changed": True, "notes": "new seed rows"}
+        )
+
+    _runtime, client, _conversation, _asked = _seed_rebuild(tmp_path, monkeypatch, act)
+
+    assert "mcp__world__add_world_check" in seen["granted"]
+    refused = seen["refused"]["content"][0]["text"]
+    assert seen["refused"].get("is_error")
+    assert "key_balances" in refused and "seed_matches_source" in refused
+    assert not seen["saved"].get("is_error"), seen["saved"]
+    assert not seen["report"].get("is_error"), seen["report"]
+    checks = read_manifest(tmp_path / "work")["world_checks"]
+    assert checks == {"seed_matches_source": menu, "key_balances": balances}
+    result = client.results[-1]
+    assert result["checks"]["passed"] is True
+    assert result["checks"]["warnings"] == [
+        "world checks changed: key_balances (cites db/seed.sql), "
+        "seed_matches_source (cites db/seed.sql)"
+    ]
+
+
+def test_a_world_check_edit_that_cites_no_seed_change_is_refused(tmp_path, monkeypatch):
+    from fi.alk.harness.world.snapshot import read_manifest
+
+    seen: dict = {}
+    weakened = (
+        "def check(world):\n    return None if world.state().get('menu') else 'no'\n"
+    )
+
+    async def act(stage):
+        (tmp_path / "source" / "db").mkdir(parents=True)
+        (tmp_path / "source" / "db" / "seed.sql").write_text(
+            "INSERT INTO menu (id) VALUES ('big_mac');\n"
+        )
+        await _reseed(stage)
+        tool = _tool(stage, "world", "add_world_check")
+        seen["uncited"] = await tool.handler(
+            {"name": "seed_matches_source", "code": weakened}
+        )
+        seen["unchanged"] = await tool.handler(
+            {
+                "name": "seed_matches_source",
+                "code": weakened,
+                "source_path": "db/seed.sql",
+                "source_quote": "INSERT INTO menu (id) VALUES ('fries');",
+            }
+        )
+        seen["saved"] = await _tool(stage, "world", "save_world").handler({})
+        await _tool(stage, "nudge", "report_update").handler(
+            {"changed": True, "notes": "fries"}
+        )
+
+    _runtime, client, _conversation, _asked = _seed_rebuild(tmp_path, monkeypatch, act)
+
+    assert seen["uncited"].get("is_error") and seen["unchanged"].get("is_error")
+    assert "does not occur in db/seed.sql" in seen["unchanged"]["content"][0]["text"]
+    assert seen["saved"].get("is_error")
+    assert read_manifest(tmp_path / "work")["world_checks"] == _OLD_SEED_CHECKS
+    result = client.results[-1]
+    assert result["checks"]["passed"] is False
+    assert not result["checks"]["warnings"]
+
+
+def test_a_rebuild_that_leaves_out_a_seeded_row_fails_until_it_is_seeded(
+    tmp_path, monkeypatch
+):
+    seen: dict = {}
+
+    async def act(stage):
+        (tmp_path / "source" / "db").mkdir(parents=True)
+        (tmp_path / "source" / "db" / "seed.sql").write_text(
+            "INSERT INTO menu (id) VALUES ('big_mac');\n"
+            "INSERT INTO bookings (ref, status) VALUES ('UB7F3A2C91', 'matched');\n"
+        )
+        schema = await _tool(stage, "world", "create_schema").handler(
+            {"sql": "CREATE TABLE bookings(ref TEXT PRIMARY KEY, status TEXT);"}
+        )
+        assert not schema.get("is_error"), schema
+        for key in ("left_out", "seeded"):
+            if key == "seeded":
+                await _tool(stage, "world", "seed").handler(
+                    {
+                        "table": "bookings",
+                        "rows": [{"ref": "UB7F3A2C91", "status": "matched"}],
+                    }
+                )
+            saved = await _tool(stage, "world", "save_world").handler({})
+            assert not saved.get("is_error"), saved
+            seen[key] = await _tool(stage, "nudge", "report_update").handler(
+                {"changed": True, "notes": key}
+            )
+
+    _runtime, client, conversation, _asked = _seed_rebuild(tmp_path, monkeypatch, act)
+
+    assert "every row the agent's current seed inserts" in conversation.messages[0]
+    assert seen["left_out"].get("is_error")
+    left_out = seen["left_out"]["content"][0]["text"]
+    assert "UB7F3A2C91" in left_out and "db/seed.sql" in left_out
+    assert not seen["seeded"].get("is_error"), seen["seeded"]
+    assert client.results[-1]["checks"]["passed"] is True
+
+
+def test_a_seed_row_in_a_table_the_old_world_kept_empty_is_reproduced(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness.world.snapshot import read_manifest
+
+    seen: dict = {}
+    empty_cart = {
+        "seed_matches_source": "def check(world):\n"
+        "    st = world.state()\n"
+        "    if sorted(row['id'] for row in st.get('menu') or []) != ['big_mac']:\n"
+        "        return 'menu is not the seed menu'\n"
+        "    return 'cart is not empty at the start' if st.get('cart') else None\n"
+    }
+    seeded_cart = (
+        "def check(world):\n"
+        "    st = world.state()\n"
+        "    if sorted(row['id'] for row in st.get('menu') or []) != ['big_mac']:\n"
+        "        return 'menu is not the seed menu'\n"
+        "    cart = [row['item_id'] for row in st.get('cart') or []]\n"
+        "    return None if cart == ['big_mac'] else f'cart is {cart}'\n"
+    )
+
+    async def act(stage):
+        (tmp_path / "source" / "db").mkdir(parents=True)
+        (tmp_path / "source" / "db" / "seed.sql").write_text(
+            "INSERT INTO menu (id) VALUES ('big_mac');\n"
+            "INSERT INTO cart (item_id) VALUES ('big_mac');\n"
+        )
+        seeded = await _tool(stage, "world", "seed").handler(
+            {"table": "cart", "rows": [{"item_id": "big_mac"}]}
+        )
+        assert not seeded.get("is_error"), seeded
+        seen["refused"] = await _tool(stage, "world", "save_world").handler({})
+        edited = await _tool(stage, "world", "add_world_check").handler(
+            {
+                "name": "seed_matches_source",
+                "code": seeded_cart,
+                "source_path": "db/seed.sql",
+                "source_quote": "INSERT INTO cart (item_id) VALUES ('big_mac');",
+            }
+        )
+        assert not edited.get("is_error"), edited
+        seen["saved"] = await _tool(stage, "world", "save_world").handler({})
+        await _tool(stage, "nudge", "report_update").handler(
+            {"changed": True, "notes": "seeded the open cart"}
+        )
+
+    _runtime, client, _conversation, _asked = _seed_rebuild(
+        tmp_path, monkeypatch, act, checks=empty_cart
+    )
+
+    assert seen["refused"].get("is_error")
+    assert "seed_matches_source" in seen["refused"]["content"][0]["text"]
+    assert not seen["saved"].get("is_error"), seen["saved"]
+    manifest = read_manifest(tmp_path / "work")
+    assert manifest["tables"]["cart"] == 1
+    assert manifest["world_checks"] == {"seed_matches_source": seeded_cart}
+    assert client.results[-1]["checks"]["passed"] is True
+
+
+def test_a_report_after_the_last_write_stands(tmp_path, monkeypatch):
+    async def act(stage):
+        _called(stage, "submit_scenario")
+        _called(stage, "report_update")
+        await _tool(stage, "nudge", "report_update").handler(
+            {"changed": False, "notes": "fits"}
+        )
+        _called(stage, "check_health")
+
+    _runtime, client, _conversation, _asked = _rebuild(
+        tmp_path, monkeypatch, "suite", act
+    )
+
+    result = client.results[-1]
+    assert result["checks"]["passed"] is True and result["changed"] is False
+
+
+def test_a_late_write_whose_checks_cannot_run_lands_no_result(tmp_path, monkeypatch):
+    from fi.alk.harness import nudge
+
+    async def act(stage):
+        await _tool(stage, "nudge", "report_update").handler(
+            {"changed": True, "notes": "fits"}
+        )
+        _called(stage, "submit_scenario")
+
+        def broken(*_args, **_kwargs):
+            raise RuntimeError("gate failed")
+
+        monkeypatch.setattr(nudge, "report_update", broken)
+
+    _runtime, client, _conversation, _asked = _rebuild(
+        tmp_path, monkeypatch, "suite", act
+    )
+
+    assert client.results[-1] is None
+    assert client.events[-1]["payload"]["outcome"] == "success"
+
+
+def test_a_suite_rebuild_is_told_which_scenarios_are_the_persons(tmp_path, monkeypatch):
+    async def act(stage):
+        return None
+
+    _runtime, _client, conversation, _asked = _rebuild(
+        tmp_path, monkeypatch, "suite", act, draft_keys=("adds-a-big-mac",)
+    )
+
+    assert conversation.messages[0].endswith(
+        "Scenarios the person is still editing (keep what they wrote; only carry over a "
+        "renamed tool or argument): adds-a-big-mac"
+    )
+    assert "No scenario is being edited" not in conversation.messages[0]
+
+
+def test_a_suite_rebuild_with_no_draft_says_earlier_edits_have_landed(
+    tmp_path, monkeypatch
+):
+    async def act(stage):
+        return None
+
+    _runtime, _client, conversation, _asked = _rebuild(
+        tmp_path, monkeypatch, "suite", act
+    )
+
+    assert conversation.messages[0].endswith(
+        "No scenario is being edited by the person now: no list of edits in an earlier "
+        "message applies any more, so repair every scenario this update breaks."
+    )
+
+
+def test_an_environment_rebuild_says_nothing_about_edits(tmp_path, monkeypatch):
+    async def act(stage):
+        return None
+
+    _runtime, _client, conversation, _asked = _rebuild(
+        tmp_path, monkeypatch, "environment", act
+    )
+
+    assert "being edited" not in conversation.messages[0]
+    assert "still editing" not in conversation.messages[0]
+
+
+def test_a_suite_rebuild_can_add_a_scenario(tmp_path, monkeypatch):
+    from test_nudge_turn import _scenario
+
+    from fi.alk.harness.scenario_tools import load_scenarios
+
+    seen: dict = {}
+
+    async def act(stage):
+        await _tool(stage, "scenarios", "aim_for").handler({"count": 2})
+        seen["added"] = await _tool(stage, "scenarios", "submit_scenario").handler(
+            _scenario("adds-one-big-mac")
+        )
+
+    _rebuild(tmp_path, monkeypatch, "suite", act)
+
+    assert not seen["added"].get("is_error"), seen["added"]
+    assert {one.name for one in load_scenarios(tmp_path / "work")} == {
+        "adds-a-big-mac",
+        "adds-one-big-mac",
+    }
+
+
+def test_a_replayed_rebuild_commits_the_workspace_holding_its_result(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness.nudge import NUDGE_RESULT
+
+    async def act(stage):
+        raise AssertionError("a replayed turn does not run again")
+
+    _runtime, client, _conversation, _asked = _rebuild(
+        tmp_path,
+        monkeypatch,
+        "suite",
+        act,
+        stale_result=True,
+        journal={"m-3": "completed"},
+    )
+
+    kinds = [one["kind"] for one in client.events]
+    assert kinds[-2:] == ["checkpoint_committed", "turn_completed"]
+    assert client.events[-1]["payload"]["replayed"] is True
+    assert client.events[-2]["payload"]["digest"]
+    assert client.results[-1] == {"nudge_id": "an-older-turn"}
+    assert (tmp_path / "work" / NUDGE_RESULT).is_file()
+
+
+@pytest.mark.parametrize("ending", ["raised", "turn_failures", "interrupted"])
+def test_a_rebuild_turn_that_did_not_succeed_replays_as_failed(
+    tmp_path, monkeypatch, ending
+):
+    async def act(stage):
+        await _tool(stage, "nudge", "report_update").handler(
+            {"changed": False, "notes": "fits"}
+        )
+        _called(stage, "submit_scenario")
+        if ending == "raised":
+            raise RuntimeError("model unavailable")
+        if ending == "turn_failures":
+            stage.emit_event(
+                RuntimeEvent(kind="done", detail={"outcome": "failed", "error": "x"})
+            )
+
+    async def interrupted(self, turn, *, command_sequence):
+        await turn
+        return {"kind": "interrupt", "message_id": "m-4", "sequence": 4}
+
+    if ending == "interrupted":
+        monkeypatch.setattr(HostedChatRuntime, "_turn_until_interrupted", interrupted)
+
+    _runtime, client, _conversation, _asked = _rebuild(
+        tmp_path, monkeypatch, "suite", act, redeliver=True
+    )
+
+    journal = json.loads(
+        (tmp_path / "work" / ".futureagi-conversation.json").read_text()
+    )
+    assert journal == {"m-3": "ended"}
+    # The turn's last workspace holds no result, so nothing of it can land.
+    assert client.results[-1] is None
+    replay = client.events[client.redelivered_at :]
+    assert [one["kind"] for one in replay] == ["turn_completed"]
+    assert replay[0]["payload"] == {"command_message_id": "m-3", "outcome": "failed"}
+
+
+def test_a_cut_off_rebuild_turn_keeps_no_result(tmp_path, monkeypatch):
+    async def act(stage):
+        raise AssertionError("a retried rebuild turn does not run again")
+
+    _runtime, client, _conversation, _asked = _rebuild(
+        tmp_path,
+        monkeypatch,
+        "suite",
+        act,
+        stale_result=True,
+        journal={"m-3": "retried"},
+    )
+
+    journal = json.loads(
+        (tmp_path / "work" / ".futureagi-conversation.json").read_text()
+    )
+    assert journal == {"m-3": "ended"} and client.results[-1] is None
+    assert client.events[-1]["payload"]["interrupted"] is True
+
+
+def test_a_resumed_rebuild_turn_starts_without_its_earlier_result(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness.nudge import NUDGE_RESULT
+
+    seen: dict = {}
+
+    async def act(stage):
+        seen["result_at_start"] = (tmp_path / "work" / NUDGE_RESULT).exists()
+        _called(stage, "submit_scenario")
+
+    _runtime, client, _conversation, _asked = _rebuild(
+        tmp_path,
+        monkeypatch,
+        "suite",
+        act,
+        stale_result=True,
+        journal={"m-3": "started"},
+        resumed=True,
+    )
+
+    assert client.events[0]["payload"]["resumed"] is True
+    # The report lived in the lost process: without a new one nothing lands.
+    assert seen["result_at_start"] is False
+    assert client.results[-1] is None
+
+
+def test_aim_for_in_a_suite_rebuild_only_raises_the_count(tmp_path, monkeypatch):
+    from fi.alk.harness.nudge import REBUILD_ADDS_AT_MOST, aim_refusal
+
+    said: dict = {}
+
+    async def act(stage):
+        aim = _tool(stage, "scenarios", "aim_for").handler
+        said["alike"] = await aim({"count": 2, "people": "alike"})
+        said["asked"] = await aim({"count": 2, "asked_for": {"task": ["add"]}})
+        said["far"] = await aim({"count": 2 + REBUILD_ADDS_AT_MOST})
+        said["near"] = await aim({"count": 1 + REBUILD_ADDS_AT_MOST})
+
+    _rebuild(tmp_path, monkeypatch, "suite", act)
+
+    for refused in ("alike", "asked", "far"):
+        assert said[refused].get("is_error"), said[refused]
+    assert not said["near"].get("is_error"), said["near"]
+    assert aim_refusal({"count": 2}, 3, 3)
+
+
+@pytest.mark.parametrize("kind", ["builder", "coordinator"])
+def test_a_stored_session_the_provider_will_not_resume_opens_fresh(kind):
+    from fi.alk.harness.backends.base import ConversationSession, SessionSpec
+    from fi.alk.harness.hosted_chat_entrypoint import CoordinatorConversation
+    from fi.alk.harness.session import Stage
+
+    starts: list = []
+
+    class Session:
+        def __init__(self, spec):
+            self.resuming = spec.conversation.resume_session_id
+
+        async def start(self):
+            starts.append(self.resuming)
+            if self.resuming:
+                raise RuntimeError(f"No conversation found with session ID {self.resuming}")
+
+        async def stop(self):
+            pass
+
+    class Backend:
+        def create(self, spec):
+            return Session(spec)
+
+    conversation = ConversationSession(
+        app_name="alk", user_id="u", session_id="s", resume_session_id="sdk-1"
+    )
+    stage = Stage(
+        SessionSpec(system_prompt="", conversation=conversation),
+        name=kind,
+        backend=Backend(),
+    )
+
+    async def say(message, on_event=None):
+        return f"heard {message}"
+
+    stage.say = say  # type: ignore[method-assign]
+
+    async def open_stage(*, resume=True):
+        return stage
+
+    chat = (
+        BuilderConversation(open_stage)
+        if kind == "builder"
+        else CoordinatorConversation(stage)
+    )
+    assert asyncio.run(chat.say("hi")) == "heard hi"
+    assert starts == ["sdk-1", None]
+    assert conversation.resume_session_id is None
 
 
 def test_reading_a_run_can_wait_until_it_has_finished(tmp_path, monkeypatch):
