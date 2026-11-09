@@ -848,6 +848,10 @@ class HostedChatCallRunner:
                 [{**one, **acting_fields(listing.by_id().get(str(one.get("id"))))} for one in chat_actors],
                 seed=trial, model=None, limits=limits, act=acts, records=records, meter=meter,
                 about=action_descriptions(self._contract.model_dump()),
+                # Each actor's own rows in this trial's log (scheduled ones included), so it decides knowing them.
+                history=lambda key, since=time.time(): [
+                    row for row in _trial_log(door, since) if row.get("actor_id") == key
+                ],
             )
             if chat_actors
             else None

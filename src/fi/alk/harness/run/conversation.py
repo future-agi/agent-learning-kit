@@ -251,6 +251,7 @@ class ChatActors:
         meter: Any = None,
         clock: Callable[[], float] = time.time,
         about: dict[str, str] | None = None,
+        history: Callable[[str], list[dict[str, Any]]] | None = None,
     ) -> None:
         from fi.simulate.simulation.call_actors import Waits
 
@@ -264,6 +265,11 @@ class ChatActors:
         # What each world action is and the fields it takes, by its route, so an actor sends what the world reads.
         self.about = dict(about or {})
         self.records = records
+        # This trial's world rows an actor wrote itself (its scheduled actions included), read from the door's log; an
+        # actor decides knowing what it already did, so it never repeats or silently reverses itself.
+        self.history = history
+        # What each actor sent from this conversation and how the world answered, when no log can be read.
+        self.acted: dict[str, list[dict[str, Any]]] = {str(one["id"]): [] for one in self.actors}
         self.meter = meter
         self.turns_taken = 0
         self.written: dict[str, list[str]] = {str(one["id"]): [] for one in self.actors}
@@ -275,6 +281,35 @@ class ChatActors:
         self.events: list[dict[str, Any]] = []
         # How long the conversation waits for an actor once due, and its fallback when it does not answer.
         self.waits = Waits(clock)
+
+    def _own_rows(self, key: str) -> list[dict[str, Any]]:
+        if self.history is not None:
+            try:
+                return [
+                    {"action": row.get("name"), "arguments": row.get("arguments"), "outcome": row.get("outcome")}
+                    for row in self.history(key)
+                ]
+            except Exception:  # noqa: BLE001 - an unreadable log falls back to what this conversation sent
+                pass
+        return list(self.acted.get(key, []))
+
+    def _own_actions(self, key: str) -> list[str]:
+        """What this actor already did in the world this trial, oldest first, marked as its own."""
+        import json
+
+        return [json.dumps({"by": "you", **row}, default=str) for row in self._own_rows(key)]
+
+    def _already_committed(self, key: str, action: str, arguments: dict[str, Any]) -> bool:
+        import json
+
+        wanted = json.dumps(arguments or {}, sort_keys=True, default=str)
+        last = action.rsplit(".", 1)[-1]
+        return any(
+            row.get("outcome") == "committed"
+            and str(row.get("action") or "").rsplit(".", 1)[-1] == last
+            and json.dumps(row.get("arguments") or {}, sort_keys=True, default=str) == wanted
+            for row in self._own_rows(key)
+        )
 
     def _room(self) -> bool:
         cap = self.limits.get("caller_takes_back_after_turns")
@@ -338,11 +373,17 @@ class ChatActors:
                 said=self.written[key],
                 conversation=conversation,
                 language=str(actor.get("language") or ""),
+                seen=self._own_actions(key) if self.act else None,
                 actions={one: self.about.get(one, "") for one in actor.get("permitted_actions") or []} if self.act else {},
             )
             decision = read_decision(await self._write(actor, brief))
             if follow_up and (decision.line or decision.action):
                 self.follow_ups[key] = self.follow_ups.get(key, 0) + 1
+            if decision.action and self._already_committed(key, decision.action, decision.arguments):
+                # The same action it already committed: done once is done; it is not sent again.
+                self.events.append({"actor": key, "kind": "repeated", "action": decision.action,
+                                    "why": "already committed this action in this trial"})
+                decision = type(decision)(line=decision.line, action="", arguments={}, why=decision.why)
             if decision.action and self.act is not None:
                 self.decisions += 1
                 from ..world_door import record_action
@@ -365,6 +406,10 @@ class ChatActors:
                 self.events.append(
                     {"actor": key, "kind": "acted", "action": decision.action, "outcome": outcome, "why": decision.why}
                 )
+                self.acted.setdefault(key, []).append({
+                    "action": decision.action, "arguments": decision.arguments,
+                    "outcome": outcome.get("outcome") if isinstance(outcome, dict) else outcome,
+                })
                 self.waits.answered(actor)
             if not decision.line:
                 if decision.waits:
