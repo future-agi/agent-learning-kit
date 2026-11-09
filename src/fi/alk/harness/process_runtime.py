@@ -4106,6 +4106,9 @@ class SpawnContext:
     # A dedicated Daytona sandbox can still share one LiveKit project with other jobs. Carry the
     # stable job identity into placeholder rendering so each worker gets a unique dispatch name.
     job_id: str = "local"
+    # What ``{{JOB_ID}}`` renders to: the job plus its attempt (see `_dispatch_identity`). Empty
+    # means the job id alone.
+    dispatch_id: str = ""
     # The platform's per-run decision for customer code (job.json `metadata`), applied to every
     # customer process's environment as is.
     customer_code_environment: dict[str, str] = field(default_factory=dict)
@@ -4229,7 +4232,7 @@ def spawn_world(
                         context.work_directory, world_index, name
                     ),
                     world_index=world_index,
-                    job_id=context.job_id,
+                    job_id=context.dispatch_id or context.job_id,
                     port_plan=context.port_plan,
                     configuration_addresses=configuration_addresses,
                     secret_values=context.secret_values,
@@ -5727,6 +5730,17 @@ def _read_job_id(work_directory: Path) -> str:
     return value or f"local-{secrets.token_hex(4)}"
 
 
+def _dispatch_identity(job_id: str, attempt_id: str | None) -> str:
+    """The identity that ``{{JOB_ID}}`` renders to: the job plus its attempt.
+
+    A retry or rerun is a new attempt of the same job, and the superseded attempt's sandbox may
+    still be registered with LiveKit, so two attempts must not share a dispatch name. Local runs
+    have no attempt and use the job identity alone.
+    """
+    attempt = str(attempt_id or "").strip()
+    return f"{job_id}-{attempt[:12]}" if attempt else job_id
+
+
 def _read_customer_code_environment(work_directory: Path) -> dict[str, str]:
     """Return the platform's per-run environment for customer processes, or ``{}``.
 
@@ -6453,13 +6467,15 @@ class ProcessRuntimeProvider:
                 name: value.password for name, value in credentials.items()
             }
             self._diagnostic_work_directory = work_directory
+            job_id = _read_job_id(work_directory)
             context = SpawnContext(
                 work_directory=work_directory,
                 port_plan=port_plan,
                 credentials=credentials,
                 secret_values=self._secret_values,
                 secret_purposes=self._secret_purposes,
-                job_id=_read_job_id(work_directory),
+                job_id=job_id,
+                dispatch_id=_dispatch_identity(job_id, self._provider_attempt_id),
                 customer_code_environment=_read_customer_code_environment(
                     work_directory
                 ),
@@ -7054,7 +7070,9 @@ class ProcessRuntimeProvider:
 
         def _fill(value: str) -> str:
             return (
-                value.replace("{{JOB_ID}}", self._context.job_id)
+                value.replace(
+                    "{{JOB_ID}}", self._context.dispatch_id or self._context.job_id
+                )
                 .replace("{{WORLD_INDEX}}", str(world_index))
                 .replace("{{WORLD_DIR}}", str(world_dir))
             )
