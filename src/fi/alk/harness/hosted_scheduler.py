@@ -72,7 +72,7 @@ from .world.errors import (
     WorldUnavailable,
     WorldUsageError,
 )
-from .world.runtime import Call
+from .world.runtime import Call, graded_calls
 
 logger = logging.getLogger(__name__)
 
@@ -2321,7 +2321,7 @@ class HostedScheduler:
                 call=self._call_summary(call_outcome),
                 retry=False,
             )
-        calls = list(
+        calls = graded_calls(
             call_outcome.calls
         )  # m12: `folder.py::_RUNNABLE` expects a list, not a tuple.
         if not calls and (

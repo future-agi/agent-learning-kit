@@ -2318,16 +2318,18 @@ def spawn_source_process(
                         _SIMULATION_MARK_SITECUSTOMIZE, encoding="utf-8"
                     )
                 sitecustomize_hook.chmod(0o444)
-        if mark_hook_due:
-            # The customer's interpreter has no `fi.alk`, so the module sits beside the hook.
-            mark_module = world_dir / "simulation_mark_bootstrap.py"
-            if not mark_module.exists():
-                mark_module.write_bytes(
-                    Path(__file__)
-                    .with_name("simulation_mark_bootstrap.py")
-                    .read_bytes()
-                )
-                mark_module.chmod(0o444)
+        if mark_hook_due or process.environment.get("ALK_OBSERVE_FRAMEWORKS") == "1":
+            # The customer's interpreter has no `fi.alk`, so the modules sit beside the hook.
+            for module_name in (
+                "simulation_mark_bootstrap.py",
+                "simulation_worker_events.py",
+            ):
+                mark_module = world_dir / module_name
+                if not mark_module.exists():
+                    mark_module.write_bytes(
+                        Path(__file__).with_name(module_name).read_bytes()
+                    )
+                    mark_module.chmod(0o444)
         if process.environment.get("ALK_CREWAI_TOOL_TRACE") == "1":
             observer = world_dir / "crewai_runtime_observer_bootstrap.py"
             if not observer.exists():
