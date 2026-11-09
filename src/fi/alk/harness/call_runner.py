@@ -1213,7 +1213,7 @@ def fault_notices(
                             "message": f"The {mode} fault on call {on_call} of {action} could not be applied: {unreachable}."})
             continue
         rows = [row for row in log or [] if _same_action(action, str(row.get("name") or ""))]
-        if any(row.get("outcome") == "faulted" for row in rows):
+        if any(_fault_applied(row) for row in rows):
             continue
         made = sum(1 for call in calls if _same_action(action, call.name))
         if made >= on_call:
@@ -1225,6 +1225,14 @@ def fault_notices(
                             "message": f"The {mode} fault on call {on_call} of {action} never took effect: the agent "
                                        f"made {made} call{'s' if made != 1 else ''} of it."})
     return notices
+
+
+def _fault_applied(row: Mapping[str, Any]) -> bool:
+    """The door's row for a fault it applied: refused before commit (`faulted`), or committed with the answer lost
+    (`timeout_after_commit` keeps the commit and records `response_lost`)."""
+    return row.get("outcome") == "faulted" or (
+        row.get("outcome") == "committed" and row.get("error") == "response_lost"
+    )
 
 
 def _int_or(value: Any, default: int) -> int:
