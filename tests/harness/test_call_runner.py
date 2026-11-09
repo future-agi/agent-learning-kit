@@ -2513,7 +2513,7 @@ def test_actor_rows_are_sealed_named_and_with_their_outcome_and_the_agent_s_are_
     runtime = _runtime(endpoints={"database": _postgres_endpoint()})
     assert cr._actor_rows(runtime, bundle) == [
         {
-            "name": "approve",
+            "name": "records.approve",
             "arguments": {"item": "d1"},
             "result": {"ok": True},
             "ok": True,
@@ -2620,7 +2620,7 @@ def test_a_world_actor_s_actions_are_sealed_with_the_transcript_never_as_the_age
     transcript = json.loads(sealed[cr.ArtifactKind.TRANSCRIPT])
     assert [
         (one["name"], one["actor_id"]) for one in transcript["world_actors"]["actions"]
-    ] == [("approve", "reviewer")]
+    ] == [("records.approve", "reviewer")]
 
 
 def test_a_worker_s_refused_attempt_is_sealed_in_the_trial_s_state_changes_without_any_actor(
