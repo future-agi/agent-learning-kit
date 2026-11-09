@@ -47,6 +47,8 @@ WORKER_CHANNELS_FILE = os.environ.get("WORKER_CHANNELS_FILE", "")
 # limit workers.
 WORKER_PERMISSIONS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "permissions.json")
 _CHANNEL_PREFIX = "/w/"
+# The tool each world action is, {"orders.get": "get_order"}, sealed beside this file from the contract's routes.
+ACTIONS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "actions.json")
 
 __all__ = ["Handler", "door", "permitted"]
 
@@ -174,8 +176,10 @@ class Handler(BaseHTTPRequestHandler):
         # attempt to act as someone else, refused and logged as the agent's.
         actor = (self.headers.get("x-alk-actor") or "").strip()
         proven = not actor
+        action = route.strip("/").replace("/", ".") or "unknown"
+        tool = (_read_json(ACTIONS_FILE) or {}).get(action)
         return ToolCall(
-            action=route.strip("/").replace("/", ".") or "unknown",
+            action=action,
             name=route.rstrip("/").rsplit("/", 1)[-1] or "unknown",
             arguments=arguments,
             actor=actor or AGENT,
@@ -188,6 +192,7 @@ class Handler(BaseHTTPRequestHandler):
             body=body,
             content_type=self.headers.get("content-type", "application/json"),
             worker=worker,
+            tool=tool if isinstance(tool, str) else "",
         )
 
     def _enter(self) -> None:

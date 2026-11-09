@@ -2027,6 +2027,17 @@ def _tool_proxy_process() -> SourceProcess:
     )
 
 
+def _tool_actions(contract_body: dict[str, Any] | None) -> dict[str, str]:
+    """Each service-backed tool's world action, as the tool proxy names it (the route it calls, dotted), mapped to the
+    tool's own name: a route is often named otherwise (`get_order` -> `orders/get`)."""
+    contract = AgentContract.model_validate(contract_body or {})
+    return {
+        entry.endpoint.split("?", 1)[0].strip("/").replace("/", "."): entry.tool
+        for entry in contract.tool_entrypoints
+        if entry.endpoint.strip() and "{" not in entry.endpoint
+    }
+
+
 def _worker_permissions(contract_body: dict[str, Any] | None) -> dict[str, dict[str, list[str]]]:
     """Each declared worker's allow-list, as the tool proxy names world actions: the path its tool calls, dotted."""
     contract = AgentContract.model_validate(contract_body or {})
@@ -3730,6 +3741,12 @@ def author_bundle_v2(
                 Path(__file__).with_name("world_door.py"),
                 generated / "world_door.py",
             )
+            # The tool each route is, so the log keeps the agent's own tool name beside the route.
+            actions = _tool_actions(contract_body)
+            if actions:
+                (generated / "actions.json").write_text(
+                    json.dumps(actions, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+                )
             # Only with declared workers, so a bundle without them seals exactly as before.
             permissions = _worker_permissions(contract_body)
             if permissions:

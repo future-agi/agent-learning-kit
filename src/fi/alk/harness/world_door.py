@@ -68,6 +68,9 @@ class ToolCall:
     # The agent's worker that made the call, from the channel it came in on: None when it came in on no worker's
     # channel, "" when the channel belongs to no worker of this trial.
     worker: str | None = None
+    # The agent's own name for the tool this action is, when the surface knows it (a route is often named otherwise,
+    # `get_order` -> `orders.get`); kept beside `name` so grading reads the tool the agent called.
+    tool: str = ""
 
 
 @dataclass
@@ -412,6 +415,7 @@ class WorldDoor:
             "idempotency_key": key,
             "actor_id": call.actor,
             "worker_id": call.worker or None,
+            "agent_tool": call.tool or None,
             "parent_event_id": call.parent,
             "on_behalf_of": on_behalf_of,
         }
@@ -608,7 +612,7 @@ class Routed:
 
 _EXTENDED = (
     "name, arguments, result, ok, error, at, action_id, outcome, refusal, refusal_code, idempotency_key, actor_id, "
-    "worker_id, parent_event_id, on_behalf_of"
+    "worker_id, agent_tool, parent_event_id, on_behalf_of"
 )
 _BASIC = "name, arguments, result, ok, error, at"
 

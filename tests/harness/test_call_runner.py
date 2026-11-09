@@ -2844,3 +2844,14 @@ def test_the_sealed_trace_row_keeps_why_the_world_refused_a_call() -> None:
     )
     assert trace_row(refused)["refusal_code"] == "deadline_passed"
     assert "refusal_code" not in trace_row(Call(name="get_order", arguments={}))
+
+
+def test_a_logged_call_is_graded_under_the_agent_s_own_tool_name_when_the_world_recorded_it(monkeypatch) -> None:
+    columns = ["name", "arguments", "result", "ok", "error", "at", "actor_id", "agent_tool"]
+    rows = [
+        ("list", {"order_id": "1042"}, {"refunds": []}, True, "", 1.0, "agent", "list_refunds"),
+        ("get_deal", {"id": 8}, {}, True, "", 2.0, "agent", None),
+    ]
+    monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
+    calls = cr._collect_tool_trace_calls(_runtime(endpoints={"database": _postgres_endpoint()}))
+    assert [one.name for one in calls] == ["list_refunds", "get_deal"]

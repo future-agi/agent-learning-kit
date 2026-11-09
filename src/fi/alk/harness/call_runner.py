@@ -935,7 +935,8 @@ def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
 
     calls: list[Call] = []
     for record in records:
-        name = record.get("name")
+        # The agent's own tool name when the world recorded it beside the route the call took.
+        name = record.get("agent_tool") or record.get("name")
         if not isinstance(name, str) or not name:
             continue
         arguments = record.get("arguments")

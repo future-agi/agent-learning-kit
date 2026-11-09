@@ -427,6 +427,8 @@ def worker_proxy(proxy, monkeypatch, tmp_path):
     (shipped / "proxy.py").write_bytes(_PROXY.read_bytes())
     (shipped / "world_door.py").write_bytes(_PROXY.with_name("world_door.py").read_bytes())
     (shipped / "permissions.json").write_text(json.dumps(PERMISSIONS), encoding="utf-8")
+    # The tool each world action is, as the bundle seals it from the contract's routes.
+    (shipped / "actions.json").write_text(json.dumps({"records.approve": "approve_record"}), encoding="utf-8")
     (tmp_path / "channels.json").write_text(json.dumps(CHANNELS), encoding="utf-8")
     monkeypatch.setenv("WORKER_CHANNELS_FILE", str(tmp_path / "channels.json"))
     url, rows = proxy
@@ -481,3 +483,11 @@ def test_past_the_trial_s_worker_deadline_every_worker_call_is_refused_but_the_a
         ("refund", "refused", "deadline_passed"),
         (None, "committed", None),
     ]
+
+
+def test_a_call_is_logged_with_the_agent_s_own_tool_name_beside_its_route(worker_proxy):
+    url, rows = worker_proxy
+    assert _post(url, "/w/c-refund/records/approve", {"deal": "1"})[0] == 201
+    assert _post(url, "/ok", {})[0] == 201
+    # The route stays the row's name (what actors read); the tool the agent called is beside it, for grading.
+    assert [(one["name"], one["agent_tool"]) for one in rows()] == [("approve", "approve_record"), ("ok", None)]

@@ -5931,3 +5931,18 @@ def test_a_separately_wired_worker_s_tool_address_points_at_its_own_channel_on_t
     assert "REFUND_API_URL" not in wired["tool-proxy"]
     without_proxy = replace(plan, processes=(agent,))
     assert _with_worker_channels(without_proxy, contract) is without_proxy
+
+
+def test_each_routed_tool_is_sealed_under_the_world_action_its_route_names():
+    from fi.alk.harness.bundle_author_v2 import _tool_actions
+
+    contract = {
+        "tools": [{"name": "get_order"}, {"name": "list_refunds"}, {"name": "lookup"}],
+        "tool_entrypoints": [
+            {"tool": "get_order", "mode": "service", "service": "returns-api", "endpoint": "/orders/get"},
+            {"tool": "list_refunds", "mode": "service", "service": "returns-api", "endpoint": "refunds/list?all=1"},
+            {"tool": "lookup", "mode": "service", "service": "returns-api", "endpoint": "/orders/{id}"},
+        ],
+    }
+    # A route with a path parameter names no fixed action, so it is left out.
+    assert _tool_actions(contract) == {"orders.get": "get_order", "refunds.list": "list_refunds"}
