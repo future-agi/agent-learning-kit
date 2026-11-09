@@ -36,6 +36,7 @@ import dataclasses
 import gc
 import json
 import random
+import time
 import logging
 import os
 import stat
@@ -1151,30 +1152,50 @@ def _agent_marks(
 # The trial's faults on the agent's calls, kept in the world's own database where the tool proxy reads them: never in a
 # file the agent's process could read or rewrite.
 TRIAL_FAULTS_DDL = "CREATE TABLE IF NOT EXISTS _alk_trial_faults (id INT PRIMARY KEY, faults JSONB NOT NULL)"
+# When this trial's workers stop being allowed to act, beside its faults; null when the scenario sets no budget.
+TRIAL_DEADLINE_DDL = "ALTER TABLE _alk_trial_faults ADD COLUMN IF NOT EXISTS worker_deadline_at DOUBLE PRECISION"
 
 
-def _write_trial_state(runtime: EnvironmentRuntime, faults: list[Any]) -> None:
-    """This trial's faults, in the world's database where the door in the tool proxy reads them; written by the runner
-    only, over its own connection."""
+def _write_trial_state(
+    runtime: EnvironmentRuntime, faults: list[Any], worker_deadline_at: float | None = None
+) -> None:
+    """This trial's faults and its workers' deadline, in the world's database where the door in the tool proxy reads
+    them; written by the runner only, over its own connection. Past the deadline the world refuses every worker's
+    call (`deadline_passed`)."""
     database = _find_postgres_endpoint(runtime)
     if database is None:
-        if faults:
-            logger.warning("faults cannot be set: this world has no database the tool proxy reads trial state from")
+        if faults or worker_deadline_at:
+            logger.warning("trial state cannot be set: this world has no database the tool proxy reads it from")
         return
     import psycopg
 
     with psycopg.connect(database.address, autocommit=True, connect_timeout=5) as connection:
         connection.execute(TRIAL_FAULTS_DDL)
+        connection.execute(TRIAL_DEADLINE_DDL)
         connection.execute(
-            "INSERT INTO _alk_trial_faults (id, faults) VALUES (1, %s::jsonb) "
-            "ON CONFLICT (id) DO UPDATE SET faults = EXCLUDED.faults",
-            (json.dumps(list(faults)),),
+            "INSERT INTO _alk_trial_faults (id, faults, worker_deadline_at) VALUES (1, %s::jsonb, %s) "
+            "ON CONFLICT (id) DO UPDATE SET faults = EXCLUDED.faults, worker_deadline_at = EXCLUDED.worker_deadline_at",
+            (json.dumps(list(faults)), worker_deadline_at),
         )
 
 
-def _set_trial_faults(runtime: EnvironmentRuntime, faults: list[Any]) -> None:
-    """This trial's faults at its start. A trial with faults to set fails when they cannot be set; one with none only
-    clears what an earlier trial may have left, so a world database out of reach never fails it."""
+def worker_deadline(document: Mapping[str, Any]) -> float | None:
+    """When this trial's workers stop being allowed to act: its start plus the scenario's worker budget, if any."""
+    budget = document.get("worker_budget_seconds")
+    if isinstance(budget, bool) or not isinstance(budget, (int, float)) or budget <= 0:
+        return None
+    return time.time() + budget
+
+
+def _set_trial_faults(
+    runtime: EnvironmentRuntime, faults: list[Any], worker_deadline_at: float | None = None
+) -> None:
+    """This trial's faults and worker deadline at its start. A trial with either to set fails when they cannot be
+    set; one with neither only clears what an earlier trial may have left, so a world database out of reach never
+    fails it."""
+    if worker_deadline_at:
+        _write_trial_state(runtime, faults, worker_deadline_at)
+        return
     if faults:
         _write_trial_state(runtime, faults)
         return
@@ -2364,15 +2385,16 @@ class CallRunnerImpl:
 
         async def place_with_actors() -> SimulationReport:
             faults = list(doc.get("faults") or [])
+            deadline = worker_deadline(doc)
             proxied = runtime.endpoints.get("tool_proxy") is not None
-            if faults or proxied:
-                # Every trial behind a tool proxy writes its own faults, none included, so nothing an earlier trial
-                # left can apply to this one.
-                _set_trial_faults(runtime, faults)
+            if faults or deadline or proxied:
+                # Every trial behind a tool proxy writes its own faults and deadline, none included, so nothing an
+                # earlier trial left can apply to this one.
+                _set_trial_faults(runtime, faults, deadline)
             try:
                 return await place_with_world_actors()
             finally:
-                if faults:
+                if faults or deadline:
                     with contextlib.suppress(Exception):
                         _write_trial_state(runtime, [])
 

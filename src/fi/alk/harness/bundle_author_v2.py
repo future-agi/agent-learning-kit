@@ -65,7 +65,7 @@ from .bundle_v2 import (
     load_bundle_v2,
     seal_bundle_v2,
 )
-from .contract import DataStore, Runtime, ToolEntry, runtime_public_environment
+from .contract import AgentContract, DataStore, Runtime, ToolEntry, runtime_public_environment
 from .generated_runtime import (
     GeneratedRuntimeError,
     framework_instrumentation_command,
@@ -173,13 +173,13 @@ def _sets_trial_state(authoring: Path) -> bool:
     return False
 
 
-def _action_log_seed(authoring: Path) -> str:
-    """The action log and who may do what in the world; a world without actors, pre-run sessions or faults is seeded exactly
-    as before."""
+def _action_log_seed(authoring: Path, *, workers: bool = False) -> str:
+    """The action log and who may do what in the world; a world without actors, pre-run sessions, faults or limited
+    workers is seeded exactly as before."""
     listing = load_actors(authoring)
     return (
         _TOOL_TRACE_DDL + actors_seed(listing)
-        if listing.actors or _sets_trial_state(authoring)
+        if listing.actors or workers or _sets_trial_state(authoring)
         else _AGENT_TRACE_DDL
     )
 
@@ -2018,11 +2018,25 @@ def _tool_proxy_process() -> SourceProcess:
             "PORT": "{{PORT_tool-proxy}}",
             "UPSTREAM_URL": "{{TOOLS_UPSTREAM_URL}}",
             "DATABASE_URL": "{{WORLD_DATABASE_URL}}",
+            # This trial's worker channels, {token: worker id}, written by the runner.
+            "WORKER_CHANNELS_FILE": "{{WORLD_DIR}}/worker-channels.json",
         },
         started_check=StartedCheck(port=True, timeout_seconds=180),
         user=ProcessUser.SVC_TOOLS,
         depends_on=["tools-api", "world-db"],
     )
+
+
+def _worker_permissions(contract_body: dict[str, Any] | None) -> dict[str, dict[str, list[str]]]:
+    """Each declared worker's allow-list, as the tool proxy names world actions: the path its tool calls, dotted."""
+    contract = AgentContract.model_validate(contract_body or {})
+    endpoints = {entry.tool: entry.endpoint for entry in contract.tool_entrypoints if entry.endpoint.strip()}
+    return {
+        f"worker:{worker.id}": {
+            "allow": sorted({endpoints.get(tool, tool).strip("/").replace("/", ".") for tool in worker.tools})
+        }
+        for worker in contract.workers
+    }
 
 
 def _mcp_toolbox_definition(root: Path) -> tuple[Path, dict[str, Any]] | None:
@@ -3691,6 +3705,12 @@ def author_bundle_v2(
                 Path(__file__).with_name("world_door.py"),
                 generated / "world_door.py",
             )
+            # Only with declared workers, so a bundle without them seals exactly as before.
+            permissions = _worker_permissions(contract_body)
+            if permissions:
+                (generated / "permissions.json").write_text(
+                    json.dumps(permissions, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+                )
         if any(process.name == "mcp-toolbox" for process in plan.processes):
             toolbox = _mcp_toolbox_definition(source_root)
             if toolbox is None:
@@ -3711,7 +3731,10 @@ def author_bundle_v2(
         prefix = (
             "CREATE TABLE IF NOT EXISTS harness_seed_sentinel (id text PRIMARY KEY);\n"
             "INSERT INTO harness_seed_sentinel(id) VALUES ('ready') ON CONFLICT DO NOTHING;\n"
-            + _action_log_seed(authoring_root)
+            # A worker's refused attempt is kept in the same action log as an actor's.
+            + _action_log_seed(
+                authoring_root, workers=bool(_worker_permissions(contract_body))
+            )
         )
         generic_pipeline = job.metadata.get("generic_harness_v1") is True
         if generic_pipeline:

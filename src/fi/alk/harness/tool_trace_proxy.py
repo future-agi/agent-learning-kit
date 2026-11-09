@@ -41,6 +41,12 @@ except ImportError:  # pragma: no cover - imported as part of the package
 
 UPSTREAM = os.environ.get("UPSTREAM_URL", "").rstrip("/")
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
+# This trial's worker channels, {token: worker id}: a worker reaches the world under /w/<token>/.
+WORKER_CHANNELS_FILE = os.environ.get("WORKER_CHANNELS_FILE", "")
+# The sealed per-worker allow-lists beside this file, {"worker:<id>": {"allow": [...]}}; a bundle without it does not
+# limit workers.
+WORKER_PERMISSIONS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "permissions.json")
+_CHANNEL_PREFIX = "/w/"
 
 __all__ = ["Handler", "door", "permitted"]
 
@@ -50,24 +56,70 @@ _FAULTS_CONNECTION = None
 _FAULTS_LOCK = threading.Lock()
 
 
-def _trial_faults() -> list[dict]:
-    """This trial's faults on the agent's calls, written by the runner into the world's database; never from a request
-    or a file the agent's process could reach. Read over one kept connection; a world whose runner set no faults has
-    no row, and an unreadable table is no faults."""
+def _trial_row(column: str) -> tuple | None:
+    """One column of this trial's row, read over the one kept connection; None when there is no database, table,
+    column or row."""
     global _FAULTS_CONNECTION
     if not DATABASE_URL:
-        return []
+        return None
     with _FAULTS_LOCK:
         try:
             if _FAULTS_CONNECTION is None or _FAULTS_CONNECTION.closed:
                 import psycopg
 
                 _FAULTS_CONNECTION = psycopg.connect(DATABASE_URL, autocommit=True, connect_timeout=5)
-            row = _FAULTS_CONNECTION.execute("SELECT faults FROM _alk_trial_faults WHERE id = 1").fetchone()
-        except Exception:  # noqa: BLE001 - no table (no faults were ever set), or no database: no faults this trial
-            return []
+            return _FAULTS_CONNECTION.execute(
+                f"SELECT {column} FROM _alk_trial_faults WHERE id = 1"  # noqa: S608 - a fixed column name
+            ).fetchone()
+        except Exception:  # noqa: BLE001 - no table (nothing was ever set), or no database: nothing this trial
+            return None
+
+
+def _trial_faults() -> list[dict]:
+    """This trial's faults on the agent's calls, written by the runner into the world's database; never from a request
+    or a file the agent's process could reach. Read over one kept connection; a world whose runner set no faults has
+    no row, and an unreadable table is no faults."""
+    row = _trial_row("faults")
     faults = row[0] if row else []
     return [one for one in faults if isinstance(one, dict)] if isinstance(faults, list) else []
+
+
+def _read_json(path: str) -> dict | None:
+    try:
+        with open(path, encoding="utf-8") as handle:
+            loaded = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    return loaded if isinstance(loaded, dict) else None
+
+
+def _worker_deadline() -> float | None:
+    """This trial's worker deadline, written by the runner beside its faults; none when it set none."""
+    row = _trial_row("worker_deadline_at")
+    value = row[0] if row else None
+    return float(value) if isinstance(value, (int, float)) else None
+
+
+def _worker_limits() -> dict:
+    """What this trial's workers may do: the sealed allow-lists, when the bundle has them, and the deadline. A seal
+    that is present but unreadable is an empty allow-list: it never widens what a worker may do."""
+    limits: dict = {"deadline_at": _worker_deadline()}
+    if os.path.exists(WORKER_PERMISSIONS_FILE):
+        sealed = _read_json(WORKER_PERMISSIONS_FILE) or {}
+        limits["permissions"] = {
+            key.removeprefix("worker:"): (value or {}).get("allow")
+            for key, value in sealed.items()
+            if isinstance(value, dict)
+        }
+    return limits
+
+
+def _channel_worker(token: str) -> str:
+    """The worker a channel token belongs to in this trial, or "" for none."""
+    if not token or not WORKER_CHANNELS_FILE:
+        return ""
+    worker = (_read_json(WORKER_CHANNELS_FILE) or {}).get(token)
+    return worker if isinstance(worker, str) else ""
 
 
 def door() -> WorldDoor:
@@ -76,6 +128,7 @@ def door() -> WorldDoor:
         PostgresLog(DATABASE_URL),
         PostgresRoster(DATABASE_URL),
         faults=_trial_faults,
+        workers=_worker_limits,
     )
 
 
@@ -110,6 +163,12 @@ class Handler(BaseHTTPRequestHandler):
             arguments = json.loads(body) if body else {}
         except ValueError:
             arguments = {"_raw": body.decode("utf-8", errors="replace")}
+        worker = None
+        if self.path.startswith(_CHANNEL_PREFIX):
+            token, _, rest = self.path[len(_CHANNEL_PREFIX) :].partition("/")
+            # The token is the channel's credential: stripped here, never logged or forwarded.
+            self.path = "/" + rest
+            worker = _channel_worker(token)
         route = self.path.split("?", 1)[0]
         # Actors act through the door in the runner's own process; a request here that names one is the agent's own
         # attempt to act as someone else, refused and logged as the agent's.
@@ -128,6 +187,7 @@ class Handler(BaseHTTPRequestHandler):
             path=self.path,
             body=body,
             content_type=self.headers.get("content-type", "application/json"),
+            worker=worker,
         )
 
     def _enter(self) -> None:

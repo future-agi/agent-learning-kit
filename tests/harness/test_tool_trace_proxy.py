@@ -413,3 +413,71 @@ def test_reading_the_trial_s_faults_keeps_one_connection_for_every_agent_call(pr
         assert _post(url, "/ok", {"item": "1"})[0] == 201
     # Once warm, an agent call opens one connection, its log row's, as on dev: reading faults opens none.
     assert len(opened) - warmed == 4
+
+
+CHANNELS = {"c-lookup": "order_lookup", "c-refund": "refund"}
+PERMISSIONS = {"worker:order_lookup": {"allow": ["ok"]}, "worker:refund": {"allow": ["records.approve"]}}
+
+
+@pytest.fixture()
+def worker_proxy(proxy, monkeypatch, tmp_path):
+    """The proxy as the bundle ships it, with its door and sealed permissions beside it, and this trial's channels."""
+    shipped = tmp_path / "shipped"
+    shipped.mkdir()
+    (shipped / "proxy.py").write_bytes(_PROXY.read_bytes())
+    (shipped / "world_door.py").write_bytes(_PROXY.with_name("world_door.py").read_bytes())
+    (shipped / "permissions.json").write_text(json.dumps(PERMISSIONS), encoding="utf-8")
+    (tmp_path / "channels.json").write_text(json.dumps(CHANNELS), encoding="utf-8")
+    monkeypatch.setenv("WORKER_CHANNELS_FILE", str(tmp_path / "channels.json"))
+    url, rows = proxy
+    spec = importlib.util.spec_from_file_location("tool_trace_proxy_workers", shipped / "proxy.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    server = _serve(module.Handler)
+    try:
+        yield f"http://127.0.0.1:{server.server_port}", rows
+    finally:
+        server.shutdown()
+
+
+def test_a_worker_s_allowed_action_reaches_the_world_through_its_channel_and_names_the_worker(worker_proxy):
+    url, rows = worker_proxy
+    assert _post(url, "/w/c-refund/records/approve", {"deal": "1"})[0] == 201
+    # The world sees the action's own path; the channel token never leaves the proxy.
+    assert _World.seen == ["/records/approve"]
+    [row] = rows()
+    assert (row["actor_id"], row["worker_id"], row["outcome"]) == ("agent", "refund", "committed")
+    assert "c-refund" not in json.dumps(row, default=str)
+
+
+def test_a_worker_s_action_outside_its_allow_list_is_refused_before_the_world(worker_proxy):
+    url, rows = worker_proxy
+    status, payload = _post(url, "/w/c-lookup/records/approve", {"deal": "1"})
+    assert (status, payload) == (403, {"detail": "records.approve is not permitted for order_lookup"})
+    assert _World.seen == []
+    [row] = rows()
+    assert (row["worker_id"], row["outcome"], row["refusal_code"]) == ("order_lookup", "refused", "not_permitted")
+
+
+def test_a_channel_no_worker_of_this_trial_owns_is_refused(worker_proxy):
+    url, rows = worker_proxy
+    assert _post(url, "/w/c-stolen/ok", {})[0] == 403
+    assert _World.seen == []
+    assert [(one["worker_id"], one["refusal_code"]) for one in rows()] == [(None, "identity_conflict")]
+
+
+def test_past_the_trial_s_worker_deadline_every_worker_call_is_refused_but_the_agent_s_own_is_not(worker_proxy, store):
+    from types import SimpleNamespace
+
+    from fi.alk.harness.call_runner import _write_trial_state
+
+    # As the runner sets it at the trial's start, over its own connection to the world's database.
+    runtime = SimpleNamespace(endpoints={"db": SimpleNamespace(protocol="postgres", address=store.dsn())}, metadata={})
+    _write_trial_state(runtime, [], 1.0)
+    url, rows = worker_proxy
+    assert _post(url, "/w/c-refund/records/approve", {"deal": "1"})[0] == 403
+    assert _post(url, "/ok", {})[0] == 201
+    assert [(one["worker_id"], one["outcome"], one["refusal_code"]) for one in rows()] == [
+        ("refund", "refused", "deadline_passed"),
+        (None, "committed", None),
+    ]

@@ -471,3 +471,53 @@ def test_a_keyed_action_s_row_is_written_before_its_answer_even_on_a_slow_log_so
     again = door.enter(ToolCall(action="crm.approve", name="approve", arguments={"deal": 7}, actor="manager", key="k"))
     assert (first.outcome, again.outcome) == ("committed", "duplicate")
     assert len(executor.ran) == 1
+
+
+def _worker_door(executor, limits):
+    return WorldDoor(executor, MemoryLog(), DictRoster({}), workers=lambda: limits)
+
+
+@pytest.mark.parametrize(
+    ("limits", "action", "code"),
+    [
+        ({"permissions": {"refund": ["refunds.issue"]}}, "refunds.issue", None),
+        ({"permissions": {"refund": ["refunds.issue"]}}, "orders.cancel", "not_permitted"),
+        ({"permissions": {"lookup": ["orders.get"]}}, "refunds.issue", "not_permitted"),
+        ({"permissions": {"refund": None}}, "refunds.issue", "not_permitted"),
+        ({"deadline_at": 1.0}, "refunds.issue", "deadline_passed"),
+        ({"deadline_at": 4_102_444_800.0}, "refunds.issue", None),
+        ({}, "refunds.issue", None),
+    ],
+    ids=["allowed", "not-in-list", "other-worker-only", "unreadable-list", "past-deadline", "before-deadline", "no-limits"],
+)
+def test_a_worker_s_call_reaches_the_world_only_within_its_allow_list_and_deadline(limits, action, code):
+    executor = _Executor()
+    door = _worker_door(executor, limits)
+    outcome = door.enter(ToolCall(action=action, name=action.rsplit(".", 1)[-1], worker="refund"))
+    assert outcome.refusal_code == code
+    assert len(executor.ran) == (0 if code else 1)
+    [row] = door.events()
+    assert (row["actor_id"], row["worker_id"], row["outcome"]) == (
+        AGENT,
+        "refund",
+        "refused" if code else "committed",
+    )
+
+
+def test_a_channel_no_worker_owns_is_refused_and_the_agent_s_own_calls_are_not_limited():
+    executor = _Executor()
+    door = _worker_door(executor, {"permissions": {}, "deadline_at": 1.0})
+    assert door.enter(ToolCall(action="refunds.issue", name="issue", worker="")).refusal_code == "identity_conflict"
+    # No channel: the agent's own call, never held to a worker's limits.
+    assert door.enter(ToolCall(action="refunds.issue", name="issue")).outcome == "committed"
+    assert [row.get("worker_id") for row in door.events()] == [None, None]
+
+
+def test_worker_limits_that_cannot_be_read_refuse_and_never_widen():
+    def broken():
+        raise OSError("unreadable")
+
+    executor = _Executor()
+    door = WorldDoor(executor, MemoryLog(), DictRoster({}), workers=broken)
+    assert door.enter(ToolCall(action="refunds.issue", name="issue", worker="refund")).refusal_code == "not_permitted"
+    assert executor.ran == []

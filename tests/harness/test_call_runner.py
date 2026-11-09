@@ -2744,3 +2744,20 @@ def test_the_speaking_actors_actions_file_is_the_run_s_alone(tmp_path):
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
     assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
     assert path.read_text() == ""
+
+
+@pytest.mark.parametrize(
+    ("budget", "expected"),
+    [(30, True), (0, False), (-5, False), (True, False), ("30", False), (None, False)],
+)
+def test_a_trial_s_worker_deadline_is_its_start_plus_the_scenario_s_worker_budget(budget, expected, monkeypatch):
+    monkeypatch.setattr(cr.time, "time", lambda: 1000.0)
+    assert cr.worker_deadline({"worker_budget_seconds": budget}) == (1030.0 if expected else None)
+
+
+def test_a_trial_with_a_worker_deadline_writes_it_beside_its_faults(monkeypatch):
+    written = []
+    monkeypatch.setattr(cr, "_write_trial_state", lambda runtime, faults, deadline=None: written.append((faults, deadline)))
+    cr._set_trial_faults(None, [], 1030.0)
+    cr._set_trial_faults(None, [{"action": "approve"}])
+    assert written == [([], 1030.0), ([{"action": "approve"}], None)]

@@ -65,6 +65,9 @@ class ToolCall:
     content_type: str = "application/json"
     # Who the actor is in the service it acts in (its identity there), sent to the service beside the call.
     identity: str = ""
+    # The agent's worker that made the call, from the channel it came in on: None when it came in on no worker's
+    # channel, "" when the channel belongs to no worker of this trial.
+    worker: str | None = None
 
 
 @dataclass
@@ -159,11 +162,15 @@ class WorldDoor:
         faults: Callable[[], list[dict[str, Any]]] = list,
         write_seconds: float = LOG_WRITE_SECONDS,
         faults_by_tool: bool = False,
+        workers: Callable[[], Mapping[str, Any]] = dict,
     ) -> None:
         self.executor = executor
         self.log = log
         self.roster = roster
         self.faults = faults
+        # This trial's limits on the agent's workers: `permissions`, {worker id: [world actions]} as sealed (absent:
+        # workers are not limited), and `deadline_at`, epoch seconds past which no worker's call reaches the world.
+        self.workers = workers
         self.write_seconds = write_seconds
         # A fault names the world action (`crm.update`); a surface whose calls are named by the tool (the chat runner)
         # also matches the tool's own name, as it always has. Over HTTP the action alone, as the proxy always did.
@@ -243,6 +250,10 @@ class WorldDoor:
                     on_behalf_of,
                 )
         else:
+            if call.worker is not None:
+                refused = self._worker_refusal(call)
+                if refused is not None:
+                    return self._refused(call, *refused)
             fault = self._fault(call)
             if fault is not None:
                 return self._faulted(call, fault)
@@ -267,6 +278,25 @@ class WorldDoor:
             outcome = Outcome("duplicate", 200, result=earlier[1])
             self._write(call, outcome, key=key, on_behalf_of=on_behalf_of)
             return outcome
+
+    def _worker_refusal(self, call: ToolCall) -> tuple[str, str] | None:
+        """Why a worker's call never reaches the world, or None: a channel no worker of this trial owns, the trial's
+        worker deadline passed, or an action the worker's sealed allow-list does not hold. Limits that cannot be read
+        refuse: a broken seal never widens what a worker may do."""
+        if not call.worker:
+            return "identity_conflict", "this channel does not belong to a worker of this trial"
+        try:
+            limits = self.workers() or {}
+        except Exception:  # noqa: BLE001 - unreadable limits are no permission
+            return "not_permitted", f"{call.action} is not permitted for {call.worker}: its limits could not be read"
+        deadline = limits.get("deadline_at")
+        if isinstance(deadline, (int, float)) and not isinstance(deadline, bool) and time.time() > deadline:
+            return "deadline_passed", f"the deadline for {call.worker} has passed"
+        if "permissions" in limits:
+            allowed = (limits.get("permissions") or {}).get(call.worker)
+            if not permitted(allowed, call.action):
+                return "not_permitted", f"{call.action} is not permitted for {call.worker}"
+        return None
 
     def _refused(
         self, call: ToolCall, code: str, reason: str, on_behalf_of: str | None = None
@@ -381,6 +411,7 @@ class WorldDoor:
             "refusal_code": outcome.refusal_code,
             "idempotency_key": key,
             "actor_id": call.actor,
+            "worker_id": call.worker or None,
             "parent_event_id": call.parent,
             "on_behalf_of": on_behalf_of,
         }
@@ -577,7 +608,7 @@ class Routed:
 
 _EXTENDED = (
     "name, arguments, result, ok, error, at, action_id, outcome, refusal, refusal_code, idempotency_key, actor_id, "
-    "parent_event_id, on_behalf_of"
+    "worker_id, parent_event_id, on_behalf_of"
 )
 _BASIC = "name, arguments, result, ok, error, at"
 
