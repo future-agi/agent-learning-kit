@@ -28,6 +28,35 @@ from .contract import AgentContract, known_modalities, validate_contract
 CONTRACT = "contract.json"
 
 
+def _kept_shape(written: Any, before: Any) -> Any:
+    """``written`` without the empty keys ``before`` never had.
+
+    A contract read by an older harness lacks fields added since; dumping the model fills them with their empty
+    defaults, and an edit that touched one rule then also shows a change to a field nobody set.
+    """
+    if isinstance(written, dict) and isinstance(before, dict):
+        return {
+            key: _kept_shape(value, before.get(key))
+            for key, value in written.items()
+            if key in before or value not in ("", None, [], {})
+        }
+    if isinstance(written, list) and isinstance(before, list) and len(written) == len(before):
+        return [_kept_shape(one, was) for one, was in zip(written, before)]
+    return written
+
+
+def _contract_json(contract: AgentContract, destination: Path) -> str:
+    """The contract as written back after an edit: the edit, and no new empty fields."""
+    written = contract.model_dump()
+    try:
+        before = json.loads((destination / CONTRACT).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        before = None
+    if isinstance(before, dict):
+        written = _kept_shape(written, before)
+    return json.dumps(written, indent=2, ensure_ascii=False)
+
+
 def widen(
     contract: AgentContract,
     destination: Path,
@@ -82,7 +111,7 @@ def widen(
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
     (destination / CONTRACT).write_text(
-        json.dumps(contract.model_dump(), indent=2, ensure_ascii=False),
+        _contract_json(contract, destination),
         encoding="utf-8",
     )
     return True, (
@@ -119,7 +148,7 @@ def add_rule(
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
     (destination / CONTRACT).write_text(
-        json.dumps(contract.model_dump(), indent=2, ensure_ascii=False),
+        _contract_json(contract, destination),
         encoding="utf-8",
     )
     return True, (
@@ -168,7 +197,7 @@ def set_modality(
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
     (destination / CONTRACT).write_text(
-        json.dumps(contract.model_dump(), indent=2, ensure_ascii=False),
+        _contract_json(contract, destination),
         encoding="utf-8",
     )
     reached = {
@@ -340,7 +369,7 @@ def _persist(contract: AgentContract, destination: Path) -> None:
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
     (destination / CONTRACT).write_text(
-        json.dumps(contract.model_dump(), indent=2, ensure_ascii=False),
+        _contract_json(contract, destination),
         encoding="utf-8",
     )
 
