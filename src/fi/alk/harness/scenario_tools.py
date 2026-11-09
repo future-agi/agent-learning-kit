@@ -2392,6 +2392,12 @@ def scenario_tools(
                     "or hold, one to close. Set it above that count. A run cut off before its outcome fails for "
                     "a budget we chose, and it hits the hardest scenarios first.",
                 },
+                "worker_budget_seconds": {
+                    "type": "integer",
+                    "description": "Only for an agent with workers: how long each worker may act in this "
+                    "trial, in seconds. Past it the world refuses that worker's calls and it ends timed "
+                    "out. Leave out to use the run's own limit.",
+                },
                 "coverage": {
                     "type": "object",
                     "additionalProperties": {"type": "string"},

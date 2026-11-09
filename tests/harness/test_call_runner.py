@@ -2817,3 +2817,30 @@ def test_a_change_one_of_the_agent_s_workers_committed_is_not_no_change() -> Non
     ]
     # Only refused attempts: nothing changed.
     assert cr.trial_state_changes(log[1:], {})[0]["no_change"] is True
+
+
+def test_a_worker_s_call_carries_the_worker_and_why_the_world_refused_it(monkeypatch) -> None:
+    columns = ["name", "arguments", "result", "ok", "error", "at", "action_id", "actor_id", "worker_id", "outcome",
+               "refusal_code"]
+    rows = [
+        ("get_order", {"id": "1"}, {"status": "delivered"}, True, "", 100.5, "a1", "agent", "order_lookup", "committed", None),
+        ("issue_refund", {"id": "1"}, None, False, "late", 101.0, "a2", "agent", "refund", "refused", "deadline_passed"),
+    ]
+    monkeypatch.setitem(sys.modules, "psycopg", _FakePsycopg(rows, columns))
+    calls = cr._collect_tool_trace_calls(_runtime(endpoints={"database": _postgres_endpoint()}))
+    assert [(one.worker_id, one.refusal_code) for one in calls] == [("order_lookup", ""), ("refund", "deadline_passed")]
+
+
+def test_the_sealed_trace_row_keeps_why_the_world_refused_a_call() -> None:
+    from fi.alk.harness.world.runtime import Call, trace_row
+
+    refused = Call(
+        name="get_order",
+        arguments={},
+        ok=False,
+        refused=True,
+        worker_id="order_lookup",
+        refusal_code="deadline_passed",
+    )
+    assert trace_row(refused)["refusal_code"] == "deadline_passed"
+    assert "refusal_code" not in trace_row(Call(name="get_order", arguments={}))

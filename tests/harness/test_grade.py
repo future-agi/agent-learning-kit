@@ -592,3 +592,13 @@ def test_a_sub_goal_can_check_one_declared_worker_and_never_an_undeclared_one(tm
     assert load_catalogue(tmp_path).sub_goals[0].subject == "worker:refund"
     refused = asyncio.run(add.handler({"name": "audit", "what": "audits", "check": check, "subject": "worker:audit"}))
     assert refused.get("is_error") and "subject_unknown_worker: audit" in refused["content"][0]["text"]
+
+
+def test_a_scenario_writer_and_an_editor_can_set_a_worker_budget(tmp_path):
+    import fi.alk.harness.scenario_tools as st
+    from fi.alk.harness.contract import AgentContract
+
+    server, _kept = st.scenario_tools(AgentContract(agent="returns", real_use_cases=["refund"]), tmp_path, tmp_path, wanted=1)
+    tools = {spec.name: spec for spec in server.tools}
+    for name in ("submit_scenario", "edit_scenario"):
+        assert "integer" in tools[name].input_schema["properties"]["worker_budget_seconds"]["type"]

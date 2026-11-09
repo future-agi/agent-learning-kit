@@ -957,6 +957,7 @@ def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
                 at=at,
                 # The worker the world saw make it, by the channel it came through.
                 worker_id=str(record.get("worker_id") or ""),
+                refusal_code=str(record.get("refusal_code") or ""),
             )
         )
     return tuple(calls)

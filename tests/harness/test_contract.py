@@ -275,3 +275,14 @@ def test_a_worker_allowed_a_tool_it_does_not_hold_is_returned_to_authoring():
     assert [one.split(": ")[0] for one in validate_contract(contract)] == [
         "worker[1]:allowed-tools-it-does-not-hold:get_order"
     ]
+
+
+def test_a_scenario_s_worker_budget_is_positive_and_absent_from_its_document_when_unset():
+    from fi.alk.harness.folder import document_for
+    from fi.alk.harness.scenario import Scenario
+
+    plain = Scenario(name="a", instruction="x")
+    assert "worker_budget_seconds" not in document_for(plain)
+    assert document_for(plain.model_copy(update={"worker_budget_seconds": 20}))["worker_budget_seconds"] == 20
+    with pytest.raises(ValidationError):
+        Scenario(name="a", instruction="x", worker_budget_seconds=0)

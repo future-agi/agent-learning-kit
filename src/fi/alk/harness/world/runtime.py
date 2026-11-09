@@ -172,6 +172,8 @@ class Call:
     # Part of the arguments or the result was left out to keep the record bounded.
     input_omitted: bool = False
     output_omitted: bool = False
+    # Why the world refused it, as its action log coded it (`not_permitted`, `deadline_passed`); empty otherwise.
+    refusal_code: str = ""
 
 
 def tool_call_attribution(record: Mapping[str, Any]) -> dict[str, Any]:
@@ -269,6 +271,8 @@ def trace_row(call: Call) -> dict[str, Any]:
             if getattr(call, key)
         },
         **({"runtime_ids": call.runtime_ids} if call.runtime_ids else {}),
+        # Why the world refused it, as its action log coded it.
+        **({"refusal_code": call.refusal_code} if call.refusal_code else {}),
         **{
             key: True
             for key in ("input_omitted", "output_omitted")
