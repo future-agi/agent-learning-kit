@@ -298,6 +298,17 @@ class ActorDispatcher:
             for one in actor.permitted_actions
         )
 
+    def _watches(self, actor: Actor, row: dict[str, Any]) -> bool:
+        """Whether a row is the agent's call this actor's own on_tool trigger watches. The actor sees it when it
+        decides, whether or not it may take that action itself; when it comes in stays its trigger's to decide."""
+        trigger = self.triggers.get(actor.id)
+        return (
+            trigger is not None
+            and trigger.kind == "on_tool"
+            and (row.get("actor_id") or AGENT) == AGENT
+            and str(row.get("name") or "") == trigger.tool
+        )
+
     # -- acting ------------------------------------------------------------------------------------------------
 
     async def _send(
@@ -397,7 +408,9 @@ class ActorDispatcher:
                 default=str,
             )
             for r in log
-            if self._sees(actor, r) or r.get("actor_id") == actor.id
+            if self._sees(actor, r)
+            or self._watches(actor, r)
+            or r.get("actor_id") == actor.id
         ]
         return decision_brief(
             {
