@@ -979,6 +979,55 @@ def test_one_span_and_one_call_that_disagree_are_two_calls_each_tracer_missed_on
     )
 
 
+def test_a_span_whose_only_fitting_call_ended_otherwise_is_kept_as_its_own_call() -> (
+    None
+):
+    natives = [_search("a", 1.0), _search("c", 2.0)]
+    spans = [
+        _search_span("a", 1.0, "worker-a"),
+        _search_span("c", 2.0, "worker-b", ok=False, result="search failed"),
+    ]
+    merged = call_runner._merge_span_calls(natives, spans)
+    assert sorted((c.arguments["q"], c.ok, c.worker_id) for c in merged) == [
+        ("a", True, "worker-a"),
+        ("c", False, "worker-b"),
+        ("c", True, ""),
+    ]
+
+
+def test_spans_paired_by_order_must_agree_with_their_calls_on_the_outcome() -> None:
+    natives = [
+        Call(name="search", arguments={"raw": "x"}, result="r1", ok=True, at=10.0),
+        Call(name="search", arguments={"raw": "y"}, result="r2", ok=True, at=20.0),
+    ]
+    spans = [
+        Call(
+            name="search",
+            arguments={"raw": "x"},
+            result="r1",
+            ok=True,
+            at=1.0,
+            ended_at=2.0,
+            worker_id="w",
+        ),
+        Call(
+            name="search",
+            arguments={"raw": "y"},
+            result="boom",
+            ok=False,
+            at=3.0,
+            ended_at=4.0,
+            worker_id="w",
+        ),
+    ]
+    merged = call_runner._merge_span_calls(natives, spans)
+    assert sorted((c.result, c.ok) for c in merged) == [
+        ("boom", False),
+        ("r1", True),
+        ("r2", True),
+    ]
+
+
 @pytest.mark.parametrize("reversed_spans", [True, False])
 def test_two_spans_claiming_one_call_go_to_the_stronger_claim_and_a_tie_leaves_it_unknown(
     reversed_spans: bool,

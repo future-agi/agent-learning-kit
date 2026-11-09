@@ -1040,9 +1040,7 @@ def _pair_tool(
         claims: dict[int, tuple[Call, list[tuple[tuple[bool, bool], Call]]]] = {}
         for span in rest:
             fits = [
-                (strength, call)
-                for call in free
-                if (strength := fit(span, call)) is not None
+                (fit(span, call), call) for call in free if _compatible(span, call, fit)
             ]
             if not fits:
                 continue
@@ -1097,7 +1095,7 @@ def _pair_in_order(
     if not (
         apart
         and stamped
-        and all(fit(span, call) is not None for span, call in zip(spans, calls))
+        and all(_compatible(span, call, fit) for span, call in zip(spans, calls))
     ):
         return False
     for span, call in zip(spans, calls):
@@ -1118,7 +1116,7 @@ def _pair_interchangeable(
     wanting: dict[str, list[Call]] = {}
     for span in spans:
         fitting = [
-            digest for digest, group in alike.items() if fit(span, group[0]) is not None
+            digest for digest, group in alike.items() if _compatible(span, group[0], fit)
         ]
         if len(fitting) == 1:
             wanting.setdefault(fitting[0], []).append(span)
